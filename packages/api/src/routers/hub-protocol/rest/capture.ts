@@ -15,6 +15,7 @@ import {
 import { db } from "@synap/database";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
+import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import {
   submitCaptureGraph,
   CaptureGraphValidationError,
@@ -612,18 +613,27 @@ export function registerCaptureRoutes(app: HubHono): void {
         // discards the only copy.
         //
         // The MCP capture handler already passes rawSource; this path was the
-        // outlier. NOTE it truncates at 8000 (the `text` input's own cap) while
-        // this bound is 100_000 — `submitCaptureGraph` enforces no bound of its
-        // own despite its type doc calling rawSource "bounded", so the cap is
-        // per-call-site. Worth centralising in that one door before a third
-        // call site invents a third number.
+        // outlier. The three per-call-site caps (100_000 / 8_000 / none) are
+        // now ONE — `submitCaptureGraph` enforces RAW_SOURCE_MAX_CHARS itself,
+        // so this door no longer slices.
         const structureRawSource =
           body.text || body.url
             ? {
-                ...(body.text ? { rawText: body.text.slice(0, 100_000) } : {}),
+                ...(body.text ? { rawText: body.text } : {}),
                 ...(body.url ? { sourceUrl: body.url } : {}),
               }
             : undefined;
+
+        // WHAT was captured and FROM WHERE. This door filed EVERY structured
+        // capture with no summary at all, so the proposal inbox showed the
+        // core's count fallback ("Proposed graph: 4 entities, 2 links") for the
+        // single highest-volume capture lane — while the user's own sentence,
+        // the thing they actually typed, sat right here in `body.text`.
+        const structureSummary = buildCaptureNarrativeSummary({
+          sourceLabel: body.url ? "Web capture" : "Capture",
+          instruction: body.text,
+          sourceUrl: body.url,
+        });
 
         const graph = await submitCaptureGraph({
           userId,
@@ -631,6 +641,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           entities,
           relations,
           ...(structureRawSource ? { rawSource: structureRawSource } : {}),
+          ...(structureSummary ? { summary: structureSummary } : {}),
         });
         // Forward the WHOLE submit result, not a hand-picked subset. This door
         // previously re-typed the response by hand and dropped six fields the
@@ -1291,7 +1302,21 @@ export function registerCaptureRoutes(app: HubHono): void {
         entities: body.entities,
         relations,
         bindings,
-        summary: body.summary,
+        // Caller-supplied summary wins (it is the precise one). When absent,
+        // derive a narrative from the provenance the caller DID send rather
+        // than dropping straight to the core's entity-count fallback.
+        summary:
+          body.summary ??
+          buildCaptureNarrativeSummary({
+            sourceLabel: "Capture",
+            subject: rawSource?.success ? rawSource.data.label : undefined,
+            instruction: rawSource?.success
+              ? rawSource.data.rawText
+              : undefined,
+            sourceUrl: rawSource?.success
+              ? rawSource.data.sourceUrl
+              : undefined,
+          }),
       });
       logger.info(
         {

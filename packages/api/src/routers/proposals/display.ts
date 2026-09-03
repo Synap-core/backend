@@ -46,6 +46,7 @@ import type {
 import type { FlowDefinition } from "@synap/database";
 import { proposals } from "@synap/database";
 import { buildProposalChanges } from "./changes.js";
+import { assertEveryOperationRendered } from "./renderable-ops.js";
 
 type ProposalRow = typeof proposals.$inferSelect;
 type DisplayEnrichedProposal = ProposalRow & {
@@ -594,8 +595,15 @@ function buildProposalReviewModel(params: {
  * Absent → falls back to the short `entity <8hex>` label as before.
  *
  * Emits the PINNED ProposalReviewGraph contract — keep in sync with the frontend.
+ *
+ * REFUSAL GUARD: both passes MARK the index of every op they render into
+ * `renderedOpIndexes`, and `assertEveryOperationRendered` refuses the whole
+ * graph if any op went unrendered (see `renderable-ops.ts` for the why). A new
+ * pass that renders a further op kind must mark its indexes the same way — that
+ * is what makes the renderable set DERIVED from this code rather than declared
+ * beside it.
  */
-function buildProposalGraph(
+export function buildProposalGraph(
   data: CompositeProposalData,
   resolveEntityTitle?: (entityId: string) => string | undefined,
   existingRolesByEntityId?: Map<
@@ -610,9 +618,12 @@ function buildProposalGraph(
   const refAliasToCanonical = new Map<string, string>();
   const entities: ProposalReviewGraph["entities"] = [];
   let firstEntitySeen = false;
+  /** Indexes of the ops these passes actually rendered — the guard's evidence. */
+  const renderedOpIndexes = new Set<number>();
 
   data.operations.forEach((op, index) => {
     if (op.op !== "create_entity") return;
+    renderedOpIndexes.add(index);
     const entityOp = op as CompositeCreateEntityOp;
     const ref = entityOp.ref ?? opRef(index);
     const title = entityOp.title ?? "Untitled";
@@ -684,8 +695,9 @@ function buildProposalGraph(
   // the counter MUST increment per create_relation op (matching the same
   // iteration order over data.operations).
   let relOrdinal = 0;
-  for (const op of data.operations) {
-    if (op.op !== "create_relation") continue;
+  data.operations.forEach((op, index) => {
+    if (op.op !== "create_relation") return;
+    renderedOpIndexes.add(index);
     const relOp = op as CompositeCreateRelationOp;
     const itemRef = `$rel${relOrdinal}`;
     relOrdinal++;
@@ -699,7 +711,11 @@ function buildProposalGraph(
       ...(targetRef ? { targetRef } : {}),
       itemRef,
     });
-  }
+  });
+
+  // REFUSE a composite whose ops this pipeline cannot fully render — no member
+  // may reach a reviewer invisibly (and then apply undeniably).
+  assertEveryOperationRendered(data.operations, renderedOpIndexes);
 
   // facetCount = number of NEWLY-attached roles across all entities (isNew).
   const facetCount = entities.reduce(

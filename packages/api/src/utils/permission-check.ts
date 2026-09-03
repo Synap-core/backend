@@ -1756,18 +1756,33 @@ async function countTodayAgentProposals(
 export async function agentDailyProposalCap(
   agentUserId: string
 ): Promise<number> {
+  // `isPartial` is computed IN SQL rather than fetching `data`: this is a hot
+  // path (every proposal creation) and `data` is an unbounded JSONB payload we
+  // would otherwise pull for up to CAP_TRUST_WINDOW rows just to read one flag.
+  // Same predicate as `allAgentsScorecard`'s and as the JS-side
+  // `isPartiallyApprovedData` — one question, asked three ways only because the
+  // three call sites have different shapes available.
   const recentRows = await db
-    .select({ status: proposals.status })
+    .select({
+      status: proposals.status,
+      isPartial: drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`,
+    })
     .from(proposals)
     .where(eq(proposals.agentUserId, agentUserId))
     .orderBy(desc(proposals.createdAt))
     .limit(CAP_TRUST_WINDOW);
 
   const total = recentRows.length;
+  // A PARTIAL apply is not an approval. Per-item dispositions let a reviewer
+  // gut a composite and keep the remainder; the row still stores plain
+  // `"approved"`. Counting that here would hand a 3x daily cap to an agent
+  // whose packages are routinely thrown away — the same miscount the widening
+  // lane scanner had (`computeQualification`), on a second trust gate.
   const approved = recentRows.filter(
     (r) =>
-      r.status === ProposalStatus.APPROVED ||
-      r.status === ProposalStatus.AUTO_APPROVED
+      !r.isPartial &&
+      (r.status === ProposalStatus.APPROVED ||
+        r.status === ProposalStatus.AUTO_APPROVED)
   ).length;
   const approveRate = total > 0 ? approved / total : 0;
 

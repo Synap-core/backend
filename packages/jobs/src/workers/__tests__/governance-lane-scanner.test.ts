@@ -184,3 +184,77 @@ describe("computeDominantMotif", () => {
     expect(computeDominantMotif(rows)).toBeUndefined();
   });
 });
+
+/**
+ * TRIPWIRE — a partially-approved proposal must NOT count toward the widening
+ * approve rate. The row stores plain `"approved"`; the reviewer's per-item
+ * denials live in `data.dispositions`. Counting them as approvals would let an
+ * agent whose packages are routinely gutted read 100% and EARN a wider
+ * auto-approve lane. See `computeQualification`'s header for why partials stay
+ * in the denominator rather than being excluded like `withdrawn`.
+ *
+ * Paired with packages/api/src/__tripwires__/partial-approval-is-not-an-endorsement.test.ts
+ * (scorecard half + the source-level freeze of this file's routing).
+ */
+describe("partial approval is not an endorsement — widening gate", () => {
+  const GUTTED = {
+    dispositions: {
+      $op0: { status: "accept" },
+      $op1: { status: "reject", reasonCode: "wrong_target" },
+    },
+  };
+
+  it("a gutted composite does not raise approveRate", () => {
+    const rows = [
+      ...makeRows(100, "approved"),
+      ...makeRows(10, "approved", { data: GUTTED, targetType: "document" }),
+    ];
+    const q = computeQualification(rows);
+    expect(q.total).toBe(110);
+    // 100 full approvals out of 110 rows — the 10 gutted ones stay in the
+    // denominator and are NOT approvals.
+    expect(q.approveRate).toBeCloseTo(100 / 110, 4);
+    expect(qualifiesForWidenLane(q)).toBe(false);
+  });
+
+  it("100% gutted reads as 0% approved and never qualifies", () => {
+    const q = computeQualification(makeRows(200, "approved", { data: GUTTED }));
+    expect(q.approveRate).toBe(0);
+    expect(qualifiesForWidenLane(q)).toBe(false);
+  });
+
+  it("an all-accept disposition map is still a full approval", () => {
+    const q = computeQualification(
+      makeRows(120, "approved", {
+        data: { dispositions: { $op0: { status: "accept" } } },
+      })
+    );
+    expect(q.approveRate).toBe(1);
+  });
+
+  it("a gutted composite is not evidence for widening its own motif", () => {
+    const rows = [
+      ...makeRows(3, "approved", {
+        proposalType: "create",
+        targetType: "entity",
+        data: GUTTED,
+      }),
+      ...makeRows(1, "approved", {
+        proposalType: "update",
+        targetType: "document",
+      }),
+    ];
+    // Gutted `entity.create` outnumbers clean `document.update` 3:1, but only
+    // the clean row endorses anything.
+    expect(computeDominantMotif(rows)).toEqual({
+      targetType: "document",
+      targetPattern: "document.update",
+    });
+  });
+
+  it("returns no motif when every approval was gutted", () => {
+    expect(
+      computeDominantMotif(makeRows(5, "approved", { data: GUTTED }))
+    ).toBeUndefined();
+  });
+});

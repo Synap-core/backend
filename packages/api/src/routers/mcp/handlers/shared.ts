@@ -26,14 +26,19 @@ import type { LinkEndpointType } from "@synap/playbooks";
 import { getDb } from "@synap/database";
 import {
   db,
+  entities,
   focusSessions,
   eq,
   and,
+  isNull,
   desc,
   inArray,
   PropertyValueType,
 } from "@synap/database";
-import { logger } from "../../hub-protocol/rest/_shared.js";
+import {
+  logger,
+  getUserMemberWorkspaceIds,
+} from "../../hub-protocol/rest/_shared.js";
 import { listMemberWorkspaces } from "../../../utils/workspace-membership.js";
 import { openLink } from "../../../utils/deep-links.js";
 import type { Context } from "../../../types/context.js";
@@ -241,6 +246,48 @@ export function pickAdvisoryWorkspaceId(
   agentFocusWorkspaceId: string | null | undefined
 ): string | undefined {
   return confinedWorkspaceId ?? agentFocusWorkspaceId ?? undefined;
+}
+
+export interface EntityWorkspaceResolution {
+  workspaceId: string | undefined;
+  /** True when no entity workspace could be resolved and we fell back to an
+   * arbitrary member workspace — the caller MUST disclose this, not just use it. */
+  autoPicked: boolean;
+  /** Member-workspace count at the moment of the fallback pick (0 when autoPicked is false). */
+  memberCount: number;
+}
+
+/**
+ * Resolve the workspace lens for a tool call that names an entity but was
+ * given no explicit `workspaceId`: the entity's OWN workspace is the right
+ * lens (not an arbitrary member workspace), so a "no results" answer
+ * reflects the entity's real home instead of whichever workspace happened to
+ * sort first. Falls back to the first member workspace — and says so via
+ * `autoPicked`/`memberCount` — only when the entity's workspace can't be
+ * resolved (missing entityId, deleted, pod-global/no workspaceId, or not
+ * visible to this caller). Extracted from `synap_get_relations` (Wave: third
+ * arbitrary-workspace-pick fix) so `synap_match_playbooks` shares the same
+ * floor instead of re-deriving it.
+ */
+export async function resolveEntityWorkspaceId(
+  userId: string,
+  entityId: string | undefined
+): Promise<EntityWorkspaceResolution> {
+  if (entityId) {
+    const entityRow = await db.query.entities.findFirst({
+      columns: { workspaceId: true },
+      where: and(eq(entities.id, entityId), isNull(entities.deletedAt)),
+    });
+    if (entityRow?.workspaceId) {
+      return {
+        workspaceId: entityRow.workspaceId,
+        autoPicked: false,
+        memberCount: 0,
+      };
+    }
+  }
+  const ids = await getUserMemberWorkspaceIds(userId);
+  return { workspaceId: ids[0], autoPicked: true, memberCount: ids.length };
 }
 
 export function requireScope(

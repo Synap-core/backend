@@ -13,6 +13,7 @@
  *
  * Qualification (mirrors GOVERNANCE-CONVERGENCE-PLAN.md §Phase D):
  *   total >= 100 && approveRate > 0.95 && duplicateRate < 0.15
+ *   (approveRate counts only FULL approvals — see `computeQualification`)
  *   AND no already-PENDING widen proposal for the agent
  *   AND no ACTIVE governance_rules row already covering the dominant motif
  *
@@ -43,6 +44,7 @@ import {
   insertPendingProposal,
   ProposalStatus,
 } from "@synap/database";
+import { isPartiallyApprovedData } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
 
@@ -183,18 +185,41 @@ export interface AgentQualification {
   duplicateRate: number;
 }
 
-/** Same approve-rate + duplicate-rate math as computeAgentScorecard's rates. */
+/**
+ * Same approve-rate + duplicate-rate math as computeAgentScorecard's rates.
+ *
+ * PARTIAL APPLIES DO NOT COUNT AS APPROVALS. A reviewer can deny individual
+ * items inside a composite proposal (per-item dispositions) and approve the
+ * rest; the row still stores plain `"approved"` — there is no separate status
+ * value — so `status` alone cannot tell "kept 1 of 30" from "kept 30 of 30".
+ * `isPartiallyApprovedData` reads the persisted `data.dispositions` map (the
+ * SAME door `computeAgentScorecard` uses) to tell them apart.
+ *
+ * DELIBERATE SEMANTIC CHOICE — a partial apply stays in the DENOMINATOR and is
+ * counted as NOT approved, rather than being dropped from the sample the way
+ * `withdrawn` is ("not scored — the agent recalled it", `AgentStanding`).
+ * The two are different in kind and this gate is why:
+ *   - `withdrawn` carries NO human judgment — the agent pulled it back. There
+ *     is nothing to score, so it is excluded everywhere.
+ *   - a gutted package IS a human judgment, and a negative one: the reviewer
+ *     read the work and threw part of it away.
+ * This function is not a display; it is the gate that GRANTS AUTONOMY (a wider
+ * auto-approve lane). Excluding partials from the denominator would let an
+ * agent whose packages are routinely gutted raise its own approve rate by
+ * getting gutted more often — the signal would push the gate in the direction
+ * opposite to its meaning. Keeping them in the denominator is strictly
+ * conservative: it can only ever lower the rate, never raise it.
+ * (The pod-wide display grid, `AgentStanding`, mirrors `withdrawn` instead and
+ * shows partials as their own column — a card that informs a human may bucket
+ * a non-endorsement out; a gate that hands out trust may not.)
+ */
 export function computeQualification(
   rows: LaneScanProposalRow[]
 ): AgentQualification {
   const total = rows.length;
   if (total === 0) return { total: 0, approveRate: 0, duplicateRate: 0 };
 
-  const approved = rows.filter(
-    (r) =>
-      r.status === ProposalStatus.APPROVED ||
-      r.status === ProposalStatus.AUTO_APPROVED
-  ).length;
+  const approved = rows.filter(isFullApproval).length;
 
   const counts = new Map<string, number>();
   for (const r of rows) {
@@ -214,6 +239,18 @@ export function computeQualification(
   };
 }
 
+/**
+ * A proposal the reviewer approved WHOLE. The ONE definition of "approved" this
+ * scanner uses — both the rate and the dominant motif go through it, so they
+ * can never disagree about what an endorsement is.
+ */
+function isFullApproval(r: LaneScanProposalRow): boolean {
+  const approvedStatus =
+    r.status === ProposalStatus.APPROVED ||
+    r.status === ProposalStatus.AUTO_APPROVED;
+  return approvedStatus && !isPartiallyApprovedData(r.data);
+}
+
 /** Pure qualification predicate — the ONE gate the scanner applies. */
 export function qualifiesForWidenLane(q: AgentQualification): boolean {
   return (
@@ -231,11 +268,9 @@ export function qualifiesForWidenLane(q: AgentQualification): boolean {
 export function computeDominantMotif(
   rows: LaneScanProposalRow[]
 ): { targetType: string; targetPattern: string } | undefined {
-  const approvedRows = rows.filter(
-    (r) =>
-      r.status === ProposalStatus.APPROVED ||
-      r.status === ProposalStatus.AUTO_APPROVED
-  );
+  // Same floor as the rate: a gutted package does not endorse its motif, so it
+  // must not be the evidence for widening that motif's lane.
+  const approvedRows = rows.filter(isFullApproval);
   if (approvedRows.length === 0) return undefined;
 
   const counts = new Map<string, { targetType: string; count: number }>();

@@ -11,15 +11,19 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { RAW_SOURCE_MAX_CHARS } from "../../../../services/capture-agent/capture-narrative.js";
+
 /**
  * Optional original-input descriptor carried with a proposal-first graph
  * capture. It is proposal provenance only: approval does not materialize it as
  * a shared source entity or document. Keeping the payload bounded lets review
  * and retry surfaces retain the exact prompt/input without a schema migration.
+ * The bound is `RAW_SOURCE_MAX_CHARS` — the SAME constant `submitCaptureGraph`
+ * truncates to, so this door rejects exactly what that door would have clipped.
  */
 export const CaptureGraphRawSourceSchema = z
   .object({
-    rawText: z.string().max(100_000).optional(),
+    rawText: z.string().max(RAW_SOURCE_MAX_CHARS).optional(),
     sourceUrl: z.string().url().max(4_096).optional(),
     label: z.string().trim().min(1).max(512).optional(),
     mimeType: z.string().max(256).optional(),

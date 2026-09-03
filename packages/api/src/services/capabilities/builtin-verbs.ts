@@ -684,6 +684,12 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
   // human approves it from the review inbox, which materializes the entities.
   const { submitCaptureGraph } =
     await import("../capture-agent/submit-capture-graph.js");
+  const { buildCaptureNarrativeSummary } =
+    await import("../capture-agent/capture-narrative.js");
+  const interpretSummary = buildCaptureNarrativeSummary({
+    sourceLabel: "Interpreted message",
+    instruction: input.content,
+  });
   const result = await submitCaptureGraph({
     userId: ctx.userId,
     workspaceId,
@@ -698,10 +704,15 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     // `rawSource.rawText` retains the original text so a rejected proposal
     // still carries what produced it.
     ...(input.channelId ? { channelId: input.channelId } : {}),
+    // Bounded by `submitCaptureGraph` itself (RAW_SOURCE_MAX_CHARS) — this
+    // path used to pass the message through UNSLICED while two sibling doors
+    // sliced at two different numbers.
     rawSource: { rawText: input.content },
-    summary: `Interpreted message — ${graphEntities.length} ${
-      graphEntities.length === 1 ? "entity" : "entities"
-    }`,
+    // The MESSAGE is what was asked for; the entity count is the shape of the
+    // answer. Quote the message so the reviewer reads the request, not the
+    // response's arity. `?? undefined` keeps the core's count string as the
+    // last-resort fallback for a message that is pure whitespace.
+    ...(interpretSummary ? { summary: interpretSummary } : {}),
   });
 
   return {

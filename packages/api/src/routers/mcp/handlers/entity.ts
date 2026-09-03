@@ -30,6 +30,7 @@ import {
   CallToolResult,
   McpHandlerMap,
 } from "./shared.js";
+import { toolError } from "../tool-errors.js";
 
 export const entityHandlers: McpHandlerMap = {
   synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -130,13 +131,95 @@ export const entityHandlers: McpHandlerMap = {
     });
   },
   synap_update_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId, lensCaller } =
-      ctx;
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      lensCaller,
+      caller,
+    } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    const entityId = args.entityId as string;
+    // BODY (long-form `content`) does NOT live on the entity row — it lives on
+    // the LINKED DOCUMENT (`entities.documentId`; `documents.entityId` was
+    // removed). `synap_capture`/`synap_create_entity` already accept `content`
+    // and materialize it as that document, so before this the body was
+    // WRITE-ONCE: creatable, readable (`synap_get_document`), never updatable.
+    // Routing it here rather than adding a 23rd tool keeps ONE door for
+    // "change this entity" and matches where an agent already holds an
+    // entityId (it captured the entity; it never saw a documentId).
+    const content = args.content as string | undefined;
+    const hasEntityFields =
+      args.title !== undefined ||
+      args.description !== undefined ||
+      args.properties !== undefined ||
+      args.metadata !== undefined;
+
+    let body: Record<string, unknown> | undefined;
+    if (content !== undefined) {
+      // 1. Resolve the linked document UNDER THE ACCESS FLOOR. `entities.get`
+      //    is `podProcedure` + `entityReadVisibleWhere(ctx.userId)` — the same
+      //    owner/visibility predicate `synap_get_entity` reads through. Never
+      //    a bare `db.query.entities` lookup on a model-supplied id.
+      const entityCallerCtx = await createHubProtocolCallerContext(
+        userId,
+        apiKeyScopes,
+        undefined,
+        undefined,
+        undefined,
+        agentUserId
+      );
+      const entityCaller = regularEntitiesRouter.createCaller(entityCallerCtx);
+      const { entity } = await entityCaller.get({ id: entityId });
+      const documentId = (entity as { documentId?: string | null } | null)
+        ?.documentId;
+
+      // 2. No body document yet ⇒ REFUSE, naming the door that creates AND
+      //    attaches one in a single governed call. Creating it here would be a
+      //    second create+attach path beside `synap_create_document`, and a
+      //    silent no-op would hide the miss entirely.
+      if (!documentId) {
+        return toolError(
+          `Entity ${entityId} has no body document, so there is nothing to update. ` +
+            `Create and attach one in a single call: synap_create_document({ entityId: "${entityId}", title, content }).`
+        );
+      }
+
+      // 3. Governed edit through the EXISTING door — `createDocumentProposal`
+      //    (hub-protocol/documents.ts), the same procedure Hub REST
+      //    `PATCH /api/hub/documents/:id` uses. It re-checks `doc.userId`
+      //    (FORBIDDEN on mismatch) and always files a proposal; the approval
+      //    half is the `targetType === "document"` branch (B3) in
+      //    `proposals/apply-approval.ts`, which uploads the new content and
+      //    snapshots a `document_versions` row.
+      const current = await caller.documents.getDocument({
+        documentId,
+        userId,
+      });
+      const originalContent = current.document.content ?? "";
+      const proposal = await caller.documents.createDocumentProposal({
+        documentId,
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        proposalType: "ai_edit",
+        changes: [
+          { op: "replace", range: [0, originalContent.length], text: content },
+        ],
+        originalContent,
+        proposedContent: content,
+      });
+      body = { documentId, ...(proposal as Record<string, unknown>) };
+    }
+
+    // A content-only call must NOT also file an all-undefined entity proposal.
+    if (!hasEntityFields && body) return ok({ entityId, body });
+
     // Same omission as create: hub `updateEntity` derives its governance lens
     // from `ctx.workspaceId`, which was always null for MCP callers.
     const result = await lensCaller.entities.updateEntity({
-      entityId: args.entityId as string,
+      entityId,
       userId,
       title: args.title as string | undefined,
       preview: args.description as string | undefined,
@@ -145,7 +228,10 @@ export const entityHandlers: McpHandlerMap = {
         Record<string, unknown> | undefined,
       ...(agentUserId ? { agentUserId } : {}),
     });
-    return ok(result);
+    // Two governed writes, two independent outcomes — the entity fields may
+    // auto-approve while the body edit is still `proposed`. Report both rather
+    // than collapsing them into one status the caller would misread.
+    return ok(body ? { ...(result as Record<string, unknown>), body } : result);
   },
   synap_create_document: async (
     ctx: McpToolContext

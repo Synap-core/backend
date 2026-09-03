@@ -479,7 +479,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an entity's title, description, or properties (JSONB). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, corrections.",
+      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, and correcting the body of a document you captured earlier. `content` REPLACES the body of the entity's linked document (read it first with synap_get_document); it always goes to review. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -498,6 +498,10 @@
           },
           "metadata": {
             "type": "object"
+          },
+          "content": {
+            "type": "string",
+            "description": "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch. Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'."
           }
         },
         "required": ["entityId"]
@@ -1941,7 +1945,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (a not-yet-granted verb must be enabled in Settings → Capabilities). Core built-in tools (already available to you directly as MCP tools) and teaching docs are omitted from this actionable view and only COUNTED under `excluded`; pass kind:\"builtin-tool\" to see the full catalog. Pass `query` to search across integrations/verbs/skills (e.g. query:\"send email\").",
+      "description": "Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (a not-yet-granted verb must be enabled in Settings → Capabilities). Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:\"builtin-tool\" or kind:\"teaching-doc\" to list them here instead, or synap_load_skill(\"catalog\") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:\"send email\").",
       "inputSchema": {
         "type": "object",
         "properties": {

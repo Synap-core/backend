@@ -24,6 +24,7 @@
  */
 
 import { randomUUID } from "crypto";
+import { boundRawSourceText } from "./capture-narrative.js";
 
 import {
   db,
@@ -162,9 +163,16 @@ export interface SubmitCaptureGraphInput {
   channelId?: string | null;
   sessionId?: string;
   /**
-   * Bounded original input retained only in proposal data for review/retry.
-   * This is not a materialized source entity/document or shared provenance
-   * artifact after approval.
+   * The originating input (the user's instruction, the webhook body, the
+   * captured text) retained ONLY in proposal data for review/retry. Not a
+   * materialized source entity/document or shared provenance artifact after
+   * approval.
+   *
+   * `rawText` is bounded HERE, by this function, to `RAW_SOURCE_MAX_CHARS`
+   * (capture-narrative.ts) — callers do NOT need to slice, and must not invent
+   * their own cap. This doc used to assert a bound the function never applied,
+   * which is exactly how three different caller-side caps (100_000 / 8_000 /
+   * none) came to exist.
    */
   rawSource?: {
     rawText?: string;
@@ -247,6 +255,10 @@ export interface SubmitCaptureGraphResult {
  * every relation/binding ref exists among `entities` (the HTTP door does this;
  * mappers construct refs by hand so they're always valid).
  */
+/** Bounds on the persisted duplicate advisory — a risk signal, not an entity dump. */
+const DUPLICATE_ADVISORY_MAX_CANDIDATES = 25;
+const DUPLICATE_ADVISORY_MAX_MATCHES_PER_CANDIDATE = 5;
+
 export async function submitCaptureGraph(
   input: SubmitCaptureGraphInput
 ): Promise<SubmitCaptureGraphResult> {
@@ -585,13 +597,72 @@ export async function submitCaptureGraph(
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the
   // re-submit idempotency lookup, which needs them); not re-declared here.
 
+  // ── DUPLICATE ADVISORY, PERSISTED ────────────────────────────────────────
+  // `pendingDuplicateCandidates` was computed above and spread ONLY into the
+  // RETURN value, so the submitting caller saw it once and the proposal row
+  // kept nothing: a reviewer opening this proposal a month later could not see
+  // that the write had already been suspected of duplicating an in-flight one.
+  //
+  // Duplication IS this proposal type's blast radius — all 166 live composite
+  // proposals contain only `create_entity` (780) and `create_relation` (678),
+  // zero destructive and zero behaviour ops — so the advisory is the only real
+  // risk signal a capture review has. Persisted the SAME way
+  // `proposalProvenance` is: a spread-if-present block folded into both `data`
+  // terminals (auto-applied and pending) so the two can't drift.
+  //
+  // ABSENT means "not computed"; it must NEVER be an empty array, because an
+  // empty array reads as "we checked and found none" — a claim this field
+  // cannot make (the scan is best-effort and swallows lookup failures above).
+  //
+  // PROJECTED, not dumped: enough for a reviewer to judge — which proposed item
+  // (ref/title), which in-flight proposal (id/title/kind), and WHY (the matched
+  // signals) — never whole rows. Bounded so a pathological fan-out cannot bloat
+  // the proposal payload, and honest about clipping via `matchCount`.
+  const duplicateAdvisory =
+    pendingDuplicateCandidates.length > 0
+      ? {
+          pendingDuplicateCandidates: pendingDuplicateCandidates
+            .slice(0, DUPLICATE_ADVISORY_MAX_CANDIDATES)
+            .map((c) => ({
+              ref: c.ref,
+              title: c.title,
+              /** Total matches found, so a clipped `matches` still reads honestly. */
+              matchCount: c.matches.length,
+              matches: c.matches
+                .slice(0, DUPLICATE_ADVISORY_MAX_MATCHES_PER_CANDIDATE)
+                .map((m) => ({
+                  proposalId: m.proposalId,
+                  ...(m.entityTitle ? { entityTitle: m.entityTitle } : {}),
+                  ...(m.profileSlug ? { profileSlug: m.profileSlug } : {}),
+                  // WHY it matched. Values are already present in this same
+                  // proposal's own `operations` payload (they are the incoming
+                  // entity's own properties), so this exposes nothing new.
+                  matchedSignals: m.matchedSignals,
+                })),
+            })),
+          ...(pendingDuplicateCandidates.length >
+          DUPLICATE_ADVISORY_MAX_CANDIDATES
+            ? { candidateCount: pendingDuplicateCandidates.length }
+            : {}),
+        }
+      : {};
+
   // Reusable proposal-provenance block (rawSource is bounded, proposal-data-only).
   const proposalProvenance = input.rawSource
     ? {
         proposalProvenance: {
           kind: "raw_capture_input" as const,
           storage: "proposal_data_only" as const,
-          rawSource: input.rawSource,
+          rawSource: {
+            ...input.rawSource,
+            // ENFORCE the bound this field's doc promises. Previously the doc
+            // said "bounded" and nothing enforced it, so the cap lived in each
+            // caller — three call sites, three different numbers, one of which
+            // (message.interpret) had none at all.
+            ...(input.rawSource.rawText !== undefined
+              ? { rawText: boundRawSourceText(input.rawSource.rawText) }
+              : {}),
+          },
         },
       }
     : {};
@@ -753,6 +824,7 @@ export async function submitCaptureGraph(
               // via findPriorCaptureGraphProposal (queries data->>'idempotencyKey').
               idempotencyKey,
               ...proposalProvenance,
+              ...duplicateAdvisory,
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
           });
@@ -843,6 +915,7 @@ export async function submitCaptureGraph(
       // of filing a second row — the core of the anti-duplicate fix.
       idempotencyKey,
       ...proposalProvenance,
+      ...duplicateAdvisory,
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     },
   });

@@ -387,6 +387,15 @@ const captureHandler: McpToolHandler = async (
     }
     const { submitCaptureGraph } =
       await import("../../../services/capture-agent/submit-capture-graph.js");
+    const { buildCaptureNarrativeSummary } =
+      await import("../../../services/capture-agent/capture-narrative.js");
+    const graphSummary =
+      typeof args.summary === "string" && args.summary
+        ? args.summary
+        : buildCaptureNarrativeSummary({
+            sourceLabel: "Agent capture",
+            instruction: captureRawText,
+          });
 
     // AGENT-MODE routing (piece A): submitCaptureGraph derives the terminal
     // from identity + policy. We pass the acting `agentUserId` so the core
@@ -412,13 +421,16 @@ const captureHandler: McpToolHandler = async (
       relations: captureRelations as unknown as Parameters<
         typeof submitCaptureGraph
       >[0]["relations"],
-      ...(typeof args.summary === "string" && args.summary
-        ? { summary: args.summary }
-        : {}),
+      // Agent-supplied summary wins (it is the precise one). When the agent
+      // sent none, quote the text it DID send rather than letting the core's
+      // entity-count fallback stand as the reviewer's only description.
+      ...(graphSummary ? { summary: graphSummary } : {}),
       // Provenance for a mixed text+entities payload (bounded by the core to
-      // proposal data — reviewable, never silently discarded).
+      // proposal data — reviewable, never silently discarded). The 8000-char
+      // slice that used to live here was one of THREE different caller-side
+      // caps; `submitCaptureGraph` now enforces RAW_SOURCE_MAX_CHARS itself.
       ...(captureNormalizedText
-        ? { rawSource: { rawText: captureRawText.slice(0, 8000) } }
+        ? { rawSource: { rawText: captureRawText } }
         : {}),
     });
     // The terminal is policy-derived: `applied` (materialized now, whitelisted

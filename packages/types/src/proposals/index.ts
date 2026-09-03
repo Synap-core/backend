@@ -644,6 +644,45 @@ export interface ProposalDataLifecycle {
 }
 
 /**
+ * How many items of a composite proposal the reviewer DENIED — read straight
+ * off the persisted `proposals.data.dispositions` map (written incrementally by
+ * `proposals.rejectItem` and stamped whole by `approve`). Defensive over
+ * `unknown` so every reader — the API scorecard AND the jobs lane-scanner,
+ * which cannot import `@synap/api` — shares ONE definition of "partial".
+ *
+ * WHY this exists: partial approval ships as per-item dispositions, but the row
+ * still stores plain `"approved"` (no new status enum, no migration). Any trust
+ * counter keying on `status` alone therefore scores "approved 1 of 30" exactly
+ * like "approved 30 of 30". A reader that cares about endorsement must ask this
+ * question too.
+ */
+export function countRejectedDispositions(data: unknown): number {
+  if (!data || typeof data !== "object") return 0;
+  const dispositions = (data as { dispositions?: unknown }).dispositions;
+  if (!dispositions || typeof dispositions !== "object") return 0;
+  let rejected = 0;
+  for (const value of Object.values(dispositions as Record<string, unknown>)) {
+    if (
+      value &&
+      typeof value === "object" &&
+      (value as { status?: unknown }).status === "reject"
+    ) {
+      rejected += 1;
+    }
+  }
+  return rejected;
+}
+
+/**
+ * True when a proposal was applied PARTIALLY — at least one item was denied
+ * while the row itself resolved as `approved`. Not a status: the caller must
+ * still check the status; this only answers "was the package gutted?".
+ */
+export function isPartiallyApprovedData(data: unknown): boolean {
+  return countRejectedDispositions(data) > 0;
+}
+
+/**
  * Union of all shapes stored in proposals.data.
  * Use isRequestShapedProposalData() / isEntityMergeProposalData() to narrow
  * in the approve flow.

@@ -132,6 +132,18 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
         entities: graphEntities,
         relations,
         summary: `Cal.com booking (backfill) — ${booking.title ?? uid}`,
+        // Parity with the WEBHOOK lane (webhooks-inbound.ts), which retains the
+        // original body for exactly this reason: `mapBookingToGraph` is lossy,
+        // `seen` is marked once the proposal is filed, and rejected proposals
+        // are never deleted — so without this the booking that produced a
+        // rejected proposal has no surviving record. Backfill is the same
+        // booking arriving by a different transport; it was the only one of the
+        // two that dropped it.
+        rawSource: {
+          rawText: JSON.stringify(booking),
+          mimeType: "application/json",
+          label: `Cal.com booking (backfill) — ${booking.title ?? uid}`,
+        },
       });
       newKeys[key] = new Date().toISOString();
       proposed += 1;

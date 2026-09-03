@@ -6143,6 +6143,13 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
 	containerId?: string | null;
 	/** Display name of `containerId`'s container; null when unresolvable. */
 	containerName?: string | null;
+	/**
+	 * `skills.slug` — the ref `synap_load_skill` resolves. Emitted ONLY for
+	 * `teaching-doc` rows, because they are the only kind a caller reaches by
+	 * ref rather than by running it: a teaching doc listed by NAME alone is a
+	 * row nothing can open. `null` for a legacy row that predates the column.
+	 */
+	slug?: string | null;
 };
 /** The grantable kinds the vault_grants table discriminates over. */
 export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
@@ -6652,13 +6659,23 @@ export interface AgentScorecard {
 	counts: {
 		total: number;
 		pending: number;
+		/** FULLY approved — every item of the package was applied. */
 		approved: number;
+		/**
+		 * Approved with at least one item DENIED (per-item dispositions). The row
+		 * stores plain `"approved"`; this is the only place the gutting shows.
+		 * Excluded from `approved` so a partial apply is never scored as a full
+		 * endorsement.
+		 */
+		partiallyApproved: number;
 		rejected: number;
 		revised: number;
 	};
 	rates: {
-		/** approved (incl. auto) / total */
+		/** FULLY approved (incl. auto) / total — partial applies excluded. */
 		approveRate: number;
+		/** partially approved / total */
+		partialApproveRate: number;
 		/** rejected / total */
 		rejectRate: number;
 		/** share of proposals a human revised before it resolved */
@@ -7759,7 +7776,7 @@ export interface AgentStanding {
 	agentUserId: string;
 	agentName: string | null;
 	agentType: string | null;
-	/** Human approvals (approved + auto_approved). */
+	/** FULL human approvals (approved + auto_approved, nothing denied inside). */
 	approved: number;
 	/** Subset of `approved` that were auto-approved (no human touched them). */
 	autoApproved: number;
@@ -7769,7 +7786,16 @@ export interface AgentStanding {
 	pending: number;
 	/** Not scored — the agent recalled it. */
 	withdrawn: number;
-	/** Denominator: approved + rejected + reverted (genuine decisions). */
+	/**
+	 * Not scored — the reviewer kept part of the package and DENIED the rest
+	 * (per-item dispositions; the row still stores plain `"approved"`). Same
+	 * category as `withdrawn`: not an endorsement, so it is neither a numerator
+	 * nor a denominator here. Surfaced as its own column instead of silently
+	 * inflating `approveRate`, which is exactly what counting it as `approved`
+	 * used to do.
+	 */
+	partiallyApproved: number;
+	/** Denominator: FULL approvals + rejected + reverted (genuine clean decisions). */
 	scoredTotal: number;
 	approveRate: number;
 	refuseRate: number;
@@ -8790,6 +8816,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiProjectReason?: string | null | undefined;
 				sessionId?: string | undefined;
 				threadId?: string | undefined;
+				sourceMessageId?: string | undefined;
 				propose?: boolean | undefined;
 				anchorEntityId?: string | undefined;
 			};
@@ -8842,6 +8869,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
 					propertiesDropped?: true | undefined;
@@ -8858,7 +8886,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
-				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
@@ -8887,6 +8914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
 					propertiesDropped?: true | undefined;
@@ -8903,7 +8931,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
-				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
@@ -8932,6 +8959,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
 					propertiesDropped?: true | undefined;
@@ -8948,7 +8976,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
-				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
@@ -8971,6 +8998,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
 					propertiesDropped?: true | undefined;
@@ -8987,7 +9015,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
-				status?: undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;

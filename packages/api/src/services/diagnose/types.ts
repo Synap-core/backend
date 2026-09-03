@@ -92,13 +92,23 @@ export interface AgentScorecard {
   counts: {
     total: number;
     pending: number;
+    /** FULLY approved — every item of the package was applied. */
     approved: number;
+    /**
+     * Approved with at least one item DENIED (per-item dispositions). The row
+     * stores plain `"approved"`; this is the only place the gutting shows.
+     * Excluded from `approved` so a partial apply is never scored as a full
+     * endorsement.
+     */
+    partiallyApproved: number;
     rejected: number;
     revised: number;
   };
   rates: {
-    /** approved (incl. auto) / total */
+    /** FULLY approved (incl. auto) / total — partial applies excluded. */
     approveRate: number;
+    /** partially approved / total */
+    partialApproveRate: number;
     /** rejected / total */
     rejectRate: number;
     /** share of proposals a human revised before it resolved */

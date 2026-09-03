@@ -11,10 +11,7 @@
 import { z } from "zod";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
-import {
-  getUserMemberWorkspaceIds,
-  resolveProposalId,
-} from "../../hub-protocol/rest/_shared.js";
+import { resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { getDb, entities, focusSessions, eq } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
@@ -22,6 +19,7 @@ import {
   ok,
   requireScope,
   rejectMissingWriteWorkspace,
+  resolveEntityWorkspaceId,
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
@@ -181,13 +179,26 @@ export const buildHandlers: McpHandlerMap = {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // READ: matchForEntity is a workspaceProcedure (needs a ctx workspace for
-    // the facet lens). First membership is catalog-only, not a write home —
-    // not rejectMissingWrite. (list_playbooks uses listAllPage / user floor;
-    // match still needs a concrete workspace for loadFacetSlugsBatch.)
+    // the facet lens) — "pod-wide" isn't available to it the way it is for
+    // synap_ask. HONEST FALLBACK, same shape as synap_get_relations: when the
+    // caller names an entityId but no workspaceId, the entity's OWN workspace
+    // is the right lens — not an arbitrary member workspace, which matches
+    // playbooks (and widens via facet slugs) against the wrong home. Only
+    // fall back to the first-membership pick — and disclose it — when the
+    // entity's workspace can't be resolved (no entityId, deleted, pod-global,
+    // or not visible to this caller). That old pick is catalog-only, not a
+    // write home, so it stays the honest floor for the entity-less case.
     let matchWsId = args.workspaceId as string | undefined;
+    let autoPicked = false;
+    let memberCount = 0;
     if (!matchWsId) {
-      const wsIds = await getUserMemberWorkspaceIds(userId);
-      matchWsId = wsIds[0];
+      const resolved = await resolveEntityWorkspaceId(
+        userId,
+        args.entityId as string | undefined
+      );
+      matchWsId = resolved.workspaceId;
+      autoPicked = resolved.autoPicked;
+      memberCount = resolved.memberCount;
     }
     if (!matchWsId) return ok({ error: "No accessible workspace found" });
     const matchCtx = await createHubProtocolCallerContext(
@@ -204,6 +215,13 @@ export const buildHandlers: McpHandlerMap = {
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
     });
+    // Only reshape in the AMBIGUOUS case (auto-picked among several member
+    // workspaces) — the explicit-workspaceId and resolved-entity-workspace
+    // paths stay byte-identical to the prior array shape.
+    if (autoPicked && memberCount > 1) {
+      const note = `The entity's own workspace could not be resolved, so playbooks were matched against ONE workspace (${matchWsId}) of your ${memberCount} member workspaces. If this looks incomplete, the entity's real workspace may differ — pass an explicit workspaceId to scope deliberately.`;
+      return ok({ playbooks: result, scopedWorkspaceId: matchWsId, note });
+    }
     return ok(result);
   },
   synap_create_playbook: async (

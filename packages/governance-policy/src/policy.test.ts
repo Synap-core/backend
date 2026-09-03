@@ -1495,7 +1495,27 @@ describe("constants are intact", () => {
       expect(ADMIN_ACTIONS).toContain(k);
     }
   });
-  it("DESTRUCTIVE_ACTIONS", () => {
+  /**
+   * DENSITY TRIPWIRE — the destructive predicate must stay NARROW.
+   *
+   * `DESTRUCTIVE_ACTIONS` is not only the rung-2.5 propose floor: it is also
+   * what drives the DESTRUCTIVE treatment on a review card. That treatment is
+   * only worth anything while it fires on a MINORITY of cards. Interruptive
+   * alerts earn 4–11% acceptance even when correctly targeted, and a danger
+   * treatment that appears on most cards is already at clinical-alarm override
+   * rates (~85–90%): a warning on everything is a warning on nothing. Adding
+   * `update`, or a scope-change verb, would silently take the treatment from
+   * ~5% of the corpus to a large fraction of it and turn it into chrome.
+   *
+   * So the set is PINNED here: WIDENING it is a deliberate act that fails this
+   * test and forces the author to justify the new density in the same commit.
+   *
+   * HONEST SCOPE: this pins the PREDICATE only. It cannot measure real-world
+   * exposure — what share of actual review cards carry the treatment depends on
+   * the proposal corpus, which no unit test can see. Read a green here as "the
+   * predicate did not widen", never as "the warning is still rare".
+   */
+  it("DESTRUCTIVE_ACTIONS stays narrow — widening it dilutes the danger treatment", () => {
     expect([...DESTRUCTIVE_ACTIONS].sort()).toEqual([
       "archive",
       "delete",

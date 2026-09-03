@@ -134,6 +134,13 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
   containerId?: string | null;
   /** Display name of `containerId`'s container; null when unresolvable. */
   containerName?: string | null;
+  /**
+   * `skills.slug` — the ref `synap_load_skill` resolves. Emitted ONLY for
+   * `teaching-doc` rows, because they are the only kind a caller reaches by
+   * ref rather than by running it: a teaching doc listed by NAME alone is a
+   * row nothing can open. `null` for a legacy row that predates the column.
+   */
+  slug?: string | null;
 };
 
 // ── Container membership (derived per read, batched) ──────────────────────────
@@ -658,6 +665,11 @@ export async function listCapabilities(
       ? {
           kind: "teaching-doc",
           id: row.id,
+          // The ref `synap_load_skill` takes. A teaching doc is READ, never
+          // run, so its name is not an identifier any door resolves — without
+          // this the MCP `kind:"teaching-doc"` listing would name rows the
+          // caller then cannot open.
+          slug: row.slug ?? null,
           name: row.name,
           description: row.description ?? null,
           inputSchema: asInputSchema(row.parameters),

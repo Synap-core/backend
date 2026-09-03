@@ -477,20 +477,29 @@ export async function withEffectiveProperties(
  * Build a human-readable summary from composite capture operations by extracting
  * entity titles from `create_entity` ops. Shows up to 2 titles plus a "+N more"
  * suffix so the proposal inbox carries real entity names instead of a bare count.
+ *
+ * `sourceLabel` (when the caller knows one — today: the uploaded file's name)
+ * supplies the FROM WHERE half. This door is the honest limit of the narrative
+ * work: `capture.execute` receives entities the CLIENT already structured, so
+ * the user's originating sentence is not in this procedure's input at all and
+ * cannot be quoted here. The titles ARE the what; only the whence is missing,
+ * and closing that needs a client-side field (see the report).
  */
 export function buildCaptureSummary(
-  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>
+  operations: ReadonlyArray<{ op?: unknown; title?: unknown }>,
+  sourceLabel?: string
 ): string {
+  const from = sourceLabel ? ` from ${sourceLabel}` : "";
   const titles: string[] = [];
   for (const op of operations) {
     if (op.op === "create_entity" && typeof op.title === "string") {
       titles.push(op.title);
     }
   }
-  if (titles.length === 0) return "Capture";
-  if (titles.length === 1) return `Captured: ${titles[0]}`;
-  if (titles.length === 2) return `Captured: ${titles[0]}, ${titles[1]}`;
-  return `Captured: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
+  if (titles.length === 0) return `Capture${from}`;
+  if (titles.length === 1) return `Captured${from}: ${titles[0]}`;
+  if (titles.length === 2) return `Captured${from}: ${titles[0]}, ${titles[1]}`;
+  return `Captured${from}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
 }
 
 export const captureRouter = router({
@@ -1760,6 +1769,11 @@ export const captureRouter = router({
          */
         threadId: z.string().uuid().optional(),
         /**
+         * Seed message on that RUN channel (the user capture line). Lets the
+         * inline chat rail attach the proposal to a bubble. Optional.
+         */
+        sourceMessageId: z.string().uuid().optional(),
+        /**
          * Propose mode ("Capture updates on this entity"). When truthy, the
          * extracted changes are filed as reviewable, user-owned PROPOSALS through
          * the governed forcePropose door instead of written directly — an entity
@@ -2155,7 +2169,13 @@ export const captureRouter = router({
           targetRef: r.targetTempId,
         })),
       ];
-      const captureSummary = buildCaptureSummary(gateOperations);
+      // The uploaded file is the only "from where" this door knows: the client
+      // sends already-structured entities, not the sentence they came from.
+      const captureSourceLabel = input.file?.filename;
+      const captureSummary = buildCaptureSummary(
+        gateOperations,
+        captureSourceLabel
+      );
       const perm = await checkPermissionOrPropose({
         userId,
         // The canonical AI signal. Set by the hub-protocol key middleware, so
@@ -2166,7 +2186,8 @@ export const captureRouter = router({
         action: "create",
         correlationId: captureId,
         sessionId: sessionId ?? undefined,
-        sourceMessageId: ctx.sourceMessageId ?? undefined,
+        sourceMessageId:
+          input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
         threadId: input.threadId,
         // Deterministic only — an AI-suggested project must never ride the gate
         // into a stamp-on-approve auto-link.
@@ -2727,6 +2748,11 @@ export const captureRouter = router({
             // is now done, so both doors are equally trusted here.
             ...(sessionId ? { sessionId } : {}),
             ...(input.threadId ? { threadId: input.threadId } : {}),
+            ...((input.sourceMessageId ?? ctx.sourceMessageId)
+              ? {
+                  sourceMessageId: input.sourceMessageId ?? ctx.sourceMessageId,
+                }
+              : {}),
             // The deterministically-resolved project (already LINKED above), or —
             // when none resolved — the AI's advisory suggestion. This is an
             // auto_approved RECORD (createAutoApprovedProposal never stamps
@@ -2743,7 +2769,7 @@ export const captureRouter = router({
             // capture-origin discriminator already lives in data.source + the
             // proposalType, so the transport source is "api".
             source: "api",
-            summary: buildCaptureSummary(operations),
+            summary: buildCaptureSummary(operations, captureSourceLabel),
             data: {
               // Unify the whole capture under the pre-minted captureId — the
               // routing decision, the entity provenance stamp, AND every
@@ -2977,6 +3003,7 @@ export const captureRouter = router({
       }
 
       return {
+        status: "applied" as const,
         created,
         relations: createdRelations,
         // The capture's self-diagnosis id + any role facets the door dropped —

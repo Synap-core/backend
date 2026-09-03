@@ -11,7 +11,6 @@
 import { ask } from "../../../services/knowledge/ask.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
-import { db, entities, eq, and, isNull } from "@synap/database";
 import {
   toProfileCatalogEntry,
   type ProfileCatalogEntry,
@@ -31,6 +30,7 @@ import {
   ok,
   requireScope,
   buildGraphEnvelope,
+  resolveEntityWorkspaceId,
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
@@ -432,25 +432,18 @@ export const readHandlers: McpHandlerMap = {
     // entity's real home instead of whichever workspace happened to sort
     // first. Only fall back to the old ids[0] pick (and say so) when the
     // entity's workspace can't be resolved (deleted, pod-global/no
-    // workspaceId, or not visible to this caller).
+    // workspaceId, or not visible to this caller). Shared with
+    // synap_match_playbooks via resolveEntityWorkspaceId (shared.ts).
     let autoPicked = false;
     let memberCount = 0;
     if (!relWsId) {
-      const entityRow = await db.query.entities.findFirst({
-        columns: { workspaceId: true },
-        where: and(
-          eq(entities.id, args.entityId as string),
-          isNull(entities.deletedAt)
-        ),
-      });
-      if (entityRow?.workspaceId) {
-        relWsId = entityRow.workspaceId;
-      } else {
-        const ids = await getUserMemberWorkspaceIds(userId);
-        memberCount = ids.length;
-        relWsId = ids[0];
-        autoPicked = true;
-      }
+      const resolved = await resolveEntityWorkspaceId(
+        userId,
+        args.entityId as string | undefined
+      );
+      relWsId = resolved.workspaceId;
+      autoPicked = resolved.autoPicked;
+      memberCount = resolved.memberCount;
     }
     if (!relWsId) return ok({ error: "No accessible workspace found" });
     const result = await caller.relations.listRelations({

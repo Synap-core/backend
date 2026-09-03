@@ -377,15 +377,59 @@ export const capabilityHandlers: McpHandlerMap = {
     // `excluded` counts) are read from a second, unbounded fold of the exact
     // same `capabilities` list — same fold, same dedupe rule, just not
     // competing for the same slice budget.
-    const cappedInput = capabilities.filter((c) => c.kind !== "builtin-tool");
+    //
+    // ── AN EXPLICIT `kind` ASK OVERRIDES THE DEFAULT FOLD ─────────────────
+    // Everything above is about the DEFAULT view, and it stays. But the fold
+    // was applied unconditionally, so a caller that deliberately named one of
+    // the folded kinds got `{integrations:[], skills:[], commands:[],
+    // excluded:{teachingDocs:N}}` — the door counted the rows, refused to list
+    // them, and pointed at a `kind:"builtin-tool"` hatch that returned nothing
+    // either, because the built-in filter on the next line ran regardless of
+    // what was asked. A count is not an answer to "list these"; naming a kind
+    // IS the caller taking responsibility for the noise.
+    const askedForBuiltins = kind === "builtin-tool";
+    const askedForTeachingDocs = kind === "teaching-doc";
+
+    const cappedInput = askedForBuiltins
+      ? capabilities
+      : capabilities.filter((c) => c.kind !== "builtin-tool");
     const sections = sectionCapabilities(cappedInput, {
       limit: limit ?? (query && !zeroHitNote ? DEFAULT_QUERY_LIMIT : undefined),
     });
     const fullSections = sectionCapabilities(capabilities);
+
+    // Teaching docs never land in ANY section (`sectionCapabilities` folds
+    // them to a count), so an explicit ask is served by projecting the flat
+    // rows here. Deduped on the ref the caller would open — the same "same
+    // row" rule the sections use, applied to the identity that matters for a
+    // doc — and capped by the caller's own `limit` when they set one.
+    const allTeachingDocs = askedForTeachingDocs
+      ? [
+          ...new Map(
+            capabilities
+              .filter((c) => c.kind === "teaching-doc")
+              .map((c) => [c.slug ?? c.id, c])
+          ).values(),
+        ]
+      : [];
+    const teachingDocs = allTeachingDocs
+      .slice(0, limit ?? allTeachingDocs.length)
+      .map((c) => ({
+        id: c.id,
+        // What `synap_load_skill` takes. `null` only for a legacy row with no
+        // slug — surfaced as null rather than silently swapped for the name,
+        // which is not a ref any door resolves.
+        ref: c.slug ?? null,
+        name: c.name,
+        description: c.description ?? null,
+      }));
+
     return ok({
       integrations: sections.integrations,
       skills: sections.skills,
       commands: sections.commands,
+      ...(askedForBuiltins ? { builtins: sections.builtins } : {}),
+      ...(askedForTeachingDocs ? { teachingDocs } : {}),
       // Honest, not hidden: these were folded out of the actionable view.
       //
       // `sections.builtins` now carries built-in tools as real ROWS (the
@@ -397,11 +441,22 @@ export const capabilityHandlers: McpHandlerMap = {
       // survive, or an agent loses the signal that anything was folded out.
       excluded: {
         ...sections.excluded,
-        // From the UNBOUNDED fold — builtins never entered `cappedInput`
-        // (see above), so `sections.builtins` is always empty and would
-        // undercount every built-in the ranked cap never saw.
-        builtinTools: fullSections.builtins.length,
-        note: 'Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are omitted here. Ask for kind:"builtin-tool" if you need the full catalog.',
+        // Count what was actually WITHHELD, never what merely got folded by
+        // the default. When the caller asked for the kind, the rows above are
+        // the answer and only the `limit` remainder is still excluded —
+        // reporting the full count next to the rows themselves was the same
+        // "the door says one thing and does another" defect being fixed here.
+        ...(askedForTeachingDocs
+          ? { teachingDocs: allTeachingDocs.length - teachingDocs.length }
+          : {}),
+        // From the UNBOUNDED fold — when built-ins are NOT forwarded they
+        // never entered `cappedInput`, so `sections.builtins` is empty and
+        // would undercount every built-in the ranked cap never saw.
+        builtinTools: fullSections.builtins.length - sections.builtins.length,
+        note:
+          "Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are folded out of this actionable view by DEFAULT. " +
+          'Pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, ' +
+          'or call synap_load_skill("catalog") for every teaching doc grouped by topic (your own authored skills included, under "yours").',
       },
       ...(zeroHitNote ? { note: zeroHitNote } : {}),
     });

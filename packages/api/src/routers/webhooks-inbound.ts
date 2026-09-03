@@ -288,7 +288,9 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
         // good. `mapBookingToGraph` is lossy by design, so the derived graph is
         // not a substitute for the body it came from.
         rawSource: {
-          rawText: rawBody.slice(0, 100_000),
+          // Bound enforced by `submitCaptureGraph` (RAW_SOURCE_MAX_CHARS) —
+          // this literal was one of three different caller-side caps.
+          rawText: rawBody,
           mimeType: "application/json",
           label: `Cal.com ${trigger} — ${payload.title ?? uid}`,
           // Namespaced by tool: submitCaptureGraph looks idempotency keys up by

@@ -27,6 +27,7 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
+import { isPartiallyApprovedData } from "@synap-core/types/proposals";
 import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
@@ -43,6 +44,13 @@ export interface ScorecardProposalRow {
   proposalType: string;
   targetType: string;
   targetId: string;
+  /**
+   * The stored `proposals.data`. Feeds the duplicate fingerprint AND —
+   * via `isPartiallyApprovedData` — the partial-approval split below, so a
+   * gutted package is never scored as a full endorsement. Deliberately NOT a
+   * pre-computed reject-count field: `data` is already on the row, and a second
+   * representation of the same fact is a fork waiting to disagree with it.
+   */
   data: unknown;
   status: string;
   rejectionReason: string | null;
@@ -72,6 +80,7 @@ export function computeAgentScorecard(
 
   let pending = 0;
   let approved = 0;
+  let partiallyApproved = 0;
   let rejected = 0;
   let revised = 0;
   const reasonHist = new Map<string, number>();
@@ -89,7 +98,15 @@ export function computeAgentScorecard(
         break;
       case ProposalStatus.APPROVED:
       case ProposalStatus.AUTO_APPROVED:
-        approved += 1;
+        // PARTIAL APPLY is not an endorsement. Per-item dispositions let a
+        // reviewer deny items inside a composite and approve the rest; the row
+        // still stores plain `"approved"` (no new status enum). Counting that
+        // as a full approval scores "1 of 30 kept" identically to "30 of 30" —
+        // so split it out. Mirrors how `withdrawn` is treated in
+        // `AgentStanding`: a non-endorsement gets its own bucket rather than
+        // being rounded up into `approved`.
+        if (isPartiallyApprovedData(r.data)) partiallyApproved += 1;
+        else approved += 1;
         break;
       case ProposalStatus.REJECTED:
         rejected += 1;
@@ -134,9 +151,10 @@ export function computeAgentScorecard(
     agentName: opts.agentName,
     agentType: opts.agentType,
     sampled: total,
-    counts: { total, pending, approved, rejected, revised },
+    counts: { total, pending, approved, partiallyApproved, rejected, revised },
     rates: {
       approveRate: rate(approved),
+      partialApproveRate: rate(partiallyApproved),
       rejectRate: rate(rejected),
       reviseRate: rate(revised),
       duplicateRate: rate(inDuplicateCluster),
@@ -242,7 +260,7 @@ export interface AgentStanding {
   agentUserId: string;
   agentName: string | null;
   agentType: string | null;
-  /** Human approvals (approved + auto_approved). */
+  /** FULL human approvals (approved + auto_approved, nothing denied inside). */
   approved: number;
   /** Subset of `approved` that were auto-approved (no human touched them). */
   autoApproved: number;
@@ -252,7 +270,16 @@ export interface AgentStanding {
   pending: number;
   /** Not scored — the agent recalled it. */
   withdrawn: number;
-  /** Denominator: approved + rejected + reverted (genuine decisions). */
+  /**
+   * Not scored — the reviewer kept part of the package and DENIED the rest
+   * (per-item dispositions; the row still stores plain `"approved"`). Same
+   * category as `withdrawn`: not an endorsement, so it is neither a numerator
+   * nor a denominator here. Surfaced as its own column instead of silently
+   * inflating `approveRate`, which is exactly what counting it as `approved`
+   * used to do.
+   */
+  partiallyApproved: number;
+  /** Denominator: FULL approvals + rejected + reverted (genuine clean decisions). */
   scoredTotal: number;
   approveRate: number;
   refuseRate: number;
@@ -272,10 +299,20 @@ export async function allAgentsScorecard(params: {
   const { userId } = params;
 
   // USER floor: only proposals in workspaces the caller can see.
+  // Partial-apply flag, computed IN SQL because this door aggregates rather
+  // than fetching rows (`count(*) GROUP BY`), so there is no `data` to inspect
+  // in JS. `jsonb_path_exists` is null-safe and shape-safe: a NULL `data`, a
+  // missing `dispositions` key, or a non-object there all yield NULL/false
+  // instead of the `cannot deconstruct` error `jsonb_each` would raise. It
+  // answers the SAME question as `isPartiallyApprovedData` (the JS door used by
+  // `computeAgentScorecard`) — any item disposition whose status is "reject".
+  const isPartial = drizzleSql<boolean>`coalesce(jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == "reject")'), false)`;
+
   const rows = await db
     .select({
       agentUserId: proposals.agentUserId,
       status: proposals.status,
+      isPartial,
       count: drizzleSql<number>`count(*)::int`,
     })
     .from(proposals)
@@ -285,11 +322,12 @@ export async function allAgentsScorecard(params: {
         userVisibleWhere(proposals.workspaceId, userId)
       )
     )
-    .groupBy(proposals.agentUserId, proposals.status);
+    .groupBy(proposals.agentUserId, proposals.status, isPartial);
 
   type Acc = {
     approved: number;
     autoApproved: number;
+    partiallyApproved: number;
     rejected: number;
     reverted: number;
     pending: number;
@@ -301,18 +339,27 @@ export async function allAgentsScorecard(params: {
     const a = byAgent.get(r.agentUserId) ?? {
       approved: 0,
       autoApproved: 0,
+      partiallyApproved: 0,
       rejected: 0,
       reverted: 0,
       pending: 0,
       withdrawn: 0,
     };
     switch (r.status) {
+      // A partially-applied row carries status `"approved"`/`"auto_approved"`
+      // like any other; only `data.dispositions` distinguishes it. Route it to
+      // its own bucket BEFORE it can reach `approved`.
       case ProposalStatus.APPROVED:
-        a.approved += r.count;
+        if (r.isPartial) a.partiallyApproved += r.count;
+        else a.approved += r.count;
         break;
       case ProposalStatus.AUTO_APPROVED:
-        a.approved += r.count;
-        a.autoApproved += r.count;
+        if (r.isPartial) {
+          a.partiallyApproved += r.count;
+        } else {
+          a.approved += r.count;
+          a.autoApproved += r.count;
+        }
         break;
       case ProposalStatus.REJECTED:
         a.rejected += r.count;
@@ -376,6 +423,7 @@ export async function allAgentsScorecard(params: {
       reverted: a.reverted,
       pending: a.pending,
       withdrawn: a.withdrawn,
+      partiallyApproved: a.partiallyApproved,
       scoredTotal,
       approveRate: rate(a.approved),
       refuseRate: rate(a.rejected),
