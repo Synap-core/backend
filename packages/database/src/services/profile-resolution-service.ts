@@ -4,7 +4,7 @@
  * Resolves profiles and their effective property sets (with inheritance).
  */
 
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, or } from "drizzle-orm";
 
 import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
@@ -12,6 +12,8 @@ import { PropertyDefRepository } from "../repositories/property-def-repository.j
 import { workspaces } from "../schema/workspaces.js";
 import { profiles } from "../schema/profiles.js";
 import { capabilities } from "../schema/capabilities.js";
+import { rendererBindings } from "../schema/renderer-bindings.js";
+import type { RendererBindingScope } from "../schema/renderer-bindings.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { AiPosture } from "../schema/profiles.js";
 import { DEFAULT_AI_POSTURES } from "../utils/ai-posture-defaults.js";
@@ -126,9 +128,66 @@ export type ProfileRendererContentKind =
 
 /**
  * Which layer of `getEffectiveRenderer`'s chain produced the ref.
- * `"default"` means NOTHING is bound — layer 3's hardcoded fallback answered.
+ *
+ *   `"user"`      — a `renderer_bindings` row scoped to the calling user.
+ *   `"pod"`       — a `renderer_bindings` row scoped pod-wide.
+ *   `"workspace"` — a workspace binding: a `renderer_bindings` row scoped to a
+ *                   workspace, OR the legacy `workspaces.settings
+ *                   .profileRenderers` overlay. `binding` on the result tells
+ *                   the two apart.
+ *   `"profile"`   — `profiles.defaultRenderers` or a deprecated column.
+ *   `"default"`   — NOTHING is bound; the hardcoded fallback answered.
+ *
+ * ADDITIVE by design. `"user"` and `"pod"` are new values, and every consumer
+ * branches only on `source === "default"` (see `pickEffectiveRenderer` in
+ * `@synap-core/cell-runtime`, whose precedence flip fires on that value alone),
+ * so widening the union changes no behaviour.
  */
-export type ProfileRendererSource = "workspace" | "profile" | "default";
+export type ProfileRendererSource =
+  "user" | "workspace" | "pod" | "profile" | "default";
+
+/**
+ * Present ONLY when a `renderer_bindings` row answered — the discriminant that
+ * separates a workspace BINDING from the legacy workspace settings overlay,
+ * both of which report `source: "workspace"`.
+ */
+export interface RendererBindingHit {
+  id: string;
+  scope: RendererBindingScope;
+  /** `null` when the binding covers the whole KIND rather than one object. */
+  subjectId: string | null;
+}
+
+/**
+ * Optional lens for `getEffectiveRendererWithSource`. Both fields only ever
+ * ADD rungs: omit them and the ladder skips the user rungs and the object
+ * rungs, which is exactly the resolution that existed before the table.
+ */
+export interface RendererResolutionScope {
+  /** The calling user, enabling the two `user` rungs. Omitted = skip them. */
+  userId?: string | null;
+  /** One object's id, enabling the three `·object` rungs. Omitted = skip them. */
+  subjectId?: string | null;
+}
+
+/**
+ * The scope ladder, MOST SPECIFIC FIRST. Ranked here and only here — the query
+ * fetches every candidate row for the (subjectKind, contentKind) pair in one
+ * round trip and this order picks the winner, so adding a rung can never mean
+ * adding a query.
+ */
+const RENDERER_BINDING_LADDER: ReadonlyArray<{
+  scope: RendererBindingScope;
+  /** true = this rung wants the row that pins ONE object. */
+  objectScoped: boolean;
+}> = [
+  { scope: "user", objectScoped: true },
+  { scope: "user", objectScoped: false },
+  { scope: "workspace", objectScoped: true },
+  { scope: "workspace", objectScoped: false },
+  { scope: "pod", objectScoped: true },
+  { scope: "pod", objectScoped: false },
+];
 
 /**
  * Capability renderers — the capability-subject analogue of a profile's
@@ -590,6 +649,9 @@ export class ProfileResolutionService {
    *   3. Hardcoded system fallback — keeps the pod bootable when nothing is
    *      configured.
    *
+   * Layer 0 — `renderer_bindings`, the ONE store — sits ABOVE all three; see
+   * `getEffectiveRendererWithSource` for its six-rung ladder.
+   *
    * Returns only the ref. Callers that need to tell an EXPLICIT binding apart
    * from the layer-3 system default (the frontend resolver, the Renderer
    * Studio) must use `getEffectiveRendererWithSource` instead — layer 3 always
@@ -600,18 +662,26 @@ export class ProfileResolutionService {
   async getEffectiveRenderer(
     profileSlug: string,
     workspaceId: string | null,
-    contentKind: ProfileRendererContentKind
+    contentKind: ProfileRendererContentKind,
+    scope: RendererResolutionScope = {}
   ): Promise<RendererRef> {
     const { ref } = await this.getEffectiveRendererWithSource(
       profileSlug,
       workspaceId,
-      contentKind
+      contentKind,
+      scope
     );
     return ref;
   }
 
   /**
    * Same resolution as `getEffectiveRenderer`, but reports WHICH layer answered:
+   *   - layer 0, `renderer_bindings` (the ONE store), six rungs most specific
+   *     first: user·object → user·kind → workspace·object → workspace·kind →
+   *     pod·object → pod·kind. Reports `source` = the binding's own scope
+   *     (`"user"` | `"workspace"` | `"pod"`) and carries a `binding`
+   *     discriminant, which is what separates a workspace BINDING from the
+   *     legacy overlay below that reports the same `source`.
    *   - `"workspace"` — layer 1, `workspaces.settings.profileRenderers`
    *   - `"profile"`   — layer 2, `profiles.defaultRenderers` or a legacy column
    *   - `"default"`   — layer 3, the hardcoded system fallback (NOT configured)
@@ -619,13 +689,39 @@ export class ProfileResolutionService {
    * `source === "default"` is the signal that nothing is bound: the resolver may
    * prefer its own local convention, and the Studio must not offer a "Reset"
    * for a binding that doesn't exist.
+   *
+   * `scope` is OPTIONAL and only ever ADDS rungs — no `userId` skips the two
+   * user rungs, no `subjectId` skips the three object rungs. Every existing
+   * three-argument caller therefore resolves exactly as it did before, and
+   * while the table has no writer it resolves exactly as it did before the
+   * table existed.
+   *
+   * NOTE the legacy per-entity `systemData.renderer` override is NOT part of
+   * this chain and is deliberately left where it is applied (the browser).
    */
   async getEffectiveRendererWithSource(
     profileSlug: string,
     workspaceId: string | null,
-    contentKind: ProfileRendererContentKind
-  ): Promise<{ ref: RendererRef; source: ProfileRendererSource }> {
+    contentKind: ProfileRendererContentKind,
+    scope: RendererResolutionScope = {}
+  ): Promise<{
+    ref: RendererRef;
+    source: ProfileRendererSource;
+    binding?: RendererBindingHit;
+  }> {
     const legacySlot = LEGACY_SLOT_BY_CONTENT_KIND[contentKind];
+
+    // 0. renderer_bindings — the ONE store, six rungs, most specific first.
+    //    Consulted BEFORE every legacy store. With no writer yet the table is
+    //    empty on every pod, so this returns undefined and resolution below is
+    //    byte-identical to what it was before the table existed.
+    const binding = await this.resolveRendererBinding(
+      profileSlug,
+      workspaceId,
+      contentKind,
+      scope
+    );
+    if (binding) return binding;
 
     // 1. Workspace overlay (new contentKind key → legacy slot key)
     if (workspaceId) {
@@ -700,6 +796,122 @@ export class ProfileResolutionService {
           ref: { kind: "cell", cellKey: "entity-detail", props: {} },
           source: "default",
         };
+  }
+
+  /**
+   * The `renderer_bindings` rung of {@link getEffectiveRendererWithSource}.
+   *
+   * ONE query fetches every ACTIVE candidate row for the (subjectKind,
+   * contentKind) pair — bounded by the partial unique index to at most one row
+   * per (scope, owner, subject) — and {@link RENDERER_BINDING_LADDER} picks the
+   * winner. Ranking in code rather than in SQL keeps the ladder readable and
+   * makes a new rung a list entry, never another round trip.
+   *
+   * The query is ALREADY floored to what this call may see: user rows are
+   * fetched only for the passed `userId`, workspace rows only for the passed
+   * `workspaceId`, pod rows are pod-wide by definition. That mirrors the
+   * `renderer_bindings` VisibilityRule in `access/registry.ts` — keep the two
+   * in sync, the same way `facetVisibilityConditions` and its rule are.
+   *
+   * Returns `undefined` when nothing is bound, which is the ONLY outcome until
+   * a write door exists.
+   */
+  private async resolveRendererBinding(
+    subjectKind: string,
+    workspaceId: string | null,
+    contentKind: ProfileRendererContentKind,
+    scope: RendererResolutionScope
+  ): Promise<
+    | {
+        ref: RendererRef;
+        source: ProfileRendererSource;
+        binding: RendererBindingHit;
+      }
+    | undefined
+  > {
+    const userId = scope.userId ?? null;
+    const subjectId = scope.subjectId ?? null;
+
+    // Scope branches are built from what the CALLER actually has. No userId
+    // means the user rungs cannot match anything, so they are not queried —
+    // never widened to "any user", which would hand one user another's
+    // personal override.
+    const scopeBranches = [
+      eq(rendererBindings.scopeKind, "pod"),
+      ...(workspaceId
+        ? [
+            and(
+              eq(rendererBindings.scopeKind, "workspace"),
+              eq(rendererBindings.workspaceId, workspaceId)
+            )!,
+          ]
+        : []),
+      ...(userId
+        ? [
+            and(
+              eq(rendererBindings.scopeKind, "user"),
+              eq(rendererBindings.userId, userId)
+            )!,
+          ]
+        : []),
+    ];
+
+    // Whole-KIND rows always qualify; the object rows only when a subject id
+    // was passed — a caller resolving "the kind" must never inherit some other
+    // object's personal binding.
+    const subjectBranches = [
+      isNull(rendererBindings.subjectId),
+      ...(subjectId ? [eq(rendererBindings.subjectId, subjectId)] : []),
+    ];
+
+    const rows = await this._db
+      .select({
+        id: rendererBindings.id,
+        scopeKind: rendererBindings.scopeKind,
+        subjectId: rendererBindings.subjectId,
+        ref: rendererBindings.ref,
+      })
+      .from(rendererBindings)
+      .where(
+        and(
+          isNull(rendererBindings.revokedAt),
+          eq(rendererBindings.subjectKind, subjectKind),
+          eq(rendererBindings.contentKind, contentKind),
+          or(...scopeBranches),
+          or(...subjectBranches)
+        )
+      );
+
+    if (rows.length === 0) return undefined;
+
+    for (const rung of RENDERER_BINDING_LADDER) {
+      // A rung the caller has no key for cannot match. The WHERE above already
+      // excludes those rows; re-checking here means the LADDER alone is a
+      // correct floor, so a future caller that hands this function a row set
+      // from somewhere else (a batch prefetch, a cache) cannot inherit another
+      // user's personal override through a rung it never earned.
+      if (rung.scope === "user" && !userId) continue;
+      if (rung.scope === "workspace" && !workspaceId) continue;
+      if (rung.objectScoped && !subjectId) continue;
+      const hit = rows.find(
+        (r) =>
+          r.scopeKind === rung.scope &&
+          (rung.objectScoped ? r.subjectId !== null : r.subjectId === null)
+      );
+      if (!hit) continue;
+      return {
+        ref: hit.ref,
+        // The scope IS the source for a binding; `binding` below is what tells
+        // a workspace BINDING apart from the legacy workspace settings overlay.
+        source: hit.scopeKind,
+        binding: {
+          id: hit.id,
+          scope: hit.scopeKind,
+          subjectId: hit.subjectId,
+        },
+      };
+    }
+    return undefined;
   }
 
   /**

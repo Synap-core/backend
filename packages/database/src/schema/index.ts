@@ -224,6 +224,7 @@ export type { ProvenanceKind } from "./provenance.js";
 // (Governance Convergence Plan, Phase A). Storage only here; resolver + engine
 // rung 2.8 wiring land in a separate wave.
 export * from "./governance-rules.js";
+export * from "./renderer-bindings.js";
 
 // Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
 // to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.

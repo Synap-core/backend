@@ -41,6 +41,7 @@ import {
   userResourceState,
   agentConfigs,
   focusSessions,
+  rendererBindings,
 } from "@synap/database/schema";
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
@@ -218,6 +219,58 @@ registerVisibility({
     // Operational config: a `sharedScope='workspace'` NULL-workspace command is
     // pod-wide (visible to members); the `sharedScope='user'` branch owner-gates
     // the private ones. Config-dominant → podGlobalConfig.
+    nullWorkspaceMeans: "podGlobalConfig",
+  },
+});
+
+// Renderer bindings (0243) — the ONE renderer store, three scopes in ONE table,
+// discriminated by `scope_kind`. NEITHER stock rule fits, and both fail
+// DANGEROUSLY rather than merely awkwardly:
+//   - `workspace` reads a NULL workspace as a pod-wide GLOBAL, which would
+//     publish every user's PERSONAL override (scope 'user' rows carry a NULL
+//     workspace) to the whole pod.
+//   - `workspaceOwned` floors EVERY row on `user_id`, which would hide the
+//     pod-wide and workspace bindings from everyone but whoever created them —
+//     the exact opposite failure.
+// So the scopes are ORed explicitly, one branch each, mirroring
+// `intelligenceCommands` (a discriminant column selecting between an owner
+// floor and a workspace lens). This is `custom`'s documented purpose — a NEW
+// rule kind with exactly one consumer would be the dead abstraction
+// visibility.ts warns against.
+//
+// KEEP IN SYNC with `ProfileResolutionService.resolveRendererBinding`
+// (packages/database), which applies the same three-branch floor inside its own
+// query rather than through scopedDb.
+registerVisibility({
+  table: rendererBindings,
+  query: () => db.query.rendererBindings,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        // Pod bindings are shared substrate — every pod member reads them.
+        eq(rendererBindings.scopeKind, "pod"),
+        // A personal override is owner-private, full stop.
+        and(
+          eq(rendererBindings.scopeKind, "user"),
+          eq(rendererBindings.userId, access.userId)
+        ),
+        // Workspace bindings follow membership + the active lens. The DB CHECK
+        // guarantees `workspace_id IS NOT NULL` on this branch, so the
+        // NULL-workspace clause inside `workspaceLensWhere` can never fire here
+        // and widen a workspace binding into a pod-wide one.
+        and(
+          eq(rendererBindings.scopeKind, "workspace"),
+          workspaceLensWhere(
+            rendererBindings.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        )
+      ),
+    // A NULL workspace_id here is NEVER "unfiled personal data": it means the
+    // row is a pod or user binding, and `scope_kind` says which. The pod branch
+    // is shared config; the user branch is owner-floored above.
     nullWorkspaceMeans: "podGlobalConfig",
   },
 });

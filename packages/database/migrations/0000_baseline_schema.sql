@@ -4380,3 +4380,57 @@ CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("ori
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "scope" text;  -- 0240 (session template vs project/engagement blueprint; NULL reads as 'session')
 CREATE INDEX IF NOT EXISTS "idx_playbooks_scope" ON "playbooks" ("scope");
 ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "phase" text;  -- 0240 (the long-running container's lifecycle position; free text — the label is a config concern)
+
+-- ── renderer_bindings — the ONE renderer store (0243) ────────────────────────
+-- Layered ABOVE the three legacy stores it replaces (workspaces.settings
+-- .profileRenderers, profiles.default_renderers + the deprecated
+-- default_*_renderer columns). Empty on arrival and INERT: the read rung lands
+-- with NO writer, so resolution is byte-identical until a later wave adds the
+-- write doors. Full rationale in migrations/0243_renderer_bindings.sql.
+DO $$ BEGIN
+  CREATE TYPE renderer_binding_scope AS ENUM ('user', 'workspace', 'pod');
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE TABLE IF NOT EXISTS "renderer_bindings" (
+  "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "scope_kind"          renderer_binding_scope NOT NULL,
+  "user_id"             text,
+  "workspace_id"        uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "subject_kind"        text NOT NULL,   -- entity: the profile slug; else the object-nav kind
+  "subject_id"          text,            -- NULL = the whole kind
+  "content_kind"        text NOT NULL,   -- entity-detail | entity-card | entity-profile | collection
+  "ref"                 jsonb NOT NULL,
+  "source_proposal_id"  uuid,
+  "created_by"          text NOT NULL,
+  "created_at"          timestamptz NOT NULL DEFAULT now(),
+  "revoked_at"          timestamptz
+);
+
+DO $$ BEGIN
+  ALTER TABLE "renderer_bindings" ADD CONSTRAINT "renderer_bindings_scope_owner_check"
+    CHECK (
+      (scope_kind = 'user'      AND user_id IS NOT NULL) OR
+      (scope_kind = 'workspace' AND workspace_id IS NOT NULL) OR
+      (scope_kind = 'pod')
+    );
+EXCEPTION WHEN duplicate_object THEN null;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "renderer_bindings_active_unique"
+  ON "renderer_bindings" (
+    "scope_kind",
+    coalesce("user_id", ''),
+    coalesce("workspace_id"::text, ''),
+    "subject_kind",
+    coalesce("subject_id", ''),
+    "content_kind"
+  )
+  WHERE "revoked_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "renderer_bindings_subject_idx"
+  ON "renderer_bindings" ("subject_kind", "content_kind")
+  WHERE "revoked_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "renderer_bindings_source_proposal_idx"
+  ON "renderer_bindings" ("source_proposal_id");

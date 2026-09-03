@@ -1422,6 +1422,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "limit_value",
     addedBy: "0236_governance_ceilings.sql",
   },
+  // Renderer Bindings (0243) — the ONE renderer store, read as the top rungs of
+  // `getEffectiveRendererWithSource` ABOVE the three legacy stores. New table;
+  // checking one column confirms the migration ran. Without this guard a missing
+  // table would surface as a query error on EVERY renderer resolution, since the
+  // rung is consulted unconditionally.
+  {
+    table: "renderer_bindings",
+    column: "scope_kind",
+    addedBy: "0243_renderer_bindings.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {
