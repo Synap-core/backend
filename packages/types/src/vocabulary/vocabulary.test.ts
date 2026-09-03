@@ -260,6 +260,12 @@ describe("tripwire: no raw machine token reaches a title", () => {
 describe("resolveStatusLabel", () => {
   it("settles the Refused/Rejected split (one canonical word)", () => {
     expect(resolveStatusLabel("rejected")).toBe("Rejected");
+    // A proposal applied per-item is a distinct outcome from a full approval,
+    // even though the row's `status` column says `approved` for both.
+    expect(resolveStatusLabel("partially_approved")).toBe("Partially approved");
+    expect(resolveStatusLabel("partially_approved")).not.toBe(
+      resolveStatusLabel("approved")
+    );
     expect(resolveStatusLabel("denied")).toBe("Rejected");
   });
 

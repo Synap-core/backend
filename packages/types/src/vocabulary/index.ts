@@ -284,6 +284,15 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   rejected: "Rejected",
   denied: "Rejected",
   approval_failed: "Approval failed",
+  // NOT a `proposals.status` enum value, and deliberately so: partial approval
+  // ships as per-item dispositions, the row keeps storing `approved`, and the
+  // reviewer's per-item denials live in `data.dispositions`. It IS a real
+  // proposal lifecycle OUTCOME though — "the reviewer kept part of the package
+  // and threw the rest away" — and more than one surface has to name it (the
+  // agent trust grid, the agent dossier scorecard). One word here beats two
+  // hand-written ones there. Do NOT add it to the DB enum on the strength of
+  // this row.
+  partially_approved: "Partially approved",
   withdrawn: "Withdrawn",
   expired: "Expired",
   // run / step lifecycle

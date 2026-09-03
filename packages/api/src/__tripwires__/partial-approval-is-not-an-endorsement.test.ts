@@ -2,6 +2,11 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { ProposalStatus, proposals } from "@synap/database";
+import {
+  resolveStatusLabel,
+  humanizeToken,
+} from "@synap-core/types/vocabulary";
 import { computeAgentScorecard } from "../services/diagnose/agent-scorecard.js";
 import type { ScorecardProposalRow } from "../services/diagnose/agent-scorecard.js";
 
@@ -143,5 +148,67 @@ describe("partial approval is not an endorsement — daily-cap trust (source)", 
       "jsonb_path_exists(${proposals.data}, '$.dispositions.*.status ? (@ == \"reject\")')";
     expect(permissionCheck).toContain(PREDICATE);
     expect(scorecard).toContain(PREDICATE);
+  });
+});
+
+describe("`partially_approved` is a LABEL, never a proposals.status value", () => {
+  /**
+   * The vocabulary SSOT carries `partially_approved: "Partially approved"` so
+   * the trust grid and the agent dossier name the concept with ONE word instead
+   * of two hand-written strings. It is deliberately NOT a `proposals.status`
+   * value: partial approval ships as per-item dispositions, the row keeps
+   * storing `approved`, and the reviewer's denials live in `data.dispositions`.
+   * Adding the enum value would mean a migration, a status every reader must
+   * newly handle, and a second place the same fact is recorded.
+   *
+   * That prohibition used to be a COMMENT above the key. A comment asserting a
+   * constraint nobody checks is the "comments are not verification" defect
+   * class — so it is a gate now. The day someone adds the enum value this
+   * fires, and the conversation happens before the fork does, not after.
+   *
+   * The column's own values are read LIVE off the Drizzle definition
+   * (`proposals.status.enumValues`) rather than re-listed here, so this test
+   * cannot drift from the DB.
+   */
+  const columnValues = (
+    proposals.status as unknown as { enumValues?: readonly string[] }
+  ).enumValues;
+
+  it("reads the column's enum live (self-guard: never assert against nothing)", () => {
+    // Without this, a drizzle change making `enumValues` undefined would let
+    // the assertions below pass VACUOUSLY — not-a-member-of-nothing is
+    // trivially true. Same self-guard idiom as declared-enum-covers-column.
+    expect(Array.isArray(columnValues)).toBe(true);
+    expect(columnValues!.length).toBeGreaterThan(5);
+    expect(columnValues).toContain(ProposalStatus.APPROVED);
+  });
+
+  it("`partially_approved` is NOT a value the proposals.status column can hold", () => {
+    expect(columnValues).not.toContain("partially_approved");
+    expect(Object.values(ProposalStatus)).not.toContain("partially_approved");
+  });
+
+  it("still resolves to a distinct human label", () => {
+    expect(resolveStatusLabel("partially_approved")).toBe("Partially approved");
+    expect(resolveStatusLabel("partially_approved")).not.toBe(
+      resolveStatusLabel(ProposalStatus.APPROVED)
+    );
+  });
+
+  it("adding a non-column key did not disturb the humanizeToken fallback", () => {
+    // Every resolver falls back to `humanizeToken`, so a new DB enum value can
+    // never reach a user as a raw token. Adding a key that is NOT a column
+    // value must not have changed that.
+    expect(resolveStatusLabel("some_future_state")).toBe(
+      humanizeToken("some_future_state")
+    );
+    expect(resolveStatusLabel("some_future_state")).not.toBe(
+      "some_future_state"
+    );
+    // And every value the column CAN hold still has a real label, not a
+    // humanized fallback of itself.
+    for (const value of columnValues!) {
+      expect(resolveStatusLabel(value)).toBeTruthy();
+    }
   });
 });

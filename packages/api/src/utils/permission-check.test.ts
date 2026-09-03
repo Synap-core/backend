@@ -1033,22 +1033,44 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
   function setupWeightedAgentBudget(opts: {
     todayCount: number;
     windowTotal: number;
+    /** FULL approvals — nothing denied inside. */
     windowApproved: number;
+    /**
+     * Approvals the reviewer applied PER-ITEM (kept some, denied the rest).
+     * Their `status` is `auto_approved` like any other — only
+     * `data.dispositions` distinguishes them, which the real query surfaces as
+     * the `isPartial` boolean. These must NOT count toward the trust rate.
+     */
+    windowPartiallyApproved?: number;
     agentMetadata?: Record<string, unknown>;
   }) {
     const {
       todayCount,
       windowTotal,
       windowApproved,
+      windowPartiallyApproved = 0,
       agentMetadata = { writesRequireProposal: true },
     } = opts;
-    const windowRows = Array.from({ length: windowTotal }, (_, i) => ({
-      status: i < windowApproved ? "auto_approved" : "pending",
-    }));
+    const windowRows = Array.from({ length: windowTotal }, (_, i) => {
+      if (i < windowApproved) {
+        return { status: "auto_approved", isPartial: false };
+      }
+      if (i < windowApproved + windowPartiallyApproved) {
+        return { status: "auto_approved", isPartial: true };
+      }
+      return { status: "pending", isPartial: false };
+    });
     mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
       const keys = Object.keys(fields);
       const isTodayCountQuery = keys.length === 1 && keys[0] === "count";
-      const isCapWindowQuery = keys.length === 1 && keys[0] === "status";
+      // Key on the FIELDS PRESENT, never on arity. The previous
+      // `keys.length === 1 && keys[0] === "status"` broke the moment
+      // `agentDailyProposalCap` began selecting a second column: the branch
+      // stopped matching, the trust window was never returned, and the
+      // "proven agent" path silently stopped being exercised at all — a green
+      // suite over an unrun code path.
+      const isCapWindowQuery =
+        keys.includes("status") && keys.includes("isPartial");
       const isAgentRowQuery = keys.includes("userType");
       const isWorkspaceRowQuery = keys.includes("settings");
       const b: Record<string, unknown> = {
@@ -1153,6 +1175,33 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     const result = await checkPermissionOrPropose({
       ...BASE_OPTS,
       agentUserId: "agent-untrusted-1",
+      subjectType: "entity",
+      action: "create",
+    });
+
+    expect("denied" in result && result.denied === true).toBe(true);
+    expect((result as { reason: string }).reason).toContain(
+      "Daily agent proposal limit reached (10/day)"
+    );
+  });
+
+  it("does NOT grant the 3x ceiling on PARTIAL approvals (a gutted package is not an endorsement)", async () => {
+    // 96 of 100 rows carry status `auto_approved` — byte-identical to the
+    // "proven agent" fixture above as far as `status` can see. But only 50 are
+    // FULL approvals; the other 46 were applied per-item, with the reviewer
+    // denying part of each package. Scoring those as approvals reads 96% and
+    // hands the agent 3x throughput on the strength of work that was largely
+    // thrown away. The real rate is 50%.
+    setupWeightedAgentBudget({
+      todayCount: 15,
+      windowTotal: 100,
+      windowApproved: 50,
+      windowPartiallyApproved: 46,
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      agentUserId: "agent-gutted-1",
       subjectType: "entity",
       action: "create",
     });

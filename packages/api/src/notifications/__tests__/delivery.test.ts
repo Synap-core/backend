@@ -17,17 +17,19 @@
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
-const { mockEmitChatEvent, mockPrefs, mockInsertReturning } = vi.hoisted(
-  () => ({
+const { mockEmitChatEvent, mockPrefs, mockInsertReturning, mockSendExpoPush } =
+  vi.hoisted(() => ({
     mockEmitChatEvent: vi.fn(),
     mockPrefs: vi.fn(),
     mockInsertReturning: vi.fn(),
-  })
-);
+    mockSendExpoPush: vi.fn(),
+  }));
 
 vi.mock("../../utils/chat-realtime-broadcast.js", () => ({
   emitChatEvent: mockEmitChatEvent,
 }));
+
+vi.mock("../expo-push.js", () => ({ sendExpoPush: mockSendExpoPush }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -73,6 +75,8 @@ function soleEmitArg(): Record<string, unknown> {
 
 beforeEach(() => {
   mockEmitChatEvent.mockClear();
+  mockSendExpoPush.mockClear();
+  mockSendExpoPush.mockResolvedValue({ sent: 1, revoked: 0, failed: 0 });
   // No stored preferences → no kill switch, no routing rule, no quiet hours.
   mockPrefs.mockResolvedValue(undefined);
   mockInsertReturning.mockResolvedValue([{ id: "row-1" }]);
@@ -139,5 +143,83 @@ describe("NotificationService.create — realtime delivery", () => {
     expect(serialized).toContain(USER_A);
     expect(serialized).not.toContain(USER_B);
     expect(serialized).not.toContain(WORKSPACE);
+  });
+});
+
+/**
+ * PUSH is the second channel out of the ONE selection point (`resolveChannels`).
+ * The socket tests above prove the `in_app` half; these prove that the `os`
+ * half obeys the SAME preferences rather than becoming a louder side door —
+ * which is exactly what a transport bolted on beside the selection point would
+ * have been.
+ */
+describe("NotificationService.create — push (`os`) delivery", () => {
+  it("(e) a muted category is silent on EVERY channel — no socket, no push", async () => {
+    // `proposal.created` is category `governance`, whose defaults are BOTH
+    // channels — so a mute that only closed the socket would still push.
+    mockPrefs.mockResolvedValue({
+      enabled: true,
+      routingRules: { governance: "mute" },
+    });
+
+    await NotificationService.create(baseInput());
+
+    expect(mockEmitChatEvent).not.toHaveBeenCalled();
+    expect(mockSendExpoPush).not.toHaveBeenCalled();
+  });
+
+  it("(f) quiet hours suppress PUSH, not just realtime", async () => {
+    // The inverse-of-the-setting bug: quiet hours have always meant "persist,
+    // don't interrupt". A push channel that read only `defaultChannels` would
+    // make the phone the LOUDEST channel at 3am.
+    mockPrefs.mockResolvedValue({
+      enabled: true,
+      routingRules: {},
+      quietHoursEnabled: true,
+      quietHoursStart: "00:00",
+      quietHoursEnd: "23:59",
+    });
+
+    await NotificationService.create(baseInput());
+
+    expect(mockSendExpoPush).not.toHaveBeenCalled();
+    expect(mockEmitChatEvent).not.toHaveBeenCalled();
+  });
+
+  it("(g) defaults ['in_app','os'] deliver EXACTLY ONE of each — never two of either", async () => {
+    // There is no insert-level dedupe (`create` does a bare insert, the indexes
+    // are non-unique, `groupKey` is display-only), so a second emitter beside
+    // the selection point would double-deliver invisibly. Asserting the exact
+    // call COUNT on both channels is what makes that regression fail here.
+    await NotificationService.create(baseInput());
+
+    expect(mockEmitChatEvent).toHaveBeenCalledTimes(1);
+    expect(mockSendExpoPush).toHaveBeenCalledTimes(1);
+
+    const push = mockSendExpoPush.mock.calls[0]![0] as Record<string, unknown>;
+    expect(push.userId).toBe(USER_A);
+    // The push carries the deep-link payload the device needs to open the row.
+    expect((push.data as Record<string, unknown>).notificationId).toBe("row-1");
+  });
+
+  it("(h) routing rule 'os' pushes and does NOT emit; 'in_app' emits and does NOT push", async () => {
+    mockPrefs.mockResolvedValue({
+      enabled: true,
+      routingRules: { governance: "os" },
+    });
+    await NotificationService.create(baseInput());
+    expect(mockEmitChatEvent).not.toHaveBeenCalled();
+    expect(mockSendExpoPush).toHaveBeenCalledTimes(1);
+
+    mockEmitChatEvent.mockClear();
+    mockSendExpoPush.mockClear();
+
+    mockPrefs.mockResolvedValue({
+      enabled: true,
+      routingRules: { governance: "in_app" },
+    });
+    await NotificationService.create(baseInput());
+    expect(mockEmitChatEvent).toHaveBeenCalledTimes(1);
+    expect(mockSendExpoPush).not.toHaveBeenCalled();
   });
 });
