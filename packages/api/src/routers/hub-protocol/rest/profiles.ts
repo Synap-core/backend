@@ -534,6 +534,9 @@ export function registerProfilesRoutes(app: HubHono): void {
     const workspaceId = c.req.query("workspaceId");
     const contentKindRaw = c.req.query("contentKind");
     const slotRaw = c.req.query("slot");
+    // One object's id — enables the `·object` rungs of `renderer_bindings`.
+    // Absent = per-KIND resolution, unchanged.
+    const subjectId = c.req.query("subjectId") || undefined;
     const profileSlug = c.req.param("slug");
 
     if (!userId || !workspaceId) {
@@ -582,6 +585,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         workspaceId,
         profileSlug,
         contentKind,
+        subjectId,
       });
       return c.json(result);
     } catch (err) {

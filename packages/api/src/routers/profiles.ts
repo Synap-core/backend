@@ -1210,6 +1210,17 @@ export const profilesRouter = router({
         // Explicit lens: undefined = use header (unchanged behavior); null =
         // pod-wide (no workspace overlay); string = that workspace's overlay.
         workspaceId: z.string().nullable().optional(),
+        /**
+         * ONE object's id, enabling the three `·object` rungs of
+         * `renderer_bindings`. Omitted = per-KIND resolution only, byte-identical
+         * to the behaviour before the table existed.
+         *
+         * The field name is the browser's: `BoundObjectDetailCell` sends
+         * `{ profileSlug: objectKind, subjectId: objectId }`, and `subject_kind`
+         * for a non-entity IS the object-nav kind string — which is why
+         * `profileSlug` above passes an unresolved string straight through.
+         */
+        subjectId: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1228,6 +1239,21 @@ export const profilesRouter = router({
         lensWorkspaceId
       );
       const profileSlug = resolved?.slug ?? input.profileSlug;
+
+      /**
+       * The resolution lens. Both fields only ever ADD rungs, so a caller that
+       * sends neither resolves exactly as before.
+       *
+       * THIS IS THE READ SIDE OF `renderer_bindings`. Until 2026-09-04 no
+       * production caller passed it: the write door minted `user`- and
+       * `object`-scoped bindings and the six-rung ladder existed, but every
+       * caller passed three arguments, so five of the six rungs were
+       * unreachable and a per-user or per-object binding could never win.
+       */
+      const scope = {
+        userId: ctx.userId ?? null,
+        subjectId: input.subjectId ?? null,
+      };
 
       // Always return the full ContentKind-keyed map; when `contentKind` is
       // given, only that one is resolved (the rest stay null).
@@ -1251,7 +1277,8 @@ export const profilesRouter = router({
         const target = await resolutionService.getEffectiveRendererWithSource(
           profileSlug,
           lensWorkspaceId,
-          input.contentKind
+          input.contentKind,
+          scope
         );
         return {
           ...base,
@@ -1265,22 +1292,26 @@ export const profilesRouter = router({
           resolutionService.getEffectiveRendererWithSource(
             profileSlug,
             lensWorkspaceId,
-            "entity-detail"
+            "entity-detail",
+            scope
           ),
           resolutionService.getEffectiveRendererWithSource(
             profileSlug,
             lensWorkspaceId,
-            "entity-card"
+            "entity-card",
+            scope
           ),
           resolutionService.getEffectiveRendererWithSource(
             profileSlug,
             lensWorkspaceId,
-            "entity-profile"
+            "entity-profile",
+            scope
           ),
           resolutionService.getEffectiveRendererWithSource(
             profileSlug,
             lensWorkspaceId,
-            "collection"
+            "collection",
+            scope
           ),
         ]);
       return {

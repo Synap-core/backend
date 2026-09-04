@@ -265,6 +265,9 @@ export const hubProfilesRouter = router({
         workspaceId: z.string().uuid(),
         profileSlug: z.string(),
         contentKind: ProfileRendererContentKindSchema.optional(),
+        /** One object's id — enables the `·object` rungs of `renderer_bindings`.
+         *  Forwarded verbatim so this door resolves what the tRPC door does. */
+        subjectId: z.string().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -281,6 +284,7 @@ export const hubProfilesRouter = router({
       return caller.getEffectiveRenderers({
         profileSlug: input.profileSlug,
         contentKind: input.contentKind,
+        subjectId: input.subjectId,
       });
     }),
 

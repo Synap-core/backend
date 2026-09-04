@@ -152,6 +152,52 @@ export async function setProfileRenderer(
     });
   }
 
+  // ── 0. PREFLIGHT — every existence check, BEFORE the first write ─────────
+  // The legacy mirror below resolves a profile row (pod scope) or a workspace
+  // row (workspace scope) and throws NOT_FOUND when it is missing. Doing that
+  // AFTER step 1 left a committed binding behind on a call that reported
+  // failure: the caller saw NOT_FOUND, the pod had a new row, and a retry with
+  // a corrected slug left the first one orphaned. Resolve both here so a failed
+  // call writes nothing.
+  //
+  // Gated on the SAME condition step 2 uses. A user-scoped or per-object
+  // binding never mirrors, and its `subjectKind` is frequently not a profile at
+  // all (`proposal`, `run`, … — the object-nav kind string), so demanding a
+  // profile row for those would refuse the bindings the table exists for.
+  const willMirrorLegacy =
+    MIRROR_LEGACY_RENDERER_STORES && scope !== "user" && subjectId === null;
+
+  const profileRepo = new ProfileRepository(db);
+  const mirrorProfile =
+    willMirrorLegacy && scope === "pod"
+      ? await new ProfileResolutionService(db).resolveProfile(
+          profileSlug,
+          userId,
+          workspaceId
+        )
+      : null;
+  if (willMirrorLegacy && scope === "pod" && !mirrorProfile) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Profile '${profileSlug}' not found`,
+    });
+  }
+
+  const mirrorWorkspace =
+    willMirrorLegacy && scope === "workspace" && workspaceId
+      ? await db.query.workspaces.findFirst({
+          where: eq(workspaces.id, workspaceId),
+        })
+      : null;
+  if (
+    willMirrorLegacy &&
+    scope === "workspace" &&
+    workspaceId &&
+    !mirrorWorkspace
+  ) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
+  }
+
   // ── 1. The canonical store: renderer_bindings ────────────────────────────
   const bindingKey = {
     scopeKind: scope,
@@ -180,19 +226,8 @@ export async function setProfileRenderer(
 
   if (scope === "pod") {
     // System default: profiles.default_{list,detail,dashboard}_renderer.
-    const profileRepo = new ProfileRepository(db);
-    const resolutionService = new ProfileResolutionService(db);
-    const profile = await resolutionService.resolveProfile(
-      profileSlug,
-      userId,
-      workspaceId
-    );
-    if (!profile) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: `Profile '${profileSlug}' not found`,
-      });
-    }
+    // `mirrorProfile` was resolved (and its absence refused) in the preflight.
+    const profile = mirrorProfile!;
     const currentDefaultRenderers = (profile.defaultRenderers ?? {}) as Record<
       string,
       RendererRef | undefined
@@ -214,12 +249,8 @@ export async function setProfileRenderer(
   const eventRepo = eventRepository;
   const workspaceRepo = new WorkspaceRepository(db, eventRepo);
 
-  const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, workspaceId),
-  });
-  if (!workspace) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found" });
-  }
+  // Resolved (and its absence refused) in the preflight, before any write.
+  const workspace = mirrorWorkspace!;
 
   const settings = (workspace.settings ?? {}) as Record<string, unknown>;
   const current = (settings.profileRenderers ?? {}) as Record<
