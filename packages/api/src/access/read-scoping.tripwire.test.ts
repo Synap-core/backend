@@ -118,6 +118,13 @@ const SCOPING_HELPERS = [
   // route through — recognized so the extraction from the old inline membership
   // check isn't false-flagged.
   "assertProposalVisibleTo",
+  // The proposal LIST editor+ gate (routers/proposals.ts): `list` and `groups`
+  // carried byte-identical inline `workspaceMembers.findFirst` + role checks,
+  // which this scanner cleared via INLINE_MEMBERSHIP_FLOOR. The two copies were
+  // consolidated into one helper, so the coverage MOVES here rather than
+  // disappearing — same floor (member row required, role in owner/admin/editor,
+  // FORBIDDEN otherwise), one place it can drift.
+  "assertProposalWorkspaceRead",
 ];
 
 // Per-user scoping: the row's userId pinned to the caller — `eq(t.userId,

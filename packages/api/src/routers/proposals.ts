@@ -124,6 +124,63 @@ const facetSpecInput = z.object({
   status: z.string().optional(),
 });
 
+/**
+ * The `proposals.target_type` values the LIST filters accept.
+ *
+ * ONE definition, consumed by both `list` and `groups`: the two were
+ * hand-mirrored eight-value `z.enum`s, and a filter enum that drifts silently
+ * drops a whole target type out of one surface while the other still shows it.
+ *
+ * Widened beyond the original 5 materialized-object types to also accept the
+ * config-object proposal targets (automation / playbook / skill). Those rows
+ * are ALREADY stored — automation-governance and permission-check write
+ * `targetType: singularType` — so this is pure filter widening; no downstream
+ * code assumes only 5.
+ *
+ * NOT the same list as `submit`'s input enum: that one names what a caller may
+ * CREATE, which is a narrower authority question than what it may filter on.
+ */
+const LIST_TARGET_TYPES = [
+  "document",
+  "entity",
+  "whiteboard",
+  "view",
+  "profile",
+  "automation",
+  "playbook",
+  "skill",
+] as const;
+
+/**
+ * The editor+ read gate for a CONCRETE workspace on a proposal list.
+ *
+ * One door: `list` and `groups` each carried a hand-copied membership lookup
+ * plus role check. Two copies of an authorization predicate is one tightening
+ * away from a surface that stays open.
+ *
+ * A `null`/absent `workspaceId` is NOT gated here — that is the pod-wide /
+ * unfiltered lens, whose floor is the visibility predicate applied downstream,
+ * not workspace membership.
+ */
+async function assertProposalWorkspaceRead(
+  workspaceId: string,
+  userId: string
+): Promise<void> {
+  const { workspaceMembers } = await import("@synap/database/schema");
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+  });
+  if (!membership || !["owner", "admin", "editor"].includes(membership.role)) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Editor or higher role required to view proposals",
+    });
+  }
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -141,24 +198,7 @@ export const proposalsRouter = router({
          *   - `undefined`  → no filter (every workspace + pod-wide)
          */
         workspaceId: z.string().nullish(),
-        targetType: z
-          // Widened beyond the original 5 materialized-object types to also
-          // accept the config-object proposal targets (automation / playbook /
-          // skill). Those rows are ALREADY stored — automation-governance and
-          // permission-check write `targetType: singularType` — this filter
-          // widening just unblocks querying them (e.g. the loops-map diff
-          // overlay). Pure filter widening; no downstream code assumes only 5.
-          .enum([
-            "document",
-            "entity",
-            "whiteboard",
-            "view",
-            "profile",
-            "automation",
-            "playbook",
-            "skill",
-          ])
-          .optional(),
+        targetType: z.enum(LIST_TARGET_TYPES).optional(),
         targetId: z.string().optional(),
         /**
          * Resolve a bounded notification batch through the normal list path.
@@ -270,22 +310,10 @@ export const proposalsRouter = router({
 
       // Verify user has editor+ access to the workspace
       if (input.workspaceId) {
-        const { workspaceMembers } = await import("@synap/database/schema");
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, input.workspaceId),
-            eq(workspaceMembers.userId, requireUserId(ctx.userId))
-          ),
-        });
-        if (
-          !membership ||
-          !["owner", "admin", "editor"].includes(membership.role)
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Editor or higher role required to view proposals",
-          });
-        }
+        await assertProposalWorkspaceRead(
+          input.workspaceId,
+          requireUserId(ctx.userId)
+        );
       }
 
       // An explicitly empty batch is a valid no-results filter, rather than an
@@ -490,18 +518,7 @@ export const proposalsRouter = router({
         agentOnly: z.boolean().optional(),
         /** Same scope filters `list` exposes, so a container package can show
          *  a pending/decided COUNT for the same scope its rows come from. */
-        targetType: z
-          .enum([
-            "document",
-            "entity",
-            "whiteboard",
-            "view",
-            "profile",
-            "automation",
-            "playbook",
-            "skill",
-          ])
-          .optional(),
+        targetType: z.enum(LIST_TARGET_TYPES).optional(),
         threadId: z.string().uuid().optional(),
         sessionId: z.string().uuid().optional(),
         projectId: z.string().uuid().optional(),
@@ -550,22 +567,7 @@ export const proposalsRouter = router({
 
       // Same editor+ gate as `list` when a concrete workspace is named.
       if (input.workspaceId) {
-        const { workspaceMembers } = await import("@synap/database/schema");
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, input.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-        });
-        if (
-          !membership ||
-          !["owner", "admin", "editor"].includes(membership.role)
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Editor or higher role required to view proposals",
-          });
-        }
+        await assertProposalWorkspaceRead(input.workspaceId, userId);
       }
 
       const rows = await db
@@ -2255,6 +2257,9 @@ export const proposalsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      /** Proposals this call actually moved to REJECTED — see the batched
+       *  `markProposalNotificationsActioned` after the loop. */
+      const actionedIds: string[] = [];
 
       for (const proposalId of input.proposalIds) {
         // Authority — SAME ladder `approve`/`revert`/`reject` enforce, per
@@ -2320,9 +2325,14 @@ export const proposalsRouter = router({
             )
           )
           .returning({ workspaceId: proposals.workspaceId });
-        markProposalNotificationsActioned([proposalId]);
 
         if (updated) {
+          // Collected, not fired here: one UPDATE per item turned a 50-item
+          // batch into 50 round-trips, and firing before the `updated` guard
+          // cleared the bell for rows this call did NOT reject (already
+          // decided, so someone else's decision was silently un-badged).
+          actionedIds.push(proposalId);
+
           emitProposalReviewed(
             proposalId,
             updated.workspaceId,
@@ -2364,6 +2374,11 @@ export const proposalsRouter = router({
           }
         }
       }
+
+      // ONE batched notification write for the whole reject batch. The helper
+      // already no-ops on an empty list, so a batch that rejected nothing
+      // issues no query at all.
+      markProposalNotificationsActioned(actionedIds);
 
       return { success: true };
     }),

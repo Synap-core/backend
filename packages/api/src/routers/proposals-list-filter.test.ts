@@ -45,9 +45,12 @@ describe("proposals.list proposalIds filter", () => {
   });
 
   it("does not let an empty batch skip concrete-workspace authorization", () => {
-    const authorizationGate = listBlock.indexOf(
-      "Editor or higher role required to view proposals"
-    );
+    // The editor+ gate is now the shared `assertProposalWorkspaceRead(` helper
+    // (`list` and `groups` carried byte-identical copies), so this looks for
+    // the CALL rather than the message string the helper now owns. What is
+    // asserted is unchanged: the gate must run BEFORE the empty-batch
+    // short-circuit, or an empty `proposalIds` returns early past it.
+    const authorizationGate = listBlock.indexOf("assertProposalWorkspaceRead(");
     const emptyBatch = listBlock.indexOf(
       "if (input.proposalIds?.length === 0)"
     );

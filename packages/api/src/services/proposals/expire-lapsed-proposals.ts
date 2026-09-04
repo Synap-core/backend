@@ -131,6 +131,8 @@ export async function expireLapsedProposals(
   // overwrite a real decision.
   const CHUNK = 500;
   let expired = 0;
+  /** Ids this scan actually moved to EXPIRED — collected, not fired per chunk. */
+  const actionedIds: string[] = [];
   for (let i = 0; i < lapsed.length; i += CHUNK) {
     const batch = lapsed.slice(i, i + CHUNK);
     const rows = await db
@@ -143,10 +145,16 @@ export async function expireLapsedProposals(
         )
       )
       .returning({ id: proposals.id });
-    // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
-    markProposalNotificationsActioned(rows.map((r) => r.id));
+    for (const r of rows) actionedIds.push(r.id);
     expired += rows.length;
   }
+
+  // Expired = no longer decidable: its bell rows leave with it (one door with
+  // approve/reject). ONE write for the whole scan rather than one per chunk —
+  // the chunking exists to bound the UPDATE's id list, and there is no reason
+  // for the notification write to inherit that bound. The helper no-ops on an
+  // empty list, so a scan that expired nothing issues no query at all.
+  markProposalNotificationsActioned(actionedIds);
 
   logger.info(
     { scanned: pending.length, expired },
