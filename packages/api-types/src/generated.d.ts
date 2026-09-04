@@ -5080,6 +5080,16 @@ export interface ImportAnalysisPlan {
 	warnings: string[];
 	overallConfidence: number;
 }
+/** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
+export interface CaptureUpdateResult {
+	tempId: string;
+	entityId: string;
+	/** "applied" = patched now; "proposed" = filed for review, nothing written. */
+	status: "applied" | "proposed" | "failed";
+	proposalId?: string;
+	reviewUrl?: string;
+	reason?: string;
+}
 /** One relation op that was submitted but never created — the honest detail
  * behind a `created < submitted` gap on a materialize receipt. */
 export interface MaterializeRelationFailure {
@@ -6559,6 +6569,39 @@ export type CreateRuleGovernedResult = {
 	 */
 	failure?: RuleCompileFailure;
 };
+export interface RuleDryRunMatch {
+	status: "ok";
+	/** The compiled pattern that was replayed — shown so the count is auditable. */
+	eventPattern: string;
+	windowDays: number;
+	/** Inclusive lower bound of the replayed window, ISO-8601 UTC. */
+	since: string;
+	/**
+	 * Stored events in the window that MATCH the compiled trigger.
+	 *
+	 * A MATCH IS NOT A RUN. See this module's header before renaming, rounding,
+	 * or re-labelling this in any surface.
+	 */
+	matchingEventCount: number;
+	/** How many rows were actually read (bounded by {@link DRY_RUN_SCAN_LIMIT}). */
+	scannedEventCount: number;
+	/** true ⇒ the scan hit its cap; `matchingEventCount` is a FLOOR, not a total. */
+	truncated: boolean;
+	/** Most recent matches, as evidence for the number. */
+	samples: Array<{
+		eventId: string;
+		eventType: string;
+		timestamp: string;
+	}>;
+	/** What this replay provably cannot see. Render verbatim. */
+	caveats: string[];
+	/**
+	 * REAL firings recorded in `automation_runs` over the same window, for a rule
+	 * that ALREADY exists. Categorically different from `matchingEventCount`:
+	 * this one counts runs that happened. Absent when no existing rule was named.
+	 */
+	actualRunCount?: number;
+}
 /** Which read paths the newly-created verb was wired into. */
 export interface WireCreatedVerbResult {
 	/** `skill --requires--> tool` edge written. */
@@ -8942,6 +8985,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					properties?: Record<string, unknown> | undefined;
 					content?: string | undefined;
 					existingEntityId?: string | undefined;
+					updateExisting?: boolean | undefined;
 					facets?: {
 						profileSlug: string;
 						status?: string | undefined;
@@ -8984,18 +9028,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				correlationId: `${string}-${string}-${string}-${string}-${string}`;
 				proposalIds: string[];
-				proposalId?: undefined;
-				proposalType?: undefined;
-				summary?: undefined;
-				reasoning?: undefined;
-				reviewPath?: undefined;
-				reviewUrl?: undefined;
-				threadId?: undefined;
 			} | {
-				status: "proposed";
-				message: string;
-				created: never[];
-				relations: never[];
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				proposalId: string;
 				proposalType: string;
@@ -9004,6 +9037,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewPath: string;
 				reviewUrl: string;
 				threadId: string | undefined;
+				updated?: CaptureUpdateResult[] | undefined;
+				status: "proposed";
+				message: string;
+				created: never[];
+				relations: never[];
 				correlationId?: undefined;
 				proposalIds?: undefined;
 			} | {
@@ -9025,6 +9063,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
+				updated?: CaptureUpdateResult[] | undefined;
 				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
@@ -9040,17 +9081,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetEntityId: string;
 					relationType: string;
 				}[];
-				captureId: `${string}-${string}-${string}-${string}-${string}`;
-				threadId: string | undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				summary?: undefined;
-				reasoning?: undefined;
-				reviewPath?: undefined;
-				reviewUrl?: undefined;
 			} | {
 				project: {
 					rung: null;
@@ -9070,6 +9103,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
+				updated?: CaptureUpdateResult[] | undefined;
 				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
@@ -9085,17 +9121,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetEntityId: string;
 					relationType: string;
 				}[];
-				captureId: `${string}-${string}-${string}-${string}-${string}`;
-				threadId: string | undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				summary?: undefined;
-				reasoning?: undefined;
-				reviewPath?: undefined;
-				reviewUrl?: undefined;
 			} | {
 				project: {
 					projectId: string;
@@ -9115,6 +9143,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
+				updated?: CaptureUpdateResult[] | undefined;
 				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
@@ -9130,17 +9161,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetEntityId: string;
 					relationType: string;
 				}[];
-				captureId: `${string}-${string}-${string}-${string}-${string}`;
-				threadId: string | undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				summary?: undefined;
-				reasoning?: undefined;
-				reviewPath?: undefined;
-				reviewUrl?: undefined;
 			} | {
 				pendingWorkspaceSwitch?: {
 					suggestedWorkspaceId: string;
@@ -9154,6 +9177,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				captureId: `${string}-${string}-${string}-${string}-${string}`;
+				threadId: string | undefined;
+				updated?: CaptureUpdateResult[] | undefined;
 				status: "applied";
 				created: {
 					deduplicated?: true | undefined;
@@ -9169,17 +9195,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetEntityId: string;
 					relationType: string;
 				}[];
-				captureId: `${string}-${string}-${string}-${string}-${string}`;
-				threadId: string | undefined;
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				summary?: undefined;
-				reasoning?: undefined;
-				reviewPath?: undefined;
-				reviewUrl?: undefined;
 			};
 			meta: object;
 		}>;
@@ -19078,6 +19096,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				sentence?: unknown;
 			};
 			output: CreateRuleGovernedResult;
+			meta: object;
+		}>;
+		dryRunRule: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sentence: unknown;
+				windowDays?: number | undefined;
+				workspaceId?: string | undefined;
+				ruleId?: string | undefined;
+			};
+			output: RuleDryRunMatch | {
+				status: "not_replayable";
+				reason: string;
+			} | {
+				status: "denied";
+				reason: string;
+				failure: RuleCompileFailure;
+			};
 			meta: object;
 		}>;
 		listRules: import("@trpc/server").TRPCQueryProcedure<{
