@@ -81,6 +81,7 @@ import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { messages } from "@synap/database/schema";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { satisfyExpectedOutputs } from "../../services/focus-sessions/satisfy-expected-output.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -460,6 +461,35 @@ export async function applyProposalApproval(args: {
   };
   ctx: Context;
 }): Promise<ProposalExecutorResult> {
+  const result = await applyProposalApprovalInner(args);
+
+  // HONEST DELIVERABLE SIGNAL. A session-scoped proposal that actually applied
+  // is the one thing about a session's expected outputs a human really vouched
+  // for — so the stamp hangs off approval, never off the agent's own say-so.
+  // Deliberately AFTER the inner call and outside its control flow: the inner
+  // door returns from ~20 branches, and a provenance stamp must not be able to
+  // fail an approval that already succeeded (hence the swallow + log).
+  if (args.proposal.sessionId) {
+    try {
+      await satisfyExpectedOutputs({
+        sessionId: args.proposal.sessionId,
+        targetType: args.proposal.targetType,
+        proposalId: args.proposal.id,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, proposalId: args.proposal.id },
+        "expected-output stamp failed after a successful approval"
+      );
+    }
+  }
+
+  return result;
+}
+
+async function applyProposalApprovalInner(
+  args: Parameters<typeof applyProposalApproval>[0]
+): Promise<ProposalExecutorResult> {
   const { proposal, userId, input, ctx } = args;
 
   const payload = proposal.data as StoredProposalData | null | undefined;
