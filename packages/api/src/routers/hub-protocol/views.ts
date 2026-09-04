@@ -18,7 +18,10 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { viewsRouter as regularViewsRouter } from "../views.js";
 import { createHubProtocolCallerContext } from "./utils.js";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { getDb, and, eq, or, isNull } from "@synap/database";
 import { views, widgetDefinitions } from "@synap/database/schema";
 import { composeWidgetError } from "../../services/cells/compose-widget-catalog.js";
@@ -202,7 +205,10 @@ export const hubViewsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "View update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "View update proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,
@@ -288,7 +294,10 @@ export const hubViewsRouter = router({
         // but handle gracefully if governance settings override the whitelist.
         return {
           status: "proposed" as const,
-          message: "Bento arrangement proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Bento arrangement proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,

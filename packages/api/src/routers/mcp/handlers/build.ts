@@ -54,7 +54,7 @@ export const buildHandlers: McpHandlerMap = {
     // role, or the agent-join proposal for a non-member) AND the agent
     // propose/execute decision. No manual verifyWorkspaceAccess: that would
     // hard-deny an agent the gate would otherwise let PROPOSE.
-    const { checkPermissionOrPropose } =
+    const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
       userId,
@@ -83,8 +83,10 @@ export const buildHandlers: McpHandlerMap = {
     ) {
       return ok({
         status: "proposed",
-        message:
-          "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval.",
+        message: proposedMessageFor(
+          perm.proposalType,
+          "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval."
+        ),
         proposalId: perm.proposalId,
         summary: perm.summary,
         reviewPath: perm.reviewPath,
@@ -385,10 +387,25 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const proposalId = args.proposalId as string;
     if (args.summary === undefined && args.reasoning === undefined) {
       return ok({ error: "Provide at least one of: summary, reasoning" });
     }
+    // Short-id parity with the sibling `synap_reject_proposal`: accepts the
+    // 8-char id `synap_list_proposals` / the CLI prints, not just a full uuid
+    // (a bare prefix in a `WHERE id = $1` uuid lookup throws).
+    const proposalId = await resolveProposalId(
+      userId,
+      args.proposalId as string
+    );
+    // AUTHORITY: unlike `reject` (which routes through
+    // `proposalsRouter.createCaller().reject()`), this door cannot go through
+    // the tRPC `proposals.revise` procedure — that one's input has no
+    // `summary`/`reasoning` and applies an ENVELOPE data patch, so it cannot
+    // express a summary/reasoning-only revision. The reviewer-authority
+    // predicate therefore lives INSIDE the shared revise core
+    // (`mergeProposalRevision`, which `reviseProposal` wraps), so this door, the
+    // Hub door and the tRPC door are gated by the ONE ladder
+    // (`computeCanReviewApproval`) and cannot drift apart.
     const { reviseProposal } =
       await import("../../../services/proposals/proposals-service.js");
     await reviseProposal({

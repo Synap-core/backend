@@ -313,7 +313,24 @@ export async function createRuleGoverned(
       const automationId = await materializeAutomationForPrincipal({
         database: db,
         definition: {
-          workspaceId: workspaceId ?? null,
+          // THE RULE'S SCOPE, not the calling workspace. `workspaceId` above
+          // resolves the POD branch to `input.workspaceId ?? null` — the
+          // workspace the caller happened to be in — so a rule scoped
+          // `{kind:"pod"}` compiled to an automation pinned to ONE workspace
+          // while its `skills` row (line ~399, the same expression used here)
+          // was correctly pod-wide. Every surface read the rule as pod-wide and
+          // it fired for a fraction of what it said, with nothing to surface the
+          // gap: `snapshotBehaviours` hashes only `flowDefinition`, so the
+          // divergence reader is blind to scope.
+          //
+          // A pod-wide automation IS a supported lane — `podWideMatch`
+          // (automation-trigger-matcher.ts) pairs `workspaceId IS NULL` with
+          // `createdBy = userId`, so it matches the owner's events across every
+          // workspace, which is exactly what "pod" means here. The one gap is a
+          // pod-wide automation meeting a pod-wide EVENT, which the matcher
+          // skips with a loud warning — a pre-existing executor-side limitation,
+          // not something this door introduces.
+          workspaceId: input.scope.kind === "workspace" ? workspaceId : null,
           name: ruleNameFromIntent(intent),
           description: intent,
           triggerType: compiled.trigger.triggerType,

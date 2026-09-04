@@ -9,6 +9,7 @@
  */
 
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
+import { proposedMessageFor } from "../../../utils/permission-check.js";
 import {
   withParentSessionId,
   attachParentSessionIds,
@@ -261,7 +262,10 @@ export const sessionHandlers: McpHandlerMap = {
       case "proposed":
         return ok({
           status: "proposed",
-          message: "Focus session update proposed for review",
+          message: proposedMessageFor(
+            (result as { proposalType?: string }).proposalType,
+            "Focus session update proposed for review"
+          ),
           proposalId: result.proposalId,
           summary: result.summary,
           reviewPath: result.reviewPath,

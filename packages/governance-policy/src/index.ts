@@ -1393,20 +1393,60 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
 };
 
 /**
- * PRIMARY strictness rank — DERIVED LIVE from the floors themselves, so it can
- * never drift from the policy it is supposed to mirror. Mirrors the rung order
+ * PRIMARY strictness rank — derived from the STRUCTURAL floors (admin,
+ * destructive), which are absolute and caller-independent.
+ *
+ * ⚠️ HONEST BOUND, do not overstate it. The third tier reads an auto-approve
+ * list, and the caller's EFFECTIVE list may differ from the shipped default.
+ * Every composite pair is absent from the shipped default, so they tie there
+ * and the winner falls to `COMPOSITE_OP_BLAST_RADIUS` — which is an ordering of
+ * consequence, NOT of policy. A caller that legitimately holds the effective
+ * list may pass it; a caller that would have to READ it to do so must not
+ * (`autoapprovefor-decision-ssot` forbids a second policy reader, and it is
+ * right to). For those callers the correct instrument is per-member evaluation
+ * through the resolver, not a smarter single pair. Mirrors the rung order
  * in {@link decideAgentPolicy}: admin (rung 2) is stricter than destructive
  * (2.5), which is stricter than "not on the default auto-approve whitelist"
  * (rung 8), which is stricter than a whitelisted write.
  */
-function gatePairFloorRank(pair: {
-  subjectType: string;
-  action: string;
-}): number {
+function gatePairFloorRank(
+  pair: {
+    subjectType: string;
+    action: string;
+  },
+  /**
+   * The auto-approve list ACTUALLY IN FORCE for this write — the workspace's
+   * effective `autoApproveFor`, not the shipped default.
+   *
+   * WHY THIS IS A PARAMETER. Ranking against the shipped `DEFAULT_AUTO_APPROVE`
+   * silently UNDER-GATES, and it is reachable in ordinary configuration. None of
+   * the five composite pairs is in the shipped default, so every one collapsed
+   * into tier 1 and the winner fell through to `COMPOSITE_OP_BLAST_RADIUS` — an
+   * ordering with no relationship to the policy in force. Measured:
+   *
+   *   ops [create_entity, create_relation], workspace autoApproveFor
+   *   widened to ["entity.create"] (the ordinary CRM/capture setup):
+   *     derived pair  entity/create   -> execute
+   *     member        relation/create -> propose   <-- written ungoverned
+   *
+   * Rung 2.8 makes it likelier, not rarer: the widen-lane scanner mints
+   * PER-ACTION rules, and `entity.create` is exactly the one it mints. Rung 4
+   * (`autoApproveFor`) and rung 2.8 both feed the real decision, so a rank that
+   * reads only the constant is ranking against a policy nobody is running.
+   *
+   * Omit it and you get the shipped-default behaviour — correct only when the
+   * workspace has not widened anything.
+   */
+  autoApproveFor: readonly string[] = DEFAULT_AUTO_APPROVE
+): number {
   const eventKey = `${pair.subjectType}.${pair.action}`;
   if (ADMIN_ACTIONS.includes(eventKey)) return 3;
   if (DESTRUCTIVE_ACTIONS.includes(pair.action)) return 2;
-  if (!DEFAULT_AUTO_APPROVE.includes(eventKey)) return 1;
+  // `isAutoApproved` is the SAME predicate rung 8 runs (it wraps
+  // `matchesActionPattern`, so `entity.*` and `*.*` behave identically here and
+  // there). Re-implementing the glob would be a second matcher that can drift
+  // from the rung it exists to mirror.
+  if (!isAutoApproved(eventKey, autoApproveFor)) return 1;
   return 0;
 }
 
@@ -1418,7 +1458,13 @@ function gatePairFloorRank(pair: {
  * this function exists to remove — a gate declaring a write nobody verified.
  */
 export function deriveGatePairFromOperations(
-  operations: ReadonlyArray<{ op?: unknown }>
+  operations: ReadonlyArray<{ op?: unknown }>,
+  /**
+   * The workspace's EFFECTIVE auto-approve list. Pass it wherever it is known —
+   * without it the rank is computed against the shipped defaults and a widened
+   * workspace can under-gate (see `gatePairFloorRank`).
+   */
+  autoApproveFor: readonly string[] = DEFAULT_AUTO_APPROVE
 ): GovernedWritePair {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new Error(
@@ -1442,8 +1488,14 @@ export function deriveGatePairFromOperations(
       strictest = name;
       continue;
     }
-    const candidate = gatePairFloorRank(COMPOSITE_OP_GATE_PAIRS[name]);
-    const incumbent = gatePairFloorRank(COMPOSITE_OP_GATE_PAIRS[strictest]);
+    const candidate = gatePairFloorRank(
+      COMPOSITE_OP_GATE_PAIRS[name],
+      autoApproveFor
+    );
+    const incumbent = gatePairFloorRank(
+      COMPOSITE_OP_GATE_PAIRS[strictest],
+      autoApproveFor
+    );
     if (
       candidate > incumbent ||
       (candidate === incumbent &&

@@ -3,6 +3,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 // Mutable mock state — configured per test.
 const state = vi.hoisted(() => ({
   selectRows: [] as Array<{ id: string }>,
+  /**
+   * Rows the CHANNEL WRITE FLOOR lookup returns. Non-empty = the caller may see
+   * (and therefore post to) the channel. Default visible so the ack-integrity
+   * assertions below keep testing what they were written to test; the floor
+   * itself is covered by `post-message.channel-floor.test.ts`.
+   */
+  channelRows: [{ id: "chan-1" }] as Array<{ id: string }>,
   insertRows: [] as Array<{ id: string }>,
   insertCalls: 0,
 }));
@@ -11,16 +18,35 @@ vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
+// The channel floor's predicate is the canonical `channelVisibilityWhere`; it is
+// unit-tested at its own door. Stub it here so this file's DB mock does not have
+// to model the whole channels/workspace-membership schema.
+vi.mock("../../utils/channel-visibility.js", () => ({
+  channelVisibilityWhere: () => undefined,
+}));
+
 vi.mock("@synap/database", () => {
-  const selectChain = {
-    from: vi.fn().mockReturnThis(),
-    where: vi.fn().mockReturnThis(),
-    orderBy: vi.fn().mockReturnThis(),
-    limit: vi.fn(() => Promise.resolve(state.selectRows)),
+  // Two distinct selects reach this mock: the channel floor
+  // (`from().where().limit()`) and the dedup lookup (which also calls
+  // `orderBy()`). Key off `orderBy` so each resolves its own rows.
+  const makeSelectChain = () => {
+    let ordered = false;
+    const chain: Record<string, unknown> = {
+      from: vi.fn(() => chain),
+      where: vi.fn(() => chain),
+      orderBy: vi.fn(() => {
+        ordered = true;
+        return chain;
+      }),
+      limit: vi.fn(() =>
+        Promise.resolve(ordered ? state.selectRows : state.channelRows)
+      ),
+    };
+    return chain;
   };
   return {
     db: {
-      select: vi.fn(() => selectChain),
+      select: vi.fn(() => makeSelectChain()),
       insert: vi.fn(() => {
         state.insertCalls += 1;
         return {
@@ -30,6 +56,8 @@ vi.mock("@synap/database", () => {
         };
       }),
     },
+    // Channel WRITE floor (the door now authorizes `channelId` before writing).
+    channels: { id: "channels.id" },
     messages: {
       id: "id",
       channelId: "channel_id",
@@ -74,6 +102,7 @@ const base = {
 };
 
 beforeEach(() => {
+  state.channelRows = [{ id: "chan-1" }];
   state.selectRows = [];
   state.insertRows = [];
   state.insertCalls = 0;

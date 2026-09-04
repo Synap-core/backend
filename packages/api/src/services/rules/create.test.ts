@@ -253,6 +253,69 @@ describe("a rule that carries a sentence compiles or is refused", () => {
     expect(materializeCalls.at(-1)).not.toHaveProperty("agentUserId");
   });
 
+  it("compiles the EXECUTOR-TRUE dialect the browser's rule editor emits", async () => {
+    // `type: null` + `__outputType` is how the only surface offering the full
+    // executor vocabulary encodes a THEN. The compiler used to count it as
+    // unconfigured and refuse the rule as "no THEN" — so the door could not
+    // consume the only sentence the product actually produces.
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: {
+        ...GOOD_SENTENCE,
+        actions: [
+          {
+            type: null,
+            config: {
+              __outputType: "notification",
+              __actionKey: "notification",
+              message: "hi",
+            },
+          },
+        ],
+      },
+    });
+    expect(result.status).toBe("created");
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    const nodes = (
+      def.flowDefinition as { nodes: Array<Record<string, unknown>> }
+    ).nodes;
+    const output = nodes.find((n) => n.type === "output");
+    expect((output!.data as Record<string, unknown>).outputType).toBe(
+      "notification"
+    );
+    // Bookkeeping keys never reach the stored flow.
+    expect(
+      (output!.data as { config: Record<string, unknown> }).config
+    ).toEqual({
+      message: "hi",
+    });
+  });
+
+  it("a POD-scoped rule compiles a POD-WIDE automation, not a workspace one", async () => {
+    // The `skills` row and the automation must agree about scope. They did not:
+    // the row was pod-wide and the automation was pinned to whatever workspace
+    // the caller was in, so the rule fired for a fraction of what it said.
+    await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "pod" },
+      workspaceId: "ws-1",
+    });
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect(def.workspaceId).toBeNull();
+  });
+
+  it("a WORKSPACE-scoped rule still pins its automation to that workspace", async () => {
+    await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "workspace", workspaceId: "ws-9" },
+      workspaceId: "ws-1",
+    });
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect(def.workspaceId).toBe("ws-9");
+  });
+
   it("REFUSES a sentence with no THEN, naming the clause", async () => {
     const result = await create({
       intent: BEHAVIOUR,

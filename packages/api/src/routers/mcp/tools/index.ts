@@ -20,6 +20,7 @@ import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remembe
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { automationDataContractSchema } from "../../automations.js";
+import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 
 /**
  * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
@@ -79,6 +80,41 @@ function buildAutomationDataContractJsonSchema(): Record<string, unknown> {
 
 const AUTOMATION_DATA_CONTRACT_JSON_SCHEMA =
   buildAutomationDataContractJsonSchema();
+
+/**
+ * JSON Schema for `synap_create_rule`'s `sentence` input, DERIVED from
+ * `ruleSentenceSchema` — the very schema the rule door parses the sentence with
+ * before compiling it. Same reasoning as the automation data-contract schema
+ * above: the published tool surface and the parser that refuses a bad sentence
+ * cannot drift apart, and teaching the grammar a new action type widens this
+ * tool with no edit here.
+ *
+ * Prose descriptions are layered on top. `$schema` is stripped (MCP
+ * `inputSchema` property entries are plain sub-schemas, and gen-manifest.ts
+ * needs a deterministic committed diff).
+ */
+function buildRuleSentenceJsonSchema(): Record<string, unknown> {
+  const derived = z.toJSONSchema(ruleSentenceSchema, {
+    io: "input",
+  }) as Record<string, unknown>;
+  delete derived.$schema;
+
+  const properties = derived.properties as Record<
+    string,
+    Record<string, unknown>
+  >;
+  derived.description =
+    "The rule's structured WHEN / WHERE / THEN. Send it when the rule should DO something — the door compiles it into a live automation or REFUSES naming the clause that failed. Omit it for a prose-only FACT rule. All three keys are required when you send it (`conditions` and `actions` may be empty arrays, but an empty `actions` is refused as 'no THEN').";
+  properties.trigger.description =
+    "WHEN — `null` is refused (nothing would ever start the rule). triggerType 'event' → subjectCategory + actionVerb (+ optional profileSlug), e.g. { triggerType: 'event', subjectCategory: 'entity', profileSlug: 'deal', actionVerb: 'created' }. triggerType 'cron' → cronFrequency (+ cronTime / cronDays / cronDayOfMonth / cronTimezone). The compiled event pattern is checked against the runtime's own event grammar, so a WHEN nothing emits is refused rather than stored.";
+  properties.conditions.description =
+    "WHERE — narrows the WHEN. Each row needs BOTH `key` and `value`: a half-filled row is refused, not dropped, because dropping it would silently apply the rule more widely than the author wrote. Empty array = no narrowing.";
+  properties.actions.description =
+    "THEN — what runs. At least one action with a non-null `type`, or the rule is refused. `config` is per-type and is validated against the executor's own node contract. `run_command` is refused: the command step has no receiver and would fail every time — use an AI step instead.";
+  return derived;
+}
+
+const RULE_SENTENCE_JSON_SCHEMA = buildRuleSentenceJsonSchema();
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
@@ -1720,7 +1756,12 @@ export const tools = {
                   existingEntityId: {
                     type: "string",
                     description:
-                      "UUID of an entity that already exists — LINK it instead of creating a duplicate.",
+                      "UUID of an entity that already exists. On its own this LINKS — the entity is attached and its fields are left untouched, so the properties you extracted are DISCARDED. Pair it with `updateExisting: true` to write them instead.",
+                  },
+                  updateExisting: {
+                    type: "boolean",
+                    description:
+                      "With `existingEntityId`: PATCH that entity with the properties in this item instead of discarding them. Use it whenever you recognise the subject AND learned something new about it — 'Ada moved to Acme' should update Ada, not create a second Ada and not link-and-forget the new employer. Gated as `entity`/`update` (never `entity`/`create`), so a governed pod returns a reviewable before→after diff. Without this flag your only options are a duplicate or a silent loss of the facts you just extracted.",
                   },
                   facets: {
                     type: "array",
@@ -2417,6 +2458,57 @@ export const tools = {
             },
           },
           required: ["name", "triggerType", "flowDefinition", "metadata"],
+        },
+      },
+      {
+        name: "synap_create_rule",
+        annotations: {
+          title: "Create rule",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Turn a stated standing intent into a RULE — the COMPILED door, and the one to reach for whenever the user says 'always…', 'from now on…', 'never…', 'every Monday…', or states a preference that should outlive this conversation. Send their own words as `intent`.\n" +
+          "• `intent` alone → a FACT rule: durable prose ('Acme prefers async') that any agent reads later while reasoning. Legitimate and complete.\n" +
+          "• `intent` + `sentence` → BEHAVIOUR: the door compiles your WHEN/WHERE/THEN into a real automation, or refuses. A rule that describes something running is never stored as prose that cannot run.\n" +
+          "USE THIS INSTEAD OF synap_create_automation / synap_create_skill for a standing intent. Those are raw primitives — they persist whatever you hand them, so a bad trigger installs 'active' and silently never fires, and an instruction skill only ever sits there as text. This door verifies the compiled artifact against the runtime BEFORE anything is saved. (Reach for synap_create_automation directly only when you are authoring a flow that is not a user-stated rule — a multi-step pipeline with its own data contract.)\n" +
+          "WHAT IT REJECTS, and why each rejection is real: a WHEN naming an event no emitter produces (the automation could never match); a WHERE row with a field but no value (dropping it would widen the rule beyond what was written); a THEN with no configured action (a trigger wired to nothing); `run_command` (the command step has no receiver and throws every run — use an AI step). A refusal comes back as status='denied' with `failure.clause` (WHEN | WHERE | THEN) and a reason written for a human. FIX THAT CLAUSE AND RESEND — it is a verdict, not a transient error, and re-sending it unchanged will fail identically.\n" +
+          "If the intent describes something that should run and you send no `sentence`, the receipt carries `needsBehaviour` — the rule was saved as prose and will not execute; say so rather than reporting it as in effect.\n" +
+          "Scope: pod-wide by default; pass `workspaceId` for a domain rule, `projectId` for the cross-cutting lens. `expiresAt` makes the rule stop applying — pass one whenever the intent is situational ('while we're in the launch push'), because a standing rule with no expiry is one the user must remember to revoke.\n" +
+          "Governed like every write: status='proposed' is SUCCESS, not an error — surface the returned link as a markdown link and never report a proposed rule as already in effect.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              description:
+                "The rule in the user's own words — this IS the rule an agent reads later, so keep their phrasing rather than paraphrasing it into a spec.",
+            },
+            sentence: RULE_SENTENCE_JSON_SCHEMA,
+            scope: {
+              type: "string",
+              enum: ["pod", "workspace", "user"],
+              description:
+                "Where the rule applies. Defaults to 'workspace' when a workspaceId resolves, otherwise 'pod' (everywhere).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens. Omit for a pod-wide rule; the ambient workspace focus is used when set.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional cross-cutting project lens — composes with the workspace lens.",
+            },
+            expiresAt: {
+              type: "string",
+              description:
+                "ISO-8601 instant with offset (e.g. '2026-12-31T00:00:00Z') after which the rule stops applying. A non-instant is refused rather than stored.",
+            },
+          },
+          required: ["intent"],
         },
       },
       {

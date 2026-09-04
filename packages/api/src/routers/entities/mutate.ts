@@ -21,7 +21,10 @@ import {
 } from "@synap/database";
 import { entities, views, workspaces } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
@@ -202,7 +205,10 @@ export const mutateProcs = {
       if ("proposalId" in perm) {
         return {
           status: "proposed",
-          message: "Update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Update proposed for review"
+          ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
@@ -465,7 +471,10 @@ export const mutateProcs = {
       if ("proposalId" in perm) {
         return {
           status: "proposed",
-          message: "Deletion proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Deletion proposed for review"
+          ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,

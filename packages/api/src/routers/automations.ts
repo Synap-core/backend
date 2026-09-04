@@ -15,7 +15,10 @@ import { AccessContext, scopedDb } from "../access/index.js";
 // all, a workspace one only to its members/owner.
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
@@ -1747,7 +1750,10 @@ export const automationsRouter = router({
           return {
             status: "proposed" as const,
             id: null as string | null,
-            message: "Automation creation proposed for review",
+            message: proposedMessageFor(
+              perm.proposalType,
+              "Automation creation proposed for review"
+            ),
             proposalId: perm.proposalId,
           };
         }

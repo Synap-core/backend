@@ -220,6 +220,75 @@ export type EventPattern =
   EventName | `${SubjectType}.${EventAction}.*` | `${SubjectType}.*`;
 
 /**
+ * DOMAIN-VERB SUBJECTS — first-party subjects whose event ACTIONS are domain
+ * verbs rather than the CRUD five, exactly like the connector family above.
+ *
+ * 🔴 Why this exists. `validateEventPattern` is the AUTHORING GATE: the
+ * automation create door runs it on every incoming trigger, so a pattern it
+ * rejects can never be authored, by any door, ever. It was narrower than the
+ * event catalog the system actually emits — measured, 13 of the 26 types
+ * declared in `@synap/events`' `event-types.ts` were rejected — so half the
+ * pod's own events were unreachable as triggers. A rule "when a proposal is
+ * approved" or "when a notification is created" could not be written at all.
+ *
+ * These six subjects appear in the catalog and in neither list: `command`,
+ * `external_channel`, `focus_session`, `inbox_item`, `messaging_account`,
+ * `notification`. (`SUBJECT_TYPES` carries `inboxItem`; the catalog emits
+ * `inbox_item` — a spelling fork, and the catalog is the one the runtime
+ * matches on.)
+ *
+ * Kept SEPARATE from `SUBJECT_TYPES` deliberately: that list is the CRUD
+ * subject vocabulary and widening it would let `entity.created.completed`-shaped
+ * past-tense patterns back through the strict action check. These bypass the
+ * action check the same way connectors do, and nothing else changes.
+ *
+ * Guarded by `packages/types/src/events/catalog-parity.tripwire.test.ts`, which
+ * runs BOTH the declared catalog AND every literal `(subjectType, action)` pair
+ * at an `emitSideEffects(...)` call site through this validator — so a new event
+ * turns that test red instead of silently becoming unauthorable.
+ *
+ * ⚠️ The CATALOG and the RUNTIME are two different things, and only the second
+ * one fires. `event-types.ts` DECLARES types; the reactor
+ * (`packages/events/src/side-effects.ts`) CONSTRUCTS the pattern it matches on as
+ * `` `${payload.subjectType}.${payload.action}.completed` `` from the emit site's
+ * own values. Validating the catalog alone proved a declaration, not a behaviour
+ * — `external_webhook`, `hydration` and `tool` are emitted at real call sites and
+ * appear in no catalog entry, so they were still unauthorable after the catalog
+ * was made to pass. Check the emit sites.
+ */
+export const DOMAIN_SUBJECT_TYPES = [
+  "command",
+  "external_channel",
+  "external_webhook",
+  "focus_session",
+  "hydration",
+  "inbox_item",
+  "messaging_account",
+  "notification",
+  "tool",
+] as const;
+
+export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];
+
+/**
+ * Extra, non-CRUD actions a STRICT subject legitimately emits.
+ *
+ * `proposal` and `user` ARE `SUBJECT_TYPES`, so they reach the strict action
+ * check — and the catalog emits `proposal.approved`, `proposal.created`,
+ * `proposal.rejected`, `user.updated`, none of which are in `EVENT_ACTIONS`.
+ *
+ * Narrow on purpose: adding `created`/`updated` to `EVENT_ACTIONS` globally
+ * would make `entity.created.completed` validate again, and no emitter produces
+ * that — it is the past-tense pattern the sentence grammar's mood bridge exists
+ * to prevent. A per-subject allowance accepts exactly what is emitted and
+ * nothing more.
+ */
+const SUBJECT_EXTRA_ACTIONS: Record<string, readonly string[]> = {
+  proposal: ["approved", "created", "rejected"],
+  user: ["updated"],
+};
+
+/**
  * Validate that a string is a valid event pattern at runtime.
  * Use this in API routes before persisting automation triggerConfig.
  *
@@ -266,6 +335,13 @@ export function validateEventPattern(raw: string): EventPattern {
     return raw as EventPattern;
   }
 
+  // First-party subjects whose actions are domain verbs — same bypass, same
+  // reason. See DOMAIN_SUBJECT_TYPES above for why these are not simply added
+  // to SUBJECT_TYPES.
+  if ((DOMAIN_SUBJECT_TYPES as readonly string[]).includes(subject)) {
+    return raw as EventPattern;
+  }
+
   if (!SUBJECT_TYPES.includes(subject as SubjectType)) {
     throw new Error(
       `Invalid event pattern "${raw}": subject "${subject}" is not a recognised SubjectType. ` +
@@ -283,7 +359,11 @@ export function validateEventPattern(raw: string): EventPattern {
     return raw as EventPattern;
   }
 
-  if (!EVENT_ACTIONS.includes(action as EventAction)) {
+  const extra = SUBJECT_EXTRA_ACTIONS[subject!];
+  if (extra && extra.includes(action!)) {
+    // A non-CRUD action this specific subject really emits (proposal.approved,
+    // user.updated). Phase still checked below.
+  } else if (!EVENT_ACTIONS.includes(action as EventAction)) {
     throw new Error(
       `Invalid event pattern "${raw}": action "${action}" is not a recognised EventAction. ` +
         `Valid actions: ${EVENT_ACTIONS.join(", ")}.`

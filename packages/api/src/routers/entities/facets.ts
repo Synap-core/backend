@@ -25,7 +25,10 @@ import {
   profileWorkspaceAccess,
 } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { randomUUID } from "crypto";
 import { canWriteFacet } from "../../utils/facet-write-gate.js";
@@ -298,7 +301,10 @@ export const facetProcs = {
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Facet attach proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Facet attach proposed for review"
+          ),
           facet: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
@@ -456,7 +462,10 @@ export const facetProcs = {
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Facet update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Facet update proposed for review"
+          ),
           facet: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
@@ -586,7 +595,10 @@ export const facetProcs = {
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Facet detach proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Facet detach proposed for review"
+          ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,

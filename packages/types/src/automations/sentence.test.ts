@@ -13,6 +13,7 @@ import {
   buildEventPattern,
   flowToSentenceAction,
   flowToSentenceActions,
+  isActionConfigured,
   toBackendTrigger,
   toFlowDefinition,
   triggerToSentence,
@@ -214,5 +215,214 @@ describe("buildEventPattern emits patterns the runtime accepts", () => {
       });
       expect(() => validateEventPattern(pattern)).not.toThrow();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The EXECUTOR-TRUE THEN dialect must ROUND-TRIP.
+//
+// The grammar could read `type: null` + `config.__*` actions and never write
+// them, so every sentence authored by the browser's rule editor — the only
+// surface offering the full executor vocabulary — compiled to a trigger wired
+// to nothing. These pin the forward half against the reverse half.
+// ---------------------------------------------------------------------------
+
+describe("the type:null executor-true dialect compiles and round-trips", () => {
+  it("compiles a raw __outputType into an output node the executor dispatches", () => {
+    // `facet_attach` is a real executor output with NO friendly ActionType —
+    // exactly the case the alias map cannot express.
+    const flow = toFlowDefinition([
+      {
+        type: null,
+        config: {
+          __outputType: "facet_attach",
+          __actionKey: "facet_attach",
+          profileSlug: "client",
+        },
+      },
+    ]);
+    const node = flow.nodes.find((n) => n.type === "output");
+    expect(node).toBeDefined();
+    expect(node!.data.outputType).toBe("facet_attach");
+    // Bookkeeping never reaches a stored flow — the executor would read a `__`
+    // key as a verb param.
+    expect(node!.data.config).toEqual({ profileSlug: "client" });
+  });
+
+  it("compiles a capability THEN into a capability node, and reads it back identically", () => {
+    const action = {
+      type: null as const,
+      config: {
+        __nodeType: "capability",
+        __capabilityId: "google-drive",
+        __verbId: "create_link",
+        __actionKey: "verb:create_link",
+        fileId: "f1",
+      },
+    };
+    const flow = toFlowDefinition([action]);
+    const node = flow.nodes.find((n) => n.type === "capability");
+    expect(node).toBeDefined();
+    expect(node!.data).toMatchObject({
+      capabilityId: "google-drive",
+      verbId: "create_link",
+      // `inputMapping` is the key the executor reads; `params` matched nothing.
+      inputMapping: { fileId: "f1" },
+    });
+    // The reverse reader must reproduce the sentence the writer was given.
+    expect(flowToSentenceActions(flow)[0]).toEqual(action);
+  });
+
+  it("still drops a TRULY empty action — an unconfigured row is not a THEN", () => {
+    expect(toFlowDefinition([{ type: null, config: {} }]).nodes).toHaveLength(
+      1
+    );
+    expect(isActionConfigured({ type: null, config: {} })).toBe(false);
+    expect(
+      isActionConfigured({ type: null, config: { __outputType: "" } })
+    ).toBe(false);
+  });
+
+  it("a flow built from the dialect passes the executor's own node contract", () => {
+    // The shape that used to reach the compiler: an output node with
+    // `outputType: undefined`, which validateFlowDefinition rejects.
+    const flow = toFlowDefinition([
+      { type: null, config: { __outputType: "notification", message: "hi" } },
+    ]);
+    for (const n of flow.nodes) {
+      if (n.type === "output") expect(n.data.outputType).toBeTruthy();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ROUND TRIP AS A PROPERTY, not as the one case I thought of.
+//
+// I added the forward half of the executor-true dialect and wrote a round-trip
+// test — for the CAPABILITY shape only. The raw-`__outputType` shape was broken
+// the whole time: the reverse dropped `__outputType`, so the rebuilt action
+// failed `isActionConfigured` and `toFlowDefinition` silently DROPPED the node.
+// Editing and re-saving such a rule would have erased its THEN.
+//
+// The lesson is the shape of the test, not the fix: assert
+// `forward(reverse(flow)) === flow` over EVERY output type the executor has,
+// derived from the alias map plus the unaliased ones — so a new output type is
+// covered without editing this file.
+// ---------------------------------------------------------------------------
+
+describe("sentence ⇄ flow is a true round trip for every output type", () => {
+  // Aliased (a friendly ActionType exists) and unaliased (type: null + __outputType).
+  const ALIASED = [
+    "notification",
+    "entity_create",
+    "entity_update",
+    "channel_message",
+    "webhook",
+  ] as const;
+  const UNALIASED = [
+    "facet_attach",
+    "facet_update",
+    "facet_detach",
+    "relation_create",
+    "session_update",
+    "set_state",
+  ] as const;
+
+  it.each([...ALIASED, ...UNALIASED].map((t) => [t]))(
+    "outputType %s survives flow → sentence → flow unchanged",
+    (outputType) => {
+      const original = toFlowDefinition([
+        {
+          type: null,
+          config: { __outputType: outputType, __actionKey: outputType, k: "v" },
+        },
+      ]);
+      const node = original.nodes.find((n) => n.type === "output");
+      expect(node, `${outputType} produced no output node`).toBeDefined();
+      expect(node!.data.outputType).toBe(outputType);
+
+      // The whole point: rebuild the sentence from the stored flow, compile it
+      // again, and the flow must be identical. A dropped node shows up here.
+      const rebuilt = toFlowDefinition(flowToSentenceActions(original));
+      expect(rebuilt).toEqual(original);
+    }
+  );
+
+  it("every alias in the map round-trips through its friendly ActionType too", () => {
+    // Derived from the map, so teaching the grammar a new alias covers it here.
+    for (const outputType of ALIASED) {
+      const flow = toFlowDefinition([
+        { type: null, config: { __outputType: outputType, msg: "x" } },
+      ]);
+      const back = flowToSentenceActions(flow);
+      expect(back).toHaveLength(1);
+      // An aliased output comes back as its FRIENDLY type — that is correct and
+      // is why this case never broke.
+      expect(back[0].type).not.toBeNull();
+      expect(toFlowDefinition(back)).toEqual(flow);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The chosen KIND must land where the runtime actually reads it.
+//
+// `triggerConfig.profileSlug` (top level) is read ONLY by the matcher's
+// `capture.` branch, against `data.profileSlugs` (plural). There is no `entity.`
+// branch — so "when a PERSON is created" fired on every entity kind, silently.
+// ---------------------------------------------------------------------------
+
+describe("an entity trigger's profileSlug lands in filters, where matchFilters reads it", () => {
+  const entityTrigger = {
+    triggerType: "event" as const,
+    subjectCategory: "entity" as const,
+    actionVerb: "created" as const,
+    profileSlug: "person",
+  };
+
+  it("puts the kind in `filters` — NOT the top-level key nothing reads", () => {
+    const { triggerConfig } = toBackendTrigger(entityTrigger, []);
+    expect(triggerConfig.filters).toMatchObject({ profileSlug: "person" });
+    expect(triggerConfig.profileSlug).toBeUndefined();
+  });
+
+  it("keeps the top-level key for CAPTURE, whose branch reads a different shape", () => {
+    // The capture branch reads `data.profileSlugs` (plural) — a shape
+    // `matchFilters` cannot evaluate, so this one must stay where it is.
+    const { triggerConfig } = toBackendTrigger(
+      {
+        triggerType: "event",
+        subjectCategory: "capture",
+        profileSlug: "person",
+      },
+      []
+    );
+    expect(triggerConfig.profileSlug).toBe("person");
+    expect(triggerConfig.filters).toBeUndefined();
+  });
+
+  it("does not clobber a WHERE condition the author wrote", () => {
+    const { triggerConfig } = toBackendTrigger(entityTrigger, [
+      { id: "c1", key: "source", operator: "is", value: "capture" },
+    ]);
+    expect(triggerConfig.filters).toEqual({
+      source: "capture",
+      profileSlug: "person",
+    });
+  });
+
+  it("round-trips the kind back into the WHEN row from EITHER home", () => {
+    // New shape (filters) …
+    const fresh = toBackendTrigger(entityTrigger, []);
+    expect(triggerToSentence("event", fresh.triggerConfig).profileSlug).toBe(
+      "person"
+    );
+    // … and the pre-fix shape still stored on live pods.
+    expect(
+      triggerToSentence("event", {
+        eventPattern: "entity.create.completed",
+        profileSlug: "person",
+      }).profileSlug
+    ).toBe("person");
   });
 });

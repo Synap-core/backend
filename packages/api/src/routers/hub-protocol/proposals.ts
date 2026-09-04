@@ -138,6 +138,16 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // AUTHORITY: this door passes a raw caller-supplied `proposalId` and used
+      // to reach the revise core with NO ownership/review predicate — any
+      // hub-protocol.write key could rewrite the `summary`/`reasoning` a human
+      // reads before approving ANY pending proposal on the pod. The
+      // reviewer-authority ladder (`computeCanReviewApproval`) now runs INSIDE
+      // `mergeProposalRevision` — the one shared core all three revise doors
+      // (tRPC / Hub / MCP) funnel through — so it cannot be missed here again.
+      // `ctx.userId` is the authenticated key owner (an agent key is remapped to
+      // its human owner by `api-key-auth.ts`), which is what the ladder gates on.
+
       // The IS `update_proposal` tool sends FLAT INNER fields ("Must match the
       // original proposal's structure (e.g. entity fields for entity
       // proposals)") — or a composite `{ operations }`. Route through the ONE

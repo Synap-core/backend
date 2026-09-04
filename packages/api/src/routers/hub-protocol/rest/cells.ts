@@ -300,7 +300,7 @@ export function registerCellsRoutes(app: HubHono): void {
       // route an operator's own CLI push to a proposal. Mirrors the identical
       // `if (input.agentUserId)` carve-out in automationsRouter.create.
       if (agentUserId) {
-        const { checkPermissionOrPropose } =
+        const { checkPermissionOrPropose, proposedMessageFor } =
           await import("../../../utils/permission-check.js");
         const perm = await checkPermissionOrPropose({
           userId: userId ?? "",
@@ -342,8 +342,10 @@ export function registerCellsRoutes(app: HubHono): void {
               reviewPath: perm.reviewPath,
               reviewUrl: perm.reviewUrl,
               ...(perm.deduped ? { deduped: true } : {}),
-              message:
-                "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval.",
+              message: proposedMessageFor(
+                perm.proposalType,
+                "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval."
+              ),
             },
             202
           );

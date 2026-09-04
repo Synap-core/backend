@@ -62,6 +62,7 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   checkPermissionOrPropose,
   previewPermissionDecision,
+  proposedMessageFor,
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
@@ -540,7 +541,10 @@ const playbookAutomationsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Composing automation into playbook proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Composing automation into playbook proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -634,7 +638,10 @@ const playbookAutomationsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Removing automation from playbook proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Removing automation from playbook proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -896,7 +903,10 @@ const playbookEnrollmentsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Enrolling entity into playbook proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Enrolling entity into playbook proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -981,7 +991,10 @@ const playbookEnrollmentsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Unenrolling entity from playbook proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Unenrolling entity from playbook proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -1397,7 +1410,10 @@ export const playbooksRouter = router({
         return {
           playbook: null as Playbook | null,
           status: "proposed" as const,
-          message: "Playbook creation proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Playbook creation proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -1609,7 +1625,10 @@ export const playbooksRouter = router({
         return {
           playbook: null as Playbook | null,
           status: "proposed" as const,
-          message: "Playbook update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Playbook update proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -1742,7 +1761,10 @@ export const playbooksRouter = router({
         return {
           playbook: null as Playbook | null,
           status: "proposed" as const,
-          message: "Playbook archive proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Playbook archive proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -1856,7 +1878,10 @@ export const playbooksRouter = router({
         return {
           session: null as FocusSession | null,
           status: "proposed" as const,
-          message: "Session instantiation proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Session instantiation proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -1939,7 +1964,10 @@ export const playbooksRouter = router({
         return {
           playbook: null as Playbook | null,
           status: "proposed" as const,
-          message: "Playbook promotion proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Playbook promotion proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -2027,7 +2055,10 @@ export const playbooksRouter = router({
           run: null,
           session: null as FocusSession | null,
           status: "proposed" as const,
-          message: "Playbook run proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Playbook run proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }
@@ -2205,7 +2236,10 @@ export const playbooksRouter = router({
         return {
           automationId: null as string | null,
           status: "proposed" as const,
-          message: "Flow save proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Flow save proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }

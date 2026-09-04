@@ -516,6 +516,95 @@ export const skillsRouter = router({
     }),
 
   /**
+   * DRY RUN a rule's behaviour against REAL history — "how many stored events
+   * match this trigger?", answered BEFORE the rule exists.
+   *
+   * Named `dryRunRule` and mounted HERE, on the skills router, for the same
+   * reason `createRule` / `listRules` are: a rule IS a `skills` row, and a
+   * second router door for the same object is a fork. It is NOT
+   * `governanceRules.dryRun`, which belongs to the authorization store and
+   * answers a different question entirely (see `services/rules/dry-run.ts`).
+   *
+   * Returns a MATCH COUNT, never a firing count. `matchingEventCount` is the
+   * number of persisted events the compiled trigger matches; it is not what
+   * "would have fired", because the live path also applies cycle detection,
+   * the chain ceiling, the exactly-once claim, the automation's status and the
+   * governance floor on its THEN. For a rule that already exists,
+   * `actualRunCount` reports REAL firings from `automation_runs` — a different
+   * number answering a different question, deliberately kept separate.
+   *
+   * Compiles through the ONE compiler (`compileRuleSentence`, the same call
+   * `createRuleGoverned` makes before the gate), so a sentence that dry-runs
+   * is a sentence that will create, and a refusal names the same clause.
+   */
+  dryRunRule: protectedProcedure
+    .input(
+      z.object({
+        /** The draft sentence — the SAME schema `createRule` accepts. */
+        sentence: ruleSentenceSchema,
+        /** How far back to replay. */
+        windowDays: z.number().int().min(1).max(90).default(7),
+        /** Narrows the caller's own events; can never widen the floor. */
+        workspaceId: z.string().uuid().optional(),
+        /**
+         * An EXISTING rule to additionally report real firings for. Read under
+         * `visibleSkillsWhere` — a rule the caller cannot see contributes no
+         * automation ids, so the run count is simply absent.
+         */
+        ruleId: z.string().uuid().optional(),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { compileRuleSentence } =
+        await import("../services/rules/compile.js");
+      const compiled = compileRuleSentence(input.sentence);
+      if (!compiled.ok) {
+        // Same contract as `createRule`: a refusal is a RETURNED verdict that
+        // names the failing clause, not a thrown error that loses it.
+        return {
+          status: "denied" as const,
+          reason: compiled.failure.reason,
+          failure: compiled.failure,
+        };
+      }
+
+      let automationIds: string[] = [];
+      if (input.ruleId) {
+        const { readRuleMetadata } = await import("../services/rules/index.js");
+        const row = await db.query.skills.findFirst({
+          where: and(
+            eq(skills.id, input.ruleId),
+            eq(skills.category, "rule"),
+            visibleSkillsWhere(userId, input.workspaceId)
+          ),
+          columns: { metadata: true },
+        });
+        const meta = readRuleMetadata(
+          row?.metadata as Record<string, unknown> | null | undefined
+        );
+        automationIds = (meta?.behaviours ?? []).map((b) => b.automationId);
+      }
+
+      const { runRuleDryRun } = await import("../services/rules/dry-run.js");
+      const { AccessContext } = await import("../access/context.js");
+      const { scopedDb } = await import("../access/index.js");
+      const { automationRuns } = await import("@synap/database");
+
+      return runRuleDryRun({
+        userId,
+        triggerType: compiled.trigger.triggerType,
+        triggerConfig: compiled.trigger.triggerConfig,
+        windowDays: input.windowDays,
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        automationIds,
+        runVisibility: scopedDb(AccessContext.from(ctx)).predicate(
+          automationRuns
+        ),
+      });
+    }),
+
+  /**
    * List rules under the caller's visibility floor — the SAME
    * `visibleSkillsWhere` predicate every other skills read uses (a rule is a
    * skill row, so it can never be more visible than a skill).

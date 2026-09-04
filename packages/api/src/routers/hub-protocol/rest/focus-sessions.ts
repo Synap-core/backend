@@ -26,7 +26,10 @@ import {
   focusSessions,
   playbookRuns,
 } from "@synap/database";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
@@ -590,7 +593,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if ("proposalId" in perm) {
         return c.json({
           status: "proposed",
-          message: "Focus session update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Focus session update proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,

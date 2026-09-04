@@ -300,7 +300,13 @@ export async function mergeProposalRevision(
 ): Promise<void> {
   await db.transaction(async (tx) => {
     const [existing] = await tx
-      .select({ data: proposals.data, status: proposals.status })
+      .select({
+        data: proposals.data,
+        status: proposals.status,
+        // Authority inputs — see the review-authority gate below.
+        workspaceId: proposals.workspaceId,
+        agentUserId: proposals.agentUserId,
+      })
       .from(proposals)
       .where(eq(proposals.id, params.proposalId))
       .limit(1)
@@ -309,6 +315,38 @@ export async function mergeProposalRevision(
     if (!existing) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
     }
+
+    // ── Review authority ────────────────────────────────────────────────────
+    // A revise rewrites `summary` / `reasoning` — the exact text a human reads
+    // when deciding to approve — so it requires the SAME authority as approve.
+    // The gate lives HERE, in the one shared revise core, rather than at each
+    // door: `proposals.revise` (tRPC) had it, while the MCP door
+    // (`synap_revise_proposal` → `reviseProposal`) and the Hub door
+    // (`hub-protocol/proposals.ts` `updateProposal`) both reached this core with
+    // a RAW caller-supplied proposal id and no predicate at all — an agent could
+    // rewrite the evidence under any pending proposal on the pod by id. One gate
+    // in the core cannot drift out of the doors the way three copies can.
+    //
+    // Fail CLOSED: an absent `actorId` is not authorization. Every caller today
+    // passes the authenticated user id.
+    // NOT_FOUND (not FORBIDDEN) so an unauthorized caller cannot use this door
+    // as an existence/status oracle for another user's proposals.
+    const { computeCanReviewApproval } =
+      await import("../../routers/proposals/review-authority.js");
+    const { allowed } = params.actorId
+      ? await computeCanReviewApproval({
+          proposal: {
+            workspaceId: existing.workspaceId,
+            data: existing.data,
+            agentUserId: existing.agentUserId,
+          },
+          userId: params.actorId,
+        })
+      : { allowed: false };
+    if (!allowed) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
+    }
+
     if (existing.status !== ProposalStatus.PENDING) {
       throw new TRPCError({
         code: "CONFLICT",

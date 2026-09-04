@@ -16,7 +16,10 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, desc, artifacts } from "@synap/database";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -312,7 +315,10 @@ export function registerArtifactsRoutes(app: HubHono): void {
       if ("proposalId" in perm) {
         return c.json({
           status: "proposed",
-          message: "Artifact creation proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Artifact creation proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,
@@ -440,7 +446,10 @@ export function registerArtifactsRoutes(app: HubHono): void {
       if ("proposalId" in perm) {
         return c.json({
           status: "proposed",
-          message: "Artifact update proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Artifact update proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,

@@ -16,7 +16,10 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { TRPCError } from "@trpc/server";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this door — its only caller
 // was the `native` branch below. Kept on disk at utils/widget-compiler.ts.
@@ -184,7 +187,10 @@ export const hubWidgetDefinitionsRouter = router({
       if ("proposalId" in perm) {
         return {
           status: "proposed" as const,
-          message: "Widget registration proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Widget registration proposed for review"
+          ),
           proposalId: perm.proposalId,
           summary: perm.summary,
           reasoning: perm.reasoning,

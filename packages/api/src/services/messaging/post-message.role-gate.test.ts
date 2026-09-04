@@ -20,12 +20,23 @@ vi.mock("@synap-core/core", () => ({
   createLogger: () => ({ warn: vi.fn(), info: vi.fn(), error: vi.fn() }),
 }));
 
+// The channel WRITE floor's predicate is the canonical `channelVisibilityWhere`,
+// unit-tested at its own door — stub it so this file's DB mock need not model
+// the channels/workspace-membership schema. The floor itself is covered by
+// `post-message.channel-floor.test.ts`.
+vi.mock("../../utils/channel-visibility.js", () => ({
+  channelVisibilityWhere: () => undefined,
+}));
+
 vi.mock("@synap/database", () => ({
   db: {
-    // Ack-integrity dedup lookup (no-key path): default no prior → proceed.
+    // Two selects reach here: the channel floor (`from().where().limit()`,
+    // default = visible) and the ack-integrity dedup lookup (which also calls
+    // `orderBy()`; default no prior → proceed).
     select: () => ({
       from: () => ({
         where: () => ({
+          limit: async () => [{ id: "chan-1" }],
           orderBy: () => ({ limit: async () => h.priorRows }),
         }),
       }),
@@ -42,6 +53,7 @@ vi.mock("@synap/database", () => ({
       },
     }),
   },
+  channels: { id: "channels.id" },
   messages: {
     id: "messages.id",
     channelId: "channel_id",
@@ -86,6 +98,10 @@ vi.mock("../../utils/trigger-auto-respond.js", () => ({
 
 import { postChannelMessage } from "./post-message.js";
 
+// A real UUID: the door now rejects a non-UUID channel id at the write floor
+// rather than binding it into a Postgres `uuid` comparison.
+const CHAN = "11111111-1111-1111-1111-111111111111";
+
 describe("postChannelMessage — triggerAI role gate", () => {
   beforeEach(() => {
     h.inserted.length = 0;
@@ -95,7 +111,7 @@ describe("postChannelMessage — triggerAI role gate", () => {
 
   it("triggers an agent turn for a user message", async () => {
     await postChannelMessage({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "hello",
       role: "user",
       triggerAI: true,
@@ -105,7 +121,7 @@ describe("postChannelMessage — triggerAI role gate", () => {
     expect(h.inserted).toHaveLength(1);
     expect(h.autoRespondCalls).toHaveLength(1);
     expect(h.autoRespondCalls[0]).toMatchObject({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "hello",
       sourceUserId: "user-1",
     });
@@ -113,7 +129,7 @@ describe("postChannelMessage — triggerAI role gate", () => {
 
   it("does NOT trigger a turn for an assistant message, even with triggerAI", async () => {
     await postChannelMessage({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "agent output",
       role: "assistant",
       triggerAI: true,
@@ -129,14 +145,14 @@ describe("postChannelMessage — triggerAI role gate", () => {
 
   it("does NOT trigger a turn for a system message, or when role is omitted (defaults to assistant)", async () => {
     await postChannelMessage({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "system note",
       role: "system",
       triggerAI: true,
       userId: "user-1",
     });
     await postChannelMessage({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "no role",
       triggerAI: true,
       userId: "user-1",
@@ -147,7 +163,7 @@ describe("postChannelMessage — triggerAI role gate", () => {
 
   it("never triggers a turn when triggerAI is absent", async () => {
     await postChannelMessage({
-      channelId: "chan-1",
+      channelId: CHAN,
       content: "hello",
       role: "user",
       userId: "user-1",

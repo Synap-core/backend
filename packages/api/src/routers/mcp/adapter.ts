@@ -33,6 +33,7 @@ import { capabilityHandlers } from "./handlers/capability.js";
 import { workspaceHandlers } from "./handlers/workspace.js";
 import { sessionHandlers } from "./handlers/session.js";
 import { buildHandlers } from "./handlers/build.js";
+import { ruleHandlers } from "./handlers/rule.js";
 
 export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
 
@@ -53,6 +54,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...workspaceHandlers,
   ...sessionHandlers,
   ...buildHandlers,
+  ...ruleHandlers,
 };
 
 export async function executeMCPToolViaHubProtocol(

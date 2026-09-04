@@ -13,7 +13,10 @@ import {
   and,
   recordSessionSpawn,
 } from "@synap/database";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
@@ -86,6 +89,13 @@ export type CreateFocusSessionResult =
   | {
       status: "proposed";
       proposalId: string;
+      /**
+       * Which proposed outcome this is: a CONTENT proposal, or a workspace-JOIN
+       * gate filed INSTEAD of the write. Callers derive their sentence from it
+       * (`proposedMessageFor`); without it on the TYPE the value cannot cross
+       * this boundary and the door has to hardcode a claim it cannot check.
+       */
+      proposalType?: string;
       message: string;
       summary?: string;
       reasoning?: string;
@@ -162,7 +172,11 @@ export async function createFocusSession(
     return {
       status: "proposed",
       proposalId: perm.proposalId,
-      message: "Focus session creation proposed for review",
+      proposalType: perm.proposalType,
+      message: proposedMessageFor(
+        perm.proposalType,
+        "Focus session creation proposed for review"
+      ),
       summary: perm.summary,
       reasoning: perm.reasoning,
       reviewPath: perm.reviewPath,

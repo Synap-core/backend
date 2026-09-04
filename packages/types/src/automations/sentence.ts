@@ -267,11 +267,37 @@ export function toBackendTrigger(
     for (const row of conditions) {
       if (row.key && row.value) filters[row.key] = row.value;
     }
+    // WHERE the chosen kind goes, and why it is NOT one key.
+    //
+    // 🔴 `triggerConfig.profileSlug` (top level) is read by the runtime matcher
+    // in exactly ONE place: `matchTriggerSpecificFilters`'s
+    // `if (eventType.startsWith("capture."))` branch, against
+    // `data.profileSlugs` (PLURAL — a capture carries several). There is no
+    // `entity.` branch. So an entity rule that said "when a PERSON is created"
+    // compiled to a top-level key nothing reads, passed every check, reported
+    // itself live, and fired on every company, task and note in the workspace —
+    // with `wakeAgent` on the THEN, an agent turn per entity.
+    //
+    // For an ENTITY trigger the kind belongs in `filters`, which the GENERIC
+    // `matchFilters` evaluates against the event's own `data` — and entity
+    // emits do carry `data.profileSlug` (`routers/capture.ts:3142,3579`,
+    // `run-gcal-import.ts:211`). The event catalog agrees: `ENTITY_CREATED`
+    // declares `filterKeys: ["profileSlug"]`.
+    //
+    // `capture` keeps the top-level key, because its branch reads a DIFFERENT
+    // shape (`profileSlugs`, plural) that `matchFilters` could not evaluate.
+    const isEntityTrigger = trigger.subjectCategory === "entity";
+    if (trigger.profileSlug && isEntityTrigger) {
+      filters.profileSlug = trigger.profileSlug;
+    }
+
     return {
       triggerType: "event",
       triggerConfig: {
         ...(pattern ? { eventPattern: pattern } : {}),
-        ...(trigger.profileSlug ? { profileSlug: trigger.profileSlug } : {}),
+        ...(trigger.profileSlug && !isEntityTrigger
+          ? { profileSlug: trigger.profileSlug }
+          : {}),
         ...(Object.keys(filters).length ? { filters } : {}),
       },
     };
@@ -309,6 +335,86 @@ const OUTPUT_TYPE_TO_ACTION: Record<string, ActionType> = Object.fromEntries(
   ])
 );
 
+/**
+ * THE EXECUTOR-TRUE THEN DIALECT — `type: null` + `config.__*`.
+ *
+ * `SentenceAction.type` is the friendly `ActionType` lineage (`notify`,
+ * `create_entity`, …). It cannot express two shapes the executor supports:
+ *   • a CAPABILITY verb call — there is no `ActionType` slot for "call this verb
+ *     on this capability";
+ *   • an output type with no `ActionType` at all. `ACTION_TO_OUTPUT_TYPE` covers
+ *     five of the executor's eleven outputs; `facet_attach`, `relation_create`,
+ *     `set_state`, `session_update` and the rest have no friendly alias.
+ * So an authoring surface offering the FULL executor vocabulary — which
+ * `browser/.../rule-sentence/sentence-io.ts` does — sets `type: null` and puts
+ * the executor-true target in `config` under these `__`-prefixed keys.
+ *
+ * 🔴 Until this was written the grammar could only READ that dialect, never
+ * WRITE it: `toFlowDefinition` dropped every `type: null` action, so a sentence
+ * authored in the browser compiled to a trigger wired to NOTHING and the rule
+ * compiler refused it as "no THEN". The forward and reverse halves of ONE
+ * grammar disagreed about what a THEN is — which is why the rule compiler had
+ * no producer it could actually consume. Keep the two halves symmetric.
+ *
+ * These keys are in-memory bookkeeping and are STRIPPED before persisting, so
+ * nothing `__`-prefixed ever reaches a stored flow. The `__` prefix exists so a
+ * third-party verb param can never collide with them.
+ */
+const OUTPUT_TYPE_KEY = "__outputType";
+const CAPABILITY_NODE_TYPE_KEY = "__nodeType";
+const CAPABILITY_ID_KEY = "__capabilityId";
+const CAPABILITY_VERB_ID_KEY = "__verbId";
+const CAPABILITY_ACTION_KEY = "__actionKey";
+
+/**
+ * EXPORTED so the browser's `sentence-io.ts` can derive its `RESERVED_CONFIG_KEYS`
+ * from this list instead of re-declaring it.
+ *
+ * 🔴 Two independent copies of one vocabulary is this repo's dominant defect, and
+ * this list is load-bearing in a way that fails SILENTLY: `persistedConfig` strips
+ * by EXACT MEMBERSHIP, not by `__` prefix. Add a sixth in-memory key on the
+ * browser side (`__label`, a per-param provenance marker) and the browser's own
+ * writer strips it — but a sentence sent to `skills.createRule` goes through
+ * `persistedConfig`, which does not know it, so `__label` lands verbatim in the
+ * stored node's `data.config` and the executor reads it as a real output param.
+ * `validateFlowDefinition` checks node SHAPE, not config keys, so it persists
+ * green and misbehaves at run time.
+ */
+export const BOOKKEEPING_KEYS: readonly string[] = [
+  OUTPUT_TYPE_KEY,
+  CAPABILITY_NODE_TYPE_KEY,
+  CAPABILITY_ID_KEY,
+  CAPABILITY_VERB_ID_KEY,
+  CAPABILITY_ACTION_KEY,
+];
+
+/** The action's config with every `__`-prefixed bookkeeping key removed. */
+function persistedConfig(
+  config: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(config ?? {})) {
+    if (!BOOKKEEPING_KEYS.includes(k)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Is this action CONFIGURED — will it emit a node the executor dispatches?
+ *
+ * NOT simply `type !== null`: a `type: null` action carrying an executor-true
+ * target in `config` is fully configured, and treating it as empty is exactly
+ * how a browser-authored THEN silently vanished. Exported because the rule
+ * compiler must ask the same question the flow builder answers, from one place.
+ */
+export function isActionConfigured(action: SentenceAction): boolean {
+  if (action.type !== null) return true;
+  const cfg = action.config ?? {};
+  if (cfg[CAPABILITY_NODE_TYPE_KEY] === "capability") return true;
+  const out = cfg[OUTPUT_TYPE_KEY];
+  return typeof out === "string" && out.length > 0;
+}
+
 function actionToFlowNode(
   action: SentenceAction,
   nodeId: string,
@@ -331,10 +437,37 @@ function actionToFlowNode(
       },
     };
   }
-  // Every other action → an `output` node keyed on its executor-true outputType.
+  const cfg = action.config ?? {};
+
+  // `type: null` + `__nodeType: "capability"` → a `capability` node. The exact
+  // inverse of `flowNodeToSentenceAction`'s capability branch below; the two
+  // must stay byte-for-byte mirrors or a capability THEN cannot round-trip.
+  if (action.type === null && cfg[CAPABILITY_NODE_TYPE_KEY] === "capability") {
+    return {
+      id: nodeId,
+      type: "capability",
+      position: { x: 0, y },
+      data: {
+        capabilityId: cfg[CAPABILITY_ID_KEY] ?? "",
+        verbId: cfg[CAPABILITY_VERB_ID_KEY] ?? "",
+        // `inputMapping` — the key the EXECUTOR reads (`automation-executor.ts`
+        // `case "capability"` → `executeCapabilityNode`) and the key the reverse
+        // reader below spreads back. Writing `params` here typechecked, matched
+        // nothing at run time, and lost every verb argument silently.
+        inputMapping: persistedConfig(cfg),
+      },
+    };
+  }
+
+  // Otherwise an `output` node keyed on its executor-true outputType — taken
+  // from the friendly `ActionType` alias when there is one, and from the
+  // explicit `__outputType` when the surface chose a raw executor output that
+  // has no alias.
   const outputType = action.type
     ? ACTION_TO_OUTPUT_TYPE[action.type]
-    : undefined;
+    : typeof cfg[OUTPUT_TYPE_KEY] === "string"
+      ? (cfg[OUTPUT_TYPE_KEY] as string)
+      : undefined;
   return {
     id: nodeId,
     type: "output",
@@ -342,7 +475,9 @@ function actionToFlowNode(
     data: {
       label: outputType ?? "",
       outputType,
-      config: action.config,
+      // Bookkeeping keys are in-memory only — never persist a `__` key into a
+      // stored flow, or the executor sees them as verb params.
+      config: persistedConfig(cfg),
     },
   };
 }
@@ -355,7 +490,10 @@ export function toFlowDefinition(
   ];
   const edges: RuleFlowEdge[] = [];
 
-  const configuredActions = actions.filter((a) => a.type !== null);
+  // `isActionConfigured`, NOT `type !== null`: an action carrying an
+  // executor-true target in `config` is configured even with a null type, and
+  // dropping it here is what made a browser-authored THEN compile to nothing.
+  const configuredActions = actions.filter(isActionConfigured);
   configuredActions.forEach((action, idx) => {
     const nodeId = `action-${idx + 1}`;
     nodes.push(actionToFlowNode(action, nodeId, 150 + idx * 150));
@@ -415,7 +553,17 @@ export function triggerToSentence(
   // webhook/manual don't map to SentenceTrigger — treat as a bare event trigger
   if (triggerType === "event") {
     const pattern = (triggerConfig.eventPattern as string) ?? "";
-    const profileSlug = triggerConfig.profileSlug as string | undefined;
+    // Read from BOTH homes: an entity trigger now stores the kind in `filters`
+    // (where the generic matcher reads it), `capture` still at the top level,
+    // and rows written before this fix carry the top-level key whatever their
+    // subject. Reading only one would blank the WHEN row for the other.
+    const storedFilters = triggerConfig.filters as
+      Record<string, unknown> | undefined;
+    const profileSlug =
+      (triggerConfig.profileSlug as string | undefined) ??
+      (typeof storedFilters?.profileSlug === "string"
+        ? storedFilters.profileSlug
+        : undefined);
     const [subjectCategory, action] = pattern.split(".");
     return {
       triggerType: "event",
@@ -441,21 +589,45 @@ export function triggerToSentence(
 // verb in `config` under these `__`-prefixed keys. Mirrors
 // `browser/.../rule-sentence/sentence-io.ts`'s `makeCapabilityAction` byte-for-
 // byte so the two representations can never diverge.
-const CAPABILITY_NODE_TYPE_KEY = "__nodeType";
-const CAPABILITY_ID_KEY = "__capabilityId";
-const CAPABILITY_VERB_ID_KEY = "__verbId";
-const CAPABILITY_ACTION_KEY = "__actionKey";
+// (The key constants themselves are declared with the FORWARD converters above,
+// so one declaration serves both directions of the grammar.)
 
 function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
   const data = actionNode.data;
 
-  // `output` node → reverse the friendly-alias map from its executor-true outputType.
+  // `output` node → reverse the friendly-alias map from its executor-true
+  // outputType.
+  //
+  // When the outputType has NO friendly `ActionType` alias — six of the
+  // executor's eleven outputs (`facet_attach`, `relation_create`, `set_state`,
+  // `session_update`, …) — the action is `type: null` and MUST carry the
+  // outputType back in `config.__outputType`. Without that the reverse is not
+  // the inverse of the forward: the reconstructed action fails
+  // `isActionConfigured`, so re-saving an edited rule DROPS the THEN node
+  // entirely and the automation silently loses its behaviour. This is the same
+  // class as the `data.params` / `data.inputMapping` mismatch below — the two
+  // halves of one grammar disagreeing — and the round-trip test is the only
+  // thing that catches either.
   if (actionNode.type === "output") {
     const outputType = data.outputType as string | undefined;
-    return {
-      type: outputType ? (OUTPUT_TYPE_TO_ACTION[outputType] ?? null) : null,
-      config: (data.config as Record<string, unknown>) ?? {},
-    };
+    const aliased = outputType
+      ? (OUTPUT_TYPE_TO_ACTION[outputType] ?? null)
+      : null;
+    const config = ((data.config as Record<string, unknown>) ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (aliased === null && outputType) {
+      return {
+        type: null,
+        config: {
+          [OUTPUT_TYPE_KEY]: outputType,
+          [CAPABILITY_ACTION_KEY]: outputType,
+          ...config,
+        },
+      };
+    }
+    return { type: aliased, config };
   }
   // `command` node → run_command; surface commandId + promptOverride back as the
   // sentence's `input`, mirroring toFlowDefinition.

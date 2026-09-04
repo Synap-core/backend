@@ -438,7 +438,7 @@ export function registerCommandsRoutes(app: HubHono): void {
     }
 
     try {
-      const { checkPermissionOrPropose } =
+      const { checkPermissionOrPropose, proposedMessageFor } =
         await import("../../../utils/permission-check.js");
       const { emitSideEffects } = await import("@synap/events");
 
@@ -472,7 +472,10 @@ export function registerCommandsRoutes(app: HubHono): void {
           reasoning: permResult.reasoning,
           reviewPath: permResult.reviewPath,
           reviewUrl: permResult.reviewUrl,
-          message: "Command proposed for approval",
+          message: proposedMessageFor(
+            permResult.proposalType,
+            "Command proposed for approval"
+          ),
         });
       }
 

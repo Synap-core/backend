@@ -33,7 +33,10 @@ import {
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../utils/permission-check.js";
 import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
 import {
   RENDERER_SCOPES,
@@ -390,7 +393,10 @@ export const profilesRouter = router({
         return {
           profile: null as Record<string, unknown> | null,
           status: "proposed",
-          message: "Profile creation proposed for review",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Profile creation proposed for review"
+          ),
           proposalId: perm.proposalId,
         };
       }

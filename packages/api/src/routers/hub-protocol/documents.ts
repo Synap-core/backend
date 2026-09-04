@@ -187,10 +187,18 @@ export const documentsRouter = router({
         // MinIO upload happens in proposals.approve when the user accepts.
         // `deduped` = the proposal SSOT returned an existing identical proposal
         // (an idempotent replay), so report duplicate-ignored, not a fresh propose.
+        const { isJoinGate, proposedMessageFor } =
+          await import("../../utils/permission-check.js");
+        // JOIN GATE: no document proposal was filed at all (a workspace-join
+        // request was filed instead), so the pre-allocated `documentId` can
+        // never resolve. Same family as the PHANTOM ENVELOPE ID FIX in
+        // `entities/create.ts`: an id that cannot resolve is worse than an
+        // absent field.
+        const joinGate = isJoinGate(perm.proposalType);
         return {
-          id: documentId,
-          documentId,
+          ...(joinGate ? {} : { id: documentId, documentId }),
           status: "proposed" as const,
+          proposalType: perm.proposalType,
           ackState: perm.deduped
             ? ("duplicate-ignored" as const)
             : ("proposed" as const),
@@ -199,7 +207,10 @@ export const documentsRouter = router({
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
-          message: "Document creation proposed, awaiting approval",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Document creation proposed, awaiting approval"
+          ),
         };
       }
 

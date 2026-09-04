@@ -122,7 +122,7 @@ export const workspaceHandlers: McpHandlerMap = {
     }
     const definition = (args.definition ?? {}) as object;
     const idempotencyKey = args.proposalId as string | undefined;
-    const { checkPermissionOrPropose } =
+    const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
       userId,
@@ -149,8 +149,10 @@ export const workspaceHandlers: McpHandlerMap = {
     ) {
       return ok({
         status: "proposed",
-        message:
-          "Workspace creation proposed for review (workspace invent is governed) — it materializes on approval.",
+        message: proposedMessageFor(
+          perm.proposalType,
+          "Workspace creation proposed for review (workspace invent is governed) — it materializes on approval."
+        ),
         proposalId: perm.proposalId,
         summary: perm.summary,
         reviewPath: perm.reviewPath,
@@ -224,7 +226,7 @@ export const workspaceHandlers: McpHandlerMap = {
     // pre-governance path); the proposed branch returns the proposal and does
     // NOT apply — the `workspace/declare_source` executor materializes it on
     // approval.
-    const { checkPermissionOrPropose } =
+    const { checkPermissionOrPropose, proposedMessageFor } =
       await import("../../../utils/permission-check.js");
     const perm = await checkPermissionOrPropose({
       userId,
@@ -244,8 +246,10 @@ export const workspaceHandlers: McpHandlerMap = {
     if ("proposalId" in perm) {
       return ok({
         status: "proposed",
-        message:
-          "Workspace edge declaration proposed for review (rewiring cross-workspace reads is governed) — it applies on approval.",
+        message: proposedMessageFor(
+          perm.proposalType,
+          "Workspace edge declaration proposed for review (rewiring cross-workspace reads is governed) — it applies on approval."
+        ),
         proposalId: perm.proposalId,
         summary: perm.summary,
         reviewPath: perm.reviewPath,

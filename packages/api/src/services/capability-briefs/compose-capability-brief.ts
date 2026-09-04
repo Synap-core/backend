@@ -113,6 +113,18 @@ const TOOL_METADATA: Record<
     postureSlug: "view",
     isWrite: true,
   },
+  synap_create_rule: {
+    // A rule is a `skills` row, but it is governed under its OWN door
+    // (`rule/create`, declared in GATE_WRITE_DOORS) because approving one also
+    // writes the lineage edges to its fact and behaviour halves — so the
+    // verdict composed for the caller must be that door's, not `skill/create`'s.
+    governance: { subjectType: "rule", action: "create" },
+    // "capability", same as `synap_create_skill`: a rule IS a `skills` row, and
+    // there is no "skill"/"rule" key in DEFAULT_AI_POSTURES — naming one would
+    // resolve to an empty posture and compose no emphases at all.
+    postureSlug: "capability",
+    isWrite: true,
+  },
   synap_create_cell: {
     // `cell.define` (NOT `cell.create`, which is cell-instances/placed cells):
     // defining renderer source is governed via checkPermissionOrPropose in the

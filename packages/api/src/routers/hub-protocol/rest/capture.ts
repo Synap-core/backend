@@ -4,6 +4,10 @@
 
 import { z } from "zod";
 
+import {
+  readCaptureFollowUp,
+  CAPTURE_FOLLOW_UP_FALLBACK,
+} from "../../capture-follow-up.js";
 import { captureRouter } from "../../capture.js";
 import { getDefaultActiveService } from "../../../utils/intelligence-routing.js";
 import {
@@ -674,6 +678,50 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }
             : {}),
+        });
+      }
+
+      // ── W3: the structurer ASKED A QUESTION ─────────────────────────────
+      //
+      // `capture.structure` can return a clarifying `followUp` (a string, or a
+      // `{ question, suggestions[] }` with typed answer chips) instead of a
+      // confident plan. `shouldPersistCapturePlan` already refuses to persist
+      // such a plan, so the door fell through to `c.json(result)` — the question
+      // was in the payload but nothing TOLD the caller it was a question, or
+      // what to do with it. `grep followUp` across `routers/hub-protocol/`
+      // returned nothing. An agent that gets a question but does not know it can
+      // answer is no better off than one that never got it.
+      //
+      // ADDITIVE by construction: the whole original result is spread first, so
+      // every existing field (`followUp` included) still reads exactly as before
+      // and no consumer breaks. The envelope mirrors the door's established
+      // "I need something from the caller" shape — `workspaceRouting: 'ask'`
+      // returning `pendingWorkspaceSwitch`: return a NEED, the caller asks the
+      // user, the caller RE-CALLS. Nothing is written on this branch.
+      // ONE reader, shared with the MCP door — see `routers/capture-follow-up.ts`.
+      const followUpRead = readCaptureFollowUp(
+        (result as { followUp?: unknown }).followUp
+      );
+      if (followUpRead) {
+        const question = followUpRead.question;
+        const suggestions = followUpRead.suggestions;
+        return c.json({
+          ...(result as Record<string, unknown>),
+          status: "needs_input",
+          pendingQuestion: {
+            question: question ?? CAPTURE_FOLLOW_UP_FALLBACK,
+            ...(suggestions ? { suggestions } : {}),
+          },
+          // The re-call protocol, spelled out — the same instruction the MCP
+          // door returns, so both agent doors teach the identical loop.
+          nextStep:
+            "NOT captured — nothing was written and no plan was persisted. Ask the user " +
+            "`pendingQuestion.question` (offer `pendingQuestion.suggestions` as options when present), " +
+            "then RE-CALL POST /capture/structure with the same `text` plus the answer — either folded " +
+            "into `text`, or passed as `context` (and the draft echoed in `proposals` as " +
+            "`previousEntities`) so the structurer refines rather than restarts. " +
+            "If the user cannot answer, POST the draft `proposals` to /capture/execute as `entities` " +
+            "to write what is already known.",
         });
       }
 

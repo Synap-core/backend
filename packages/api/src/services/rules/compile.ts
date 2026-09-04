@@ -49,15 +49,18 @@
  *     CRUD verbs both ways; a verb with no entity event is left unmapped so it
  *     is refused BY NAME here rather than silently rewritten.
  *
- * ── One vocabulary gap that still refuses, correctly ───────────────────────
- * `notification` and `inbox_item` are real event types in
- * `packages/events/src/event-types.ts`, but `validateEventPattern`'s
- * `SUBJECT_TYPES` is narrower than that catalog (it carries `inboxItem`, not
- * `inbox_item`, and no `notification`). Those two subject categories are
- * therefore unauthorable through EVERY door, not just this one — the automation
- * create door refuses them identically. Refusing here is consistent, not a new
- * restriction; closing it means reconciling the two vocabularies, which is a
- * separate piece of work and not a third spelling in this file.
+ * ── The vocabulary gap that made half the catalog unauthorable (CLOSED) ────
+ * `notification` and `inbox_item` were real event types in
+ * `packages/events/src/event-types.ts` that `validateEventPattern` rejected —
+ * and they were not alone: 13 of the 26 declared types were, because the
+ * authoring gate's subject and action vocabularies were narrower than what the
+ * pod emits. `DOMAIN_SUBJECT_TYPES` + `SUBJECT_EXTRA_ACTIONS`
+ * (`packages/types/src/events/unified.ts`) now accept exactly the catalog, and
+ * `events/catalog-parity.tripwire.test.ts` runs every catalog type through the
+ * validator so a new event with a new subject goes red instead of silently
+ * becoming unbuildable. Past-tense CRUD (`entity.created`) is still refused —
+ * nothing emits it, and the sentence grammar's mood bridge maps it to
+ * `entity.create` before it ever reaches here.
  */
 
 import {
@@ -65,8 +68,8 @@ import {
   toFlowDefinition,
   type BackendTrigger,
   type RuleFlowDefinition,
+  isActionConfigured,
   type RuleSentenceValue,
-  type SentenceAction,
 } from "@synap-core/types/automations";
 // Sub-path import: tsup code-splitting drops `validateEventPattern` from the
 // main and `events/index.js` bundles (see the same note in routers/automations.ts).
@@ -105,11 +108,17 @@ const fail = (clause: RuleClause, reason: string): RuleCompileResult => ({
 
 /**
  * An action is CONFIGURED when the grammar will actually emit a node for it.
- * `toFlowDefinition` filters `type === null` away silently, so an all-null
- * THEN compiles to a trigger wired to nothing — accepted by every structural
- * check and executing nothing.
+ *
+ * Asked of the GRAMMAR (`isActionConfigured`), never re-derived here. This used
+ * to be a local `action.type !== null`, which disagreed with the flow builder
+ * about what a THEN is: an action carrying an executor-true target in
+ * `config.__outputType` / `config.__nodeType` — the dialect the browser's rule
+ * editor emits, and the only one that can express the six executor outputs with
+ * no `ActionType` alias — was counted as unconfigured here and dropped there.
+ * Two readers of one value model, disagreeing, is how the compiler ended up
+ * unable to consume the only sentence the product produces.
  */
-const isConfigured = (action: SentenceAction): boolean => action.type !== null;
+const isConfigured = isActionConfigured;
 
 /**
  * Compile the behaviour half of a rule sentence.

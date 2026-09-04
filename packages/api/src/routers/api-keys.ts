@@ -32,7 +32,10 @@ import {
   mcpConnectCodes,
   users,
 } from "@synap/database/schema";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { randomUUID, randomBytes, createHash } from "crypto";
@@ -762,7 +765,10 @@ export const apiKeysRouter = router({
         // Shouldn't happen for direct user actions, but handle gracefully
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: "Key creation requires approval on this pod",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Key creation requires approval on this pod"
+          ),
         });
       }
 

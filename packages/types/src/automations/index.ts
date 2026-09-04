@@ -123,6 +123,8 @@ export {
   triggerToSentence,
   flowToSentenceAction,
   flowToSentenceActions,
+  isActionConfigured,
+  BOOKKEEPING_KEYS,
   flowToConditions,
 } from "./sentence.js";
 export type {

@@ -32,6 +32,10 @@ import {
   openProcessChannel,
 } from "../../../services/messaging/open-process-channel.js";
 import {
+  readCaptureFollowUp,
+  CAPTURE_FOLLOW_UP_FALLBACK,
+} from "../../capture-follow-up.js";
+import {
   ok,
   requireScope,
   CaptureScope,
@@ -606,6 +610,58 @@ const captureHandler: McpToolHandler = async (
         ? " — and that re-capturing shortly may structure it properly."
         : ", and do not tell them to try again.")
     : null;
+  // ── W3: the structurer ASKED A QUESTION ────────────────────────────────
+  //
+  // `capture.structure` can return a clarifying `followUp` (a string, or a
+  // `{ question, suggestions[] }` with typed answer chips) INSTEAD of a
+  // confident plan — routers/capture.ts:"If followUp, pass through immediately".
+  // The mechanism was human-UI only: `grep followUp` across `routers/mcp/` and
+  // `routers/hub-protocol/` returned NOTHING. So an agent supplying thin context
+  // got one of two wrong answers here — a `no-durable-content` REJECTION (when
+  // the structurer asked instead of extracting), or a silently EXECUTED guess
+  // (when it asked *and* offered a draft). Both discard the question.
+  //
+  // Contract: the SAME shape this door already uses for "I need something from
+  // the caller before I can proceed" — `workspaceRouting: 'ask'` returning
+  // `pendingWorkspaceSwitch`. The door returns a NEED, the caller asks the user,
+  // the caller RE-CALLS. Nothing is written on this branch.
+  //
+  // The draft plan is echoed back verbatim in `entities`/`relations` so the
+  // re-call is one step and the user's text is never lost, even if the question
+  // goes unanswered.
+  // ONE reader, shared with the Hub door — see `routers/capture-follow-up.ts`.
+  const followUpRead = readCaptureFollowUp(
+    (structured as { followUp?: unknown }).followUp
+  );
+  if (followUpRead) {
+    const followUpQuestion = followUpRead.question;
+    const followUpSuggestions = followUpRead.suggestions;
+    return ok({
+      status: "needs_input",
+      scope: textScope,
+      // No `writeReceipt`: that type is `applied | rejected` by construction and
+      // this branch is neither — NOTHING was written and nothing was refused.
+      pendingQuestion: {
+        question: followUpQuestion ?? CAPTURE_FOLLOW_UP_FALLBACK,
+        ...(followUpSuggestions ? { suggestions: followUpSuggestions } : {}),
+      },
+      message:
+        "NOT captured yet — the structurer needs one clarification. Nothing was written. " +
+        "ASK THE USER the question in `pendingQuestion.question` (if it carries `suggestions`, " +
+        "offer those as the options), then RE-CALL synap_capture with the SAME text plus the " +
+        'user\'s answer folded into it — e.g. text: "<original text>\\n\\n<question> <answer>". ' +
+        "If you already know the answer yourself, fold it in and re-call without asking. " +
+        "If the user cannot answer, re-call with `entities[]` instead of `text` (the draft in " +
+        "`entities` below is ready to send as-is) — that bypasses the structurer entirely and writes " +
+        "what is already known. Do NOT report this as saved.",
+      // The draft the structurer produced, ready to re-send verbatim.
+      entities: captureProposals,
+      relations: (structured as { relations?: unknown[] }).relations ?? [],
+      originalText: captureRawText,
+      structured,
+    });
+  }
+
   if (captureProposals.length === 0) {
     return captureRejected({
       reason: "no-durable-content",
@@ -640,6 +696,8 @@ const captureHandler: McpToolHandler = async (
       tempId: string;
       profileSlug: string;
       existingEntityId?: string;
+      updateExisting?: boolean;
+      properties?: Record<string, unknown>;
     }>
   ).map((p) => {
     const top = dedup[p.tempId]?.[0];
@@ -649,7 +707,26 @@ const captureHandler: McpToolHandler = async (
       top.profileSlug === p.profileSlug &&
       !p.existingEntityId
     ) {
-      return { ...p, existingEntityId: top.entityId };
+      // A bare `existingEntityId` LINKS — the target's fields are left alone and
+      // everything the structurer just extracted is DISCARDED. On a >=0.95
+      // identity match that is the wrong half of the choice whenever the item
+      // carries facts: "Ada moved to Acme" would attach to Ada and silently drop
+      // the new employer. So when there is something to write, ask for the PATCH
+      // (`entity`/`update`, a reviewable before→after diff on a governed pod);
+      // when there is nothing new, a plain link is still correct and cheaper.
+      //
+      // This mirrors the browser's `autoDecideAction` (capture-pipeline
+      // `state.ts`), which makes the same link-vs-update call at the same
+      // threshold. The two doors must not disagree about what a confident match
+      // means — that divergence is how the agent door ends up strictly weaker
+      // than the human one.
+      const hasFactsToWrite =
+        !!p.properties && Object.keys(p.properties).length > 0;
+      return {
+        ...p,
+        existingEntityId: top.entityId,
+        ...(hasFactsToWrite ? { updateExisting: true } : {}),
+      };
     }
     return p;
   });

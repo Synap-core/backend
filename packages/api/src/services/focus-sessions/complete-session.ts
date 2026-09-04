@@ -18,7 +18,10 @@ import {
   desc,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { expireSessionEphemerals } from "../proposals/expire-lapsed-proposals.js";
 
 export interface CompleteFocusSessionParams {
@@ -119,10 +122,16 @@ export async function completeFocusSession(
     // Hub REST surfaces proposalId/summary/review*; human approve runs
     // focus_session/update which reuses completeFocusSession (no agentUserId).
     throw Object.assign(
-      new Error("Session completion proposed for review — approval required"),
+      new Error(
+        proposedMessageFor(
+          perm.proposalType,
+          "Session completion proposed for review — approval required"
+        )
+      ),
       {
         code: "FORBIDDEN",
         proposalId: perm.proposalId,
+        proposalType: perm.proposalType,
         summary: perm.summary,
         reasoning: perm.reasoning,
         reviewPath: perm.reviewPath,

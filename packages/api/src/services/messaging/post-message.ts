@@ -30,8 +30,11 @@
  */
 
 import { randomUUID } from "crypto";
+import { TRPCError } from "@trpc/server";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import {
   db,
+  channels,
   messages,
   MessageRole,
   MessageAuthorType,
@@ -50,6 +53,7 @@ import {
   deterministicUuidFromKey,
   idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
+import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 
 const logger = createLogger({ module: "post-message" });
 
@@ -118,10 +122,67 @@ function duplicateReceipt(
   };
 }
 
+/**
+ * Channel WRITE floor for this door.
+ *
+ * This service used to take a caller-supplied `channelId` and insert straight
+ * into it — no authorization at all. Since `synap_post_message` is in the
+ * curated MCP tool set, any key holding `mcp.write` plus a known channel UUID
+ * could append to that channel and, with `triggerAI`, make that channel's agent
+ * take a turn.
+ *
+ * The predicate is `channelVisibilityWhere` — the canonical channel access
+ * predicate, the SAME one the Hub REST message-append doors
+ * (`hub-protocol/rest/threads.ts` `callerMayWriteToChannel`),
+ * `hub-protocol/sessions.ts` (`assertChannelVisible`) and the access-layer
+ * `VisibilityRule` for `channels` (`access/registry.ts`) all floor on. It is
+ * deliberately NOT a new rule.
+ *
+ * ⚠️ It is a READ predicate: "can SEE the channel" APPROXIMATES "may WRITE to
+ * the channel", because no write-side channel predicate exists today (same
+ * caveat, verbatim, as the Hub REST door). A session-owned channel keeps
+ * working: `focus_sessions.channelId` points at a channel owned by the caller
+ * (branch 1) or shared into a workspace they belong to (branch 3).
+ *
+ * `userId` MUST be the AUTHENTICATED key owner — `api-key-auth.ts` remaps an
+ * agent key to its human owner, so an agent post is floored by what its owner
+ * may see, never by a body-supplied author.
+ *
+ * NOT_FOUND (never FORBIDDEN) on an invisible channel, per the convention in
+ * `hub-protocol/context.ts`: the "does not exist" and "not yours" cases stay
+ * indistinguishable so no existence oracle is created. A non-UUID id is
+ * rejected here rather than bound into a Postgres `uuid` comparison (which
+ * throws `invalid input syntax for type uuid` and escapes as a bare 500).
+ */
+async function assertCallerMayPostToChannel(
+  channelId: string,
+  userId: string
+): Promise<void> {
+  const visible =
+    typeof channelId === "string" &&
+    isLikelyUUID(channelId) &&
+    (
+      await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
+        .limit(1)
+    ).length > 0;
+
+  if (!visible) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
+  }
+}
+
 export async function postChannelMessage(
   params: PostChannelMessageParams
 ): Promise<PostChannelMessageResult> {
   const { channelId, content, userId, agentUserId } = params;
+
+  // Fail CLOSED before ANY write or idempotency work: an unknown or
+  // unauthorized channel throws, it never falls through to the insert.
+  await assertCallerMayPostToChannel(channelId, userId);
+
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
   const roleEnum =

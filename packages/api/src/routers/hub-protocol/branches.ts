@@ -16,7 +16,10 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq } from "@synap/database";
 import { channels } from "@synap/database/schema";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../../utils/permission-check.js";
 import { assertMayActAs } from "./guard.js";
 
 export const branchesRouter = router({
@@ -130,7 +133,10 @@ export const branchesRouter = router({
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
-          message: "Branch creation proposed, awaiting approval",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Branch creation proposed, awaiting approval"
+          ),
         };
       }
 
@@ -241,7 +247,10 @@ export const branchesRouter = router({
           reasoning: perm.reasoning,
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
-          message: "Branch merge proposed, awaiting approval",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Branch merge proposed, awaiting approval"
+          ),
         };
       }
 

@@ -41,6 +41,13 @@ export type UpdateFocusSessionResult =
   | {
       status: "proposed";
       proposalId: string;
+      /**
+       * Which proposed outcome this is: a CONTENT proposal, or a workspace-JOIN
+       * gate filed INSTEAD of the write. Callers derive their sentence from it
+       * (`proposedMessageFor`); without it on the TYPE the value cannot cross
+       * this boundary and the door has to hardcode a claim it cannot check.
+       */
+      proposalType?: string;
       summary?: string;
       reviewPath?: string;
       reviewUrl?: string;
@@ -111,6 +118,12 @@ export async function updateFocusSession(
     return {
       status: "proposed",
       proposalId: perm.proposalId,
+      // The discriminator MUST cross this boundary: this door is join-gate
+      // reachable (the MCP handler threads `agentUserId`), and without it the
+      // caller cannot tell a session-update proposal from a workspace-JOIN
+      // gate filed instead of it. Its two siblings (create-session,
+      // complete-session) already forward it.
+      proposalType: perm.proposalType,
       summary: perm.summary,
       reviewPath: perm.reviewPath,
       reviewUrl: perm.reviewUrl,

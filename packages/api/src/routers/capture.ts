@@ -10,6 +10,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { deriveGatePairFromOperations } from "@synap/governance-policy";
+import { captureGraphEventKeys } from "../services/capture-agent/capture-graph-policy.js";
+import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { router, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
@@ -107,9 +109,15 @@ import {
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
   checkPermissionOrPropose,
+  proposedMessageFor,
   type PermissionResult,
 } from "../utils/permission-check.js";
 import { fileAnchoredCaptureProposals } from "../utils/capture-propose.js";
+import {
+  applyCaptureUpdateOps,
+  isCaptureUpdateOp,
+  type CaptureUpdateResult,
+} from "../utils/capture-update-arm.js";
 
 const logger = createLogger({ module: "capture-router" });
 
@@ -1670,6 +1678,30 @@ export const captureRouter = router({
             /** Link to existing entity instead of creating */
             existingEntityId: z.string().uuid().optional(),
             /**
+             * W1 — the UPDATE arm. When true (and `existingEntityId` is set),
+             * this op PATCHES that entity with the extracted `description` /
+             * `properties` instead of merely linking to it.
+             *
+             * WHY IT EXISTS: a plain link (`existingEntityId` alone) reaches
+             * `materializeCompositeGraph`'s `if (op.existingEntityId)` branch,
+             * which resolves the id and returns — the op's `properties`,
+             * `description` and `content` are SILENTLY DISCARDED. So a capture
+             * that recognised an existing subject and extracted new facts about
+             * it could only create a duplicate or link-and-drop-the-facts.
+             *
+             * The patch is applied through `entities.update` — the ONE governed
+             * update door — so it gates as `entity`/`update` (never `entity`/
+             * `create`), and a governed verdict returns a real `entity.update`
+             * proposal whose before→after diff the existing `FieldDiffList`
+             * review UI already renders. NOT a composite op arm: there is no
+             * `update_entity` in `CompositeProposalOperation`, and inventing a
+             * gate mapping for an arm no materializer can execute would be a
+             * declaration nobody verified.
+             *
+             * Ignored without `existingEntityId` (nothing to patch).
+             */
+            updateExisting: z.boolean().optional(),
+            /**
              * Kind + Facets: role-profiles to attach to this entity once it
              * materializes (or onto its dedup match). `contextTempId` references
              * another entity in this same batch by `tempId` (the disambiguating
@@ -2153,15 +2185,24 @@ export const captureRouter = router({
       // `entity`+`create`+`data.profileSlug` and would HARD-DENY a capture
       // naming an unseeded profile — destroying capture's retry-as-item
       // degradation, which is load-bearing zero-friction behavior.
+      // W1 — an UPDATE-arm op's body is NOT part of this graph. Its
+      // `description`/`properties`/`content` are patched through the governed
+      // `entities.update` door below; the composite only needs the op present as
+      // a resolvable REF so relations pointing at it still materialize (the
+      // materializer's `existingEntityId` branch links and returns — it has
+      // never written a body for these ops). Carrying the body here anyway would
+      // put fields on a reviewable graph that approving it can only discard.
       const gateOperations: CompositeProposalOperation[] = [
         ...input.entities.map((e) => ({
           op: "create_entity" as const,
           ref: e.tempId,
           profileSlug: e.profileSlug,
           title: e.title,
-          ...(e.description ? { description: e.description } : {}),
-          ...(e.content ? { content: e.content } : {}),
-          properties: e.properties ?? {},
+          ...(e.description && !isCaptureUpdateOp(e)
+            ? { description: e.description }
+            : {}),
+          ...(e.content && !isCaptureUpdateOp(e) ? { content: e.content } : {}),
+          properties: isCaptureUpdateOp(e) ? {} : (e.properties ?? {}),
           ...(e.existingEntityId
             ? { existingEntityId: e.existingEntityId }
             : {}),
@@ -2186,6 +2227,57 @@ export const captureRouter = router({
       // batch by design: a gate that cannot name its write must not invent one.
       // Falling straight through preserves today's behaviour exactly — the
       // materializer below creates nothing and the door returns `created: []`.
+      // PER-MEMBER GOVERNANCE — the batch may be heterogeneous, the gate takes
+      // ONE pair, and a single pair cannot speak for every op in it.
+      //
+      // `deriveGatePairFromOperations` picks the strictest member by STRUCTURAL
+      // floor (admin > destructive > rest). That is sound for the floors, but
+      // its last tier consults the SHIPPED `DEFAULT_AUTO_APPROVE`, while the
+      // real verdict consults the workspace's EFFECTIVE list. No composite pair
+      // is in the shipped default, so they all tie there and the winner falls to
+      // a blast-radius tiebreak — an ordering of consequence, not of policy.
+      // Measured: a workspace widened to `entity.create` gated the batch
+      // [create_entity, create_relation] as `entity/create` -> execute while its
+      // `relation.create` member alone would have proposed, so the relation
+      // materialized UNGOVERNED.
+      //
+      // The fix is NOT a smarter single pair, and it is NOT reading
+      // `autoApproveFor` here to rank (that is a DECISION read — a second policy
+      // reader is how the governance store forks, and
+      // `__tripwires__/autoapprovefor-decision-ssot.test.ts` correctly forbids
+      // it). It is to ask the RESOLVER about every member and let ANY propose
+      // force the whole batch to propose. Same shape `submit-capture-graph.ts`
+      // already uses for the graph door — this is the second call site that
+      // evaluation always needed, and the batch is atomic, so all-or-nothing is
+      // the only coherent answer.
+      //
+      // Agent doors only: a human/CLI/webhook caller passes no `agentUserId`,
+      // the agent ladder does not apply, and the gate's own RBAC decides.
+      let anyMemberProposes = false;
+      if (ctx.agentUserId && gateOperations.length > 0) {
+        const memberKeys = captureGraphEventKeys(gateOperations);
+        for (const key of memberKeys) {
+          const gov = await resolveAgentGovernanceDecision({
+            db,
+            agentUserId: ctx.agentUserId,
+            workspaceId: workspaceId ?? null,
+            subjectType: key.subjectType,
+            action: key.action,
+            ...(key.subjectProfileSlug
+              ? { subjectProfileSlug: key.subjectProfileSlug }
+              : {}),
+            ...(key.subjectUoValidated !== undefined
+              ? { subjectUoValidated: key.subjectUoValidated }
+              : {}),
+            preferAgentMetadataAutoApproveFor: true,
+          });
+          if (gov.decision !== "execute") {
+            anyMemberProposes = true;
+            break;
+          }
+        }
+      }
+
       const perm: PermissionResult =
         gateOperations.length === 0
           ? { granted: true }
@@ -2203,7 +2295,30 @@ export const captureRouter = router({
               // capture emits `create_entity` / `create_relation` and nothing else.
               // The derivation gates the batch at its STRICTEST member, so the next
               // op arm a producer adds cannot slip in under a stale "create".
+              //
+              // ⚠️ KNOWN LIMITATION — this pair is ranked against the SHIPPED
+              // `DEFAULT_AUTO_APPROVE`, not the workspace's effective list, and
+              // that CAN under-gate. Measured: with a workspace widened to
+              // `entity.create`, the batch [create_entity, create_relation]
+              // derives `entity/create` -> execute while its `relation.create`
+              // member alone would propose, so the relation materializes
+              // ungoverned. This is NOT a regression (the hardcoded literal it
+              // replaced had the identical hole) and it is NOT fixable here:
+              // reading `autoApproveFor` to rank is a DECISION read, which
+              // `__tripwires__/autoapprovefor-decision-ssot.test.ts` forbids —
+              // correctly, since a second policy reader is how the governance
+              // store forks. THE REAL FIX is to stop gating a heterogeneous
+              // batch on one pair: evaluate every member through the resolver
+              // and propose if ANY says propose. `captureGraphEventKeys`
+              // (services/capture-agent/capture-graph-policy.ts) already does
+              // exactly this, and is wired at ONE call site
+              // (submit-capture-graph.ts) — this door is the second one it
+              // needs. Until then the rank below is structural only.
               ...deriveGatePairFromOperations(gateOperations),
+              // Any member the resolver would park parks the WHOLE batch. The
+              // derived pair still names the write; this stops it SPEAKING for
+              // members it does not cover.
+              ...(anyMemberProposes ? { forcePropose: true } : {}),
               correlationId: captureId,
               sessionId: sessionId ?? undefined,
               sourceMessageId:
@@ -2221,6 +2336,30 @@ export const captureRouter = router({
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
+
+      // ── UPDATE arm (W1) ──────────────────────────────────────────────────
+      // Ops the user marked `updateExisting` PATCH their target instead of
+      // linking to it. Routed through `entities.update` — the ONE governed
+      // update door — so the write gates as `entity`/`update`, never as the
+      // `entity`/`create` this batch's composite gate derived. A governed
+      // verdict there returns a real `entity.update` proposal whose before→after
+      // diff the existing FieldDiffList review UI renders.
+      //
+      // `forcePropose` when the CREATE half was parked: a `status:"proposed"`
+      // receipt must never be returned with rows already patched behind it.
+      const captureUpdates: CaptureUpdateResult[] = await applyCaptureUpdateOps(
+        {
+          ops: input.entities,
+          forcePropose: "proposalId" in perm,
+          updateEntity: (patch) => entitiesCaller.update(patch),
+          onError: (err, entityId) =>
+            logger.warn(
+              { err, entityId },
+              "capture.execute: update-arm patch failed (capture preserved)"
+            ),
+        }
+      );
+
       if ("proposalId" in perm) {
         // Nothing was written. Mirrors the "proposed" envelope every other
         // governed door returns (entities.create, mcp synap_create_workspace):
@@ -2230,10 +2369,16 @@ export const captureRouter = router({
         // mistake a proposal for materialized rows.
         return {
           status: "proposed" as const,
-          message:
-            "Capture proposed for review — it materializes on approval (this workspace's AI governance policy does not auto-approve entity.create).",
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Capture proposed for review — it materializes on approval (this workspace's AI governance policy does not auto-approve entity.create)."
+          ),
           created: [] as never[],
           relations: [] as never[],
+          // The update arm rode the same review verdict (forcePropose above), so
+          // every entry here is `proposed` with its own reviewable diff. Nothing
+          // was written on this branch.
+          ...(captureUpdates.length ? { updated: captureUpdates } : {}),
           captureId,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
@@ -3036,6 +3181,11 @@ export const captureRouter = router({
         status: "applied" as const,
         created,
         relations: createdRelations,
+        // W1 — entities PATCHED rather than created/linked. Each entry says
+        // whether the patch landed (`applied`), was parked for review
+        // (`proposed`, with its reviewable diff) or failed. Absent when the
+        // capture carried no update-arm ops, so existing consumers are untouched.
+        ...(captureUpdates.length ? { updated: captureUpdates } : {}),
         // The capture's self-diagnosis id + any role facets the door dropped —
         // so the caller (and a diagnose query keyed on captureId) can see "filed
         // N, dropped M facets — why". Empty array on the happy path.

@@ -1540,6 +1540,53 @@ export function buildProposalSummary(
 }
 
 /**
+ * The `proposalType` a WORKSPACE-JOIN gate carries. `maybeCreateWorkspaceJoinProposal`
+ * is the only producer; every governed write door can receive it, because the gate
+ * fires for ANY agent write into a workspace the agent is not yet a member of.
+ */
+export const JOIN_GATE_PROPOSAL_TYPE = "join";
+
+/**
+ * Summary for a proposed response that turned out to be a JOIN gate. Doors that
+ * SYNTHESIZE a summary from (subjectType, action) must use this instead — the
+ * synthesized "Update entity …" narrates a write that was never proposed.
+ */
+export const JOIN_GATE_SUMMARY =
+  "Workspace access required — a workspace JOIN request is pending review";
+
+/** True when a proposed-branch result is a workspace-JOIN gate, not the requested write. */
+export function isJoinGate(proposalType: string | undefined | null): boolean {
+  return proposalType === JOIN_GATE_PROPOSAL_TYPE;
+}
+
+/**
+ * The `message` a governed door returns on its proposed branch.
+ *
+ * WHY THIS EXISTS: the join gate DEGRADES the write — it files a
+ * `workspace.join` proposal INSTEAD of the content proposal the caller asked
+ * for. A door that hardcodes "<X> proposed for review" then narrates a write
+ * that was never proposed, and the agent reading it builds a wrong theory of
+ * what is pending. `proposalType` is the discriminator that already rides the
+ * result; this derives the prose FROM it instead of ignoring it.
+ *
+ * Same family as the "PHANTOM ENVELOPE ID FIX" in `entities/create.ts`: on a
+ * join gate, also OMIT any pre-allocated id (`proposedEntityId` and friends) —
+ * an id that can never resolve is worse than an absent field.
+ */
+export function proposedMessageFor(
+  proposalType: string | undefined | null,
+  contentMessage: string
+): string {
+  if (!isJoinGate(proposalType)) return contentMessage;
+  return (
+    "Workspace access was required, so a workspace JOIN request was filed for " +
+    "review INSTEAD of the requested write — nothing about the write itself is " +
+    "pending yet. Approve the join, then retry the write; or capture the same " +
+    "content WITHOUT a workspace lens (pod scope), which needs no membership."
+  );
+}
+
+/**
  * Build the envelope of fields returned on any "proposed" response. Used both
  * by `createProposal()` (via the perm helper) and by event-backed proposal
  * callers that need to return the same review URL/summary envelope.

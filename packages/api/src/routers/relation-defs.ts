@@ -11,7 +11,10 @@ import { relationDefs } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../utils/audit-log.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  proposedMessageFor,
+} from "../utils/permission-check.js";
 import { scopedDb, AccessContext } from "../access/index.js";
 import { randomUUID } from "crypto";
 
@@ -87,7 +90,10 @@ export const relationDefsRouter = router({
           relationDef: null,
           status: "proposed" as const,
           proposalId: permission.proposalId,
-          message: "Relationship type creation proposed for review",
+          message: proposedMessageFor(
+            permission.proposalType,
+            "Relationship type creation proposed for review"
+          ),
         };
       }
 

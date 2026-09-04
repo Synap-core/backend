@@ -303,7 +303,11 @@ export const entitiesRouter = router({
         status: result.status,
         message: result.message,
         id: result.id,
-        proposalId: result.proposalId,
+        // Cast like `proposalType`/`reviewUrl` below: `proposedEntityId` is now
+        // CONDITIONAL on the create door (omitted on a workspace-JOIN gate,
+        // where no entity id was ever allocated). That widened the inferred
+        // union, so these two bare reads no longer narrow.
+        proposalId: (result as { proposalId?: string }).proposalId,
         // Additive: signals the door merged onto an existing entity (strong
         // identity match) instead of creating a duplicate.
         ...((result as { deduplicated?: boolean }).deduplicated
@@ -318,7 +322,8 @@ export const entitiesRouter = router({
         reviewUrl: (result as { reviewUrl?: string }).reviewUrl,
         // Stable entity ID exposed at propose-time for cross-write proposal
         // graphs. Only populated when the action was proposal-gated.
-        proposedEntityId: result.proposedEntityId as string | undefined,
+        proposedEntityId: (result as { proposedEntityId?: string })
+          .proposedEntityId,
         // Echo the ambient workspace lens for the caller. NOTE: this is the
         // GOVERNANCE context, not necessarily the entity's placement — a
         // pod-scope kind lands at workspaceId=null even though the ambient lens
@@ -380,8 +385,14 @@ export const entitiesRouter = router({
       });
 
       if (result.status === "proposed" && result.proposalId) {
-        const { buildProposalResponseFields } =
-          await import("../../utils/permission-check.js");
+        const {
+          buildProposalResponseFields,
+          isJoinGate,
+          proposedMessageFor,
+          JOIN_GATE_SUMMARY,
+        } = await import("../../utils/permission-check.js");
+        const proposalType = (result as { proposalType?: string }).proposalType;
+        const joinGate = isJoinGate(proposalType);
         const envelope = buildProposalResponseFields({
           proposalId: result.proposalId,
           subjectType: "entity",
@@ -390,10 +401,19 @@ export const entitiesRouter = router({
         });
         return {
           status: result.status,
-          message: result.message,
+          // Derive the prose from the discriminator: on a JOIN gate the entity
+          // update was NOT proposed — a workspace-join request was filed
+          // instead — so both the message and the SYNTHESIZED summary/reasoning
+          // must not narrate an "Update entity …" that does not exist.
+          message: proposedMessageFor(proposalType, result.message),
           proposalId: result.proposalId,
-          summary: envelope.summary,
-          reasoning: envelope.reasoning,
+          // Same forwarding the sibling `createEntity` already does, so hub
+          // callers (CLI, MCP, Discord bridge) can tell the two apart at all.
+          proposalType,
+          summary: joinGate ? JOIN_GATE_SUMMARY : envelope.summary,
+          reasoning: joinGate
+            ? proposedMessageFor(proposalType, result.message)
+            : envelope.reasoning,
           reviewPath: envelope.reviewPath,
           reviewUrl: envelope.reviewUrl,
         };
@@ -451,8 +471,14 @@ export const entitiesRouter = router({
         "proposalId" in result &&
         result.proposalId
       ) {
-        const { buildProposalResponseFields } =
-          await import("../../utils/permission-check.js");
+        const {
+          buildProposalResponseFields,
+          isJoinGate,
+          proposedMessageFor,
+          JOIN_GATE_SUMMARY,
+        } = await import("../../utils/permission-check.js");
+        const proposalType = (result as { proposalType?: string }).proposalType;
+        const joinGate = isJoinGate(proposalType);
         const envelope = buildProposalResponseFields({
           proposalId: result.proposalId,
           subjectType: "entity",
@@ -461,10 +487,14 @@ export const entitiesRouter = router({
         });
         return {
           status: result.status,
-          message: result.message,
+          // See `updateEntity` above: a JOIN gate proposed no delete at all.
+          message: proposedMessageFor(proposalType, result.message),
           proposalId: result.proposalId,
-          summary: envelope.summary,
-          reasoning: envelope.reasoning,
+          proposalType,
+          summary: joinGate ? JOIN_GATE_SUMMARY : envelope.summary,
+          reasoning: joinGate
+            ? proposedMessageFor(proposalType, result.message)
+            : envelope.reasoning,
           reviewPath: envelope.reviewPath,
           reviewUrl: envelope.reviewUrl,
         };

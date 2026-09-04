@@ -61,6 +61,7 @@ import { verifyPermission, getWorkspaceMembership } from "@synap/database";
 import {
   checkPermissionOrPropose,
   previewPermissionDecision,
+  proposedMessageFor,
 } from "../utils/permission-check.js";
 import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -431,7 +432,10 @@ export const viewsRouter = router({
             view: null as Record<string, unknown> | null,
             documentId: null as string | null,
             status: "proposed" as const,
-            message: "View creation proposed for review",
+            message: proposedMessageFor(
+              perm.proposalType,
+              "View creation proposed for review"
+            ),
             proposalId: perm.proposalId,
           };
         }

@@ -284,8 +284,13 @@ function isMessageEvent(eventType: string): boolean {
  * undefined for a non-message event. Reads only fields the emitter actually
  * puts on the event `data` (inbound-recorder's emitSideEffects for external;
  * channels.ts for channel_message) — anything absent stays undefined.
+ *
+ * EXPORTED (with `matchTriggerSpecificFilters` below) so the rule DRY RUN
+ * (`@synap/api` `services/rules/dry-run.ts`) replays stored history through the
+ * matcher's OWN predicates instead of forking a second copy. Not unused here —
+ * do not un-export.
  */
-function deriveMessageEnvelope(
+export function deriveMessageEnvelope(
   eventType: string,
   data: Record<string, unknown> | undefined
 ): MessageEnvelope | undefined {
@@ -324,8 +329,9 @@ function deriveMessageEnvelope(
  * separate from the generic `triggerConfig.filters` key-value map.
  *
  * Returns true if the event passes all configured specific filters (or if none apply).
+ * Exported for the rule dry run — see `deriveMessageEnvelope` above.
  */
-function matchTriggerSpecificFilters(
+export function matchTriggerSpecificFilters(
   eventType: string,
   eventData: Record<string, unknown> | undefined,
   config: AutomationTriggerConfig,

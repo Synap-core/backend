@@ -18,7 +18,6 @@ import {
   and,
   eq,
   gte,
-  isNotNull,
   desc,
   drizzleSql,
   proposals,
@@ -26,6 +25,7 @@ import {
   capabilities,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownAgentUserFilter } from "../agent-identity-service.js";
 import { listRuns, listRunGroups } from "../runs/index.js";
 import {
   collapseProposalsToClusters,
@@ -334,6 +334,16 @@ export async function diagnoseGlobal(params: {
         )
       ),
     // Agent activity today: per-agent proposal counts for this owner.
+    //
+    // Floored by LINEAGE (`agentUserId` is one of MY agents), not by
+    // `createdBy = <human> AND agentUserId IS NOT NULL`. That pair excluded
+    // the MAJORITY row shape: `proposals.createdBy` is overloaded ("userId or
+    // agentUserId that authored this row"), so an agent write that passes no
+    // explicit createdBy lands `createdBy = agentUserId = <agent>` — measured
+    // live at 4 of 6 pending on this pod. The hard daily cap
+    // (`countTodayAgentProposals`) counts `agentUserId` alone, so the old pair
+    // here displayed a SMALLER number than the counter enforcing the refusal
+    // this panel exists to explain. Same floor as the cap = the two agree.
     db
       .select({
         agentId: proposals.agentUserId,
@@ -342,8 +352,7 @@ export async function diagnoseGlobal(params: {
       .from(proposals)
       .where(
         and(
-          eq(proposals.createdBy, userId),
-          isNotNull(proposals.agentUserId),
+          ownAgentUserFilter(proposals.agentUserId, userId),
           gte(proposals.createdAt, startOfUtcDay())
         )
       )
