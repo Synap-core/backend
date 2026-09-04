@@ -5986,6 +5986,11 @@ export interface AskResult {
 	 */
 	pending?: AskPendingBlock;
 }
+export interface SynthesisSource {
+	substrate: string;
+	id: string;
+	title: string;
+}
 /**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
@@ -8587,6 +8592,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				until?: unknown;
 				type?: string | undefined;
 				subjectType?: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
+				workspaceId?: string | undefined;
 				limit?: number | undefined;
 				lean?: boolean | undefined;
 			};
@@ -9375,21 +9381,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					proposalId?: string;
 					error?: string;
 				}[];
-				proposalId?: undefined;
-				proposalType?: undefined;
-				reviewUrl?: undefined;
-				proposedEntityId?: undefined;
-				workspaceId?: undefined;
-				effectiveWorkspaceId?: undefined;
 				ackState?: undefined;
 			} | {
-				status: string;
-				message: string;
-				entity: Record<string, unknown> | null;
-				proposalId: string;
-				proposalType: string;
-				reviewUrl: string;
-				proposedEntityId: string;
 				workspaceId: string | null;
 				effectiveWorkspaceId: string | null;
 				facets: {
@@ -9398,6 +9391,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outcome: string;
 					message: string;
 				}[];
+				proposedEntityId?: string | undefined;
+				status: string;
+				message: string;
+				entity: Record<string, unknown> | null;
+				proposalId: string;
+				proposalType: string;
+				reviewUrl: string;
 				id?: undefined;
 				deduplicated?: undefined;
 				contentDropped?: undefined;
@@ -9445,12 +9445,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				deduplicated?: undefined;
 				contentDropped?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				reviewUrl?: undefined;
-				proposedEntityId?: undefined;
-				workspaceId?: undefined;
-				effectiveWorkspaceId?: undefined;
 			} | {
 				unmodeled?: any;
 				status: string;
@@ -9494,12 +9488,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				deduplicated?: undefined;
 				contentDropped?: undefined;
-				proposalId?: undefined;
-				proposalType?: undefined;
-				reviewUrl?: undefined;
-				proposedEntityId?: undefined;
-				workspaceId?: undefined;
-				effectiveWorkspaceId?: undefined;
 				ackState?: undefined;
 			};
 			meta: object;
@@ -12118,7 +12106,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "workspace" | "profile" | "entity" | "document" | "view" | "relation";
-				changeType: "update" | "create" | "delete";
+				changeType: "create" | "update" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;
@@ -15092,6 +15080,21 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: AskResult;
 			meta: object;
 		}>;
+		answer: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				query: string;
+				workspaceId?: string | null | undefined;
+				limit?: number | undefined;
+			};
+			output: {
+				answer: string | null;
+				sources: SynthesisSource[];
+				routedTo: string[];
+				synthesisFailed: boolean;
+				degraded: DegradedTag[];
+			};
+			meta: object;
+		}>;
 	}>>;
 	capabilities: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -17613,7 +17616,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					profileEntityBentoTemplates?: Record<string, unknown> | undefined;
 				};
-				mode?: "update" | "create" | undefined;
+				mode?: "create" | "update" | undefined;
 				workspaceId?: string | undefined;
 				proposalId?: string | undefined;
 				appId?: string | undefined;
@@ -20192,6 +20195,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileSlug: string;
 				contentKind?: "entity-detail" | "entity-card" | "entity-profile" | "collection" | undefined;
 				workspaceId?: string | null | undefined;
+				subjectId?: string | undefined;
 			};
 			output: {
 				sources: {
