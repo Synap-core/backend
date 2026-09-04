@@ -5,15 +5,28 @@
  * pod skills are shared, user skills belong to their owner, and workspace
  * skills require both the selected workspace and a live membership.
  *
- * ── RULE EXPIRY IS ENFORCED HERE, AND ONLY HERE ────────────────────────────
+ * ── RULE EXPIRY: ENFORCED BY DEFAULT, WAIVED EXPLICITLY ────────────────────
  * A RULE is a `skills` row (`kind:"instruction"`, `category:"rule"`), so every
- * door that can surface a rule goes through this predicate — the IS prompt path
- * (`/api/hub/agent-skills/executable` → hub `skills.getSkills` → tRPC
- * `skills.list`), `GET /api/hub/rules`, and `skills.listRules`. It is the
- * NARROWEST point all of them inherit, so ANDing `ruleNotExpiredWhere()` in
- * here is what makes `metadata.rule.expiresAt` mean something instead of being
- * a stored field with no consumer — and a fourth reader added later gets the
- * enforcement for free.
+ * door that can surface a rule inherits this predicate. Enforcing by DEFAULT is
+ * deliberate and fail-safe: a door added later that forgets about expiry
+ * over-filters (an expired rule is missing) rather than leaking a lapsed
+ * standing permission into an agent's prompt. Defaults should fail in the
+ * direction that is merely annoying, not the direction that is unsafe.
+ *
+ * ⚠️ BUT ENFORCEMENT IS NOT VISIBILITY, and conflating them here shipped a real
+ * defect. Because the waiver did not exist, `GET /api/hub/rules`,
+ * `skills.listRules`, `skills.getRule` and `skills.dryRunRule` all filtered
+ * expired rules out — so a lapsed rule 404'd from every owner-facing door and
+ * could not be seen, renewed or deleted. The product contract is the opposite:
+ * an expired rule must stop ACTING and stay VISIBLE. Worse, the tripwire that
+ * asserted `rules.ts` did NOT enforce was GREEN, because it grepped that file
+ * for the literal `ruleNotExpiredWhere(` and the predicate arrives through this
+ * import instead — a source scan asserting a token when the property is
+ * behavioural.
+ *
+ * So an OWNER-FACING door passes `{ includeExpired: true }` and says why. An
+ * AGENT-FACING door passes nothing. The distinction is now expressible, which
+ * is the point: before, "forgot" and "decided" looked identical.
  *
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
@@ -23,7 +36,21 @@ import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
 
-export function visibleSkillsWhere(userId: string, workspaceId?: string): SQL {
+export interface SkillVisibilityOptions {
+  /**
+   * Keep EXPIRED rules in the result. Only for a door whose audience is the
+   * rule's OWNER — a list they manage, a detail page, a dry run they asked for.
+   * Never for a door that feeds an agent: that is the enforcement this flag
+   * waives.
+   */
+  includeExpired?: boolean;
+}
+
+export function visibleSkillsWhere(
+  userId: string,
+  workspaceId?: string,
+  options?: SkillVisibilityOptions
+): SQL {
   const tiers = !workspaceId
     ? or(
         eq(skills.scope, "pod"),
@@ -39,5 +66,5 @@ export function visibleSkillsWhere(userId: string, workspaceId?: string): SQL {
         )
       )!;
 
-  return and(tiers, ruleNotExpiredWhere())!;
+  return options?.includeExpired ? tiers : and(tiers, ruleNotExpiredWhere())!;
 }

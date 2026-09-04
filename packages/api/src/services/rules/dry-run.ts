@@ -87,6 +87,15 @@ import {
   matchTriggerSpecificFilters,
   deriveMessageEnvelope,
 } from "@synap/jobs/workers/automation-trigger-matcher.js";
+// The label SSOT. NEVER hand-write a noun/verb map for a domain token here:
+// `resolveObjectNoun`/`resolveActionLabel` both fall through to `humanizeToken`,
+// so an event type this module has never seen still renders as words.
+import {
+  resolveObjectNoun,
+  resolveActionLabel,
+  humanizeToken,
+} from "@synap-core/types/vocabulary";
+import { EVENT_PHASES } from "@synap-core/types";
 
 /** Hard ceiling on rows read per dry run. A hit is reported, never hidden. */
 export const DRY_RUN_SCAN_LIMIT = 5000;
@@ -211,6 +220,44 @@ export function eventMatchesTrigger(
 }
 
 /**
+ * Human words for ONE event type — the only user-facing text a dry-run sample
+ * carries.
+ *
+ * The dot-grammar is `subject.action[.phase]` (`@synap-core/types`
+ * `EventName`), so this splits it and resolves each half through the vocabulary
+ * SSOT rather than a map of its own. A raw token can therefore never reach a
+ * user: both resolvers fall through to `humanizeToken`, which is total.
+ *
+ * Mood is PAST, always. A dry-run sample is history — a thing that already
+ * happened — not a button that will do something. Rendering these imperative
+ * ("Receive message") would state the opposite of what the row is.
+ *
+ * A trailing `completed` is dropped because it is the unmarked case and adds
+ * noise to every single row; every OTHER phase is kept, because
+ * "Entity create denied" and "Entity created" are different facts.
+ */
+export function describeEventType(eventType: string): string {
+  const segments = eventType.split(".").filter((seg) => seg.length > 0);
+  if (segments.length === 0) return humanizeToken(eventType);
+
+  const last = segments[segments.length - 1];
+  const phase =
+    segments.length > 2 && (EVENT_PHASES as readonly string[]).includes(last)
+      ? segments.pop()
+      : undefined;
+
+  const action = segments.pop() as string;
+  const subject = segments.join("_");
+
+  const verb = resolveActionLabel(action, "past");
+  const noun = subject ? resolveObjectNoun(subject) : "";
+  const head = noun ? `${noun} ${verb.toLowerCase()}` : verb;
+  return phase && phase !== "completed"
+    ? `${head} \u2014 ${humanizeToken(phase).toLowerCase()}`
+    : head;
+}
+
+/**
  * Fields the live physical message payload carries that a PERSISTED row does
  * not, because `emitMessageEvent` writes facts and never the message body.
  * A trigger whose shape predicate reads one of these can only under-count on
@@ -287,6 +334,27 @@ export function eventTypePrefilter(eventPattern: string): SQL | undefined {
     : like(events.type, `${spec.prefix}%`);
 }
 
+/**
+ * ONE matched row, as evidence a human can actually read.
+ *
+ * Carries BOTH type strings on purpose. `storedType` is what is in the `events`
+ * row; `matchedAs` is the physical string the predicate was evaluated against,
+ * and for a message row they differ (see this module's header — that remap is
+ * the whole reason this module exists). Showing only the stored one next to a
+ * count computed from the physical one would make the evidence contradict the
+ * number it is evidence for.
+ */
+export interface RuleDryRunSample {
+  eventId: string;
+  /** The raw `events.type` as persisted. For audit; never render it directly. */
+  storedType: string;
+  /** The physical type the trigger predicate actually matched. */
+  matchedAs: string;
+  /** Human, past mood, derived from `matchedAs`. THIS is the renderable text. */
+  label: string;
+  timestamp: string;
+}
+
 export interface RuleDryRunMatch {
   status: "ok";
   /** The compiled pattern that was replayed — shown so the count is auditable. */
@@ -306,7 +374,7 @@ export interface RuleDryRunMatch {
   /** true ⇒ the scan hit its cap; `matchingEventCount` is a FLOOR, not a total. */
   truncated: boolean;
   /** Most recent matches, as evidence for the number. */
-  samples: Array<{ eventId: string; eventType: string; timestamp: string }>;
+  samples: RuleDryRunSample[];
   /** What this replay provably cannot see. Render verbatim. */
   caveats: string[];
   /**
@@ -401,9 +469,12 @@ export async function runRuleDryRun(
     if (!eventMatchesTrigger(row, input.triggerConfig)) continue;
     matchingEventCount += 1;
     if (samples.length < SAMPLE_LIMIT) {
+      const matchedAs = toPhysicalEvent(row).eventType;
       samples.push({
         eventId: row.id,
-        eventType: row.type,
+        storedType: row.type,
+        matchedAs,
+        label: describeEventType(matchedAs),
         timestamp: row.timestamp.toISOString(),
       });
     }

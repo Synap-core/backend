@@ -68,10 +68,18 @@ function catalogEventTypes(): string[] {
  * exist. Read the call, not the neighbourhood.
  */
 function emittedPatterns(): string[] {
+  // EVERY root that emits, not the three I happened to think of. `apps` holds 4
+  // emitting files — `apps/api/src/webhooks/{n8n,intelligence}.ts` emit
+  // `inbox_item.received` / `.analyzed` — and `packages/events/src` 3 more. Both
+  // validate today, so omitting them was green over a blind spot: the next
+  // webhook emit with a new subject would have gone unnoticed. Under-coverage
+  // that reports green is the exact failure this file's own header warns about.
   const roots = [
+    "apps",
     "packages/api/src",
     "packages/jobs/src",
     "packages/database/src",
+    "packages/events/src",
   ];
   const pairs = new Set<string>();
   let sites = 0;

@@ -29,6 +29,26 @@ import {
   withParentSessionId,
   attachParentSessionIds,
 } from "../services/focus-sessions/parent-lineage.js";
+import { createFocusSession } from "../services/focus-sessions/create-session.js";
+import { isTerminalSessionStatus } from "../services/focus-sessions/session-statuses.js";
+import { listSessionOutputs } from "../services/focus-sessions/session-outputs.js";
+import {
+  addSessionBlocker,
+  removeSessionBlocker,
+  attachSessionEdges,
+} from "../services/focus-sessions/session-blocked-by.js";
+import {
+  acceptFromTriage,
+  discardFromTriage,
+  attachTriage,
+  projectTriage,
+  triagePendingWhere,
+  notTriagePendingWhere,
+} from "../services/focus-sessions/triage.js";
+import { spawnProjectFromSession } from "../services/focus-sessions/spawn-project.js";
+import { revertConversion } from "../services/focus-sessions/session-conversion.js";
+import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { getDb } from "@synap/database";
 import {
   getLinksFor,
   createLinks,
@@ -67,6 +87,22 @@ const statusFilterSchema = z
     "all",
   ])
   .default("all");
+
+/**
+ * WHICH SESSIONS. Orthogonal to `status`, which is the row's own lifecycle.
+ *
+ *   - `default` — the working list: everything EXCEPT sessions still waiting to
+ *     be triaged. This is a deliberate behaviour change; an agent-opened session
+ *     no longer appears in the working list until a person accepts it.
+ *   - `triage`  — only those: agent/automation-originated, still open, not yet
+ *     accepted (`services/focus-sessions/triage.ts` owns the predicate).
+ *   - `all`     — the pre-triage behaviour, kept addressable so nothing has to
+ *     union two calls to count everything.
+ */
+const sessionLensSchema = z
+  .enum(["default", "triage", "all"])
+  .default("default");
+type SessionLens = z.infer<typeof sessionLensSchema>;
 
 // ── Links sub-router (read-only) ───────────────────────────────────────────
 
@@ -132,7 +168,8 @@ function queryUserSessions(
   userId: string | null | undefined,
   { workspaceLens, projectLens }: ResolvedScope,
   status: z.infer<typeof statusFilterSchema>,
-  limit: number
+  limit: number,
+  lens: SessionLens = "default"
 ) {
   const conditions = [eq(focusSessions.userId, requireUserId(userId))];
 
@@ -159,6 +196,17 @@ function queryUserSessions(
   if (status !== "all") {
     conditions.push(eq(focusSessions.status, status));
   }
+
+  // TRIAGE LENS — applied as a WHERE clause, never as a post-filter. A page is
+  // `limit`-capped in SQL, so filtering after the fact would let unaccepted
+  // agent drafts consume the 50 slots and push real work off the end. That is
+  // the whole reason the lens exists.
+  if (lens === "triage") {
+    conditions.push(triagePendingWhere());
+  } else if (lens === "default") {
+    conditions.push(notTriagePendingWhere());
+  }
+  // lens === "all" adds nothing — the pre-triage behaviour, kept addressable.
 
   return db
     .select()
@@ -192,6 +240,16 @@ export const focusSessionsRouter = router({
         projectId: ScopeFilterShape.projectId,
         status: statusFilterSchema,
         limit: z.number().int().min(1).max(50).default(20),
+        /**
+         * Also project the `blocked_by` dependency edges for the page —
+         * `blockedBy` (what this session waits on) and `unblocks` (what waits
+         * on it). Opt-in because most callers do not draw them, and it is a
+         * projection on THIS door rather than a `graph` procedure of its own:
+         * a second door would be a second shape to keep in lockstep.
+         */
+        edges: z.boolean().optional(),
+        /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
+        lens: sessionLensSchema,
       })
     )
     .query(async ({ ctx, input }) => {
@@ -200,11 +258,289 @@ export const focusSessionsRouter = router({
         ctx.userId,
         scope,
         input.status,
-        input.limit
+        input.limit,
+        input.lens
       );
       // Derived lineage for the whole page in ONE query (never N+1, never a
       // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
-      return attachParentSessionIds(sessions);
+      const withLineage = await attachParentSessionIds(sessions);
+      // `triage` is projected onto EVERY row in EVERY lens (it is pure — no
+      // query), so no consumer ever re-derives the predicate from origin +
+      // metadata + status. That re-derivation is exactly how a second, drifting
+      // copy of a rule gets written.
+      const withTriage = attachTriage(withLineage);
+      if (!input.edges) return withTriage;
+      // Second batch projection, ONE more links query for the whole page.
+      return attachSessionEdges(withTriage);
+    }),
+
+  /**
+   * Declare that a session is blocked by another — `session --blocked_by-->
+   * session`.
+   *
+   * There is NO `blocked` status to set: blocked-ness is derived from the
+   * edges whose target is still open (see `session-blocked-by.ts`). Ownership
+   * is floored on BOTH endpoints inside the producer, mirroring the spawn
+   * door; a handle the caller does not own is reported, never thrown.
+   */
+  addBlocker: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        blockerSessionId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return addSessionBlocker({
+        sessionId: input.sessionId,
+        blockerSessionId: input.blockerSessionId,
+        userId: ctx.userId,
+        workspaceId: session.workspaceId,
+      });
+    }),
+
+  /** Drop a `blocked_by` edge. Reports whether one was actually there. */
+  removeBlocker: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        blockerSessionId: z.string().uuid(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+        columns: { id: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return removeSessionBlocker({
+        sessionId: input.sessionId,
+        blockerSessionId: input.blockerSessionId,
+        userId: ctx.userId,
+      });
+    }),
+
+  // ── Triage ───────────────────────────────────────────────────────────────
+  // A session an agent or an automation opened is a SUGGESTION until a person
+  // says otherwise. Two verbs, no stored status: acceptance is a receipt on
+  // `metadata.triage`, discard routes to the existing terminal `cancelled`.
+
+  /**
+   * "Accept as ready" — take ownership of a triage session. Stamps
+   * `metadata.triage.acceptedAt`/`acceptedBy`; changes NO status.
+   *
+   * Returns `{ accepted, session? , reason? }`. `reason: "not_pending"` means
+   * the session was never in triage (or somebody accepted it first) — a fact,
+   * not a fault, so it is not a 4xx.
+   */
+  acceptFromTriage: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await acceptFromTriage({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      });
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.sessionId} not found`,
+          });
+        }
+        return { accepted: false as const, reason: result.reason };
+      }
+      return { accepted: true as const, session: result.session };
+    }),
+
+  /**
+   * Discard a triage session — cancel it (nothing is deleted) and retire the
+   * ephemeral proposals bound to work that is now not happening.
+   *
+   * Returns `{ discarded, session?, expiredEphemerals?, reason? }`.
+   * `expiredEphemerals` is reported, never silent: a retirement the person does
+   * not learn about is the lying-count defect wearing a different hat.
+   */
+  discardFromTriage: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await discardFromTriage({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      });
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.sessionId} not found`,
+          });
+        }
+        return { discarded: false as const, reason: result.reason };
+      }
+      return {
+        discarded: true as const,
+        session: result.session,
+        expiredEphemerals: result.expiredEphemerals,
+      };
+    }),
+
+  // ── Conversions ──────────────────────────────────────────────────────────
+
+  /**
+   * Spawn a PROJECT from this session — the container half of the conversion
+   * pair (promote → playbook is the other, and lives on `playbooks.promote`).
+   *
+   * Governance mirrors promote exactly: load by id, `assertWorkspaceWrite` on
+   * the LOADED row's workspace, then `checkPermissionOrPropose` — a human caller
+   * executes, an agent caller files a `project/spawn_from_session` proposal that
+   * re-runs THIS procedure on approval.
+   *
+   * Returns `{ status, projectId, receipt, ... }`. The receipt carries
+   * `created: {kind,id,name}`, `renamedFrom` and `undoUntil`; undo is
+   * `focusSessions.revertConversion`.
+   */
+  spawnProject: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        name: z.string().min(1).max(255).optional(),
+        description: z.string().max(4000).optional(),
+        agentUserId: z.string().uuid().optional(),
+        source: z.string().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const database = await getDb();
+      // Load by id + owner floor, gate on the LOADED row (never on a
+      // request-supplied workspaceId).
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, requireUserId(ctx.userId))
+        ),
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      await assertWorkspaceWrite(database, ctx.userId, {
+        workspaceId: session.workspaceId,
+      });
+
+      const perm = await checkPermissionOrPropose({
+        userId: requireUserId(ctx.userId),
+        agentUserId: input.agentUserId,
+        workspaceId: session.workspaceId ?? undefined,
+        subjectType: "project",
+        // Its OWN verb, not `create`: the two are materialized by different
+        // executors (a raw create takes a name; this takes a sessionId and
+        // carries the mapping + the rename + the lineage edge), and one
+        // proposalType cannot materialize both. `requiredPermissionFor`
+        // fail-closes an unknown verb to "write", so RBAC is identical to
+        // create — only the apply key forks. Same split promote made.
+        action: "spawn_from_session",
+        source: input.source,
+        reasoning: input.reasoning,
+        data: {
+          sessionId: input.sessionId,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.description !== undefined
+            ? { description: input.description }
+            : {}),
+        },
+      });
+      if ("denied" in perm && perm.denied) {
+        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          projectId: null as string | null,
+          proposalId: perm.proposalId,
+          receipt: null,
+        };
+      }
+
+      const result = await spawnProjectFromSession({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        name: input.name,
+        description: input.description,
+        agentUserId: input.agentUserId ?? null,
+        door: "trpc",
+      });
+      if (result.status === "refused") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: result.message,
+          cause: result.reason,
+        });
+      }
+      return {
+        status: "spawned" as const,
+        projectId: result.projectId as string | null,
+        proposalId: null as string | null,
+        deduped: result.deduped,
+        expectedOutputsCarried: result.expectedOutputsCarried,
+        ...(result.subjectBound !== undefined
+          ? { subjectBound: result.subjectBound }
+          : {}),
+        receipt: result.receipt,
+      };
+    }),
+
+  /**
+   * UNDO a conversion — the inverse verb, one door for both promote and spawn.
+   *
+   * Restores the session's goal, ARCHIVES the created playbook/project (never
+   * deletes: an undo that destroys rows is a worse failure than one that hides
+   * them) and drops the lineage edge. Refuses with a typed reason once the
+   * window has passed or the created object has been used.
+   */
+  revertConversion: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await revertConversion({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      });
+      if (!result.ok) {
+        if (result.reason === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.sessionId} not found`,
+          });
+        }
+        return { reverted: false as const, reason: result.reason };
+      }
+      return {
+        reverted: true as const,
+        goal: result.goal,
+        retired: result.retired,
+      };
     }),
 
   /**
@@ -285,7 +621,13 @@ export const focusSessionsRouter = router({
       // Derived detour lineage (see `services/focus-sessions/parent-lineage.ts`)
       // — mirrors `synap_get_session` (mcp/handlers/session.ts) so the two
       // doors can never disagree.
-      return withParentSessionId({ ...row, participants });
+      // Same projection the list door attaches (pure, no query) so a detail
+      // page never re-derives triage-pending from origin + metadata + status.
+      return withParentSessionId({
+        ...row,
+        participants,
+        triage: projectTriage(row),
+      });
     }),
 
   /**
@@ -332,27 +674,25 @@ export const focusSessionsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const [created] = await db
-        .insert(focusSessions)
-        .values({
-          workspaceId: input.workspaceId ?? null,
-          userId: ctx.userId,
-          goal: input.goal,
-          templateId: input.templateId ?? null,
-          expectedOutputs: input.expectedOutputs,
-          channelId: input.channelId ?? null,
-          agentIds: input.agentIds,
-          projectId: input.projectId ?? null,
-          // Typed origin (migration 0240). This door writes no playbookId and
-          // no automation metadata — a human starting a bare work session — so
-          // it is "agent", which is also what the legacy sniff returns for the
-          // row it produces.
-          origin: "agent",
-          status: "active",
-        })
-        .returning();
-
-      return created as FocusSession;
+      // ONE create door (`createFocusSession`): the bare insert this replaced
+      // stamped every human-started session `origin: "agent"`, which is the
+      // exact mislabel the triage lens keys on. The service derives origin
+      // from the caller (no agentUserId here ⇒ "human") and runs the same
+      // membership membrane every other start door runs.
+      const result = await createFocusSession({
+        userId: ctx.userId,
+        workspaceId: input.workspaceId ?? null,
+        projectId: input.projectId ?? null,
+        goal: input.goal,
+        templateId: input.templateId ?? null,
+        expectedOutputs: input.expectedOutputs,
+        channelId: input.channelId ?? null,
+        agentIds: input.agentIds,
+      });
+      if (result.status !== "created") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.message });
+      }
+      return result.session as FocusSession;
     }),
 
   /**
@@ -419,14 +759,20 @@ export const focusSessionsRouter = router({
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
 
-      // Closing via update: funnel through completeFocusSession (pack + run close).
-      if (patch.status === "closed" && existing.status !== "closed") {
+      // Any terminal status via update funnels through completeFocusSession —
+      // the ONE close door (pack + run close + ephemeral expiry + close event).
+      // A bare `status: "cancelled"` write used to skip all four.
+      if (
+        isTerminalSessionStatus(patch.status) &&
+        !isTerminalSessionStatus(existing.status)
+      ) {
         const { completeFocusSession } =
           await import("../services/focus-sessions/complete-session.js");
         try {
           const result = await completeFocusSession({
             sessionId: input.id,
             userId: ctx.userId,
+            terminalStatus: patch.status,
           });
           if (!result) {
             throw new TRPCError({
@@ -690,5 +1036,28 @@ export const focusSessionsRouter = router({
       });
 
       return { granted: true, status: "granted" as const };
+    }),
+
+  /**
+   * THE one door for "what did this session produce?" — the join of the three
+   * output ledgers (`produced` edges, `artifacts` rows, `expected_outputs`).
+   *
+   * Consumers must navigate with `refId`, never an artifact row id.
+   */
+  outputs: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const result = await listSessionOutputs({
+        db,
+        userId: ctx.userId,
+        sessionId: input.sessionId,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
     }),
 });

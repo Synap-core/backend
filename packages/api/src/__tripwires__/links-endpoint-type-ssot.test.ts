@@ -1,30 +1,40 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync, statSync } from "fs";
 import { join } from "path";
+import { fileURLToPath } from "url";
 
 /**
- * TRIPWIRE — `LinkEndpointType` has THREE copies (schema union, playbooks
- * mirror, hub-REST z.enum array) that must stay in lockstep. They already
- * drifted once silently: the REST `LINK_ENDPOINT_TYPES` array (rest/links.ts)
- * was missing "automation" / "project" / "secret" / "capability" that the
- * schema union had gained, which meant an agent could never create those edge
- * kinds over the Hub Protocol even though the schema allowed them.
+ * TRIPWIRE — `LinkEndpointType` is DECLARED in one place and MIRRORED in
+ * others (a hand-copied union in `@synap/playbooks`, a `z.enum` array in the
+ * hub-REST door). They already drifted once silently: the REST
+ * `LINK_ENDPOINT_TYPES` array (rest/links.ts) was missing "automation" /
+ * "project" / "secret" / "capability" that the schema union had gained, which
+ * meant an agent could never create those edge kinds over the Hub Protocol
+ * even though the schema allowed them.
  *
- * This test parses the source of the schema union and the REST array and
- * fails the moment either list gains/loses a member the other doesn't have —
- * catching the drift class at CI time instead of at "why can't I link a
- * capability" debugging time.
+ * DERIVE, DON'T HAND-LIST. The earlier version of this test named the two
+ * mirror files explicitly — which meant a THIRD mirror could be added anywhere
+ * in the repo and this tripwire would sail past it, the exact fork it exists
+ * to prevent. It now DISCOVERS the registration sites by scanning
+ * `packages/**\/src` source (same shape as
+ * `capability-drift.projection-parity.tripwire.test.ts`, which parses the
+ * applier's own `.set({...})` to derive its field set):
  *
- * Longer-term SSOT follow-up (not done here): derive `LINK_ENDPOINT_TYPES` in
- * rest/links.ts directly from the schema union (e.g. `z.enum` built off a
- * `satisfies readonly LinkEndpointType[]` array) so this can't drift again by
- * construction. Filed in WORKSPACE-RESOLUTION-PLAN.md Wave 4.
+ *   site kind A — any `type LinkEndpointType = "..." | "..."` union declaration
+ *   site kind B — any `[...] as const` string array whose members are ALL
+ *                 members of the schema union and which holds ≥ 5 of them
+ *                 (i.e. a list that is unmistakably an endpoint-type list)
+ *
+ * Rule B deliberately does NOT match a declared SUPERSET such as
+ * `GRAPH_KINDS` (it contains "view"/"document", which are not endpoint types),
+ * nor a small intentional subset such as `GrantableKind` (< 5 members).
+ *
+ * Every discovered site must equal the schema union EXACTLY.
  */
 
-/** Strip `// ...` line comments so a comment's punctuation (e.g. a stray
- * `;`) can never be mistaken for source syntax when scanning for block
- * boundaries below. None of the string literals this file cares about
- * ("playbook", "workspace", ...) contain `//`, so this is safe. */
+/** Strip `// ...` line comments so a comment's prose (e.g. the words in a
+ * doc-comment, or a stray `;`) can never be mistaken for source syntax when
+ * scanning for block boundaries or string literals below. */
 function stripLineComments(src: string): string {
   return src
     .split("\n")
@@ -32,78 +42,119 @@ function stripLineComments(src: string): string {
     .join("\n");
 }
 
-function extractUnionMembers(src: string, typeName: string): string[] {
-  const clean = stripLineComments(src);
-  const start = clean.indexOf(`export type ${typeName} =`);
-  if (start === -1) throw new Error(`${typeName} not found`);
+const SCHEMA_FILE = join(
+  process.cwd(),
+  "..",
+  "database",
+  "src",
+  "schema",
+  "links.ts"
+);
+
+function schemaUnion(): string[] {
+  const clean = stripLineComments(readFileSync(SCHEMA_FILE, "utf8"));
+  const start = clean.indexOf("export type LinkEndpointType =");
+  if (start === -1) throw new Error("LinkEndpointType not found in schema");
   const end = clean.indexOf(";", start);
-  const block = clean.slice(start, end);
-  return [...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+  return [...clean.slice(start, end).matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
 }
 
-function extractArrayMembers(src: string, constName: string): string[] {
-  const clean = stripLineComments(src);
-  const start = clean.indexOf(`const ${constName} = [`);
-  if (start === -1) throw new Error(`${constName} not found`);
-  const end = clean.indexOf("] as const", start);
-  const block = clean.slice(start, end);
-  return [...block.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+const SKIP_DIRS = new Set(["node_modules", "dist", ".turbo", "build"]);
+
+/** This scanner's own source quotes the patterns it looks for, so it would
+ * otherwise discover ITSELF as a registration site. */
+const SELF = fileURLToPath(import.meta.url);
+
+/** Every `.ts` source file under `packages/`, excluding build output. */
+function sourceFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      if (SKIP_DIRS.has(name)) continue;
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith(".ts") && !name.endsWith(".d.ts") && full !== SELF)
+        out.push(full);
+    }
+  };
+  walk(join(process.cwd(), ".."));
+  return out;
 }
 
-describe("tripwire: LinkEndpointType SSOT (schema union vs hub-REST enum)", () => {
-  it("rest/links.ts LINK_ENDPOINT_TYPES matches the schema union exactly", () => {
-    const schemaSrc = readFileSync(
-      join(process.cwd(), "..", "database", "src", "schema", "links.ts"),
-      "utf8"
-    );
-    const restSrc = readFileSync(
-      join(process.cwd(), "src", "routers", "hub-protocol", "rest", "links.ts"),
-      "utf8"
-    );
+interface Site {
+  file: string;
+  kind: "union" | "array";
+  members: string[];
+}
 
-    const schemaTypes = new Set(
-      extractUnionMembers(schemaSrc, "LinkEndpointType")
-    );
-    const restTypes = new Set(
-      extractArrayMembers(restSrc, "LINK_ENDPOINT_TYPES")
-    );
+function discoverSites(union: ReadonlySet<string>): Site[] {
+  const sites: Site[] = [];
+  for (const file of sourceFiles()) {
+    const src = stripLineComments(readFileSync(file, "utf8"));
 
-    const missingFromRest = [...schemaTypes].filter((t) => !restTypes.has(t));
-    const extraInRest = [...restTypes].filter((t) => !schemaTypes.has(t));
+    // Site kind A — a `LinkEndpointType` union declaration.
+    let idx = src.indexOf("type LinkEndpointType =");
+    while (idx !== -1) {
+      const end = src.indexOf(";", idx);
+      if (end !== -1) {
+        sites.push({
+          file,
+          kind: "union",
+          members: [...src.slice(idx, end).matchAll(/"([a-z_]+)"/g)].map(
+            (m) => m[1]
+          ),
+        });
+      }
+      idx = src.indexOf("type LinkEndpointType =", idx + 1);
+    }
 
-    expect({ missingFromRest, extraInRest }).toEqual({
-      missingFromRest: [],
-      extraInRest: [],
-    });
+    // Site kind B — a hand-copied `as const` array of endpoint-type literals.
+    for (const m of src.matchAll(/=\s*\[([^[\]]*?)\]\s*as const/gs)) {
+      const body = m[1];
+      // Literals only — anything else (spreads, identifiers, objects) means
+      // this is not a plain string list.
+      if (/[^\s"',\w]/.test(body)) continue;
+      const values = [...body.matchAll(/"([a-z_]+)"/g)].map((v) => v[1]);
+      if (values.length < 5) continue;
+      if (!values.every((v) => union.has(v))) continue;
+      sites.push({ file, kind: "array", members: values });
+    }
+  }
+  return sites;
+}
+
+describe("tripwire: LinkEndpointType SSOT (derived registration sites)", () => {
+  const union = schemaUnion();
+  const unionSet = new Set(union);
+  const sites = discoverSites(unionSet);
+
+  it("discovers the schema declaration plus at least two mirrors", () => {
+    // Guard against a scanner that silently matches NOTHING and so passes
+    // vacuously. This is a FLOOR on the discovered population, not the
+    // population itself — new mirrors are found automatically.
+    expect(sites.map((s) => s.file)).toContain(SCHEMA_FILE);
+    expect(sites.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("playbooks/index.ts LinkEndpointType mirror matches the schema union exactly", () => {
-    const schemaSrc = readFileSync(
-      join(process.cwd(), "..", "database", "src", "schema", "links.ts"),
-      "utf8"
-    );
-    const playbooksSrc = readFileSync(
-      join(process.cwd(), "..", "playbooks", "src", "index.ts"),
-      "utf8"
-    );
+  it("every discovered site matches the schema union exactly", () => {
+    const drift = sites
+      .map((s) => {
+        const has = new Set(s.members);
+        return {
+          file: s.file,
+          kind: s.kind,
+          missing: union.filter((t) => !has.has(t)),
+          extra: s.members.filter((t) => !unionSet.has(t)),
+        };
+      })
+      .filter((d) => d.missing.length > 0 || d.extra.length > 0);
 
-    const schemaTypes = new Set(
-      extractUnionMembers(schemaSrc, "LinkEndpointType")
-    );
-    const playbooksTypes = new Set(
-      extractUnionMembers(playbooksSrc, "LinkEndpointType")
-    );
+    expect(drift).toEqual([]);
+  });
 
-    const missingFromPlaybooks = [...schemaTypes].filter(
-      (t) => !playbooksTypes.has(t)
-    );
-    const extraInPlaybooks = [...playbooksTypes].filter(
-      (t) => !schemaTypes.has(t)
-    );
-
-    expect({ missingFromPlaybooks, extraInPlaybooks }).toEqual({
-      missingFromPlaybooks: [],
-      extraInPlaybooks: [],
-    });
+  it("governance_rule is a registered endpoint type", () => {
+    // The value this wave added. Pinned so a revert is loud rather than a
+    // silently narrowed union that still passes the parity check above.
+    expect(union).toContain("governance_rule");
   });
 });

@@ -39,6 +39,7 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
+import { ownAgentUserFilter } from "../agent-identity-service.js";
 import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -595,6 +596,34 @@ async function diagnoseClass(
         createdAt: r.createdAt,
         workspaceId: r.workspaceId ?? null,
       }));
+      // Same lens gap the GLOBAL door now names (`services/diagnose/global.ts`,
+      // `mineOutsideLens`). `userVisibleWhere` is a WORKSPACE-membership
+      // predicate, so a pending row whose `workspaceId` does not resolve to a
+      // workspace this user belongs to is dropped — and those are precisely the
+      // malformed ones (orphaned workspace ids; one row carries a USER id in
+      // the workspace column). Three external test passes reported this door
+      // saying 11 while `orient`/`list_proposals` said 14, with no explanation.
+      //
+      // Adds NO disclosure: it is the AUTHOR floor `orient` already reports to
+      // this same user. No membership term — this is not a workspace widening.
+      const [mineRow] = await db
+        .select({ mine: drizzleSql<number>`count(*)::int` })
+        .from(proposals)
+        .where(
+          and(
+            or(
+              eq(proposals.createdBy, userId),
+              ownAgentUserFilter(proposals.agentUserId, userId),
+              ownAgentUserFilter(proposals.createdBy, userId)
+            ),
+            eq(proposals.status, ProposalStatus.PENDING),
+            workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
+          )
+        );
+      // Clamped: the author floor is not a superset of the workspace floor (a
+      // teammate's row in a shared workspace is workspace-visible, not mine).
+      const mineOutsideLens = Math.max(0, (mineRow?.mine ?? 0) - rows.length);
+
       const clusters = collapseProposalsToClusters(clusterRows);
       const duplicates = clusters.filter((c) => c.count > 1);
       const oldest = rows.length > 0 ? rows[rows.length - 1]!.createdAt : null;
@@ -604,9 +633,13 @@ async function diagnoseClass(
         summary:
           rows.length === 0
             ? "No pending proposals in the review queue."
-            : `${rows.length} pending proposal(s), ${duplicates.length} duplicate cluster(s).`,
+            : `${rows.length} pending proposal(s), ${duplicates.length} duplicate cluster(s).` +
+              (mineOutsideLens > 0
+                ? ` ${mineOutsideLens} more of yours sit outside your workspace lens (unresolvable placement).`
+                : ""),
         detail: {
           pending: rows.length,
+          mineOutsideLens,
           oldestCreatedAt: oldest,
           duplicateClusters: duplicates
             .map((c) => ({ targetLabel: c.targetLabel, count: c.count }))

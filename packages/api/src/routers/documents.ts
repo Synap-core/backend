@@ -599,6 +599,9 @@ export const documentsRouter = router({
           id: v.id,
           version: v.version,
           message: v.message,
+          // Provenance: 'user' | 'ai' | 'system' (declared in the schema). The
+          // version rail reads this to say who drafted a version.
+          author: v.author,
           createdBy: v.authorId,
           createdAt: v.createdAt,
           size: v.size,

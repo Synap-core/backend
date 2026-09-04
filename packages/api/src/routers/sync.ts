@@ -26,6 +26,7 @@ import {
   intelligenceCommands,
   documents,
   documentVersions,
+  DOCUMENT_VERSION_AUTHORS,
   proposals,
   focusSessions,
   widgetDefinitions,
@@ -70,7 +71,12 @@ const logger = createLogger({ module: "sync-receive" });
 function isFocusSessionOrigin(
   value: unknown
 ): value is NonNullable<typeof focusSessions.$inferInsert.origin> {
-  return value === "playbook" || value === "automation" || value === "agent";
+  return (
+    value === "playbook" ||
+    value === "automation" ||
+    value === "agent" ||
+    value === "human"
+  );
 }
 
 // ============================================================================
@@ -1406,7 +1412,15 @@ const fileVersionPayloadSchema = z.object({
   mimeType: z.string().nullable().optional(),
   size: z.number().nullable().optional(),
   checksum: z.string().nullable().optional(),
-  author: z.string().nullable().optional(),
+  // The peer's own declared authorship, validated against the SAME set the
+  // column declares — a sync peer is not a door to invent a value the readers
+  // do not know. Anything else (including the old free-string `"sync"`) falls
+  // to `system`: the pod wrote this on nobody's behalf.
+  author: z
+    .enum(DOCUMENT_VERSION_AUTHORS)
+    .catch("system")
+    .nullable()
+    .optional(),
   authorId: z.string().nullable().optional(),
   message: z.string().nullable().optional(),
   createdAt: z.string().optional(),
@@ -1526,7 +1540,7 @@ app.post("/receive-file-version", async (c) => {
       documentId: body.documentId,
       version: body.version ?? 1,
       ...storedVersionValues(snapshot),
-      author: body.author ?? "sync",
+      author: body.author ?? "system",
       authorId: body.authorId ?? "sync",
       message: body.message,
       createdAt: body.createdAt ? new Date(body.createdAt) : new Date(),

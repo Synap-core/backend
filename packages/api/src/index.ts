@@ -342,6 +342,10 @@ export {
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever
 // importing api. Called from apps/api/src/index.ts.
 export { registerPodWideProposalReactor } from "./notifications/pod-wide-proposal-reactor.js";
+// Same boot-time IoC for the session unblock notification: the close door emits
+// `focus_session.closed`, this reactor derives whether the LAST open blocker
+// just went away and notifies once. See session-unblock-reactor.ts.
+export { registerSessionUnblockReactor } from "./notifications/session-unblock-reactor.js";
 export { scanBrokenAutomations } from "./services/automations/scan-broken-automations.js";
 export {
   runEventEnd,

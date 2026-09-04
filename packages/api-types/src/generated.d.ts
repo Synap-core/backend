@@ -2546,7 +2546,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "agent" | "automation" | "playbook";
+			data: "human" | "agent" | "automation" | "playbook";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2561,7 +2561,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "agent" | "automation" | "playbook";
+			$type: "human" | "agent" | "automation" | "playbook";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2813,6 +2813,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
+			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -2824,7 +2825,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
-			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -3966,7 +3966,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "governance_rule";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates"
 /**
@@ -3979,7 +3979,21 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  * actually ships is a coordinator with sibling children, where fan-in is a
  * SUMMARY, not a merge. The UI says "forked from"; it never draws a graph.
  */
- | "spawned_from" | "provides_credential";
+ | "spawned_from" | "provides_credential"
+/**
+ * session --blocked_by--> session. A dependency between units of work: the
+ * FROM session cannot proceed until the TO session closes.
+ *
+ * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
+ * still open, never a stored `blocked` status on `focus_sessions` (prior
+ * art: Atlassian's "flag, don't status" — a status can only hold one value,
+ * so storing blocked-ness destroys the real state and then drifts from the
+ * blockers). The reader is `session-blocked-by.ts`.
+ *
+ * Unrelated to the run status `blocked_by_policy` — that is a governance
+ * outcome on a single run, not an edge between sessions.
+ */
+ | "blocked_by";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -5986,6 +6000,32 @@ export interface AskResult {
 	 */
 	pending?: AskPendingBlock;
 }
+/**
+ * ONE door from an AI/IS failure to the words a user reads.
+ *
+ * The rule this module exists to enforce: **never assert a cause the code did
+ * not verify, and never recommend an action that cannot work.** The bug it
+ * replaces told users "the AI service is recovering from a temporary overload,
+ * please try again shortly" while the real failure was `HTTP 402 Insufficient
+ * Balance` — the LLM provider was out of credit. No amount of retrying could
+ * ever have fixed that, and nothing was recovering from anything.
+ *
+ * Classification is EVIDENCE-ONLY: an HTTP status carried on the error, a
+ * provider error code, or an unambiguous token in the error text. When there is
+ * no evidence, the class is `unknown` and the copy SAYS so — it does not guess.
+ *
+ * Relationship to `classifyDispatchFailure` (connectors/external-dispatch.ts):
+ * that is the sibling classifier for *connector dispatch* failures, which
+ * always arrive with a known HTTP status and whose classes drive reconnect /
+ * connect affordances in the browser. This one starts from a thrown `unknown`,
+ * and needs the distinction that one does not carry — billing/quota exhaustion
+ * (operator must act) vs. a retryable outage. It is deliberately a LEAF module
+ * (no DB, no connector imports) so the MCP handlers and the chat send path can
+ * import it without pulling the dispatch graph in. Keep the two precedence
+ * orders in sync in spirit: no-credit and credential-rejection outrank
+ * transient, because calling a 402 "temporary" is the exact defect above.
+ */
+export type AiFailureClass = "quota" | "plan_quota" | "cancelled" | "auth" | "rate_limit" | "timeout" | "circuit" | "upstream" | "bad_request" | "invalid_response" | "unknown";
 export interface SynthesisSource {
 	substrate: string;
 	id: string;
@@ -6071,6 +6111,27 @@ export type GrantableKind = "tool" | "skill" | "command";
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
  */
 export type ExecMode = "auto" | "propose" | "dry-run";
+export interface ExpectedOutput {
+	kind: string;
+	label: string;
+	icon?: string;
+	/**
+	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
+	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
+	 * called after a session-scoped proposal is APPROVED. Nothing else may write it:
+	 * the agent grading its own homework is exactly the failure this field exists
+	 * to stop. Absent ⇒ treat as `pending`.
+	 */
+	status?: "pending" | "done";
+	/**
+	 * The AGENT's claim that it produced this output. Free for the agent to set
+	 * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
+	 * same field as `status` — a claim is evidence to show the human, never proof.
+	 */
+	claimedDone?: boolean;
+	/** Lineage: the approved proposal whose apply satisfied this output. */
+	satisfiedByProposalId?: string;
+}
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
  * from Linear's `ProjectStatusType` — the convergent answer across eight
@@ -6437,6 +6498,12 @@ export interface CapabilityGrantRow {
  */
 export type RuleShape = "fact" | "behaviour" | "structure" | "schedule" | "notification" | "extraction" | "unknown";
 export interface RuleBehaviourRecord {
+	/**
+	 * The KEY the snapshot below is stored under — NOT the membership store.
+	 * A rule's automations are resolved from the `skill --activates-->
+	 * automation` edge (`./lineage.ts`); reading this array as "the rule's
+	 * automations" is the divergence that made the edge decorative.
+	 */
 	automationId: string;
 	/**
 	 * DIVERGENCE SNAPSHOT: hash of the automation's `flowDefinition` AS THE RULE
@@ -6486,33 +6553,24 @@ export interface RuleScope {
 	/** Cross-cutting project lens. Absent = the rule is not project-scoped. */
 	projectId?: string;
 }
-export interface RuleMetadata {
-	v: 1;
-	intent: string;
-	scope: RuleScope;
+export interface DivergedBehaviour {
+	automationId: string;
 	/**
-	 * ISO-8601 UTC instant after which this rule stops influencing anything —
-	 * ENFORCED by `ruleNotExpiredWhere()` inside `visibleSkillsWhere`, the one
-	 * predicate every rule read door inherits. Absent = no expiry, NEVER
-	 * "expired" (mirrors `governance_rules.expires_at`). See `./expiry.ts`.
+	 * The hash the rule RECORDED for this behaviour, or `null` when the edge
+	 * names an automation the rule took no snapshot of — see `"unsnapshotted"`.
 	 */
-	expiresAt?: string;
-	/** Set only when the fact half is a SEPARATE skill row. */
-	factSkillId?: string;
-	behaviours: RuleBehaviourRecord[];
-	/**
-	 * Optional because rows written before the classifier was wired into the
-	 * write door carry none. Absent ⇒ "never classified", not "classified as
-	 * nothing".
-	 */
-	routing?: RuleRouting;
-	createdAt: string;
-}
-export interface DivergedBehaviour extends RuleBehaviourRecord {
+	flowHash: string | null;
 	/** Hash of the automation's flowDefinition RIGHT NOW. */
 	currentFlowHash: string | null;
-	/** null current hash = the automation row is gone. */
-	status: "matches" | "diverged" | "missing";
+	/**
+	 * `missing`      — the edge names an automation row that is gone.
+	 * `unsnapshotted` — the edge exists but `behaviours[]` holds no hash for it,
+	 *                   so there is nothing to compare against. Reported, never
+	 *                   silently treated as a match: the membership store (the
+	 *                   edge) and the snapshot store (the JSONB) are written in
+	 *                   the same call, so this is a real anomaly.
+	 */
+	status: "matches" | "diverged" | "missing" | "unsnapshotted";
 }
 /**
  * The clause a refusal is about, in the user's own sentence vocabulary. A rule
@@ -6574,6 +6632,26 @@ export type CreateRuleGovernedResult = {
 	 */
 	failure?: RuleCompileFailure;
 };
+/**
+ * ONE matched row, as evidence a human can actually read.
+ *
+ * Carries BOTH type strings on purpose. `storedType` is what is in the `events`
+ * row; `matchedAs` is the physical string the predicate was evaluated against,
+ * and for a message row they differ (see this module's header — that remap is
+ * the whole reason this module exists). Showing only the stored one next to a
+ * count computed from the physical one would make the evidence contradict the
+ * number it is evidence for.
+ */
+export interface RuleDryRunSample {
+	eventId: string;
+	/** The raw `events.type` as persisted. For audit; never render it directly. */
+	storedType: string;
+	/** The physical type the trigger predicate actually matched. */
+	matchedAs: string;
+	/** Human, past mood, derived from `matchedAs`. THIS is the renderable text. */
+	label: string;
+	timestamp: string;
+}
 export interface RuleDryRunMatch {
 	status: "ok";
 	/** The compiled pattern that was replayed — shown so the count is auditable. */
@@ -6593,11 +6671,7 @@ export interface RuleDryRunMatch {
 	/** true ⇒ the scan hit its cap; `matchingEventCount` is a FLOOR, not a total. */
 	truncated: boolean;
 	/** Most recent matches, as evidence for the number. */
-	samples: Array<{
-		eventId: string;
-		eventType: string;
-		timestamp: string;
-	}>;
+	samples: RuleDryRunSample[];
 	/** What this replay provably cannot see. Render verbatim. */
 	caveats: string[];
 	/**
@@ -7750,6 +7824,80 @@ export interface ReactionEvent {
 	/** the fan-out */
 	reactions: Reaction[];
 }
+export interface TriageProjection {
+	/** Waiting for a human to accept or discard it. */
+	pending: boolean;
+	/** When a human accepted it (ISO), or null. */
+	acceptedAt: string | null;
+	/** Who accepted it, or null. */
+	acceptedBy: string | null;
+}
+export type BlockerEdgeResult = {
+	linked: true;
+} | {
+	linked: false;
+	reason: "not_found" | "self_blocker";
+};
+export type RemoveBlockerResult = {
+	removed: true;
+} | {
+	removed: false;
+	reason: "not_found" | "self_blocker" | "no_edge";
+};
+/** The kinds a session can be converted INTO. */
+export type ConversionKind = "playbook" | "project";
+/** The receipt every conversion verb returns. Frontend renders it verbatim. */
+export interface ConversionReceipt {
+	created: {
+		kind: ConversionKind;
+		id: string;
+		name: string;
+	};
+	/** The session's goal BEFORE the rename (null when the rename was skipped). */
+	renamedFrom: string | null;
+	/** The session's goal AFTER the rename. */
+	renamedTo: string;
+	/** ISO deadline after which `revertConversion` refuses. */
+	undoUntil: string;
+}
+/**
+ * One thing a session produced. `id` is the STABLE join coordinate
+ * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
+ * collapse onto one entry, and the frontend can key on it across refetches.
+ */
+export interface SessionOutput {
+	/** `<kind>:<refId>` — stable across ledgers and refetches. */
+	id: string;
+	/** Normalized object kind (`document`, `entity`, `view`, `cell`, `url`, …). */
+	kind: string;
+	/**
+	 * The UNDERLYING object's id — what navigation must use. NOT the artifact
+	 * row id: `SessionRoomGroundCell.tsx` opens an artifact by row id today and
+	 * lands on nothing.
+	 */
+	refId: string;
+	title: string;
+	icon?: string;
+	/** Artifact lifecycle, when an artifact row backs this output. */
+	state?: "working" | "kept" | "swept";
+	producedAt: Date;
+	/** Derivable from artifact provenance or the satisfying proposal's actor. */
+	producedBy?: "agent" | "human";
+	/** The declared deliverable this object satisfies, when one matched. */
+	expected?: {
+		label: string;
+		status?: "pending" | "done";
+		claimedDone?: boolean;
+		satisfiedByProposalId?: string;
+	};
+	/** Which ledger(s) reported it — provenance for the join itself. */
+	source: Array<"artifact" | "produced_edge" | "expected">;
+}
+export interface SessionOutputsResult {
+	outputs: SessionOutput[];
+	/** Declared deliverables with no produced object behind them. */
+	pendingExpected: ExpectedOutput[];
+}
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
  * enrollment-UI agent — field names are load-bearing, do not rename).
@@ -8574,7 +8722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		log: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				subjectId: string;
-				subjectType: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation";
+				subjectType: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation";
 				eventType: string;
 				data: Record<string, unknown>;
 				version: number;
@@ -8591,7 +8739,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				since?: unknown;
 				until?: unknown;
 				type?: string | undefined;
-				subjectType?: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
+				subjectType?: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
 				workspaceId?: string | undefined;
 				limit?: number | undefined;
 				lean?: boolean | undefined;
@@ -8620,7 +8768,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
+				subjectType?: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
 				subjectId?: string | undefined;
 				subjectIds?: string[] | undefined;
 				correlationId?: string | undefined;
@@ -8655,7 +8803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				subjectId?: string | undefined;
-				subjectType?: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
+				subjectType?: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
 				profileSlug?: string | undefined;
 				eventTypes?: string[] | undefined;
 				period?: "day" | "week" | "month" | undefined;
@@ -8676,7 +8824,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "user" | "message" | "apiKey" | "workspace" | "project" | "system" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
+				subjectType?: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
 				fromDate?: Date | undefined;
 				toDate?: Date | undefined;
 				workspaceId?: string | undefined;
@@ -10524,7 +10672,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -11266,7 +11414,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -11365,7 +11513,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -11478,7 +11626,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							}[];
 							executionSummaries: {
 								tool: string;
-								status: "error" | "skipped" | "success";
+								status: "success" | "error" | "skipped";
 								result?: unknown;
 								error?: string | undefined;
 							}[];
@@ -11935,7 +12083,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string;
 			};
 			output: {
-				provenance: "agent" | "automation" | "human";
+				provenance: "human" | "agent" | "automation";
 				targets: {
 					kind: "agent" | "automation" | "playbook" | "session" | "channel" | "skill";
 					id: string;
@@ -12496,7 +12644,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		listUsers: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				type?: "agent" | "human" | "all" | undefined;
+				type?: "human" | "agent" | "all" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -13557,6 +13705,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					version: number;
 					message: string | null;
+					author: "user" | "system" | "ai";
 					createdBy: string;
 					createdAt: Date;
 					size: number;
@@ -13598,7 +13747,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				size: number;
 				mimeType: string | null;
 				checksum: string | null;
-				author: string;
+				author: "user" | "system" | "ai";
 				authorId: string;
 			};
 			meta: object;
@@ -15092,6 +15241,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				routedTo: string[];
 				synthesisFailed: boolean;
 				degraded: DegradedTag[];
+				verdict: RetrievalVerdict;
+				failureClass: AiFailureClass | undefined;
+				truncated: {
+					omitted: number;
+					total: number;
+				} | undefined;
 			};
 			meta: object;
 		}>;
@@ -18988,7 +19143,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mimeType: string | null;
 					content: string;
 					checksum: string | null;
-					author: string;
+					author: "user" | "system" | "ai";
 					authorId: string;
 				}[];
 				latest: {
@@ -19026,13 +19181,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mimeType: string | null;
 					content: string;
 					checksum: string | null;
-					author: string;
+					author: "user" | "system" | "ai";
 					authorId: string;
 				};
 				metadata: {
 					size: number;
 					message: string | null;
-					author: string;
+					author: "user" | "system" | "ai";
 					createdAt: Date;
 					hasStoredSnapshot: boolean;
 				};
@@ -19142,7 +19297,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					approved: any;
 					workspaceId: any;
 					createdAt: any;
-					rule: RuleMetadata;
+					rule: {
+						factSkillId?: string;
+						v: 1;
+						intent: string;
+						scope: RuleScope;
+						expiresAt?: string;
+						behaviours: RuleBehaviourRecord[];
+						routing?: RuleRouting;
+						createdAt: string;
+					};
 				};
 				divergence: {
 					diverged: boolean;
@@ -19800,7 +19964,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentProfileId?: string | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 				defaultValues?: Record<string, unknown> | undefined;
-				scope?: "user" | "shared" | "workspace" | "system" | undefined;
+				scope?: "user" | "system" | "shared" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
 				entityScope?: "workspace" | "pod" | undefined;
 				source?: "user" | "system" | "ai" | "intelligence" | undefined;
@@ -19890,7 +20054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentProfileId?: string | null | undefined;
 				uiHints?: Record<string, unknown> | undefined;
 				defaultValues?: Record<string, unknown> | undefined;
-				scope?: "user" | "shared" | "workspace" | "system" | undefined;
+				scope?: "user" | "system" | "shared" | "workspace" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
 				entityScope?: "workspace" | "pod" | undefined;
 				defaultListRenderer?: {
@@ -22522,7 +22686,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 				status?: "read" | "dismissed" | "unread" | "snoozed" | "all" | undefined;
-				category?: "data" | "system" | "governance" | "ai" | "inbox" | undefined;
+				category?: "data" | "system" | "ai" | "governance" | "inbox" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -22532,7 +22696,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					userId: string;
 					type: string;
-					category: "data" | "system" | "governance" | "ai" | "inbox";
+					category: "data" | "system" | "ai" | "governance" | "inbox";
 					priority: "low" | "normal" | "high" | "urgent";
 					title: string;
 					body: string;
@@ -24813,12 +24977,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | string[] | null | undefined;
 				status?: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale" | "all" | undefined;
 				limit?: number | undefined;
+				edges?: boolean | undefined;
+				lens?: "default" | "all" | "triage" | undefined;
 			};
 			output: ({
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -24839,7 +25005,149 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				updatedAt: Date;
 			} & {
 				parentSessionId: string | null;
+			} & {
+				triage: TriageProjection;
 			})[];
+			meta: object;
+		}>;
+		addBlocker: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				blockerSessionId: string;
+			};
+			output: BlockerEdgeResult;
+			meta: object;
+		}>;
+		removeBlocker: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				blockerSessionId: string;
+			};
+			output: RemoveBlockerResult;
+			meta: object;
+		}>;
+		acceptFromTriage: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				accepted: false;
+				reason: "not_pending";
+				session?: undefined;
+			} | {
+				accepted: true;
+				session: {
+					id: string;
+					workspaceId: string | null;
+					projectId: string | null;
+					origin: "human" | "agent" | "automation" | "playbook" | null;
+					subjectEntityId: string | null;
+					userId: string;
+					correlationId: string | null;
+					goal: string;
+					status: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
+					templateId: string | null;
+					playbookId: string | null;
+					expectedOutputs: unknown;
+					channelId: string | null;
+					progress: number | null;
+					currentStage: string | null;
+					agentIds: string[] | null;
+					closedAt: Date | null;
+					verificationReport: unknown;
+					metadata: unknown;
+					startedAt: Date;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+				reason?: undefined;
+			};
+			meta: object;
+		}>;
+		discardFromTriage: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				discarded: false;
+				reason: "not_pending";
+				session?: undefined;
+				expiredEphemerals?: undefined;
+			} | {
+				discarded: true;
+				session: {
+					id: string;
+					workspaceId: string | null;
+					projectId: string | null;
+					origin: "human" | "agent" | "automation" | "playbook" | null;
+					subjectEntityId: string | null;
+					userId: string;
+					correlationId: string | null;
+					goal: string;
+					status: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
+					templateId: string | null;
+					playbookId: string | null;
+					expectedOutputs: unknown;
+					channelId: string | null;
+					progress: number | null;
+					currentStage: string | null;
+					agentIds: string[] | null;
+					closedAt: Date | null;
+					verificationReport: unknown;
+					metadata: unknown;
+					startedAt: Date;
+					createdAt: Date;
+					updatedAt: Date;
+				};
+				expiredEphemerals: number;
+				reason?: undefined;
+			};
+			meta: object;
+		}>;
+		spawnProject: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				name?: string | undefined;
+				description?: string | undefined;
+				agentUserId?: string | undefined;
+				source?: string | undefined;
+				reasoning?: string | undefined;
+			};
+			output: {
+				status: "proposed";
+				projectId: string | null;
+				proposalId: string;
+				receipt: null;
+			} | {
+				receipt: ConversionReceipt;
+				subjectBound?: boolean | undefined;
+				status: "spawned";
+				projectId: string | null;
+				proposalId: string | null;
+				deduped: boolean;
+				expectedOutputsCarried: number;
+			};
+			meta: object;
+		}>;
+		revertConversion: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				reverted: false;
+				reason: "no_conversion" | "already_reverted" | "window_expired" | "object_in_use";
+				goal?: undefined;
+				retired?: undefined;
+			} | {
+				reverted: true;
+				goal: string;
+				retired: {
+					kind: ConversionKind;
+					id: string;
+					name: string;
+				};
+				reason?: undefined;
+			};
 			meta: object;
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
@@ -24851,10 +25159,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					name: string;
 				}[];
+				triage: TriageProjection;
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -24886,7 +25195,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -24927,7 +25236,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -24970,7 +25279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -25001,7 +25310,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;
-				origin: "agent" | "automation" | "playbook" | null;
+				origin: "human" | "agent" | "automation" | "playbook" | null;
 				subjectEntityId: string | null;
 				userId: string;
 				correlationId: string | null;
@@ -25041,6 +25350,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "granted";
 				proposalId?: undefined;
 			};
+			meta: object;
+		}>;
+		outputs: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: SessionOutputsResult;
 			meta: object;
 		}>;
 	}>>;
@@ -25595,7 +25911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					workspaceId: string | null;
 					projectId: string | null;
-					origin: "agent" | "automation" | "playbook" | null;
+					origin: "human" | "agent" | "automation" | "playbook" | null;
 					subjectEntityId: string | null;
 					userId: string;
 					correlationId: string | null;
@@ -25635,6 +25951,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "proposed";
 				message: string;
 				proposalId: string;
+				receipt?: undefined;
+				reused?: undefined;
 			} | {
 				playbook: {
 					name: string;
@@ -25662,6 +25980,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "promoted";
 				message: string;
 				proposalId: string | null;
+				receipt: ConversionReceipt;
+				reused: boolean;
 			};
 			meta: object;
 		}>;
@@ -25702,7 +26022,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					workspaceId: string | null;
 					projectId: string | null;
-					origin: "agent" | "automation" | "playbook" | null;
+					origin: "human" | "agent" | "automation" | "playbook" | null;
 					subjectEntityId: string | null;
 					userId: string;
 					correlationId: string | null;

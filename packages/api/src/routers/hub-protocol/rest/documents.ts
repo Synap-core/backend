@@ -267,9 +267,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
     method: "patch",
     path: "/documents/{documentId}",
     tags: ["Documents"],
-    summary: "Update a document's title or content",
+    summary: "Propose a replacement for a document's content",
     description:
-      "Replaces a document's content and/or title. Content is the full replacement string (not a diff). Goes through governance — `document.update` is auto-approved by default.",
+      "Proposes a replacement for a document's content. Content is the full replacement string (not a diff). This route NEVER writes the document: it always creates a pending `ai_edit` proposal for the owner to accept or reject, and returns that proposal. Accepting it mints a new document version authored by the agent; rejecting it leaves the document untouched. Title-only updates are not supported.",
     request: {
       params: z.object({ documentId: z.string() }),
       body: UpdateDocumentBodySchema,
@@ -285,7 +285,12 @@ export function registerDocumentsRoutes(app: HubHono): void {
 
   /**
    * PATCH /documents/:documentId
-   * Update title and/or content. Content is the full replacement string.
+   *
+   * Content is the full replacement string. This is a CHECKPOINT, not a write:
+   * every call creates a pending `ai_edit` proposal and returns it. There is no
+   * auto-approve lane for `document.update` — `DEFAULT_AUTO_APPROVE` grants
+   * only `document.read` and `document.create` — so the owner decides on every
+   * edit, and the accepted version carries the drafting agent as its author.
    */
   app.patch("/documents/:documentId", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {

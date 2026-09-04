@@ -180,6 +180,29 @@ export const knowledgeRouter = router({
          * publishes. Same field name, same meaning.
          */
         degraded: result.degraded,
+        /**
+         * The retrieval engine's own CRAG verdict, forwarded rather than
+         * re-derived. The client used to infer "we cannot tell" from
+         * `degraded.length > 0`, which is a WEAKER copy of a judgement this
+         * service already makes: a hand-maintained projection of a value the
+         * producer owns is a fork with a countdown. `degraded` stays — it says
+         * WHY retrieval was thin; `verdict` says how much to trust the result.
+         */
+        verdict: result.verdict,
+        /**
+         * WHY synthesis failed, not merely THAT it did. `synthesisFailed` above
+         * is the boolean this collapses out of, kept because callers already
+         * branch on it; a surface that can only say "something went wrong" has
+         * to guess between an outage and a refusal.
+         */
+        failureClass: synthesis.failureClass,
+        /**
+         * Present only when source items were dropped to fit the model budget
+         * (`{ omitted, total }`). An answer synthesized from a truncated source
+         * set, rendered as if it were complete, is the same dishonesty as
+         * reporting a match count as a run count.
+         */
+        truncated: synthesis.truncated,
       };
     }),
 });

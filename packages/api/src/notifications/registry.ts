@@ -670,6 +670,38 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       },
     ],
   },
+
+  // ── Sessions ──────────────────────────────────────────────────────────────
+  {
+    /**
+     * The LAST open blocker of a session closed, so the work can resume.
+     *
+     * Fires once per unblocking, not once per closed blocker — a session
+     * waiting on three things is not "unblocked" twice while two remain
+     * (Asana's rule, and the reason the reactor re-derives `openBlockerIds`
+     * instead of reacting to the close alone). Producer: the
+     * `session-unblock-notify` reactor (`session-unblock-reactor.ts`).
+     */
+    type: "session.unblocked",
+    category: "system",
+    label: "Session Unblocked",
+    icon: "circle-play",
+    priority: "normal",
+    titleTemplate: "{{sessionTitle}} is unblocked",
+    bodyTemplate: "{{blockerTitle}} closed — nothing else is blocking it.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open Session",
+        variant: "primary",
+        // `sourceId` is the UNBLOCKED session's id (see the reactor), so no
+        // explicit id is needed — the route table resolves it.
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
 ];
 
 // Fast lookup map (built once at module init)

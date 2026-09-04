@@ -35,6 +35,8 @@ import {
   idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 
+import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+
 const logger = createLogger({ module: "hub-documents" });
 
 export const documentsRouter = router({
@@ -256,6 +258,20 @@ export const documentsRouter = router({
           userId: agentUserId,
         });
 
+        // OUTPUT LEDGER — see `record-session-artifact.ts`. Until this, a
+        // document created inside a session was attributed to nothing:
+        // `documents` has no sessionId column and `links` has no `document`
+        // endpoint type, so the session that asked for it could not see it.
+        await recordSessionArtifact({
+          sessionId: ctx.sessionId,
+          workspaceId: input.workspaceId,
+          userId,
+          kind: "document",
+          refId: created.id,
+          title: created.title,
+          agentUserId: input.agentUserId,
+        });
+
         return {
           id: created.id,
           documentId: created.id,
@@ -312,6 +328,17 @@ export const documentsRouter = router({
         action: "create",
         subjectId: created.id,
         userId: agentUserId,
+      });
+
+      // OUTPUT LEDGER — same reason as the external-reference path above.
+      await recordSessionArtifact({
+        sessionId: ctx.sessionId,
+        workspaceId: input.workspaceId,
+        userId,
+        kind: "document",
+        refId: created.id,
+        title: created.title,
+        agentUserId: input.agentUserId,
       });
 
       return {
@@ -395,9 +422,6 @@ export const documentsRouter = router({
       const { db, eq } = await import("@synap/database");
       const { documents, entities } = await import("@synap/database/schema");
 
-      const expiresAt = new Date();
-      expiresAt.setDate(expiresAt.getDate() + 7);
-
       const doc = await db.query.documents.findFirst({
         where: eq(documents.id, input.documentId),
       });
@@ -441,7 +465,11 @@ export const documentsRouter = router({
         threadId: threadId ?? null,
         sourceMessageId: sourceMessageId ?? null,
         sessionId,
-        expiresAt,
+        // NO `expiresAt`. A defaulted TTL on a proposal row is the C2 defect
+        // `insert-pending-proposal.ts` removed: nothing honours the column, so
+        // it dropped rows out of nobody's queue while `orient` still counted
+        // them. A document draft dies with its SESSION — `expireSessionEphemerals`
+        // retires it on close, writing an EXPIRED status a reader can see.
         data: {
           source: "agent",
           sourceId: createdBy,
@@ -449,7 +477,6 @@ export const documentsRouter = router({
           changes: input.changes,
           originalContent: input.originalContent,
           proposedContent: input.proposedContent,
-          expiresAt: expiresAt.toISOString(),
         },
       });
 

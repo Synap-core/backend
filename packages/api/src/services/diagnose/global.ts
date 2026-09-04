@@ -33,7 +33,7 @@ import {
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
 import {
-  AGENT_PROPOSALS_PER_USER_PER_DAY,
+  agentDailyProposalCap,
   startOfUtcDay,
 } from "../../utils/permission-check.js";
 import {
@@ -478,15 +478,28 @@ export async function diagnoseGlobal(params: {
     unapproved: capRows.filter((c) => !c.approved).length,
   };
 
-  const agentActivity = agentRows
+  const agentActivityCounts = agentRows
     .filter((a): a is { agentId: string; todayCount: number } =>
       Boolean(a.agentId)
     )
-    .map((a) => ({
-      agentId: a.agentId,
-      todayCount: a.todayCount,
-      cap: AGENT_PROPOSALS_PER_USER_PER_DAY,
-    }));
+    .map((a) => ({ agentId: a.agentId, todayCount: a.todayCount }));
+
+  // Resolve the REAL cap per agent, not the base constant.
+  //
+  // `agentDailyProposalCap` applies the trust multiplier (a proven agent —
+  // >=100 recent proposals at >=95% approve rate — earns 3x). Hardcoding
+  // `AGENT_PROPOSALS_PER_USER_PER_DAY` here made this door announce
+  // "1 agent(s) hit the daily proposal cap" for an agent sitting at 13/30,
+  // while `diagnose(agentId)` correctly reported `cap: 30, atOrOverCap: false`
+  // from the same numbers. A health door raising a FALSE alarm is worse than
+  // the silent drop this section previously had: it sends the user to
+  // investigate a block that is not happening. One resolver, both surfaces.
+  const agentActivity = await Promise.all(
+    agentActivityCounts.map(async (a) => ({
+      ...a,
+      cap: await agentDailyProposalCap(a.agentId),
+    }))
+  );
 
   return summarizeGlobalHealth(
     {

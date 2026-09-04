@@ -219,7 +219,15 @@ export async function createFocusSession(
         // automation-origin sessions never come through here, they come through
         // `openRunSession`. Readers prefer this column and fall back to the
         // legacy metadata sniff only for rows a non-stamping writer produced.
-        origin: playbook ? "playbook" : "agent",
+        //
+        // Otherwise the discriminator is `agentUserId` — the SAME fact the
+        // governance membrane above already used to decide whether this write
+        // needs a proposal. An agent identity means an agent opened the session
+        // ("agent"); its absence means a person did ("human"). Until "human"
+        // existed every human-started session was stamped "agent", so the
+        // triage lens (which exists to surface sessions somebody else opened
+        // for you) could not tell an agent's session from your own.
+        origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
         // `focus_sessions.current_stage` is documented as "seeded from the
         // playbook's first stage on instantiation" — but this door only ever
         // wired playbookId, so a session started from a staged playbook opened

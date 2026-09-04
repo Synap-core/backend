@@ -959,9 +959,27 @@ async function applyProposalApprovalInner(
         documentId: proposal.targetId,
         version: newVersion,
         ...storedVersionValues(snapshot),
-        author: "user",
-        authorId: userId,
-        message: "AI edit accepted",
+        // PROVENANCE: the agent DRAFTED this text, the human ACCEPTED it. Two
+        // different people, and the version row must be able to say so —
+        // stamping the accepting human as author erases the agent from the
+        // rail and makes the checkpoint a lie about who wrote the words.
+        // `document_versions` has no metadata column, so the accepting human
+        // is recorded in `message` (the field version history already renders)
+        // rather than growing the table for one string.
+        ...(proposal.agentUserId
+          ? {
+              author: "ai" as const,
+              authorId: proposal.agentUserId,
+              // The accepting human is the row's acceptance actor, not a
+              // display string: a raw uuid in `message` is the "title fell
+              // through to a UUID" shape the version rail renders verbatim.
+              message: "AI edit accepted",
+            }
+          : {
+              author: "user" as const,
+              authorId: userId,
+              message: "Edit accepted",
+            }),
       })
       .returning({ id: documentVersions.id });
 

@@ -230,6 +230,53 @@ export function buildCronExpression(trigger: SentenceTrigger): string {
   }
 }
 
+/**
+ * A WHERE row → the runtime filter value the matcher can actually evaluate.
+ *
+ * `undefined` means "emits nothing" — either the row is incomplete, or its
+ * operator has no runtime equivalent. The three text operators (`contains`,
+ * `starts_with`, `changed_to`) are in the sentence vocabulary but NOT in
+ * `TRIGGER_FILTER_OPERATORS`, so they cannot be evaluated at all; the rule
+ * compiler refuses them BY NAME rather than letting them degrade to equality,
+ * which is how "contains" silently became "equals".
+ */
+export function conditionToFilterValue(row: ConditionRow): unknown {
+  switch (row.operator) {
+    // Booleans carry no `value` — the operator IS the value.
+    case "is_true":
+      return true;
+    case "is_false":
+      return false;
+    case "is":
+      return row.value ? row.value : undefined;
+    case "is_not":
+      return row.value ? { $ne: row.value } : undefined;
+    case "greater_than":
+      return row.value ? { $gt: row.value } : undefined;
+    case "less_than":
+      return row.value ? { $lt: row.value } : undefined;
+    // No runtime operator exists for these. Emitting nothing would silently
+    // WIDEN the rule, so the compiler refuses them instead.
+    case "contains":
+    case "starts_with":
+    case "changed_to":
+      return undefined;
+  }
+}
+
+/** Operators the sentence offers that the runtime cannot evaluate. */
+export const UNEVALUABLE_CONDITION_OPERATORS: readonly ConditionOperator[] = [
+  "contains",
+  "starts_with",
+  "changed_to",
+];
+
+/** Operators that are complete WITHOUT a value — the operator is the value. */
+export const VALUELESS_CONDITION_OPERATORS: readonly ConditionOperator[] = [
+  "is_true",
+  "is_false",
+];
+
 export function toBackendTrigger(
   trigger: SentenceTrigger,
   conditions: ConditionRow[]
@@ -263,9 +310,28 @@ export function toBackendTrigger(
 
   if (trigger.triggerType === "event") {
     const pattern = buildEventPattern(trigger);
-    const filters: Record<string, string> = {};
+    // THE WHERE OPERATOR IS LOAD-BEARING AND WAS BEING DISCARDED.
+    //
+    // 🔴 This loop used to be `if (row.key && row.value) filters[row.key] =
+    // row.value` — `row.operator` was never read, so all nine `ConditionOperator`
+    // members compiled to bare EQUALITY. "when status is NOT done" became
+    // `{status: "done"}`, i.e. the rule fired on exactly the events its author
+    // excluded. That is inverted semantics, not silence, and it is worse than a
+    // rule that never fires. `greater_than` collapsed to equality the same way.
+    //
+    // Invisible from the editor, for the same reason the cron-key bug was:
+    // `flowToConditions` below hardcoded `operator: "is"` on the way back, so a
+    // mangled rule reloaded looking exactly as written.
+    //
+    // The runtime's operator vocabulary is `TRIGGER_FILTER_OPERATORS`
+    // (`./filter-operators`), which `matchFilters` → `evaluateTriggerFilterValue`
+    // evaluates and the create door validates against — one vocabulary, so a
+    // filter this emits can always be evaluated.
+    const filters: Record<string, unknown> = {};
     for (const row of conditions) {
-      if (row.key && row.value) filters[row.key] = row.value;
+      if (!row.key) continue;
+      const compiled = conditionToFilterValue(row);
+      if (compiled !== undefined) filters[row.key] = compiled;
     }
     // WHERE the chosen kind goes, and why it is NOT one key.
     //
@@ -279,10 +345,24 @@ export function toBackendTrigger(
     // with `wakeAgent` on the THEN, an agent turn per entity.
     //
     // For an ENTITY trigger the kind belongs in `filters`, which the GENERIC
-    // `matchFilters` evaluates against the event's own `data` — and entity
-    // emits do carry `data.profileSlug` (`routers/capture.ts:3142,3579`,
-    // `run-gcal-import.ts:211`). The event catalog agrees: `ENTITY_CREATED`
-    // declares `filterKeys: ["profileSlug"]`.
+    // `matchFilters` evaluates against the event's own `data`. The event catalog
+    // agrees: `ENTITY_CREATED` declares `filterKeys: ["profileSlug"]`.
+    //
+    // ⚠️ MEASURED SCOPE — narrower than an earlier version of this comment
+    // claimed. `entity.create` emits DO carry `data.profileSlug`
+    // (`routers/capture.ts:3142,3579`, `run-gcal-import.ts:211`). But of the 9
+    // entity UPDATE/DELETE/RESTORE emit sites, **8 do not** — only
+    // `routers/entities/helpers.ts:467` does. So a kind-filtered rule on
+    // "updated" or "deleted" currently matches NOTHING, where before this change
+    // it matched EVERYTHING.
+    //
+    // That is a deliberate trade, not an oversight: silence is recoverable and
+    // visible to the author, whereas firing on every kind spends an agent turn
+    // per unrelated entity when the THEN carries `wakeAgent`. The real fix is to
+    // make those 8 emits carry the kind the catalog says they filter on — each
+    // needs a lookup it does not currently do, so it is its own change.
+    // `__tripwires__/entity-emits-carry-declared-filter-keys.test.ts` pins the
+    // gap so it cannot grow silently.
     //
     // `capture` keeps the top-level key, because its branch reads a DIFFERENT
     // shape (`profileSlugs`, plural) that `matchFilters` could not evaluate.
@@ -705,12 +785,55 @@ export function flowToSentenceAction(flow: RuleFlowDefinition): SentenceAction {
 export function flowToConditions(
   triggerConfig: Record<string, unknown>
 ): ConditionRow[] {
-  const filters = triggerConfig.filters as Record<string, string> | undefined;
+  const filters = triggerConfig.filters as Record<string, unknown> | undefined;
   if (!filters) return [];
-  return Object.entries(filters).map(([key, value], i) => ({
-    id: `filter-${i}`,
-    key,
-    operator: "is" as const,
-    value,
-  }));
+  // Read the OPERATOR back. This hardcoded `operator: "is"`, which is what made
+  // the discarded-operator bug above invisible: a rule stored as `{$ne: "done"}`
+  // reloaded as `status is done` and re-saving cemented the inversion.
+  return Object.entries(filters).map(([key, raw], i) => {
+    if (raw === true)
+      return {
+        id: `filter-${i}`,
+        key,
+        operator: "is_true" as const,
+        value: "",
+      };
+    if (raw === false)
+      return {
+        id: `filter-${i}`,
+        key,
+        operator: "is_false" as const,
+        value: "",
+      };
+    if (raw && typeof raw === "object") {
+      const op = raw as Record<string, unknown>;
+      if ("$ne" in op)
+        return {
+          id: `filter-${i}`,
+          key,
+          operator: "is_not" as const,
+          value: String(op.$ne),
+        };
+      if ("$gt" in op)
+        return {
+          id: `filter-${i}`,
+          key,
+          operator: "greater_than" as const,
+          value: String(op.$gt),
+        };
+      if ("$lt" in op)
+        return {
+          id: `filter-${i}`,
+          key,
+          operator: "less_than" as const,
+          value: String(op.$lt),
+        };
+    }
+    return {
+      id: `filter-${i}`,
+      key,
+      operator: "is" as const,
+      value: String(raw),
+    };
+  });
 }

@@ -14,6 +14,7 @@ import {
   withParentSessionId,
   attachParentSessionIds,
 } from "../../../services/focus-sessions/parent-lineage.js";
+import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import {
   ok,
   requireScope,
@@ -220,8 +221,19 @@ export const sessionHandlers: McpHandlerMap = {
       .limit(Math.min(Math.max(Math.trunc(rawLimit), 1), 50));
     // Derived lineage for the whole page in ONE query (never N+1, never a
     // column) — the same projection the tRPC `focusSessions.list` uses.
+    //
+    // `triage` rides along for the SAME reason it does there: it is pure (no
+    // query), and an agent that had to re-derive "is this waiting on a human?"
+    // from origin + status + metadata would be writing the second, drifting
+    // copy of a predicate that `services/focus-sessions/triage.ts` owns.
+    //
+    // No `lens` here on purpose. The tRPC door's default EXCLUDES triage rows
+    // because a person's working list must not fill with drafts they never
+    // asked for; an agent listing sessions is usually looking for the ones it
+    // just opened, so hiding them would be the wrong default at this door.
+    // The flag makes the distinction visible either way.
     return ok({
-      sessions: await attachParentSessionIds(sessions),
+      sessions: attachTriage(await attachParentSessionIds(sessions)),
       count: sessions.length,
     });
   },

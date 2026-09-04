@@ -1922,9 +1922,14 @@ export const playbooksRouter = router({
     .mutation(async ({ ctx, input }) => {
       const database = await getDb();
 
-      // Load by id ONLY, then gate on the loaded row's workspace.
+      // Owner floor: focus_sessions are owner-private, and promote now WRITES
+      // the session (rename + conversion receipt), so membership alone would
+      // let a co-member rename another person's session and arm its revert.
       const session = await database.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, input.sessionId),
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
       });
       if (!session) {
         throw new TRPCError({
@@ -1972,17 +1977,36 @@ export const playbooksRouter = router({
         };
       }
 
-      const playbook = await promoteSessionToPlaybook({
+      const result = await promoteSessionToPlaybook({
         sessionId: input.sessionId,
         userId: input.agentUserId ?? ctx.userId,
         name: input.name,
         description: input.description,
+        agentUserId: input.agentUserId,
       });
+      // The project-scope guard is a REFUSAL, not a server fault — it used to
+      // throw a bare Error and surface as a 500. BAD_REQUEST carries the typed
+      // reason so a caller can branch on it instead of matching prose.
+      if (result.status === "refused") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: result.message,
+          cause: result.reason,
+        });
+      }
       return {
-        playbook,
+        playbook: result.playbook,
         status: "promoted" as const,
         message: "Session promoted to playbook",
         proposalId: null as string | null,
+        /**
+         * The conversion receipt — `created` (kind/id/name), `renamedFrom` (the
+         * session's goal BEFORE the rename) and `undoUntil`. Consumed verbatim
+         * by the frontend receipt, which names BOTH sides of the conversion and
+         * offers Undo (`focusSessions.revertConversion`).
+         */
+        receipt: result.receipt,
+        reused: result.reused,
       };
     }),
 

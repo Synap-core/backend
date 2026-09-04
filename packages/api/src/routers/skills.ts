@@ -571,19 +571,30 @@ export const skillsRouter = router({
 
       let automationIds: string[] = [];
       if (input.ruleId) {
-        const { readRuleMetadata } = await import("../services/rules/index.js");
+        // The rule row is resolved under `visibleSkillsWhere` FIRST; only then
+        // is its lineage read. `readRuleAutomationIds` is caller-gated, so a
+        // rule the caller cannot see contributes no automation ids and the run
+        // count is simply absent — unchanged from the JSONB read it replaces.
+        const { readRuleAutomationIds } =
+          await import("../services/rules/lineage.js");
         const row = await db.query.skills.findFirst({
           where: and(
             eq(skills.id, input.ruleId),
             eq(skills.category, "rule"),
-            visibleSkillsWhere(userId, input.workspaceId)
+            // OWNER-FACING: a replay the caller explicitly asked for. It reads
+            // history and fires nothing, so expiry has nothing to enforce here
+            // — and "what did this match before it lapsed?" is a fair question
+            // to ask about a rule precisely because it lapsed.
+            visibleSkillsWhere(userId, input.workspaceId, {
+              includeExpired: true,
+            })
           ),
-          columns: { metadata: true },
+          columns: { id: true },
         });
-        const meta = readRuleMetadata(
-          row?.metadata as Record<string, unknown> | null | undefined
-        );
-        automationIds = (meta?.behaviours ?? []).map((b) => b.automationId);
+        // MEMBERSHIP comes from the `skill --activates--> automation` EDGE, not
+        // from `metadata.rule.behaviours[].automationId`. The JSONB copy holds
+        // only the divergence snapshot now.
+        automationIds = row ? await readRuleAutomationIds(row.id) : [];
       }
 
       const { runRuleDryRun } = await import("../services/rules/dry-run.js");
@@ -638,7 +649,14 @@ export const skillsRouter = router({
       const rows = await ctx.db.query.skills.findMany({
         where: and(
           eq(skills.category, RULE_CATEGORY),
-          visibleSkillsWhere(userId, input?.workspaceId)
+          // OWNER-FACING: the rule inventory its owner manages. An expired rule
+          // must stop ACTING, not disappear — it has to be visible to be
+          // renewed or deleted, and the design organises this very list by
+          // health (All / Active / Broken / Expiring), which cannot show an
+          // "Expiring" group built from rows the query removed.
+          visibleSkillsWhere(userId, input?.workspaceId, {
+            includeExpired: true,
+          })
         ),
         orderBy: [desc(skills.createdAt)],
         limit: input?.limit || 50,
@@ -679,6 +697,96 @@ export const skillsRouter = router({
    * produced, compare the flow hash the rule recorded at creation against the
    * automation's flow hash today. Detection only — nothing reconciles.
    */
+  /**
+   * Move (or clear) a rule's review date. The ONLY safe way to renew one.
+   *
+   * ── WHY A DEDICATED DOOR AND NOT `skills.update` ────────────────────────
+   * `skills.update` accepts a `metadata` patch that is SHALLOW-merged onto the
+   * row bag. `expiresAt` lives one level deeper, inside `metadata.rule`, so a
+   * caller renewing through that door has to send the WHOLE `rule` object back
+   * — and any field they omit is destroyed. Omitting `intent` erases the rule's
+   * prose (it IS the fact an agent reads); omitting `behaviours` erases the
+   * divergence snapshot. A renew path that silently corrupts the rule it renews
+   * is worse than no path, because it looks like it works.
+   *
+   * This procedure reads the stored metadata, replaces exactly one field, and
+   * writes the whole object back — so nothing can be dropped by omission.
+   *
+   * It is also the other half of expiry being enforced at all. The matcher and
+   * the cron scheduler now stop an expired rule from firing, and the owner-
+   * facing doors deliberately keep showing it (`includeExpired`) — both of
+   * which are pointless if the owner has no way to act on what they can see.
+   *
+   * `expiresAt: null` CLEARS the date (the rule becomes permanent). That is a
+   * different act from setting a date far in the future and is spelled
+   * differently, so neither can be mistaken for the other.
+   */
+  renewRule: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        workspaceId: z.string().uuid().optional(),
+        /** ISO-8601. `null` clears the expiry; absent is rejected, not guessed. */
+        expiresAt: z.string().datetime({ offset: true }).nullable(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { readRuleMetadata, RULE_CATEGORY, RULE_METADATA_KEY } =
+        await import("../services/rules/index.js");
+      const { normalizeExpiresAt } =
+        await import("../services/rules/expiry.js");
+
+      const row = await ctx.db.query.skills.findFirst({
+        where: and(
+          eq(skills.id, input.id),
+          eq(skills.category, RULE_CATEGORY),
+          // OWNER-FACING, and load-bearing here above all: an EXPIRED rule is
+          // the main thing anyone renews. Enforcing expiry on this read would
+          // make the procedure unable to act on its own primary case.
+          visibleSkillsWhere(userId, input.workspaceId, {
+            includeExpired: true,
+          })
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
+      }
+
+      const metadata = readRuleMetadata(
+        row.metadata as Record<string, unknown> | null
+      );
+      if (!metadata) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This skill is categorised as a rule but carries no rule metadata, so there is no review date to move.",
+        });
+      }
+
+      // Same normaliser the create door uses, so the stored form is the
+      // canonical ISO-8601 UTC string `ruleNotExpiredWhere()` compares against.
+      // A second date format here would be a rule that reads unexpired to SQL
+      // and expired to JS, or the reverse.
+      const normalized = normalizeExpiresAt(input.expiresAt);
+      const next = { ...metadata };
+      if (normalized) next.expiresAt = normalized;
+      else delete next.expiresAt;
+
+      await ctx.db
+        .update(skills)
+        .set({
+          metadata: {
+            ...((row.metadata as Record<string, unknown> | null) ?? {}),
+            [RULE_METADATA_KEY]: next,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(skills.id, input.id));
+
+      return { id: input.id, expiresAt: next.expiresAt ?? null };
+    }),
+
   getRule: protectedProcedure
     .input(
       z.object({
@@ -694,14 +802,31 @@ export const skillsRouter = router({
         where: and(
           eq(skills.id, input.id),
           eq(skills.category, RULE_CATEGORY),
-          visibleSkillsWhere(userId, input.workspaceId)
+          // OWNER-FACING: a rule's own detail page. Without the waiver an
+          // expired rule 404s here, so the only surface that could offer
+          // "renew" is unreachable exactly when it is needed.
+          visibleSkillsWhere(userId, input.workspaceId, {
+            includeExpired: true,
+          })
         ),
       });
       const rule = row ? readRuleMetadata(row.metadata) : null;
       if (!row || !rule) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
       }
-      const divergence = await detectRuleDivergence(rule);
+      // MEMBERSHIP from the `skill --activates--> automation` EDGE — the store.
+      // `rule.behaviours[]` is consulted only for the flowHash snapshot, keyed
+      // by the ids the edge yields.
+      const { readRuleAutomationIds, readRuleFactSkillId } =
+        await import("../services/rules/lineage.js");
+      const divergence = await detectRuleDivergence(
+        await readRuleAutomationIds(row.id),
+        rule
+      );
+      // The OTHER edge `linkRuleHalves` writes — `skill(fact) --documents-->
+      // skill(rule)`. Read from the edge for the same reason as the behaviour
+      // half: the JSONB `factSkillId` is a copy, the edge is the store.
+      const factSkillId = await readRuleFactSkillId(row.id);
       return {
         rule: {
           id: row.id,
@@ -709,7 +834,7 @@ export const skillsRouter = router({
           approved: row.approved,
           workspaceId: row.workspaceId,
           createdAt: row.createdAt,
-          rule,
+          rule: { ...rule, ...(factSkillId ? { factSkillId } : {}) },
         },
         divergence,
       };

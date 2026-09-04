@@ -389,28 +389,15 @@ export function isReadOnlyTool(toolName: string): boolean {
   );
 }
 
-/** Non-terminal statuses — a session still "in flight" for its owner. */
-export const OPEN_SESSION_STATUSES = [
-  "active",
-  "paused",
-  "forming",
-  "scheduled",
-] as const;
-
-/**
- * Every `focus_sessions.status` value (mirrors the schema's column enum). Used
- * to validate the model-supplied `status` filter — see synap_list_sessions.
- */
-export const SESSION_STATUSES = [
-  ...OPEN_SESSION_STATUSES,
-  "closed",
-  "failed",
-  "cancelled",
-  // Added by the focus-session reaper (a long-idle `running` session is marked
-  // stale rather than deleted). Must be listable, or list_sessions({status:
-  // "stale"}) rejects a status the schema legitimately produces.
-  "stale",
-] as const;
+// The session-status vocabulary now lives in a leaf module
+// (`services/focus-sessions/session-statuses.ts`) so services can import it
+// without pulling this file's hub-protocol router in. Re-exported here so every
+// existing importer is unchanged — one declaration, two names for it.
+import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
+export {
+  OPEN_SESSION_STATUSES,
+  SESSION_STATUSES,
+} from "../../../services/focus-sessions/session-statuses.js";
 
 /**
  * Does this `focus_sessions` row belong to the effective user?

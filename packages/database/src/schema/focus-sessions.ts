@@ -77,10 +77,18 @@ export const focusSessions = pgTable(
      * app-level `FocusSessionOrigin` union — deliberately not a DB enum so the
      * vocabulary can extend without a migration.
      *
+     * `"human"` is a session a PERSON started at a door with no agent identity.
+     * It is the value the triage lens keys on by absence: agent/automation/
+     * inbound sessions need a look, a session the operator opened themselves
+     * does not. Before it existed every human-started session read back as
+     * `"agent"`, so the lens could not tell the two apart at all.
+     *
      * NULL means "not yet classified": readers fall back to the legacy metadata
      * sniff, so a row written by an un-migrated writer still resolves correctly.
      */
-    origin: text("origin").$type<"playbook" | "automation" | "agent">(),
+    origin: text("origin").$type<
+      "playbook" | "automation" | "agent" | "human"
+    >(),
     /**
      * The entity this session is "about" — the subject spine anchor.
      * Process North Star Wave 0: links a session to a specific subject entity

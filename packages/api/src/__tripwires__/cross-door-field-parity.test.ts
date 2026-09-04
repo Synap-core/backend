@@ -1129,6 +1129,34 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   {
     service: "ask",
     field: "intent",
+    door: "routers/knowledge.ts:answer",
+    reason:
+      "DELIBERATE, TIER — `knowledge.answer` is the ANSWER tier (its twin `knowledge.search` is the SEARCH tier and passes the whole `ask()` result through untouched, so nothing is lost from the router: a caller who wants glass-box routing calls the other procedure). `intent` is what the query's cues SUGGESTED, which is only interesting next to what actually answered; on its own, on an answer payload, it invites a reader to believe a substrate was consulted when it may not have been.",
+  },
+  {
+    service: "ask",
+    field: "primary",
+    door: "routers/knowledge.ts:answer",
+    reason:
+      "DELIBERATE, TIER — same boundary as `intent`, and subsumed on this payload: `routedTo` (forwarded) names every substrate actually queried, and each entry of `sources[]` carries its own `substrate` tag, so which store answered reaches the caller per-item. `knowledge.search` publishes `primary` for the caller who needs the single header value.",
+  },
+  {
+    service: "ask",
+    field: "understanding",
+    door: "routers/knowledge.ts:answer",
+    reason:
+      "DELIBERATE, TIER — `QueryUnderstanding` is the semantic engine's parse record, a debugging artifact for tuning retrieval. It has no consumer on the answer tier and no rendered surface; publishing it here would put engine internals in a client contract that would then have to be kept stable. Available on `knowledge.search`.",
+  },
+  {
+    service: "ask",
+    field: "comparison",
+    door: "routers/knowledge.ts:answer",
+    reason:
+      "STRUCTURALLY UNREACHABLE — `comparison` is the A/B ranker diagnostic that `ask()` attaches ONLY when its `compare` input is set. This procedure's zod input declares exactly four keys (`query`, `workspaceId`, `limit`) and never passes `compare`, so the field can never be anything but `undefined` on this door. Forwarding it would publish a permanently-null key. If `compare` is ever added to this input, this entry becomes false and must be removed.",
+  },
+  {
+    service: "ask",
+    field: "intent",
     door: "routers/mcp/handlers/read.ts:synap_ask",
     reason:
       "DELIBERATE — `synap_ask` is the ANSWER tier: it hands the retrieval to `synthesizeAnswer` and returns prose + sources. The SEARCH tier (glass-box routing: what the query cues suggested vs what actually answered) is not exposed over MCP at all; there is no `synap_search` tool. Withheld with the tier, not dropped from a shipped payload.",

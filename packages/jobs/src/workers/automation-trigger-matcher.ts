@@ -24,6 +24,7 @@ import {
   automationRuns,
   automationClaims,
   playbookAutomations,
+  skills,
   workspaceMembers,
   workspaces,
 } from "@synap/database";
@@ -42,8 +43,101 @@ const logger = createLogger({ module: "automation-trigger-matcher" });
 
 const MAX_CHAIN_DEPTH = 3;
 
+/**
+ * MIRROR of `FOCUS_SESSION_CLOSED_EVENT_TYPE`, whose SSOT is
+ * `@synap/api` → `services/focus-sessions/close-event.ts` (the emitter side).
+ *
+ * It is copied rather than imported because `@synap/api` depends on
+ * `@synap/jobs` — importing back would close a dependency cycle (the same
+ * reason `getAccessibleWorkspaceFloor` below replicates its predicate).
+ *
+ * It cannot DRIFT: `packages/api/src/__tripwires__/focus-session-close-event-one-name.test.ts`
+ * parses both files and fails CI the moment the two strings differ. Change the
+ * SSOT, not this line.
+ */
+export const FOCUS_SESSION_CLOSED_EVENT_TYPE = "focus_session.closed.completed";
+
 /** Claim namespace for exactly-once event→automation fire (D5). */
 export const AUTOMATION_EVENT_CLAIM_NAMESPACE = "automation-event";
+
+/**
+ * ── RULE EXPIRY, ENFORCED AT THE FIRING SIDE ───────────────────────────────
+ *
+ * A rule (`skills` row, `category:"rule"`) may carry
+ * `metadata.rule.expiresAt`. Until now that instant was honoured by the three
+ * READ doors only (`visibleSkillsWhere` ANDs `ruleNotExpiredWhere()`), so an
+ * expired rule stopped reaching agents as prose while the automation it
+ * compiled kept firing forever. Expiry is this product's chosen mitigation for
+ * a standing permission being wrong; silencing the advice and leaving the
+ * action running is the wrong half of it.
+ *
+ * ENFORCEMENT ≠ VISIBILITY. Nothing here deletes, archives or hides anything:
+ * an expired rule and its automation stay fully listed, editable and renewable.
+ * They simply stop ACTING.
+ *
+ * ── MIRRORED PREDICATE (deliberate, pinned) ────────────────────────────────
+ * The SSOT is `isRuleExpired` + `readExpiresAt` in
+ * `@synap/api` → `services/rules/expiry.ts`. It is MIRRORED rather than
+ * imported for the same reason `FOCUS_SESSION_CLOSED_EVENT_TYPE` above is:
+ * `@synap/api` depends on `@synap/jobs`, so importing back closes a cycle.
+ * `packages/api/src/__tripwires__/rule-expiry-stops-firing.test.ts` parses both
+ * files and fails CI if this file stops enforcing or the canonical form
+ * changes. Change the SSOT, not this function.
+ *
+ * The comparison is the SSOT's exactly: the stored value is normalised to
+ * `Date#toISOString()` at the write door, over which lexicographic order IS
+ * chronological order, and `<=` means an expiry instant that has arrived has
+ * passed. Absent or unreadable ⇒ NO EXPIRY, never "expired".
+ */
+export function isRuleSkillExpired(skillMetadata: unknown, now: Date): boolean {
+  const rule = (skillMetadata as Record<string, unknown> | null | undefined)?.[
+    "rule"
+  ];
+  const raw = (rule as Record<string, unknown> | undefined)?.["expiresAt"];
+  if (typeof raw !== "string" || raw.length === 0) return false;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.toISOString() <= now.toISOString();
+}
+
+/**
+ * ONE batched lookup: of the rule ids named by these automations' metadata,
+ * which have expired? Empty set (and zero queries) when no candidate is
+ * rule-backed. A rule row that is GONE is not "expired" — absent means no
+ * expiry here exactly as it does in the SSOT.
+ */
+export async function loadExpiredRuleIds(
+  automationMetadatas: unknown[],
+  now: Date = new Date()
+): Promise<Set<string>> {
+  const ruleIds = Array.from(
+    new Set(
+      automationMetadatas
+        .map(ruleIdOfAutomation)
+        .filter((id): id is string => id !== undefined)
+    )
+  );
+  if (ruleIds.length === 0) return new Set();
+  const rows = await db
+    .select({ id: skills.id, metadata: skills.metadata })
+    .from(skills)
+    .where(inArray(skills.id, ruleIds));
+  const expired = new Set<string>();
+  for (const row of rows) {
+    if (isRuleSkillExpired(row.metadata, now)) expired.add(row.id);
+  }
+  return expired;
+}
+
+/** The rule this automation was compiled from, if any. */
+export function ruleIdOfAutomation(
+  automationMetadata: unknown
+): string | undefined {
+  const id = (
+    automationMetadata as Record<string, unknown> | null | undefined
+  )?.["ruleId"];
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
 
 /**
  * Prefer a stable id from the event payload when present (messageId from
@@ -498,6 +592,29 @@ export function matchTriggerSpecificFilters(
     }
   }
 
+  // ── focus_session close trigger ─────────────────────────────────────────
+  // Explicit, so a close is a RECOGNIZED event type here rather than one that
+  // reaches the final `return true` by never having been considered.
+  if (eventType === FOCUS_SESSION_CLOSED_EVENT_TYPE) {
+    // A close is not a stage transition. `toStage` was the only focus_session
+    // filter that existed before this event, and the branch above inspects it
+    // for `stage_changed.` types ONLY — so an automation authored as
+    // `focus_session.*` + `toStage` would match every close as well and fire on
+    // something it was never configured for.
+    if (config.toStage) {
+      return false;
+    }
+
+    // Narrowing a close by playbook / origin / workspace needs no field here:
+    // the payload carries `playbookId`, `origin` and `workspaceId` at the top
+    // level, and `matchFilters` — which runs before this function for EVERY
+    // event — evaluates `triggerConfig.filters` against them with the full
+    // operator grammar. Top-level config fields for the same three values would
+    // fork that door. With no filter configured every close automation matches,
+    // which is the intended semantics; it is stated here rather than inherited
+    // from the fall-through below.
+  }
+
   // ── feed trigger ─────────────────────────────────────────────────────────
   if (eventType.startsWith("feed.")) {
     // Filter by archetype (e.g. "leads", "trends") — "any" or absent = all archetypes
@@ -695,6 +812,9 @@ export async function handleAutomationTriggerMatch(job: {
       id: automations.id,
       triggerConfig: automations.triggerConfig,
       workspaceId: automations.workspaceId,
+      // Carries `metadata.ruleId` for a rule-compiled automation — the key
+      // `dropExpiredRuleAutomations` batches its expiry lookup on.
+      metadata: automations.metadata,
     })
     .from(automations)
     .where(
@@ -757,6 +877,9 @@ export async function handleAutomationTriggerMatch(job: {
               id: automations.id,
               triggerConfig: automations.triggerConfig,
               workspaceId: automations.workspaceId,
+              // Carries `metadata.ruleId` for a rule-compiled automation — the key
+              // `dropExpiredRuleAutomations` batches its expiry lookup on.
+              metadata: automations.metadata,
             })
             .from(automations)
             .where(
@@ -816,6 +939,9 @@ export async function handleAutomationTriggerMatch(job: {
         id: automations.id,
         triggerConfig: automations.triggerConfig,
         workspaceId: automations.workspaceId,
+        // Carries `metadata.ruleId` for a rule-compiled automation — the key
+        // `dropExpiredRuleAutomations` batches its expiry lookup on.
+        metadata: automations.metadata,
       })
       .from(automations)
       .where(
@@ -826,6 +952,45 @@ export async function handleAutomationTriggerMatch(job: {
           drizzleSql`${automations.triggerConfig}->>'webhookSubscriptionId' = ${webhookSubscriptionId}`
         )
       );
+  }
+
+  // ── Drop automations whose RULE has expired ────────────────────────────
+  // Applied to the CANDIDATE SET, before the match loop — deliberately not
+  // inside the decision predicates, which stay pure (`services/rules/dry-run.ts`
+  // replays real history through those same exported predicates and would break
+  // the moment one of them did I/O).
+  //
+  // COST: at most ONE extra query per match cycle, and only when at least one
+  // candidate actually carries `metadata.ruleId` — an event whose candidates are
+  // all ordinary automations pays a `Map` build over a list already in memory
+  // and nothing else. No per-candidate lookup, so no N+1. The alternative — a
+  // correlated `NOT EXISTS` over `skills` welded into all three candidate
+  // selects — would be paid on EVERY event including the overwhelming majority
+  // with no rule-backed automation at all, and would have to re-derive the
+  // expiry predicate in a second SQL dialect.
+  //
+  // The AUTHORITATIVE row is read every cycle rather than a copy stamped onto
+  // the automation: a stamped expiry is a snapshot that goes stale the moment a
+  // rule is renewed or shortened, and this repo's recurring defect is exactly a
+  // marker asserting something nobody re-checked.
+  const expiredRuleIds = await loadExpiredRuleIds(
+    [...allAutomations, ...webhookAutomations].map((a) => a.metadata)
+  );
+  if (expiredRuleIds.size > 0) {
+    const drop = (list: typeof allAutomations): typeof allAutomations =>
+      list.filter((a) => {
+        const ruleId = ruleIdOfAutomation(a.metadata);
+        if (!ruleId || !expiredRuleIds.has(ruleId)) return true;
+        logger.info(
+          { automationId: a.id, ruleId, eventType },
+          "Skipping automation — the rule that created it has expired (rule stays visible; it just stops acting)"
+        );
+        return false;
+      });
+    const keptEvent = drop(allAutomations);
+    allAutomations.length = 0;
+    allAutomations.push(...keptEvent);
+    webhookAutomations = drop(webhookAutomations);
   }
 
   if (allAutomations.length === 0 && webhookAutomations.length === 0) return;

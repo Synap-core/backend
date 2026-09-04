@@ -116,6 +116,21 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   set: { imperative: "Set", past: "Set" },
   request: { imperative: "Request", past: "Requested" },
   revise: { imperative: "Revise", past: "Revised" },
+  // Session→config conversions (workbench Wave B). Promote turns a validated
+  // session into a reusable playbook; spawn turns one into a project. Both are
+  // STRUCTURE-ONLY conversions, and both are named on a receipt that must read
+  // in the past ("Promoted to playbook X") while the button reads imperative.
+  promote: { imperative: "Promote", past: "Promoted" },
+  spawn: { imperative: "Spawn", past: "Spawned" },
+  // Triage decisions on an agent/automation-originated session. "Accept" is the
+  // affirmative half of the pair whose negative is `discard` — deliberately NOT
+  // `approve`/`reject`, which name a PROPOSAL decision. Triage is not governance:
+  // nothing was proposed, a session simply appeared and a person says whether it
+  // is theirs to work.
+  accept: { imperative: "Accept", past: "Accepted" },
+  discard: { imperative: "Discard", past: "Discarded" },
+  // Undo of a conversion — the inverse verb, not a delete.
+  revert: { imperative: "Revert", past: "Reverted" },
 };
 
 /**
@@ -320,6 +335,16 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   paused: "Paused",
   draft: "Draft",
   archived: "Archived",
+  // session work-state lenses (derived, never stored — a session is "waiting"
+  // because an open `blocked_by` edge points at an open session, "ready" when
+  // none does, "done" when closed). These are lens names over one row set,
+  // not `focus_sessions.status` values; keep them out of the DB enum.
+  ready: "Ready",
+  waiting: "Waiting",
+  blocked: "Blocked",
+  done: "Done",
+  // an agent- or automation-originated session not yet accepted from triage
+  drafted: "Drafted",
 };
 
 /**

@@ -13,6 +13,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const inserted: Array<Record<string, unknown>> = [];
 let permResult: Record<string, unknown> = { allowed: true };
 
+/** Compensation writes recorded so the unwind path can be asserted, not assumed. */
+const archived: Array<Record<string, unknown>> = [];
+const deleted: string[] = [];
+
 vi.mock("@synap/database", () => ({
   db: {
     // snapshotBehaviours' select — no automation rows in these tests.
@@ -23,9 +27,26 @@ vi.mock("@synap/database", () => ({
         return { returning: async () => [{ id: values.id }] };
       },
     }),
+    update: (table: { __table?: string }) => ({
+      set: (values: Record<string, unknown>) => ({
+        where: async () => {
+          archived.push({ table: table.__table, ...values });
+        },
+      }),
+    }),
+    delete: (table: { __table?: string }) => ({
+      where: async () => {
+        deleted.push(table.__table ?? "?");
+      },
+    }),
   },
-  skills: { __table: "skills" },
-  automations: { id: "id", flowDefinition: "flowDefinition" },
+  skills: { __table: "skills", id: "id" },
+  automations: {
+    __table: "automations",
+    id: "id",
+    flowDefinition: "flowDefinition",
+  },
+  eq: () => ({}),
   inArray: () => ({}),
 }));
 
@@ -36,8 +57,13 @@ vi.mock("../../utils/permission-check.js", () => ({
   },
 }));
 
+/** The lineage-edge write. Non-optional by contract — a failure unwinds. */
+let createLinksThrows: Error | null = null;
 vi.mock("../links/links-service.js", () => ({
-  createLinks: async () => undefined,
+  createLinks: async () => {
+    if (createLinksThrows) throw createLinksThrows;
+    return undefined;
+  },
 }));
 
 /**
@@ -78,7 +104,10 @@ beforeEach(() => {
   inserted.length = 0;
   gateCalls.length = 0;
   materializeCalls.length = 0;
+  archived.length = 0;
+  deleted.length = 0;
   materializeThrows = null;
+  createLinksThrows = null;
   permResult = { allowed: true };
 });
 
@@ -385,5 +414,83 @@ describe("a rule that carries a sentence compiles or is refused", () => {
     expect(result.status).toBe("created");
     expect(materializeCalls).toHaveLength(0);
     expect(result).toHaveProperty("needsBehaviour");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R3 — the metadata the RULES LIST reads.
+//
+// `RulesList.tsx` drops every automation whose `metadata.kind !== "rule"`. This
+// door stamped only `{ ruleId }`, so every rule created through it (MCP, CLI,
+// Hub REST, the browser's CommandPanel rule door, the approval replay) was
+// invisible in the Rules list — and the older browser modal, which DOES stamp
+// `kind`, kept the list looking like it worked.
+// ---------------------------------------------------------------------------
+
+describe("the compiled automation carries the metadata its consumer filters on", () => {
+  it('stamps kind:"rule" alongside the ruleId back-reference', async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(result.status).toBe("created");
+    const def = materializeCalls[0]!.definition as Record<string, unknown>;
+    const md = def.metadata as Record<string, unknown>;
+    expect(md.kind).toBe("rule");
+    // The back-reference is KEPT — it is how the automation names its rule.
+    expect(md.ruleId).toBe((result as { ruleId: string }).ruleId);
+  });
+
+  it("carries the cross-cutting projectId lens the same filter reads", async () => {
+    await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-9" },
+    });
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect((def.metadata as Record<string, unknown>).projectId).toBe("proj-9");
+  });
+
+  it("omits projectId when the rule is not project-scoped", async () => {
+    await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect(def.metadata as Record<string, unknown>).not.toHaveProperty(
+      "projectId"
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4 — the lineage edge is the MEMBERSHIP STORE, so its write is not optional.
+//
+// It used to be swallowed: `"rule created but lineage edges failed (rule
+// kept)"`. That was tolerable only while nothing read the edge. Now that
+// divergence detection and `skills.dryRunRule` resolve a rule's automations
+// from it, keeping the rule row means keeping a rule that silently lost its
+// behaviour.
+// ---------------------------------------------------------------------------
+
+describe("a failed lineage edge unwinds the create instead of being logged", () => {
+  it("THROWS rather than reporting a rule that lost its membership edge", async () => {
+    createLinksThrows = new Error("links unavailable");
+    await expect(
+      create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE })
+    ).rejects.toThrow("links unavailable");
+  });
+
+  it("archives the automation it created and removes the rule row", async () => {
+    createLinksThrows = new Error("links unavailable");
+    await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE }).catch(
+      () => undefined
+    );
+    // The SAME compensation the rule-insert failure path uses.
+    expect(archived).toContainEqual(
+      expect.objectContaining({ table: "automations", status: "archived" })
+    );
+    expect(deleted).toContain("skills");
+  });
+
+  it("leaves nothing behind when the edges DO write", async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(result.status).toBe("created");
+    expect(archived).toEqual([]);
+    expect(deleted).toEqual([]);
   });
 });

@@ -41,6 +41,17 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("messaging.external.send", "past")).toBe("Sent");
   });
 
+  it("carries the session-conversion and triage verbs in both moods", () => {
+    // The receipt says "Promoted to playbook X"; the button says "Promote".
+    expect(resolveActionLabel("promote", "imperative")).toBe("Promote");
+    expect(resolveActionLabel("promote", "past")).toBe("Promoted");
+    expect(resolveActionLabel("spawn", "past")).toBe("Spawned");
+    // Triage is not governance — accept/discard, never approve/reject.
+    expect(resolveActionLabel("accept", "imperative")).toBe("Accept");
+    expect(resolveActionLabel("discard", "past")).toBe("Discarded");
+    expect(resolveActionLabel("revert", "past")).toBe("Reverted");
+  });
+
   it("settles the Refused/Rejected split on one canonical pair", () => {
     expect(resolveActionLabel("reject", "imperative")).toBe("Reject");
     expect(resolveActionLabel("reject", "past")).toBe("Rejected");
@@ -280,6 +291,14 @@ describe("resolveStatusLabel", () => {
   it("humanizes an unknown status instead of leaking it", () => {
     expect(resolveStatusLabel("some_new_state")).toBe("Some new state");
     expect(resolveStatusLabel("")).toBe("");
+  });
+
+  it("names the derived session lenses without leaking their tokens", () => {
+    expect(resolveStatusLabel("ready")).toBe("Ready");
+    expect(resolveStatusLabel("waiting")).toBe("Waiting");
+    expect(resolveStatusLabel("blocked")).toBe("Blocked");
+    expect(resolveStatusLabel("done")).toBe("Done");
+    expect(resolveStatusLabel("drafted")).toBe("Drafted");
   });
 
   it("never renders a raw token for any known status", () => {

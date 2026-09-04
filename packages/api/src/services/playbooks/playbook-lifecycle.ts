@@ -46,6 +46,17 @@ import {
   extractCapabilities,
   getLinksFor,
 } from "../links/links-service.js";
+import { emitSideEffects } from "@synap/events";
+import { logEvent } from "../../lib/event-helpers.js";
+import {
+  recordConversion,
+  type ConversionReceipt,
+} from "../focus-sessions/session-conversion.js";
+import {
+  FOCUS_SESSION_SUBJECT_TYPE,
+  FOCUS_SESSION_PROMOTE_ACTION,
+  FOCUS_SESSION_PROMOTED_EVENT_TYPE,
+} from "../focus-sessions/lifecycle-events.js";
 
 const logger = createLogger({ module: "playbook-lifecycle" });
 
@@ -212,14 +223,34 @@ export interface PromoteInput {
   /** Optional name for the new playbook (defaults to the session goal). */
   name?: string;
   description?: string;
+  /** Agent attribution, when an agent's approved proposal is materializing. */
+  agentUserId?: string | null;
 }
+
+/**
+ * The promote outcome.
+ *
+ * The project-scope guard used to `throw` a bare string, which every caller then
+ * surfaced as a 500 over a perfectly legitimate refusal. It is now a TYPED
+ * refusal the caller can render; a missing session still throws, because that is
+ * an invariant break (the caller loaded it a moment earlier), not a refusal.
+ */
+export type PromoteResult =
+  | {
+      status: "promoted";
+      playbook: Playbook;
+      /** True when a same-name playbook already existed and was REUSED. */
+      reused: boolean;
+      receipt: ConversionReceipt;
+    }
+  | { status: "refused"; reason: "project_scoped_session"; message: string };
 
 /**
  * Promote a validated session into a reusable Playbook. Caller MUST gate first.
  */
 export async function promoteSessionToPlaybook(
   input: PromoteInput
-): Promise<Playbook> {
+): Promise<PromoteResult> {
   const db = await getDb();
   const session = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, input.sessionId),
@@ -233,9 +264,12 @@ export async function promoteSessionToPlaybook(
   // path creates such a session today (P4b) — fail with a clear message rather
   // than a raw constraint violation.
   if (!session.workspaceId) {
-    throw new Error(
-      "Project-scoped sessions (no workspace) cannot be promoted to a playbook yet."
-    );
+    return {
+      status: "refused",
+      reason: "project_scoped_session",
+      message:
+        "Project-scoped sessions (no workspace) cannot be promoted to a playbook yet.",
+    };
   }
 
   // Capabilities the session USED → re-grant them on the new playbook.
@@ -366,5 +400,48 @@ export async function promoteSessionToPlaybook(
     );
   }
 
-  return playbook;
+  // Rename the source + stamp the receipt through the ONE conversion recorder
+  // (shared with spawn-project, so the two verbs cannot disagree about the
+  // shape). Prior art: Linear retitles the issue it converted so the list it
+  // still lives in says what happened to it.
+  const receipt = await recordConversion({
+    session,
+    kind: "playbook",
+    createdId: playbook.id,
+    createdName: playbook.name,
+    userId: input.userId,
+  });
+
+  // Promote emitted NOTHING before this wave: no history row, no reactor hop,
+  // so no automation could fire on a promotion and no reader could see one. Both
+  // halves now, for the reason `close-event.ts` spells out.
+  const eventData = {
+    sessionId: session.id,
+    workspaceId: session.workspaceId,
+    userId: input.userId,
+    playbookId: playbook.id,
+    playbookName: playbook.name,
+    reused,
+    renamedFrom: receipt.renamedFrom,
+    goal: receipt.renamedTo,
+  };
+  await logEvent(input.userId, FOCUS_SESSION_PROMOTED_EVENT_TYPE, eventData, {
+    subjectId: session.id,
+    subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+    source: input.agentUserId ? "intelligence" : "api",
+    ...(input.agentUserId
+      ? { metadata: { agentUserId: input.agentUserId } }
+      : {}),
+  });
+  await emitSideEffects({
+    subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+    action: FOCUS_SESSION_PROMOTE_ACTION,
+    subjectId: session.id,
+    userId: input.userId,
+    workspaceId: session.workspaceId,
+    sessionId: session.id,
+    data: eventData,
+  });
+
+  return { status: "promoted", playbook, reused, receipt };
 }

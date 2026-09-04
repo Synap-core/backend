@@ -92,10 +92,20 @@ describe("ruleNotExpiredWhere — which rules still apply", () => {
  * The predicate only hides anything if the read doors actually AND it in.
  * `visibleSkillsWhere` is the narrowest point EVERY rule reader inherits:
  *   - the IS prompt path: `/api/hub/agent-skills/executable`
- *     → hub `skills.getSkills` → tRPC `skills.list`,
- *   - `GET /api/hub/rules`,
- *   - tRPC `skills.listRules`.
+ *     → hub `skills.getSkills` → tRPC `skills.list`.
  * So this is enforcement at one door, not three copies of a filter.
+ *
+ * ⚠️ The two entries that used to be listed here — `GET /api/hub/rules` and
+ * `skills.listRules` — were WRONG to be, and this file asserted their wrongness
+ * as if it were the design. They are OWNER-FACING; expiry must stop a rule
+ * ACTING without hiding it, and inheriting the filter made an expired rule a
+ * ghost nobody could renew. They now pass `{ includeExpired: true }`.
+ *
+ * Note what that means about tests: `expiry-enforced.tripwire.test.ts` asserted
+ * the OPPOSITE of this file about the very same door, and BOTH were green —
+ * one grepped a token the file never types, the other rendered the SQL. Two
+ * contradictory intents can coexist for as long as they measure different
+ * things.
  */
 describe("the shared read door applies it", () => {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -113,22 +123,26 @@ describe("the shared read door applies it", () => {
     }
   });
 
-  it("the IS prompt path inherits it: skills.list uses visibleSkillsWhere", () => {
-    const src = read("../../routers/skills.ts");
-    expect(src).toContain("visibleSkillsWhere(userId, input?.workspaceId)");
-  });
-
-  it("GET /api/hub/rules inherits it", () => {
-    const src = read("../../routers/hub-protocol/rest/rules.ts");
-    expect(src).toContain(
-      "visibleSkillsWhere(userId, parsed.data.workspaceId)"
+  it("the waiver actually removes it — otherwise the flag is decoration", () => {
+    const { sql } = render(
+      visibleSkillsWhere("user-1", undefined, { includeExpired: true })
     );
+    expect(sql).not.toContain(`"skills"."metadata" #>>`);
   });
 
-  it("skills.listRules inherits it", () => {
+  it("the waiver is OPT-IN: absent and `false` both still enforce", () => {
+    // Fail-safe. A door that forgets the option, or passes an empty object,
+    // must over-filter (an expired rule is missing) rather than leak a lapsed
+    // standing permission into an agent's prompt.
+    for (const options of [undefined, {}, { includeExpired: false }]) {
+      const { sql } = render(visibleSkillsWhere("user-1", undefined, options));
+      expect(sql).toContain(`"skills"."metadata" #>>`);
+    }
+  });
+
+  it("the IS prompt path inherits it: skills.list does NOT waive", () => {
     const src = read("../../routers/skills.ts");
     expect(src).toContain("visibleSkillsWhere(userId, input?.workspaceId)");
-    expect(src).toContain("eq(skills.category, RULE_CATEGORY)");
   });
 });
 

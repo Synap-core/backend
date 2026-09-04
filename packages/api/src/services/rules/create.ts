@@ -37,7 +37,7 @@ import {
 import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
 import { readRuleSentence } from "./sentence-schema.js";
-import { automations, inArray } from "@synap/database";
+import { automations, eq, inArray } from "@synap/database";
 
 const logger = createLogger({ module: "rules-create" });
 
@@ -344,7 +344,28 @@ export async function createRuleGoverned(
           // single one. The agent floor is NOT source-based anyway: the draft
           // forcing below is derived from `agentUserId` inside the insert door.
           source: "user",
-          metadata: { ruleId },
+          // ── R3: the metadata the RULES LIST already reads ────────────────
+          // `kind: "rule"` is not decoration — it is the ONE discriminator the
+          // consumer filters on (`RulesList.tsx` drops every row whose
+          // `metadata.kind !== "rule"`). Stamping only `ruleId` meant every
+          // rule created through this governed door (MCP, CLI, Hub REST, the
+          // browser's CommandPanel rule door, and the approval replay) was
+          // invisible in the Rules list, while the older browser modal — which
+          // writes the automation directly WITH `kind` — kept the list looking
+          // like it worked. Same key, same value, both doors.
+          //
+          // `projectId` is the cross-cutting lens the same filter reads, and it
+          // is the only other scope key this door actually holds. The list also
+          // filters on `capabilityId` / `channelId` / `entityId`; `RuleScope`
+          // here carries none of them, so a rule created through this door is
+          // correctly absent from those SCOPED mounts rather than mislabelled.
+          metadata: {
+            ruleId,
+            kind: RULE_CATEGORY,
+            ...(input.scope.projectId
+              ? { projectId: input.scope.projectId }
+              : {}),
+          },
         } as Parameters<
           typeof materializeAutomationForPrincipal
         >[0]["definition"],
@@ -437,8 +458,18 @@ export async function createRuleGoverned(
 
   const materializedId = row?.id ?? ruleId;
 
-  // Lineage edges — best-effort: the rule row already exists and must not be
-  // discarded because an edge failed.
+  // ── Lineage edges — NOT best-effort ──────────────────────────────────────
+  // The `skill --activates--> automation` edge IS the rule's membership store
+  // (`services/rules/lineage.ts` is the reader; divergence detection and
+  // `skills.dryRunRule` resolve a rule's automations from it). Swallowing a
+  // failure here therefore keeps a rule row that has silently lost its
+  // behaviour — data loss dressed as a warning, which is what the old
+  // `"rule created but lineage edges failed (rule kept)"` catch did.
+  //
+  // Compensate the same way the insert path does — archive the automation this
+  // call created — and additionally delete the rule row this call inserted, so
+  // the whole create unwinds rather than leaving a half-rule behind. Then
+  // rethrow: the caller must not be told a rule was created.
   try {
     await linkRuleHalves({
       ruleSkillId: materializedId,
@@ -447,10 +478,16 @@ export async function createRuleGoverned(
       workspaceId,
     });
   } catch (err) {
-    logger.warn(
-      { err, ruleId: materializedId },
-      "rule created but lineage edges failed (rule kept)"
-    );
+    await archiveOrphanedBehaviour(err);
+    try {
+      await db.delete(skills).where(eq(skills.id, materializedId));
+    } catch (deleteErr) {
+      logger.error(
+        { err: deleteErr, ruleId: materializedId },
+        "rule lineage edges failed AND the rule row could not be removed — a rule exists with no membership edge"
+      );
+    }
+    throw err;
   }
 
   return {

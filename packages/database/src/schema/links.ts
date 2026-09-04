@@ -77,7 +77,12 @@ export type LinkEndpointType =
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
   // Governs lens propagation only — never data movement (see links.ts header).
-  | "workspace";
+  | "workspace"
+  // A row of the `governance_rules` table (migration 0215) — the ONE
+  // user-editable store of auto/propose verdicts. A graph citizen so an
+  // intent-rule can hold an edge to the governance rule it produced:
+  // `automation|playbook --produced--> governance_rule`.
+  | "governance_rule";
 
 /** The relationship an edge expresses. */
 export type LinkType =
@@ -111,7 +116,21 @@ export type LinkType =
   // dynamic tool-auth binding: principal|entity --provides_credential--> secret.
   // metadata.toolId scopes the credential to a specific tool. Resolved at
   // execution by the dispatcher per the tool's `authBinding`.
-  | "provides_credential";
+  | "provides_credential"
+  /**
+   * session --blocked_by--> session. A dependency between units of work: the
+   * FROM session cannot proceed until the TO session closes.
+   *
+   * Blocked-ness is DERIVED from the subset of these edges whose TARGET is
+   * still open, never a stored `blocked` status on `focus_sessions` (prior
+   * art: Atlassian's "flag, don't status" — a status can only hold one value,
+   * so storing blocked-ness destroys the real state and then drifts from the
+   * blockers). The reader is `session-blocked-by.ts`.
+   *
+   * Unrelated to the run status `blocked_by_policy` — that is a governance
+   * outcome on a single run, not an edge between sessions.
+   */
+  | "blocked_by";
 
 export const links = pgTable(
   "links",

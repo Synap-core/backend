@@ -124,6 +124,9 @@ export {
   flowToSentenceAction,
   flowToSentenceActions,
   isActionConfigured,
+  conditionToFilterValue,
+  UNEVALUABLE_CONDITION_OPERATORS,
+  VALUELESS_CONDITION_OPERATORS,
   BOOKKEEPING_KEYS,
   flowToConditions,
 } from "./sentence.js";

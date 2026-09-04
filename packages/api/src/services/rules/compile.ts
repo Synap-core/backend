@@ -69,6 +69,8 @@ import {
   type BackendTrigger,
   type RuleFlowDefinition,
   isActionConfigured,
+  UNEVALUABLE_CONDITION_OPERATORS,
+  VALUELESS_CONDITION_OPERATORS,
   type RuleSentenceValue,
 } from "@synap-core/types/automations";
 // Sub-path import: tsup code-splitting drops `validateEventPattern` from the
@@ -142,8 +144,35 @@ export function compileRuleSentence(
   // `filters`; a half-filled row is dropped, which quietly widens the rule to
   // match more than the author wrote. That is a refusal, not a normalisation.
   const conditions = sentence.conditions ?? [];
+
+  // An operator the RUNTIME cannot evaluate must be refused by name, not
+  // degraded. `contains` / `starts_with` / `changed_to` are in the sentence
+  // vocabulary but not in `TRIGGER_FILTER_OPERATORS`, so a rule using one would
+  // otherwise compile to a filter that silently means something else — the
+  // exact class this door exists to stop.
+  const unevaluable = conditions.find(
+    (row) =>
+      row.key &&
+      (UNEVALUABLE_CONDITION_OPERATORS as readonly string[]).includes(
+        row.operator
+      )
+  );
+  if (unevaluable) {
+    return fail(
+      "WHERE",
+      `The WHERE condition on "${unevaluable.key}" uses "${unevaluable.operator.replace(/_/g, " ")}", which this trigger cannot evaluate — the automation matcher only understands is, is not, greater than, less than, is true and is false. Rewrite the condition with one of those.`
+    );
+  }
+
+  // `is_true` / `is_false` are complete WITHOUT a value — the operator IS the
+  // value — so they must not trip the half-filled check below, which would
+  // refuse them with a message about a missing value they never needed.
+  const needsValue = (row: { operator: string }) =>
+    !(VALUELESS_CONDITION_OPERATORS as readonly string[]).includes(
+      row.operator
+    );
   const halfFilled = conditions.find(
-    (row) => Boolean(row.key) !== Boolean(row.value)
+    (row) => needsValue(row) && Boolean(row.key) !== Boolean(row.value)
   );
   if (halfFilled) {
     return fail(

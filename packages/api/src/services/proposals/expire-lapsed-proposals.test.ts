@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   selectLapsedIds,
+  diesWithSession,
+  SESSION_BOUND_DRAFT_TYPES,
   type LapseCandidate,
 } from "./expire-lapsed-proposals.js";
 
@@ -101,5 +103,51 @@ describe("selectLapsedIds", () => {
 
   it("an empty queue is not an error", () => {
     expect(selectLapsedIds([], NOW)).toEqual([]);
+  });
+});
+
+/**
+ * Session close is the OTHER trigger, and it retires a strictly wider set than
+ * the clock: a draft has no fuse but does have a context, and the context dies
+ * with the session.
+ */
+describe("diesWithSession", () => {
+  it("retires an ephemeral run (its moment passed)", () => {
+    expect(diesWithSession("capability.run", "capability")).toBe(true);
+  });
+
+  it("retires an AI document draft — a draft dies with its session", () => {
+    // The clock must NOT sweep it: ai_edit is objectWork, lifetime null.
+    expect(
+      selectLapsedIds(
+        [
+          {
+            id: "draft",
+            proposalType: "ai_edit",
+            targetType: "document",
+            createdAt: new Date("2020-01-01T00:00:00Z"),
+          },
+        ],
+        new Date("2026-09-04T00:00:00Z")
+      )
+    ).toEqual([]);
+    // Closing its session does.
+    expect(diesWithSession("ai_edit", "document")).toBe(true);
+  });
+
+  it("does NOT retire a proposed entity or a merge candidate", () => {
+    // These outlive the session by design — they are as reviewable next week.
+    expect(diesWithSession("create", "entity")).toBe(false);
+    expect(diesWithSession("merge", "entity")).toBe(false);
+  });
+
+  it("does NOT retire a proposal type it has never seen", () => {
+    expect(diesWithSession("some_future_type", "whatever")).toBe(false);
+  });
+
+  it("names its session-bound drafts as ONE list", () => {
+    // Guards the shape, not the contents: a second inline literal for a
+    // session-bound type is the drift this constant exists to prevent.
+    expect(SESSION_BOUND_DRAFT_TYPES).toContain("ai_edit");
   });
 });

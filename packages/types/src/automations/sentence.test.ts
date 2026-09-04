@@ -14,11 +14,15 @@ import {
   flowToSentenceAction,
   flowToSentenceActions,
   isActionConfigured,
+  flowToConditions,
+  UNEVALUABLE_CONDITION_OPERATORS,
+  type ConditionRow,
   toBackendTrigger,
   toFlowDefinition,
   triggerToSentence,
 } from "./sentence.js";
 import { validateEventPattern } from "../events/unified.js";
+import { TRIGGER_FILTER_OPERATORS } from "./filter-operators.js";
 
 describe("sentence → flow converters emit executor-true nodes", () => {
   // Regression guard: the executor only runs `type:"output"` nodes keyed on
@@ -424,5 +428,100 @@ describe("an entity trigger's profileSlug lands in filters, where matchFilters r
         profileSlug: "person",
       }).profileSlug
     ).toBe("person");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE WHERE OPERATOR. This is the one that produced INVERTED semantics: every
+// operator compiled to bare equality, so "status is NOT done" fired on exactly
+// the events its author excluded — and `flowToConditions` hardcoded
+// `operator: "is"` so the editor reloaded the mangled rule looking correct.
+//
+// Asserted against the RUNTIME's own operator vocabulary, not a hand-written
+// expectation, so a new operator cannot be added on one side only.
+// ---------------------------------------------------------------------------
+
+describe("the WHERE operator survives compilation", () => {
+  const row = (operator: ConditionRow["operator"], value = "done") => ({
+    id: "c1",
+    key: "status",
+    operator,
+    value,
+  });
+  const filtersFor = (r: ConditionRow) =>
+    toBackendTrigger(
+      {
+        triggerType: "event",
+        subjectCategory: "entity",
+        actionVerb: "created",
+      },
+      [r]
+    ).triggerConfig.filters as Record<string, unknown>;
+
+  it("is → a literal (unchanged behaviour)", () => {
+    expect(filtersFor(row("is"))).toEqual({ status: "done" });
+  });
+
+  it("is_not → $ne, NOT the value itself", () => {
+    // The regression: this used to emit `{status:"done"}` — the rule fired on
+    // precisely what the author excluded.
+    expect(filtersFor(row("is_not"))).toEqual({ status: { $ne: "done" } });
+  });
+
+  it("greater_than / less_than → $gt / $lt", () => {
+    expect(filtersFor(row("greater_than", "5"))).toEqual({
+      status: { $gt: "5" },
+    });
+    expect(filtersFor(row("less_than", "5"))).toEqual({ status: { $lt: "5" } });
+  });
+
+  it("is_true / is_false need no value and emit booleans", () => {
+    expect(filtersFor(row("is_true", ""))).toEqual({ status: true });
+    expect(filtersFor(row("is_false", ""))).toEqual({ status: false });
+  });
+
+  it("every operator it EMITS is one the runtime can evaluate", () => {
+    // Derived from the runtime's own list, so teaching the grammar a new
+    // operator without teaching the matcher fails here.
+    for (const op of [
+      "is",
+      "is_not",
+      "greater_than",
+      "less_than",
+      "is_true",
+      "is_false",
+    ] as const) {
+      const compiled = filtersFor(row(op, "1")).status;
+      if (compiled && typeof compiled === "object") {
+        for (const k of Object.keys(compiled)) {
+          expect(TRIGGER_FILTER_OPERATORS).toContain(k);
+        }
+      }
+    }
+  });
+
+  it("emits NOTHING for an operator the runtime cannot evaluate", () => {
+    // Emitting a literal would silently turn "contains" into "equals"; the rule
+    // compiler refuses these by name instead.
+    for (const op of UNEVALUABLE_CONDITION_OPERATORS) {
+      expect(filtersFor(row(op))).toBeUndefined();
+    }
+  });
+
+  it("round-trips the operator back into the sentence", () => {
+    // The hardcoded `operator: "is"` here is what hid the whole bug.
+    for (const op of ["is", "is_not", "greater_than", "less_than"] as const) {
+      const cfg = toBackendTrigger(
+        {
+          triggerType: "event",
+          subjectCategory: "entity",
+          actionVerb: "created",
+        },
+        [row(op, "7")]
+      ).triggerConfig;
+      const back = flowToConditions(cfg);
+      expect(back[0]!.operator).toBe(op);
+      expect(back[0]!.value).toBe("7");
+    }
   });
 });

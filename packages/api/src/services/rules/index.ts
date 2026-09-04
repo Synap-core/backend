@@ -50,6 +50,12 @@ export const RULE_METADATA_KEY = "rule" as const;
 export const RULE_CATEGORY = "rule" as const;
 
 export interface RuleBehaviourRecord {
+  /**
+   * The KEY the snapshot below is stored under — NOT the membership store.
+   * A rule's automations are resolved from the `skill --activates-->
+   * automation` edge (`./lineage.ts`); reading this array as "the rule's
+   * automations" is the divergence that made the edge decorative.
+   */
   automationId: string;
   /**
    * DIVERGENCE SNAPSHOT: hash of the automation's `flowDefinition` AS THE RULE
@@ -246,26 +252,45 @@ export function ruleNameFromIntent(intent: string): string {
   return clipped || "Untitled rule";
 }
 
-export interface DivergedBehaviour extends RuleBehaviourRecord {
+export interface DivergedBehaviour {
+  automationId: string;
+  /**
+   * The hash the rule RECORDED for this behaviour, or `null` when the edge
+   * names an automation the rule took no snapshot of — see `"unsnapshotted"`.
+   */
+  flowHash: string | null;
   /** Hash of the automation's flowDefinition RIGHT NOW. */
   currentFlowHash: string | null;
-  /** null current hash = the automation row is gone. */
-  status: "matches" | "diverged" | "missing";
+  /**
+   * `missing`      — the edge names an automation row that is gone.
+   * `unsnapshotted` — the edge exists but `behaviours[]` holds no hash for it,
+   *                   so there is nothing to compare against. Reported, never
+   *                   silently treated as a match: the membership store (the
+   *                   edge) and the snapshot store (the JSONB) are written in
+   *                   the same call, so this is a real anomaly.
+   */
+  status: "matches" | "diverged" | "missing" | "unsnapshotted";
 }
 
 /**
  * DIVERGENCE DETECTION (detection ONLY — no reconciliation).
  *
- * For each behaviour the rule produced, compare the flow hash the rule
+ * MEMBERSHIP comes from the CALLER, which resolved it from the
+ * `skill --activates--> automation` edge (`./lineage.ts`) — NOT from
+ * `metadata.behaviours[].automationId`. The edge is the store; `behaviours[]`
+ * keeps only the `flowHash` snapshot, keyed by automation id.
+ *
+ * For each behaviour the rule activates, compare the flow hash the rule
  * recorded at creation against the automation's flow hash today. A reader can
  * then say "this automation no longer matches its rule" without the rule ever
  * having tried to own the automation's current content.
  */
 export async function detectRuleDivergence(
+  automationIds: string[],
   metadata: RuleMetadata,
   database: typeof db = db
 ): Promise<{ diverged: boolean; behaviours: DivergedBehaviour[] }> {
-  if (metadata.behaviours.length === 0) {
+  if (automationIds.length === 0) {
     return { diverged: false, behaviours: [] };
   }
   const rows = await database
@@ -274,23 +299,36 @@ export async function detectRuleDivergence(
       flowDefinition: automations.flowDefinition,
     })
     .from(automations)
-    .where(
-      inArray(
-        automations.id,
-        metadata.behaviours.map((b) => b.automationId)
-      )
-    );
+    .where(inArray(automations.id, automationIds));
   const byId = new Map(rows.map((r) => [r.id, r.flowDefinition]));
-  const behaviours = metadata.behaviours.map((b): DivergedBehaviour => {
-    const live = byId.get(b.automationId);
+  const snapshotById = new Map(
+    metadata.behaviours.map((b) => [b.automationId, b.flowHash])
+  );
+  const behaviours = automationIds.map((automationId): DivergedBehaviour => {
+    const flowHash = snapshotById.get(automationId) ?? null;
+    const live = byId.get(automationId);
     if (live === undefined) {
-      return { ...b, currentFlowHash: null, status: "missing" };
+      return {
+        automationId,
+        flowHash,
+        currentFlowHash: null,
+        status: "missing",
+      };
     }
     const currentFlowHash = hashFlowDefinition(live);
+    if (flowHash === null) {
+      return {
+        automationId,
+        flowHash,
+        currentFlowHash,
+        status: "unsnapshotted",
+      };
+    }
     return {
-      ...b,
+      automationId,
+      flowHash,
       currentFlowHash,
-      status: currentFlowHash === b.flowHash ? "matches" : "diverged",
+      status: currentFlowHash === flowHash ? "matches" : "diverged",
     };
   });
   return {
@@ -301,8 +339,15 @@ export async function detectRuleDivergence(
 
 /**
  * Write the lineage edges for a materialized rule. Idempotent (the links
- * unique edge absorbs a replay). Best-effort by contract: a failed edge is the
- * caller's to log — it must never discard the rule row that already exists.
+ * unique edge absorbs a replay).
+ *
+ * ⚠️ NOT best-effort. The `skill --activates--> automation` edge IS the rule's
+ * membership store — `./lineage.ts` is the reader, and divergence detection +
+ * `skills.dryRunRule` resolve a rule's automations from it. A rule row whose
+ * edges failed to write is a rule that has silently lost its behaviour, so
+ * `createRuleGoverned` COMPENSATES (archives the automation it created, deletes
+ * the rule row) and rethrows. It used to log a warning and keep the rule; that
+ * was tolerable only while nothing read the edge.
  */
 export async function linkRuleHalves(input: {
   ruleSkillId: string;

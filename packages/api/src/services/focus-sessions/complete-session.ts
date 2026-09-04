@@ -22,7 +22,15 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { emitSideEffects } from "@synap/events";
 import { expireSessionEphemerals } from "../proposals/expire-lapsed-proposals.js";
+import { logEvent } from "../../lib/event-helpers.js";
+import {
+  FOCUS_SESSION_SUBJECT_TYPE,
+  FOCUS_SESSION_CLOSE_ACTION,
+  FOCUS_SESSION_CLOSED_EVENT_TYPE,
+} from "./close-event.js";
+import { isTerminalSessionStatus } from "./session-statuses.js";
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
@@ -31,6 +39,15 @@ export interface CompleteFocusSessionParams {
   /** Short human-readable outcome — surfaced in session lists. */
   summary?: string;
   verificationReport?: Record<string, unknown> | null;
+  /**
+   * Which terminal state the session lands in. `closed` is the ordinary
+   * completion; `cancelled` / `failed` are the same lifecycle exit with a
+   * different verdict. ONE door for all three: every exit expires the
+   * session-bound ephemerals and emits the close event, so a session that is
+   * cancelled through the ordinary update door can no longer leave its drafts
+   * alive and its dependents unblocked in silence.
+   */
+  terminalStatus?: "closed" | "cancelled" | "failed";
 }
 
 export type ProposalPackItem = {
@@ -80,7 +97,12 @@ function packItem(row: typeof proposals.$inferSelect): ProposalPackItem {
 export async function completeFocusSession(
   params: CompleteFocusSessionParams
 ): Promise<CompleteFocusSessionResult | null> {
-  const { sessionId, summary, verificationReport } = params;
+  const {
+    sessionId,
+    summary,
+    verificationReport,
+    terminalStatus = "closed",
+  } = params;
 
   const session = await db.query.focusSessions.findFirst({
     where: and(
@@ -89,6 +111,20 @@ export async function completeFocusSession(
     ),
   });
   if (!session) return null;
+
+  // Already-terminal guard lives HERE, in the one close door, not in each
+  // caller: a second close would re-run the membrane, re-stamp `closedAt` and
+  // re-emit the close event (the unblock reactor is idempotent by group key,
+  // the automation matcher is not). Return the row as it stands, no side
+  // effects — the caller asked for a closed session and has one.
+  if (isTerminalSessionStatus(session.status)) {
+    return {
+      session: session as FocusSession,
+      pendingProposals: [],
+      counts: { pending: 0, unfinishedOutputs: 0, expiredEphemerals: 0 },
+      warnings: [],
+    };
+  }
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
   // ignoreSessionForcePropose keeps auto-approve / execute path for complete only.
@@ -106,7 +142,7 @@ export async function completeFocusSession(
     source: "intelligence",
     data: {
       id: sessionId,
-      status: "closed",
+      status: terminalStatus,
       goal: session.goal,
       previousStatus: session.status,
       ...(summary !== undefined ? { sessionSummary: summary } : {}),
@@ -172,7 +208,7 @@ export async function completeFocusSession(
   const [updated] = await db
     .update(focusSessions)
     .set({
-      status: "closed",
+      status: terminalStatus,
       closedAt: new Date(),
       ...(verificationReport != null
         ? {
@@ -236,6 +272,52 @@ export async function completeFocusSession(
         `they were bound to it and are no longer actionable.`
     );
   }
+
+  // ── THE CLOSE EVENT ────────────────────────────────────────────────────────
+  // Closing a session is a fact about the work, and until now it left no trace
+  // anyone could react to or read back: no automation could fire on it, the
+  // unblock reactor had nothing to listen for, and the Why spine had no row.
+  //
+  // BOTH halves are required and they are not substitutes. `emitSideEffects` is
+  // the TRANSIENT reactor hop (pg-boss): it reaches the automation trigger
+  // matcher and the webhook fan-out, and it is gone the moment it is handled.
+  // `logEvent` is the PERSISTED history row on the events spine — the only half
+  // a later reader (session history, the Why pane) can ever see. Emitting only
+  // the first is the integration-continent defect: live firing with no history.
+  const eventData = {
+    sessionId: updated.id,
+    workspaceId: updated.workspaceId,
+    projectId: updated.projectId,
+    userId: params.userId,
+    subjectId: updated.subjectEntityId,
+    playbookId: updated.playbookId,
+    origin: updated.origin,
+    goal: updated.goal,
+    status: updated.status,
+    ...(summary !== undefined ? { summary } : {}),
+  };
+
+  await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {
+    subjectId: updated.id,
+    subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+    source: params.agentUserId ? "intelligence" : "api",
+    ...(params.agentUserId
+      ? { metadata: { agentUserId: params.agentUserId } }
+      : {}),
+  });
+
+  // `emitSideEffects` composes `${subjectType}.${action}.completed`, which is
+  // exactly FOCUS_SESSION_CLOSED_EVENT_TYPE — the constants are the SAME two
+  // halves, so the emitted type and the persisted type can never diverge.
+  await emitSideEffects({
+    subjectType: FOCUS_SESSION_SUBJECT_TYPE,
+    action: FOCUS_SESSION_CLOSE_ACTION,
+    subjectId: updated.id,
+    userId: params.userId,
+    workspaceId: updated.workspaceId,
+    sessionId: updated.id,
+    data: eventData,
+  });
 
   return {
     session: updated,

@@ -156,6 +156,7 @@ describe("divergence detection", () => {
 
   it("reports no divergence while the automation still matches", async () => {
     const result = await detectRuleDivergence(
+      ["auto-1"],
       metadata,
       fakeDb([{ id: "auto-1", flowDefinition: FLOW }])
     );
@@ -169,6 +170,7 @@ describe("divergence detection", () => {
       nodes: [...FLOW.nodes, { id: "b", type: "http" }],
     };
     const result = await detectRuleDivergence(
+      ["auto-1"],
       metadata,
       fakeDb([{ id: "auto-1", flowDefinition: edited }])
     );
@@ -179,13 +181,14 @@ describe("divergence detection", () => {
   });
 
   it("reports a deleted automation as missing, not as a match", async () => {
-    const result = await detectRuleDivergence(metadata, fakeDb([]));
+    const result = await detectRuleDivergence(["auto-1"], metadata, fakeDb([]));
     expect(result.diverged).toBe(true);
     expect(result.behaviours[0]?.status).toBe("missing");
   });
 
-  it("a rule with no behaviours never reads as diverged", async () => {
+  it("a rule with NO ACTIVATES EDGE never reads as diverged", async () => {
     const result = await detectRuleDivergence(
+      [],
       buildRuleMetadata({
         intent: "x",
         scope: { kind: "pod" },
@@ -194,5 +197,27 @@ describe("divergence detection", () => {
       fakeDb([])
     );
     expect(result).toEqual({ diverged: false, behaviours: [] });
+  });
+
+  it("MEMBERSHIP is the edge, not behaviours[] — a snapshot the edge does not name is ignored", async () => {
+    // The JSONB copy still lists `auto-1`, but the edge says the rule activates
+    // nothing. The edge wins: this is the whole point of R4.
+    const result = await detectRuleDivergence(
+      [],
+      metadata,
+      fakeDb([{ id: "auto-1", flowDefinition: FLOW }])
+    );
+    expect(result).toEqual({ diverged: false, behaviours: [] });
+  });
+
+  it("an edge with no recorded snapshot is UNSNAPSHOTTED, never a silent match", async () => {
+    const result = await detectRuleDivergence(
+      ["auto-2"],
+      metadata,
+      fakeDb([{ id: "auto-2", flowDefinition: FLOW }])
+    );
+    expect(result.diverged).toBe(true);
+    expect(result.behaviours[0]?.status).toBe("unsnapshotted");
+    expect(result.behaviours[0]?.flowHash).toBeNull();
   });
 });

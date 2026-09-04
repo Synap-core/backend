@@ -21,6 +21,13 @@ import {
 import { drizzleSql } from "@synap/database";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
+// The expiry predicate + the rule back-reference reader, IMPORTED from the
+// event matcher in this same package rather than mirrored. Two firing doors
+// must agree on what "expired" means; a second copy is how they stop agreeing.
+import {
+  loadExpiredRuleIds,
+  ruleIdOfAutomation,
+} from "./automation-trigger-matcher.js";
 
 const logger = createLogger({ module: "automation-cron-scheduler" });
 
@@ -238,11 +245,46 @@ export async function handleAutomationCronScheduler(): Promise<void> {
 
   if (dueAutomations.length === 0) return;
 
-  logger.info({ count: dueAutomations.length }, "Found due cron automations");
+  // ── Drop automations whose RULE has expired ──────────────────────────────
+  // The SECOND autonomous firing door. `automation-trigger-matcher.ts` guards
+  // the event path; a rule can also compile to a CRON automation
+  // (`services/rules/compile.ts` accepts `triggerType: "cron"` once
+  // `triggerConfig.expression` is present), and this loop would otherwise keep
+  // running it forever after its review date passed — the same "silence the
+  // advice, leave the action running" half-fix, one door over.
+  //
+  // Same three properties as the event path, deliberately: the predicate is
+  // IMPORTED from the matcher rather than re-derived (one definition of
+  // expired); the lookup is ONE batched query, skipped entirely when no due
+  // automation is rule-backed; and it is SKIP-ONLY — no delete, no archive, no
+  // status change, no `nextRunAt` advance. Enforcement is not visibility: an
+  // expired rule stays listed, and renewing it resumes the schedule with no
+  // repair step. A row therefore stays due and is re-skipped each tick, which
+  // is the honest cost of not mutating state we do not own.
+  const expiredRuleIds = await loadExpiredRuleIds(
+    dueAutomations.map((a) => a.metadata),
+    now
+  );
+  const runnable = expiredRuleIds.size
+    ? dueAutomations.filter((a) => {
+        const ruleId = ruleIdOfAutomation(a.metadata);
+        return !(ruleId && expiredRuleIds.has(ruleId));
+      })
+    : dueAutomations;
+
+  if (runnable.length !== dueAutomations.length) {
+    logger.info(
+      { skipped: dueAutomations.length - runnable.length },
+      "Skipped due cron automations whose rule has expired"
+    );
+  }
+  if (runnable.length === 0) return;
+
+  logger.info({ count: runnable.length }, "Found due cron automations");
 
   const boss = getBoss();
 
-  for (const automation of dueAutomations) {
+  for (const automation of runnable) {
     try {
       const triggerConfig = automation.triggerConfig as Record<string, unknown>;
       const cronExpression = triggerConfig?.expression as string;

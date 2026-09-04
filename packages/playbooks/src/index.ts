@@ -329,7 +329,11 @@ export type LinkEndpointType =
   | "agent"
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
-  | "workspace";
+  | "workspace"
+  // A row of the `governance_rules` table (0215) — the user-editable store of
+  // auto/propose verdicts. Lets a rule hold an edge to the governance rule it
+  // produced. In lock-step with the @synap/database LinkEndpointType union.
+  | "governance_rule";
 export type LinkType =
   | "grants"
   | "requires"
@@ -353,7 +357,12 @@ export type LinkType =
   | "provides_credential"
   // session --spawned_from--> session. Work lineage: forked from, never
   // "branched from", and with no "merged_into" twin — nothing merges work.
-  | "spawned_from";
+  | "spawned_from"
+  // session --blocked_by--> session. A dependency between units of work: the
+  // FROM session cannot proceed until the TO session closes. Blocked-ness is
+  // DERIVED from the set of edges whose target is still open — there is no
+  // stored `blocked` status, deliberately (see `session-blocked-by.ts`).
+  | "blocked_by";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

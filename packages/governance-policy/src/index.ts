@@ -1231,6 +1231,14 @@ export const GATE_WRITE_DOORS = {
   "project/create": "gate",
   "project/delete": "gate",
   "project/instantiate_from_playbook": "gate",
+  // Session → project. Its OWN door, not `project/create`: the two are
+  // materialized by different executors (create takes a name; this takes a
+  // sessionId and carries the field mapping, the source rename and the
+  // `session --promoted_to--> project` lineage edge), and one proposalType
+  // cannot materialize both. Same split `playbook/promote` made off
+  // `playbook/create`. RBAC is identical — `requiredPermissionFor` fail-closes
+  // an unrecognized verb to "write".
+  "project/spawn_from_session": "gate",
   "project/update": "gate",
   "projectMember/create": "gate",
   "property_def/create": "gate",

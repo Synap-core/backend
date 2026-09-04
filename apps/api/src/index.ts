@@ -50,6 +50,7 @@ import {
   normalizeIssuerUrl,
   sanitizeErrorEgress,
   registerPodWideProposalReactor,
+  registerSessionUnblockReactor,
 } from "@synap/api";
 import { serve } from "@hono/node-server";
 import {
@@ -1900,6 +1901,10 @@ try {
       // the registry is process-global, and `emitSideEffects` already no-ops
       // when pg-boss is unavailable (LOCAL_MODE).
       registerPodWideProposalReactor();
+      // Same seam for session dependencies: the close door emits
+      // `focus_session.closed`, this reactor derives whether the last open
+      // blocker just went away and files ONE `session.unblocked` notification.
+      registerSessionUnblockReactor();
 
       if (config.server.localMode) {
         // Local mode: pg-boss is disabled (untested on PGlite and would

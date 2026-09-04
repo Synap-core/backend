@@ -48,6 +48,41 @@ const MIN_LIFETIME_MS =
 
 const logger = createLogger({ module: "expire-lapsed-proposals" });
 
+/**
+ * Proposal types that are SESSION-BOUND DRAFTS: they die when their session
+ * closes, but no clock ever sweeps them.
+ *
+ * Why a second list rather than a lifetime on the class: an `ai_edit` document
+ * proposal is `objectWork` and that classification is right — a draft of a
+ * document is exactly as reviewable next week as today, so the 6-hourly cron
+ * must never touch it. What it is NOT is reviewable after the session that
+ * produced it is gone: the agent's reasoning, its context and the reader's own
+ * attention all left with the session, and an unanswered draft outliving them
+ * is queue debt, not a decision anyone still owes. Session close is a signal
+ * the clock does not have, so it gets its own predicate.
+ *
+ * Keyed on `proposalType` alone. A `document` target is the only shape this
+ * covers today and the type literal is already unique to it; pairing it with a
+ * targetType would add a second thing to keep in sync for no discrimination.
+ */
+export const SESSION_BOUND_DRAFT_TYPES: readonly string[] = ["ai_edit"];
+
+/**
+ * Does closing a session retire this pending proposal?
+ *
+ * Two independent reasons, one predicate: it belongs to a class WITH a lifetime
+ * (an outbound call whose moment passed), or it is a session-bound draft. Both
+ * are "the context is gone"; neither touches a proposed entity or a merge
+ * candidate, which outlive the session by design.
+ */
+export function diesWithSession(
+  proposalType: string,
+  targetType: string
+): boolean {
+  if (proposalLifetimeHours(proposalType, targetType) !== null) return true;
+  return SESSION_BOUND_DRAFT_TYPES.includes(proposalType);
+}
+
 /** The minimum a row must carry for the lapse decision. */
 export interface LapseCandidate {
   id: string;
@@ -164,14 +199,15 @@ export async function expireLapsedProposals(
 }
 
 /**
- * Expire a closing session's still-pending EPHEMERAL proposals.
+ * Expire a closing session's still-pending proposals whose CONTEXT died with it.
  *
  * The real trigger. Called from `completeSession`, best-effort: a session must
  * close even if this fails, so it never throws.
  *
- * Only classes WITH a lifetime are touched — closing a session must not discard
- * a proposed entity or a merge candidate that happened to be created during it.
- * Those outlive the session by design.
+ * `diesWithSession` decides — classes with a lifetime (ephemeral outbound
+ * calls) plus `SESSION_BOUND_DRAFT_TYPES`. Closing a session must not discard a
+ * proposed entity or a merge candidate that happened to be created during it;
+ * those outlive the session by design.
  */
 export async function expireSessionEphemerals(
   sessionId: string,
@@ -193,9 +229,7 @@ export async function expireSessionEphemerals(
       );
 
     const ids = pending
-      .filter(
-        (p) => proposalLifetimeHours(p.proposalType, p.targetType) !== null
-      )
+      .filter((p) => diesWithSession(p.proposalType, p.targetType))
       .map((p) => p.id);
     if (ids.length === 0) return 0;
 
@@ -215,7 +249,7 @@ export async function expireSessionEphemerals(
     if (rows.length > 0) {
       logger.info(
         { sessionId, expired: rows.length },
-        "session closed — expired its unanswered ephemeral proposals"
+        "session closed — expired its unanswered session-bound proposals"
       );
     }
     return rows.length;

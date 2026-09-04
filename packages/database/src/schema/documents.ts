@@ -81,6 +81,24 @@ export const documents = pgTable(
 );
 
 /**
+ * Who authored a document version.
+ *
+ * THREE values, not two. `user` is a human's own save; `system` is the pod
+ * writing on nobody's behalf (Yjs autosave, session-close snapshot); `ai` is an
+ * agent's draft that a human then accepted. The third value is what makes the
+ * accepted-AI-edit checkpoint honest: without it an agent's text lands stamped
+ * as the reviewing human's own writing.
+ *
+ * The literal set is `ai`, not `agent`, because the product's ONE declared
+ * union for this field already reads `"user" | "ai" | "system"`
+ * (`synap-app/packages/core/markdown-engine/.../types/advanced-editor.ts`) and
+ * its only discriminating reader tests `version.author === 'ai'`. A second
+ * literal for the same concept is the drift this codebase keeps paying for.
+ */
+export const DOCUMENT_VERSION_AUTHORS = ["user", "system", "ai"] as const;
+export type DocumentVersionAuthor = (typeof DOCUMENT_VERSION_AUTHORS)[number];
+
+/**
  * Document versions table
  * Stores each immutable version of the document for history.
  *
@@ -108,9 +126,12 @@ export const documentVersions = pgTable(
     mimeType: text("mime_type"),
     checksum: text("checksum"),
 
-    // Author tracking
-    author: text("author").notNull(), // 'user' | 'system'
-    authorId: text("author_id").notNull(), // User ID who created this version
+    // Author tracking. The declared set is DOCUMENT_VERSION_AUTHORS below —
+    // 'ai' exists because an accepted AI edit is drafted by an agent and
+    // accepted by a human, and a version that stamps only the accepting human
+    // erases the agent from the provenance rail.
+    author: text("author").notNull().$type<DocumentVersionAuthor>(),
+    authorId: text("author_id").notNull(), // Agent or user id that AUTHORED this version
     message: text("message"), // Optional commit message (for UI display in version history)
 
     // Timestamps

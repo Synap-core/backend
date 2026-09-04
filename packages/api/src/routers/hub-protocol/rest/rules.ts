@@ -360,7 +360,14 @@ export function registerRulesRoutes(app: HubHono): void {
       const rows = await db.query.skills.findMany({
         where: and(
           eq(skills.category, RULE_CATEGORY),
-          visibleSkillsWhere(userId, parsed.data.workspaceId)
+          // OWNER-FACING: `synap rule list` / the rules inventory. The header
+          // above has always claimed an expired rule stays visible so the owner
+          // can renew or delete it; until the waiver existed that claim was
+          // false, because `visibleSkillsWhere` ANDed the expiry predicate in
+          // and this file never had to type its name.
+          visibleSkillsWhere(userId, parsed.data.workspaceId, {
+            includeExpired: true,
+          })
         ),
         orderBy: [desc(skills.createdAt)],
         limit: parsed.data.limit ?? 50,

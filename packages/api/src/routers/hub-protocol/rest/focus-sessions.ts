@@ -35,6 +35,15 @@ import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import {
+  isTerminalSessionStatus,
+  SESSION_STATUSES,
+} from "../../../services/focus-sessions/session-statuses.js";
+import {
+  attachTriage,
+  notTriagePendingWhere,
+  triagePendingWhere,
+} from "../../../services/focus-sessions/triage.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -160,18 +169,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     request: {
       query: z.object({
         workspaceId: z.string(),
-        status: z
-          .enum([
-            "active",
-            "paused",
-            "closed",
-            "forming",
-            "scheduled",
-            "failed",
-            "cancelled",
-            "all",
-          ])
-          .optional(),
+        status: z.enum([...SESSION_STATUSES, "all"]).optional(),
+        // Triage lens. Default here is `all` (agent-facing door); `default`
+        // hides agent/automation-originated sessions not yet accepted by a
+        // human, `triage` returns only those. Rows carry `triage.pending`.
+        lens: z.enum(["default", "triage", "all"]).optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
       }),
     },
@@ -295,22 +297,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const limit = Number.isFinite(limitRaw)
       ? Math.min(Math.max(limitRaw, 1), 50)
       : 20;
-    const validStatuses = [
-      "active",
-      "paused",
-      "closed",
-      "forming",
-      "scheduled",
-      "failed",
-      "cancelled",
-      "stale",
-      "all",
-    ] as const;
+    // ONE status vocabulary (session-statuses.ts) — this door used to carry a
+    // hand-mirrored copy that would silently reject any status the schema
+    // later learned.
+    const validStatuses = [...SESSION_STATUSES, "all"] as const;
     const status = validStatuses.includes(
       statusRaw as (typeof validStatuses)[number]
     )
       ? (statusRaw as (typeof validStatuses)[number])
       : "all";
+
+    // Triage lens, same vocabulary as tRPC `focusSessions.list`. This is the
+    // AGENT-facing door (IS + CLI), so the default is `all`: an agent listing
+    // sessions is usually looking for the one it just opened, which is exactly
+    // the row the human default lens hides. Rows still carry the projection so
+    // a human overview riding this door can group Drafted itself.
+    const lensRaw = c.req.query("lens") ?? "all";
+    const lens: "default" | "triage" | "all" =
+      lensRaw === "default" || lensRaw === "triage" ? lensRaw : "all";
 
     // Optional: narrow to sessions ABOUT a specific subject entity (the
     // subject-spine anchor). Lets a caller fetch "the sessions linked to this
@@ -328,6 +332,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (subjectEntityId) {
         conditions.push(eq(focusSessions.subjectEntityId, subjectEntityId));
       }
+      if (lens === "triage") conditions.push(triagePendingWhere());
+      else if (lens === "default") conditions.push(notTriagePendingWhere());
 
       const rows = await db
         .select()
@@ -336,7 +342,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .orderBy(desc(focusSessions.startedAt))
         .limit(limit);
 
-      return c.json(rows);
+      return c.json(attachTriage(rows));
     } catch (err) {
       logger.error({ err }, "focus-sessions.list failed");
       return c.json(
@@ -606,6 +612,33 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         });
       }
 
+      // Step 4a: a TERMINAL status funnels through the ONE close door first
+      // (pack + run close + ephemeral expiry + close event). This PATCH used to
+      // stamp `closed` directly — the "known dual path" — and a `cancelled`
+      // write skipped every close side-effect.
+      if (
+        isTerminalSessionStatus(patch.status) &&
+        !isTerminalSessionStatus(existing.status)
+      ) {
+        try {
+          const closed = await completeFocusSession({
+            sessionId: id,
+            userId,
+            agentUserId,
+            terminalStatus: patch.status,
+          });
+          if (!closed) {
+            return c.json({ error: `Focus session ${id} not found` }, 404);
+          }
+        } catch (err) {
+          const code = (err as { code?: string }).code;
+          const message = err instanceof Error ? err.message : String(err);
+          return c.json({ error: message }, code === "FORBIDDEN" ? 403 : 409);
+        }
+        // The row is now terminal; apply the rest of the patch below.
+        delete (patch as { status?: string }).status;
+      }
+
       // Step 4: execute the update.
       const set: Partial<typeof focusSessions.$inferInsert> = {
         updatedAt: new Date(),
@@ -649,10 +682,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         const existingMeta =
           (existing.metadata as Record<string, unknown> | null) ?? {};
         set.metadata = { ...existingMeta, ...patch.metadata };
-      }
-
-      if (patch.status === "closed" && existing.status !== "closed") {
-        set.closedAt = new Date();
       }
 
       const [updated] = await db

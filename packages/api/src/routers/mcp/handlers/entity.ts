@@ -31,6 +31,7 @@ import {
   McpHandlerMap,
 } from "./shared.js";
 import { toolError } from "../tool-errors.js";
+import { recordSessionArtifact } from "../../../services/focus-sessions/record-session-artifact.js";
 
 export const entityHandlers: McpHandlerMap = {
   synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -268,8 +269,10 @@ export const entityHandlers: McpHandlerMap = {
     // so it is a separate GOVERNED entity update through the regular entities
     // router, not a side effect of the document write.
     const attachEntityId = args.entityId as string | undefined;
-    if (!attachEntityId) return ok(result);
+    // OUTPUT LEDGER: recorded inside `documents.createDocument` (the hub door
+    // this call goes through), so MCP and the IS REST door share one producer.
     const doc = result as Record<string, unknown>;
+    if (!attachEntityId) return ok(result);
     // A proposal-gated document has no row yet: `documentId` is only the id it
     // WILL get. Linking to it now would leave a dangling reference, so say so
     // instead of pretending the attach happened.
@@ -407,6 +410,17 @@ export const entityHandlers: McpHandlerMap = {
         filename,
         workspaceId: storeWorkspaceId,
       });
+      // The attach produced a document ON an existing entity — the document is
+      // the new thing this session made, so that is what the ledger records.
+      await recordSessionArtifact({
+        sessionId,
+        workspaceId: storeWorkspaceId,
+        userId,
+        kind: "document",
+        refId: attached.documentId,
+        title: title ?? filename,
+        agentUserId,
+      });
       return ok({
         entityId: attachToEntityId,
         documentId: attached.documentId,
@@ -440,6 +454,20 @@ export const entityHandlers: McpHandlerMap = {
         reviewUrl: stored.reviewUrl,
       });
     }
+    // `sessionId` reached `createGovernedFileEntityFromBuffer` already — but it
+    // lands on the PROPOSAL, not on any output ledger. An auto-approved store
+    // therefore produced an entity nothing could attribute to the session.
+    // `kind: "entity"` on purpose: a stored file IS a `file`-profile entity,
+    // and `artifacts.kind` has no `file` value to add.
+    await recordSessionArtifact({
+      sessionId,
+      workspaceId: storeWorkspaceId,
+      userId,
+      kind: "entity",
+      refId: stored.fileEntityId,
+      title: title ?? filename,
+      agentUserId,
+    });
     return ok({
       fileEntityId: stored.fileEntityId,
       documentId: stored.documentId,

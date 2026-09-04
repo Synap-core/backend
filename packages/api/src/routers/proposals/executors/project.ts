@@ -11,6 +11,7 @@ import {
   drizzleSql,
   relations,
   projectMembers,
+  focusSessions,
   getWorkspaceMembership,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -600,6 +601,101 @@ export function registerProjectExecutors(): void {
 
       // The replay must APPLY, never re-propose — see `assertApplied`.
       assertApplied(await projectCaller.delete({ id: projectId }));
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── project / spawn_from_session ─────────────────────────────────────────────
+  // An AGENT asked to turn a focus session into a project. Its own key rather
+  // than `project/create` because the two are materialized differently: a raw
+  // create takes a name, this takes a sessionId and carries the whole mapping
+  // (goal → name/description, subject entity, expected outputs into metadata),
+  // the source-session rename and the `session --promoted_to--> project` lineage
+  // edge. One proposalType cannot materialize both — the same split
+  // `playbook/promote` made when it forked off `playbook/create`.
+  //
+  // Replays through the SAME `focusSessions.spawnProject` the direct path uses,
+  // as the SESSION'S OWNER (not the approver): that procedure floors on
+  // `focus_sessions.userId`, so running as the approver would match no row and
+  // 500 before the proposal was ever marked approved — the failure mode
+  // `project/instantiate_from_playbook` documents.
+  registerProposalExecutor({
+    key: "project/spawn_from_session",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const sessionId = innerData.sessionId as string | undefined;
+      if (!sessionId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Project spawn proposal is missing sessionId",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, and a spawn
+      // mints a fresh project id each run.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      // Workspace from the SESSION ROW, never from the proposal.
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+        columns: { id: true, userId: true, workspaceId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Session to spawn from no longer exists",
+        });
+      }
+      const membership = session.workspaceId
+        ? await getWorkspaceMembership(db, session.workspaceId, userId)
+        : null;
+      if (session.workspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { focusSessionsRouter } = await import("../../focus-sessions.js");
+      const sessionCaller = focusSessionsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId: session.userId,
+        workspaceId: session.workspaceId ?? undefined,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`. No
+      // agentUserId is forwarded, exactly like `playbook/promote`: the approval
+      // IS the human decision, so re-gating it as an agent write would file a
+      // second proposal for a write a person just approved.
+      assertApplied(await sessionCaller.spawnProject({ sessionId }));
 
       await db
         .update(proposals)

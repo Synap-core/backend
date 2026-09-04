@@ -33,6 +33,7 @@ import {
   SUBJECT_TYPES,
   EVENT_ACTIONS,
   CONNECTOR_SUBJECT_TYPES,
+  DOMAIN_SUBJECT_TYPES,
   MESSAGE_ALIAS_PATTERNS,
   OBSERVATION_NAMESPACES,
 } from "@synap-core/types/events/unified";
@@ -1117,6 +1118,14 @@ function buildEventCatalog(): EventOption[] {
   }
   for (const ns of OBSERVATION_NAMESPACES) {
     push(`${ns}.*`, ns);
+  }
+  // Domain lifecycle subjects (focus_session, notification, tool…). Their
+  // actions are not the CRUD set, so they are offered as a subject-level
+  // wildcard. Without this loop `focus_session.closed` was authorable but
+  // INVISIBLE in the picker until it had fired once — the cold-start
+  // severance class (a rule nobody can write against an event nobody has seen).
+  for (const subject of DOMAIN_SUBJECT_TYPES) {
+    push(`${subject}.*`, subject);
   }
   return out;
 }
