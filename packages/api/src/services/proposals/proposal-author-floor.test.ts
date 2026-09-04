@@ -156,3 +156,46 @@ describe("orient pendingReview aggregate matches the list population", () => {
     expect(src).toMatch(/min\(\$\{proposals\.createdAt\}\)/);
   });
 });
+
+describe("the in-flight dedup scan shares the SAME author floor", () => {
+  /*
+   * `findPendingSignalMatches` flags a duplicate an agent is ABOUT to file.
+   * It floored on `createdBy = <human>` while `createdBy` is overloaded, so an
+   * agent could not see ITS OWN in-flight duplicate — blind to the majority
+   * row shape (measured: 4 of 6 pending) and to the team pod's 32 duplicate
+   * clusters. Widened to the same lineage predicate as the queue.
+   *
+   * The file's stated guarantee — "never another user's queue" — is the thing
+   * these assertions defend. It is preserved by CONSTRUCTION, not by comment:
+   * `ownAgentUserFilter` floors on `users.createdByUserId = me`.
+   */
+  const dedupPath = join(here, "../../utils/pending-capture-dedup.ts");
+
+  it("uses the shared lineage helper, not a re-derived subquery", () => {
+    const src = readFileSync(dedupPath, "utf8");
+    expect(src).toMatch(
+      /ownAgentUserFilter\(proposals\.agentUserId, params\.userId\)/
+    );
+    expect(src).toMatch(
+      /ownAgentUserFilter\(proposals\.createdBy, params\.userId\)/
+    );
+    // No re-derived copy of the users subquery: ONE definition of the set.
+    expect(src).not.toMatch(/eq\(users\.createdByUserId/);
+    expect(src).not.toMatch(/\.from\(users\)/);
+  });
+
+  it("carries NO workspace term — a workspace floor is what it rules out", () => {
+    const src = readFileSync(dedupPath, "utf8");
+    // This is the boundary the file's own comment defends, and the trap that
+    // was caught three separate times in one session. A membership term here
+    // would leak a teammate's unreviewed queue through a dedup hint.
+    expect(src).not.toMatch(/workspaceMembers/);
+    expect(src).not.toMatch(/userVisibleWhere/);
+    expect(src).not.toMatch(/eq\(proposals\.workspaceId/);
+  });
+
+  it("still floors STRICTLY on pending — an approved row is already committed", () => {
+    const src = readFileSync(dedupPath, "utf8");
+    expect(src).toMatch(/eq\(proposals\.status, ProposalStatus\.PENDING\)/);
+  });
+});

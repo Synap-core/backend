@@ -21,7 +21,9 @@
 import { z } from "zod";
 import {
   PLAYBOOK_STAGE_CATEGORIES,
+  STAGE_GATE_PROPOSAL_TYPES,
   type PlaybookStageCategory,
+  type StageGateProposalType,
 } from "@synap/playbooks";
 
 /**
@@ -77,6 +79,31 @@ export const playbookStageSchema = z.looseObject({
   /** Order WITHIN the category group — never a global order. */
   position: z.number().int().optional(),
   indefinite: z.boolean().optional(),
+  /**
+   * Human gate on ENTRY (optional; absent ⇒ the stage advances freely).
+   *
+   * STRICT, unlike its siblings: the surrounding stage object is loose because
+   * dropping an unknown stage field on a round-trip would lose data, but a gate
+   * is a CONTROL. A misspelled key inside a control that silently survives
+   * validation is how "the stage looked gated and wasn't" happens — so an
+   * unknown key here is a parse error, not a preserved passenger.
+   */
+  gate: z
+    .strictObject({
+      kind: z.literal("human"),
+      // Closed set, derived from the contract package — see the comment on
+      // `PlaybookStageGate.proposalType` for why a free string here would file
+      // gates that approve without ever resuming the run.
+      proposalType: z
+        .enum(
+          STAGE_GATE_PROPOSAL_TYPES as readonly [
+            StageGateProposalType,
+            ...StageGateProposalType[],
+          ]
+        )
+        .optional(),
+    })
+    .optional(),
 });
 
 /**

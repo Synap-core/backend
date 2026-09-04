@@ -1027,7 +1027,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label). Cannot close — use synap_complete_session for that.",
+      "description": "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1095,6 +1095,10 @@
           "completeOutput": {
             "type": "string",
             "description": "Mark the deliverable with this exact label as 'done'. No-op if no deliverable matches the label exactly."
+          },
+          "addAgentId": {
+            "type": "string",
+            "description": "APPEND one agent user id to the session roster (optional). Idempotent — re-attaching an agent already on the session writes nothing. Use this to staff a session already in flight; the roster is otherwise only settable when the session is created."
           }
         },
         "required": ["sessionId"]
@@ -2010,25 +2014,46 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "idempotencyKey": {
-            "type": "string",
-            "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run."
-          },
           "verbId": {
+            "description": "The capability name from synap_list_capabilities (e.g. 'gmail_send'). Alternatively pass skillId.",
             "type": "string",
-            "description": "The capability name from synap_list_capabilities (e.g. 'gmail_send'). Alternatively pass skillId."
+            "minLength": 1
           },
           "skillId": {
+            "description": "Direct backing-skill UUID (alternative to verbId).",
             "type": "string",
-            "description": "Direct backing-skill UUID (alternative to verbId)."
+            "minLength": 1
           },
           "parameters": {
+            "description": "The capability's inputs — e.g. { to, subject, body } for gmail_send, { query } for gmail_search.",
             "type": "object",
-            "description": "The capability's inputs — e.g. { to, subject, body } for gmail_send, { query } for gmail_search."
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
           },
           "workspaceId": {
+            "description": "Workspace UUID",
             "type": "string",
-            "description": "Workspace UUID"
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "connectionSelector": {
+            "description": "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection — a selector matching nothing fails the run.",
+            "type": "object",
+            "properties": {
+              "connectionId": {
+                "type": "string"
+              },
+              "contextObjectId": {
+                "type": "string"
+              }
+            }
+          },
+          "idempotencyKey": {
+            "description": "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.",
+            "type": "string",
+            "minLength": 1
           }
         },
         "required": ["workspaceId"]

@@ -251,6 +251,89 @@ export interface PlaybookStage {
    * is not built).
    */
   indefinite?: boolean;
+  /**
+   * HUMAN GATE on ENTRY. Absent (the default) ⇒ the stage advances freely, and
+   * every stage stored before this field existed keeps behaving exactly as it
+   * did. Present ⇒ advancing INTO this stage pauses the session and files a
+   * proposal; the stage still stands (the run IS in the stage), it is merely
+   * not running until a person answers.
+   *
+   * The gate is a PAUSE, never a veto of the advance itself: rejecting the
+   * proposal leaves the session paused rather than rewinding the stage, because
+   * a rewind would silently discard whatever the advance already recorded.
+   */
+  gate?: PlaybookStageGate;
+}
+
+/**
+ * A stage's entry gate. `kind` is a one-value union on purpose — the shape must
+ * be able to grow a second gate kind (a check, a timer) without a migration, and
+ * a bare boolean could not. Only `"human"` exists today.
+ */
+export interface PlaybookStageGate {
+  kind: "human";
+  /**
+   * Proposal type filed when the gate opens. Defaults to
+   * `DEFAULT_STAGE_GATE_PROPOSAL_TYPE`.
+   *
+   * DELIBERATELY A CLOSED SET, not a free string. A proposal type is only half a
+   * contract: the other half is an approve executor registered under
+   * `focus_session/<type>`. A playbook author who typed an unregistered type
+   * would file a proposal that renders, notifies, and on approval falls to the
+   * `*​/*` catch-all — flipping the row to approved while NEVER resuming the
+   * paused session. The run would sit paused forever with an approved gate
+   * above it. Widening this set means adding a door entry and an executor in the
+   * same change; the type makes that unavoidable.
+   */
+  proposalType?: StageGateProposalType;
+}
+
+/**
+ * Every proposal type a stage gate may file — each one has a registered
+ * executor and a `DIRECT_PROPOSAL_DOORS` entry. Add to all three or to none.
+ */
+export const STAGE_GATE_PROPOSAL_TYPES = ["playbook.stage_gate"] as const;
+export type StageGateProposalType = (typeof STAGE_GATE_PROPOSAL_TYPES)[number];
+
+/** The proposal type a gated stage files when no `gate.proposalType` is set. */
+export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
+  "playbook.stage_gate";
+
+/**
+ * Read a stage's gate. Takes `unknown` for the same reason
+ * `resolveStageCategory` does — callers read a jsonb bag, and a stage stored
+ * before gates existed must resolve to "no gate", never throw.
+ *
+ * THE ONE READER. Never test `stage.gate` directly: a gate whose `kind` is
+ * unrecognised (written by a newer pod, or by hand) must NOT be treated as
+ * "human" — an unknown gate kind that fell through to the human path would let
+ * a stage the author meant to gate differently pass under the wrong ceremony.
+ */
+export function resolveStageGate(
+  stage: unknown
+): PlaybookStageGate | undefined {
+  const raw = (stage as { gate?: unknown } | null | undefined)?.gate;
+  if (!raw || typeof raw !== "object") return undefined;
+  const gate = raw as { kind?: unknown; proposalType?: unknown };
+  if (gate.kind !== "human") return undefined;
+  const known =
+    typeof gate.proposalType === "string" &&
+    (STAGE_GATE_PROPOSAL_TYPES as readonly string[]).includes(
+      gate.proposalType
+    );
+  return {
+    kind: "human",
+    // An unregistered stored type is DROPPED, not carried: the default has an
+    // executor, so the run resumes. Honouring it would file an unapplyable gate.
+    ...(known
+      ? { proposalType: gate.proposalType as StageGateProposalType }
+      : {}),
+  };
+}
+
+/** The proposal type a given stage's gate files (default applied). */
+export function stageGateProposalType(gate: PlaybookStageGate): string {
+  return gate.proposalType ?? DEFAULT_STAGE_GATE_PROPOSAL_TYPE;
 }
 
 /**
@@ -329,11 +412,14 @@ export type LinkEndpointType =
   | "agent"
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
-  | "workspace"
-  // A row of the `governance_rules` table (0215) — the user-editable store of
-  // auto/propose verdicts. Lets a rule hold an edge to the governance rule it
-  // produced. In lock-step with the @synap/database LinkEndpointType union.
-  | "governance_rule";
+  | "workspace";
+
+// `governance_rule` was removed here in lock-step with the @synap/database
+// union — it had no producer and no reader. See the note in
+// `@synap/database/schema/links.ts` before re-adding; it must land WITH its
+// producer, and `links-endpoint-type-ssot.test.ts` discovers this mirror by
+// scanning source, so the two cannot drift apart.
+
 export type LinkType =
   | "grants"
   | "requires"

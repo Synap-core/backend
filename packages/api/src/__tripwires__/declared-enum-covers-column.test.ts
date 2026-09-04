@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { ProposalStatus } from "@synap/database";
+import { z } from "zod";
+import { ProposalStatus, focusSessions } from "@synap/database";
+import {
+  SESSION_STATUSES,
+  UPDATABLE_SESSION_STATUSES,
+} from "../services/focus-sessions/session-statuses.js";
 import {
   ProposalBasicSchema,
   WireProposalSchema,
@@ -48,6 +53,17 @@ const PAIRS: Pair[] = [
     zodSchema: ProposalBasicSchema.shape.status,
     dbEnum: ProposalStatus,
   },
+  {
+    // The session-status vocabulary moved to `@synap-core/types/focus-sessions`
+    // so the browser reads the SAME four lists instead of minting a fourth
+    // copy. This is the lockstep that keeps the moved constant honest: add a
+    // state to the column enum and forget this list, and every derived door
+    // (`focusSessions.list` filter, `synap_list_sessions`, the Hub REST list)
+    // silently rejects a status the database legitimately produces.
+    name: "SESSION_STATUSES vs focus_sessions.status",
+    zodSchema: z.enum(SESSION_STATUSES),
+    dbEnum: focusSessions.status.enumValues,
+  },
 ];
 
 function zodOptions(schema: unknown, name: string): string[] {
@@ -92,4 +108,19 @@ describe("tripwire: declared wire enums cover their stored column", () => {
       });
     });
   }
+
+  /**
+   * The write-door list is DERIVED, not hand-written — this pins the one
+   * decision that derivation encodes: a client may write every stored state
+   * except `stale`, which only the focus-session reaper stamps. If someone
+   * re-hardcodes either door's enum, this fails.
+   */
+  it("UPDATABLE_SESSION_STATUSES is SESSION_STATUSES minus the reaper-only `stale`", () => {
+    expect([...UPDATABLE_SESSION_STATUSES].sort()).toEqual(
+      SESSION_STATUSES.filter((s) => s !== "stale")
+        .slice()
+        .sort()
+    );
+    expect(UPDATABLE_SESSION_STATUSES).not.toContain("stale");
+  });
 });

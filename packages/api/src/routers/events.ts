@@ -226,6 +226,20 @@ export const eventsRouter = router({
          * every workspace. Another workspace's rows are excluded.
          */
         workspaceId: z.string().optional(),
+        /**
+         * Narrow the stream to ONE focus session — every event that happened
+         * inside that unit of work.
+         *
+         * `events.session_id` (migration 0241) had no reader outside the graph
+         * service: the spine was written and never queried, so a session could
+         * not show its own history. This is the reader, and it only ever
+         * narrows the existing `userId` floor.
+         *
+         * There is no `projectId` twin here: `events` carries no `project_id`
+         * column. A project lens on the history feed is served by the
+         * proposals half alone — see `signals.list`.
+         */
+        sessionId: z.string().uuid().optional(),
         limit: z.number().min(1).max(500).default(50),
         lean: z.boolean().default(false),
       })
@@ -239,6 +253,7 @@ export const eventsRouter = router({
         eventType: input.type,
         subjectType: input.subjectType,
         workspaceId: input.workspaceId,
+        sessionId: input.sessionId,
         // The notif-center lens: a workspace narrowing still shows the
         // pod-wide rows that belong to every workspace. An `eq` never matches
         // NULL, so without this the feed drops them silently.
@@ -287,6 +302,8 @@ export const eventsRouter = router({
         // `subjectId` if both are given. Capped at 200 to bound the IN clause.
         subjectIds: z.array(z.string()).max(200).optional(),
         correlationId: z.string().optional(),
+        /** Same session lens as `read` — `events.session_id`, narrowing only. */
+        sessionId: z.string().uuid().optional(),
         fromDate: z.date().optional(),
         toDate: z.date().optional(),
         limit: z.number().min(1).max(100).default(50),
@@ -341,6 +358,7 @@ export const eventsRouter = router({
         subjectId: input.subjectId,
         subjectIds: input.subjectIds,
         correlationId: input.correlationId,
+        sessionId: input.sessionId,
         fromDate: input.fromDate,
         toDate: input.toDate,
         limit: input.limit,

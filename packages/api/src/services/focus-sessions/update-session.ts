@@ -8,7 +8,7 @@
  * response.
  *
  * NOTE: this is the MCP door's field set (goal/status(active|paused)/progress/
- * currentStage + addOutput/completeOutput/expectedOutputs). The Hub REST PATCH
+ * currentStage + addOutput/completeOutput/expectedOutputs + addAgentId). The Hub REST PATCH
  * /focus-sessions/:id supports a wider set (channelId, correlationId, agentIds,
  * verificationReport, metadata, status=closed, realtime event) WITHOUT the
  * output RMW lock — they are intentionally distinct doors, not unified here.
@@ -27,6 +27,13 @@ export interface UpdateFocusSessionParams {
   currentStage?: string;
   addOutput?: { kind: string; label: string; icon?: string };
   completeOutput?: string;
+  /**
+   * APPEND one agent to the session roster. Mirrors `addOutput`: incremental
+   * and idempotent, as against the wholesale `agentIds` assignment the tRPC and
+   * Hub PATCH doors expose. Applied through the ONE append door,
+   * `attachSessionAgent` — never by assigning `set.agentIds` here.
+   */
+  addAgentId?: string;
   expectedOutputs?: Array<{
     kind: string;
     label: string;
@@ -109,6 +116,12 @@ export async function updateFocusSession(
       ...(params.completeOutput !== undefined
         ? { completeOutput: params.completeOutput }
         : {}),
+      // Carried so the PROPOSED path is not a silent no-op: the
+      // `focus_session/update` executor re-applies it through the same append
+      // door on approval.
+      ...(params.addAgentId !== undefined
+        ? { addAgentId: params.addAgentId }
+        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -140,6 +153,19 @@ export async function updateFocusSession(
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;
   if (params.currentStage !== undefined) set.currentStage = params.currentStage;
+
+  // Roster append goes through the ONE append door, which owns its own row lock
+  // and its own idempotency. Deliberately NOT folded into `set` below: assigning
+  // `agentIds` here would be a second wholesale writer of the column, which is
+  // exactly the shape that left it unappendable in the first place.
+  if (params.addAgentId !== undefined) {
+    const { attachSessionAgent } = await import("./attach-session-agent.js");
+    await attachSessionAgent({
+      sessionId,
+      agentId: params.addAgentId,
+      userId,
+    });
+  }
 
   // addOutput / completeOutput / a full expectedOutputs replace mutate the
   // JSONB deliverables array. Do the read-modify-write inside a transaction
@@ -214,5 +240,43 @@ export async function updateFocusSession(
     });
   }
 
-  return { status: "updated", session: updated };
+  // ── HUMAN GATE ON STAGE ENTRY ───────────────────────────────────────────────
+  // A stage may declare `gate: { kind: "human" }`. Advancing INTO it pauses the
+  // session and files a proposal; the stage STANDS (the write above already
+  // landed — see services/playbooks/stage-gate.ts for why the gate is a pause
+  // and not a veto). Ungated stages, stageless playbooks and unchanged stages
+  // cost nothing: the resolver is only consulted when the stage actually moved.
+  //
+  // DOOR PARITY: this is one of THREE stage-advance implementations
+  // (`routers/focus-sessions.ts`, `jobs/steps/output.ts` and this service).
+  // Only this one — the MCP/agent door — is wired today; the other two are
+  // named as follow-ups rather than edited under a concurrent change.
+  let gatedStatus: typeof updated.status | undefined;
+  if (
+    params.currentStage !== undefined &&
+    params.currentStage !== existing.currentStage
+  ) {
+    const { applyStageGateOnAdvance } =
+      await import("../playbooks/stage-gate.js");
+    const gate = await applyStageGateOnAdvance({
+      sessionId: updated.id,
+      userId,
+      agentUserId,
+      workspaceId: existing.workspaceId,
+      projectId: existing.projectId,
+      channelId: existing.channelId,
+      playbookId: existing.playbookId,
+      toStage: params.currentStage,
+      fromStage: existing.currentStage,
+    });
+    // Report the status the ROW now holds, not the one this call asked for —
+    // a caller told "active" while the pod has it paused would step straight
+    // past the gate it just opened.
+    if (gate?.paused) gatedStatus = "paused";
+  }
+
+  return {
+    status: "updated",
+    session: gatedStatus ? { ...updated, status: gatedStatus } : updated,
+  };
 }

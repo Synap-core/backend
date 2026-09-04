@@ -60,7 +60,7 @@ export type ConversionKind = "playbook" | "project";
  * wrongness shows up when you open the thing you just made. The window is a
  * REFUSAL rule, not a scheduler — nothing expires it in the background.
  */
-export const CONVERSION_UNDO_WINDOW_MS = 15 * 60 * 1000;
+const CONVERSION_UNDO_WINDOW_MS = 15 * 60 * 1000;
 
 /** The receipt every conversion verb returns. Frontend renders it verbatim. */
 export interface ConversionReceipt {
@@ -91,7 +91,7 @@ const GOAL_MAX = 2000;
  * The renamed goal. Idempotent: re-converting an already-renamed session does
  * not stack arrows, because the suffix is matched before it is appended.
  */
-export function conversionGoal(
+function conversionGoal(
   goal: string,
   kind: ConversionKind,
   name: string

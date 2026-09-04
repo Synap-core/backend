@@ -36,7 +36,10 @@ import { router, protectedProcedure } from "../trpc.js";
 import { db, proposals, and, desc, inArray, drizzleSql } from "@synap/database";
 import { ProposalStatus } from "@synap/database";
 import { humanizeToken } from "@synap-core/types/vocabulary";
-import { buildProposalScopeConditions } from "./proposals/scope-conditions.js";
+import {
+  buildProposalScopeConditions,
+  resolveAutomationStepRunIds,
+} from "./proposals/scope-conditions.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
@@ -74,7 +77,38 @@ const SignalScope = {
   /** Same three-state as `proposals.groups`/`list`: string = that workspace,
    *  null = pod-wide only, undefined = the full user floor. */
   workspaceId: z.string().nullish(),
+  /**
+   * NARROWING lenses — "what needs me / what happened INSIDE this container".
+   *
+   * All three are forwarded to the SAME predicate builder the proposals queue
+   * uses (`buildProposalScopeConditions` + `resolveAutomationStepRunIds`), so a
+   * scoped signal list can never admit a row the unscoped one would not. They
+   * compose with `workspaceId` and with each other.
+   */
+  sessionId: z.string().uuid().optional(),
+  projectId: z.string().uuid().optional(),
+  automationId: z.string().uuid().optional(),
 };
+
+/**
+ * Is this call scoped to a CONTAINER (a session, project or automation) rather
+ * than to the pod/workspace floor?
+ *
+ * It decides whether the notification half of the needs-you union participates:
+ * `notifications` carries no session/project/automation column and
+ * `notifCenter.list` exposes no such filter, so under a container scope the
+ * union would silently mix "this session's proposals" with "every unread
+ * notification you have" — a number that grows when nothing in the container
+ * changed. A scoped needs-you is therefore PROPOSALS-ONLY, and says so, rather
+ * than faking a lens the notification store cannot serve.
+ */
+function isContainerScoped(input: {
+  sessionId?: string;
+  projectId?: string;
+  automationId?: string;
+}): boolean {
+  return !!(input.sessionId || input.projectId || input.automationId);
+}
 
 export const signalsRouter = router({
   /**
@@ -93,17 +127,24 @@ export const signalsRouter = router({
     )
     .query(async ({ ctx, input }): Promise<{ signals: Signal[] }> => {
       if (input.lens === "needs-you") {
+        // Container-scoped → proposals only. See `isContainerScoped`.
+        const scoped = isContainerScoped(input);
         const [groups, notifs] = await Promise.all([
           proposalsRouter.createCaller(ctx).groups({
             workspaceId: input.workspaceId,
+            sessionId: input.sessionId,
+            projectId: input.projectId,
+            automationId: input.automationId,
             status: "pending",
             limit: input.limit,
           }),
-          notifCenterRouter.createCaller(ctx).list({
-            workspaceId: notificationLens(input.workspaceId),
-            status: "unread",
-            limit: NOTIFICATION_SCAN_LIMIT,
-          }),
+          scoped
+            ? Promise.resolve({ notifications: [] })
+            : notifCenterRouter.createCaller(ctx).list({
+                workspaceId: notificationLens(input.workspaceId),
+                status: "unread",
+                limit: NOTIFICATION_SCAN_LIMIT,
+              }),
         ]);
 
         const signals = unionNeedsYou({
@@ -115,21 +156,33 @@ export const signalsRouter = router({
 
       // ── history: past events merged with decided proposals ──────────────
       const before = input.cursor ? new Date(input.cursor) : undefined;
+      // `projectId` / `automationId` have no `events` column to narrow on, so
+      // under those scopes the events half is SUPPRESSED rather than returned
+      // unnarrowed beside a narrowed proposals half — an unfiltered pod-wide
+      // feed labelled "this project" is worse than a shorter honest one. A
+      // session scope does narrow, through `events.session_id`.
+      const eventsNarrowable = !input.projectId && !input.automationId;
       const [events, decided] = await Promise.all([
-        eventsRouter.createCaller(ctx).read({
-          limit: input.limit,
-          lean: true,
-          // Same lens the proposals half uses. `read` takes a plain optional
-          // string, not the three-state: a `null` workspaceId means "pod-wide
-          // proposals", and events carry no pod-wide sibling — so null and
-          // undefined both mean "do not narrow" here, and the two halves agree
-          // wherever a concrete workspace is named.
-          ...(typeof input.workspaceId === "string"
-            ? { workspaceId: input.workspaceId }
-            : {}),
-          ...(before ? { until: before } : {}),
-        }),
-        listDecidedProposals(ctx, input.workspaceId, input.limit, before),
+        eventsNarrowable
+          ? eventsRouter.createCaller(ctx).read({
+              limit: input.limit,
+              lean: true,
+              // Same lens the proposals half uses. `read` takes a plain optional
+              // string, not the three-state: a `null` workspaceId means "pod-wide
+              // proposals", and events carry no pod-wide sibling — so null and
+              // undefined both mean "do not narrow" here, and the two halves agree
+              // wherever a concrete workspace is named.
+              ...(typeof input.workspaceId === "string"
+                ? { workspaceId: input.workspaceId }
+                : {}),
+              // The session lens reaches events through `events.session_id`
+              // (migration 0241) — the column's first reader outside the graph
+              // service.
+              ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+              ...(before ? { until: before } : {}),
+            })
+          : Promise.resolve([]),
+        listDecidedProposals(ctx, input, input.limit, before),
       ]);
 
       const eventSignals: Signal[] = events.map((e) => ({
@@ -159,20 +212,32 @@ export const signalsRouter = router({
    * `proposals.groups`.scanTruncated and the notification page cap — when true,
    * the number is a FLOOR, and a caller must render it as such (e.g. "99+")
    * rather than as an exact total.
+   *
+   * Takes the SAME scope as `list`, and applies the SAME proposals-only rule
+   * under a container scope — a badge that counted a container's proposals plus
+   * every unread pod notification would be a number no surface could explain.
+   * Every existing caller passes at most `workspaceId`, so the pod-wide count is
+   * byte-identical to before.
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
     .query(async ({ ctx, input }) => {
+      const scoped = isContainerScoped(input);
       const [groups, notifs] = await Promise.all([
         proposalsRouter.createCaller(ctx).groups({
           workspaceId: input.workspaceId,
+          sessionId: input.sessionId,
+          projectId: input.projectId,
+          automationId: input.automationId,
           status: "pending",
         }),
-        notifCenterRouter.createCaller(ctx).list({
-          workspaceId: notificationLens(input.workspaceId),
-          status: "unread",
-          limit: NOTIFICATION_SCAN_LIMIT,
-        }),
+        scoped
+          ? Promise.resolve({ notifications: [] })
+          : notifCenterRouter.createCaller(ctx).list({
+              workspaceId: notificationLens(input.workspaceId),
+              status: "unread",
+              limit: NOTIFICATION_SCAN_LIMIT,
+            }),
       ]);
 
       return countNeedsYou({
@@ -207,7 +272,12 @@ export const signalsRouter = router({
  */
 async function listDecidedProposals(
   ctx: { userId?: string | null },
-  workspaceId: string | null | undefined,
+  scope: {
+    workspaceId?: string | null;
+    sessionId?: string;
+    projectId?: string;
+    automationId?: string;
+  },
   limit: number,
   before: Date | undefined
 ): Promise<Signal[]> {
@@ -215,8 +285,21 @@ async function listDecidedProposals(
   // The SAME builder `proposals.list` and `proposals.groups` scope on, rather
   // than a third hand-rolled copy of the workspace three-state. History and the
   // queue must agree about what a user can see; three copies of a visibility
-  // predicate is two chances to tighten one and forget the others.
-  const conditions = buildProposalScopeConditions({ workspaceId }, userId);
+  // predicate is two chances to tighten one and forget the others. The
+  // container lenses (session/project/automation) ride the same builder for the
+  // same reason.
+  const conditions = buildProposalScopeConditions(scope, userId);
+  if (scope.automationId) {
+    // `proposals` has no `automationId` column — the automation is reached
+    // through `automation_step_runs`. An empty id list compiles to `false`, so
+    // an automation with no runs yields an honest empty history.
+    conditions.push(
+      inArray(
+        proposals.stepRunId,
+        await resolveAutomationStepRunIds(scope.automationId)
+      )
+    );
+  }
   conditions.push(
     inArray(proposals.status, [
       ProposalStatus.APPROVED,

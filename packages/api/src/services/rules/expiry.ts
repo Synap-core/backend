@@ -86,3 +86,37 @@ export function ruleNotExpiredWhere(now: Date = new Date()): SQL {
   const nowIso = now.toISOString();
   return drizzleSql`(${skills.metadata} #>> ${EXPIRES_AT_PATH} IS NULL OR ${skills.metadata} #>> ${EXPIRES_AT_PATH} > ${nowIso})`;
 }
+
+/**
+ * Return `metadata` with ONLY its review date changed — every other field
+ * carried through untouched.
+ *
+ * Pure, and separated from the router on purpose: the guarantee worth testing
+ * here is a NEGATIVE one (nothing else changed), and a negative guarantee
+ * buried in a tRPC procedure can only be checked by mocking a database. The
+ * defect it prevents is concrete: `skills.update` shallow-merges its metadata
+ * patch, so renewing a rule through that door replaces the whole `rule` object
+ * and silently drops any field the caller did not resend — `intent` (which IS
+ * the prose an agent reads) and `behaviours[]` (the divergence snapshot) being
+ * the two that matter.
+ *
+ * `null` CLEARS the date, and clearing DELETES the key rather than storing
+ * `undefined`: `readRuleMetadata` treats absent as "no expiry, never expired",
+ * and a present-but-undefined key serialises into JSONB differently than an
+ * absent one.
+ *
+ * Normalisation goes through {@link normalizeExpiresAt}, the same function the
+ * create door uses, so the stored string stays the canonical ISO-8601 UTC form
+ * that `ruleNotExpiredWhere()` compares against. A second date format here
+ * would produce a rule that reads unexpired to SQL and expired to JS.
+ */
+export function withRuleExpiry<T extends object>(
+  metadata: T,
+  expiresAt: string | Date | null
+): T & { expiresAt?: string } {
+  const normalized = normalizeExpiresAt(expiresAt);
+  const next = { ...metadata } as T & { expiresAt?: string };
+  if (normalized) next.expiresAt = normalized;
+  else delete next.expiresAt;
+  return next;
+}

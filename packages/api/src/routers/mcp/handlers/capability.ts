@@ -486,6 +486,12 @@ export const capabilityHandlers: McpHandlerMap = {
       verbId: args.verbId as string | undefined,
       skillId: args.skillId as string | undefined,
       parameters: args.parameters as Record<string, unknown> | undefined,
+      // Which of the capability's connections runs. The tool advertised no such
+      // field until the schema was derived from the shared contract, so an
+      // agent whose capability had two connected accounts had no way to say
+      // which one to send from.
+      connectionSelector: args.connectionSelector as
+        { connectionId?: string; contextObjectId?: string } | undefined,
       workspaceId: wsId,
       userId,
       // Thread the acting agent (set on agent-key remap) so an agent WRITE verb

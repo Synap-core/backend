@@ -669,6 +669,20 @@ export class EventRepository {
       /** Filter by the action verb (middle segment of type, e.g. "create", "update"). */
       actions?: string[];
       /**
+       * Filter to the events one SESSION produced (`events.session_id`).
+       *
+       * The column and its partial index `idx_events_session_id` have existed
+       * since migration 0241 with NO reader outside the graph service — the
+       * spine was written and never queried. This is that reader: "everything
+       * that happened inside this unit of work", which is what makes a session
+       * an INDEX rather than just a row.
+       *
+       * There is deliberately no `projectId` twin: `events` carries no
+       * `project_id` column, and inventing a join here would make the filter
+       * silently mean something different from every other project lens.
+       */
+      sessionId?: string;
+      /**
        * Filter to the events one AGENT produced (`events.agent_user_id`, a text
        * column matching `users.id`). The dedicated `events_agent_user_id_idx`
        * index has existed since 0131 with no reader — this is the reader: "show
@@ -777,6 +791,15 @@ export class EventRepository {
     if (filters.correlationId) {
       query += ` AND correlation_id = $${paramIndex}`;
       params.push(filters.correlationId);
+      paramIndex++;
+    }
+
+    if (filters.sessionId) {
+      // Backed by the partial index `idx_events_session_id (session_id,
+      // timestamp) WHERE session_id IS NOT NULL` — an equality here plus the
+      // ORDER BY timestamp below is exactly the shape that index serves.
+      query += ` AND session_id = $${paramIndex}`;
+      params.push(filters.sessionId);
       paramIndex++;
     }
 

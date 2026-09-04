@@ -33,8 +33,10 @@
  */
 
 import { createHash } from "crypto";
+import { ownAgentUserFilter } from "../services/agent-identity-service.js";
 
 import {
+  or,
   type db,
   and,
   eq,
@@ -106,8 +108,29 @@ export async function findPendingSignalMatches(
     .from(proposals)
     .where(
       and(
-        // OWNER FLOOR — never another user's queue.
-        eq(proposals.createdBy, params.userId),
+        // OWNER FLOOR — never another user's queue. Unchanged in INTENT;
+        // widened in MECHANISM, because `createdBy` alone no longer expresses
+        // it. That column is overloaded ("userId or agentUserId that authored
+        // this row" — schema/proposals.ts), so an agent write that passes no
+        // explicit createdBy lands `createdBy = agentUserId = <agent>`. Measured
+        // live: 4 of 6 pending rows carry that shape. The consequence was that
+        // an agent could not see ITS OWN in-flight duplicate — this dedup scan
+        // was blind to the majority of the rows it exists to catch, and the
+        // team pod carries 32 duplicate clusters.
+        //
+        // The guarantee the original comment states is PRESERVED EXACTLY:
+        // `ownAgentUserFilter` is floored on
+        // `users.createdByUserId = <me> AND userType = 'agent'`, so another
+        // human's agents can never enter the set. There is NO workspace term
+        // here and there must never be one — a workspace floor is what
+        // `pending-capture-dedup`'s own guarantee rules out, and it is the trap
+        // that was caught three times in one session. Same predicate as
+        // `listCreatedProposals`' author floor, one definition.
+        or(
+          eq(proposals.createdBy, params.userId),
+          ownAgentUserFilter(proposals.agentUserId, params.userId),
+          ownAgentUserFilter(proposals.createdBy, params.userId)
+        ),
         // STRICT pending — an approved proposal's entity is already committed.
         eq(proposals.status, ProposalStatus.PENDING),
         inArray(

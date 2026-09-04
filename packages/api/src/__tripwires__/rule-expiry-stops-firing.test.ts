@@ -84,7 +84,7 @@ const AUTONOMOUS_DISPATCH_MARKERS = [
  */
 const KNOWN_NON_AUTONOMOUS: Record<string, string> = {
   "automation-executor.ts":
-    "Executes ONE automation a door already chose (matcher, scheduler, or a human pressing Run). Re-checking here would double-guard the autonomous callers and would also veto a deliberate manual run of a lapsed rule, which is the owner's call to make, not the executor's.",
+    "Executes ONE automation a door already chose. Every CHOOSING door is guarded instead: the matcher and the cron scheduler here, and the manual `automations.trigger` router for the agent-initiated case (pinned by the THIRD-DOOR test below). Re-checking in the executor would double-guard those and would also veto a HUMAN's deliberate run of their own lapsed rule, which is the owner's call to make, not the executor's.",
   "automation-run-reaper.ts":
     "Reaps stale RUN rows. It never starts a run, so there is nothing for expiry to prevent.",
 };
@@ -134,6 +134,70 @@ describe("rule expiry reaches EVERY autonomous firing door", () => {
         "KNOWN_NON_AUTONOMOUS with the reason it is exempt:\n  " +
         unguarded.join("\n  ")
     ).toEqual([]);
+  });
+
+  /**
+   * THE THIRD FIRING DOOR, and the one that is not a worker.
+   *
+   * `automations.trigger` runs an automation by id on demand, and reaches an
+   * AGENT through `synap_trigger_automation` (MCP) and two Hub REST routes. The
+   * derived scan above is over `packages/jobs/src/workers`, so it structurally
+   * cannot see a router — naming it here is not laziness, it is the scan's
+   * honest boundary, and leaving it unstated would let the derived population
+   * imply a coverage it does not have.
+   *
+   * The agent branch must REFUSE rather than fall through to the governance
+   * gate: that gate would turn the request into a proposal, and a proposal card
+   * carrying no expiry signal asks a human to approve a lapsed rule's behaviour
+   * without showing them the fact that matters.
+   */
+  it("the manual trigger door refuses an AGENT run of an expired rule", () => {
+    const src = readFileSync(
+      join(__dirname, "../routers/automations.ts"),
+      "utf8"
+    );
+    const at = src.indexOf("  trigger: protectedProcedure");
+    expect(
+      at,
+      "`automations.trigger` not found — this scan moved"
+    ).toBeGreaterThan(0);
+    const body = src.slice(at, at + 6000);
+
+    // It must consult the SSOT predicate, not re-derive "expired" locally.
+    expect(
+      body,
+      "`automations.trigger` no longer consults `isRuleExpired`, so an agent " +
+        "can run the behaviour of a rule whose review date has passed."
+    ).toMatch(/\bisRuleExpired\s*\(/);
+
+    // And it must be LEXICALLY INSIDE the agent branch: guarding the human
+    // path too would veto an owner running their own lapsed rule on purpose.
+    //
+    // ⚠️ This was first written as an index comparison,
+    // `body.indexOf("if (agentUserId)") < checkAt`, and it was GREEN against a
+    // mutant that moved the refusal OUT of the branch — because a COMMENT
+    // fifteen lines earlier contains the words `if (agentUserId)` and matched
+    // first. A scan that cannot tell code from prose is measuring prose. So:
+    // find the real statement (the brace is what the comment lacks) and walk
+    // its body.
+    const branchOpener = "if (agentUserId) {";
+    const branchAt = body.indexOf(branchOpener);
+    expect(
+      branchAt,
+      "no `if (agentUserId) {` statement in trigger"
+    ).toBeGreaterThan(-1);
+    let depth = 1;
+    let i = branchAt + branchOpener.length;
+    while (i < body.length && depth > 0) {
+      if (body[i] === "{") depth += 1;
+      else if (body[i] === "}") depth -= 1;
+      i += 1;
+    }
+    expect(
+      /\bisRuleExpired\s*\(/.test(body.slice(branchAt, i)),
+      "the expiry refusal must sit INSIDE the `if (agentUserId)` branch — " +
+        "outside it, a human running their own lapsed rule is vetoed too"
+    ).toBe(true);
   });
 
   it("every declared exemption names a worker that still exists", () => {

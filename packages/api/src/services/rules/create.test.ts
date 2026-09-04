@@ -494,3 +494,53 @@ describe("a failed lineage edge unwinds the create instead of being logged", () 
     expect(deleted).toEqual([]);
   });
 });
+
+/**
+ * THE SENTENCE MUST REACH THE STORED ROW, not just the proposal payload.
+ *
+ * `skills.dryRunRule` requires a sentence to replay a trigger against real
+ * history. It was written into the rule's PROPOSAL payload (`create.ts:275`)
+ * and nowhere else, so a rule was replayable while proposed and never once
+ * materialized — preview for the rule you had not trusted yet, none for the one
+ * that had been running for a month.
+ *
+ * ⚠️ This test exists because the unit tests around `buildRuleMetadata` did NOT
+ * catch it: deleting the sentence pass-through from THIS door left all 89 tests
+ * green. A capability that exists at one layer and is not wired at the next is
+ * the defect class this whole wave is about, and only a test at the SEAM sees
+ * it — which is why this asserts the inserted row, not the builder.
+ */
+describe("the authored sentence reaches the materialized rule", () => {
+  /**
+   * A sentence that genuinely COMPILES. An invalid one is not a weaker test —
+   * it is a different one: `createRuleGoverned` refuses an unreadable sentence
+   * before it inserts anything (compile-or-refuse), so a malformed fixture
+   * asserts nothing about persistence. My first version of this test used one
+   * and failed against correct code.
+   */
+  const SENTENCE = {
+    trigger: {
+      triggerType: "event" as const,
+      subjectCategory: "external_message" as const,
+      actionVerb: "received" as const,
+    },
+    conditions: [],
+    actions: [
+      { type: "notify" as const, config: { title: "hi", message: "there" } },
+    ],
+  };
+
+  it("persists it onto the stored row so the rule stays replayable", async () => {
+    await create({ intent: BEHAVIOUR, sentence: SENTENCE });
+    expect(metadataOfLastInsert()?.sentence).toEqual(SENTENCE);
+  });
+
+  it("a rule authored WITHOUT one stores no sentence key", async () => {
+    // Absent must be one state, so a surface can say "cannot replay" rather
+    // than rendering a zero that reads as "matched nothing".
+    await create({ intent: FACT });
+    const meta = metadataOfLastInsert();
+    expect(meta).not.toBeNull();
+    expect(meta?.sentence).toBeUndefined();
+  });
+});

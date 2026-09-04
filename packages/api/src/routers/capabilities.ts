@@ -83,6 +83,7 @@ import {
   loadCapabilityTemplate,
 } from "../services/capabilities/create-from-definition.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
+import { CapabilityExecuteInput } from "../contracts/capability-execute.js";
 import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
@@ -1126,26 +1127,41 @@ export const capabilitiesRouter = router({
    * returns its discriminated result verbatim (run / proposed / deny / not_found).
    */
   execute: protectedProcedure
+    // ONE contract (`contracts/capability-execute.ts`), NARROWED — not a fourth
+    // hand-written copy of the service's parameter list. This door used to
+    // declare four of the service's twelve parameters, and the four it dropped
+    // were the provenance ones: a browser-launched run could not carry
+    // `sessionId`, so it landed with `proposals.session_id = NULL` (the live
+    // pod's 2.6% session-provenance rate is this door), could not carry
+    // `channelId`/`sourceMessageId` (origin-trust at rung 2.55 never activated
+    // on a browser run), and could not carry `idempotencyKey`.
+    //
+    // The two `.extend`ed keys are TIGHTER than the contract on purpose:
+    // `verbId` and `workspaceId` have always been REQUIRED here and the browser
+    // client passes both. Narrowing a shared contract at a door is allowed;
+    // silently dropping a field from it is what the input-parity tripwire (T5)
+    // now refuses.
     .input(
-      z.object({
+      CapabilityExecuteInput.extend({
         verbId: z.string(),
-        parameters: z.record(z.string(), z.unknown()).optional(),
         workspaceId: z.string().uuid(),
-        connectionSelector: z
-          .object({
-            connectionId: z.string().optional(),
-            contextObjectId: z.string().optional(),
-          })
-          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       return executeCapability({
         verbId: input.verbId,
+        skillId: input.skillId,
         parameters: input.parameters,
         workspaceId: input.workspaceId,
+        // Identity is the transport's, never the body's — a client-supplied
+        // userId would be an impersonation door, which is why the contract does
+        // not carry one.
         userId: ctx.userId,
         connectionSelector: input.connectionSelector,
+        idempotencyKey: input.idempotencyKey,
+        channelId: input.channelId ?? null,
+        sourceMessageId: input.sourceMessageId ?? null,
+        sessionId: input.sessionId ?? null,
       });
     }),
 

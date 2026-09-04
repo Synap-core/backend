@@ -360,6 +360,43 @@ export const ADMIN_ACTIONS: readonly string[] = [
 ];
 
 /**
+ * HUMAN GATES — writes whose ENTIRE PURPOSE is that a person says yes.
+ *
+ * These are not "sensitive writes that should usually be reviewed". They are
+ * writes that carry NO value at all unless a human made the call: the server-side
+ * dev loop files `dev.plan_approval` before it writes code and
+ * `dev.deploy_approval` before it ships, and an agent that could auto-approve
+ * either one has simply deleted the gate while leaving the paperwork behind.
+ *
+ * WHY A SEPARATE LIST FROM {@link ADMIN_ACTIONS}. Both floor at "always propose",
+ * but they answer different questions and must be readable apart: ADMIN names
+ * writes that change WHO CAN DO WHAT (membership, keys, capabilities), and a
+ * future policy could reasonably argue about one of its entries. A human gate is
+ * definitionally unwidenable — the day one of these auto-approves, the feature it
+ * belongs to is broken, not merely loosened. Merging the two lists would let a
+ * later "relax an admin floor" edit silently take a dev gate with it.
+ *
+ * SAME MATCHING CONTRACT AS ADMIN_ACTIONS — exact equality on the
+ * `${subjectType}.${action}` event key composed from the RAW gate arguments. No
+ * globbing, no pluralization forgiveness. A wrong string here is INVISIBLE.
+ *
+ * HONEST LIMIT — these keys name NO gate call site today, the same status as
+ * {@link ADMIN_ACTIONS_RESERVED}: the dev-approval doors file their proposal
+ * DIRECTLY (`createDevApprovalProposal` → `createEventBackedProposal`), so they
+ * never reach `decideAgentPolicy` and this floor is defence in depth, not the
+ * live protection. It is here so that the day someone routes a dev approval
+ * through the gate — or through `checkAutomationWriteOrPropose` — it arrives
+ * floored on day one instead of inheriting rung 8's auto-execute. That is the
+ * exact failure mode `workspace.delete` had for months.
+ */
+export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
+  "dev.plan_approval",
+  "dev.deploy_approval",
+  "focus_session.plan_approval",
+  "focus_session.deploy_approval",
+];
+
+/**
  * Filesystem paths ALWAYS blocked for external agent writes, regardless of user
  * approval or workspace settings. Backend enforcement layer (the synap-os skill
  * also enforces these on the OpenClaw side as the first line of defence).
@@ -827,6 +864,8 @@ export const PROPOSE_REASON = {
     "This write originates from an untrusted channel (external / bridge) and requires human approval before it is applied.",
   DAILY_WRITE_CEILING:
     "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
+  HUMAN_GATE:
+    "This is a human gate — a person must approve it, and no governance rule can widen it.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -862,6 +901,19 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.ADMIN,
       reasonCode: "ADMIN",
+    };
+  }
+
+  // 2.05 HUMAN GATES → always propose, and no rung below can ever widen them.
+  // Placed immediately under ADMIN (rung 2) and ABOVE the governance_rules store
+  // (rung 2.8), ownership (3), explicit autoApproveFor (4) and DEFAULT_AUTO_APPROVE
+  // (8) — which is the whole point: a `dev.plan_approval` that a trusted-lane rule
+  // could flip to "auto" is a plan gate that approves its own plan.
+  if (HUMAN_GATE_EVENT_KEYS.includes(eventKey)) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.HUMAN_GATE,
+      reasonCode: "HUMAN_GATE",
     };
   }
 
@@ -1289,6 +1341,19 @@ export const DIRECT_PROPOSAL_DOORS = {
   "capability/capability.run": "direct",
   "capability/run": "direct",
   "document/user_edit": "direct",
+  // Server-side dev loop human gates. Filed directly by
+  // `createDevApprovalProposal` (packages/api/src/services/proposals/dev-approval.ts);
+  // approved by the executors in `routers/proposals/executors/dev-approval.ts`,
+  // which ONLY stamp the session — the agent polling the pod is what acts.
+  "focus_session/dev.deploy_approval": "direct",
+  // Playbook STAGE gate. Filed by `openStageGate`
+  // (packages/api/src/services/playbooks/stage-gate.ts) when a run advances into
+  // a stage whose definition carries `gate: { kind: "human" }`; approved by
+  // `routers/proposals/executors/playbook-stage-gate.ts`, which only flips the
+  // paused session back to active. The SUBJECT is the session — same reasoning
+  // as the two dev gates above.
+  "focus_session/playbook.stage_gate": "direct",
+  "focus_session/dev.plan_approval": "direct",
   "entity/capture.graph": "direct",
   "entity/import.graph": "direct",
   "entity/merge": "direct",

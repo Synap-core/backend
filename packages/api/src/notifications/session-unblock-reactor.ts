@@ -16,6 +16,15 @@
  * reason (`@synap/events` cannot import `@synap/api`, so the api process
  * registers its own reactors at boot).
  *
+ * TWO KINDS OF WAIT, ONE NOTIFICATION. A session can be waiting on another
+ * either because someone DECLARED it (`blocked_by`) or because it targets an
+ * object another open session is producing (`session-output-edges.ts`, derived
+ * — no edge of its own). Both are the same news to the person waiting, so the
+ * dependent set is the UNION and the "last open blocker" rule spans BOTH: a
+ * dependent still waiting on an output is not unblocked by a declared blocker
+ * closing, and vice versa. Splitting this into a second reactor would send two
+ * notifications for one unblocking and give each half a blind spot.
+ *
  * IDEMPOTENT on `(dependent, closed blocker)`, keyed on the durable
  * notification row's `groupKey` rather than on ordering — a re-delivered or
  * replayed close event is a no-op. Deliberately NOT keyed on the dependent
@@ -45,6 +54,10 @@ import {
   getSessionEdgesFor,
   openBlockerIds,
 } from "../services/focus-sessions/session-blocked-by.js";
+import {
+  outputDependentsOf,
+  openOutputBlockerIds,
+} from "../services/focus-sessions/session-output-edges.js";
 import { NotificationService } from "./NotificationService.js";
 
 const logger = createLogger({ module: "session-unblock-reactor" });
@@ -58,7 +71,7 @@ const logger = createLogger({ module: "session-unblock-reactor" });
  */
 const notificationType = "session.unblocked" as const;
 
-export const SESSION_UNBLOCKED_NOTIFICATION_TYPE = notificationType;
+const SESSION_UNBLOCKED_NOTIFICATION_TYPE = notificationType;
 
 /** `(dependent, blocker)` — the natural identity of "this unblocking". */
 function unblockGroupKey(sessionId: string, blockerId: string): string {
@@ -75,20 +88,42 @@ export const sessionUnblockNotifyReactor: Reactor = {
       (payload.data?.sessionId as string | undefined) ?? payload.subjectId;
     if (!closedId) return;
 
-    // Inbound `blocked_by` edges — the sessions that were waiting on this one.
+    // Inbound `blocked_by` edges — the sessions that DECLARED they were
+    // waiting on this one.
     const { unblocks } = await getSessionEdgesFor(closedId);
-    if (unblocks.length === 0) return;
 
     // The closed session's goal, for the body. `complete-session.ts` DOES put
     // `goal` on the payload, but this reads the row anyway: the payload shape
     // is the close door's contract with the automation matcher, not with this
     // reactor, and the row is the one authority on what the session is called.
-    // One extra query, only on a close that actually unblocks something.
+    // It is also the owner floor for the output-dependent read below, which is
+    // why it now runs on EVERY close rather than only on one with declared
+    // dependents — the derived half cannot be looked up without a userId.
     const [closed] = await db
-      .select({ id: focusSessions.id, title: focusSessions.goal })
+      .select({
+        id: focusSessions.id,
+        title: focusSessions.goal,
+        userId: focusSessions.userId,
+      })
       .from(focusSessions)
       .where(eq(focusSessions.id, closedId))
       .limit(1);
+    if (!closed) return;
+
+    // Sessions waiting on an OUTPUT of this one. Read AFTER the close, which
+    // is why this uses `outputDependentsOf` and not the open-only reader: to
+    // the latter a closed producer is history and reports nothing. This is the
+    // set that WAS waiting a moment ago. Nothing is announced early — each
+    // dependent's own remaining waits are re-derived below.
+    const outputsWaitedOnBy = await outputDependentsOf(closedId, closed.userId);
+
+    const dependentIds = [
+      ...new Set([
+        ...unblocks,
+        ...outputsWaitedOnBy.map((o) => o.dependentSessionId),
+      ]),
+    ];
+    if (dependentIds.length === 0) return;
 
     const dependents = await db
       .select({
@@ -98,13 +133,19 @@ export const sessionUnblockNotifyReactor: Reactor = {
         workspaceId: focusSessions.workspaceId,
       })
       .from(focusSessions)
-      .where(inArray(focusSessions.id, unblocks));
+      .where(inArray(focusSessions.id, dependentIds));
 
     for (const dependent of dependents) {
       try {
-        // THE DERIVATION. Anything still open ⇒ still blocked ⇒ stay silent.
+        // THE DERIVATION, across BOTH kinds of wait. Anything still open ⇒
+        // still blocked ⇒ stay silent.
         const stillOpen = await openBlockerIds(dependent.id);
         if (stillOpen.length > 0) continue;
+        const stillWaitingOnOutputs = await openOutputBlockerIds(
+          dependent.id,
+          dependent.userId
+        );
+        if (stillWaitingOnOutputs.length > 0) continue;
 
         const groupKey = unblockGroupKey(dependent.id, closedId);
         const [already] = await db

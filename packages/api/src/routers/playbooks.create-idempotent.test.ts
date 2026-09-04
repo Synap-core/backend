@@ -96,9 +96,16 @@ vi.mock("../utils/split-brain-service.js", () => ({
   invalidateSyncGenerationCache: vi.fn(),
 }));
 
+// TOTAL mock: every export the router reaches for must be listed, or a NEW
+// import in the router fails here at call time with "No export is defined on
+// the mock" — which is how `proposedMessageFor` broke this suite.
 vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: mockCheckPermission,
   previewPermissionDecision: mockPreviewDecision,
+  // Same contract as the real one for a non-join gate: the content message
+  // passes through untouched.
+  proposedMessageFor: (_type: string | undefined | null, message: string) =>
+    message,
 }));
 
 vi.mock("../services/playbooks/cron-automation.js", () => ({

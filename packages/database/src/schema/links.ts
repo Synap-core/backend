@@ -77,12 +77,25 @@ export type LinkEndpointType =
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
   // Governs lens propagation only — never data movement (see links.ts header).
-  | "workspace"
-  // A row of the `governance_rules` table (migration 0215) — the ONE
-  // user-editable store of auto/propose verdicts. A graph citizen so an
-  // intent-rule can hold an edge to the governance rule it produced:
-  // `automation|playbook --produced--> governance_rule`.
-  | "governance_rule";
+  | "workspace";
+
+// ── `governance_rule` was HERE and was removed, deliberately ────────────────
+// It was added so an intent-rule could hold an edge to the governance rule it
+// produced (`automation|playbook --produced--> governance_rule`). No such
+// producer exists, and no reader does either: `rg 'Type: "governance_rule"'`
+// across every repo returns nothing but a proposal `targetType`, which is a
+// different axis.
+//
+// The same wave that added it spent its main effort deleting the `activates`
+// edge's decorative half, on the principle that a write with no reader is not a
+// store. An endpoint type with neither is that principle's own counterexample —
+// and because it was allowlisted for Hub REST writes, an agent could have
+// created edges nothing was able to interpret.
+//
+// Re-add it WITH its producer, not before. That is three lines (this union, the
+// dependency-free mirror in `@synap/playbooks`, the REST allowlist), and
+// `links-endpoint-type-ssot.test.ts` now DISCOVERS those sites by scanning
+// source, so nothing can be missed.
 
 /** The relationship an edge expresses. */
 export type LinkType =

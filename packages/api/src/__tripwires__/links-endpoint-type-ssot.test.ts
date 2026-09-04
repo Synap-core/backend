@@ -152,9 +152,51 @@ describe("tripwire: LinkEndpointType SSOT (derived registration sites)", () => {
     expect(drift).toEqual([]);
   });
 
-  it("governance_rule is a registered endpoint type", () => {
-    // The value this wave added. Pinned so a revert is loud rather than a
-    // silently narrowed union that still passes the parity check above.
-    expect(union).toContain("governance_rule");
+  /**
+   * `governance_rule` TRACKS ITS PRODUCER — in both directions.
+   *
+   * It was added to the union so an intent-rule could hold an edge to the
+   * governance rule it produced, and then removed again in the same wave
+   * because that producer was never written: it had zero producers AND zero
+   * readers, while the wave's main effort was deleting exactly that shape
+   * elsewhere. It was also allowlisted for Hub REST writes, so an agent could
+   * have created edges nothing could interpret.
+   *
+   * This asserts the RELATIONSHIP rather than either state, so it needs no edit
+   * when the producer lands: write a producer and the union MUST carry the
+   * member; delete the producer and it must not. Pinning "absent" instead would
+   * be a decision frozen into a test, and the next person would have to delete
+   * an assertion to do the right thing — which is how tests come to be treated
+   * as obstacles.
+   */
+  it("carries `governance_rule` exactly when something produces such an edge", () => {
+    const PRODUCER = /(?:from|to)Type:\s*["'`]governance_rule["'`]/;
+    const producers = sourceFiles().filter((file) =>
+      PRODUCER.test(readFileSync(file, "utf8"))
+    );
+    const declared = unionSet.has("governance_rule");
+
+    if (producers.length > 0) {
+      expect(
+        declared,
+        `Something writes a \`governance_rule\` edge (${producers
+          .map((f) => f.split("/packages/")[1] ?? f)
+          .join(
+            ", "
+          )}) but the endpoint union does not carry it, so the write ` +
+          `cannot be typed or validated. Add it to every registration site — ` +
+          `the parity test above lists them.`
+      ).toBe(true);
+    } else {
+      expect(
+        declared,
+        "`governance_rule` is declared as an endpoint type but NOTHING writes " +
+          "such an edge and nothing reads one. A declared-but-unproduced " +
+          "endpoint type is the same defect this wave removed from the " +
+          "`activates` edge, one level up: it widens what an agent may write " +
+          "through the Hub REST allowlist before anything can interpret it. " +
+          "Land the producer in the same change, or leave the member out."
+      ).toBe(false);
+    }
   });
 });

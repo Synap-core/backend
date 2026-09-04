@@ -21,6 +21,7 @@ import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
+import { buildCapabilityExecuteAgentJsonSchema } from "../../../contracts/capability-execute-schema.js";
 
 /**
  * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
@@ -115,6 +116,20 @@ function buildRuleSentenceJsonSchema(): Record<string, unknown> {
 }
 
 const RULE_SENTENCE_JSON_SCHEMA = buildRuleSentenceJsonSchema();
+
+/**
+ * JSON Schema for `synap_run_capability`, DERIVED from the ONE
+ * capability-execute input contract (`contracts/capability-execute.ts`) — the
+ * same schema the tRPC and Hub REST doors declare.
+ *
+ * The AGENT subset is narrower than the full contract on purpose:
+ * `sessionId`, `sourceMessageId` and `channelId` are AMBIENT on an MCP turn and
+ * the handler supplies them from `ctx`, so a model-supplied value would let an
+ * agent file its run under someone else's operation. The narrowing lives in the
+ * contract (`MCP_AGENT_PARAMS`) rather than here, so this tool cannot quietly
+ * fall behind the service's parameter list again.
+ */
+const RUN_CAPABILITY_JSON_SCHEMA = buildCapabilityExecuteAgentJsonSchema();
 
 /** Context available when `list()` is called from a live MCP session (createMCPServer) — absent for the legacy static capabilities manifest (http-handler.ts GET /). */
 export interface ToolsListContext {
@@ -1230,7 +1245,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label). Cannot close — use synap_complete_session for that.",
+          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1292,6 +1307,11 @@ export const tools = {
               type: "string",
               description:
                 "Mark the deliverable with this exact label as 'done'. No-op if no deliverable matches the label exactly.",
+            },
+            addAgentId: {
+              type: "string",
+              description:
+                "APPEND one agent user id to the session roster (optional). Idempotent — re-attaching an agent already on the session writes nothing. Use this to staff a session already in flight; the roster is otherwise only settable when the session is created.",
             },
           },
           required: ["sessionId"],
@@ -2241,32 +2261,12 @@ export const tools = {
         },
         description:
           'Run a registered capability verb (discover via synap_list_capabilities) with dynamic inputs — e.g. send an email, search Gmail, create a calendar event. Pass verbId + parameters. A DRAFT (un-enabled) capability is refused — ask the user to enable it first. Governed like any write: an ungranted verb comes back as `{ kind: "proposed", proposalId, reviewUrl }` instead of running — that is SUCCESS, not an error. You MUST surface the `reviewUrl` as a clickable link in your reply (never just say \'proposed\' with no link) — e.g. "Queued that email send for your review: [Review proposal](<reviewUrl>)" — and continue the conversation without waiting for approval.',
-        inputSchema: {
-          type: "object",
-          properties: {
-            idempotencyKey: {
-              type: "string",
-              description:
-                "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.",
-            },
-            verbId: {
-              type: "string",
-              description:
-                "The capability name from synap_list_capabilities (e.g. 'gmail_send'). Alternatively pass skillId.",
-            },
-            skillId: {
-              type: "string",
-              description: "Direct backing-skill UUID (alternative to verbId).",
-            },
-            parameters: {
-              type: "object",
-              description:
-                "The capability's inputs — e.g. { to, subject, body } for gmail_send, { query } for gmail_search.",
-            },
-            workspaceId: { type: "string", description: "Workspace UUID" },
-          },
-          required: ["workspaceId"],
-        },
+        // DERIVED from the shared capability-execute contract, not hand-written
+        // here — the same reasoning as the automation data contract and the
+        // rule sentence above. A hand-written literal is how this tool came to
+        // omit `connectionSelector`: the service accepts it, so an agent whose
+        // capability has two connections had no way to say which one to run.
+        inputSchema: RUN_CAPABILITY_JSON_SCHEMA as Tool["inputSchema"],
       },
       {
         name: "synap_create_verb",

@@ -103,3 +103,6 @@ export * from "./external-connect/index.js";
 
 // Invitations
 export * from "./invitations/index.js";
+
+// Focus session lifecycle vocabulary (leaf module — browser/CLI safe)
+export * from "./focus-sessions/index.js";

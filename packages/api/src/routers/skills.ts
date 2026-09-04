@@ -662,6 +662,20 @@ export const skillsRouter = router({
         limit: input?.limit || 50,
         offset: input?.offset || 0,
       });
+      // Membership comes from the EDGE, projected onto the list in ONE query.
+      //
+      // Without this the payload carried only the raw `rule` blob, and the CLI
+      // counted behaviours off `rule.behaviours.length` while the browser asked
+      // the backend, which reads the edge. Two doors, two stores, one question —
+      // and they disagree exactly where the new `"unsnapshotted"` status was
+      // introduced to name the anomaly: a rule with an edge but no snapshot read
+      // 0 attached on the CLI and 1 in the browser, and the reverse for a
+      // snapshot with no edge. The fix belongs here, not in a wider client read.
+      const { readRuleHealthBulk } =
+        await import("../services/rules/lineage.js");
+      const health = await readRuleHealthBulk(
+        rows.map((row: typeof skills.$inferSelect) => row.id)
+      );
       const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
         const rule = readRuleMetadata(row.metadata);
         return rule
@@ -673,6 +687,23 @@ export const skillsRouter = router({
                 workspaceId: row.workspaceId,
                 createdAt: row.createdAt,
                 rule,
+                /**
+                 * The rule's automations, from the `activates` edge — the
+                 * membership store. Prefer this over `rule.behaviours`, which
+                 * now holds only the divergence snapshot.
+                 */
+                automationIds: health.get(row.id)?.automationIds ?? [],
+                /**
+                 * Health, so a list can GROUP by it without N+1-ing per row.
+                 * `behaviourStatus: "error"` is the honest "Broken" — this
+                 * rule's behaviour is failing to run. It is NOT connection
+                 * health; no producer for that exists, so a surface must not
+                 * name a cause ("connection expired") nobody measured.
+                 */
+                behaviourStatus: health.get(row.id)?.worstStatus ?? null,
+                lastRunAt: health.get(row.id)?.lastRunAt ?? null,
+                /** Lifetime RUNS — never a match count. */
+                runCount: health.get(row.id)?.runCount ?? 0,
                 status: "active" as const,
                 proposalId: undefined as string | undefined,
               },
@@ -734,8 +765,7 @@ export const skillsRouter = router({
       const userId = requireUserId(ctx.userId);
       const { readRuleMetadata, RULE_CATEGORY, RULE_METADATA_KEY } =
         await import("../services/rules/index.js");
-      const { normalizeExpiresAt } =
-        await import("../services/rules/expiry.js");
+      const { withRuleExpiry } = await import("../services/rules/expiry.js");
 
       const row = await ctx.db.query.skills.findFirst({
         where: and(
@@ -764,14 +794,10 @@ export const skillsRouter = router({
         });
       }
 
-      // Same normaliser the create door uses, so the stored form is the
-      // canonical ISO-8601 UTC string `ruleNotExpiredWhere()` compares against.
-      // A second date format here would be a rule that reads unexpired to SQL
-      // and expired to JS, or the reverse.
-      const normalized = normalizeExpiresAt(input.expiresAt);
-      const next = { ...metadata };
-      if (normalized) next.expiresAt = normalized;
-      else delete next.expiresAt;
+      // One field changes; every other one is carried through. The "nothing
+      // else changed" guarantee is asserted in `expiry.test.ts` against the
+      // pure function, not through a mocked database here.
+      const next = withRuleExpiry(metadata, input.expiresAt);
 
       await ctx.db
         .update(skills)

@@ -13,6 +13,8 @@ import {
   ADMIN_ACTIONS,
   ADMIN_ACTIONS_LIVE,
   ADMIN_ACTIONS_RESERVED,
+  HUMAN_GATE_EVENT_KEYS,
+  DIRECT_PROPOSAL_DOORS,
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
   findUnsafeAutoApproveEntries,
@@ -1794,5 +1796,127 @@ describe("deriveGatePairFromOperations", () => {
         )
       ).toBe(true);
     }
+  });
+});
+
+/**
+ * HUMAN GATES — the dev-loop plan/deploy stops.
+ *
+ * A human gate is a write whose only value is that a person said yes. The
+ * failure this pins is not "it got looser": it is that the FEATURE stops
+ * existing the moment one of these auto-approves. Every rung capable of
+ * returning "execute" is exercised below, one per test, so a future rung that
+ * forgets the floor fails here rather than in production.
+ */
+describe("rung 2.05 — human gates can never auto-approve", () => {
+  const GATES = ["dev.plan_approval", "dev.deploy_approval"] as const;
+
+  const pairs = GATES.map((key) => {
+    const [subjectType, action] = key.split(".");
+    return { key, subjectType: subjectType!, action: action! };
+  });
+
+  it("proposes under the widest possible auto-approve posture", () => {
+    for (const { subjectType, action } of pairs) {
+      const verdict = decideAgentPolicy({
+        subjectType,
+        action,
+        // Every widening lever at once: owned workspace, a "*" allowlist, no
+        // proposal requirement, and a rule store saying "auto".
+        isAgentOwnedWorkspace: true,
+        writesRequireProposal: false,
+        autoApproveFor: ["*"],
+        governanceRuleVerdict: "auto",
+        capabilityGovernance: "auto",
+        capabilityExecMode: "auto",
+        allowDestructiveAutoApprove: true,
+      });
+      expect(verdict.verdict).toBe("propose");
+      expect(verdict.verdict === "propose" && verdict.reasonCode).toBe(
+        "HUMAN_GATE"
+      );
+    }
+  });
+
+  it("a governance_rules row (rung 2.8) cannot widen a gate", () => {
+    // The specific attack the floor exists for: a trusted agent earns a wide
+    // lane and the rule store starts saying "auto" for its writes. If that
+    // reached a plan gate, the agent would approve its own plan.
+    for (const { subjectType, action } of pairs) {
+      expect(
+        decideAgentPolicy({
+          subjectType,
+          action,
+          governanceRuleVerdict: "auto",
+        }).verdict
+      ).toBe("propose");
+    }
+  });
+
+  it("an explicit autoApproveFor entry naming the gate cannot widen it", () => {
+    for (const { subjectType, action } of pairs) {
+      expect(
+        decideAgentPolicy({
+          subjectType,
+          action,
+          autoApproveFor: [`${subjectType}.${action}`, `${subjectType}.*`],
+        }).verdict
+      ).toBe("propose");
+    }
+  });
+
+  it("sits BELOW the CBAC deny (rung 1) — a denied capability still denies", () => {
+    // Ordering matters: a floor that returned "propose" above CBAC would upgrade
+    // a forbidden write into a reviewable one.
+    expect(
+      decideAgentPolicy({
+        subjectType: "dev",
+        action: "plan_approval",
+        agentCapabilities: ["entity.read"],
+      }).verdict
+    ).toBe("deny");
+  });
+
+  it("floors the focus_session spelling too — the target type these are filed under", () => {
+    // The proposal's targetType is `focus_session`; if a gate call site ever
+    // passes that as its subjectType, the raw spelling is what rung 2.05 sees.
+    for (const action of ["plan_approval", "deploy_approval"]) {
+      expect(
+        decideAgentPolicy({
+          subjectType: "focus_session",
+          action,
+          autoApproveFor: ["*"],
+          isAgentOwnedWorkspace: true,
+        }).verdict
+      ).toBe("propose");
+    }
+  });
+
+  it("floors nothing else — an unrelated write is untouched", () => {
+    // Guards against a substring/prefix match creeping in later.
+    expect(
+      decideAgentPolicy({
+        subjectType: "entity",
+        action: "create",
+        autoApproveFor: ["entity.create"],
+      }).verdict
+    ).toBe("execute");
+  });
+
+  it("both gates are declared as direct proposal doors", () => {
+    // The floor is defence in depth; the LIVE protection is that these are
+    // filed as proposals by construction. Pin that the doors are declared, so
+    // the approval-half tripwire keeps demanding an executor for each.
+    expect(Object.keys(DIRECT_PROPOSAL_DOORS)).toEqual(
+      expect.arrayContaining([
+        "focus_session/dev.plan_approval",
+        "focus_session/dev.deploy_approval",
+      ])
+    );
+  });
+
+  it("the gate list never shrinks below the two dev-loop stops", () => {
+    // Removing a human gate is the one direction this list must never move.
+    expect(HUMAN_GATE_EVENT_KEYS).toEqual(expect.arrayContaining([...GATES]));
   });
 });

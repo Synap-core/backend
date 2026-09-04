@@ -283,6 +283,22 @@ export function registerFocusSessionExecutors(): void {
           set.currentStage = innerData.currentStage;
         }
 
+        // Roster append. Carried by BOTH proposing doors (`update-session.ts`
+        // and the Hub PATCH) so the PROPOSED path is not a silent no-op —
+        // approving a "staff this session" proposal that changed nothing is the
+        // authoring↔runtime fork this codebase keeps paying for. Applied via
+        // the ONE append door, floored on the session's OWN owner (the approver
+        // may be a different human).
+        if (typeof innerData.addAgentId === "string") {
+          const { attachSessionAgent } =
+            await import("../../../services/focus-sessions/attach-session-agent.js");
+          await attachSessionAgent({
+            sessionId,
+            agentId: innerData.addAgentId,
+            userId: session.userId,
+          });
+        }
+
         const [updated] = await db
           .update(focusSessions)
           .set(set)

@@ -28,6 +28,7 @@
 import { z } from "@hono/zod-openapi";
 
 import { executeCapability } from "../../../services/capabilities/execute-capability.js";
+import { CapabilityExecuteInput } from "../../../contracts/capability-execute.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -38,44 +39,23 @@ import {
   type HubHono,
 } from "./_shared.js";
 
-const ExecuteCapabilityRequestSchema = z
-  .object({
-    /** The capability verb to run — the backing skill's NAME. One of verbId/skillId required. */
-    verbId: z.string().min(1).optional(),
-    /** Direct skill id (alternative to verbId). */
-    skillId: z.string().min(1).optional(),
-    /** Inputs passed to the skill (the sandbox `args`). */
-    parameters: z.record(z.string(), z.unknown()).optional(),
-    /** Acting workspace — OPTIONAL lens that narrows the skill lookup + the gate.
-     * Omit for a pod-wide run; a `propose` then routes to the user's pod-wide queue. */
-    workspaceId: z.string().uuid().optional(),
-    /** Runtime 1-of-N connection selector (Wave 4) — pick which of the capability's
-     * connections this run uses. `connectionId` = a specific connection; `contextObjectId`
-     * = the connection bound to that context object. A selector matching nothing fails the run. */
-    connectionSelector: z
-      .object({
-        connectionId: z.string().optional(),
-        contextObjectId: z.string().optional(),
-      })
-      .optional(),
-    /** #4 instruction-provenance: the triggering inbound message id of THIS agent
-     * turn. Resolved server-side to the acting channel (`messages.channelId`) so a
-     * capability run triggered from an untrusted-origin channel (external / bridge)
-     * force-proposes instead of auto-running (rung 2.55). Tighten-only: absent → no
-     * origin-trust classification (the dormant default). Mirrors every other Hub
-     * REST write door, which accepts `sourceMessageId` in the body. */
-    sourceMessageId: z.string().optional(),
-    /** The focus session this run belongs to, when the agent is working inside
-     * one. Persisted as the `proposals.session_id` COLUMN (not into `data`) so a
-     * reviewer can see which operation an agent action is part of instead of
-     * judging it in isolation. Absent → null; non-session agent activity is
-     * legitimate and stays ungrouped. */
-    sessionId: z.string().optional(),
-  })
-  .refine((b) => !!b.verbId || !!b.skillId, {
-    message: "Either verbId or skillId is required",
-  })
-  .openapi("ExecuteCapabilityRequest");
+/**
+ * The request body IS the shared contract (`contracts/capability-execute.ts`),
+ * published under this route's OpenAPI name — not a second hand-written copy of
+ * it. `@hono/zod-openapi` 1.3.0 takes zod 4 as a peer dependency, the same
+ * instance the contract is written in, so `.openapi()` applies directly to it.
+ *
+ * This door previously declared seven of the nine client-suppliable parameters:
+ * `idempotencyKey` and `channelId` were accepted by the service and unsayable
+ * here, so an external caller could not make a send at-most-once and could not
+ * declare its acting channel for the rung-2.55 origin-trust classification.
+ * Building the schema from the contract is what makes that class of drop
+ * impossible rather than merely fixed once.
+ */
+const ExecuteCapabilityRequestSchema = CapabilityExecuteInput.refine(
+  (b) => !!b.verbId || !!b.skillId,
+  { message: "Either verbId or skillId is required" }
+).openapi("ExecuteCapabilityRequest");
 
 const ExecuteCapabilityResultSchema = z
   .object({
@@ -169,6 +149,8 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       connectionSelector,
       sourceMessageId,
       sessionId,
+      idempotencyKey,
+      channelId,
     } = body;
 
     const acting = await resolveActingContext(c, { workspaceId });
@@ -192,6 +174,13 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // channel inside executeCapability so an untrusted-origin run proposes.
         sourceMessageId: sourceMessageId ?? null,
         sessionId: sessionId ?? null,
+        // An explicit acting channel wins over the one derived from
+        // `sourceMessageId`; a caller that knows its channel need not have a
+        // triggering message at all (a cron-driven agent turn has none).
+        channelId: channelId ?? null,
+        // Caller idempotency: makes an external-send verb at-most-once across
+        // retries instead of falling back to the derived content-hash window.
+        idempotencyKey,
       });
 
       switch (outcome.kind) {

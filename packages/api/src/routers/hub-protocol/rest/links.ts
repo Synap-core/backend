@@ -50,7 +50,6 @@ const LINK_ENDPOINT_TYPES = [
   "capability",
   "agent",
   "workspace",
-  "governance_rule",
 ] as const;
 
 const LINK_TYPES = [

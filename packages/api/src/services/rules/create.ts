@@ -398,6 +398,12 @@ export async function createRuleGoverned(
     ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
     behaviours,
     routing,
+    // Persist the authored WHEN/THEN so the rule stays REPLAYABLE. It was
+    // written into the proposal payload and nowhere else, so a rule could be
+    // dry-run while proposed and never once approved — preview available for
+    // the rule you had not trusted yet, and not for the one that had been
+    // running for a month.
+    ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
   });
 
   // COMPENSATION for the ordering below. The automation is created BEFORE the

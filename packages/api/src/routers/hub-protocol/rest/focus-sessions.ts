@@ -38,6 +38,7 @@ import { completeFocusSession } from "../../../services/focus-sessions/complete-
 import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
+  UPDATABLE_SESSION_STATUSES,
 } from "../../../services/focus-sessions/session-statuses.js";
 import {
   attachTriage,
@@ -120,22 +121,19 @@ const CreateBodySchema = z
 // never trust a caller-supplied workspaceId for scoping a mutation).
 const UpdateBodySchema = z.object({
   workspaceId: z.string().min(1).optional(),
-  status: z
-    .enum([
-      "active",
-      "paused",
-      "closed",
-      "forming",
-      "scheduled",
-      "failed",
-      "cancelled",
-    ])
-    .optional(),
+  // ONE status vocabulary — the same list the tRPC `focus_sessions.update` door
+  // takes, so the two write doors can never drift apart.
+  status: z.enum(UPDATABLE_SESSION_STATUSES).optional(),
   progress: z.number().int().min(0).max(100).optional(),
   channelId: z.string().uuid().optional(),
   correlationId: z.string().optional(),
   goal: z.string().min(1).max(2000).optional(),
   agentIds: z.array(z.string()).optional(),
+  // APPEND one agent, as against `agentIds` which REPLACES the roster. Routed
+  // through the ONE append door (`attachSessionAgent`) so it is idempotent and
+  // cannot lose a concurrent attach; the two may be sent together, in which
+  // case the wholesale assignment lands first and the append is applied on top.
+  addAgentId: z.string().min(1).optional(),
   expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
   verificationReport: z.unknown().optional(),
   // First-class stages: advance the active playbook stage (PlaybookStage.key).
@@ -580,6 +578,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             ? { correlationId: patch.correlationId }
             : {}),
           ...(patch.agentIds !== undefined ? { agentIds: patch.agentIds } : {}),
+          // Carried so the PROPOSED path is not a silent no-op — the
+          // `focus_session/update` executor re-applies it on approval.
+          ...(patch.addAgentId !== undefined
+            ? { addAgentId: patch.addAgentId }
+            : {}),
           ...(patch.expectedOutputs !== undefined
             ? { expectedOutputs: patch.expectedOutputs }
             : {}),
@@ -684,11 +687,30 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.metadata = { ...existingMeta, ...patch.metadata };
       }
 
-      const [updated] = await db
+      let [updated] = await db
         .update(focusSessions)
         .set(set)
         .where(eq(focusSessions.id, id))
         .returning();
+
+      // Roster append through the ONE append door (row-locked, idempotent).
+      // AFTER the row update on purpose: `agentIds` and `addAgentId` may both be
+      // sent, and a wholesale REPLACE followed by an APPEND is the only ordering
+      // where neither silently discards the other. Folding the append into `set`
+      // instead would be a second append implementation with no lock — the exact
+      // read-modify-write race the door exists to own.
+      if (updated && patch.addAgentId !== undefined) {
+        const { attachSessionAgent } =
+          await import("../../../services/focus-sessions/attach-session-agent.js");
+        const attached = await attachSessionAgent({
+          sessionId: id,
+          agentId: patch.addAgentId,
+          userId,
+        });
+        if (attached.status === "attached") {
+          updated = { ...updated, agentIds: attached.agentIds };
+        }
+      }
 
       // Stage transition side-effect: when the active stage actually changes,
       // emit `focus_session.stage_changed` so automations can react (and filter

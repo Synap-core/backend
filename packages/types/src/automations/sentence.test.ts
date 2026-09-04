@@ -525,3 +525,99 @@ describe("the WHERE operator survives compilation", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// PLAYBOOK-RUN THEN — the grammar half.
+//
+// The runtime has executed `type:"playbook_run"` nodes since the playbook wave
+// (`automation-executor.ts` → `executePlaybookRun`, validated by
+// `validate-flow.ts` `case "playbook_run"`), but the SENTENCE grammar could not
+// author one: `actionToFlowNode` had no branch, so a playbook THEN fell through
+// to an `output` node with `outputType: undefined` and the compiler refused it.
+// These tests pin the forward and reverse halves as exact mirrors — the same
+// property that the capability THEN lost twice.
+// ---------------------------------------------------------------------------
+
+describe("playbook_run THEN — grammar authors what the executor already runs", () => {
+  const byId = {
+    type: null,
+    config: {
+      __nodeType: "playbook_run",
+      __playbookId: "11111111-1111-4111-8111-111111111111",
+      __actionKey: "playbook:11111111-1111-4111-8111-111111111111",
+      subject: "{{trigger.entityId}}",
+    },
+  } as const;
+
+  it("is CONFIGURED when it names a playbook by id or by name", () => {
+    expect(isActionConfigured({ ...byId, config: { ...byId.config } })).toBe(
+      true
+    );
+    expect(
+      isActionConfigured({
+        type: null,
+        config: { __nodeType: "playbook_run", __playbookName: "Weekly digest" },
+      })
+    ).toBe(true);
+    // Neither ref ⇒ not configured: `validate-flow` requires one of the two, so
+    // emitting a node here would persist green and throw at run time.
+    expect(
+      isActionConfigured({ type: null, config: { __nodeType: "playbook_run" } })
+    ).toBe(false);
+  });
+
+  it("compiles to the node shape the executor actually reads", () => {
+    const flow = toFlowDefinition([{ ...byId, config: { ...byId.config } }]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run");
+    expect(node).toBeDefined();
+    expect(node!.data).toEqual({
+      playbookId: "11111111-1111-4111-8111-111111111111",
+      paramsMapping: { subject: "{{trigger.entityId}}" },
+    });
+    // No `__` bookkeeping key may reach a stored node — the executor would read
+    // it as a real playbook param.
+    for (const k of Object.keys(
+      node!.data.paramsMapping as Record<string, unknown>
+    )) {
+      expect(k.startsWith("__")).toBe(false);
+    }
+  });
+
+  it.each([
+    [
+      "id only",
+      { playbookId: "11111111-1111-4111-8111-111111111111", paramsMapping: {} },
+    ],
+    ["name only", { playbookName: "Weekly digest", paramsMapping: {} }],
+    [
+      "id + agent + params",
+      {
+        playbookId: "22222222-2222-4222-8222-222222222222",
+        agentType: "researcher",
+        paramsMapping: { topic: "{{trigger.data.title}}" },
+      },
+    ],
+  ])("node → sentence → node is an identity (%s)", (_label, data) => {
+    const original = {
+      nodes: [
+        { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
+        {
+          id: "action-1",
+          type: "playbook_run",
+          position: { x: 0, y: 150 },
+          data,
+        },
+      ],
+      edges: [{ id: "e1", source: "trigger", target: "action-1" }],
+    };
+    const rebuilt = toFlowDefinition(flowToSentenceActions(original));
+    expect(rebuilt).toEqual(original);
+  });
+
+  it("survives the lossy single-action reader too", () => {
+    const flow = toFlowDefinition([{ ...byId, config: { ...byId.config } }]);
+    const action = flowToSentenceAction(flow);
+    expect(action.config.__nodeType).toBe("playbook_run");
+    expect(isActionConfigured(action)).toBe(true);
+  });
+});

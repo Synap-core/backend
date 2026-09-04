@@ -128,6 +128,33 @@ export interface RuleMetadata {
    * nothing".
    */
   routing?: RuleRouting;
+  /**
+   * The structured WHEN/WHERE/THEN sentence this rule was authored from, stored
+   * VERBATIM as it arrived off the wire.
+   *
+   * ── WHY IT IS PERSISTED ────────────────────────────────────────────────
+   * `skills.dryRunRule` REQUIRES a sentence to replay a trigger against real
+   * history. The sentence was written into the rule's PROPOSAL payload and
+   * nowhere else, so a rule was replayable while it was still proposed and
+   * never again once approved — you could preview a rule you had not trusted
+   * yet, and not the one that had been running for a month. That is backwards
+   * for a feature whose whole point is "show me what this actually does".
+   *
+   * Rebuilding it from the compiled automation (`flowToSentenceValue`) is NOT
+   * equivalent: that path is lossy by construction, which is precisely why
+   * `canRepresentAsSentence` has to exist. Storing the authored form keeps the
+   * original intent instead of a best-effort reconstruction of it.
+   *
+   * `unknown` on purpose — this is the untrusted-payload boundary, exactly as
+   * in the proposal payload. The sentence's own schema
+   * (`services/rules/sentence-schema.ts`) is what parses it, at the point of
+   * use. Never trust the stored shape without re-parsing.
+   *
+   * Absent for every rule written before this landed, and for a prose-only
+   * rule that never had a sentence — absent means "cannot replay", never
+   * "matched nothing".
+   */
+  sentence?: unknown;
   createdAt: string;
 }
 
@@ -173,6 +200,14 @@ export function readRuleMetadata(
     ...(candidate.factSkillId ? { factSkillId: candidate.factSkillId } : {}),
     behaviours: Array.isArray(candidate.behaviours) ? candidate.behaviours : [],
     ...(routing ? { routing } : {}),
+    // Projected as `unknown` and NOT parsed here: this reader is the
+    // untrusted-stored-blob boundary, and the sentence's own schema is what
+    // validates it at the point of replay. Parsing eagerly here would make one
+    // malformed stored sentence turn the WHOLE rule unreadable — the rule's
+    // prose is what agents need, and it must survive a bad sentence.
+    ...(candidate.sentence !== undefined && candidate.sentence !== null
+      ? { sentence: candidate.sentence }
+      : {}),
     createdAt: candidate.createdAt ?? new Date(0).toISOString(),
   };
 }
@@ -227,6 +262,8 @@ export function buildRuleMetadata(input: {
   factSkillId?: string;
   behaviours: RuleBehaviourRecord[];
   routing?: RuleRouting;
+  /** The authored sentence, stored so the rule stays replayable. */
+  sentence?: unknown;
   now?: Date;
 }): RuleMetadata {
   const expiresAt = normalizeExpiresAt(input.expiresAt);
@@ -238,6 +275,12 @@ export function buildRuleMetadata(input: {
     ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
     behaviours: input.behaviours,
     ...(input.routing ? { routing: input.routing } : {}),
+    // `undefined` is absent, but `null` and `{}` are not — only skip the key
+    // when there is genuinely nothing, so "authored with no sentence" and
+    // "written before sentences were stored" stay the same single state.
+    ...(input.sentence !== undefined && input.sentence !== null
+      ? { sentence: input.sentence }
+      : {}),
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }

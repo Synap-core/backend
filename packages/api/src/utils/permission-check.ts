@@ -68,6 +68,7 @@ import {
   type WriteEnvelope,
 } from "../access/context.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
+import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
@@ -1349,6 +1350,41 @@ async function evaluatePermission(
             { err, workspaceId, agentUserId, eventKey },
             "Auto-approve audit-trail row insert failed (write still granted; event spine remains the primary audit)"
           );
+        }
+
+        // HONEST DELIVERABLE SIGNAL — the AUTO-APPROVED half.
+        //
+        // `apply-approval.ts` stamps `expectedOutputs[].status = "done"` when a
+        // PENDING session proposal is approved. Auto-approve is the OTHER
+        // approval path — an explicit governance rule (or the default lane)
+        // standing in for the human's click — and it minted/resolved a session
+        // above (the P1 hoist) yet never stamped. So every deliverable produced
+        // by an auto-approved agent write stayed `pending` forever, and since
+        // auto-approve is the MAJORITY of agent write traffic, a session's
+        // expected outputs were effectively never satisfiable.
+        //
+        // Same guard, same arguments as the pending door: session id present,
+        // the proposal's OWN targetType (`subjectType` is the subject here),
+        // and the receipt id as lineage — so the stamp names a real, auditable
+        // row. No receipt id (the insert above failed) ⇒ no stamp: a `done`
+        // whose `satisfiedByProposalId` points at nothing is exactly the
+        // unfalsifiable claim this door replaced.
+        //
+        // Best-effort by the door's contract: a provenance stamp must never
+        // fail a write that was already granted.
+        if (governedSessionId && autoApprovedProposalId) {
+          try {
+            await satisfyExpectedOutputs({
+              sessionId: governedSessionId,
+              targetType: subjectType,
+              proposalId: autoApprovedProposalId,
+            });
+          } catch (err) {
+            logger.warn(
+              { err, proposalId: autoApprovedProposalId },
+              "expected-output stamp failed after an auto-approved write"
+            );
+          }
         }
 
         return { granted: true, autoApprovedProposalId };

@@ -7,6 +7,7 @@ import {
   isRuleExpired,
   normalizeExpiresAt,
   ruleNotExpiredWhere,
+  withRuleExpiry,
 } from "./expiry.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 
@@ -165,5 +166,73 @@ describe("normalizeExpiresAt / isRuleExpired — the JS mirror", () => {
     expect(isRuleExpired(undefined, now)).toBe(false);
     expect(isRuleExpired("2020-01-01T00:00:00.000Z", now)).toBe(true);
     expect(isRuleExpired("2099-01-01T00:00:00.000Z", now)).toBe(false);
+  });
+});
+
+/**
+ * RENEWING A RULE MUST NOT CORRUPT IT.
+ *
+ * Before `renewRule` existed, the only way to move a review date was
+ * `skills.update`'s SHALLOW-merged `metadata` patch — which replaces the whole
+ * `rule` object, so every field the caller failed to resend was destroyed.
+ * These pin the negative guarantee: exactly one key changes.
+ */
+describe("withRuleExpiry", () => {
+  const FULL = {
+    v: 1 as const,
+    intent: "When a client emails an invoice, file it under that client",
+    scope: { kind: "workspace" as const, workspaceId: "ws-1" },
+    expiresAt: "2027-01-01T00:00:00.000Z",
+    factSkillId: "fact-1",
+    behaviours: [{ automationId: "auto-1", flowHash: "h1" }],
+    routing: { classified: true },
+  };
+
+  it("changes the review date and NOTHING else", () => {
+    const next = withRuleExpiry(FULL, "2028-06-01T00:00:00.000Z");
+    expect(next.expiresAt).toBe("2028-06-01T00:00:00.000Z");
+    // The whole point: every other key survives, by value.
+    expect({ ...next, expiresAt: FULL.expiresAt }).toEqual(FULL);
+  });
+
+  it("preserves intent and behaviours — the two that shallow-merge destroyed", () => {
+    const next = withRuleExpiry(FULL, "2028-06-01T00:00:00.000Z");
+    // `intent` IS the prose an agent reads; `behaviours` holds the divergence
+    // snapshot that nothing else can hold.
+    expect(next.intent).toBe(FULL.intent);
+    expect(next.behaviours).toEqual(FULL.behaviours);
+  });
+
+  it("null CLEARS the date by DELETING the key, not by storing undefined", () => {
+    const next = withRuleExpiry(FULL, null);
+    expect("expiresAt" in next).toBe(false);
+    expect({ ...next, expiresAt: FULL.expiresAt }).toEqual(FULL);
+  });
+
+  it("normalises through the same door the create path uses", () => {
+    // A second date format here would produce a rule that reads unexpired to
+    // SQL and expired to JS.
+    const next = withRuleExpiry(FULL, "2027-03-01T12:00:00+02:00");
+    expect(next.expiresAt).toBe(
+      normalizeExpiresAt("2027-03-01T12:00:00+02:00")
+    );
+    expect(next.expiresAt).toBe("2027-03-01T10:00:00.000Z");
+  });
+
+  it("does not mutate the input", () => {
+    const before = JSON.parse(JSON.stringify(FULL));
+    withRuleExpiry(FULL, null);
+    expect(FULL).toEqual(before);
+  });
+
+  it("rejects an unparseable date rather than storing it or silently clearing", () => {
+    // Silently clearing would turn a typo into "this rule never expires".
+    expect(() => withRuleExpiry(FULL, "next tuesday")).toThrow();
+  });
+
+  it("adds a date to a rule that had none", () => {
+    const { expiresAt: _drop, ...noExpiry } = FULL;
+    const next = withRuleExpiry(noExpiry, "2028-06-01T00:00:00.000Z");
+    expect(next.expiresAt).toBe("2028-06-01T00:00:00.000Z");
   });
 });

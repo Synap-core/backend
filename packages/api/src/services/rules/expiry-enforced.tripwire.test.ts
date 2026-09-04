@@ -50,6 +50,12 @@ const PROCEDURE_AUDIENCE: Record<string, "agent" | "owner"> = {
   listRules: "owner",
   getRule: "owner",
   dryRunRule: "owner",
+  // The renew door itself. An EXPIRED rule is its primary case, so enforcing
+  // expiry on its read would make it unable to act on the very rows it exists
+  // for. (This test flagged `renewRule` as unclassified the moment it was
+  // written, before anyone thought to check — which is the point of having no
+  // safe default.)
+  renewRule: "owner",
 };
 
 /**

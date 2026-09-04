@@ -39,7 +39,8 @@ const {
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
 }));
 
-vi.mock("@synap/database", async () => {
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
   mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
   mockValues.mockReturnValue({ returning: mockReturning });
   mockDbInsert.mockImplementation(() => ({ values: mockValues }));
@@ -55,11 +56,25 @@ vi.mock("@synap/database", async () => {
     return b;
   });
   return {
+    ...actual,
     db: {
       insert: mockDbInsert,
       select: mockDbSelect,
+      // `satisfyExpectedOutputs` (called on the auto-approve path once the
+      // receipt lands) opens a transaction and locks the session row. These
+      // tests declare no session outputs, so an empty lock is the honest shape.
       transaction: vi.fn(async (cb: (tx: unknown) => unknown) =>
-        cb({ insert: mockDbInsert })
+        cb({
+          insert: mockDbInsert,
+          select: () => {
+            const b: Record<string, unknown> = {
+              from: () => b,
+              where: () => b,
+              for: () => Promise.resolve([]),
+            };
+            return b;
+          },
+        })
       ),
       query: {
         focusSessions: { findFirst: vi.fn().mockResolvedValue(undefined) },

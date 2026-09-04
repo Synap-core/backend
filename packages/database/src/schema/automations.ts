@@ -756,6 +756,23 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
     playbookName?: string;
     /** Maps automation step outputs to playbook params */
     paramsMapping?: Record<string, string>;
+    /**
+     * AGENT SELECTOR — the `agents.slug` of the agent that should answer the
+     * spawned run. Absent ⇒ the default orchestrator ("meta").
+     *
+     * `executePlaybookRun` (packages/jobs/src/workers/steps/playbook-run.ts) has
+     * read this field since the playbook wave and forwards it to the runner, but
+     * it was never DECLARED here — so no authoring door could type it, no
+     * producer existed, and every playbook run resolved to "meta" regardless of
+     * intent. The rule-sentence grammar now emits it
+     * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
+     * which makes this a typed producer rather than an untyped passthrough.
+     *
+     * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
+     * definitions, services/playbooks/cron-automation.ts) still emits no
+     * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+     */
+    agentType?: string;
     errorHandling?: NodeErrorHandling;
   };
 }

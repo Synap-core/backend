@@ -963,16 +963,16 @@ async function applyProposalApprovalInner(
         // different people, and the version row must be able to say so —
         // stamping the accepting human as author erases the agent from the
         // rail and makes the checkpoint a lie about who wrote the words.
-        // `document_versions` has no metadata column, so the accepting human
-        // is recorded in `message` (the field version history already renders)
-        // rather than growing the table for one string.
+        //
+        // The row records the AUTHOR only. `document_versions` has no metadata
+        // column and no acceptor column, so the accepting human is NOT on this
+        // row: the acceptance actor lives on the proposal (`reviewedBy`), which
+        // is the row that decision belongs to. A uuid stuffed into `message`
+        // would surface verbatim in the version rail.
         ...(proposal.agentUserId
           ? {
               author: "ai" as const,
               authorId: proposal.agentUserId,
-              // The accepting human is the row's acceptance actor, not a
-              // display string: a raw uuid in `message` is the "title fell
-              // through to a UUID" shape the version rail renders verbatim.
               message: "AI edit accepted",
             }
           : {

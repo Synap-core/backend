@@ -131,6 +131,15 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   discard: { imperative: "Discard", past: "Discarded" },
   // Undo of a conversion — the inverse verb, not a delete.
   revert: { imperative: "Revert", past: "Reverted" },
+  // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
+  // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
+  // these keys resolve the full proposal types. They are NOT bare "approve":
+  // "Approve" alone is the decision VERB every proposal card already shows on
+  // its button, so a gate labelled "Approve" would read "Approve · Approve" and
+  // lose the only word that says WHICH gate a person is standing at. Both moods
+  // matter — the button asks, the session receipt reports.
+  plan_approval: { imperative: "Approve plan", past: "Approved plan" },
+  deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
 };
 
 /**
@@ -261,6 +270,12 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   governance_tighten_posture: "Tighten posture",
   capability_run: "Run capability",
   automation_run: "Run automation",
+  // Server-side dev-loop HUMAN GATES. The chip is the first thing a reviewer
+  // reads, and the two gates ask genuinely different questions — one is about
+  // work not yet done, one is about shipping work already verified — so they
+  // get two chips, never one shared "Dev approval".
+  dev_plan_approval: "Approve a plan",
+  dev_deploy_approval: "Approve a deploy",
 };
 
 /**

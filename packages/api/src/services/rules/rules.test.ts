@@ -221,3 +221,76 @@ describe("divergence detection", () => {
     expect(result.behaviours[0]?.flowHash).toBeNull();
   });
 });
+
+/**
+ * A RULE MUST STAY REPLAYABLE AFTER IT IS APPROVED.
+ *
+ * `skills.dryRunRule` REQUIRES a sentence. It was written into the rule's
+ * PROPOSAL payload and nowhere else, so a rule could be dry-run while it was
+ * still proposed and never again once materialized — preview available for the
+ * rule you had not trusted yet, and unavailable for the one that had been
+ * running for a month. Exactly backwards for a feature whose purpose is "show
+ * me what this actually does".
+ */
+describe("the authored sentence survives materialization", () => {
+  const SENTENCE = {
+    trigger: { triggerType: "event", subjectCategory: "external_message" },
+    conditions: [],
+    actions: [{ key: "file_under_client" }],
+  };
+
+  it("round-trips through build → store → read", () => {
+    const built = buildRuleMetadata({
+      intent: "File client invoices",
+      scope: { kind: "pod" },
+      behaviours: [],
+      sentence: SENTENCE,
+    });
+    // Survives the JSONB boundary, not just the in-memory object.
+    const stored = JSON.parse(
+      JSON.stringify({ [RULE_METADATA_KEY]: built })
+    ) as Record<string, unknown>;
+    expect(readRuleMetadata(stored)?.sentence).toEqual(SENTENCE);
+  });
+
+  it("ABSENT is absent — a rule authored without one carries no key", () => {
+    // "No sentence" and "written before sentences were stored" must be ONE
+    // state, so a surface can say "cannot replay" instead of showing a zero.
+    const built = buildRuleMetadata({
+      intent: "Prefer Google over Proton",
+      scope: { kind: "pod" },
+      behaviours: [],
+    });
+    expect("sentence" in built).toBe(false);
+    expect(
+      readRuleMetadata({ [RULE_METADATA_KEY]: built })?.sentence
+    ).toBeUndefined();
+  });
+
+  it("null collapses to absent, so there is no third state", () => {
+    const built = buildRuleMetadata({
+      intent: "x",
+      scope: { kind: "pod" },
+      behaviours: [],
+      sentence: null,
+    });
+    expect("sentence" in built).toBe(false);
+  });
+
+  it("a MALFORMED stored sentence does not make the whole rule unreadable", () => {
+    // The rule's prose is what agents read; it must survive a bad sentence.
+    // Parsing eagerly in the reader would lose the rule over its preview.
+    const meta = readRuleMetadata({
+      [RULE_METADATA_KEY]: {
+        v: 1,
+        intent: "still readable",
+        scope: { kind: "pod" },
+        behaviours: [],
+        sentence: "not a sentence object",
+        createdAt: new Date(0).toISOString(),
+      },
+    });
+    expect(meta?.intent).toBe("still readable");
+    expect(meta?.sentence).toBe("not a sentence object");
+  });
+});

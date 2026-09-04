@@ -326,7 +326,7 @@ export async function listSessionOutputs(
         .where(inArray(proposals.id, proposalIds))
     : [];
 
-  const titles = await resolveTitles([
+  const titles = await resolveTitles(database, [
     ...artifactRows.map((a) => ({
       kind: a.kind,
       refId: artifactRefId(a as JoinArtifactRow),
@@ -350,6 +350,7 @@ export async function listSessionOutputs(
  * entry and keeps the artifact's own title.
  */
 async function resolveTitles(
+  database: typeof db,
   refs: Array<{ kind: string; refId: string }>
 ): Promise<Map<string, string>> {
   const byKind = new Map<string, Set<string>>();
@@ -368,19 +369,19 @@ async function resolveTitles(
 
   const [entityRows, documentRows, viewRows] = await Promise.all([
     entityIds.length
-      ? db
+      ? database
           .select({ id: entities.id, title: entities.title })
           .from(entities)
           .where(inArray(entities.id, entityIds))
       : Promise.resolve([]),
     documentIds.length
-      ? db
+      ? database
           .select({ id: documents.id, title: documents.title })
           .from(documents)
           .where(inArray(documents.id, documentIds))
       : Promise.resolve([]),
     viewIds.length
-      ? db
+      ? database
           .select({ id: views.id, name: views.name })
           .from(views)
           .where(inArray(views.id, viewIds))
@@ -394,5 +395,3 @@ async function resolveTitles(
   for (const r of viewRows) titles.set(`view:${r.id}`, r.name);
   return titles;
 }
-
-/** Backing-table ids are `uuid` columns; a non-uuid ref would error the query. */

@@ -3,19 +3,36 @@
  * the first closes. `session.unblocked` fires exactly once, when the set of
  * blockers still OPEN becomes empty — which is why the reactor re-derives
  * `openBlockerIds` after the close instead of reacting to the close alone.
+ *
+ * The rule spans BOTH kinds of wait — the DECLARED `blocked_by` edge and the
+ * DERIVED "waits on an output of" (targets ∩ produced). One notification, one
+ * last-blocker test across the union.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { getSessionEdgesForMock, openBlockerIdsMock, createMock, queue } =
-  vi.hoisted(() => ({
-    getSessionEdgesForMock: vi.fn(async (_id: string) => ({
-      blockedBy: [] as string[],
-      unblocks: [] as string[],
-    })),
-    openBlockerIdsMock: vi.fn(async (_id: string) => [] as string[]),
-    createMock: vi.fn(async (_input: unknown) => "notif-1"),
-    queue: [] as unknown[][],
-  }));
+const {
+  getSessionEdgesForMock,
+  openBlockerIdsMock,
+  outputDependentsOfMock,
+  openOutputBlockerIdsMock,
+  createMock,
+  queue,
+} = vi.hoisted(() => ({
+  getSessionEdgesForMock: vi.fn(async (_id: string) => ({
+    blockedBy: [] as string[],
+    unblocks: [] as string[],
+  })),
+  openBlockerIdsMock: vi.fn(async (_id: string) => [] as string[]),
+  outputDependentsOfMock: vi.fn(
+    async (_id: string, _userId: string) =>
+      [] as Array<{ entityId: string; dependentSessionId: string }>
+  ),
+  openOutputBlockerIdsMock: vi.fn(
+    async (_id: string, _userId: string) => [] as string[]
+  ),
+  createMock: vi.fn(async (_input: unknown) => "notif-1"),
+  queue: [] as unknown[][],
+}));
 
 // PARTIAL mock: only `db` is replaced — see the total-mock ratchet tripwire.
 vi.mock("@synap/database", async (importOriginal) => {
@@ -31,6 +48,11 @@ vi.mock("@synap/database", async (importOriginal) => {
 vi.mock("../../services/focus-sessions/session-blocked-by.js", () => ({
   getSessionEdgesFor: getSessionEdgesForMock,
   openBlockerIds: openBlockerIdsMock,
+}));
+
+vi.mock("../../services/focus-sessions/session-output-edges.js", () => ({
+  outputDependentsOf: outputDependentsOfMock,
+  openOutputBlockerIds: openOutputBlockerIdsMock,
 }));
 
 vi.mock("../NotificationService.js", () => ({
@@ -90,7 +112,7 @@ describe("session-unblock-notify reactor", () => {
       blockedBy: [],
       unblocks: [DEPENDENT],
     });
-    queue.push([{ id: CLOSED, title: "the blocker" }]); // closed session row
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]); // closed session row
     queue.push([
       { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
     ]);
@@ -104,7 +126,7 @@ describe("session-unblock-notify reactor", () => {
       blockedBy: [],
       unblocks: [DEPENDENT],
     });
-    queue.push([{ id: CLOSED, title: "the blocker" }]);
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]);
     queue.push([
       { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
     ]);
@@ -122,12 +144,70 @@ describe("session-unblock-notify reactor", () => {
     });
   });
 
+  it("notifies a dependent that was waiting only on an OUTPUT of the closed session", async () => {
+    // No declared blocker at all — the wait is entirely derived.
+    getSessionEdgesForMock.mockResolvedValueOnce({
+      blockedBy: [],
+      unblocks: [],
+    });
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]);
+    outputDependentsOfMock.mockResolvedValueOnce([
+      { entityId: "entity-x", dependentSessionId: DEPENDENT },
+    ]);
+    queue.push([
+      { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
+    ]);
+    openBlockerIdsMock.mockResolvedValueOnce([]);
+    openOutputBlockerIdsMock.mockResolvedValueOnce([]);
+    queue.push([]);
+    await sessionUnblockNotifyReactor.handler(payload(), {} as never);
+    expect(createMock).toHaveBeenCalledTimes(1);
+    expect(createMock.mock.calls[0]![0]).toMatchObject({
+      groupKey: `session.unblocked:${DEPENDENT}:${CLOSED}`,
+    });
+  });
+
+  it("stays silent while the dependent still waits on ANOTHER session's output", async () => {
+    // The declared side is clear; the derived side is not. One rule, both kinds.
+    getSessionEdgesForMock.mockResolvedValueOnce({
+      blockedBy: [],
+      unblocks: [DEPENDENT],
+    });
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]);
+    queue.push([
+      { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
+    ]);
+    openBlockerIdsMock.mockResolvedValueOnce([]);
+    openOutputBlockerIdsMock.mockResolvedValueOnce(["other-open-producer"]);
+    await sessionUnblockNotifyReactor.handler(payload(), {} as never);
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("sends ONE notification when a dependent waits both ways on the same session", async () => {
+    getSessionEdgesForMock.mockResolvedValueOnce({
+      blockedBy: [],
+      unblocks: [DEPENDENT],
+    });
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]);
+    outputDependentsOfMock.mockResolvedValueOnce([
+      { entityId: "entity-x", dependentSessionId: DEPENDENT },
+    ]);
+    queue.push([
+      { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
+    ]);
+    openBlockerIdsMock.mockResolvedValueOnce([]);
+    openOutputBlockerIdsMock.mockResolvedValueOnce([]);
+    queue.push([]);
+    await sessionUnblockNotifyReactor.handler(payload(), {} as never);
+    expect(createMock).toHaveBeenCalledTimes(1);
+  });
+
   it("is idempotent — a replayed close event does not notify twice", async () => {
     getSessionEdgesForMock.mockResolvedValueOnce({
       blockedBy: [],
       unblocks: [DEPENDENT],
     });
-    queue.push([{ id: CLOSED, title: "the blocker" }]);
+    queue.push([{ id: CLOSED, title: "the blocker", userId: "u" }]);
     queue.push([
       { id: DEPENDENT, title: "waiting work", userId: "u", workspaceId: "ws" },
     ]);

@@ -55,7 +55,7 @@ import {
 } from "./lifecycle-events.js";
 
 /** The origins whose sessions land in triage — nobody triages their own work. */
-export const TRIAGE_ORIGINS = ["agent", "automation"] as const;
+const TRIAGE_ORIGINS = ["agent", "automation"] as const;
 
 /** SQL: rows that are triage-pending right now. */
 export function triagePendingWhere(): SQL {

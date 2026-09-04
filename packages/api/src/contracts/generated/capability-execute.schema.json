@@ -1,0 +1,58 @@
+{
+  "type": "object",
+  "properties": {
+    "verbId": {
+      "description": "The capability verb to run — the backing skill's NAME (e.g. 'gmail_send'). One of verbId/skillId is required.",
+      "type": "string",
+      "minLength": 1
+    },
+    "skillId": {
+      "description": "Direct backing-skill id (alternative to verbId).",
+      "type": "string",
+      "minLength": 1
+    },
+    "parameters": {
+      "description": "The capability's own inputs, passed to the skill sandbox as `args` — e.g. { to, subject, body } for gmail_send.",
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {}
+    },
+    "workspaceId": {
+      "description": "Acting workspace — an optional lens narrowing the skill lookup and the gate. Omit for a pod-wide run.",
+      "type": "string",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+    },
+    "connectionSelector": {
+      "description": "Which of the capability's connections this run uses, when it has more than one. A selector matching nothing fails the run.",
+      "type": "object",
+      "properties": {
+        "connectionId": {
+          "type": "string"
+        },
+        "contextObjectId": {
+          "type": "string"
+        }
+      }
+    },
+    "idempotencyKey": {
+      "description": "A stable key correlating retries of THIS logical run, so an external-send verb is at-most-once. Omitted → a content hash is derived.",
+      "type": "string",
+      "minLength": 1
+    },
+    "channelId": {
+      "description": "Instruction-provenance: the acting channel of this agent turn. A run triggered from an untrusted-origin channel force-proposes instead of auto-running.",
+      "type": "string"
+    },
+    "sourceMessageId": {
+      "description": "The triggering inbound message id, resolved server-side to the acting channel when channelId is not passed explicitly.",
+      "type": "string"
+    },
+    "sessionId": {
+      "description": "The focus session this run belongs to. Persisted as the proposals.session_id column so a reviewer sees which operation the action was part of.",
+      "type": "string"
+    }
+  }
+}

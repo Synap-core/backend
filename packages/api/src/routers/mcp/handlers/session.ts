@@ -255,6 +255,7 @@ export const sessionHandlers: McpHandlerMap = {
       addOutput: args.addOutput as
         { kind: string; label: string; icon?: string } | undefined,
       completeOutput: args.completeOutput as string | undefined,
+      addAgentId: args.addAgentId as string | undefined,
       expectedOutputs: args.expectedOutputs as
         | Array<{
             kind: string;

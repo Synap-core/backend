@@ -831,8 +831,10 @@ const actionOptionSchema = z.object({
   label: z.string(),
   // Which flow node this action compiles to. "output" (default) → an `output`
   // node keyed on `outputType`; "capability" → a `type:"capability"` node calling
-  // `verbId` on `capabilityId`, governed by the shared capability gate.
-  nodeType: z.enum(["output", "capability"]).default("output"),
+  // `verbId` on `capabilityId`, governed by the shared capability gate;
+  // "playbook_run" → a `type:"playbook_run"` node spawning a session that runs
+  // `playbookId` (optionally as `agentType`), executed by `executePlaybookRun`.
+  nodeType: z.enum(["output", "capability", "playbook_run"]).default("output"),
   // Set for OUTPUT actions (the executor `outputType`); absent for capability.
   outputType: z.string().optional(),
   // Set for CAPABILITY actions: the verb id (`<subject>.<action>` — the exact id
@@ -840,6 +842,10 @@ const actionOptionSchema = z.object({
   // Absent for output actions.
   capabilityId: z.string().uuid().optional(),
   verbId: z.string().optional(),
+  // Set for PLAYBOOK_RUN actions: the playbook this THEN spawns a session for.
+  // The node accepts `playbookId` OR `playbookName`; the door always offers the
+  // id, which is the unambiguous reference.
+  playbookId: z.string().uuid().optional(),
   params: z
     .array(
       z.object({
@@ -898,6 +904,55 @@ export function capabilityActionOptions(
     });
   }
   return out;
+}
+
+/**
+ * Map a workspace's PLAYBOOKS into playbook-run `ActionOption`s — the THEN that
+ * spawns a session running a playbook.
+ *
+ * PURE (rows in, options out) so it is unit-testable without a DB, the same
+ * shape as `capabilityActionOptions`. The `key` is `playbook:<id>`, mirroring
+ * the `verb:<verbId>` convention so the selected-option highlight and the
+ * `paramsOf`/required-config gate work with zero new UI. Params come from the
+ * playbook's OWN declared `params` (`PlaybookParam[]`), projected into the same
+ * `{ key, label, required }` shape the five output actions use — labels through
+ * the ONE humanization door, never a hand-written map.
+ */
+export function playbookActionOptions(
+  rows: readonly {
+    id: string;
+    name: string;
+    params?: unknown;
+  }[]
+): ActionOption[] {
+  return rows.map((row) => ({
+    key: `playbook:${row.id}`,
+    label: row.name,
+    nodeType: "playbook_run" as const,
+    playbookId: row.id,
+    params: Array.isArray(row.params)
+      ? row.params.flatMap((raw) => {
+          if (typeof raw !== "object" || raw === null) return [];
+          const spec = raw as {
+            name?: unknown;
+            label?: unknown;
+            required?: unknown;
+          };
+          if (typeof spec.name !== "string" || spec.name.length === 0)
+            return [];
+          return [
+            {
+              key: spec.name,
+              label:
+                typeof spec.label === "string" && spec.label.length > 0
+                  ? spec.label
+                  : humanizeToken(spec.name),
+              required: spec.required === true,
+            },
+          ];
+        })
+      : [],
+  }));
 }
 
 /**
@@ -1640,6 +1695,31 @@ export const automationsRouter = router({
           );
         }
       }
+
+      // Playbook-run THEN: every playbook visible at this lens. A `playbook_run`
+      // node has been EXECUTABLE since the playbook wave (automation-executor.ts
+      // `case "playbook_run"` → `executePlaybookRun`, shape-checked by
+      // `validate-flow.ts`) but no authoring door offered it, so the runtime had
+      // zero producers. `scopedDb` applies the playbooks VisibilityRule
+      // (workspace + pod-wide), so this can only ever list rows the caller may
+      // already see. Unlike a capability verb, a playbook is not gated on a
+      // connection: it spawns a session, which the session runtime governs.
+      const playbookRows = await scopedDb(AccessContext.from(ctx)).findMany<{
+        id: string;
+        name: string;
+        params: unknown;
+      }>(playbooks, {
+        columns: { id: true, name: true, params: true },
+        where: scope.workspaceId
+          ? or(
+              isNull(playbooks.workspaceId),
+              eq(playbooks.workspaceId, scope.workspaceId)
+            )
+          : undefined,
+        orderBy: asc(playbooks.name),
+        limit: 200,
+      });
+      actions.push(...playbookActionOptions(playbookRows));
 
       return { actions: actionOptionSchema.array().parse(actions) };
     }),
@@ -2401,6 +2481,51 @@ export const automationsRouter = router({
       // (assertWorkspaceWrite above); the agent path additionally runs the gate,
       // which owns the agent's own RBAC + propose/execute decision.
       const agentUserId = input.agentUserId ?? ctx.agentUserId ?? undefined;
+
+      // ── An AGENT may not run a lapsed rule's behaviour, even by proposal ──
+      // The matcher and the cron scheduler already refuse to FIRE an expired
+      // rule's automation. This is the third firing path: an agent asking for a
+      // run on demand. Without this the two autonomous doors are shut and the
+      // agent-initiated one is open, which is the wrong door to leave open —
+      // expiry exists precisely because a standing permission granted to an
+      // agent goes stale.
+      //
+      // The gate below would route this to a proposal rather than execute it,
+      // so nothing runs unreviewed. But the proposal card carries no expiry
+      // signal, so a human would be approving "run this automation" with no way
+      // to see that the rule behind it lapsed — consent without the fact that
+      // matters. Refusing here is honest; approving blind is not.
+      //
+      // A HUMAN's own explicit "run now" is deliberately still allowed: they
+      // can see the rule is expired, and it is their standing permission to
+      // spend. `skills.renewRule` is the durable answer, and the message says so.
+      if (agentUserId) {
+        const ruleId = (
+          existing.metadata as Record<string, unknown> | null | undefined
+        )?.["ruleId"];
+        if (typeof ruleId === "string" && ruleId.length > 0) {
+          const { readRuleMetadata } =
+            await import("../services/rules/index.js");
+          const { isRuleExpired } = await import("../services/rules/expiry.js");
+          const ruleRow = await database.query.skills.findFirst({
+            where: eq(skills.id, ruleId),
+            columns: { metadata: true },
+          });
+          const ruleMeta = readRuleMetadata(
+            ruleRow?.metadata as Record<string, unknown> | null
+          );
+          // Absent is NOT expired — a rule row that is gone, or one with no
+          // review date, leaves the automation runnable exactly as before.
+          if (ruleMeta && isRuleExpired(ruleMeta.expiresAt)) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message:
+                "This automation belongs to a rule whose review date has passed, so an agent cannot run it. Renew the rule to put it back in effect.",
+            });
+          }
+        }
+      }
+
       if (agentUserId) {
         const perm = await checkPermissionOrPropose({
           userId: ctx.userId!,

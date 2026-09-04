@@ -445,6 +445,16 @@ const CAPABILITY_NODE_TYPE_KEY = "__nodeType";
 const CAPABILITY_ID_KEY = "__capabilityId";
 const CAPABILITY_VERB_ID_KEY = "__verbId";
 const CAPABILITY_ACTION_KEY = "__actionKey";
+// Playbook-run THEN bookkeeping. A `type:"playbook_run"` flow node (executor:
+// automation-executor.ts `case "playbook_run"` → `executePlaybookRun`) has no
+// `ActionType` slot either, so its action carries `type: null` and encodes the
+// playbook reference + agent selector in `config` under these keys. The node's
+// own data shape is `{ playbookId?, playbookName?, paramsMapping?, agentType? }`
+// — read field-by-field by the executor and required-one-of by
+// `validate-flow.ts` `case "playbook_run"`.
+const PLAYBOOK_ID_KEY = "__playbookId";
+const PLAYBOOK_NAME_KEY = "__playbookName";
+const PLAYBOOK_AGENT_TYPE_KEY = "__agentType";
 
 /**
  * EXPORTED so the browser's `sentence-io.ts` can derive its `RESERVED_CONFIG_KEYS`
@@ -466,6 +476,9 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   CAPABILITY_ID_KEY,
   CAPABILITY_VERB_ID_KEY,
   CAPABILITY_ACTION_KEY,
+  PLAYBOOK_ID_KEY,
+  PLAYBOOK_NAME_KEY,
+  PLAYBOOK_AGENT_TYPE_KEY,
 ];
 
 /** The action's config with every `__`-prefixed bookkeeping key removed. */
@@ -487,10 +500,22 @@ function persistedConfig(
  * how a browser-authored THEN silently vanished. Exported because the rule
  * compiler must ask the same question the flow builder answers, from one place.
  */
+const nonEmptyStr = (v: unknown): boolean =>
+  typeof v === "string" && v.length > 0;
+
 export function isActionConfigured(action: SentenceAction): boolean {
   if (action.type !== null) return true;
   const cfg = action.config ?? {};
   if (cfg[CAPABILITY_NODE_TYPE_KEY] === "capability") return true;
+  // A playbook_run THEN is configured once it names a playbook — by id OR by
+  // name, the same one-of `validate-flow.ts` requires. Without this branch a
+  // playbook THEN counts as an empty action and `toFlowDefinition` drops it,
+  // which is exactly how the capability THEN silently vanished before.
+  if (cfg[CAPABILITY_NODE_TYPE_KEY] === "playbook_run") {
+    return (
+      nonEmptyStr(cfg[PLAYBOOK_ID_KEY]) || nonEmptyStr(cfg[PLAYBOOK_NAME_KEY])
+    );
+  }
   const out = cfg[OUTPUT_TYPE_KEY];
   return typeof out === "string" && out.length > 0;
 }
@@ -518,6 +543,34 @@ function actionToFlowNode(
     };
   }
   const cfg = action.config ?? {};
+
+  // `type: null` + `__nodeType: "playbook_run"` → a `playbook_run` node: spawn a
+  // session running playbook P, optionally with a named agent. The data keys are
+  // the executor's own (`automation-executor.ts` `case "playbook_run"` rebuilds
+  // the call field-by-field from `playbookId` / `playbookName` / `paramsMapping`
+  // / `agentType`), so writing any other key here would typecheck and match
+  // nothing at run time — the `params` vs `inputMapping` mistake one lane over.
+  // Optional keys are OMITTED, not written as `undefined`, so a node without an
+  // agent selector round-trips to a node without one.
+  if (
+    action.type === null &&
+    cfg[CAPABILITY_NODE_TYPE_KEY] === "playbook_run"
+  ) {
+    const data: Record<string, unknown> = {};
+    if (nonEmptyStr(cfg[PLAYBOOK_ID_KEY]))
+      data.playbookId = cfg[PLAYBOOK_ID_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_NAME_KEY]))
+      data.playbookName = cfg[PLAYBOOK_NAME_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_AGENT_TYPE_KEY]))
+      data.agentType = cfg[PLAYBOOK_AGENT_TYPE_KEY];
+    data.paramsMapping = persistedConfig(cfg);
+    return {
+      id: nodeId,
+      type: "playbook_run",
+      position: { x: 0, y },
+      data,
+    };
+  }
 
   // `type: null` + `__nodeType: "capability"` → a `capability` node. The exact
   // inverse of `flowNodeToSentenceAction`'s capability branch below; the two
@@ -750,6 +803,32 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       },
     };
   }
+  // `playbook_run` node → a spawn-a-session THEN; the exact inverse of the
+  // forward branch above. Optional fields are omitted when absent so
+  // node → action → node is an identity (round-trip test in sentence.test.ts).
+  if (actionNode.type === "playbook_run") {
+    const pdata = data as {
+      playbookId?: string;
+      playbookName?: string;
+      agentType?: string;
+      paramsMapping?: Record<string, unknown>;
+    };
+    const config: Record<string, unknown> = {
+      [CAPABILITY_NODE_TYPE_KEY]: "playbook_run",
+    };
+    if (nonEmptyStr(pdata.playbookId))
+      config[PLAYBOOK_ID_KEY] = pdata.playbookId;
+    if (nonEmptyStr(pdata.playbookName))
+      config[PLAYBOOK_NAME_KEY] = pdata.playbookName;
+    if (nonEmptyStr(pdata.agentType))
+      config[PLAYBOOK_AGENT_TYPE_KEY] = pdata.agentType;
+    config[CAPABILITY_ACTION_KEY] =
+      `playbook:${pdata.playbookId ?? pdata.playbookName ?? ""}`;
+    return {
+      type: null,
+      config: { ...config, ...(pdata.paramsMapping ?? {}) },
+    };
+  }
   // Legacy `type:"action"` nodes (stored before the executor-true fix) still
   // round-trip via their old `stepType`.
   return {
@@ -760,8 +839,9 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
 
 /**
  * Read ALL non-trigger action nodes off a stored flow, in order — the reverse of
- * `toFlowDefinition` (which writes N `output`/`command` nodes), plus `capability`
- * nodes which `toFlowDefinition` does not emit (see `flowNodeToSentenceAction`).
+ * `toFlowDefinition` (which writes N `output`/`command`/`playbook_run` nodes),
+ * plus `capability` nodes which `toFlowDefinition` does not emit (see
+ * `flowNodeToSentenceAction`).
  * `flowToSentenceAction` (singular) is implemented in terms of this so the two
  * can never disagree.
  */

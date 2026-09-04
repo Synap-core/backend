@@ -265,3 +265,60 @@ describe("EventRepository.activityStats — pulse-band aggregate", () => {
     });
   });
 });
+
+/**
+ * The `sessionId` filter — the FIRST reader of `events.session_id`.
+ *
+ * The column and its partial index `idx_events_session_id` shipped in migration
+ * 0241 and nothing outside the graph service ever queried them: the temporal
+ * spine was written and never read back, so a session could not show its own
+ * history. These pin the where-clause that closes that severance, and — the
+ * load-bearing part — that it NARROWS the existing user/workspace clamps rather
+ * than replacing them.
+ */
+describe("EventRepository.searchEvents — session filter", () => {
+  let unsafe: ReturnType<typeof vi.fn>;
+  let repo: EventRepository;
+
+  beforeEach(() => {
+    unsafe = vi.fn().mockResolvedValue([]);
+    repo = new EventRepository({ unsafe } as any);
+  });
+
+  const lastCall = () => {
+    const [sql, params] = unsafe.mock.calls[0] as [string, unknown[]];
+    return { sql, params };
+  };
+
+  it("builds a session_id equality clause", async () => {
+    await repo.searchEvents({ sessionId: "sess-1" });
+    const { sql, params } = lastCall();
+    expect(sql).toContain("AND session_id = $1");
+    expect(params).toEqual(["sess-1"]);
+  });
+
+  it("keeps the userId clamp ANDed with the session filter (no widening)", async () => {
+    await repo.searchEvents({ userId: "user-1", sessionId: "sess-1" });
+    const { sql, params } = lastCall();
+    expect(sql).toContain("user_id = $1");
+    expect(sql).toContain("AND session_id = $2");
+    expect(params.slice(0, 2)).toEqual(["user-1", "sess-1"]);
+  });
+
+  it("keeps the workspace lens ANDed with the session filter", async () => {
+    await repo.searchEvents({
+      workspaceId: "ws-1",
+      includePodWide: true,
+      sessionId: "sess-1",
+    });
+    const { sql } = lastCall();
+    expect(sql).toContain("COALESCE(workspace_id, data->>'workspaceId') = $1");
+    expect(sql).toContain("AND session_id = $2");
+  });
+
+  it("emits NO session predicate when sessionId is absent", async () => {
+    await repo.searchEvents({ userId: "user-1" });
+    const { sql } = lastCall();
+    expect(sql).not.toContain("session_id");
+  });
+});

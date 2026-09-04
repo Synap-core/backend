@@ -31,6 +31,13 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import {
+  createDevApprovalProposal,
+  DEV_APPROVAL_SCHEMAS,
+  DEV_DEPLOY_APPROVAL_TYPE,
+  DEV_PLAN_APPROVAL_TYPE,
+  type DevApprovalType,
+} from "../../../services/proposals/dev-approval.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
@@ -45,6 +52,34 @@ export const MAX_PAGE_SIZE = 200;
 /** Deepest reachable offset. `offset` is a native SQL OFFSET on the procedure,
  *  so this is a sanity bound on absurd input, not a cost ceiling. */
 export const MAX_OFFSET = 100_000;
+
+/** POST /proposals/dev-approval request body. */
+const DevApprovalRequestSchema = z
+  .object({
+    type: z
+      .enum([DEV_PLAN_APPROVAL_TYPE, DEV_DEPLOY_APPROVAL_TYPE])
+      .describe("Which dev-loop gate is being filed."),
+    workspaceId: z.string().nullable().optional(),
+    projectId: z.string().nullable().optional(),
+    channelId: z.string().optional(),
+    sourceMessageId: z.string().optional(),
+    payload: z
+      .union([
+        DEV_APPROVAL_SCHEMAS[DEV_PLAN_APPROVAL_TYPE],
+        DEV_APPROVAL_SCHEMAS[DEV_DEPLOY_APPROVAL_TYPE],
+      ])
+      .describe("The gate payload — shape is determined by `type`."),
+  })
+  .openapi("DevApprovalRequest");
+
+/** POST /proposals/dev-approval response. */
+const DevApprovalResponseSchema = z
+  .object({
+    id: z.string(),
+    status: z.string(),
+    sessionId: z.string(),
+  })
+  .openapi("DevApprovalResponse");
 
 export function registerProposalsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /proposals* routes ──────────────────────────────
@@ -605,6 +640,120 @@ export function registerProposalsRoutes(app: HubHono): void {
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // ── OpenAPI metadata for the typed dev-loop gate door ────────────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/dev-approval",
+    tags: ["Proposals"],
+    summary: "File a dev-loop human gate (plan or deploy approval)",
+    description:
+      "The typed door for the server-side dev loop's two stops: `dev.plan_approval` " +
+      "before the agent writes code, `dev.deploy_approval` before it ships a verified " +
+      "commit. Files a normal governed proposal against the FOCUS SESSION, so it " +
+      "inherits the `proposal.created` push (with its `synap://open/proposal/<id>` " +
+      "deep link), the `sessionId` provenance FK and every review surface. " +
+      "APPROVAL ONLY RECORDS THE DECISION on the session — the pod never runs " +
+      "`gateCommand` / `deployCommand`; the agent polls and acts on its own machine.",
+    request: {
+      body: {
+        content: {
+          "application/json": { schema: DevApprovalRequestSchema },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "The filed gate proposal",
+        schema: DevApprovalResponseSchema,
+      },
+      400: {
+        description: "Unknown `type`, or a payload the type's schema rejects",
+        schema: ErrorSchema,
+      },
+      403: { description: "Missing scope", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * POST /proposals/dev-approval
+   *
+   * The TYPED dev-loop gate door — this is what the CLI/agent calls, not the
+   * free-form POST /proposals below. The generic door validates nothing, so a
+   * producer that misspells `planMarkdown` files a proposal that renders an
+   * empty review body and stamps an empty session, with both halves reporting
+   * success. Here the payload is parsed against the type's own zod schema and a
+   * bad one is a 400 at the door.
+   *
+   * ROUTE ORDERING — verified, not assumed. Hono matches in registration order,
+   * so a static path registered AFTER a matching param route loses to it. The
+   * POST routes above are all TWO segments (`/proposals/:id/approve`,
+   * `/revert`, `/reject`), which cannot match this ONE-segment path, and there
+   * is no single-segment `POST /proposals/:id`. So this position is safe today.
+   * If a `POST /proposals/:id` is ever added, it MUST go below this line or it
+   * will swallow `dev-approval` as an id.
+   */
+  app.post("/proposals/dev-approval", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    const body = (await c.req.json()) as {
+      type?: string;
+      workspaceId?: string | null;
+      projectId?: string | null;
+      channelId?: string;
+      sourceMessageId?: string;
+      payload?: unknown;
+    };
+    if (!body.type || !(body.type in DEV_APPROVAL_SCHEMAS)) {
+      return c.json(
+        {
+          error:
+            `Unknown dev approval type. Expected one of: ` +
+            `${DEV_PLAN_APPROVAL_TYPE}, ${DEV_DEPLOY_APPROVAL_TYPE}.`,
+        },
+        400
+      );
+    }
+    const workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
+    const agentUserId = (c.get("agentUserId") as string | undefined) ?? null;
+    try {
+      const result = await createDevApprovalProposal({
+        type: body.type as DevApprovalType,
+        payload: body.payload,
+        userId: agentUserId ?? (c.get("userId") as string),
+        workspaceId,
+        projectId: body.projectId ?? null,
+        agentUserId,
+        channelId: body.channelId ?? null,
+        sourceMessageId: body.sourceMessageId ?? null,
+      });
+      return c.json(result);
+    } catch (err) {
+      // A zod parse failure is the caller's bug, not the server's — return it as
+      // a 400 with the field-level message so the agent can fix its payload
+      // instead of retrying an identical malformed body against a 500.
+      if (err && typeof err === "object" && "issues" in err) {
+        return c.json(
+          {
+            error: `Invalid ${body.type} payload: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+          400
+        );
+      }
+      logger.error({ err }, "createDevApprovalProposal failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
       );
     }
   });

@@ -53,7 +53,7 @@ import { dirname, join, relative } from "node:path";
  * there is no separate list to forget to update.
  */
 
-const BASELINE = 67;
+const BASELINE = 66;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

@@ -30,13 +30,18 @@ import {
   attachParentSessionIds,
 } from "../services/focus-sessions/parent-lineage.js";
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
-import { isTerminalSessionStatus } from "../services/focus-sessions/session-statuses.js";
+import {
+  isTerminalSessionStatus,
+  SESSION_STATUSES,
+  UPDATABLE_SESSION_STATUSES,
+} from "../services/focus-sessions/session-statuses.js";
 import { listSessionOutputs } from "../services/focus-sessions/session-outputs.js";
 import {
   addSessionBlocker,
   removeSessionBlocker,
   attachSessionEdges,
 } from "../services/focus-sessions/session-blocked-by.js";
+import { attachSessionOutputDependencies } from "../services/focus-sessions/session-output-edges.js";
 import {
   acceptFromTriage,
   discardFromTriage,
@@ -74,19 +79,14 @@ const expectedOutputItemSchema = z.object({
   status: z.enum(["pending", "done"]).optional(),
 });
 
-const statusFilterSchema = z
-  .enum([
-    "active",
-    "paused",
-    "closed",
-    "forming",
-    "scheduled",
-    "failed",
-    "cancelled",
-    "stale",
-    "all",
-  ])
-  .default("all");
+// DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
+// never hand-mirrored: a new `focus_sessions.status` value reaches this filter
+// automatically instead of being silently unfilterable. `"all"` is a filter
+// sentinel, not a stored state.
+const statusFilterSchema = z.enum([...SESSION_STATUSES, "all"]).default("all");
+
+/** The states a client may write — the ONE list, shared with the Hub REST PATCH door. */
+const updatableStatusSchema = z.enum(UPDATABLE_SESSION_STATUSES);
 
 /**
  * WHICH SESSIONS. Orthogonal to `status`, which is the row's own lifecycle.
@@ -241,11 +241,16 @@ export const focusSessionsRouter = router({
         status: statusFilterSchema,
         limit: z.number().int().min(1).max(50).default(20),
         /**
-         * Also project the `blocked_by` dependency edges for the page —
-         * `blockedBy` (what this session waits on) and `unblocks` (what waits
-         * on it). Opt-in because most callers do not draw them, and it is a
-         * projection on THIS door rather than a `graph` procedure of its own:
-         * a second door would be a second shape to keep in lockstep.
+         * Also project the dependency edges for the page. TWO kinds, on the
+         * one flag because a consumer drawing "what is this waiting on" needs
+         * both or neither:
+         *   - DECLARED — `blockedBy` / `unblocks`, the `blocked_by` edges.
+         *   - DERIVED — `waitsOnOutputs` / `outputsWaitedOnBy`, from
+         *     `targets` ∩ `produced` over the same entity
+         *     (`session-output-edges.ts`). No edge type of its own.
+         * Opt-in because most callers do not draw them, and it is a projection
+         * on THIS door rather than a `graph` procedure of its own: a second
+         * door would be a second shape to keep in lockstep.
          */
         edges: z.boolean().optional(),
         /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
@@ -271,7 +276,11 @@ export const focusSessionsRouter = router({
       const withTriage = attachTriage(withLineage);
       if (!input.edges) return withTriage;
       // Second batch projection, ONE more links query for the whole page.
-      return attachSessionEdges(withTriage);
+      const withEdges = await attachSessionEdges(withTriage);
+      // Third: the DERIVED output dependencies. Owner-floored explicitly —
+      // unlike `blocked_by`, these edges have no single producer that floors
+      // both ends, so the counterparty can belong to another user.
+      return attachSessionOutputDependencies(withEdges, ctx.userId);
     }),
 
   /**
@@ -547,12 +556,21 @@ export const focusSessionsRouter = router({
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *
-   * Returns `participants` — the agents that actually WORKED in this session,
-   * DERIVED from the proposals they filed against it. The `agentIds` column is
-   * not that set. It is an INVITE LIST: the create and update doors REPLACE it
-   * wholesale (here, the Hub PATCH, and sync's conflict update), but nothing
-   * ever APPENDS to it when an agent does work — so a session driven by an agent
-   * nobody named up front reads as empty. The derived set is authoritative.
+   * Returns `participants` — everyone STAFFED on this session, from the two
+   * stores that each know half the answer:
+   *
+   *   1. DERIVED — agents that actually WORKED here, read off the proposals they
+   *      filed against the session. This is evidence, and it is why the roster
+   *      was derived in the first place.
+   *   2. DECLARED — `focus_sessions.agentIds`. Historically an INVITE LIST that
+   *      only create-time writers could set (every door assigned it wholesale;
+   *      nothing appended), so an agent that joined mid-flight could not be
+   *      recorded and the column was worth ignoring. `attachSessionAgent` is now
+   *      the append door, so a declared-but-not-yet-productive agent is a real
+   *      answer this surface must show.
+   *
+   * UNIONED, not one or the other: an agent that filed no proposal is still on
+   * the session, and an agent nobody declared still did the work.
    */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -589,10 +607,17 @@ export const focusSessionsRouter = router({
       // swap tones between two refetches of the same session, on a surface that
       // polls. Deterministic order is the difference between a stable roster and
       // a flickering one.
-      const participantIds = participantRows
-        .map((p) => p.agentUserId)
-        .filter((id): id is string => Boolean(id))
-        .sort();
+      // UNION of the two stores — declared (`agentIds`, now appendable via
+      // `attachSessionAgent`) and derived (proposals filed). A Set collapses an
+      // agent present in both.
+      const participantIds = [
+        ...new Set([
+          ...participantRows
+            .map((p) => p.agentUserId)
+            .filter((id): id is string => Boolean(id)),
+          ...((row.agentIds as string[] | null) ?? []).filter(Boolean),
+        ]),
+      ].sort();
 
       // Resolve to display names in the SAME batch shape `proposals.list` uses
       // for its agent labels — one `inArray`, one `displayNameForUser`. A bare
@@ -696,6 +721,40 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * APPEND one agent to the session's roster.
+   *
+   * Separate from `update` on purpose. `update.agentIds` REPLACES the array —
+   * the only shape the column ever had, and the reason nothing could staff a
+   * session already in flight without first re-reading and re-sending the whole
+   * list (a lost-update race between any two callers). This door appends, is
+   * idempotent, and is the ONE writer that may do so; see
+   * `services/focus-sessions/attach-session-agent.ts`.
+   */
+  attachAgent: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        agentId: z.string().min(1),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { attachSessionAgent } =
+        await import("../services/focus-sessions/attach-session-agent.js");
+      const result = await attachSessionAgent({
+        sessionId: input.id,
+        agentId: input.agentId,
+        userId: ctx.userId,
+      });
+      if (result.status === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
+        });
+      }
+      return { agentIds: result.agentIds, added: result.added };
+    }),
+
+  /**
    * Update an existing focus session.
    * Caller must own the session (userId check).
    */
@@ -703,17 +762,7 @@ export const focusSessionsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
-        status: z
-          .enum([
-            "active",
-            "paused",
-            "closed",
-            "forming",
-            "scheduled",
-            "failed",
-            "cancelled",
-          ])
-          .optional(),
+        status: updatableStatusSchema.optional(),
         progress: z.number().int().min(0).max(100).optional(),
         channelId: z.string().uuid().optional(),
         correlationId: z.string().optional(),

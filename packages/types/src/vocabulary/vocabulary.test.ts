@@ -57,6 +57,26 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("reject", "past")).toBe("Rejected");
   });
 
+  it("names the dev-loop gates by WHICH gate, resolving the full proposal type", () => {
+    // Matched on the last dotted segment, so the proposal type resolves too.
+    expect(resolveActionLabel("dev.plan_approval", "imperative")).toBe(
+      "Approve plan"
+    );
+    expect(resolveActionLabel("dev.plan_approval", "past")).toBe(
+      "Approved plan"
+    );
+    expect(resolveActionLabel("dev.deploy_approval", "imperative")).toBe(
+      "Approve deploy"
+    );
+    expect(resolveActionLabel("dev.deploy_approval", "past")).toBe(
+      "Approved deploy"
+    );
+    // Not collapsed into the generic decision verb — that is the whole point.
+    expect(resolveActionLabel("dev.plan_approval", "imperative")).not.toBe(
+      resolveActionLabel("approve", "imperative")
+    );
+  });
+
   it("humanizes an unknown verb instead of leaking it", () => {
     expect(resolveActionLabel("declare_source")).toBe("Declare source");
   });
@@ -331,6 +351,8 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     "governance_tighten_posture",
     "capability_run",
     "automation_run",
+    "dev_plan_approval",
+    "dev_deploy_approval",
   ];
 
   it("settles the facet/composite fork between relay and proposal-ui", () => {
@@ -351,6 +373,20 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     );
     expect(resolveProposalKindLabel("governance_tighten_posture")).toBe(
       "Tighten posture"
+    );
+  });
+
+  it("gives each dev-loop gate its OWN chip", () => {
+    // Two different questions — "may I start?" vs "may I ship?" — must never
+    // collapse into one label a reviewer has to open the card to disambiguate.
+    expect(resolveProposalKindLabel("dev_plan_approval")).toBe(
+      "Approve a plan"
+    );
+    expect(resolveProposalKindLabel("dev_deploy_approval")).toBe(
+      "Approve a deploy"
+    );
+    expect(resolveProposalKindLabel("dev_plan_approval")).not.toBe(
+      resolveProposalKindLabel("dev_deploy_approval")
     );
   });
 

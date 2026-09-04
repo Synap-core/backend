@@ -3966,7 +3966,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "governance_rule";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates"
 /**
@@ -8741,6 +8741,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				type?: string | undefined;
 				subjectType?: "user" | "message" | "system" | "apiKey" | "workspace" | "project" | "entity" | "chat" | "member" | "document" | "task" | "relation" | undefined;
 				workspaceId?: string | undefined;
+				sessionId?: string | undefined;
 				limit?: number | undefined;
 				lean?: boolean | undefined;
 			};
@@ -8772,6 +8773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectId?: string | undefined;
 				subjectIds?: string[] | undefined;
 				correlationId?: string | undefined;
+				sessionId?: string | undefined;
 				fromDate?: Date | undefined;
 				toDate?: Date | undefined;
 				limit?: number | undefined;
@@ -15771,11 +15773,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				verbId: string;
 				workspaceId: string;
+				skillId?: string | undefined;
 				parameters?: Record<string, unknown> | undefined;
 				connectionSelector?: {
 					connectionId?: string | undefined;
 					contextObjectId?: string | undefined;
 				} | undefined;
+				idempotencyKey?: string | undefined;
+				channelId?: string | undefined;
+				sourceMessageId?: string | undefined;
+				sessionId?: string | undefined;
 			};
 			output: ExecuteCapabilityResult;
 			meta: object;
@@ -19285,6 +19292,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		renewRule: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				expiresAt: string | null;
+				workspaceId?: string | undefined;
+			};
+			output: {
+				id: string;
+				expiresAt: string | null;
+			};
+			meta: object;
+		}>;
 		getRule: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -19305,6 +19324,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						expiresAt?: string;
 						behaviours: RuleBehaviourRecord[];
 						routing?: RuleRouting;
+						sentence?: unknown;
 						createdAt: string;
 					};
 				};
@@ -23882,10 +23902,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				actions: {
 					key: string;
 					label: string;
-					nodeType: "output" | "capability";
+					nodeType: "output" | "capability" | "playbook_run";
 					outputType?: string | undefined;
 					capabilityId?: string | undefined;
 					verbId?: string | undefined;
+					playbookId?: string | undefined;
 					params?: {
 						key: string;
 						label: string;
@@ -25258,6 +25279,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		attachAgent: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				agentId: string;
+			};
+			output: {
+				agentIds: string[];
+				added: boolean;
+			};
+			meta: object;
+		}>;
 		update: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
@@ -25747,6 +25779,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
 					indefinite?: boolean | undefined;
+					gate?: {
+						kind: "human";
+						proposalType?: "playbook.stage_gate" | undefined;
+					} | undefined;
 				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
@@ -25828,6 +25864,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					suggestedTasks?: string[] | undefined;
 					position?: number | undefined;
 					indefinite?: boolean | undefined;
+					gate?: {
+						kind: "human";
+						proposalType?: "playbook.stage_gate" | undefined;
+					} | undefined;
 				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
@@ -27183,6 +27223,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				cursor?: string | undefined;
 				workspaceId?: string | null | undefined;
+				sessionId?: string | undefined;
+				projectId?: string | undefined;
+				automationId?: string | undefined;
 			};
 			output: {
 				signals: Signal[];
@@ -27192,6 +27235,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		count: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				workspaceId?: string | null | undefined;
+				sessionId?: string | undefined;
+				projectId?: string | undefined;
+				automationId?: string | undefined;
 			} | undefined;
 			output: {
 				needsYou: number;

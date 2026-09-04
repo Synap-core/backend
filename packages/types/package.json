@@ -32,6 +32,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./focus-sessions": {
+      "types": "./dist/focus-sessions/index.d.ts",
+      "import": "./dist/focus-sessions/index.js"
+    },
     "./vocabulary": {
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
