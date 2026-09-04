@@ -24,6 +24,11 @@
  * `string`), so callers pass their concrete flow type in unchanged.
  */
 
+// The ONE door that turns machine tokens into human words (.claude/rules/vocabulary.md).
+// Same package, no new dependency — and it is why the generic playbook-run node
+// label below is COMPOSED ("Run" + "playbook") rather than hand-written.
+import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
+
 // ── Value-model ───────────────────────────────────────────────────────────────
 
 export type ActionType =
@@ -455,6 +460,16 @@ const CAPABILITY_ACTION_KEY = "__actionKey";
 const PLAYBOOK_ID_KEY = "__playbookId";
 const PLAYBOOK_NAME_KEY = "__playbookName";
 const PLAYBOOK_AGENT_TYPE_KEY = "__agentType";
+/**
+ * The generic display label for a playbook-run node — used when the sentence
+ * references its playbook by ID (the common case), so no name is available to
+ * show. Composed through the vocabulary door in IMPERATIVE mood ("Run"), because
+ * a flow node names what the step WILL do; never hand-written.
+ */
+const PLAYBOOK_RUN_LABEL = `${resolveActionLabel(
+  "run",
+  "imperative"
+)} ${resolveObjectNoun("playbook").toLowerCase()}`;
 
 /**
  * EXPORTED so the browser's `sentence-io.ts` can derive its `RESERVED_CONFIG_KEYS`
@@ -556,7 +571,17 @@ function actionToFlowNode(
     action.type === null &&
     cfg[CAPABILITY_NODE_TYPE_KEY] === "playbook_run"
   ) {
-    const data: Record<string, unknown> = {};
+    // `label` is DERIVED, not bookkeeping: `PlaybookRunNodeDef.data` declares it
+    // required, and the node's own name is the playbook's when the sentence
+    // carries one. The reverse converter deliberately IGNORES it (a derived
+    // field must not become a second source of truth), which means a round trip
+    // NORMALIZES the label — see the round-trip tests, which assert exactly that
+    // rather than pretending the label survives untouched.
+    const data: Record<string, unknown> = {
+      label: nonEmptyStr(cfg[PLAYBOOK_NAME_KEY])
+        ? (cfg[PLAYBOOK_NAME_KEY] as string)
+        : PLAYBOOK_RUN_LABEL,
+    };
     if (nonEmptyStr(cfg[PLAYBOOK_ID_KEY]))
       data.playbookId = cfg[PLAYBOOK_ID_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_NAME_KEY]))

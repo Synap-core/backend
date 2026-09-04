@@ -1833,6 +1833,23 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		playbookName?: string;
 		/** Maps automation step outputs to playbook params */
 		paramsMapping?: Record<string, string>;
+		/**
+		 * AGENT SELECTOR — the `agents.slug` of the agent that should answer the
+		 * spawned run. Absent ⇒ the default orchestrator ("meta").
+		 *
+		 * `executePlaybookRun` (packages/jobs/src/workers/steps/playbook-run.ts) has
+		 * read this field since the playbook wave and forwards it to the runner, but
+		 * it was never DECLARED here — so no authoring door could type it, no
+		 * producer existed, and every playbook run resolved to "meta" regardless of
+		 * intent. The rule-sentence grammar now emits it
+		 * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
+		 * which makes this a typed producer rather than an untyped passthrough.
+		 *
+		 * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
+		 * definitions, services/playbooks/cron-automation.ts) still emits no
+		 * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+		 */
+		agentType?: string;
 		errorHandling?: NodeErrorHandling;
 	};
 }
@@ -7844,6 +7861,82 @@ export type RemoveBlockerResult = {
 	removed: false;
 	reason: "not_found" | "self_blocker" | "no_edge";
 };
+/** Both directions of the dependency edge for one session. */
+export interface SessionEdges {
+	/** Sessions this one is waiting on (outbound `blocked_by`). */
+	blockedBy: string[];
+	/** Sessions waiting on this one (inbound `blocked_by`). */
+	unblocks: string[];
+}
+/**
+ * "Blocked by an OUTPUT of another session" — DERIVED, with NO new edge type
+ * and NO new column.
+ *
+ * WHY NOTHING IS STORED. `session --blocked_by--> session` (see
+ * `session-blocked-by.ts`) is a DECLARED dependency: a human says "this waits
+ * on that". The dependency here is an OBSERVED one — it already exists in the
+ * graph the moment two sessions point at the same object from opposite ends:
+ *
+ *     A --targets--> X        (X is A's input / subject)
+ *     B --produced--> X       (X is B's output)      A ≠ B
+ *
+ * ⇒ A is waiting on an output of B. Writing a third edge to say what those two
+ * already say would be a second store to keep in lockstep, and it would go
+ * stale the instant either end changed. So this module is a READER only; there
+ * is no producer, which is also why the `blocked-by-one-producer` tripwire
+ * needs no widening.
+ *
+ * OPEN-ONLY, and that is the whole semantic difference from `produced` edges as
+ * history. If B is CLOSED the output already exists — A is not waiting on
+ * anything, it is simply consuming a finished thing. A wait therefore requires
+ * the PRODUCER to be in an open status (`OPEN_SESSION_STATUSES`, the same
+ * constant `openBlockerIds` derives from). The inverse direction obeys the same
+ * rule from the other side: B only reports `outputsWaitedOnBy` while B itself
+ * is open.
+ *
+ * OWNER FLOOR — READ THIS BEFORE COPYING THE PATTERN FROM
+ * `session-blocked-by.ts`, WHICH FLOORS NOTHING ON THE READ.
+ * That reader can skip the floor because its ONE producer floors both endpoints
+ * on the same user, so a `blocked_by` edge cannot span two owners. Here there
+ * is no such producer: `targets` and `produced` edges are written by ~9 doors
+ * onto entities that can live in a SHARED workspace, so the counterparty of a
+ * page row can genuinely belong to another user. An unfloored join would
+ * therefore disclose another user's session ids. Hence `userId` is REQUIRED,
+ * and the counterparty side is floored with an explicit
+ * `focus_sessions.userId` join predicate.
+ *
+ * The PAGE side needs no floor of its own: the ids come from the caller's
+ * already-floored query (`queryUserSessions`), exactly as `attachSessionEdges`
+ * assumes. Both invariants together mean every id this module returns belongs
+ * to `userId`.
+ *
+ * TWO QUERIES, NOT ONE, and deliberately. The join coordinate is the ENTITY,
+ * not the session — the counterparty session is reached only THROUGH X and is
+ * usually not on the page. A single query over the page's ids would surface a
+ * dependency only when both ends happened to land in the same 20 rows, which
+ * makes the answer depend on page size. So: one query to learn the page's
+ * entity coordinates, one to fetch every session on the other side of them
+ * (floored, with status). Still O(1) in page size, never N+1.
+ */
+/** One "I am waiting on someone else's output" edge, from the waiter's side. */
+export interface WaitsOnOutput {
+	/** The object being waited on (`links.toId` — an entity). */
+	entityId: string;
+	/** The still-OPEN session that will produce it. */
+	producerSessionId: string;
+}
+/** The same edge seen from the producer's side. */
+export interface OutputWaitedOnBy {
+	entityId: string;
+	/** The session that targets this output and is therefore waiting. */
+	dependentSessionId: string;
+}
+export interface SessionOutputDependencies {
+	/** Outputs of OTHER open sessions that this session takes as input. */
+	waitsOnOutputs: WaitsOnOutput[];
+	/** Sessions waiting on THIS session's outputs (only while it is open). */
+	outputsWaitedOnBy: OutputWaitedOnBy[];
+}
 /** The kinds a session can be converted INTO. */
 export type ConversionKind = "playbook" | "project";
 /** The receipt every conversion verb returns. Frontend renders it verbatim. */
@@ -25028,7 +25121,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentSessionId: string | null;
 			} & {
 				triage: TriageProjection;
-			})[];
+			} & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
 			meta: object;
 		}>;
 		addBlocker: import("@trpc/server").TRPCMutationProcedure<{

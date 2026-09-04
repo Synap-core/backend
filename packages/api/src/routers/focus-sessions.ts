@@ -40,8 +40,12 @@ import {
   addSessionBlocker,
   removeSessionBlocker,
   attachSessionEdges,
+  type SessionEdges,
 } from "../services/focus-sessions/session-blocked-by.js";
-import { attachSessionOutputDependencies } from "../services/focus-sessions/session-output-edges.js";
+import {
+  attachSessionOutputDependencies,
+  type SessionOutputDependencies,
+} from "../services/focus-sessions/session-output-edges.js";
 import {
   acceptFromTriage,
   discardFromTriage,
@@ -49,6 +53,7 @@ import {
   projectTriage,
   triagePendingWhere,
   notTriagePendingWhere,
+  type TriageProjection,
 } from "../services/focus-sessions/triage.js";
 import { spawnProjectFromSession } from "../services/focus-sessions/spawn-project.js";
 import { revertConversion } from "../services/focus-sessions/session-conversion.js";
@@ -218,6 +223,16 @@ function queryUserSessions(
 
 // ── Router ─────────────────────────────────────────────────────────────────
 
+/**
+ * One row of `focusSessions.list`. The edge fields are OPTIONAL on the type
+ * and PRESENT on the wire only under `edges: true` — see the note inside the
+ * procedure for why this must be spelled out rather than inferred.
+ */
+type SessionListRow = FocusSession & { parentSessionId: string | null } & {
+  triage: TriageProjection;
+} & Partial<SessionEdges> &
+  Partial<SessionOutputDependencies>;
+
 export const focusSessionsRouter = router({
   links: sessionLinksRouter,
   /**
@@ -257,7 +272,13 @@ export const focusSessionsRouter = router({
         lens: sessionLensSchema,
       })
     )
-    .query(async ({ ctx, input }) => {
+    .query(async ({ ctx, input }): Promise<SessionListRow[]> => {
+      // The explicit return type is LOAD-BEARING: with an inferred union of
+      // `A[]` (no edges) and `(A & Edges)[]` (edges), TypeScript's subtype
+      // reduction DROPS the wider member because arrays are covariant — so
+      // `blockedBy`/`waitsOnOutputs` were erased from the api-types snapshot
+      // and no typed client could see a dependency edge. Optional here means
+      // "present when `edges: true`", which is the true contract.
       const scope = resolveScope(ctx, input);
       const sessions = await queryUserSessions(
         ctx.userId,

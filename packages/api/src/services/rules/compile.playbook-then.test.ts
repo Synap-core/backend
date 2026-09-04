@@ -13,6 +13,7 @@
 import { describe, expect, it } from "vitest";
 import { compileRuleSentence } from "./compile.js";
 import type { RuleSentenceValue } from "@synap-core/types/automations";
+import type { PlaybookRunNodeDef } from "@synap/database";
 
 const PB = "33333333-3333-4333-8333-333333333333";
 
@@ -41,12 +42,28 @@ describe("compileRuleSentence — playbook_run THEN", () => {
     const node = result.flow.nodes.find((n) => n.type === "playbook_run");
     expect(node).toBeDefined();
     expect(node!.data).toEqual({
+      // `PlaybookRunNodeDef.data.label` is declared REQUIRED, so the grammar
+      // emits it; composed through the vocabulary door, not hand-written here.
+      label: "Run playbook",
       playbookId: PB,
       paramsMapping: { topic: "{{trigger.data.title}}" },
     });
   });
 
-  it("carries the agent selector through to the node", () => {
+  /**
+   * `agentType` was BUILT WITH ZERO PRODUCERS: `executePlaybookRun`
+   * (`packages/jobs/src/workers/steps/playbook-run.ts`) has read
+   * `data.agentType` and forwarded it to the runner since the playbook wave, but
+   * `PlaybookRunNodeDef.data` never DECLARED it — so no authoring door could
+   * type the field, nothing wrote it, and every playbook run resolved to the
+   * default orchestrator ("meta") no matter what the author intended.
+   *
+   * This test is the producer end of that repair, and it is deliberately typed:
+   * the compiled node's data is read THROUGH `PlaybookRunNodeDef["data"]`, so
+   * removing the declaration again fails tsc here rather than silently
+   * degrading to an untyped passthrough that happens to work.
+   */
+  it("carries the agent selector through to the executor's node data", () => {
     const result = compileRuleSentence(
       sentence({
         __nodeType: "playbook_run",
@@ -54,11 +71,26 @@ describe("compileRuleSentence — playbook_run THEN", () => {
         __agentType: "researcher",
       })
     );
+    expect(result.ok, result.ok ? "" : result.failure.reason).toBe(true);
+    if (!result.ok) return;
+    const node = result.flow.nodes.find((n) => n.type === "playbook_run");
+    expect(node).toBeDefined();
+    // The DECLARED node contract, not `Record<string, unknown>`.
+    const data = node!.data as PlaybookRunNodeDef["data"];
+    expect(data.agentType).toBe("researcher");
+    expect(data.playbookId).toBe(PB);
+  });
+
+  it("omits agentType entirely when the author chose no agent", () => {
+    // Absent, never `undefined`: the executor rebuilds its call field-by-field,
+    // and a written-but-undefined key would round-trip as a different node.
+    const result = compileRuleSentence(
+      sentence({ __nodeType: "playbook_run", __playbookId: PB })
+    );
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(
-      result.flow.nodes.find((n) => n.type === "playbook_run")!.data.agentType
-    ).toBe("researcher");
+    const data = result.flow.nodes.find((n) => n.type === "playbook_run")!.data;
+    expect("agentType" in data).toBe(false);
   });
 
   it("REFUSES a playbook THEN that names no playbook, naming the clause", () => {

@@ -169,7 +169,7 @@ describe("getSessionOutputDependencies", () => {
     queue.push([{ toId: X }]);
     queue.push([
       { sessionId: A, entityId: X, linkType: "targets", status: "active" },
-      { sessionId: B, entityId: X, linkType: "produced", status: "completed" },
+      { sessionId: B, entityId: X, linkType: "produced", status: "closed" },
     ]);
     const map = await getSessionOutputDependencies([A, B], "u");
     expect(map.size).toBe(0);

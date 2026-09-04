@@ -659,11 +659,7 @@ export function registerProposalsRoutes(app: HubHono): void {
       "APPROVAL ONLY RECORDS THE DECISION on the session — the pod never runs " +
       "`gateCommand` / `deployCommand`; the agent polls and acts on its own machine.",
     request: {
-      body: {
-        content: {
-          "application/json": { schema: DevApprovalRequestSchema },
-        },
-      },
+      body: DevApprovalRequestSchema,
     },
     responses: {
       200: {

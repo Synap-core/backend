@@ -571,6 +571,9 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     const node = flow.nodes.find((n) => n.type === "playbook_run");
     expect(node).toBeDefined();
     expect(node!.data).toEqual({
+      // `PlaybookRunNodeDef.data.label` is declared REQUIRED, so the grammar
+      // must emit it. Composed through the vocabulary door, never hand-written.
+      label: "Run playbook",
       playbookId: "11111111-1111-4111-8111-111111111111",
       paramsMapping: { subject: "{{trigger.entityId}}" },
     });
@@ -583,12 +586,50 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     }
   });
 
+  // A GRAMMAR-PRODUCED flow round-trips to itself EXACTLY — the same property the
+  // output-node suite above asserts, and the one that matters for a rule authored
+  // through this module: read it back, write it again, get the same bytes.
+  it.each([
+    ["id only", { __playbookId: "11111111-1111-4111-8111-111111111111" }],
+    ["name only", { __playbookName: "Weekly digest" }],
+    [
+      "id + agent + params",
+      {
+        __playbookId: "22222222-2222-4222-8222-222222222222",
+        __agentType: "researcher",
+        topic: "{{trigger.data.title}}",
+      },
+    ],
+  ])(
+    "a grammar-authored playbook flow round-trips unchanged (%s)",
+    (_l, cfg) => {
+      const original = toFlowDefinition([
+        { type: null, config: { __nodeType: "playbook_run", ...cfg } },
+      ]);
+      expect(original.nodes.some((n) => n.type === "playbook_run")).toBe(true);
+      expect(toFlowDefinition(flowToSentenceActions(original))).toEqual(
+        original
+      );
+    }
+  );
+
+  // A STORED node (written by another door, or by hand) round-trips on every
+  // SEMANTIC field. `label` is the one exception and the exception is honest:
+  // it is DERIVED by the forward converter and IGNORED by the reverse, so a
+  // round trip NORMALIZES it. Asserting identity here would be asserting
+  // something false; asserting the semantic fields is what actually catches the
+  // erasure class this suite exists for.
   it.each([
     [
       "id only",
       { playbookId: "11111111-1111-4111-8111-111111111111", paramsMapping: {} },
+      "Run playbook",
     ],
-    ["name only", { playbookName: "Weekly digest", paramsMapping: {} }],
+    [
+      "name only",
+      { playbookName: "Weekly digest", paramsMapping: {} },
+      "Weekly digest",
+    ],
     [
       "id + agent + params",
       {
@@ -596,8 +637,43 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         agentType: "researcher",
         paramsMapping: { topic: "{{trigger.data.title}}" },
       },
+      "Run playbook",
     ],
-  ])("node → sentence → node is an identity (%s)", (_label, data) => {
+  ])(
+    "a stored node survives read → write on every semantic field (%s)",
+    (_label, data, expectedLabel) => {
+      const original = {
+        nodes: [
+          {
+            id: "trigger",
+            type: "trigger",
+            position: { x: 0, y: 0 },
+            data: {},
+          },
+          {
+            id: "action-1",
+            type: "playbook_run",
+            position: { x: 0, y: 150 },
+            data,
+          },
+        ],
+        edges: [{ id: "e1", source: "trigger", target: "action-1" }],
+      };
+      const rebuilt = toFlowDefinition(flowToSentenceActions(original));
+      // Identity everywhere EXCEPT the derived label, which is now populated.
+      expect(rebuilt).toEqual({
+        ...original,
+        nodes: [
+          original.nodes[0],
+          { ...original.nodes[1], data: { ...data, label: expectedLabel } },
+        ],
+      });
+    }
+  );
+
+  it("a hand-written label is NORMALIZED, not carried, on the way back", () => {
+    // The honest consequence of `label` being derived. Stated as its own test so
+    // the loss is a documented property rather than a surprise in a diff.
     const original = {
       nodes: [
         { id: "trigger", type: "trigger", position: { x: 0, y: 0 }, data: {} },
@@ -605,13 +681,18 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
           id: "action-1",
           type: "playbook_run",
           position: { x: 0, y: 150 },
-          data,
+          data: {
+            playbookId: "11111111-1111-4111-8111-111111111111",
+            label: "My custom step",
+          },
         },
       ],
       edges: [{ id: "e1", source: "trigger", target: "action-1" }],
     };
     const rebuilt = toFlowDefinition(flowToSentenceActions(original));
-    expect(rebuilt).toEqual(original);
+    const node = rebuilt.nodes.find((n) => n.type === "playbook_run");
+    expect(node!.data.label).toBe("Run playbook");
+    expect(node!.data.playbookId).toBe("11111111-1111-4111-8111-111111111111");
   });
 
   it("survives the lossy single-action reader too", () => {

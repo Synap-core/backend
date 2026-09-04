@@ -74,10 +74,15 @@ export interface SessionOutputDependencies {
   outputsWaitedOnBy: OutputWaitedOnBy[];
 }
 
-const EMPTY_DEPENDENCIES: SessionOutputDependencies = {
+/**
+ * A FACTORY, not a shared constant: the empty value is spread onto every row
+ * with no dependency, and a shared literal would hand all of them the SAME two
+ * array instances.
+ */
+const emptyDependencies = (): SessionOutputDependencies => ({
   waitsOnOutputs: [],
   outputsWaitedOnBy: [],
-};
+});
 
 /** The two link types this derivation reads. Nothing else is a dependency. */
 const DEPENDENCY_LINK_TYPES = ["targets", "produced"] as const;
@@ -235,13 +240,16 @@ export async function getSessionOutputDependencies(
   );
 }
 
-/** Single-session form — for `get` and for one-off callers. */
-export async function getSessionOutputDependenciesFor(
+/**
+ * Single-session form. Module-private: the two exported readers below are the
+ * only callers, and an unused export is a door nobody walks.
+ */
+async function getSessionOutputDependenciesFor(
   sessionId: string,
   userId: string
 ): Promise<SessionOutputDependencies> {
   const map = await getSessionOutputDependencies([sessionId], userId);
-  return map.get(sessionId) ?? EMPTY_DEPENDENCIES;
+  return map.get(sessionId) ?? emptyDependencies();
 }
 
 /**
@@ -332,6 +340,6 @@ export async function attachSessionOutputDependencies<T extends { id: string }>(
   );
   return sessions.map((s) => ({
     ...s,
-    ...(deps.get(s.id) ?? EMPTY_DEPENDENCIES),
+    ...(deps.get(s.id) ?? emptyDependencies()),
   }));
 }
