@@ -161,6 +161,39 @@ const PROPERTY_TEXT_KEYS = [
  * means a pending-only result never reads as a flat "no information found",
  * whether or not the IS's own text happened to be empty-shaped.
  */
+/**
+ * Prepend a DEGRADATION notice, for the same reason `prependPendingNotice`
+ * exists one function below: the IS composes `answer` from `answers` alone and
+ * never sees the retrieval envelope, so a half-dead substrate produced a
+ * fluent, confident answer built on whatever happened to survive.
+ *
+ * Measured, live: with `degraded: ["semantic:vector-down"]` exactly ONE source
+ * matched — an unrelated engineering note — and the synthesis answered a
+ * question about twelve business bets from it, formatted and plausible, with
+ * nothing in the prose indicating the retrieval layer was down. The signal was
+ * present and CORRECT in the envelope the whole time; only the sentence the
+ * agent actually reads was silent.
+ *
+ * This is the third variant of one class across four external test passes
+ * (answered-when-absent, failed-honestly, half-failed-silently). The class is:
+ * every degradation signal must reach the PROSE, not just the envelope.
+ *
+ * Leading, not trailing — same rationale as the pending notice: the reader
+ * must see the caveat before the content it qualifies.
+ */
+function prependDegradedNotice(answer: string, degraded: string[]): string {
+  if (degraded.length === 0) return answer;
+  // Do not double-announce if the model already hedged about the outage.
+  if (/degrad|unavailable|could not search|retrieval (is )?down/i.test(answer))
+    return answer;
+  return (
+    `\u26a0 Retrieval was DEGRADED for this answer (${degraded.join(", ")}), so ` +
+    `the sources below are incomplete and this answer may miss or misattribute ` +
+    `material. Treat it as partial, and re-ask once healthy before relying on it.\n\n` +
+    answer
+  );
+}
+
 function prependPendingNotice(answer: string, pendingCount: number): string {
   if (pendingCount <= 0 || /pending/i.test(answer)) return answer;
   const plural = pendingCount === 1 ? "" : "s";
@@ -406,7 +439,14 @@ export async function synthesizeAnswer(
    * pending matches exist. Optional/defaults to 0 so other callers of
    * synthesizeAnswer are unaffected.
    */
-  pendingCount = 0
+  pendingCount = 0,
+  /**
+   * `AskResult.degraded` — which retrieval substrates failed or fell back for
+   * THIS query. Threaded in for the same reason as `pendingCount`: the IS
+   * cannot see it, and an answer synthesized over a half-empty candidate pool
+   * is indistinguishable, in prose, from a healthy one.
+   */
+  degraded: string[] = []
 ): Promise<SynthesisResult> {
   const { sources, context } = buildSynthesisContext(answers);
 
@@ -437,7 +477,10 @@ export async function synthesizeAnswer(
     const data = (await res.json()) as { answer?: string };
     const answer =
       typeof data.answer === "string"
-        ? prependPendingNotice(data.answer, pendingCount)
+        ? prependDegradedNotice(
+            prependPendingNotice(data.answer, pendingCount),
+            degraded
+          )
         : null;
     return {
       answer,

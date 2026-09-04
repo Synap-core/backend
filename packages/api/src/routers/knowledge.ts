@@ -162,7 +162,11 @@ export const knowledgeRouter = router({
         input.query,
         result.routedTo,
         lensWs,
-        result.pending?.matches?.length ?? 0
+        result.pending?.matches?.length ?? 0,
+        // Degradation must reach the prose on EVERY door, not just one —
+        // a parameter with a single producer is the severance this repo keeps
+        // re-finding.
+        result.degraded ?? []
       );
 
       return {

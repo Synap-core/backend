@@ -1232,6 +1232,17 @@
               "type": "string"
             },
             "description": "Optional view types this cell can RENDER (e.g. [\"list\",\"table\"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain widget and views fall back to the built-in adapter."
+          },
+          "contentKind": {
+            "type": "string",
+            "enum": [
+              "entity-detail",
+              "entity-card",
+              "entity-profile",
+              "collection",
+              "widget"
+            ],
+            "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want."
           }
         },
         "required": ["name", "rendererSource"]

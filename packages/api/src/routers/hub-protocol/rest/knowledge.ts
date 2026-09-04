@@ -1048,7 +1048,11 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         question,
         result.routedTo,
         workspaceId,
-        result.pending?.matches?.length ?? 0
+        result.pending?.matches?.length ?? 0,
+        // Degradation must reach the prose on EVERY door, not just one —
+        // a parameter with a single producer is the severance this repo keeps
+        // re-finding.
+        result.degraded ?? []
       );
       if (synthesis.error) {
         logger.error({ userId }, "knowledge/answer IS call failed");

@@ -49,7 +49,15 @@
  * (floored, with status). Still O(1) in page size, never N+1.
  */
 
-import { db, and, eq, inArray, focusSessions, links } from "@synap/database";
+import {
+  db,
+  and,
+  drizzleSql,
+  eq,
+  inArray,
+  focusSessions,
+  links,
+} from "@synap/database";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 
 /** One "I am waiting on someone else's output" edge, from the waiter's side. */
@@ -218,7 +226,10 @@ export async function getSessionOutputDependencies(
     .from(links)
     .innerJoin(
       focusSessions,
-      and(eq(focusSessions.id, links.fromId), eq(focusSessions.userId, userId))
+      and(
+        eq(drizzleSql`${focusSessions.id}::text`, links.fromId),
+        eq(focusSessions.userId, userId)
+      )
     )
     .where(
       and(
@@ -302,7 +313,10 @@ export async function outputDependentsOf(
     .from(links)
     .innerJoin(
       focusSessions,
-      and(eq(focusSessions.id, links.fromId), eq(focusSessions.userId, userId))
+      and(
+        eq(drizzleSql`${focusSessions.id}::text`, links.fromId),
+        eq(focusSessions.userId, userId)
+      )
     )
     .where(
       and(

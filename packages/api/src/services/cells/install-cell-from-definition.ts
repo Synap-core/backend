@@ -20,15 +20,7 @@
  */
 
 import { defineCell } from "./define-cell.js";
-import type { ContentKind } from "@synap/database/schema";
-
-const CONTENT_KINDS: readonly string[] = [
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-  "widget",
-];
+import { CONTENT_KINDS, type ContentKind } from "@synap/database/schema";
 
 /**
  * The renderer SLOT to store for an installed cell — the same drop as
@@ -52,7 +44,9 @@ export function resolveCellContentKind(
   raw: string | undefined,
   viewTypes: string[] | undefined
 ): ContentKind | undefined {
-  if (raw && CONTENT_KINDS.includes(raw)) return raw as ContentKind;
+  if (raw && (CONTENT_KINDS as readonly string[]).includes(raw)) {
+    return raw as ContentKind;
+  }
   if (Array.isArray(viewTypes) && viewTypes.length > 0) return "collection";
   return undefined;
 }

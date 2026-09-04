@@ -24,6 +24,7 @@ import {
   entities,
   ProfileResolutionService,
   insertPendingProposal,
+  ne,
   findExistingPendingDuplicate,
   resolveOrCreateAgentProposalSession,
   deriveAgentProposalSessionGoal,
@@ -1965,6 +1966,20 @@ export async function countTodayAgentProposals(
     .where(
       and(
         eq(proposals.agentUserId, agentUserId),
+        // COUNT WHAT THE CAP PROTECTS. This budget's own docstring is
+        // "must not be able to flood a user's REVIEW QUEUE", and the gate that
+        // consumes this count sits on the PROPOSE path only — an auto-approved
+        // write returns `{ granted: true, autoApprovedProposalId }` ~768 lines
+        // earlier and never reaches it, correctly, because it never enters the
+        // queue. Counting its audit RECEIPT here measured a different
+        // population than the gate enforces: live, this read 64 against a cap
+        // of 30 while the entire pod held 11 pending rows, and the health door
+        // announced an agent "hit the daily proposal cap" that was never
+        // gated and never blocked.
+        //
+        // A receipt is an audit row for a write that already executed. It is
+        // not queue pressure, and it must not consume a queue-pressure budget.
+        ne(proposals.status, ProposalStatus.AUTO_APPROVED),
         gte(proposals.createdAt, startOfUtcDay())
       )
     );

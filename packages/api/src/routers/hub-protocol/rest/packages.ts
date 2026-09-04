@@ -21,6 +21,7 @@ import {
   preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
 } from "@synap/database";
+import { CONTENT_KINDS } from "@synap/database/schema";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { auditLog } from "../../../utils/audit-log.js";
 import { workspacePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
@@ -130,7 +131,21 @@ const ActionPlacementSchema = z.object({
     .optional(),
 });
 
-const PackageApplySchema = z.object({
+/**
+ * Exported so the OTHER layer-2 caller — `applyMarketInstall`'s `case "template"`
+ * (services/capabilities/marketplace-install.ts) — parses the definition through
+ * the SAME schema instead of casting it.
+ *
+ * This is not a shape concern; the shapes already match. It is a DEFAULTS
+ * concern. This schema defaults `automations[].status` and `playbooks[].status`
+ * to "active", while the appliers' own routers default them to "draft"
+ * (routers/automations.ts, routers/playbooks.ts). A CP package definition
+ * carries `defaultStatus` and leaves `status` absent, so a raw cast installs
+ * every automation and playbook DRAFT — installed, inert, no error — while the
+ * same package installed through this Hub door goes live. That is the
+ * door-parity severance class, one door over.
+ */
+export const PackageApplySchema = z.object({
   /**
    * Unified pod configuration (Phase 3): install this template ONTO an
    * existing workspace instead of creating a new one. Additive reconcile
@@ -278,6 +293,17 @@ const PackageApplySchema = z.object({
           .optional(),
         configSchema: z.record(z.string(), z.unknown()).optional(),
         viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
+        /**
+         * Renderer SLOT. The CP's own `cells[]` slot declares this
+         * (`synap-control-plane-api/src/routes/packages.ts`), and the pod
+         * stripped it one hop later — the exact `relationDefs` shape of loss
+         * this schema's header warns about, and invisible to the
+         * `cp-pod-package-schema-parity` tripwire, which compares only
+         * TOP-LEVEL keys. Without it `resolveCellContentKind` never sees an
+         * explicit value and can only derive `collection` from `viewTypes`.
+         * Enum from the `CONTENT_KINDS` runtime SSOT.
+         */
+        contentKind: z.enum(CONTENT_KINDS).optional(),
       })
     )
     .optional(),

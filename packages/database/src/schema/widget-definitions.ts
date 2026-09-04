@@ -68,8 +68,24 @@ export type WidgetRole =
  * The column is plain `text` with no CHECK (migration 0111), so widening this
  * union needs no migration.
  */
-export type ContentKind =
-  "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
+export const CONTENT_KINDS = [
+  "entity-detail",
+  "entity-card",
+  "entity-profile",
+  "collection",
+  "widget",
+] as const;
+
+/**
+ * The union, DERIVED from the runtime const above so the two can never
+ * disagree. Every zod door that accepts a `contentKind`
+ * MUST build its enum from this const (`z.enum(CONTENT_KINDS)`) rather than
+ * retyping the five literals: a hand-copied projection of this union has
+ * already drifted once (`entity-card` existed here but not in the Control
+ * Plane's publish schema, so an entity-card cell could not be shipped as a
+ * package at all).
+ */
+export type ContentKind = (typeof CONTENT_KINDS)[number];
 
 export const widgetDefinitions = pgTable(
   "widget_definitions",

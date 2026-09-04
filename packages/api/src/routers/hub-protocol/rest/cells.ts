@@ -4,11 +4,14 @@
 
 import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
-import { widgetDefinitions } from "@synap/database/schema";
+import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
 import {
   defineCell,
   validateDeps,
 } from "../../../services/cells/define-cell.js";
+// The ONE explicit-then-derive-from-viewTypes rule for a package cell's
+// renderer slot — shared with the tRPC twin and both package appliers.
+import { resolveCellContentKind } from "../../../services/cells/install-cell-from-definition.js";
 import {
   hasScope,
   logger,
@@ -185,6 +188,12 @@ export function registerCellsRoutes(app: HubHono): void {
         defaultSize: cell.defaultSize,
         deps: cell.deps,
         viewTypes: cell.viewTypes,
+        // Renderer SLOT. Its tRPC twin (`routers/cells.ts` cells.install) has
+        // threaded this since the raw-insert fix; this Hub door had not, so the
+        // SAME CP cell installed here landed as the column default `widget` and
+        // was invisible to `renderersForType`. Resolved through the ONE shared
+        // resolver so the explicit-then-derive-from-viewTypes rule cannot fork.
+        contentKind: resolveCellContentKind(cell.contentKind, cell.viewTypes),
         userId: userId ?? "",
       });
 
@@ -235,6 +244,16 @@ export function registerCellsRoutes(app: HubHono): void {
         defaultSize: z.object({ w: z.number(), h: z.number() }).optional(),
         /** View-type affinity for using this cell as a view renderer (0221). */
         viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
+        /**
+         * Renderer SLOT. `defineCell` has always accepted this; NO write door
+         * declared it, and a plain z.object STRIPS an undeclared key — so a
+         * caller sending `contentKind` got a 201 and a cell that silently took
+         * the column default `widget`, placeable on a bento but never offered
+         * as an entity-detail / entity-card / entity-profile / collection
+         * renderer. Enum built from the `CONTENT_KINDS` runtime SSOT, never
+         * retyped here.
+         */
+        contentKind: z.enum(CONTENT_KINDS).optional(),
         deps: z
           .record(z.string(), z.string())
           .optional()
@@ -269,6 +288,7 @@ export function registerCellsRoutes(app: HubHono): void {
       defaultSize,
       deps,
       viewTypes,
+      contentKind,
       reasoning,
     } = parsed.data;
     const userId = c.get("userId");
@@ -326,6 +346,10 @@ export function registerCellsRoutes(app: HubHono): void {
             // view-renderer affinity too — dropping it here would approve a
             // renderer that can never be selected for a view.
             ...(viewTypes ? { viewTypes } : {}),
+            // Same reason as `viewTypes`: without it an APPROVED agent-authored
+            // cell materializes into the default `widget` slot, so the reviewer
+            // approves one thing and the pod writes another.
+            ...(contentKind ? { contentKind } : {}),
           },
           reasoning,
         });
@@ -361,6 +385,7 @@ export function registerCellsRoutes(app: HubHono): void {
         defaultSize,
         deps,
         viewTypes,
+        contentKind,
         userId: userId ?? "",
       });
 
@@ -422,4 +447,6 @@ interface CellDef {
   defaultSize?: { w: number; h: number };
   /** View-type affinity declared by the package (0221) — optional. */
   viewTypes?: string[];
+  /** Renderer slot declared by the package — see `resolveCellContentKind`. */
+  contentKind?: string;
 }

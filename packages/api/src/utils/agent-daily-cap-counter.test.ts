@@ -145,3 +145,42 @@ describe("wiring: one counter, called by both the enforcer and the scorecard", (
     ).not.toContain("eq(proposals.createdBy, userId)");
   });
 });
+
+describe("the counter measures the population the GATE gates", () => {
+  /*
+   * The budget's docstring is "must not be able to flood a user's REVIEW
+   * QUEUE", and its gate sits on the PROPOSE path only: an auto-approved write
+   * returns `{ granted: true, autoApprovedProposalId }` hundreds of lines
+   * earlier and never reaches the check — correctly, since it never enters the
+   * queue.
+   *
+   * Counting its audit RECEIPT therefore measured write VOLUME against a
+   * queue-pressure budget. Live consequence: 64 counted against a cap of 30
+   * while the whole pod held 11 pending rows, and the health door announced a
+   * cap hit that was never gated and never blocked anything.
+   */
+  const src = readFileSync(join(here, "permission-check.ts"), "utf8");
+  const fn = src.slice(
+    src.indexOf("export async function countTodayAgentProposals"),
+    src.indexOf("export async function agentDailyProposalCap")
+  );
+
+  it("reads a real region — not asserting over an empty slice", () => {
+    expect(fn.length).toBeGreaterThan(200);
+    expect(fn).toContain("countTodayAgentProposals");
+  });
+
+  it("excludes AUTO_APPROVED receipts — they are audit rows, not queue pressure", () => {
+    expect(
+      fn,
+      "countTodayAgentProposals must exclude auto-approved receipts: they " +
+        "record a write that already executed and never entered the review " +
+        "queue the cap exists to protect."
+    ).toMatch(/ne\(\s*proposals\.status,\s*ProposalStatus\.AUTO_APPROVED\s*\)/);
+  });
+
+  it("still floors on the agent and the UTC day", () => {
+    expect(fn).toMatch(/eq\(proposals\.agentUserId, agentUserId\)/);
+    expect(fn).toMatch(/gte\(proposals\.createdAt, startOfUtcDay\(\)\)/);
+  });
+});

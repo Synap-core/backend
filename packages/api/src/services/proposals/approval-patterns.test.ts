@@ -208,3 +208,102 @@ describe("approval patterns projection", () => {
     expect(patterns[0].approvedByHuman).toBe(2);
   });
 });
+
+/**
+ * THE EXEMPLAR — the member a standing rule would cite as its basis.
+ *
+ * A pattern alone is a statistic nobody can act on: turning "you approved this
+ * 3 times" into a widening needs a concrete proposal (`sourceProposalId` for
+ * lineage, `agentUserId` for whose lane widens). WHICH member is chosen is the
+ * load-bearing part, not that one exists.
+ */
+describe("the exemplar a rule can be seeded from", () => {
+  const at = (iso: string) => {
+    const createdAt = new Date(iso);
+    return {
+      createdAt,
+      reviewedAt: new Date(createdAt.getTime() + DELIBERATED),
+    };
+  };
+
+  it("is the MOST RECENTLY human-approved member", async () => {
+    // A widening must be justified by the freshest evidence — an exemplar from
+    // six months ago may describe a shape the user would no longer accept.
+    seed([
+      row({ id: "old", ...at("2026-06-01T10:00:00Z") }),
+      row({ id: "newest", ...at("2026-08-20T10:00:00Z") }),
+      row({ id: "middle", ...at("2026-07-04T10:00:00Z") }),
+    ]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar?.proposalId).toBe("newest");
+  });
+
+  it("is NEVER an auto-approved member, even if it is the most recent", async () => {
+    // Seeding from a decision governance made would let the system cite its own
+    // past widening as the basis for widening further — the loop governance
+    // exists to close, and why `autoApproved` is counted but never evidence.
+    seed([
+      row({ id: "human", ...at("2026-06-01T10:00:00Z") }),
+      row({
+        id: "auto",
+        status: "auto_approved",
+        ...at("2026-08-20T10:00:00Z"),
+      }),
+    ]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar?.proposalId).toBe("human");
+  });
+
+  it("is NEVER a rubber-stamped member — that is not a decision anyone made", async () => {
+    const fast = new Date("2026-08-20T10:00:00Z");
+    seed([
+      row({ id: "deliberated", ...at("2026-06-01T10:00:00Z") }),
+      row({
+        id: "stamped",
+        createdAt: fast,
+        reviewedAt: new Date(fast.getTime() + 100),
+      }),
+    ]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar?.proposalId).toBe("deliberated");
+  });
+
+  it("is NEVER a rejected member", async () => {
+    seed([
+      row({ id: "approved", ...at("2026-06-01T10:00:00Z") }),
+      row({
+        id: "rejected",
+        status: "rejected",
+        ...at("2026-08-20T10:00:00Z"),
+      }),
+    ]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar?.proposalId).toBe("approved");
+  });
+
+  it("carries the agent whose lane a widening would open", async () => {
+    seed([row({ id: "p", agentUserId: "agent-7" })]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar?.agentUserId).toBe("agent-7");
+  });
+
+  it("reports a null agent rather than a missing one — absent is not 'everyone'", async () => {
+    // A human-authored proposal has no agent lane. Coalescing that to some
+    // default would widen a lane nobody asked to widen.
+    seed([row({ id: "p", agentUserId: null })]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar).not.toBeNull();
+    expect(patterns[0]?.exemplar?.agentUserId).toBeNull();
+  });
+
+  it("is null when a pattern has no human approval to cite", async () => {
+    // Rejections still form a pattern (the counter-evidence is worth showing),
+    // but there is nothing to seed a widening FROM.
+    seed([
+      row({ id: "r1", status: "rejected" }),
+      row({ id: "r2", status: "rejected" }),
+    ]);
+    const { patterns } = await scanApprovalPatterns({ userId: "u1" });
+    expect(patterns[0]?.exemplar).toBeNull();
+  });
+});

@@ -87,6 +87,13 @@ export interface GlobalSignals {
      * ones needing attention.
      */
     mineOutsideLens: number;
+    /**
+     * Oldest pending row traceable to this user INCLUDING the ones the
+     * workspace lens drops. `oldestAgeHours` above ranges only over the lensed
+     * set, so on a pod with unresolvable placements it under-reports the true
+     * age of the backlog.
+     */
+    oldestAgeHoursIncludingOutsideLens: number | null;
   };
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
   capabilities: { enabled: number; unapproved: number };
@@ -337,7 +344,10 @@ export async function diagnoseGlobal(params: {
     // caller can already see — it just stops two surfaces disagreeing without
     // explanation. It is NOT a workspace widening: no membership term.
     db
-      .select({ mine: drizzleSql<number>`count(*)::int` })
+      .select({
+        mine: drizzleSql<number>`count(*)::int`,
+        oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
+      })
       .from(proposals)
       .where(
         and(
@@ -457,6 +467,15 @@ export async function diagnoseGlobal(params: {
       0,
       (mineBacklogRow[0]?.mine ?? 0) - backlogPending
     ),
+    // The AGE must range over the same population the headline claims, or the
+    // reconciliation is half-done: the count said 15 while "oldest" still
+    // reported 2026-07-21 — the workspace-lensed minimum — when the true
+    // oldest row this user owns is 2026-06-27, one of the four the lens drops.
+    // Reporting a hidden row's existence but not its age is the same defect
+    // one field over.
+    oldestAgeHoursIncludingOutsideLens: mineBacklogRow[0]?.oldest
+      ? (now - new Date(mineBacklogRow[0].oldest).getTime()) / HOUR_MS
+      : null,
   };
 
   const clusterRows: ClusterInputRow[] = pendingRows.map((r) => ({

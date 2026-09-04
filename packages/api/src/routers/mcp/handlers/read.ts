@@ -124,7 +124,12 @@ export const readHandlers: McpHandlerMap = {
       args.query as string,
       retrieved.routedTo,
       workspaceId ?? null,
-      retrieved.pending?.matches?.length ?? 0
+      retrieved.pending?.matches?.length ?? 0,
+      // The degradation signal must reach the SENTENCE, not just the envelope.
+      // `degraded` was already returned alongside this answer and correct; the
+      // synthesis simply never saw it, so a half-dead retrieval layer produced
+      // a confident answer with no caveat in the prose an agent reads.
+      retrieved.degraded ?? []
     );
 
     // Surface synthesis outages loudly instead of returning a null answer that

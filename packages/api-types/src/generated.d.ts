@@ -2380,23 +2380,6 @@ export type WidgetTrustLevel = "trusted" | "installed" | "generated";
  *   - "panel"           → side or floating panel surface
  */
 export type WidgetRole = "widget" | "view-renderer" | "entity-renderer" | "panel";
-/**
- * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
- * REPLACES `role` (which conflated content with placement). DISTINCT from
- * `rendererType` (the rendering MECHANISM: frame/builtin/iframe/native).
- * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
- *
- *   - "entity-detail"  → renders ONE entity (its full page)
- *   - "entity-card"    → renders ONE entity (its small, embeddable block)
- *   - "entity-profile" → renders the WHOLE profile/type (its dashboard / home)
- *   - "collection"     → renders a view of MANY entities
- *   - "widget"         → generic, content-agnostic — the DEFAULT; never a
- *                        profile assignment, only placeable
- *
- * The column is plain `text` with no CHECK (migration 0111), so widening this
- * union needs no migration.
- */
-export type ContentKind = "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 export interface PodIntelligenceDefaults {
 	chatModelId: string | null;
 	reasoningModelId: string | null;
@@ -5358,6 +5341,38 @@ export interface ApprovalPattern {
 	distinctSubjects: number;
 	firstDecidedAt: Date;
 	lastDecidedAt: Date;
+	/**
+	 * One real proposal this pattern was learned FROM — the most recent
+	 * human-approved member.
+	 *
+	 * ── WHY AN EXEMPLAR, AND WHY THIS ONE ──────────────────────────────────
+	 * A pattern on its own is a statistic; you cannot act on it. Turning "you
+	 * approved this 3 times" into a standing rule needs a concrete request to
+	 * seed from (`sourceProposalId` for lineage, `agentUserId` for whose lane is
+	 * being widened), and neither is derivable from the aggregate — the scan
+	 * keys on eventType × motif ACROSS agents. Without this the suggestion is a
+	 * card the user can read and nothing can act on, which is the built-but-
+	 * severed shape this codebase keeps paying for.
+	 *
+	 * It is deliberately drawn from `approvedByHuman` ONLY. Seeding from an
+	 * auto-approved member would let the system cite its own past decision as
+	 * the basis for widening further — the loop governance exists to close, and
+	 * the same reason `autoApproved` is counted but never treated as evidence.
+	 * A rubber-stamped verdict (faster than `MIN_DELIBERATION_MS`) is excluded
+	 * for the same reason: it is not a decision anyone made.
+	 *
+	 * MOST RECENT because a widening should be justified by the freshest
+	 * evidence; an exemplar from six months ago may describe a shape the user
+	 * would no longer accept.
+	 *
+	 * `agentUserId` is null for a human-authored proposal. Absent means "no
+	 * agent lane to widen", never "widen everyone's".
+	 */
+	exemplar: {
+		proposalId: string;
+		agentUserId: string | null;
+		decidedAt: Date;
+	} | null;
 }
 /**
  * Where the scanned rows went. Publish this wherever patterns are shown: it is
@@ -21899,7 +21914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
-				contentKind: ContentKind;
+				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
 			}[];
 			meta: object;
@@ -21935,7 +21950,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
-				contentKind: ContentKind;
+				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
 			}, "name" | "workspaceId" | "createdAt" | "updatedAt" | "description" | "isActive" | "category" | "typeKey" | "rendererType">[];
 			meta: object;
@@ -21973,7 +21988,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
-				contentKind: ContentKind;
+				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
 			};
 			meta: object;
@@ -21998,7 +22013,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				icon?: string | undefined;
 				category?: string | undefined;
 				rendererType?: "builtin" | "iframe" | "native" | "frame" | undefined;
-				contentKind?: "widget" | "entity-detail" | "entity-card" | "entity-profile" | "collection" | undefined;
+				contentKind?: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget" | undefined;
 				rendererSource?: string | undefined;
 				source?: string | undefined;
 				deps?: Record<string, string> | undefined;
@@ -22043,7 +22058,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				deps: Record<string, string> | null;
 				trustLevel: WidgetTrustLevel;
-				contentKind: ContentKind;
+				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
 			};
 			meta: object;

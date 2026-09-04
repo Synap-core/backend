@@ -14,6 +14,7 @@ import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { getDb, entities, focusSessions, eq } from "@synap/database";
+import { CONTENT_KINDS } from "@synap/database/schema";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import {
   ok,
@@ -40,6 +41,14 @@ export const buildHandlers: McpHandlerMap = {
         description: z.string().optional(),
         /** View-type affinity for using this cell as a view renderer (0221). */
         viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
+        /**
+         * Renderer SLOT. `defineCell` has always accepted this; NO write door
+         * declared it, and a plain z.object STRIPS an undeclared key — so an
+         * agent sending `contentKind` got a success and a cell that silently
+         * took the column default `widget`, invisible to `renderersForType`.
+         * Enum built from the `CONTENT_KINDS` runtime SSOT, never retyped.
+         */
+        contentKind: z.enum(CONTENT_KINDS).optional(),
       })
       .safeParse(args);
     if (!parsed.success) {
@@ -71,6 +80,12 @@ export const buildHandlers: McpHandlerMap = {
         // Carried so the `cell/define` approve-executor materializes the
         // view-renderer affinity on approval, not just the source.
         ...(parsed.data.viewTypes ? { viewTypes: parsed.data.viewTypes } : {}),
+        // Same reason as `viewTypes`: without it an APPROVED cell materializes
+        // into the default `widget` slot — the reviewer approves an
+        // entity-detail renderer and the pod writes a bento widget.
+        ...(parsed.data.contentKind
+          ? { contentKind: parsed.data.contentKind }
+          : {}),
       },
     });
     if ("denied" in perm && perm.denied) {
@@ -103,6 +118,7 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: cellWorkspaceId,
       description: parsed.data.description,
       viewTypes: parsed.data.viewTypes,
+      contentKind: parsed.data.contentKind,
       userId,
     });
     return ok({ status: result.changeType, ...result });

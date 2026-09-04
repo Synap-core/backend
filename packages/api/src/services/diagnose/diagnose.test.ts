@@ -159,7 +159,12 @@ describe("summarizeGlobalHealth", () => {
     stuckHours: 24,
     stuck: [],
     failedFlows: [],
-    backlog: { pending: 0, oldestAgeHours: null, mineOutsideLens: 0 },
+    backlog: {
+      pending: 0,
+      oldestAgeHours: null,
+      mineOutsideLens: 0,
+      oldestAgeHoursIncludingOutsideLens: null,
+    },
     duplicateClusters: [],
     capabilities: { enabled: 3, unapproved: 0 },
     agentActivity: [],
@@ -200,7 +205,12 @@ describe("summarizeGlobalHealth", () => {
     const stale = summarizeGlobalHealth(
       {
         ...clean,
-        backlog: { pending: 5, oldestAgeHours: 72, mineOutsideLens: 0 },
+        backlog: {
+          pending: 5,
+          oldestAgeHours: 72,
+          mineOutsideLens: 0,
+          oldestAgeHoursIncludingOutsideLens: null,
+        },
       },
       { workspaceId: null }
     );
@@ -211,7 +221,12 @@ describe("summarizeGlobalHealth", () => {
     const fresh = summarizeGlobalHealth(
       {
         ...clean,
-        backlog: { pending: 5, oldestAgeHours: 3, mineOutsideLens: 0 },
+        backlog: {
+          pending: 5,
+          oldestAgeHours: 3,
+          mineOutsideLens: 0,
+          oldestAgeHoursIncludingOutsideLens: null,
+        },
       },
       { workspaceId: null }
     );

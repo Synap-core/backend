@@ -102,6 +102,38 @@ export interface ApprovalPattern {
   distinctSubjects: number;
   firstDecidedAt: Date;
   lastDecidedAt: Date;
+  /**
+   * One real proposal this pattern was learned FROM — the most recent
+   * human-approved member.
+   *
+   * ── WHY AN EXEMPLAR, AND WHY THIS ONE ──────────────────────────────────
+   * A pattern on its own is a statistic; you cannot act on it. Turning "you
+   * approved this 3 times" into a standing rule needs a concrete request to
+   * seed from (`sourceProposalId` for lineage, `agentUserId` for whose lane is
+   * being widened), and neither is derivable from the aggregate — the scan
+   * keys on eventType × motif ACROSS agents. Without this the suggestion is a
+   * card the user can read and nothing can act on, which is the built-but-
+   * severed shape this codebase keeps paying for.
+   *
+   * It is deliberately drawn from `approvedByHuman` ONLY. Seeding from an
+   * auto-approved member would let the system cite its own past decision as
+   * the basis for widening further — the loop governance exists to close, and
+   * the same reason `autoApproved` is counted but never treated as evidence.
+   * A rubber-stamped verdict (faster than `MIN_DELIBERATION_MS`) is excluded
+   * for the same reason: it is not a decision anyone made.
+   *
+   * MOST RECENT because a widening should be justified by the freshest
+   * evidence; an exemplar from six months ago may describe a shape the user
+   * would no longer accept.
+   *
+   * `agentUserId` is null for a human-authored proposal. Absent means "no
+   * agent lane to widen", never "widen everyone's".
+   */
+  exemplar: {
+    proposalId: string;
+    agentUserId: string | null;
+    decidedAt: Date;
+  } | null;
 }
 
 /**
@@ -165,6 +197,12 @@ interface Bucket {
   subjects: Set<string>;
   first: Date;
   last: Date;
+  /** Most recent HUMAN-APPROVED member — the only defensible seed. */
+  exemplar: {
+    proposalId: string;
+    agentUserId: string | null;
+    decidedAt: Date;
+  } | null;
 }
 
 /**
@@ -196,6 +234,7 @@ export async function scanApprovalPatterns(input: {
       reviewedBy: proposals.reviewedBy,
       reviewedAt: proposals.reviewedAt,
       createdAt: proposals.createdAt,
+      agentUserId: proposals.agentUserId,
       triggerPayload: automationRuns.triggerPayload,
     })
     .from(proposals)
@@ -262,6 +301,7 @@ export async function scanApprovalPatterns(input: {
         subjects: new Set(),
         first: decidedAt,
         last: decidedAt,
+        exemplar: null,
       };
       buckets.set(key, b);
     }
@@ -293,8 +333,20 @@ export async function scanApprovalPatterns(input: {
     }
     funnel.humanDecided += 1;
 
-    if (row.status === ProposalStatus.APPROVED) b.approvedByHuman.add(row.id);
-    else if (row.status === ProposalStatus.REJECTED) b.rejected.add(row.id);
+    if (row.status === ProposalStatus.APPROVED) {
+      b.approvedByHuman.add(row.id);
+      // Most recent wins. Rows arrive `createdAt DESC`, but the comparison is
+      // on the DECIDED instant and made explicit rather than relying on that
+      // order — a change to the ORDER BY must not silently change which
+      // proposal a standing rule cites as its basis.
+      if (!b.exemplar || decidedAt > b.exemplar.decidedAt) {
+        b.exemplar = {
+          proposalId: row.id,
+          agentUserId: row.agentUserId ?? null,
+          decidedAt,
+        };
+      }
+    } else if (row.status === ProposalStatus.REJECTED) b.rejected.add(row.id);
   }
 
   funnel.distinctPatterns = buckets.size;
@@ -311,6 +363,7 @@ export async function scanApprovalPatterns(input: {
       distinctSubjects: b.subjects.size,
       firstDecidedAt: b.first,
       lastDecidedAt: b.last,
+      exemplar: b.exemplar,
     }))
     // Strongest evidence first; a tie breaks toward the more recently confirmed.
     .sort(

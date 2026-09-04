@@ -1,6 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import { db, proposals, eq, and, cellInstances } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
+import {
+  ProposalStatus,
+  CONTENT_KINDS,
+  type ContentKind,
+} from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 
@@ -74,6 +78,16 @@ export function registerCellExecutors(): void {
         // Absent ⇒ undefined ⇒ defineCell leaves any stored affinity untouched.
         viewTypes: Array.isArray(innerData.viewTypes)
           ? (innerData.viewTypes as string[])
+          : undefined,
+        // Renderer SLOT, carried in the gate `data` by the same two doors.
+        // Absent ⇒ undefined ⇒ defineCell leaves an existing row's slot
+        // untouched and lets a new row take the column default. Re-validated
+        // against the SSOT rather than trusted: the payload is caller-supplied,
+        // and an unrecognised value must not reach the column.
+        contentKind: (CONTENT_KINDS as readonly string[]).includes(
+          innerData.contentKind as string
+        )
+          ? (innerData.contentKind as ContentKind)
           : undefined,
         userId,
       });

@@ -15,7 +15,7 @@ import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { getDb, and, eq, or, isNull, asc } from "@synap/database";
-import { widgetDefinitions } from "@synap/database/schema";
+import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
 import { scopedDb, accessFor } from "../access/index.js";
 import { requireUserId } from "../utils/user-scoped.js";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this router — its only
@@ -135,15 +135,7 @@ const WidgetUpsertSchema = z.object({
     .transform((value) => value as Exclude<typeof value, "native">),
   /** What this cell renders — the de-conflated content taxonomy. Selected by the
    *  author (Cell Studio) / AI generator; defaults to the content-agnostic `widget`. */
-  contentKind: z
-    .enum([
-      "entity-detail",
-      "entity-card",
-      "entity-profile",
-      "collection",
-      "widget",
-    ])
-    .optional(),
+  contentKind: z.enum(CONTENT_KINDS).optional(),
   rendererSource: z.string().optional(),
   /** Original JSX/TSX source for native widgets (compiled server-side) */
   source: z.string().optional(),

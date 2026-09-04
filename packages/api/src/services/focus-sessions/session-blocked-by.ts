@@ -42,6 +42,7 @@ import {
   or,
   focusSessions,
   links,
+  drizzleSql,
 } from "@synap/database";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { UUID_RE } from "./session-metadata.js";
@@ -237,7 +238,10 @@ export async function openBlockerIds(sessionId: string): Promise<string[]> {
   const rows = await db
     .select({ blockerId: focusSessions.id })
     .from(links)
-    .innerJoin(focusSessions, eq(focusSessions.id, links.toId))
+    .innerJoin(
+      focusSessions,
+      eq(drizzleSql`${focusSessions.id}::text`, links.toId)
+    )
     .where(
       and(
         eq(links.fromType, "session"),
