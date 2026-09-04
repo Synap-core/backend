@@ -77,11 +77,12 @@ import {
   type RunGroupCursor,
 } from "../../utils/keyset-cursor.js";
 import { validateFlowDefinition } from "../automations/validate-flow.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
-/** `proposals.proposalType` for the agnostic-capability last-mile executor
- * (Workstream 1 — see approve-executors.ts's `capability.run` executor). */
-const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+/* `CAPABILITY_RUN_PROPOSAL_TYPE` (the agnostic-capability last-mile executor's
+ * `proposals.proposalType`) is imported from `../proposals/proposal-class.js` —
+ * the module that classifies on it. A private copy here was one of four. */
 /**
  * `events.data.kind` (and `action`) for a capability run's ai_decision event —
  * the literal BOTH the `capability.run` approve-executor AND the direct-run door

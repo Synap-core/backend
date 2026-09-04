@@ -18,6 +18,24 @@
  *   access        0  does not exist in the data yet — deliberately NOT a class
  */
 
+/**
+ * THE literal every capability-run proposal carries in `proposals.proposal_type`.
+ *
+ * Exported from here — the module that CLASSIFIES on it — because a private copy
+ * next to each producer is exactly how this broke: `execute-capability.ts` wrote
+ * `"capability.run"` while `routers/skills.ts` and `connectors/external-dispatch.ts`
+ * wrote `"run"`, so skill runs and external-dispatch runs classified `objectWork`
+ * and no sweeper could ever expire them. One exported constant, imported by every
+ * producer and every reader, is the only shape in which they cannot drift.
+ *
+ * Reads keep working across the rename: the approve-executor registry resolves
+ * `run`, `capability/run` and `capability.run` to the same executor, so rows
+ * written under the old literal still approve.
+ *
+ * This module imports NOTHING, so importing it can never create a cycle.
+ */
+export const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+
 /** The classes that exist in the data today. */
 export const PROPOSAL_CLASSES = [
   "ephemeral",
@@ -60,10 +78,15 @@ export function classifyProposal(
   targetType: string
 ): ProposalClass {
   // A capability run is an outbound call bound to a live session. The literal
-  // is the one `execute-capability.ts` writes (`capability.run`); a test scans
-  // that source so the two can never drift — they did once, and the class
-  // table silently filed every run as objectWork, which never expires.
-  if (proposalType === "capability.run" && targetType === "capability")
+  // is `CAPABILITY_RUN_PROPOSAL_TYPE`, which every producer imports; a tripwire
+  // scans EVERY `targetType: "capability"` proposal call site so the producers
+  // and this table can never drift — they did once (three producers, two
+  // literals), and the class table silently filed most runs as objectWork,
+  // which never expires.
+  if (
+    proposalType === CAPABILITY_RUN_PROPOSAL_TYPE &&
+    targetType === "capability"
+  )
     return "ephemeral";
   // Governance meta-proposals are the policy lane, already rendered apart.
   if (proposalType.startsWith("governance.")) return "governance";

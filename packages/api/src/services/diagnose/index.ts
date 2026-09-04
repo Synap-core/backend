@@ -44,6 +44,7 @@ import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import {
   collapseProposalsToClusters,
   type ClusterInputRow,
@@ -72,9 +73,9 @@ const CLASS_VALUES: DiagnoseClass[] = [
   "run",
 ];
 
-/** `proposals.proposalType` for the agnostic-capability last-mile executor —
- * the one whose `data.runResult` carries the run output (approve-executors.ts). */
-const CAPABILITY_RUN_PROPOSAL_TYPE = "capability.run";
+/* `CAPABILITY_RUN_PROPOSAL_TYPE` — the agnostic-capability last-mile executor's
+ * `proposals.proposalType`, the one whose `data.runResult` carries the run
+ * output — is imported from the module that classifies on it. */
 
 /** Bound a (possibly large) diagnose value for the response — pass small values
  * through verbatim, truncate a huge payload to a preview so diagnose stays lean. */

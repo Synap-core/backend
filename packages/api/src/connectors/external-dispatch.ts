@@ -54,6 +54,7 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import { createPendingProposal } from "../utils/permission-check.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "external-dispatch" });
@@ -2088,7 +2089,9 @@ export async function triggerProviderAction(
         workspaceId: proposalWorkspaceId,
         targetType: "capability",
         targetId: tool.id,
-        proposalType: "run",
+        // ONE literal, imported — a private `"run"` here classified every
+        // external-dispatch run as objectWork, which never expires.
+        proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
         data: {
           capabilityKind: "tool",
           capabilityId: tool.id,

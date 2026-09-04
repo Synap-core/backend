@@ -67,6 +67,7 @@ import {
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 
@@ -498,7 +499,7 @@ export async function executeCapability(input: {
       agentUserId: input.agentUserId ?? undefined,
       targetType: "capability",
       targetId: skillRow.id,
-      proposalType: "capability.run",
+      proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
       // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
       // index. NULL when the caller had no session, by design.
       sessionId: input.sessionId ?? null,

@@ -28,6 +28,7 @@ import {
 } from "../utils/permission-check.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { skillExecFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -1184,7 +1185,9 @@ export const skillsRouter = router({
           workspaceId: skill.workspaceId,
           targetType: "capability",
           targetId: skill.id,
-          proposalType: "run",
+          // ONE literal, imported — a private `"run"` here classified every
+          // skill run as objectWork, which never expires.
+          proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
           data: {
             capabilityKind: "skill",
             capabilityId: skill.id,
