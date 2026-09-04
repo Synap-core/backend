@@ -6,6 +6,8 @@
  * a user cannot write the pod, and a non-editor cannot write a workspace.
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
@@ -45,15 +47,32 @@ describe("scope: user", () => {
     expect(h.requireEditor).not.toHaveBeenCalled();
   });
 
-  it("refuses writing into someone else's personal scope", async () => {
-    await expect(
-      assertMayBindRenderer({
-        userId: "u-1",
-        scope: "user",
-        workspaceId: null,
-        targetUserId: "u-2",
-      })
-    ).rejects.toThrow(/only be written for yourself/);
+  /**
+   * The "someone else's personal scope" case is not a runtime branch, because
+   * it is not reachable: `setProfileRenderer` is the only write door and it
+   * derives the binding row's `userId` column from the ACTING identity. A
+   * runtime mismatch check here had zero producers — it read like a floor while
+   * being dead code.
+   *
+   * So the invariant is pinned where it actually lives. A source scan, because
+   * the defect would be an EDIT to the call site (accepting a caller-supplied
+   * user id), which no behavioural test of this module could ever observe.
+   */
+  it("the one write door derives the binding's user column from the actor", () => {
+    const src = readFileSync(
+      fileURLToPath(new URL("./set-profile-renderer.ts", import.meta.url)),
+      "utf8"
+    );
+    expect(
+      /userId:\s*scope === "user" \? userId : null/.test(src),
+      "setProfileRenderer no longer derives the user-scoped binding's userId " +
+        "from the acting identity. A caller-supplied target user is an " +
+        "invisible impersonation: the resolver would report the write as that " +
+        "user's own preference. Restore the derivation, or bring back the " +
+        "`targetUserId` floor in renderer-binding-authz.ts TOGETHER with it."
+    ).toBe(true);
+    // And no target-user input exists on the door to supply one from.
+    expect(/targetUserId/.test(src)).toBe(false);
   });
 });
 

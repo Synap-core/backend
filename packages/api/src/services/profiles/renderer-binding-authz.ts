@@ -48,11 +48,6 @@ export interface BindRendererAuthzInput {
   scope: RendererScope;
   /** Required for `scope: 'workspace'`. */
   workspaceId: string | null;
-  /**
-   * The user a `scope: 'user'` binding is FOR. Defaults to the actor; passing
-   * anyone else is refused rather than silently ignored.
-   */
-  targetUserId?: string | null;
 }
 
 export async function assertMayBindRenderer(
@@ -61,14 +56,20 @@ export async function assertMayBindRenderer(
   const { userId, scope, workspaceId } = input;
 
   if (scope === "user") {
-    const target = input.targetUserId ?? userId;
-    if (target !== userId) {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message:
-          "A user-scoped renderer binding can only be written for yourself.",
-      });
-    }
+    // Nothing to check: a user-scoped binding is actor-scoped BY CONSTRUCTION.
+    // `setProfileRenderer` — the one write door — derives the binding row's
+    // `userId` column from the acting identity (`scope === "user" ? userId :
+    // null`) and takes no target-user input at all, so there is no way to name
+    // someone else's personal scope.
+    //
+    // This used to carry a `targetUserId` mismatch check. It had ZERO
+    // producers, which made it an unreachable branch that READ like a floor:
+    // an authorization check nothing can trigger is a claim nobody verified.
+    // The invariant is real, so it is enforced where it actually holds —
+    // `renderer-binding-authz.test.ts` source-scans the call site to pin that
+    // the binding's user column stays actor-derived. If a caller ever needs to
+    // write another user's scope, the parameter comes back TOGETHER with its
+    // producer, and this becomes a live check again.
     return;
   }
 
