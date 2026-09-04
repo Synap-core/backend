@@ -41,8 +41,7 @@ import {
   desc,
   inArray,
   isNull,
-  isNotNull,
-  lt,
+  drizzleSql,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database";
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -194,10 +193,18 @@ export const signalsRouter = router({
  * `proposals.list` and `proposals.groups` build: the `workspaceId` three-state,
  * defaulting to `userVisibleWhere`.
  *
- * Ordered by `reviewedAt`, not `createdAt`: history answers "what was decided,
- * and when" — a month-old proposal decided this morning belongs at the top.
- * Rows with no `reviewedAt` are excluded, since an undecided row has no place
- * in a decision history.
+ * Ordered by the DECISION time, not `createdAt`: history answers "what was
+ * decided, and when" — a month-old proposal decided this morning belongs at the
+ * top.
+ *
+ * The decision time is `coalesce(reviewedAt, updatedAt)`, NOT `reviewedAt`
+ * alone. Expiry is a decision that no human made: `expireLapsedProposals`
+ * writes `status` + `updatedAt` and deliberately leaves `reviewedAt` NULL,
+ * because stamping a reviewer on a lapse would claim a review that never
+ * happened. Filtering (and paging) on `reviewedAt` therefore dropped EVERY
+ * expired row out of history — the sweeper's whole output was invisible.
+ * `updatedAt` is NOT NULL on every row, so the coalesce is total and no decided
+ * row can fall out.
  */
 async function listDecidedProposals(
   ctx: { userId?: string | null },
@@ -222,8 +229,10 @@ async function listDecidedProposals(
       ProposalStatus.EXPIRED,
     ])
   );
-  conditions.push(isNotNull(proposals.reviewedAt));
-  if (before) conditions.push(lt(proposals.reviewedAt, before));
+  // The one expression the filter, the cursor, the projection and the ORDER BY
+  // all use — three copies of a coalesce is how two of them end up disagreeing.
+  const decidedAt = drizzleSql<Date>`coalesce(${proposals.reviewedAt}, ${proposals.updatedAt})`;
+  if (before) conditions.push(drizzleSql`${decidedAt} < ${before}`);
 
   const rows = await db
     .select({
@@ -232,11 +241,11 @@ async function listDecidedProposals(
       targetType: proposals.targetType,
       status: proposals.status,
       data: proposals.data,
-      reviewedAt: proposals.reviewedAt,
+      decidedAt,
     })
     .from(proposals)
     .where(and(...conditions))
-    .orderBy(desc(proposals.reviewedAt))
+    .orderBy(desc(decidedAt))
     .limit(limit);
 
   return rows.map((r) => ({
@@ -251,7 +260,7 @@ async function listDecidedProposals(
       mood: "past",
     }),
     count: 1,
-    occurredAt: r.reviewedAt as Date,
+    occurredAt: r.decidedAt as Date,
     target: { kind: "proposal", id: r.id },
     category: "governance",
   }));
