@@ -695,6 +695,21 @@ export class EventRepository {
        * `agentUserId` to scope to one agent. Backed by `idx_events_ungoverned_agent`.
        */
       ungoverned?: boolean;
+      /**
+       * Widen a `workspaceId` narrowing to ALSO include pod-wide rows
+       * (`workspace_id IS NULL`) — the SAME lens `notif-center` applies to
+       * notifications.
+       *
+       * Why it is opt-in: an admin search asking "what happened in workspace X"
+       * means strictly X, while a USER-FACING activity feed lensed on X must
+       * still show the pod-wide events that belong to every workspace. An
+       * `eq(workspaceId, …)` never matches NULL, so without this the feed
+       * silently drops every pod-wide event — the exact defect that left
+       * pod-wide notifications un-badged.
+       *
+       * Ignored when no `workspaceId` is given: there is nothing to widen.
+       */
+      includePodWide?: boolean;
     } = {}
   ): Promise<EventRecord[]> {
     let query = "SELECT * FROM events WHERE 1=1";
@@ -711,7 +726,10 @@ export class EventRepository {
       // Workspace context lives in the real `workspace_id` column (0223) but
       // historical / un-backfilled / compressed rows may only carry it in the
       // `data` JSONB — COALESCE resolves both.
-      query += ` AND COALESCE(workspace_id, data->>'workspaceId') = $${paramIndex}`;
+      const wsExpr = "COALESCE(workspace_id, data->>'workspaceId')";
+      query += filters.includePodWide
+        ? ` AND (${wsExpr} = $${paramIndex} OR ${wsExpr} IS NULL)`
+        : ` AND ${wsExpr} = $${paramIndex}`;
       params.push(filters.workspaceId);
       paramIndex++;
     }

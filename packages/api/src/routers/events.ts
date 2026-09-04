@@ -211,6 +211,21 @@ export const eventsRouter = router({
         until: z.coerce.date().optional(),
         type: z.string().optional(),
         subjectType: subjectTypeSchema.optional(),
+        /**
+         * Narrow the stream to ONE workspace. The floor is unchanged — the read
+         * is already scoped to `userId` — so this only ever narrows.
+         *
+         * It exists because the activity feed (`signals.list` history lens)
+         * scopes its proposals half by workspace and had no way to scope its
+         * events half: a user viewing one workspace saw that workspace's
+         * decisions beside every workspace's events. Omitted = every workspace,
+         * exactly as before.
+         *
+         * Lens semantics match the notification centre: the named workspace's
+         * rows PLUS pod-wide rows (`workspace_id IS NULL`), which belong to
+         * every workspace. Another workspace's rows are excluded.
+         */
+        workspaceId: z.string().optional(),
         limit: z.number().min(1).max(500).default(50),
         lean: z.boolean().default(false),
       })
@@ -223,6 +238,11 @@ export const eventsRouter = router({
         userId,
         eventType: input.type,
         subjectType: input.subjectType,
+        workspaceId: input.workspaceId,
+        // The notif-center lens: a workspace narrowing still shows the
+        // pod-wide rows that belong to every workspace. An `eq` never matches
+        // NULL, so without this the feed drops them silently.
+        includePodWide: true,
         fromDate: input.since,
         toDate: input.until,
         limit: input.limit,

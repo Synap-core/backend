@@ -33,20 +33,11 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import {
-  db,
-  proposals,
-  eq,
-  and,
-  desc,
-  inArray,
-  isNull,
-  drizzleSql,
-} from "@synap/database";
+import { db, proposals, and, desc, inArray, drizzleSql } from "@synap/database";
 import { ProposalStatus } from "@synap/database";
 import { humanizeToken } from "@synap-core/types/vocabulary";
+import { buildProposalScopeConditions } from "./proposals/scope-conditions.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
 import { eventsRouter } from "./events.js";
@@ -128,6 +119,14 @@ export const signalsRouter = router({
         eventsRouter.createCaller(ctx).read({
           limit: input.limit,
           lean: true,
+          // Same lens the proposals half uses. `read` takes a plain optional
+          // string, not the three-state: a `null` workspaceId means "pod-wide
+          // proposals", and events carry no pod-wide sibling — so null and
+          // undefined both mean "do not narrow" here, and the two halves agree
+          // wherever a concrete workspace is named.
+          ...(typeof input.workspaceId === "string"
+            ? { workspaceId: input.workspaceId }
+            : {}),
           ...(before ? { until: before } : {}),
         }),
         listDecidedProposals(ctx, input.workspaceId, input.limit, before),
@@ -213,14 +212,11 @@ async function listDecidedProposals(
   before: Date | undefined
 ): Promise<Signal[]> {
   const userId = requireUserId(ctx.userId);
-  const conditions = [];
-  if (workspaceId === null) {
-    conditions.push(isNull(proposals.workspaceId));
-  } else if (typeof workspaceId === "string") {
-    conditions.push(eq(proposals.workspaceId, workspaceId));
-  } else {
-    conditions.push(userVisibleWhere(proposals.workspaceId, userId));
-  }
+  // The SAME builder `proposals.list` and `proposals.groups` scope on, rather
+  // than a third hand-rolled copy of the workspace three-state. History and the
+  // queue must agree about what a user can see; three copies of a visibility
+  // predicate is two chances to tighten one and forget the others.
+  const conditions = buildProposalScopeConditions({ workspaceId }, userId);
   conditions.push(
     inArray(proposals.status, [
       ProposalStatus.APPROVED,

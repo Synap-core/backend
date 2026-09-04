@@ -55,8 +55,48 @@ describe("EventRepository.searchEvents — multi-subject filter", () => {
       limit: 50,
     });
     const { sql } = lastCall();
-    expect(sql).toContain("data->>'workspaceId' = $1");
+    // The COALESCE form (0223 moved workspace context into a real column while
+    // historical rows still carry it only in `data`). The assertion below
+    // predated that and had gone stale — it named a shape the builder no longer
+    // emits, so it failed rather than proving the clamp.
+    expect(sql).toContain("COALESCE(workspace_id, data->>'workspaceId') = $1");
     expect(sql).toContain("subject_id IN ($2, $3)");
+  });
+
+  it("narrows to ONE workspace by default — no pod-wide widening", async () => {
+    await repo.searchEvents({ userId: "user-1", workspaceId: "ws-1" });
+    const { sql, params } = lastCall();
+    expect(sql).toContain(
+      "AND COALESCE(workspace_id, data->>'workspaceId') = $2"
+    );
+    // Strictly equality: an admin asking about workspace X means X.
+    expect(sql).not.toContain("IS NULL");
+    expect(params.slice(0, 2)).toEqual(["user-1", "ws-1"]);
+  });
+
+  it("includePodWide adds the NULL-workspace rows, and ONLY those", async () => {
+    await repo.searchEvents({
+      userId: "user-1",
+      workspaceId: "ws-1",
+      includePodWide: true,
+    });
+    const { sql, params } = lastCall();
+    // The notif-center lens: this workspace OR pod-wide. Another workspace's
+    // rows match neither branch, so the feed still excludes them — the whole
+    // point of the narrowing.
+    expect(sql).toContain(
+      "AND (COALESCE(workspace_id, data->>'workspaceId') = $2 OR " +
+        "COALESCE(workspace_id, data->>'workspaceId') IS NULL)"
+    );
+    // The user clamp is untouched: the lens narrows, it never widens.
+    expect(sql).toContain("user_id = $1");
+    expect(params.slice(0, 2)).toEqual(["user-1", "ws-1"]);
+  });
+
+  it("includePodWide without a workspaceId changes nothing", async () => {
+    await repo.searchEvents({ userId: "user-1", includePodWide: true });
+    const { sql } = lastCall();
+    expect(sql).not.toContain("workspace_id");
   });
 
   it("unions subjectId + subjectIds into one membership predicate (no intersection)", async () => {
