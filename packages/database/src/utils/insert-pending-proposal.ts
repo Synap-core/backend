@@ -243,6 +243,68 @@ export async function findExistingPendingDuplicate(
 }
 
 /**
+ * The provenance COLUMNS every proposal-writing door must set on the `proposals`
+ * row. Named once, here, so the two doors that insert a row — this PENDING door
+ * and the AUTO_APPROVED receipt insert in `@synap/api`'s permission-check —
+ * cannot drift into writing different provenance sets.
+ *
+ * This is not decoration: the receipt door shipped WITHOUT `stepRunId` /
+ * `nodeId` / `governanceReason` while this door had them, which is exactly how
+ * "auto-approved agent writes are unjoinable" became a measured 0% on
+ * `stepRunId`. A source-scan tripwire (`api/src/__tripwires__/
+ * proposal-provenance-door-parity.test.ts`) asserts both inserts name every key
+ * below, so adding a provenance column here forces both doors to carry it.
+ */
+export const PROPOSAL_PROVENANCE_KEYS = [
+  "agentUserId",
+  "threadId",
+  "commandRunId",
+  "sourceMessageId",
+  "correlationId",
+  "requestedEventId",
+  "sessionId",
+  "projectId",
+  "stepRunId",
+  "nodeId",
+  "governanceReason",
+] as const;
+
+/**
+ * PROJECT LENS derivation — a proposal that belongs to a session belongs to that
+ * session's project.
+ *
+ * Extracted from the PENDING insert below so the AUTO_APPROVED receipt door can
+ * REUSE it rather than re-implement it. Doing it at each door is what produced
+ * the measured 0-of-670 `projectId` coverage: the column, the forwarding and the
+ * API field all existed; only the derivation was missing at every door.
+ *
+ * An explicit `projectId` always wins — this only fills a gap, and a session
+ * with no project leaves it null rather than inventing one.
+ *
+ * Runs on the caller's `executor` so a session minted earlier in the SAME
+ * transaction is visible. Not wrapped in a try/catch: inside a transaction a
+ * failed statement aborts the whole tx, so a swallowed error would only
+ * resurface at the insert with a worse message. The one failure that IS
+ * reachable on a healthy connection — a malformed `sessionId` (several doors
+ * accept it from the request body unvalidated; Postgres raises 22P02 on a
+ * non-uuid) — is excluded BEFORE the query instead of caught after, so a bad id
+ * costs the lens, never the proposal.
+ */
+export async function deriveProposalProjectId(
+  input: { projectId?: string | null; sessionId?: string | null },
+  executor: typeof db | DbTx = db
+): Promise<string | null> {
+  if (input.projectId) return input.projectId;
+  if (!input.sessionId || !UUID_SHAPE.test(input.sessionId)) return null;
+  const [session] = await executor
+    .select({ projectId: focusSessions.projectId })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, input.sessionId))
+    .limit(1);
+  return session?.projectId ?? null;
+}
+
+/**
  * Insert a single PENDING `proposals` row, or — for an agent/automation-authored
  * proposal that exactly matches an existing PENDING one — return that existing
  * row without inserting a duplicate. Result is `{ proposal, deduped }`.
@@ -292,33 +354,12 @@ export async function insertPendingProposal(
   const correlationId = input.correlationId ?? randomUUID();
 
   // PROJECT LENS FLOOR: a proposal that belongs to a session belongs to that
-  // session's project. Derived HERE — the SSOT insert — for the same reason
-  // correlationId is: doing it at each door means every door that forgets
-  // produces a row the project lens cannot see, and measured on the live pod
-  // 2026-09-01 that was EVERY door: `projectId` was set on 0 of 670 pending
-  // proposals while `sessionId` was set on 361. The column, the forwarding and
-  // the API field all existed; only the derivation was missing.
-  //
-  // An explicit `input.projectId` always wins — this only fills a gap, and a
-  // session with no project leaves it null rather than inventing one.
-  //
-  // Runs on the caller's `executor` so a session minted earlier in the SAME
-  // transaction is visible. Not wrapped in a try/catch: inside a transaction a
-  // failed statement aborts the whole tx, so a swallowed error would only
-  // resurface at the insert with a worse message. The one failure that IS
-  // reachable on a healthy connection — a malformed `sessionId` (several
-  // doors accept it from the request body unvalidated; Postgres raises 22P02
-  // on a non-uuid) — is excluded BEFORE the query instead of caught after,
-  // so a bad id costs the lens, never the proposal.
-  let projectId = input.projectId ?? null;
-  if (!projectId && input.sessionId && UUID_SHAPE.test(input.sessionId)) {
-    const [session] = await executor
-      .select({ projectId: focusSessions.projectId })
-      .from(focusSessions)
-      .where(eq(focusSessions.id, input.sessionId))
-      .limit(1);
-    projectId = session?.projectId ?? null;
-  }
+  // session's project — derived through the SHARED `deriveProposalProjectId`
+  // (above) so the AUTO_APPROVED receipt door computes it identically.
+  const projectId = await deriveProposalProjectId(
+    { projectId: input.projectId, sessionId: input.sessionId },
+    executor
+  );
 
   try {
     const [proposal] = await executor

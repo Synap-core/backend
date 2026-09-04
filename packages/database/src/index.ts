@@ -65,6 +65,7 @@ export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
+export * from "./utils/agent-proposal-session-memo.js";
 export * from "./utils/insert-pending-proposal.js";
 export * from "./utils/facet-visibility.js";
 export * from "./utils/pod-membership.js";

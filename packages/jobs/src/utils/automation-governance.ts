@@ -45,6 +45,7 @@ import {
   verifyPermission,
   ProposalStatus,
   insertPendingProposal,
+  deriveProposalProjectId,
   proposals,
   eq,
   and,
@@ -333,7 +334,169 @@ export async function checkAutomationWriteOrPropose(
   }
 
   // gov.decision === "execute": auto-approved → the caller may write directly.
+  // File the RUN's auto-approve receipt first, so an auto-approved automation
+  // write is packaged the same way a proposed one is (see the helper's contract
+  // for why it is per RUN and not per row).
+  await recordAutomationAutoApproveReceipt({
+    agentUserId: ownerId,
+    workspaceId,
+    subjectType,
+    action,
+    automationRunId,
+    correlationId,
+    sessionId,
+    stepRunId,
+    nodeId,
+  });
   return { granted: true };
+}
+
+/**
+ * AUTO-APPROVE RECEIPT for the automation door — the missing half of the
+ * governance ledger on this path.
+ *
+ * The chat door records an `AUTO_APPROVED` `proposals` row for every write the
+ * ladder auto-executes (permission-check's `_autoApprove` branch), which is what
+ * makes "what did this agent do, ungated" answerable. The automation door filed
+ * NOTHING on `decision === "execute"` — it returned `{ granted: true }` and the
+ * caller wrote directly. Since `entity.create` sits in DEFAULT_AUTO_APPROVE,
+ * that is the DEFAULT path for automation entity writes, which is exactly why
+ * `stepRunId` measured 0% across 2961 proposals on 2026-09-03: the only door
+ * that ever sets that column is the automation PROPOSE path, and automations
+ * almost never propose.
+ *
+ * ── PER RUN, NOT PER ROW (measured) ──────────────────────────────────────────
+ * A receipt per WRITE would mirror the chat door exactly, and it is the wrong
+ * shape here. `checkAutomationWriteOrPropose` is called once per output-step
+ * EXECUTION, and `automation-executor.ts` runs an output step once per loop item
+ * with `MAX_LOOP_ITERATIONS = 100`. So a single loop node can auto-approve 100
+ * writes, and a run with several such nodes multiplies from there — against a
+ * whole-pod census of 2961 proposal rows, one busy nightly automation would
+ * dominate the table and the review queue's counts. A per-row receipt buys
+ * per-row `nodeId` precision at the cost of making the ledger unreadable.
+ *
+ * So: ONE receipt per automation run, carrying the step/node attribution of the
+ * FIRST auto-approved write in that run, and `writeAction`/`subjectType` of that
+ * same first write. It answers "this run performed ungated writes, here is the
+ * agent, the session, the project and the step it started at" at a fixed cost of
+ * one row per run. Per-step detail remains in `automation_step_runs`, which is
+ * the table that already owns it.
+ *
+ * IDEMPOTENCY, two layers, both needed:
+ *   - an in-process memo, so the other 99 loop iterations cost NOTHING (no probe,
+ *     no insert) — this is what keeps the hoist off the hot path;
+ *   - a DB probe on (targetType, targetId) for the memo's cold cases: a pg-boss
+ *     step redelivery, or a run whose steps span worker processes.
+ *
+ * BEST-EFFORT by contract, exactly like the chat door's receipt: a failure here
+ * is logged and swallowed. The primary durable audit of an auto-approved write
+ * is the event spine, and an audit-row failure must never turn a granted write
+ * into a denied one.
+ */
+const AUTO_APPROVE_RECEIPT_TARGET_TYPE = "automation_run";
+const AUTO_APPROVE_RECEIPT_PROPOSAL_TYPE = "automation_run.auto_approved";
+
+/** Runs whose receipt this process has already filed (or found). */
+const receiptedRuns = new Set<string>();
+/** Bound the set — a long-lived worker would otherwise retain every run id. */
+const RECEIPTED_RUNS_MAX = 2000;
+
+/** Test seam — drops the per-process receipt memo. Never called in production. */
+export function __resetAutomationAutoApproveReceipts(): void {
+  receiptedRuns.clear();
+}
+
+async function recordAutomationAutoApproveReceipt(opts: {
+  agentUserId: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  automationRunId?: string;
+  correlationId?: string;
+  sessionId?: string;
+  stepRunId?: string;
+  nodeId?: string;
+}): Promise<void> {
+  const { automationRunId } = opts;
+  // No run id → no stable per-run identity to dedup on. Filing an undedupable
+  // row per write is the exact volume failure this shape exists to avoid, so
+  // skip rather than guess. (Every real automation write carries one.)
+  if (!automationRunId) return;
+  if (receiptedRuns.has(automationRunId)) return;
+
+  try {
+    const [existing] = await db
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.targetType, AUTO_APPROVE_RECEIPT_TARGET_TYPE),
+          eq(proposals.targetId, automationRunId)
+        )
+      )
+      .limit(1);
+    if (existing) {
+      receiptedRuns.add(automationRunId);
+      return;
+    }
+
+    // PROJECT LENS: the SAME shared derivation both other doors use — never a
+    // third copy (re-implementation per door is what produced the measured
+    // 0-of-670 `projectId` coverage).
+    const projectId = await deriveProposalProjectId({
+      sessionId: opts.sessionId ?? null,
+    });
+
+    await db.insert(proposals).values({
+      workspaceId: opts.workspaceId,
+      targetType: AUTO_APPROVE_RECEIPT_TARGET_TYPE,
+      targetId: automationRunId,
+      proposalType: AUTO_APPROVE_RECEIPT_PROPOSAL_TYPE,
+      data: {
+        automationRunId,
+        agentUserId: opts.agentUserId,
+        authorshipMode: "autonomous",
+        source: "automation",
+        // The FIRST auto-approved write of the run — what this receipt is
+        // anchored to. Later writes in the same run are covered by the run, not
+        // enumerated here (see the per-run rationale above).
+        firstWrite: {
+          subjectType: opts.subjectType,
+          writeAction: opts.action,
+          ...(opts.stepRunId ? { stepRunId: opts.stepRunId } : {}),
+          ...(opts.nodeId ? { nodeId: opts.nodeId } : {}),
+        },
+        _autoApprove: {
+          approvedAt: new Date().toISOString(),
+          approvedBy: "system:auto_approve",
+          scope: "run",
+        },
+      },
+      status: ProposalStatus.AUTO_APPROVED,
+      createdBy: opts.agentUserId,
+      agentUserId: opts.agentUserId,
+      correlationId: opts.correlationId ?? randomUUID(),
+      sessionId: opts.sessionId ?? undefined,
+      projectId: projectId ?? undefined,
+      stepRunId: opts.stepRunId ?? undefined,
+      nodeId: opts.nodeId ?? undefined,
+    });
+    receiptedRuns.add(automationRunId);
+    if (receiptedRuns.size > RECEIPTED_RUNS_MAX) {
+      const oldest = receiptedRuns.values().next();
+      if (!oldest.done) receiptedRuns.delete(oldest.value);
+    }
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        automationRunId,
+        workspaceId: opts.workspaceId,
+        agentUserId: opts.agentUserId,
+      },
+      "Automation auto-approve receipt insert failed (write still granted; event spine remains the primary audit)"
+    );
+  }
 }
 
 /**

@@ -66,6 +66,15 @@ vi.mock("@synap/database", async () => {
       },
     },
     insertPendingProposal: vi.fn(),
+    // P1 provenance hoist: `evaluatePermission` now resolves the agent session
+    // and the project lens on the COMMON path, so a total mock of
+    // `@synap/database` must name them or every governed write throws.
+    resolveAgentProposalSessionOnce: vi.fn().mockResolvedValue(null),
+    resolveOrCreateAgentProposalSession: vi.fn().mockResolvedValue(null),
+    deriveAgentProposalSessionGoal: vi.fn(() => "goal"),
+    deriveProposalProjectId: vi.fn(
+      async (i: { projectId?: string | null }) => i.projectId ?? null
+    ),
     findExistingPendingDuplicate: vi.fn().mockResolvedValue(null),
     proposals: {},
     entities: {},

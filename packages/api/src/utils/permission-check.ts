@@ -27,6 +27,8 @@ import {
   findExistingPendingDuplicate,
   resolveOrCreateAgentProposalSession,
   deriveAgentProposalSessionGoal,
+  resolveAgentProposalSessionOnce,
+  deriveProposalProjectId,
   type InsertPendingProposalResult,
 } from "@synap/database";
 import {
@@ -646,6 +648,22 @@ export interface PermissionCheckBaseOpts {
   /** Active project lens → proposals.project_id → belongs_to_project at materialize */
   projectId?: string | null;
   /**
+   * WORKFLOW ATTRIBUTION — the automation step run + flow node that produced
+   * this write. Persisted to `proposals.step_run_id` / `proposals.node_id` on
+   * BOTH branches (proposal and auto-approve receipt), which is what makes
+   * "which automation node did this" answerable for an auto-approved write.
+   * Omitted by non-automation callers; the columns stay NULL exactly as before.
+   */
+  stepRunId?: string | null;
+  nodeId?: string | null;
+  /**
+   * Structured GOVERNANCE reason (a `PROPOSE_REASON` key) supplied by a CALLER
+   * that already knows why this write needs review. The propose branch prefers
+   * the pure engine's own `gov.reasonCode` — this is the fallback, and it is the
+   * ONLY source on the auto-approve receipt branch (where no propose rung fired).
+   */
+  governanceReason?: string | null;
+  /**
    * Force a PROPOSAL even when the action would otherwise auto-approve. Set by
    * callers for scope/identity-bearing writes that must always be reviewed
    * (e.g. promoting an entity workspace→pod-wide, or changing its profile TYPE).
@@ -773,6 +791,8 @@ async function evaluatePermission(
     sourceMessageId,
     sessionId,
     projectId,
+    stepRunId,
+    nodeId,
     channelCapabilities,
   } = opts;
 
@@ -1133,6 +1153,72 @@ async function evaluatePermission(
         return { denied: true, reason: gov.reason };
       }
 
+      // ── PROVENANCE HOIST (P1) ────────────────────────────────────────────
+      // The agent-session mint used to live ONLY inside the PENDING path
+      // (`createPendingProposalRow`), so an AUTO-APPROVED agent write carried no
+      // session at all — measured 2026-09-03 at 2.6% `sessionId` coverage over
+      // 2961 proposals. Since auto-approve is the MAJORITY of agent write
+      // traffic, packaging only the proposed half meant the session lens saw
+      // almost nothing an agent actually did.
+      //
+      // Resolved HERE: the one point BOTH the propose branch and the execute
+      // branch below pass through, so an auto-approved write carries the SAME
+      // session a proposed one would. Placed AFTER the `deny` return, so a
+      // refused write never mints a session; and skipped in `dryRun`, which by
+      // contract performs no side effects.
+      //
+      // COST: `checkPermissionOrPropose` is called PER ROW, and one capture can
+      // auto-approve ~1600 `entity.create` rows. `resolveAgentProposalSessionOnce`
+      // memoizes on (operator, agent, workspace, project, goal) — the same tuple
+      // the resolver's own reuse ladder keys on — so a burst resolves ONCE and
+      // every later row reads the memo instead of re-querying.
+      //
+      // GUARD on `subjectType`, not `proposalType`: the pre-existing guard in
+      // `createPendingProposalRow` reads `input.proposalType.startsWith(
+      // "focus_session")`, but that door is passed the bare ACTION ("create" /
+      // "update") — the SUBJECT is `targetType`. So the recursion guard it
+      // documents has never actually fired on the chat path. Here the subject is
+      // in hand and the guard is real.
+      const governedSessionId =
+        sessionId ??
+        (dryRun || subjectType.startsWith("focus_session")
+          ? null
+          : await resolveAgentProposalSessionOnce({
+              userId,
+              agentUserId,
+              workspaceId,
+              projectId,
+              goal: deriveAgentProposalSessionGoal({
+                data,
+                proposalType: action,
+                targetType: subjectType,
+                notificationDescription: opts.reasoning ?? null,
+              }),
+              // Per-proposal correlation UUIDs would force one session per row —
+              // only reuse by agent+goal (openRunSession mint on miss).
+              stableCorrelation: false,
+            }));
+
+      // Re-stamp the frozen envelope ONLY when the hoist actually resolved a
+      // session the caller did not supply. Same object otherwise, so every
+      // caller that already carried a session is byte-identical to before.
+      const governedEnvelope =
+        governedSessionId === (sessionId ?? null)
+          ? writeEnvelope
+          : makeWriteEnvelope(
+              writeEnvelope.access,
+              makeRequestProvenance({
+                source,
+                correlationId,
+                requestedEventId,
+                threadId,
+                commandRunId,
+                sourceMessageId,
+                sessionId: governedSessionId ?? undefined,
+                projectId,
+              })
+            );
+
       // Lifecycle complete escape: `ignoreSessionForcePropose` means "allow the
       // focus_session close write to execute under agent all-writes / pack mode"
       // — NOT a general bypass of deny, destructive, admin, or explicit
@@ -1148,7 +1234,7 @@ async function evaluatePermission(
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
         return createProposal({
-          envelope: writeEnvelope,
+          envelope: governedEnvelope,
           workspaceId,
           subjectType,
           action,
@@ -1160,7 +1246,12 @@ async function evaluatePermission(
           // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key,
           // e.g. "UNTRUSTED_ORIGIN") — persisted so the review UI can render a
           // distinct "why this needs you" treatment for a force-propose rung.
-          governanceReason: gov.reasonCode,
+          // The caller-supplied `governanceReason` is the fallback: the engine's
+          // own verdict always wins when it fired a named rung.
+          governanceReason:
+            gov.reasonCode ?? opts.governanceReason ?? undefined,
+          stepRunId,
+          nodeId,
         });
       }
 
@@ -1189,6 +1280,14 @@ async function evaluatePermission(
         const eventKey = `${subjectType}.${action}`;
         const authorshipMode = deriveAuthorshipMode(userId, agentUserId);
         let autoApprovedProposalId: string | undefined;
+        // PROJECT LENS parity with the PENDING door: a receipt that belongs to a
+        // session belongs to that session's project. Reuses the pending door's
+        // own derivation rather than re-implementing it — re-implementation at
+        // each door is what produced the measured 0-of-670 `projectId` coverage.
+        const receiptProjectId = await deriveProposalProjectId({
+          projectId,
+          sessionId: governedSessionId,
+        });
         try {
           const [receipt] = await db
             .insert(proposals)
@@ -1229,9 +1328,16 @@ async function evaluatePermission(
               commandRunId: commandRunId ?? undefined,
               correlationId: correlationId ?? undefined,
               requestedEventId: requestedEventId ?? undefined,
-              sessionId: sessionId ?? undefined,
+              // Hoisted above — the SAME session a proposed write would carry.
+              sessionId: governedSessionId ?? undefined,
               sourceMessageId: sourceMessageId ?? undefined,
-              projectId: projectId ?? undefined,
+              // Derived through the SHARED `deriveProposalProjectId` the PENDING
+              // door uses, so the two doors cannot disagree about which project a
+              // session's write belongs to.
+              projectId: receiptProjectId ?? undefined,
+              stepRunId: stepRunId ?? undefined,
+              nodeId: nodeId ?? undefined,
+              governanceReason: opts.governanceReason ?? undefined,
             })
             .returning({ id: proposals.id });
           // Thread the receipt id back so the caller can stamp it onto the
@@ -1483,6 +1589,10 @@ export interface CreatePendingProposalInput {
   requestedEventId?: string | null;
   sessionId?: string | null;
   projectId?: string | null;
+  /** Workflow attribution: the automation step run + flow node that produced
+   *  this proposal. Both optional — non-automation proposals omit them. */
+  stepRunId?: string | null;
+  nodeId?: string | null;
   expiresAt?: Date | null;
   notificationDescription?: string;
   /** Structured governance reason (PROPOSE_REASON key) → `governance_reason`. */
@@ -1664,6 +1774,8 @@ async function createPendingProposalRow(
       requestedEventId: input.requestedEventId,
       sessionId,
       projectId: input.projectId,
+      stepRunId: input.stepRunId,
+      nodeId: input.nodeId,
       expiresAt: input.expiresAt,
       governanceReason: input.governanceReason,
     },
@@ -1859,6 +1971,9 @@ async function createProposal(args: {
    * RBAC-role-exceed propose paths (those carry no governance-engine verdict).
    */
   governanceReason?: string;
+  /** Workflow attribution forwarded to the row: automation step run + flow node. */
+  stepRunId?: string | null;
+  nodeId?: string | null;
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
@@ -1871,6 +1986,8 @@ async function createProposal(args: {
     data,
     reasoning,
     governanceReason,
+    stepRunId,
+    nodeId,
   } = args;
   // Identity off the boundary-minted AccessContext; provenance off the frozen
   // per-request slice. Same values as the old loose params — now single-sourced.
@@ -2146,6 +2263,8 @@ async function createProposal(args: {
         projectId: projectId ?? null,
         correlationId: resolvedCorrelationId,
         requestedEventId: reqEventId ?? null,
+        stepRunId: stepRunId ?? null,
+        nodeId: nodeId ?? null,
         notificationDescription: reasoning ?? `${action} ${singularType}`,
         governanceReason: governanceReason ?? null,
       };

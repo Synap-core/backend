@@ -90,6 +90,16 @@ vi.mock("@synap/database", async () => {
     // `.requested` event. Default: no existing duplicate → the normal insert
     // path runs (what these tests assert on).
     findExistingPendingDuplicate: vi.fn().mockResolvedValue(null),
+    // P1 provenance hoist — the gate now resolves the agent's packaging session
+    // ONCE, above the propose/execute split, and derives the receipt's project
+    // through the pending door's own helper. Both are TOTAL-mock casualties if
+    // omitted (a new source import silently kills every test in this file).
+    // Defaults keep every pre-existing assertion unchanged: no session minted,
+    // no project derived.
+    resolveAgentProposalSessionOnce: vi.fn().mockResolvedValue(null),
+    deriveProposalProjectId: vi.fn().mockResolvedValue(null),
+    resolveOrCreateAgentProposalSession: vi.fn().mockResolvedValue(null),
+    deriveAgentProposalSessionGoal: vi.fn(() => "test goal"),
     proposals: {},
     entities: {},
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },

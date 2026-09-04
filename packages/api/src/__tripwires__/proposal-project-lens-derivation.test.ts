@@ -52,9 +52,34 @@ describe("proposals carry the project lens", () => {
 
   it("an explicit projectId still wins — the derivation only fills a gap", () => {
     expect(
-      /let projectId = input\.projectId \?\? null/.test(src),
+      /if \(input\.projectId\) return input\.projectId;/.test(src),
       "a caller that already knows its project must never be overridden by a " +
         "session lookup"
+    ).toBe(true);
+  });
+
+  it("the derivation is a SHARED helper both proposal doors call", () => {
+    // The derivation was extracted out of `insertPendingProposal` so the
+    // AUTO_APPROVED receipt insert in `@synap/api` can reuse it. Two doors
+    // re-implementing it is exactly how the pending door ended up with a lens
+    // the receipt door did not have.
+    expect(
+      /export async function deriveProposalProjectId/.test(src),
+      "the shared derivation is gone — the receipt door has no way to compute " +
+        "the same project without re-implementing it"
+    ).toBe(true);
+    expect(
+      /await deriveProposalProjectId\(/.test(src),
+      "the pending door must consume the shared helper, not its own copy"
+    ).toBe(true);
+    const receipt = readFileSync(
+      join(process.cwd(), "src/utils/permission-check.ts"),
+      "utf8"
+    );
+    expect(
+      /await deriveProposalProjectId\(/.test(receipt),
+      "the auto-approve receipt door stopped deriving the project lens — an " +
+        "auto-approved write goes back to being invisible to the project lens"
     ).toBe(true);
   });
 
@@ -75,11 +100,11 @@ describe("proposals carry the project lens", () => {
     // at the insert with a worse message. The real invariant is visibility:
     // `resolveOrCreateAgentProposalSession` can mint the session in the SAME
     // tx, and a read on a different connection would miss it and derive null.
-    const start = src.indexOf("let projectId");
-    // Bound at the if-block's close (two-space `}` on its own line), NOT at
-    // the insert: the insert sits inside the outer `try {`, and slicing that
-    // far would make the no-try/catch check below trip on the wrong `try`.
-    const block = src.slice(start, src.indexOf("\n  }\n", start));
+    // Bound to the extracted helper's own body — the derivation no longer
+    // lives inline in the insert, and slicing past its close would make the
+    // no-try/catch check below trip on the insert's own `try`.
+    const start = src.indexOf("export async function deriveProposalProjectId");
+    const block = src.slice(start, src.indexOf("\n}\n", start));
     // Two containment checks rather than one layout-sensitive regex, so a
     // prettier reflow cannot turn this pin red for a harmless reason.
     expect(
