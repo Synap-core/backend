@@ -614,7 +614,12 @@ export interface FocusSessionExpectedOutput {
   kind: string;
   label: string;
   icon?: string;
+  /** Stamped ONLY by `satisfyExpectedOutputs` on approval of a session proposal. */
   status?: "pending" | "done";
+  /** The agent's own (unverified) claim that it produced this output. */
+  claimedDone?: boolean;
+  /** Lineage: the approved proposal whose apply satisfied this output. */
+  satisfiedByProposalId?: string;
 }
 
 /**

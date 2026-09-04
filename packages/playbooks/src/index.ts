@@ -175,6 +175,22 @@ export interface ExpectedOutput {
   kind: string;
   label: string;
   icon?: string;
+  /**
+   * Whether the deliverable actually landed. `done` is stamped by ONE door —
+   * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
+   * called after a session-scoped proposal is APPROVED. Nothing else may write it:
+   * the agent grading its own homework is exactly the failure this field exists
+   * to stop. Absent ⇒ treat as `pending`.
+   */
+  status?: "pending" | "done";
+  /**
+   * The AGENT's claim that it produced this output. Free for the agent to set
+   * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
+   * same field as `status` — a claim is evidence to show the human, never proof.
+   */
+  claimedDone?: boolean;
+  /** Lineage: the approved proposal whose apply satisfied this output. */
+  satisfiedByProposalId?: string;
 }
 
 /**

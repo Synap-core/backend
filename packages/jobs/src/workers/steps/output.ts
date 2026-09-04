@@ -30,6 +30,7 @@ import {
   ChannelRepository,
 } from "@synap/database";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
+import type { ExpectedOutput } from "@synap/playbooks";
 import { emitSideEffects } from "@synap/events";
 import {
   resolveVaultReferences,
@@ -986,7 +987,7 @@ export async function executeOutputStep(
       const currentStage = config.currentStage as string | undefined;
       const grantStatus = config.grantStatus as unknown;
       const addOutput = config.addOutput as
-        { kind: string; label: string; icon?: string } | undefined;
+        Pick<ExpectedOutput, "kind" | "label" | "icon"> | undefined;
 
       let session: typeof focusSessions.$inferSelect | undefined;
       if (sessionId) {
@@ -1058,19 +1059,21 @@ export async function executeOutputStep(
       }
 
       // addOutput → append to expectedOutputs (status 'pending'); read-modify-write.
+      // Typed as ExpectedOutput (@synap/playbooks) — the shape's SSOT. `pending`
+      // is the only status any writer but `satisfyExpectedOutputs` may set.
       if (addOutput) {
-        const existingOutputs = Array.isArray(session.expectedOutputs)
-          ? (session.expectedOutputs as Array<Record<string, unknown>>)
+        const existingOutputs: ExpectedOutput[] = Array.isArray(
+          session.expectedOutputs
+        )
+          ? (session.expectedOutputs as ExpectedOutput[])
           : [];
-        set.expectedOutputs = [
-          ...existingOutputs,
-          {
-            kind: addOutput.kind,
-            label: addOutput.label,
-            ...(addOutput.icon ? { icon: addOutput.icon } : {}),
-            status: "pending",
-          },
-        ];
+        const appended: ExpectedOutput = {
+          kind: addOutput.kind,
+          label: addOutput.label,
+          ...(addOutput.icon ? { icon: addOutput.icon } : {}),
+          status: "pending",
+        };
+        set.expectedOutputs = [...existingOutputs, appended];
       }
 
       await db

@@ -123,8 +123,12 @@ export const focusSessions = pgTable(
     playbookId: uuid("playbook_id"),
     /**
      * Expected deliverables declared at session start.
-     * Shape: [{ kind: string, label: string, icon?: string, status?: "pending" | "done" }]
+     * Shape: ExpectedOutput[] (@synap/playbooks) — [{ kind, label, icon?,
+     * status?: "pending" | "done", claimedDone?: boolean, satisfiedByProposalId? }]
      * `status` is a per-item lifecycle flag (defaults to "pending" when omitted)
+     * and is stamped by ONE door only — `satisfyExpectedOutputs`, on approval of
+     * a session-scoped proposal. `claimedDone` is the AGENT's own (unverified)
+     * mark; the two are deliberately different fields
      * — a shape-within-jsonb addition, no column/migration change.
      */
     expectedOutputs: jsonb("expected_outputs").default([]),

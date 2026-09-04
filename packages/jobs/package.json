@@ -44,6 +44,7 @@
     "@synap/database": "workspace:*",
     "@synap/feed-service": "workspace:*",
     "@synap/governance-policy": "workspace:*",
+    "@synap/playbooks": "workspace:*",
     "@synap/search": "workspace:*",
     "@synap/storage": "workspace:*",
     "ai": "^4.0.0",

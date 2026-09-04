@@ -828,6 +828,9 @@ importers:
       '@synap/intelligence-client':
         specifier: workspace:*
         version: link:../intelligence-client
+      '@synap/playbooks':
+        specifier: workspace:*
+        version: link:../playbooks
       '@synap/search':
         specifier: workspace:*
         version: link:../search
@@ -1015,7 +1018,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.0.4
-        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.1.10)(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@22.19.5)(@vitest/ui@4.1.10(vitest@4.1.10))(lightningcss@1.32.0)
 
   packages/test-e2e:
     dependencies:
@@ -1064,7 +1067,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^1.3.1
-        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.1.10)(lightningcss@1.32.0)
+        version: 1.6.1(@types/node@20.19.28)(@vitest/ui@4.1.10(vitest@4.1.10))(lightningcss@1.32.0)
 
   packages/types:
     dependencies:
@@ -5972,6 +5975,7 @@ packages:
   cron-parser@4.9.0:
     resolution: {integrity: sha512-p0SaNjrHOnQeR8/VnfGbmg9te2kfyYSQ7Sc/j/6DtPL3JQvKxmjO9TSjNFpujqV3vEYYBvNNvXSxzyksBWAx1Q==}
     engines: {node: '>=12.0.0'}
+    deprecated: v4 is no longer maintained, upgrade to v5
 
   cross-spawn@6.0.6:
     resolution: {integrity: sha512-VqCUuhcd1iB+dsv8gxPttb5iZh/D0iubSP21g36KXdEuf6I5JiioesUVjpCdHV9MZRUfVFlvwtIUyPfxo5trtw==}
@@ -6409,6 +6413,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -7984,6 +7989,7 @@ packages:
   prom-client@15.1.3:
     resolution: {integrity: sha512-6ZiOBfCywsD4k1BN9IX0uZhF+tJkV8q8llP64G5Hajs4JOeVLPCwpPVcpXy3BwYiUGgyJzsJJQeOIv7+hDSq8g==}
     engines: {node: ^16 || ^18 || >=20}
+    deprecated: prom-client has been replaced by @prometheus-io/client
 
   prop-types@15.8.1:
     resolution: {integrity: sha512-oj87CgZICdulUohogVAR7AjlC0327U4el4L6eAvOqCeudMDVU0NThNaV+b9Df4dXgSP1gXMTnPdhfe/2qDH5cg==}
@@ -14871,7 +14877,7 @@ snapshots:
       obug: 2.1.1
       std-env: 3.10.0
       tinyrainbow: 3.0.3
-      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@20.19.28)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.23.1)(yaml@2.9.0)
+      vitest: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@24.10.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.9.0)
 
   '@vitest/expect@1.6.1':
     dependencies:
@@ -18864,7 +18870,7 @@ snapshots:
       tsx: 4.23.1
       yaml: 2.9.0
 
-  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.1.10)(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@20.19.28)(@vitest/ui@4.1.10(vitest@4.1.10))(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
@@ -18899,7 +18905,7 @@ snapshots:
       - supports-color
       - terser
 
-  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.1.10)(lightningcss@1.32.0):
+  vitest@1.6.1(@types/node@22.19.5)(@vitest/ui@4.1.10(vitest@4.1.10))(lightningcss@1.32.0):
     dependencies:
       '@vitest/expect': 1.6.1
       '@vitest/runner': 1.6.1
