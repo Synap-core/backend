@@ -25,8 +25,14 @@ import {
   eq,
   and,
   NotificationStatus,
+  eventRepository,
 } from "@synap/database";
+import { randomUUID } from "crypto";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import {
+  NOTIFICATION_EVENT_TYPE_MAP,
+  NOTIFICATION_EVENT_SOURCE,
+} from "../../notifications/notification-event-map.js";
 import { resolvePodOwnerUserId } from "./pod-owner.js";
 import type { CapabilityReconcileReport } from "./reconcile-capabilities-to-templates.js";
 
@@ -91,6 +97,33 @@ export async function notifyCapabilityUpdatesAvailable(
       names: updates.map((u) => u.name).join(", "),
     },
   });
+
+  // Domain-typed event alongside the notification — see notification-event-map.ts.
+  // Idempotency is inherited from the "existing OPEN notification" guard above:
+  // this line is only reached when a fresh notification was actually created,
+  // so a restart with unchanged drift never appends a duplicate event either.
+  const mappedEventType =
+    NOTIFICATION_EVENT_TYPE_MAP["system.capability_update_available"];
+  if (mappedEventType) {
+    await eventRepository
+      .append({
+        id: randomUUID(),
+        version: "v1",
+        type: mappedEventType,
+        subjectType: "system",
+        subjectId: CAPABILITY_UPDATE_GROUP_KEY,
+        data: {
+          count: updates.length,
+          names: updates.map((u) => u.name).join(", "),
+        },
+        userId: ownerUserId,
+        source: NOTIFICATION_EVENT_SOURCE,
+        timestamp: new Date(),
+      })
+      .catch((err) =>
+        logger.warn({ err }, "notify-capability-updates: event append failed")
+      );
+  }
 
   logger.info(
     { count: updates.length },

@@ -18,10 +18,16 @@ import {
   drizzleSql,
   ensureExternalChannel,
   insertChannelMessage,
+  eventRepository,
 } from "@synap/database";
+import { randomUUID } from "crypto";
 import { recordChannelOrigin } from "../channels/channel-origin.js";
 import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../notifications/NotificationService.js";
+import {
+  NOTIFICATION_EVENT_TYPE_MAP,
+  NOTIFICATION_EVENT_SOURCE,
+} from "../../notifications/notification-event-map.js";
 
 const logger = createLogger({ module: "connection-health" });
 
@@ -197,6 +203,34 @@ export async function notifyConnectorUnhealthy(
   }).catch((err) =>
     logger.warn({ err }, "connection-health: in-app notification failed")
   );
+
+  // 1b. Domain-typed event alongside the notification — the generic
+  //     `notification.created` wrapper NotificationService.create() always
+  //     appends carries no domain-specific type, so nothing that filters or
+  //     projects BY event type can recognize this occurrence. Gated on the
+  //     SAME cooldown check above (early-returned before this point), so a
+  //     repeated probe within the 6h window never appends a duplicate.
+  const mappedEventType = NOTIFICATION_EVENT_TYPE_MAP[notificationType];
+  if (mappedEventType) {
+    await eventRepository
+      .append({
+        id: randomUUID(),
+        version: "v1",
+        type: mappedEventType,
+        subjectType:
+          (opts.watermarkTable ?? "tools") === "intelligence_services"
+            ? "intelligence_service"
+            : "connector",
+        subjectId: opts.watermarkToolId,
+        data: { connectorName: opts.connectorName, ...opts.notificationData },
+        userId: opts.userId,
+        source: NOTIFICATION_EVENT_SOURCE,
+        timestamp: new Date(),
+      })
+      .catch((err) =>
+        logger.warn({ err }, "connection-health: event append failed")
+      );
+  }
 
   // 2. Discord team-channel nudge (firewall-safe — branchPurpose 'team' only),
   //    best-effort, only when the caller knows an internal channel to post to.

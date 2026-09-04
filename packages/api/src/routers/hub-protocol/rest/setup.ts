@@ -23,6 +23,7 @@ import {
   invites,
   users,
   EventRepository,
+  eventRepository,
   ApiKeyRepository,
   TrustedIssuerService,
   type ApiKeyScope,
@@ -41,6 +42,10 @@ import {
   resolveExternalUserMapping,
 } from "../../../services/external-user-mapping.js";
 import { NotificationService } from "../../../notifications/NotificationService.js";
+import {
+  NOTIFICATION_EVENT_TYPE_MAP,
+  NOTIFICATION_EVENT_SOURCE,
+} from "../../../notifications/notification-event-map.js";
 import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
 import { integrationHubIdFromIssuerUrl } from "../../../services/hub-integration-registration.js";
@@ -417,6 +422,28 @@ export function registerSetupRoutes(app: HubHono): void {
                       issuerUrl: iss,
                       displayName: derivedDisplayName,
                     },
+                  });
+                }
+                // Domain-typed event alongside the per-admin notifications —
+                // see notification-event-map.ts. Attributed to the first
+                // resolved admin (there is no single "acting user" for an
+                // anonymous issuer probe). Idempotent because this whole
+                // block only runs inside `if (!issuer)`: the next request for
+                // the same issuer URL finds the row `registerPending` just
+                // created and skips straight to the status branches above.
+                const mappedEventType =
+                  NOTIFICATION_EVENT_TYPE_MAP["system.issuer_pending_approval"];
+                if (mappedEventType && admins[0]) {
+                  await eventRepository.append({
+                    id: randomUUID(),
+                    version: "v1",
+                    type: mappedEventType,
+                    subjectType: "issuer",
+                    subjectId: issuer.id,
+                    data: { issuerUrl: iss, displayName: derivedDisplayName },
+                    userId: admins[0].userId,
+                    source: NOTIFICATION_EVENT_SOURCE,
+                    timestamp: new Date(),
                   });
                 }
               }
