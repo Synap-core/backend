@@ -29,6 +29,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
   getUserAccessibleWorkspaceIds,
   type HubProtocolCaller,
@@ -494,11 +495,15 @@ export async function discover(
   //
   // MUST match what `synap_list_proposals` returns (the tool the nudge tells the
   // user to call), or the count and the tool disagree. The canonical queue floors
-  // by OWNER — `eq(proposals.createdBy, userId)` (proposals-service.ts) — with a
+  // by AUTHOR — me OR an agent I created (`proposals-service.ts`) — with a
   // workspaceId only NARROWING. An earlier version floored by workspace
   // MEMBERSHIP instead, which on a multi-user pod counted a teammate's pending
   // proposals for this user (both a wrong count and a small disclosure of their
-  // backlog). Floor by createdBy, user-wide, exactly like the tool's default.
+  // backlog). Floor by author, user-wide, exactly like the tool's default.
+  //
+  // `count` and `oldest` are aggregated over the SAME floored population as the
+  // list: widening the list without widening this would make `oldestDays` a
+  // number computed over a different set than the count printed beside it.
   let pendingSummary: { count: number; oldestDays: number } | undefined;
   try {
     // COUNT + MIN in one aggregate row — never load the rows themselves. On a
@@ -511,7 +516,14 @@ export async function discover(
       })
       .from(proposals)
       .where(
-        and(eq(proposals.status, "pending"), eq(proposals.createdBy, userId))
+        and(
+          eq(proposals.status, "pending"),
+          or(
+            eq(proposals.createdBy, userId),
+            ownAgentUserFilter(proposals.agentUserId, userId),
+            ownAgentUserFilter(proposals.createdBy, userId)
+          )
+        )
       );
     if (agg && agg.count > 0) {
       pendingSummary = {

@@ -91,6 +91,8 @@ export interface PlaybookRunnerInput {
   /** `undefined` ⇒ defer to the spine's own resolveGoal (see run-playbook). */
   goalResolver?: (goalTemplate: string) => string | undefined;
   chainContext?: PlaybookRunnerChainContext;
+  /** Agent selector (`agents.slug`) — absent ⇒ the default orchestrator. */
+  agentType?: string | null;
 }
 
 export interface PlaybookRunnerResult {

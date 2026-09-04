@@ -9,6 +9,8 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { deriveGatePairFromOperations } from "@synap/governance-policy";
+import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { router, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { entitiesRouter } from "./entities.js";
@@ -103,7 +105,10 @@ import {
   emitCaptureTrace,
 } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  type PermissionResult,
+} from "../utils/permission-check.js";
 import { fileAnchoredCaptureProposals } from "../utils/capture-propose.js";
 
 const logger = createLogger({ module: "capture-router" });
@@ -2176,28 +2181,43 @@ export const captureRouter = router({
         gateOperations,
         captureSourceLabel
       );
-      const perm = await checkPermissionOrPropose({
-        userId,
-        // The canonical AI signal. Set by the hub-protocol key middleware, so
-        // MCP `synap_capture` arrives as an agent; the CLI/browser do not.
-        agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: workspaceId ?? null,
-        subjectType: "entity",
-        action: "create",
-        correlationId: captureId,
-        sessionId: sessionId ?? undefined,
-        sourceMessageId:
-          input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
-        threadId: input.threadId,
-        // Deterministic only — an AI-suggested project must never ride the gate
-        // into a stamp-on-approve auto-link.
-        projectId: resolvedProjectId ?? undefined,
-        reasoning: `Capture — ${captureSummary}`,
-        data: {
-          operations: gateOperations,
-          source: "capture",
-        },
-      });
+      // An EMPTY capture (`entities: []`, `relations: []` — zod accepts it) has
+      // no write to gate, and `deriveGatePairFromOperations` refuses an empty
+      // batch by design: a gate that cannot name its write must not invent one.
+      // Falling straight through preserves today's behaviour exactly — the
+      // materializer below creates nothing and the door returns `created: []`.
+      const perm: PermissionResult =
+        gateOperations.length === 0
+          ? { granted: true }
+          : await checkPermissionOrPropose({
+              userId,
+              // The canonical AI signal. Set by the hub-protocol key middleware, so
+              // MCP `synap_capture` arrives as an agent; the CLI/browser do not.
+              agentUserId: ctx.agentUserId ?? undefined,
+              workspaceId: workspaceId ?? null,
+              // DERIVED, never declared. These two were hardcoded `entity`/`create`
+              // beside an opaque `data.operations` batch — and every floor
+              // (ADMIN_ACTIONS at rung 2, DESTRUCTIVE_ACTIONS at 2.5, by-kind at 2.6)
+              // is a pure function of exactly this pair, so they were scoring a
+              // DECLARATION instead of the write. True today only by coincidence:
+              // capture emits `create_entity` / `create_relation` and nothing else.
+              // The derivation gates the batch at its STRICTEST member, so the next
+              // op arm a producer adds cannot slip in under a stale "create".
+              ...deriveGatePairFromOperations(gateOperations),
+              correlationId: captureId,
+              sessionId: sessionId ?? undefined,
+              sourceMessageId:
+                input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
+              threadId: input.threadId,
+              // Deterministic only — an AI-suggested project must never ride the gate
+              // into a stamp-on-approve auto-link.
+              projectId: resolvedProjectId ?? undefined,
+              reasoning: `Capture — ${captureSummary}`,
+              data: {
+                operations: gateOperations,
+                source: "capture",
+              },
+            });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
@@ -2453,6 +2473,16 @@ export const captureRouter = router({
           logger.warn({ err, type }, "Relation creation failed, skipping"),
         {
           source: "capture",
+          // Rule Loop callers — the SAME three canonical doors proposal
+          // approval wires. Without them a config op in this batch would
+          // materialize when the write was GOVERNED and be silently dropped
+          // when it was AUTO-APPROVED: behaviour forking on governance state.
+          ...buildRuleLoopCallers({
+            database,
+            userId,
+            workspaceId: workspaceId ?? null,
+            auditSource: "rule_loop_capture",
+          }),
           resolveRelationType: (type) =>
             validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
           // U1: always key materialize. Prefer client key; else stable hash of

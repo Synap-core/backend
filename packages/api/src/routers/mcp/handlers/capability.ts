@@ -510,6 +510,11 @@ export const capabilityHandlers: McpHandlerMap = {
         error: outcome.message,
         ...(outcome.errorClass ? { errorClass: outcome.errorClass } : {}),
         ...(outcome.providerRef ? { providerRef: outcome.providerRef } : {}),
+        // CONNECTION moment — a no_connection/auth failure carries the link to
+        // the card where the account is connected. Without this the `errorClass`
+        // told the agent WHAT kind of failure it was and nothing about where to
+        // fix it, which is the same dead end the deny path had.
+        ...(outcome.enable ? { enable: outcome.enable } : {}),
       });
     }
     return ok(outcome);

@@ -35,6 +35,7 @@ import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
+import { deriveGatePairFromOperations } from "@synap/governance-policy";
 import {
   checkPermissionOrPropose,
   type PermissionResult,
@@ -259,8 +260,10 @@ export async function fileAnchoredCaptureProposals(
     collect(
       await checkPermissionOrPropose({
         ...gateBase,
-        subjectType: "entity",
-        action: "create",
+        // DERIVED, never declared — same rule as the capture door: a composite
+        // batch gates at its strictest member, so a new op arm can never be
+        // scored by the floors as a plain `entity.create`.
+        ...deriveGatePairFromOperations(compositeOps),
         reasoning: "Capture — create related entities",
         // No top-level profileSlug: the gate's create-profile guardrail fires on
         // entity + create + data.profileSlug and would hard-deny a composite.

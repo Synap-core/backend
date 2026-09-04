@@ -173,15 +173,45 @@ describe("Rule Loop composite ops", () => {
     expect(result.rules).toHaveLength(0);
   });
 
-  it("ops are skipped (never thrown) when a caller is not wired", async () => {
-    const result = await materializeCompositeGraph(
-      [skillOp, automationOp, ruleOp],
-      noopEntityCaller,
-      noopRelationCaller
-    );
-    expect(result.skills).toHaveLength(0);
-    expect(result.automations).toHaveLength(0);
-    expect(result.rules).toHaveLength(0);
+  // DELIBERATE INVERSION — this case previously asserted "ops are skipped
+  // (never thrown) when a caller is not wired", i.e. it PINNED the silent skip.
+  // That behaviour was the defect: only one of the materializer's five call
+  // sites wired these callers, so the same batch materialized its config ops on
+  // the GOVERNED path and dropped them on the AUTO-APPROVED path, reporting
+  // success both times. Behaviour must not fork on governance state, so the
+  // unwired batch now refuses UP FRONT, before anything is written.
+  it("REFUSES a batch whose config op has no wired caller (was: silently skipped)", async () => {
+    await expect(
+      materializeCompositeGraph(
+        [skillOp, automationOp, ruleOp],
+        noopEntityCaller,
+        noopRelationCaller
+      )
+    ).rejects.toThrow(/wired no matching caller/);
+  });
+
+  it("refuses BEFORE writing anything — an unwirable batch is atomic", async () => {
+    // The rule op is unwired; the entity op must NOT have been created.
+    const entityCaller = {
+      create: vi.fn().mockResolvedValue({ id: "e1", profileSlug: "note" }),
+    };
+    await expect(
+      materializeCompositeGraph(
+        [
+          { op: "create_entity", ref: "e1", profileSlug: "note", title: "n" },
+          ruleOp,
+        ] as CompositeProposalOperation[],
+        entityCaller as unknown as typeof noopEntityCaller,
+        noopRelationCaller,
+        undefined,
+        // skill/automation callers present, ruleCaller deliberately absent.
+        {
+          skillCaller: stubSkillCaller(),
+          automationCaller: stubAutomationCaller(),
+        }
+      )
+    ).rejects.toThrow(/create_rule/);
+    expect(entityCaller.create).not.toHaveBeenCalled();
   });
 
   it("a Rule Loop payload with no entity op is still recognised as composite", () => {

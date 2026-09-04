@@ -28,6 +28,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { MessageAuthorType, MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
+import { resolveActiveAgentBySlug } from "../../agent-identity-service.js";
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
 
 const logger = createLogger({ module: "is-agent-executor" });
@@ -44,6 +45,25 @@ export class IsAgentExecutor implements Executor {
     }
 
     const db = await getDb();
+
+    // AGENT SELECTOR — resolve the requested agent BEFORE writing anything, so an
+    // unknown slug costs no kickoff message in the channel. Absent ⇒ null ⇒
+    // triggerAutoRespond's own default ("meta", the orchestrator): the exact
+    // pre-existing behaviour. Present-but-unknown ⇒ FAIL the run. Falling back to
+    // "meta" here is the one thing this must never do — the user would read a
+    // completed run and believe the specialist they named had answered it.
+    let agentType: string | null = null;
+    const requestedAgent = ctx.agentType?.trim();
+    if (requestedAgent) {
+      const agent = await resolveActiveAgentBySlug(requestedAgent);
+      if (!agent) {
+        return {
+          status: "failed",
+          error: `is-agent executor: unknown agent "${requestedAgent}" — no active agents row with that slug (the IS syncs its roster via POST /api/hub/agents/sync)`,
+        };
+      }
+      agentType = agent.slug;
+    }
 
     // Surface the bound subject so the agent knows WHAT it is working on. The id
     // lets it fetch full details via its tools; the name/profile give immediate
@@ -178,6 +198,9 @@ export class IsAgentExecutor implements Executor {
       userMessageId: messageId,
       content: kickoff,
       sourceUserId: ctx.userId,
+      // null ⇒ the door's own "meta" default (unchanged behaviour); a resolved
+      // slug ⇒ the IS runs the turn as that named persona.
+      agentType,
     });
     if (!triggered) {
       return {

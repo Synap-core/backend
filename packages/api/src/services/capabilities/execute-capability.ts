@@ -62,6 +62,10 @@ import {
   resolveActingChannelId,
 } from "../../utils/permission-check.js";
 import { openLink } from "../../utils/deep-links.js";
+import {
+  capabilityNextAction,
+  type CapabilityNextAction,
+} from "./capability-enable-link.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
@@ -91,7 +95,21 @@ export type ExecuteCapabilityResult =
       reviewUrl: string;
       ackState: WriteAckState;
     }
-  | { kind: "deny"; reason: string }
+  | {
+      kind: "deny";
+      reason: string;
+      /**
+       * ATTEMPT moment: WHAT to enable and WHERE, as a clickable link the agent
+       * can hand straight to the human. The refusal already knew the cause; it
+       * just had no way to make it actionable — 0 of 11 containers on the live
+       * pod are approved, so this is the wall every run hits today.
+       *
+       * A deny from this gate is ALWAYS an approval problem (a dead connection
+       * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
+       * carries its own `connect` block) — the two fixes stay distinct.
+       */
+      enable?: CapabilityNextAction;
+    }
   // A run that REACHED its handler and FAILED (a code skill's sandbox returned
   // success:false, or a declarative provider verb returned an error envelope).
   // The ONE failure channel: callers must NOT dig a success:false envelope out of
@@ -103,8 +121,179 @@ export type ExecuteCapabilityResult =
       message: string;
       errorClass?: FailureErrorClass;
       providerRef?: string;
+      /**
+       * CONNECTION moment: a `no_connection` / `auth` failure means the
+       * container is fine and the ACCOUNT is not — a different fix from the
+       * approval `deny` above, so it says `connect`, never `enable`.
+       */
+      enable?: CapabilityNextAction;
     }
   | { kind: "not_found"; message: string };
+
+/**
+ * Resolve the "where do I fix this" block for a skill that was just refused.
+ *
+ * The container is derived per read from the `member_of` edges through
+ * `loadContainerRefs` — the SAME batched resolver the registry uses, under the
+ * SAME `userVisibleWhere` lens, so a refusal can never name a container the
+ * caller cannot see. `containerName` is the label the human reads on the card;
+ * the raw UUID only ever rides inside the href.
+ *
+ * Best-effort by construction: a brick in NO container yields a block with a
+ * hint and no `url` (there is no card to open, and a link to a route that
+ * resolves to nothing is worse than none), and a lookup failure degrades to
+ * `undefined` rather than turning a refusal into a 500.
+ */
+async function resolveRefusalBlock(input: {
+  skillId: string;
+  skillName: string;
+  userId: string;
+  /** `enable` = unapproved capability. `connect` = approved, dead account. */
+  reason: "enable" | "connect";
+  provider?: string;
+}): Promise<CapabilityNextAction | undefined> {
+  try {
+    const { loadContainerRefs, containerMemberKey } =
+      await import("./capability-registry.js");
+    const refs = await loadContainerRefs({
+      toolIds: [],
+      skillIds: [input.skillId],
+      userId: input.userId,
+    });
+    const container = refs.get(containerMemberKey("skill", input.skillId));
+    const name = container?.name ?? input.skillName;
+    return input.reason === "connect"
+      ? capabilityNextAction(
+          "needs_connection",
+          name,
+          {
+            required: true,
+            kind: "provider",
+            state: "missing",
+            ...(input.provider ? { provider: input.provider } : {}),
+          },
+          container?.id ?? null
+        )
+      : capabilityNextAction("draft", name, undefined, container?.id ?? null);
+  } catch (err) {
+    logger.warn(
+      { err, skillId: input.skillId },
+      "enable-link resolution failed"
+    );
+    return undefined;
+  }
+}
+
+/**
+ * CONNECTION moment. A run that reached its handler and failed with
+ * `errorClass: "no_connection"` / `"auth"` is NOT an approval problem — the
+ * container is enabled and the ACCOUNT is dead or absent. Attach a `connect`
+ * block so the refusal names the right fix; `enable` would send the human to
+ * toggle something that is already on.
+ *
+ * Only these two classes. `transient` is a retry, `provider`/`target_missing` are
+ * the verb's own business failure, and `permission` is a grant denial the gate
+ * already owns — inventing a connect link for any of them would be a costume.
+ */
+async function attachConnectBlock(
+  result: ExecuteCapabilityResult,
+  skillRow: { id: string; name: string },
+  userId: string,
+  ctx: { workspaceId: string | null; verbId: string | null }
+): Promise<ExecuteCapabilityResult> {
+  if (
+    result.kind !== "error" ||
+    result.enable ||
+    (result.errorClass !== "no_connection" && result.errorClass !== "auth")
+  ) {
+    return result;
+  }
+  const enable = await resolveRefusalBlock({
+    skillId: skillRow.id,
+    skillName: skillRow.name,
+    userId,
+    reason: "connect",
+    ...(result.providerRef ? { provider: result.providerRef } : {}),
+  });
+  // The HUMAN-facing half of the refusal (see recordRefusedCapabilityRun). A
+  // dead account is a DIFFERENT fix from an unapproved container, so it records
+  // `not_connected` — never `not_approved`.
+  await recordRefusedCapabilityRun({
+    userId,
+    workspaceId: ctx.workspaceId,
+    skillId: skillRow.id,
+    verbId: ctx.verbId,
+    refusalReason: "not_connected",
+    reason: result.message,
+    enable,
+  });
+  return enable ? { ...result, enable } : result;
+}
+
+/** WHY a capability refusal happened — the three fixes are NOT interchangeable. */
+export type CapabilityRefusalReason =
+  /** The container/verb is installed but not approved → enable it. */
+  | "not_approved"
+  /** The container is enabled; the ACCOUNT is missing or dead → connect it. */
+  | "not_connected"
+  /** The acting agent exhausted its daily proposal budget → review the queue. */
+  | "capped";
+
+/**
+ * Make a capability REFUSAL observable to the HUMAN — the missing half of the
+ * enable-link work.
+ *
+ * Until now a deny returned the `enable` block to the CALLING AGENT and emitted
+ * nothing: a cron, a background flow, or an agent that simply gives up left the
+ * user with no record that anything was blocked. A capped agent and a dead agent
+ * were byte-identical from the UI.
+ *
+ * DELIBERATELY the SAME event shape a successful direct run emits
+ * (`recordDirectCapabilityRun`): `action`/`data.kind` are the existing
+ * `capability_run` literal, so the runs read-layer's ONE filter
+ * (`services/runs/index.ts`'s CAPABILITY_RUN_EVENT_KIND query) catches refusals
+ * with no second mechanism and no new event type. `data.outcome: "refused"` is
+ * what the reader branches on to render `blocked_by_policy` instead of
+ * `completed`, and `data.refusalReason` keeps the three fixes distinct.
+ *
+ * Best-effort by construction: `emitAiDecision` swallows + logs and never throws,
+ * so telemetry can never turn a clean refusal into a 500.
+ */
+async function recordRefusedCapabilityRun(opts: {
+  userId: string;
+  workspaceId: string | null;
+  skillId: string;
+  verbId: string | null;
+  refusalReason: CapabilityRefusalReason;
+  /** The human-readable refusal text the caller also returns. */
+  reason: string;
+  /** The actionable block, when one resolved — its `hint` becomes `fixHint`. */
+  enable?: CapabilityNextAction;
+}): Promise<void> {
+  await emitAiDecision({
+    action: "capability_run",
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
+    correlationId: randomUUID(),
+    data: {
+      kind: "capability_run",
+      outcome: "refused",
+      refusalReason: opts.refusalReason,
+      skillId: opts.skillId,
+      verbId: opts.verbId,
+      reason: opts.reason,
+      ...(opts.enable
+        ? {
+            enable: opts.enable,
+            // getRun's capability branch reads `data.fixHint` for an activity
+            // row's one-line hint — the field already exists, so use it rather
+            // than teaching the reader a second name for the same thing.
+            fixHint: opts.enable.hint,
+          }
+        : {}),
+    },
+  });
+}
 
 export async function executeCapability(input: {
   /** Capability verb = backing skill NAME. One of verbId/skillId required. */
@@ -251,17 +440,53 @@ export async function executeCapability(input: {
   });
 
   if (decision.decision === "deny") {
-    return { kind: "deny", reason: decision.reason };
+    const enable = await resolveRefusalBlock({
+      skillId: skillRow.id,
+      skillName: skillRow.name,
+      userId,
+      reason: "enable",
+    });
+    await recordRefusedCapabilityRun({
+      userId,
+      workspaceId,
+      skillId: skillRow.id,
+      verbId: verbId ?? null,
+      refusalReason: "not_approved",
+      reason: decision.reason,
+      enable,
+    });
+    return {
+      kind: "deny",
+      reason: decision.reason,
+      ...(enable ? { enable } : {}),
+    };
   }
   if (decision.decision === "dry-run") {
     return { kind: "dry-run", skillId: skillRow.id };
   }
   if (decision.decision === "propose") {
     if (input.suppressProposal) {
+      const enable = await resolveRefusalBlock({
+        skillId: skillRow.id,
+        skillName: skillRow.name,
+        userId,
+        reason: "enable",
+      });
+      const reason =
+        "Capability requires approval and no review surface is available (unattended run); approve the skill to run it.";
+      await recordRefusedCapabilityRun({
+        userId,
+        workspaceId,
+        skillId: skillRow.id,
+        verbId: verbId ?? null,
+        refusalReason: "not_approved",
+        reason,
+        enable,
+      });
       return {
         kind: "deny",
-        reason:
-          "Capability requires approval and no review surface is available (unattended run); approve the skill to run it.",
+        reason,
+        ...(enable ? { enable } : {}),
       };
     }
     const proposal = await createPendingProposal({
@@ -323,16 +548,21 @@ export async function executeCapability(input: {
   // windowing must NOT collapse legit duplicate local writes — so they run
   // unguarded through the shared path below.
   if (capabilityVerbHasExternalEffect(skillRow)) {
-    return runDirectWriteVerbOnce({
+    return attachConnectBlock(
+      await runDirectWriteVerbOnce({
+        skillRow,
+        parameters,
+        verbId: verbId ?? null,
+        userId,
+        workspaceId,
+        connectionSelector: input.connectionSelector ?? null,
+        agentUserId: input.agentUserId ?? null,
+        idempotencyKey: input.idempotencyKey,
+      }),
       skillRow,
-      parameters,
-      verbId: verbId ?? null,
       userId,
-      workspaceId,
-      connectionSelector: input.connectionSelector ?? null,
-      agentUserId: input.agentUserId ?? null,
-      idempotencyKey: input.idempotencyKey,
-    });
+      { workspaceId, verbId: verbId ?? null }
+    );
   }
 
   const ran = await runResolvedSkill(skillRow, parameters, {
@@ -341,7 +571,11 @@ export async function executeCapability(input: {
     connectionSelector: input.connectionSelector ?? null,
     agentUserId: input.agentUserId ?? null,
   });
-  if (ran.kind !== "run") return ran;
+  if (ran.kind !== "run")
+    return attachConnectBlock(ran, skillRow, userId, {
+      workspaceId,
+      verbId: verbId ?? null,
+    });
 
   // OBSERVABILITY (additive, best-effort). Until now a direct run returned
   // INLINE with no correlationId / event / recall — invisible to the runs feed
@@ -758,7 +992,21 @@ export async function runResolvedSkill(
       providerRef?: string;
     }
   | { kind: "not_found"; message: string }
-  | { kind: "deny"; reason: string }
+  | {
+      kind: "deny";
+      reason: string;
+      /**
+       * ATTEMPT moment: WHAT to enable and WHERE, as a clickable link the agent
+       * can hand straight to the human. The refusal already knew the cause; it
+       * just had no way to make it actionable — 0 of 11 containers on the live
+       * pod are approved, so this is the wall every run hits today.
+       *
+       * A deny from this gate is ALWAYS an approval problem (a dead connection
+       * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
+       * carries its own `connect` block) — the two fixes stay distinct.
+       */
+      enable?: CapabilityNextAction;
+    }
 > {
   if (skill.kind === "builtin") {
     const handler = BUILTIN_VERBS[skill.name];

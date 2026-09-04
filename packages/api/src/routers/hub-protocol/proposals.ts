@@ -15,6 +15,7 @@ import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 import {
   PROPOSAL_STATUS_FILTERS,
+  withProposalClass,
   type ProposalStatusFilter,
 } from "./rest/_codecs/proposal.js";
 
@@ -103,7 +104,10 @@ export const proposalsRouter = router({
       const total = Number(counted[0]?.total ?? 0);
 
       return {
-        proposals: items,
+        // Class + lifetime stamped through the SAME door the REST/MCP codecs
+        // use, so a `view=full` row and a `view=basic` row can never disagree
+        // about what class a proposal is.
+        proposals: items.map((row) => withProposalClass(row)),
         total,
         limit: input.limit,
         offset: input.offset,

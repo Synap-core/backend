@@ -67,6 +67,7 @@ import {
 } from "../access/context.js";
 import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
 import { logEvent } from "../lib/event-helpers.js";
+import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
 import {
   findMatchingPattern,
@@ -1719,11 +1720,47 @@ export function startOfUtcDay(): Date {
 
 /**
  * Count proposals attributed to THIS agent (not its owner's whole roster)
- * created today (UTC). Per-agent, mirroring the shape of the scorecard's own
- * today-count query (`agent-scorecard.ts`) so the two never disagree.
+ * created today (UTC). Per-agent — `agentUserId` + the UTC-day bound are the
+ * WHOLE predicate, and `agent-scorecard.ts` CALLS this function rather than
+ * re-deriving it, so the enforced count and the reported posture are one query.
+ *
+ * D4b — why `createdBy` is NOT in the predicate.
+ *
+ * It used to be, ANDed as `createdBy = <the human> AND agentUserId = <the
+ * agent>`. Be precise about what that did and did not break, because the first
+ * telling of this was WRONG and the wrong version is the more attractive story:
+ * it did NOT make the cap inert. `createProposal` — the only function that
+ * enforces the cap — builds its insert with `createdBy: userId` EXPLICITLY
+ * (see the `pendingInput` in its transaction), and `countTodayAgentProposals`
+ * was called with that SAME `userId` binding, never reassigned in between. Count
+ * predicate and inserted value were one expression in one scope, so they matched
+ * by construction and the cap fired correctly for every row that path created.
+ *
+ * What the pair actually cost was rows the capped path did NOT create. The
+ * `?? input.agentUserId` fallback in `createPendingProposalRow` fires only for
+ * doors that call it directly without a `createdBy` — `connectors/external-dispatch.ts`
+ * is the live example — so those rows land `createdBy = agentUserId` and the
+ * old pair could never see them. The counter under-counted total queue pressure;
+ * it never mis-counted its own budget.
+ *
+ * Dropping the term is still correct, for reasons independent of that history:
+ *   1. It counts the bypass doors' rows, which are real queue pressure.
+ *   2. It cannot admit another human's rows, because an agent-user belongs to
+ *      exactly ONE human: `users.createdByUserId` is a single-valued FK, and
+ *      migration 0228 adds a partial UNIQUE (created_by_user_id, agent_type)
+ *      making a service agent a singleton per owner x type. `agentUserId`
+ *      already implies its owner, so the human term was redundant.
+ *   3. It matches `agentDailyProposalCap()` — the ceiling half of the same
+ *      decision — which has ALWAYS keyed on `agentUserId` alone. A human floor
+ *      here with none there would let an agent earn a 3x ceiling from rows the
+ *      counter could not see.
+ *
+ * This predicate is pinned by `agent-daily-cap-counter.test.ts`. Before that,
+ * every cap test MOCKED `todayCount` as an input, so nothing would have caught
+ * a wrong predicate here — which is how the incorrect story above survived
+ * long enough to be believed.
  */
-async function countTodayAgentProposals(
-  userId: string,
+export async function countTodayAgentProposals(
   agentUserId: string
 ): Promise<number> {
   const [row] = await db
@@ -1731,7 +1768,6 @@ async function countTodayAgentProposals(
     .from(proposals)
     .where(
       and(
-        eq(proposals.createdBy, userId),
         eq(proposals.agentUserId, agentUserId),
         gte(proposals.createdAt, startOfUtcDay())
       )
@@ -1921,7 +1957,7 @@ async function createProposal(args: {
   const isGovernanceMetaProposal = action.startsWith("governance.");
   if (attributionAgentUserId && !isGovernanceMetaProposal) {
     const [alreadyToday, cap] = await Promise.all([
-      countTodayAgentProposals(userId, attributionAgentUserId),
+      countTodayAgentProposals(attributionAgentUserId),
       agentDailyProposalCap(attributionAgentUserId),
     ]);
     if (alreadyToday >= cap) {
@@ -1936,9 +1972,45 @@ async function createProposal(args: {
         },
         "Agent daily proposal budget reached — refusing further agent proposals"
       );
+      const capReason = `Daily agent proposal limit reached (${cap}/day). Ask the user to review pending proposals, or try again tomorrow.`;
+      // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
+      // a capped agent and a dead agent were byte-identical from the UI: the
+      // write neither executed nor proposed, and NOTHING said so. This event is
+      // the agent_write ledger's refusal row — `listAgentWriteRuns`
+      // (services/runs/index.ts) synthesises a `blocked_by_policy` run from it,
+      // exactly as the capability ledger already synthesises a direct run from a
+      // `capability_run` event. Best-effort by contract: emitAiDecision swallows
+      // + logs and never throws, so telemetry cannot turn a refusal into a 500.
+      // DYNAMIC import: `ai-feedback-events` pulls `lib/ai-events` →
+      // `@synap/database`, and this module's suites replace that package with a
+      // TOTAL `vi.mock`. A static import would kill every test in those files at
+      // load time; loading it only on the refusal path keeps the hazard out of
+      // the module graph. (Same reason execute-capability defers
+      // `capability-registry`.)
+      const { emitAiDecision } = await import("./ai-feedback-events.js");
+      await emitAiDecision({
+        action: AGENT_WRITE_EVENT_KIND,
+        userId,
+        workspaceId: workspaceId ?? null,
+        correlationId: resolvedCorrelationId,
+        data: {
+          kind: AGENT_WRITE_EVENT_KIND,
+          outcome: "refused",
+          refusalReason: "capped",
+          subjectType,
+          writeAction: action,
+          agentUserId: attributionAgentUserId,
+          alreadyToday,
+          cap,
+          reason: capReason,
+          // Read by getRun's agent_write branch as the activity row's hint.
+          fixHint:
+            "Review or clear this agent's pending proposals to free budget, or raise its cap by widening its lane.",
+        },
+      });
       return {
         denied: true,
-        reason: `Daily agent proposal limit reached (${cap}/day). Ask the user to review pending proposals, or try again tomorrow.`,
+        reason: capReason,
       };
     }
   }

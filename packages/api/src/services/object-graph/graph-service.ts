@@ -157,7 +157,14 @@ export interface GraphNeighbor extends GraphNode {
     //                carrying an INTENT (`focus_sessions.goal` is NOT NULL), so
     //                this is the edge that answers "why does this look like this".
     | "governed"
-    | "produced-in";
+    | "produced-in"
+    // `entities.documentId` — an entity's body document. A plain FK column,
+    // never mirrored into `links` or `relations`, so a `document` focus had no
+    // way to see the entity(ies) that use it as their body (get_graph on a
+    // document returned empty neighbours even when entities pointed at it).
+    // Folded in read-time by `getDocumentBodyNeighbors`, direction "incoming"
+    // (the document is the target of the FK).
+    | "body";
 }
 
 /** "Fetch X, get X + everything it's linked to, typed." */
@@ -969,6 +976,85 @@ export async function getTemporalNeighbors(
   return out;
 }
 
+/** Max entities returned as the "body of" neighbours of one document. */
+const DOCUMENT_BODY_NEIGHBOR_CAP = 25;
+
+/**
+ * The ENTITIES that use this document as their body — the reverse of
+ * `entities.documentId`, a plain FK column that is NEVER mirrored into
+ * `links` or `relations`. Every other fold in this file answers "what edge
+ * connects to X"; none of them see this one, because it isn't a `links` row —
+ * so a `document` focus resolved to zero neighbours even when live entities
+ * pointed at it (the forward direction — entity → its body document — is
+ * already visible on the entity's own detail payload as `documentId`; this
+ * closes only the missing reverse).
+ *
+ * Gated on `kind === "document"` — every other focus kind pays nothing.
+ * Floored through the SAME canonical entity read-scope (`accessScopeWhere`,
+ * `facetLens: true`) that `hydrationScopeWhere`'s `"entity"` branch uses for
+ * every other entity neighbour in this graph, so an entity in a workspace (or
+ * behind a facet lens) this caller can't see is dropped, never leaked by name.
+ */
+export async function getDocumentBodyNeighbors(
+  userId: string,
+  kind: string,
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  if (kind !== "document") return [];
+
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: entities.id,
+      title: entities.title,
+      type: entities.type,
+      workspaceId: entities.workspaceId,
+    })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.documentId, id),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          workspaceLens: workspaceId,
+          facetLens: true,
+        })
+      )
+    )
+    .limit(DOCUMENT_BODY_NEIGHBOR_CAP);
+  if (rows.length === 0) return [];
+
+  // Facet slugs on top of the base type, exactly like `hydrateNodes`' entity
+  // branch — an entity's `subtypes` always means "[kind slug, ...facet slugs]",
+  // never just the kind slug, so this fold must not shortcut that.
+  const facetSlugsByEntity = await loadFacetSlugs(
+    db,
+    rows.map((r) => r.id),
+    facetVisibilityScope
+  );
+
+  return rows.map((r) => ({
+    kind: "entity",
+    id: r.id,
+    name: r.title ?? "(untitled)",
+    subtype: r.type ?? null,
+    subtypes: [
+      ...(r.type ? [r.type] : []),
+      ...(facetSlugsByEntity.get(r.id) ?? []),
+    ],
+    workspaceId: r.workspaceId,
+    edgeType: "documentId",
+    direction: "incoming",
+    via: "body",
+  }));
+}
+
 /**
  * Merge every neighbour source into ONE list, de-duplicated.
  *
@@ -1039,19 +1125,25 @@ export async function getObjectGraph(
     userId,
     workspaceId
   );
-  const [selfMap, linkNeighbors, governanceNeighbors, temporalNeighbors] =
-    await Promise.all([
-      hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
-      getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
-      getGovernanceNeighbors(
-        userId,
-        kind,
-        id,
-        facetVisibilityScope,
-        workspaceId
-      ),
-      getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
-    ]);
+  const [
+    selfMap,
+    linkNeighbors,
+    governanceNeighbors,
+    temporalNeighbors,
+    documentBodyNeighbors,
+  ] = await Promise.all([
+    hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
+    getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    getDocumentBodyNeighbors(
+      userId,
+      kind,
+      id,
+      facetVisibilityScope,
+      workspaceId
+    ),
+  ]);
 
   // Merge config + data graphs through the ONE de-dup door (see `mergeNeighbors`:
   // same-edge-twice, plus the produced / produced-in one-fact-two-rows fold).
@@ -1059,6 +1151,7 @@ export async function getObjectGraph(
     linkNeighbors,
     governanceNeighbors,
     temporalNeighbors,
+    documentBodyNeighbors,
     extraNeighbors,
   ]);
 

@@ -34,6 +34,11 @@ export const TYPED_OPEN_KINDS = [
   "session",
   "project",
   "workspace",
+  // A capability CONTAINER card — where a human ENABLES a capability or
+  // CONNECTS its account. Emitted by `openTypedLink("capability", id)`
+  // (packages/api/src/utils/deep-links.ts) on every "not enabled / not
+  // connected" refusal, so a blocked agent can hand the user the exact card.
+  "capability",
 ] as const;
 
 export type TypedOpenKind = (typeof TYPED_OPEN_KINDS)[number];
@@ -84,31 +89,65 @@ export function podAdminTarget(
   return new URL(path, adminBase).toString();
 }
 
+/**
+ * The DEVICE discriminator — an explicit query param, set at link-BUILD time.
+ *
+ * `${PUBLIC_URL}/open/<id>?client=mobile` means "this link was minted for a
+ * phone". The producer already knows its audience: a push notification going to
+ * a registered device knows it is going to a device, so nothing has to be
+ * guessed from the request.
+ *
+ * DELIBERATELY NOT a user-agent classifier. `isUnfurlBot` above answers a
+ * DIFFERENT question (crawler vs human) and is lock-tested for it; a second
+ * sniffer answering "phone vs desktop" beside it is two tables that will
+ * disagree, and the UNFURL_MARKERS comment already records why UA is treacherous
+ * here — Discord/Slack/WhatsApp in-app browsers on a phone carry bot-ish UAs and
+ * must still be treated as humans.
+ *
+ * Producer side: `openLink(id, { client: "mobile" })`
+ * (packages/api/src/utils/deep-links.ts). The two literals are frozen against
+ * each other by `open-kinds.lock.test.ts`.
+ */
+export const OPEN_CLIENT_PARAM = "client";
+export const OPEN_CLIENT_MOBILE = "mobile";
+
+/** True iff `?client=` names the mobile app. Any other value is desktop. */
+export function isMobileClient(client: string | undefined | null): boolean {
+  return client === OPEN_CLIENT_MOBILE;
+}
+
 export type OpenDispatch =
   { action: "redirect"; url: string } | { action: "bounce"; deep: string };
 
 // Proposal is web-first (review already lives on pod-admin, even for bots).
 // Entity/view 302 only for humans — unfurl HTML must never carry their bodies.
+//
+// EXCEPT when the link was minted for a phone (`?client=mobile`): pod-admin is
+// a desktop review surface, so a mobile-flavoured link bounces to `synap://`
+// and lands in relay's own proposal screen instead. The mobile flag is ANDed
+// with `!bot` so an unfurl crawler can never take the mobile branch — a bot
+// that follows a `?client=mobile` link behaves exactly as it does today.
 export function dispatchOpen(opts: {
   type: string | undefined;
   id: string;
   userAgent: string | undefined | null;
   adminBase: string | null;
+  /** Raw `?client=` value off the request. Absent ⇒ desktop. */
+  client?: string | undefined | null;
 }): OpenDispatch {
-  const { type, id, userAgent, adminBase } = opts;
+  const { type, id, userAgent, adminBase, client } = opts;
 
-  if (type === "proposal" && adminBase) {
+  const bot = isUnfurlBot(userAgent);
+  const mobile = !bot && isMobileClient(client);
+
+  if (type === "proposal" && adminBase && !mobile) {
     return {
       action: "redirect",
       url: podAdminTarget("proposal", id, adminBase),
     };
   }
 
-  if (
-    (type === "entity" || type === "view") &&
-    adminBase &&
-    !isUnfurlBot(userAgent)
-  ) {
+  if ((type === "entity" || type === "view") && adminBase && !bot && !mobile) {
     return {
       action: "redirect",
       url: podAdminTarget(type, id, adminBase),

@@ -154,6 +154,11 @@ export type {
   SubmitCaptureGraphResult,
   AskResponse,
   AskAnswerBlock,
+  KnowledgeAnswerSource,
+  KnowledgeAnswerPendingMatch,
+  KnowledgeAnswerPending,
+  KnowledgeAnswerFailure,
+  KnowledgeAnswerResponse,
   // Diagnose (third door)
   HubDiagnoseInput,
   HubDiagnoseResult,

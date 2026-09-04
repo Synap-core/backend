@@ -202,6 +202,37 @@ describe("NotificationService.create — push (`os`) delivery", () => {
     expect((push.data as Record<string, unknown>).notificationId).toBe("row-1");
   });
 
+  it("(g2) a PROPOSAL push carries a mobile-flavoured deep link; other sources carry none", async () => {
+    // The push is addressed to a registered device, so the link it carries must
+    // be the mobile flavour — otherwise the tap 302s to the desktop-only
+    // pod-admin review page. `?client=mobile` is what `dispatchOpen` reads to
+    // bounce into relay instead (apps/api/src/open-dispatch.ts).
+    process.env.PUBLIC_URL = "https://pod.example.test";
+    await NotificationService.create(baseInput());
+    const proposalPush = mockSendExpoPush.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect((proposalPush.data as Record<string, unknown>).deepLink).toBe(
+      "https://pod.example.test/open/44444444-4444-4444-8444-444444444444?client=mobile"
+    );
+
+    // A source kind the bare-id /open probe cannot resolve gets NO link rather
+    // than a typeless `synap://open/<id>` no client can route.
+    mockSendExpoPush.mockClear();
+    await NotificationService.create(
+      baseInput({ sourceType: "connector" as const })
+    );
+    const otherPush = mockSendExpoPush.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(
+      (otherPush.data as Record<string, unknown>).deepLink
+    ).toBeUndefined();
+    delete process.env.PUBLIC_URL;
+  });
+
   it("(h) routing rule 'os' pushes and does NOT emit; 'in_app' emits and does NOT push", async () => {
     mockPrefs.mockResolvedValue({
       enabled: true,

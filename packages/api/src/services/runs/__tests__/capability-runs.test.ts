@@ -196,6 +196,45 @@ describe("listCapabilityRuns (via listRuns) — the capability-run ledger synthe
     expect(runs[0]?.summary).toContain("messages");
   });
 
+  it("renders a REFUSED attempt as blocked_by_policy, keeping WHY it was refused", async () => {
+    // The refusal rides the SAME event kind as a delivered run (no second event
+    // type) — `outcome: "refused"` is what separates them. Rendering it as
+    // `completed` would be a worse lie than the silence this replaced.
+    mockDb.select.mockReturnValueOnce(selectChain([])).mockReturnValueOnce(
+      selectChain([
+        {
+          id: "evt-refused-1",
+          correlationId: "cor-refused-1",
+          timestamp: new Date("2026-01-03T00:00:00Z"),
+          data: {
+            kind: "capability_run",
+            outcome: "refused",
+            refusalReason: "not_approved",
+            skillId: "skill-9",
+            verbId: "gmail.send",
+            workspaceId: "ws-1",
+            reason: "Capability installed but not yet enabled.",
+            fixHint: 'Enable "Gmail" to run its verbs.',
+          },
+        },
+      ])
+    );
+
+    const runs = await listRuns({ userId: USER, flowType: "capability" });
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      id: "cor-refused-1",
+      flowType: "capability",
+      flowName: "gmail.send",
+      status: "blocked_by_policy",
+    });
+    // The three reasons need three different fixes — the machine code must
+    // survive to the reader, not be flattened into one "refused".
+    expect(runs[0]?.summary).toContain("not_approved");
+    expect(runs[0]?.summary).toContain("not yet enabled");
+  });
+
   it("dedupes a proposal-backed run against its own event by correlationId (proposal wins, appears once)", async () => {
     mockDb.select
       .mockReturnValueOnce(

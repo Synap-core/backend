@@ -12,9 +12,24 @@
  *   - create_entity            → entity.create
  *   - create_entity w/ facets  → additionally facet.attach
  *   - create_relation          → relation.create
- * All three are in DEFAULT_AUTO_APPROVE, so an ordinary capture graph
- * auto-applies unless a workspace/agent override, writesRequireProposal, or a
- * CBAC allowlist withholds one of them — in which case the WHOLE graph proposes.
+ *   - create_skill             → skill.create
+ *   - create_automation        → automation.create
+ *   - create_rule              → rule.create
+ * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
+ * only read/presentational keys: search.*, memory.recall, entity.read,
+ * bento.arrange, document.read, context.*, filesystem.*, view.create). An
+ * ordinary capture graph auto-applies because the WORKSPACE's effective
+ * `autoApproveFor` widens the set — `decideAgentPolicy` takes it as a
+ * parameter defaulting to DEFAULT_AUTO_APPROVE, it does not read the constant
+ * directly. So auto-apply here is a per-workspace CONFIGURATION, never a
+ * property of this file, and any key can be withheld by a workspace/agent
+ * override, writesRequireProposal, or a CBAC allowlist — in which case the
+ * WHOLE graph proposes.
+ *
+ * Do NOT restate that as "skill.create and rule.create always propose": that
+ * holds only while no workspace whitelists them. What IS structural is the
+ * fail-closed `else` below — an unmapped arm can never reach the evaluator
+ * unscored.
  */
 
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -70,6 +85,25 @@ export function captureGraphEventKeys(
         add({ subjectType: "facet", action: "attach" });
     } else if (op.op === "create_relation") {
       add({ subjectType: "relation", action: "create" });
+    } else if (op.op === "create_skill") {
+      add({ subjectType: "skill", action: "create" });
+    } else if (op.op === "create_automation") {
+      add({ subjectType: "automation", action: "create" });
+    } else if (op.op === "create_rule") {
+      add({ subjectType: "rule", action: "create" });
+    } else {
+      // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
+      // wave removed: an op arm this function does not recognise produced NO
+      // key, so the evaluator never scored it — and since the caller only
+      // needs every EMITTED key to say `execute`, a graph of (entity + an
+      // unknown arm) would auto-apply the unknown arm ungoverned. Silence is
+      // exactly the wrong answer here; unreachable via the typed union, and
+      // that is the point — a new arm must be mapped, not defaulted.
+      throw new Error(
+        `captureGraphEventKeys: unrecognized composite operation "${
+          (op as { op?: unknown }).op
+        }" — map it to a governed (subjectType, action) pair before it can be auto-applied.`
+      );
     }
   }
   return [...keys.values()];

@@ -36,6 +36,7 @@ import { SERVER_CONVERSATION_EVENTS } from "../realtime/socket-events.js";
 import { emitSideEffects } from "@synap/events";
 import { getNotificationDef } from "./registry.js";
 import { sendExpoPush } from "./expo-push.js";
+import { openLink } from "../utils/deep-links.js";
 import type { DeliveryChannel, NotificationDef } from "./registry.js";
 import type {
   NotificationCategory,
@@ -379,6 +380,21 @@ export const NotificationService = {
             category: def.category,
             sourceType: input.sourceType,
             ...(input.sourceId ? { sourceId: input.sourceId } : {}),
+            // A push is addressed to a REGISTERED DEVICE, so the producer knows
+            // its audience — this is exactly the case the mobile flavour exists
+            // for. `?client=mobile` makes the pod's /open bounce hand the tap to
+            // relay (`synap://open/proposal/<id>`) instead of 302-ing to the
+            // desktop-only pod-admin review page.
+            //
+            // Narrowed to `proposal` deliberately: the bare-id `/open/:id` route
+            // probes proposal → entity → view → document → channel, and
+            // `proposal` is the ONLY `sourceType` in that set. Minting a link
+            // for a connector/agent/system source id would bounce to a TYPELESS
+            // `synap://open/<id>` no client can route — a dead link is worse
+            // than none.
+            ...(input.sourceType === "proposal" && input.sourceId
+              ? { deepLink: openLink(input.sourceId, { client: "mobile" }) }
+              : {}),
           },
         }).catch((err) =>
           logger.warn({ err, notificationId: row.id }, "Push send failed")

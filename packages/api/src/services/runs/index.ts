@@ -48,6 +48,10 @@ import {
 } from "../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
+import {
+  AGENT_WRITE_EVENT_KIND,
+  REFUSED_OUTCOME,
+} from "../../lib/run-event-kinds.js";
 import type {
   FlowType,
   RunStatus,
@@ -701,6 +705,15 @@ async function listCapabilityRuns(
         return eventRows.map((e) => {
           const data = (e.data ?? {}) as Record<string, unknown>;
           const runResult = data.runResult;
+          // A REFUSED attempt (execute-capability's `recordRefusedCapabilityRun`)
+          // rides the SAME event kind as a delivered run — `outcome` is what
+          // separates them. Without this branch a refusal would render as
+          // `completed`, which is a worse lie than the silence it replaced.
+          const refused = data.outcome === REFUSED_OUTCOME;
+          const refusalReason =
+            typeof data.refusalReason === "string" ? data.refusalReason : null;
+          const reasonText =
+            typeof data.reason === "string" ? (data.reason as string) : null;
           return {
             // A direct run has no proposal row — its correlationId is its id
             // (mirrors capture's `correlationId ?? id`).
@@ -714,7 +727,13 @@ async function listCapabilityRuns(
                   ? data.skillId
                   : "Capability",
             // An emitted direct run reached its handler and returned → completed.
-            status: "completed" as const,
+            // A refusal never ran at all: it is a governance OUTCOME, not a
+            // transport failure, so it reuses `blocked_by_policy` (the status
+            // automation runs already use for the same meaning) — never
+            // "failed", which would send the human debugging a working verb.
+            status: refused
+              ? ("blocked_by_policy" as const)
+              : ("completed" as const),
             startedAt: e.timestamp,
             completedAt: e.timestamp,
             // Synthesised from a single terminal event — never "running".
@@ -726,8 +745,14 @@ async function listCapabilityRuns(
             channelId: null,
             correlationId: e.correlationId ?? null,
             replayOf: null,
-            summary:
-              runResult !== undefined
+            summary: refused
+              ? // WHY it was refused is the whole point of the row — and the
+                // three reasons need three different fixes, so the machine code
+                // rides alongside the human text rather than replacing it.
+                `Refused${refusalReason ? ` (${refusalReason})` : ""}${
+                  reasonText ? `: ${reasonText.slice(0, 200)}` : ""
+                }`
+              : runResult !== undefined
                 ? `Result: ${JSON.stringify(runResult).slice(0, 200)}`
                 : null,
             error: null,
@@ -789,13 +814,99 @@ async function listAgentWriteRuns(
   status?: RunStatus,
   exactRunId?: string
 ): Promise<UnifiedRun[]> {
-  // An auto-approved receipt means the write already executed → always
-  // "completed"; any other status filter excludes this ledger entirely.
-  if (status && status !== "completed") return [];
   // No entity-subject linkage exists on a plain write receipt (unlike capture's
   // `data.materialized.entityIds`) — an entity-focused scope has nothing to
   // match. Mirrors listCapabilityRuns.
   if (scope.subjectEntityId) return [];
+
+  // REFUSED agent writes — the daily-cap floor (permission-check's
+  // `createProposal`) refuses a write PAST the cap: it neither executes nor
+  // proposes, so there is NO receipt row and the ledger above renders nothing.
+  // A capped agent and a dead agent were byte-identical from the UI. The refusal
+  // emits an `agent_write` ai_decision event instead, and this synthesises the
+  // run from it — the SAME correlationId-keyed mechanism the direct-capability
+  // ledger uses, deliberately not a second one.
+  const refusedRuns: UnifiedRun[] =
+    // Events carry no project column, so a project-scoped feed excludes them
+    // (mirrors listCapabilityRuns' eventRuns).
+    scope.projectId || (status && status !== "blocked_by_policy")
+      ? []
+      : await (async () => {
+          const eventRows = await db
+            .select({
+              id: events.id,
+              correlationId: events.correlationId,
+              timestamp: events.timestamp,
+              data: events.data,
+            })
+            .from(events)
+            .where(
+              and(
+                eq(events.subjectType, AI_DECISION),
+                drizzleSql`${events.data}->>'kind' = ${AGENT_WRITE_EVENT_KIND}`,
+                drizzleSql`${events.data}->>'outcome' = ${REFUSED_OUTCOME}`,
+                eq(events.userId, userId),
+                exactRunId ? eq(events.correlationId, exactRunId) : undefined,
+                scope.workspaceId
+                  ? drizzleSql`${events.data}->>'workspaceId' = ${scope.workspaceId}`
+                  : undefined
+              )
+            )
+            .orderBy(desc(events.timestamp))
+            .limit(limit);
+          return eventRows.map((e) => {
+            const data = (e.data ?? {}) as Record<string, unknown>;
+            const writeAction =
+              typeof data.writeAction === "string" ? data.writeAction : null;
+            const subjectType =
+              typeof data.subjectType === "string" ? data.subjectType : null;
+            const refusalReason =
+              typeof data.refusalReason === "string"
+                ? data.refusalReason
+                : null;
+            const reasonText =
+              typeof data.reason === "string" ? (data.reason as string) : null;
+            return {
+              id: e.correlationId ?? e.id,
+              flowType: "agent_write" as const,
+              flowId: null,
+              // Same `{subject}.{action}` shape the receipt rows carry in
+              // `flowName` (their `proposalType`), so the two halves of this
+              // ledger read as one list.
+              flowName:
+                subjectType && writeAction
+                  ? `${subjectType}.${writeAction}`
+                  : (writeAction ?? subjectType ?? "agent_write"),
+              // A governance OUTCOME, not a transport failure — the same status
+              // the capability ledger gives a refusal.
+              status: "blocked_by_policy" as const,
+              startedAt: e.timestamp,
+              completedAt: e.timestamp,
+              lastActivityAt: null,
+              workspaceId:
+                typeof data.workspaceId === "string" ? data.workspaceId : null,
+              projectId: null,
+              subjectEntityId: null,
+              channelId: null,
+              correlationId: e.correlationId ?? null,
+              replayOf: null,
+              summary: `Refused${refusalReason ? ` (${refusalReason})` : ""}${
+                reasonText ? `: ${reasonText.slice(0, 200)}` : ""
+              }`,
+              error: null,
+              triggeredBy:
+                typeof data.agentUserId === "string" ? data.agentUserId : null,
+              stepsCompleted: null,
+              stepsFailed: null,
+              definitionVersion: null,
+            };
+          });
+        })();
+
+  // An auto-approved receipt means the write already executed → always
+  // "completed"; any other status filter excludes the RECEIPT half (the refusal
+  // half above answers `blocked_by_policy`).
+  if (status && status !== "completed") return refusedRuns;
 
   const rows = await db
     .select({
@@ -832,7 +943,7 @@ async function listAgentWriteRuns(
     .orderBy(desc(proposals.createdAt))
     .limit(limit);
 
-  return rows.map((r) => {
+  const receiptRuns: UnifiedRun[] = rows.map((r) => {
     const data = (r.data ?? {}) as Record<string, unknown>;
     // The model sometimes volunteers a rationale on an auto-approved write
     // (permission-check threads it into `data.reasoning`) — it is the single
@@ -867,6 +978,13 @@ async function listAgentWriteRuns(
       definitionVersion: null,
     };
   });
+
+  // Two independent halves of ONE ledger (executed receipts + refusals) — merge
+  // newest-first and bound to `limit`, the same shape listCapabilityRuns uses.
+  // They can never collide: a refusal has no receipt, by definition.
+  const merged = [...receiptRuns, ...refusedRuns];
+  merged.sort(byStartedAtDesc);
+  return merged.slice(0, limit);
 }
 
 async function listSessionRuns(

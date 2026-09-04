@@ -2,7 +2,13 @@
  * `command` / `skill` / `capability` step executors — the three node types that
  * dispatch work OUT of the flow (IS task, or the canonical capability router).
  */
-import { db, eq, automationStepRuns } from "@synap/database";
+import {
+  db,
+  eq,
+  automationStepRuns,
+  normalizeCommandNodeData,
+} from "@synap/database";
+import type { CommandNodeDef, LegacyCommandNodeData } from "@synap/database";
 import {
   resolveTemplate,
   deepResolveTemplates,
@@ -28,12 +34,7 @@ import type { StepContext } from "../automation-executor-types.js";
  * Execute a command step by calling the Intelligence Service.
  */
 export async function executeCommandStep(
-  data: {
-    commandId?: string;
-    commandTitle?: string;
-    inputMapping: Record<string, string>;
-    promptOverride?: string;
-  },
+  rawData: CommandNodeDef["data"] & LegacyCommandNodeData,
   context: StepContext,
   workspaceId: string,
   ownerId: string,
@@ -59,6 +60,8 @@ export async function executeCommandStep(
         : `command cannot auto-execute: an agent produced this trigger, so a human-owned automation may not run it ungoverned (confused-deputy guard).`
     );
   }
+
+  const data = normalizeCommandNodeData(rawData);
 
   let resolvedInputs = resolveInputMapping(data.inputMapping, context);
 

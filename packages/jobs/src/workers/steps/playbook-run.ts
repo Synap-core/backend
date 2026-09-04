@@ -42,6 +42,14 @@ export async function executePlaybookRun(
     playbookId?: string;
     playbookName?: string;
     paramsMapping?: Record<string, string>;
+    /**
+     * AGENT SELECTOR — the `agents.slug` of the agent that should answer this
+     * run ("ask <agent> to …"). Optional: absent ⇒ the default orchestrator
+     * ("meta"), which is what every existing node does. Forwarded verbatim; the
+     * `is-agent` executor resolves it against the `agents` catalog and fails the
+     * run on an unknown slug rather than quietly using the orchestrator.
+     */
+    agentType?: string;
   },
   context: StepContext,
   workspaceId: string,
@@ -128,6 +136,7 @@ export async function executePlaybookRun(
     params: resolvedParams,
     subjectId: resolvedSubjectId,
     idempotentBySubject: true,
+    agentType: data.agentType,
     goalResolver: (goalTemplate) => {
       const resolved = resolveTemplate(goalTemplate, context);
       // `resolveTemplate` speaks ONLY {{mustache}}. A goalTemplate authored in

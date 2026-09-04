@@ -24,6 +24,8 @@ import {
 } from "@synap/database";
 import { agents, users } from "@synap/database/schema";
 import type { AgentMetadata } from "@synap/database/schema";
+import type { SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { randomUUID } from "crypto";
 import {
   createAndVerifyHubInboundKey,
@@ -47,6 +49,26 @@ export async function getAgentById(agentId: string): Promise<AgentRow | null> {
     .select()
     .from(agents)
     .where(eq(agents.id, agentId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Resolve an ACTIVE registry row by its slug — the string the IS calls
+ * `agentType` (chat-stream.ts reads a channel's assigned agent and hands its
+ * `agents.slug` to the IS as `agentType`; `resolve-or-create-channel.ts`,
+ * `personal-channel.ts` and `channels/crud.ts` all do the same slug+active
+ * lookup). Returns null for an unknown or deactivated slug so a caller that
+ * targets a named agent can FAIL rather than silently dispatch to the default
+ * orchestrator.
+ */
+export async function resolveActiveAgentBySlug(
+  slug: string
+): Promise<AgentRow | null> {
+  const [row] = await db
+    .select()
+    .from(agents)
+    .where(and(eq(agents.slug, slug), eq(agents.active, true)))
     .limit(1);
   return row ?? null;
 }
@@ -87,16 +109,46 @@ export async function hasUserIdentity(agentId: string): Promise<boolean> {
 export function ownAdjunctFilter(userId: string) {
   return and(
     eq(agents.ownerType, "user"),
-    inArray(
-      agents.userId,
-      db
-        .select({ id: users.id })
-        .from(users)
-        .where(
-          and(eq(users.userType, "agent"), eq(users.createdByUserId, userId))
-        )
-    )
+    ownAgentUserFilter(agents.userId, userId)
   );
+}
+
+/**
+ * The AGENT-LINEAGE set: ids of the agent-users a given human created.
+ *
+ * Split out of `ownAdjunctFilter` for the same reason `memberWorkspaceIds` /
+ * `ownedWorkspaceIds` were split out of `userVisibleWhere`
+ * (database/src/utils/user-visible-where.ts): the lineage set is needed BOTH as
+ * an `agents`-table predicate (the catalog readers) and as a bare id subquery
+ * over other tables (`proposals.agentUserId` in the MCP proposal queue and in
+ * orient's pending aggregate). One definition, so a floor can never widen on
+ * one door and not the other.
+ *
+ * Both halves matter: `userType = 'agent'` keeps it to agent principals, and
+ * `createdByUserId = userId` keeps it to THIS human's agents — it can never
+ * admit a teammate's agents, which is the boundary a workspace-membership floor
+ * would have crossed.
+ */
+function ownAgentUserIds(userId: string) {
+  return db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.userType, "agent"), eq(users.createdByUserId, userId)));
+}
+
+/**
+ * The lineage set as a predicate over ANY agent-user column — `agents.userId`
+ * for the catalog readers, `proposals.agentUserId` for the MCP proposal queue
+ * and orient's pending aggregate. Exported in predicate form (not as the raw
+ * subquery) because a `db.select()` builder's inferred type cannot be named
+ * outside `@synap/database` (TS2742); the subquery above stays the ONE
+ * definition and nothing re-derives it.
+ */
+export function ownAgentUserFilter(
+  agentUserIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return inArray(agentUserIdColumn, ownAgentUserIds(userId));
 }
 
 /**
@@ -265,6 +317,14 @@ export async function findOrCreateServiceAgentUser(opts: {
   label: string;
   /** Merged into agentMetadata; identity fields (agentType/creator/isPersonal) are forced. */
   metadata?: Partial<AgentMetadata>;
+  /**
+   * Provenance for the Agent dashboard (`users.created_via`). Defaults to "cli",
+   * which is what both original callers (createNamedAgent /
+   * provisionSurfaceAgentKey) meant; the IS agent-roster sync passes
+   * "intelligence-service" so a synced agent-user is not mislabelled as a CLI
+   * adjunct.
+   */
+  createdVia?: "cli" | "intelligence-service" | "ui" | "system";
   logger?: ProvisionLogger;
 }): Promise<{ agentUserId: string; email: string }> {
   const { creatorId, agentType, label, logger } = opts;
@@ -319,7 +379,7 @@ export async function findOrCreateServiceAgentUser(opts: {
       agentType,
       isPersonalAgent: false,
       createdByUserId: creatorId,
-      createdVia: "cli",
+      createdVia: opts.createdVia ?? "cli",
       agentMetadata,
       timezone: "UTC",
       locale: "en",

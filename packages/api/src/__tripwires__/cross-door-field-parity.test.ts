@@ -108,6 +108,27 @@ import { dirname, join, relative, resolve } from "node:path";
  * FAILS ("remove it"), and an entry naming a service/field/door outside the
  * derived matrix FAILS (the code moved and the entry now silences nothing).
  *
+ * ── THREE AXES THIS AUDIT REACHES ALONG ────────────────────────────────────
+ * Each was added because a field leaked past the previous shape of this file
+ * and had to be found BY HAND afterwards:
+ *   • DEPTH (`fieldDepth`). `AgentScorecard.counts` / `.rates` are inline
+ *     anonymous objects; `partiallyApproved` / `partialApproveRate` were dropped
+ *     INSIDE them on the day they were added, so every diagnose surface scored a
+ *     gutted package as a full approval and a trust lane widened on it. Depth is
+ *     only sound because of {@link forwardsFieldWhole}: a nested key rides along
+ *     whenever the parent's VALUE is forwarded whole, and is audited only on a
+ *     door that REBUILDS its parent.
+ *   • COMPOSITION (`auditSubShapes`). Extraction stops at a named type
+ *     reference, so `CapabilityCard.verbs: CapabilityCardVerb[]` hid a whole
+ *     shape — `intent`, the vendor-independent routing axis, was computed for
+ *     83/83 verbs and absent from the Hub REST response schema, so the feature
+ *     reached one of its two doors. The list of sub-shapes is DERIVED by walking
+ *     the type graph, not kept by hand.
+ *   • REPUBLISHERS (`republisherRoots`). The diagnose roster re-projects
+ *     `AgentScorecard` field by field inside a SERVICE; no router file imports
+ *     the scorecard on that path, so a `routers/`-only walk was blind to it.
+ *     Same defect shape as a door, one module earlier.
+ *
  * ── ANTI-STALENESS (the documented `tripwires-lose-coverage-silently` class) ─
  *   1. Scan roots are walked RECURSIVELY — never a file list.
  *   2. Required roots must EXIST — a rename fails loudly instead of scanning
@@ -117,6 +138,10 @@ import { dirname, join, relative, resolve } from "node:path";
  *      rather than green-over-nothing.
  *   4. SELF-GUARD on known-positive fields per door — if the detector engine
  *      breaks, that reads red instead of as a wall of new "gaps".
+ *   5. Type extraction is WORD-BOUNDED and asserted so. A prefix match
+ *      (`CapabilityCard` finding `CapabilityCardConnection`) audits the WRONG
+ *      SHAPE with every non-vacuity check still green — confident nonsense,
+ *      which is worse than an empty audit.
  */
 
 // ── Audited services ─────────────────────────────────────────────────────────
@@ -126,14 +151,96 @@ const ROUTERS_DIR = join(API_SRC, "routers");
 
 interface ServiceSpec {
   key: string;
-  /** Absolute path to the source that DECLARES the result type. */
+  /** Absolute path to the module that EXPORTS `fn` — the import-discovery seed. */
   file: string;
+  /**
+   * Absolute path to the source that DECLARES `resultType`, when that is not
+   * `file`. `agentScorecard` lives in `agent-scorecard.ts` but its result type
+   * is declared in the sibling `types.ts`; without this the extractor finds no
+   * type and the non-vacuity assertion (correctly) reds. Defaults to `file`.
+   */
+  typeFile?: string;
   /** Exported symbol callers import (used for passthrough + import detection). */
   fn: string;
   /** Exported result type whose fields are extracted. */
   resultType: string;
+  /**
+   * The result contract is a tRPC procedure's `.output(z.object({…}))` rather
+   * than an exported TS type. Value is the source text the procedure's
+   * declaration starts with (`get: podProcedure`); the field list is extracted
+   * from the FIRST `.output(z.object({` after it.
+   *
+   * WHY THIS EXISTS AND WHY IT IS NOT A HAND-WRITTEN INTERFACE. `entities.get`
+   * assembles its envelope inline in the router and declares its shape only as
+   * a zod output schema — there is no exported result type to point `resultType`
+   * at. Mirroring that schema into a TS interface here would be a SECOND,
+   * independently drifting declaration of the same shape: precisely the
+   * hand-maintained-projection defect this whole file exists to catch, one level
+   * up. So the extractor reads the DECLARED CONTRACT ITSELF. `resultType` then
+   * carries no extraction duty and is only the name failures report under.
+   */
+  zodOutputAfter?: string;
+  /**
+   * Regex SOURCE for the call expression that reaches the service, when a bare
+   * `fn(` does not describe it. A tRPC procedure is reached through a caller
+   * object (`entityCaller.get({…})`), so `fn` — which stays the IMPORTED symbol,
+   * because that is what import-discovery seeds on — never appears as a call.
+   *
+   * This must be as NARROW as the contract it audits. `entities.get` returns a
+   * two-field row (`entity`, `externalLinks`) unless `includeProfile` is set,
+   * so a pattern matching every `.get(` would audit six fields against call
+   * sites that never receive four of them and INVENT drops. Door discovery for
+   * both real sites is pinned by KNOWN_POSITIVES, so a rename of the caller
+   * variable fails loudly here rather than silently dropping a door.
+   */
+  callPattern?: string;
   /** Minimum fields a healthy extraction must find (non-vacuity). */
   fieldFloor: number;
+  /**
+   * How deep into the result type keys are extracted. 1 (default) audits only
+   * top-level properties.
+   *
+   * WHY THIS IS A KNOB AND NOT A CONSTANT. Raising it is not free and not always
+   * right: at depth 2 a door that forwards a parent's VALUE whole
+   * (`writeReceipt: graph.writeReceipt`) still has every sub-key of that value on
+   * the wire, so auditing those sub-keys by name INVENTS drops. The
+   * {@link parentPassesThrough} rule below is what makes depth > 1 sound — a
+   * nested key is only audited on a door that REBUILDS its parent. Depth is
+   * raised where a real drop has happened inside a rebuilt sub-object
+   * (`AgentScorecard.counts` / `.rates`) and left at 1 elsewhere. This is
+   * COVERAGE SCOPE, not a field list: what is audited inside that scope is still
+   * extracted from the type, never enumerated here.
+   */
+  fieldDepth?: number;
+  /**
+   * Extra roots walked for RE-PUBLISHERS: non-router modules that consume this
+   * service's result and hand-assemble a NEW payload from it, which some door
+   * then serves. Same defect shape as a door — a hand-written projection with
+   * nothing forcing it to track its source — one module earlier in the chain.
+   *
+   * `services/diagnose/index.ts` is the live case: its `case "agent"` roster
+   * re-projects `AgentScorecard` field by field, and dropped
+   * `partiallyApproved`/`partialApproveRate` on the day they were added, so every
+   * diagnose surface scored a gutted package as a full approval. No router file
+   * imports the scorecard on that path, so a `routers/`-only walk can never see
+   * it.
+   *
+   * This names WHERE to look, never WHAT to check: the walk inside the root is
+   * recursive (RULE 1), the root must exist (RULE 2), and the field list stays
+   * derived from the result type.
+   */
+  republisherRoots?: string[];
+  /**
+   * This result type COMPOSES named sub-shapes declared beside it
+   * (`CapabilityCard.verbs: CapabilityCardVerb[]`). Field extraction stops at a
+   * named type reference, so each sub-shape needs its own spec — and a
+   * hand-kept list of which ones is the very defect this file exists to catch.
+   * Setting this turns on a DERIVED completeness test: every exported type
+   * reachable from this one, in the same file, that declares fields must have a
+   * spec of its own. Add a sub-shape to the card and the tripwire reds until it
+   * is audited.
+   */
+  auditSubShapes?: boolean;
 }
 
 const SERVICES: ServiceSpec[] = [
@@ -165,6 +272,78 @@ const SERVICES: ServiceSpec[] = [
     resultType: "SynthesisResult",
     fieldFloor: 4,
   },
+  // The capability CATALOG is audited as TWO specs over one service because its
+  // result nests a NAMED exported type: `CapabilityCard.verbs` is
+  // `CapabilityCardVerb[]`, declared separately, so no depth setting on the card
+  // can reach it. The verb row is where the drop that motivated this pair lived
+  // — `intent` (the vendor-independent routing axis) was computed for 83/83
+  // verbs and absent from the Hub REST response schema, so the whole intent
+  // feature reached exactly one of its two doors.
+  {
+    key: "capability-catalog",
+    file: join(API_SRC, "services/capabilities/capability-catalog.ts"),
+    fn: "buildCapabilityCatalog",
+    resultType: "CapabilityCard",
+    fieldFloor: 8,
+    auditSubShapes: true,
+  },
+  {
+    key: "capability-catalog-verb",
+    file: join(API_SRC, "services/capabilities/capability-catalog.ts"),
+    fn: "buildCapabilityCatalog",
+    resultType: "CapabilityCardVerb",
+    fieldFloor: 8,
+  },
+  {
+    key: "capability-catalog-connection",
+    file: join(API_SRC, "services/capabilities/capability-catalog.ts"),
+    fn: "buildCapabilityCatalog",
+    resultType: "CapabilityCardConnection",
+    fieldFloor: 5,
+  },
+  {
+    key: "capability-catalog-verb-param",
+    file: join(API_SRC, "services/capabilities/capability-catalog.ts"),
+    fn: "buildCapabilityCatalog",
+    resultType: "CapabilityCardVerbParam",
+    fieldFloor: 4,
+  },
+  {
+    key: "capability-catalog-install-param",
+    file: join(API_SRC, "services/capabilities/capability-catalog.ts"),
+    fn: "buildCapabilityCatalog",
+    resultType: "CapabilityCardInstallParam",
+    fieldFloor: 5,
+  },
+  {
+    key: "agent-scorecard",
+    file: join(API_SRC, "services/diagnose/agent-scorecard.ts"),
+    typeFile: join(API_SRC, "services/diagnose/types.ts"),
+    fn: "agentScorecard",
+    resultType: "AgentScorecard",
+    fieldFloor: 8,
+    // `counts` and `rates` are INLINE anonymous objects, and the drop happened
+    // inside them — a depth-1 audit sees only "counts" and cannot tell a whole
+    // forward from a hand-rebuilt summary that lost two buckets.
+    fieldDepth: 2,
+    republisherRoots: [join(API_SRC, "services/diagnose")],
+  },
+  // The identity-wide ENTITY READ. Not a `services/` module — the envelope is
+  // assembled inline in the `entities.get` tRPC procedure and declared only as
+  // a zod output schema, which is why this spec needs `zodOutputAfter` and
+  // `callPattern`. It was added after `effectivePropertiesByWorkspace` (83-93%
+  // of an entity read, and the reason a `person` read truncates) was projected
+  // away on the MCP door with nothing in this file able to notice: T4 audited
+  // ten result types and the one an agent reads most was not among them.
+  {
+    key: "entity-get",
+    file: join(API_SRC, "routers/entities.ts"),
+    fn: "entitiesRouter",
+    callPattern: "entityCaller\\.get\\(\\s*\\{[^}]*includeProfile",
+    resultType: "entities.get output",
+    zodOutputAfter: "get: podProcedure",
+    fieldFloor: 5,
+  },
 ];
 
 // ── Source utilities ─────────────────────────────────────────────────────────
@@ -195,6 +374,10 @@ const SKIP_DIRS = new Set([
 /** RULE 1: recursive walk — never a file-path list. */
 function collectSources(dir: string): string[] {
   const out: string[] = [];
+  // A moved root must fail through the RULE 2 existence assertions, which name
+  // it — not through an ENOENT during module load, which aborts the whole file
+  // and reports "no tests" rather than "scan root X moved".
+  if (!existsSync(dir)) return out;
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) {
@@ -219,16 +402,49 @@ function collectSources(dir: string): string[] {
  * assertions turn into a loud failure rather than an empty audit.
  */
 function extractTypeBody(source: string, name: string): string {
-  const iface = source.indexOf(`export interface ${name}`);
+  // WORD-BOUNDED. `indexOf("export interface CapabilityCard")` finds
+  // `CapabilityCardConnection` first and silently audits the WRONG TYPE — six
+  // connection fields standing in for the eleven card fields, with every
+  // non-vacuity assertion still green because a plausible-looking shape came
+  // back. A prefix-matching extractor is a lie that reads like data.
+  const iface = matchDecl(source, `export interface ${name}`);
   if (iface >= 0) {
     const open = source.indexOf("{", iface);
     return open < 0 ? "" : sliceBalanced(source, open);
   }
-  const alias = source.indexOf(`export type ${name}`);
+  const alias = matchDecl(source, `export type ${name}`);
   if (alias < 0) return "";
   const eq = source.indexOf("=", alias);
   if (eq < 0) return "";
   return sliceToStatementEnd(source, eq + 1);
+}
+
+/**
+ * The `{ … }` of the first `.output(z.object({ … }))` declared after `anchor`.
+ *
+ * Whitespace-tolerant for the same reason `schemaRegions` is: Prettier breaks
+ * `z\n  .object({`, and a pattern that cannot see that would return "" and turn
+ * a real audit into an empty one (the non-vacuity floor catches it, loudly).
+ */
+function extractZodOutputBody(source: string, anchor: string): string {
+  const at = source.indexOf(anchor);
+  if (at < 0) return "";
+  const m = /\.\s*output\s*\(\s*z\s*\.\s*object\s*\(/.exec(source.slice(at));
+  if (!m) return "";
+  const open = source.indexOf("{", at + m.index + m[0].length - 1);
+  return open < 0 ? "" : sliceBalanced(source, open);
+}
+
+/** Index of `decl` where the character after it cannot continue an identifier. */
+function matchDecl(source: string, decl: string): number {
+  let from = 0;
+  for (;;) {
+    const at = source.indexOf(decl, from);
+    if (at < 0) return -1;
+    const next = source[at + decl.length];
+    if (next === undefined || !/[\w$]/.test(next)) return at;
+    from = at + 1;
+  }
 }
 
 /** From an opening `{` to its matching `}`, inclusive. */
@@ -290,14 +506,39 @@ function skipString(source: string, i: number): number {
  */
 interface ResultMember {
   discriminant: string | null;
-  fields: string[];
+  fields: FieldRef[];
 }
 
-/** Property keys declared at exactly `wantDepth`, string- and depth-aware. */
-function keysAtDepth(body: string, wantDepth: number): string[] {
-  const keys: string[] = [];
+/**
+ * One property of the result shape. `id` is the string a failure reports and an
+ * {@link ACKNOWLEDGED_GAPS} entry is keyed on; `parent` is what makes the
+ * nested-key rule below sound.
+ */
+interface FieldRef {
+  /** Property key as written. */
+  name: string;
+  /** Enclosing property key, or null at the top level. */
+  parent: string | null;
+  /** `name`, or `parent.name` when nested. */
+  id: string;
+}
+
+/**
+ * Property keys declared at depth 1..`maxDepth`, string- and depth-aware, each
+ * tagged with the key that encloses it.
+ *
+ * Depth is counted in BRACKETS of every kind, so a key inside a function-type
+ * parameter list or an `Array<{…}>` element also counts as nested — which is
+ * what we want: `rejectionReasons: Array<{ reason; count }>` really does declare
+ * `reason`/`count` one level in.
+ */
+function keysUpToDepth(body: string, maxDepth: number): FieldRef[] {
+  const keys: FieldRef[] = [];
+  /** The key that opened each bracket level — `stack[d - 1]` is depth d's parent. */
+  const stack: Array<string | null> = [];
   let depth = 0;
   let prev = "{";
+  let lastKey: string | null = null;
   for (let i = 0; i < body.length; i += 1) {
     const ch = body[i]!;
     if (isQuote(ch)) {
@@ -307,19 +548,31 @@ function keysAtDepth(body: string, wantDepth: number): string[] {
     }
     if (ch === "{" || ch === "(" || ch === "[") {
       depth += 1;
+      stack.push(lastKey);
+      lastKey = null;
       prev = ch;
       continue;
     }
     if (ch === "}" || ch === ")" || ch === "]") {
       depth -= 1;
+      lastKey = stack.pop() ?? null;
       prev = ch;
       continue;
     }
     if (/\s/.test(ch)) continue;
-    if (/[A-Za-z_$]/.test(ch) && depth === wantDepth && /[{;,]/.test(prev)) {
+    if (
+      /[A-Za-z_$]/.test(ch) &&
+      depth >= 1 &&
+      depth <= maxDepth &&
+      /[{;,]/.test(prev)
+    ) {
       const m = /^[A-Za-z_$][\w$]*/.exec(body.slice(i))![0];
       const after = body.slice(i + m.length).match(/^\s*\??\s*:/);
-      if (after) keys.push(m);
+      if (after) {
+        const parent = depth > 1 ? (stack[depth - 1] ?? null) : null;
+        keys.push({ name: m, parent, id: parent ? `${parent}.${m}` : m });
+        lastKey = m;
+      }
       i += m.length - 1;
       prev = "x";
       continue;
@@ -329,9 +582,15 @@ function keysAtDepth(body: string, wantDepth: number): string[] {
   return keys;
 }
 
-function extractMembers(body: string, isUnion: boolean): ResultMember[] {
+function extractMembers(
+  body: string,
+  isUnion: boolean,
+  maxDepth: number
+): ResultMember[] {
   if (!isUnion) {
-    return [{ discriminant: null, fields: unique(keysAtDepth(body, 1)) }];
+    return [
+      { discriminant: null, fields: uniqueRefs(keysUpToDepth(body, maxDepth)) },
+    ];
   }
   const members: ResultMember[] = [];
   let depth = 0;
@@ -352,7 +611,7 @@ function extractMembers(body: string, isUnion: boolean): ResultMember[] {
         const kind = /\bkind\s*:\s*["']([\w-]+)["']/.exec(arm);
         members.push({
           discriminant: kind ? kind[1]! : null,
-          fields: unique(keysAtDepth(arm, 1)),
+          fields: uniqueRefs(keysUpToDepth(arm, maxDepth)),
         });
         start = -1;
       }
@@ -361,34 +620,75 @@ function extractMembers(body: string, isUnion: boolean): ResultMember[] {
   return members;
 }
 
-function unique<T>(xs: T[]): T[] {
-  return [...new Set(xs)];
+function uniqueRefs(refs: FieldRef[]): FieldRef[] {
+  const seen = new Map<string, FieldRef>();
+  for (const r of refs) if (!seen.has(r.id)) seen.set(r.id, r);
+  return [...seen.values()];
 }
 
 interface ResultShape {
   members: ResultMember[];
+  /** Field IDS (`name`, or `parent.name` when nested) — what failures report. */
   fields: string[];
-  /** field → the discriminants of the members declaring it (null = untagged). */
+  refs: Map<string, FieldRef>;
+  /** field id → the discriminants of the members declaring it (null = untagged). */
   owners: Map<string, Array<string | null>>;
 }
 
 function resultShapeOf(spec: ServiceSpec): ResultShape {
-  const source = stripComments(readFileSync(spec.file, "utf8"));
-  const body = extractTypeBody(source, spec.resultType);
-  const isUnion = source.includes(`export type ${spec.resultType}`);
-  const members = extractMembers(body, isUnion);
+  const source = stripComments(
+    readFileSync(spec.typeFile ?? spec.file, "utf8")
+  );
+  const body = spec.zodOutputAfter
+    ? extractZodOutputBody(source, spec.zodOutputAfter)
+    : extractTypeBody(source, spec.resultType);
+  const isUnion =
+    !spec.zodOutputAfter && source.includes(`export type ${spec.resultType}`);
+  const members = extractMembers(body, isUnion, spec.fieldDepth ?? 1);
   const owners = new Map<string, Array<string | null>>();
+  const refs = new Map<string, FieldRef>();
   for (const m of members) {
     for (const f of m.fields) {
-      owners.set(f, [...(owners.get(f) ?? []), m.discriminant]);
+      owners.set(f.id, [...(owners.get(f.id) ?? []), m.discriminant]);
+      refs.set(f.id, f);
     }
   }
-  return { members, fields: [...owners.keys()], owners };
+  return { members, fields: [...owners.keys()], refs, owners };
+}
+
+/** Every exported interface/type alias name declared in a source. */
+function declaredTypeNames(source: string): string[] {
+  return [
+    ...source.matchAll(/export\s+(?:interface|type)\s+([A-Za-z_$][\w$]*)/g),
+  ].map((m) => m[1]!);
+}
+
+/**
+ * Exported types reachable from `root` by NAME REFERENCE within one file —
+ * `CapabilityCard` → `CapabilityCardVerb` → `CapabilityCardVerbParam`. Derived,
+ * so a new sub-shape cannot be added without the completeness test noticing.
+ */
+function reachableShapes(source: string, root: string): string[] {
+  const declared = new Set(declaredTypeNames(source));
+  const seen = new Set<string>([root]);
+  const queue = [root];
+  while (queue.length > 0) {
+    const name = queue.shift()!;
+    const body = extractTypeBody(source, name);
+    for (const m of body.matchAll(/[A-Za-z_$][\w$]*/g)) {
+      const id = m[0];
+      if (!declared.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      queue.push(id);
+    }
+  }
+  seen.delete(root);
+  return [...seen];
 }
 
 // ── Door discovery (walk for importers — never a fixed path list) ────────────
 
-type DoorRole = "trpc" | "hub_rest" | "mcp";
+type DoorRole = "trpc" | "hub_rest" | "mcp" | "republisher";
 
 /**
  * A door is a CALL SITE, not a file.
@@ -488,6 +788,31 @@ function enclosingBlock(src: string, idx: number): [number, number] | null {
 const CALL_SITE_LABEL =
   /app\.(?:post|get|put|patch|delete)\(\s*["']([^"']+)["']|path:\s*["']([^"']+)["']|function\s+(\w+)\s*\(|(\w+)\s*:\s*async|(\w+)\s*:\s*(?:protected|workspace|public|admin)Procedure|(?:const|let)\s+(\w+)\s*(?::[^=;]*)?=\s*async/g;
 
+/**
+ * The guard whose body IS this block, e.g. `if (input.agentId) {` →
+ * `input.agentId`. Used ONLY to break a label collision, so it can never change
+ * an id that was already unambiguous.
+ */
+function guardQualifier(src: string, blockOpen: number): string | null {
+  let i = blockOpen - 1;
+  while (i >= 0 && /\s/.test(src[i]!)) i -= 1;
+  if (src[i] !== ")") return null;
+  let depth = 0;
+  for (; i >= 0; i -= 1) {
+    if (src[i] === ")") depth += 1;
+    else if (src[i] === "(") {
+      depth -= 1;
+      if (depth === 0) break;
+    }
+  }
+  if (i < 0) return null;
+  const cond = src.slice(i + 1, blockOpen).replace(/\)\s*$/, "");
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(src[j]!)) j -= 1;
+  if (!/\bif$/.test(src.slice(Math.max(0, j - 1), j + 1))) return null;
+  return cond.replace(/\s+/g, "").slice(0, 48) || null;
+}
+
 function callSiteLabel(
   src: string,
   blockOpen: number,
@@ -529,21 +854,51 @@ interface Discovery {
   internal: string[];
 }
 
-const ROUTER_SOURCES: Array<{ file: string; source: string }> = collectSources(
-  ROUTERS_DIR
-).map((file) => ({ file, source: readFileSync(file, "utf8") }));
+function loadSources(dir: string): Array<{ file: string; source: string }> {
+  return collectSources(dir).map((file) => ({
+    file,
+    source: readFileSync(file, "utf8"),
+  }));
+}
+
+const ROUTER_SOURCES: Array<{ file: string; source: string }> =
+  loadSources(ROUTERS_DIR);
+
+/**
+ * The corpus this spec is audited over: `routers/` always, plus its declared
+ * REPUBLISHER roots. A file reached through a republisher root is a door by
+ * construction (`forcedRole`) — `classify` would call it internal, which is
+ * exactly the answer that let the diagnose roster's drop go unseen.
+ */
+function corpusFor(
+  spec: ServiceSpec
+): Array<{ file: string; source: string; forcedRole: DoorRole | null }> {
+  const out = ROUTER_SOURCES.map((e) => ({
+    ...e,
+    forcedRole: null as DoorRole | null,
+  }));
+  const seen = new Set(out.map((e) => e.file));
+  for (const root of spec.republisherRoots ?? []) {
+    for (const e of loadSources(root)) {
+      if (seen.has(e.file)) continue;
+      seen.add(e.file);
+      out.push({ ...e, forcedRole: "republisher" as DoorRole });
+    }
+  }
+  return out;
+}
 
 function discoverDoors(spec: ServiceSpec): Discovery {
   const exposers = new Set(exposingModules(spec));
   const doors: Door[] = [];
   const internal: string[] = [];
 
-  for (const { file, source } of ROUTER_SOURCES) {
+  for (const { file, source, forcedRole } of corpusFor(spec)) {
     if (!importedPaths(file, source).some((p) => exposers.has(p))) continue;
     const stripped = stripComments(source);
-    const role = classify(file, stripped);
+    const role = forcedRole ?? classify(file, stripped);
     const rel = relative(API_SRC, file);
-    const callRe = new RegExp(`\\b${spec.fn}\\s*\\(`, "g");
+    const callRe = new RegExp(spec.callPattern ?? `\\b${spec.fn}\\s*\\(`, "g");
     const sites = [...stripped.matchAll(callRe)];
     if (sites.length === 0) continue;
     if (!role) {
@@ -554,16 +909,38 @@ function discoverDoors(spec: ServiceSpec): Discovery {
       ? schemaRegions(stripped)
       : "";
     const seen = new Set<number>();
+    const fileDoors: Array<{ door: Door; label: string; blockOpen: number }> =
+      [];
     sites.forEach((m, n) => {
       const block = enclosingBlock(stripped, m.index!);
       if (!block || seen.has(block[0])) return;
       seen.add(block[0]);
-      doors.push({
-        role,
-        id: `${rel}:${callSiteLabel(stripped, block[0], n)}`,
-        region: `${stripped.slice(block[0], block[1] + 1)}\n${schemas}`,
-        file: stripped,
+      const label = callSiteLabel(stripped, block[0], n);
+      fileDoors.push({
+        label,
+        blockOpen: block[0],
+        door: {
+          role,
+          id: `${rel}:${label}`,
+          region: `${stripped.slice(block[0], block[1] + 1)}\n${schemas}`,
+          file: stripped,
+        },
       });
+    });
+    // Two call sites in ONE function share its name (`diagnoseRouter` answers
+    // `input.agentId` and `resolved.kind === "agent"` from separate blocks).
+    // A collision means the second site is audited under the first's name and
+    // one ACKNOWLEDGED entry silences both — so qualify the collided ones by
+    // the guard that owns their block, which is SEMANTIC and survives a move.
+    const labelCount = new Map<string, number>();
+    for (const d of fileDoors)
+      labelCount.set(d.label, (labelCount.get(d.label) ?? 0) + 1);
+    fileDoors.forEach((d, n) => {
+      if ((labelCount.get(d.label) ?? 0) > 1) {
+        const q = guardQualifier(stripped, d.blockOpen) ?? `site${n}`;
+        d.door.id = `${rel}:${d.label}#${q}`;
+      }
+      doors.push(d.door);
     });
   }
   return { doors, internal };
@@ -676,18 +1053,60 @@ function branchesOn(region: string, discriminant: string): boolean {
   ).test(region);
 }
 
+/**
+ * `writeReceipt: graph.writeReceipt` / `{ …, writeReceipt, … }` — the field's
+ * VALUE leaves the door whole, so everything inside it leaves too.
+ *
+ * This is what makes auditing nested keys sound rather than noisy. Judged by
+ * NAME alone at depth 2, `/capture/structure` reads as dropping `ref`, `title`,
+ * `created`, `linked`, `entityIds` and seven more — every one of which is on the
+ * wire, inside the `writeReceipt` / `pendingDuplicateCandidates` values it
+ * forwards verbatim. Eleven invented drops on one door is how a guard dies of
+ * noise. A nested key is therefore only auditable on a door that REBUILDS its
+ * parent (a zod `verbs: z.array(VerbSchema)` re-declaration, or the diagnose
+ * roster flattening `counts`/`rates` into a summary row) — which is exactly
+ * where a nested field CAN be forgotten.
+ */
+function forwardsFieldWhole(region: string, field: string): boolean {
+  const f = field.replace(/\$/g, "\\$");
+  return new RegExp(
+    // `x: obj.x`, `x: await obj?.deep.x`
+    `\\b${f}\\s*:\\s*(?:await\\s+)?[A-Za-z_$][\\w$]*(?:\\s*\\??\\.\\s*[\\w$]+)*\\s*\\??\\.\\s*${f}\\b` +
+      // shorthand `{ …, x, … }` / `{ …, x }`
+      `|\\{[^{}]{0,400}\\b${f}\\s*[,}]`
+  ).test(region);
+}
+
+/** Whether the WHOLE service result is forwarded past this door untouched. */
+function resultPassesThrough(
+  door: Door,
+  spec: ServiceSpec,
+  shape: ResultShape,
+  fieldId: string
+): boolean {
+  if (!forwardsWholeResult(door.region, spec.fn)) return false;
+  if (doorDeclaresResponseSchema(door)) return false;
+  const owners = shape.owners.get(fieldId) ?? [];
+  // Covered by passthrough only if SOME owning member is not branched away.
+  return owners.some((d) => d === null || !branchesOn(door.region, d));
+}
+
 function isCovered(
   door: Door,
   spec: ServiceSpec,
   shape: ResultShape,
-  field: string
+  fieldId: string
 ): boolean {
-  if (isExplicit(door.region, field)) return true;
-  if (!forwardsWholeResult(door.region, spec.fn)) return false;
-  if (doorDeclaresResponseSchema(door)) return false;
-  const owners = shape.owners.get(field) ?? [];
-  // Covered by passthrough only if SOME owning member is not branched away.
-  return owners.some((d) => d === null || !branchesOn(door.region, d));
+  const ref = shape.refs.get(fieldId);
+  const name = ref?.name ?? fieldId;
+  if (isExplicit(door.region, name)) return true;
+  if (ref?.parent) {
+    return (
+      resultPassesThrough(door, spec, shape, ref.parent) ||
+      forwardsFieldWhole(door.region, ref.parent)
+    );
+  }
+  return resultPassesThrough(door, spec, shape, fieldId);
 }
 
 // ── Acknowledged gaps ────────────────────────────────────────────────────────
@@ -727,6 +1146,78 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     door: "routers/mcp/handlers/read.ts:synap_ask",
     reason:
       "DELIBERATE — same tier boundary as `intent`. The CRAG verdict rates the RETRIEVAL, and MCP callers never see the retrieval: they get the synthesized answer plus `degraded` (the retrieval-health signal that IS forwarded, since it changes what the agent should tell the user).",
+  },
+  {
+    service: "agent-scorecard",
+    field: "mode",
+    door: "services/diagnose/index.ts:diagnoseClass",
+    reason:
+      'STRUCTURAL — `mode` is the discriminant of a SINGLE-agent card (`mode: "agent"`), and a roster row is not one: it is an element of `detail.agents` inside a report that already carries `mode: "class", type: "agent"` two lines below in this same block. Copying the member discriminant onto each row would give one payload two conflicting modes.',
+  },
+  {
+    service: "agent-scorecard",
+    field: "sampled",
+    door: "services/diagnose/index.ts:diagnoseClass",
+    reason:
+      "SAME VALUE, ALREADY ON THE ROW. `computeAgentScorecard` returns `sampled: total` and `counts: { total, … }` from the one local `total` — the row forwards it as `total`. Checkable in `agent-scorecard.ts` at the single return literal that builds both; if they ever diverge, that literal is the one place it can happen.",
+  },
+  {
+    service: "agent-scorecard",
+    field: "counts.approved",
+    door: "services/diagnose/index.ts:diagnoseClass",
+    reason:
+      "RECOVERABLE EXACTLY FROM THIS ROW, no other surface involved: `approved = round(total * approveRate)`, and `total` + `approveRate` are both forwarded here. `rate(n) = Number((n/total).toFixed(4))` over the SAME denominator, and `SCORECARD_SCAN_LIMIT` bounds `total` below `10^decimals`, so the rounding resolves every integer. That bound is PINNED by the arithmetic-bound test, which reads both numbers out of `agent-scorecard.ts` — raise the scan limit past 10 000 and this entry fails instead of quietly becoming false. The row is a rate-ranked summary by design; the absolute bucket adds nothing it does not already determine.",
+  },
+  {
+    service: "agent-scorecard",
+    field: "counts.rejected",
+    door: "services/diagnose/index.ts:diagnoseClass",
+    reason:
+      "RECOVERABLE EXACTLY FROM THIS ROW: `rejected = round(total * rejectRate)`, both forwarded here, same `rate()` denominator and the same PINNED `SCORECARD_SCAN_LIMIT < 10^decimals` bound that makes the rounding lossless (see the arithmetic-bound test). Note this is NOT true of `counts.pending` (there is no pendingRate) — which is why that one is forwarded rather than acknowledged.",
+  },
+  {
+    service: "agent-scorecard",
+    field: "counts.revised",
+    door: "services/diagnose/index.ts:diagnoseClass",
+    reason:
+      "RECOVERABLE EXACTLY FROM THIS ROW: `revised = round(total * reviseRate)`, both forwarded here (reviseRate was added to the row in the same change that added this entry), same denominator and the same PINNED `SCORECARD_SCAN_LIMIT < 10^decimals` bound (see the arithmetic-bound test).",
+  },
+  // ── entity-get on `synap_detach_facet` ─────────────────────────────────────
+  // These four share ONE reason, and it is a property of the CALL SITE, not of
+  // any field: this block does not publish the entity read at all. It is a
+  // lookup — entityId + facetSlug → facetId — feeding the governed
+  // `entities.detachFacet` call below it. `classify` forces "mcp" from the file
+  // path, which is right for the file and wrong for this block; rather than
+  // teach the classifier to guess which blocks publish (it cannot), the four
+  // are named here so a real drop on the door that DOES publish
+  // (`read.ts:synap_get_entity`) still reads red.
+  {
+    service: "entity-get",
+    field: "entity",
+    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    reason:
+      "NOT A PUBLISHING DOOR — this block never emits the entity read. It calls `entityCaller.get` only to resolve entityId + facetSlug → facetId, then hands that id to the governed `entities.detachFacet` door. CHECKABLE in the block itself: every `ok(...)` inside it carries either `{ error }`, `{ error, candidates }` (facetId + workspaceId pairs), or the detachFacet outcome — no field of the entity read is on any of them.",
+  },
+  {
+    service: "entity-get",
+    field: "effectiveProperties",
+    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    reason:
+      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above: a facetSlug→facetId lookup, whose only emitted payloads are `{ error }` / `{ error, candidates }` / the detachFacet outcome. The property SCHEMA in particular has no bearing on detaching a role; nothing here reads it.",
+  },
+  {
+    service: "entity-get",
+    field: "effectivePropertiesByWorkspace",
+    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    reason:
+      'NOT A PUBLISHING DOOR — same block, same reason. Note this is a DIFFERENT fact from the lean projection on `read.ts:synap_get_entity`, which DOES reach this field (it reads it to build `propertyOverlays`, and returns it whole on `detail: "full"`) and is therefore covered there rather than acknowledged.',
+  },
+  {
+    service: "entity-get",
+    field: "externalLinks",
+    door: "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    reason:
+      "NOT A PUBLISHING DOOR — same block, same reason as `entity` above. The lookup destructures `facets` and reads `f.profile.slug` / `f.facet.id`; import provenance is not part of resolving which facet to detach and is never emitted here.",
   },
 ];
 
@@ -788,6 +1279,58 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
     ).toMatch(/reviewUrl/);
   });
 
+  /**
+   * SELF-GUARD for type-name matching.
+   *
+   * `indexOf("export interface CapabilityCard")` lands on
+   * `CapabilityCardConnection`, so the card spec silently audited the CONNECTION
+   * shape — six fields where eleven were expected, every non-vacuity assertion
+   * green because a plausible shape came back. An extractor that reads the wrong
+   * type is worse than one that reads none: it produces confident nonsense.
+   */
+  it("type extraction is WORD-BOUNDED (a prefix must not stand in for the type)", () => {
+    const src =
+      "export interface Card {\n  only: string;\n}\n" +
+      "export interface CardVerb {\n  a: string;\n  b: string;\n}\n";
+    expect(
+      keysUpToDepth(extractTypeBody(src, "Card"), 1).map((f) => f.id)
+    ).toEqual(["only"]);
+    expect(
+      keysUpToDepth(extractTypeBody(src, "CardVerb"), 1).map((f) => f.id)
+    ).toEqual(["a", "b"]);
+  });
+
+  /**
+   * SELF-GUARD for the nested-key soundness rule.
+   *
+   * Auditing sub-keys by NAME alone invents drops wherever a door forwards the
+   * PARENT's value whole — measured, that is 11 phantom gaps on
+   * `/capture/structure` alone, which is enough noise to kill a guard. The
+   * parent rule is what makes `fieldDepth > 1` usable, so its two shapes are
+   * asserted directly.
+   */
+  it("a forwarded parent VALUE covers its nested keys", () => {
+    expect(
+      forwardsFieldWhole(
+        "return { writeReceipt: graph.writeReceipt };",
+        "writeReceipt"
+      ),
+      "an explicit whole-value forward must count"
+    ).toBe(true);
+    expect(
+      forwardsFieldWhole(
+        "return { ...rest, writeReceipt, applied };",
+        "writeReceipt"
+      ),
+      "shorthand is the same forward"
+    ).toBe(true);
+    expect(
+      forwardsFieldWhole("verbs: z.array(VerbSchema),", "verbs"),
+      "a REBUILT parent must NOT vouch for its children — that is the only " +
+        "case where a nested field can actually be forgotten"
+    ).toBe(false);
+  });
+
   it("the declared-schema disqualifier actually fires on a path-labelled Hub door", () => {
     const door = AUDITS.flatMap((a) => a.discovery.doors).find((d) =>
       d.id.endsWith("rest/capabilities-execute.ts:/capabilities/execute")
@@ -804,6 +1347,39 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
     ).toBe(true);
   });
 
+  /**
+   * DERIVED completeness for composed shapes. A spec-per-sub-shape list that
+   * nobody forces to track the type is a hand-maintained projection — the exact
+   * defect one level up. This walks the type graph instead.
+   */
+  it.each(SERVICES.filter((s) => s.auditSubShapes))(
+    "$key: every named sub-shape of $resultType has a spec of its own",
+    (spec) => {
+      const source = stripComments(
+        readFileSync(spec.typeFile ?? spec.file, "utf8")
+      );
+      const audited = new Set(SERVICES.map((s) => s.resultType));
+      const missing = reachableShapes(source, spec.resultType).filter(
+        (name) =>
+          !audited.has(name) &&
+          // A field-less shape (a string-union alias like
+          // `CapabilityCardStatus`) has nothing for a door to drop.
+          extractMembers(
+            extractTypeBody(source, name),
+            source.includes(`export type ${name}`),
+            1
+          ).some((m) => m.fields.length > 0)
+      );
+      expect(
+        missing,
+        `${spec.resultType} composes these named shapes, declared in the same ` +
+          `file, and no SERVICES entry audits their fields — a door can drop ` +
+          `every field of one and this tripwire stays green:\n  ` +
+          missing.join("\n  ")
+      ).toEqual([]);
+    }
+  );
+
   it("the routers scan root exists", () => {
     expect(
       existsSync(ROUTERS_DIR),
@@ -817,6 +1393,17 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
       existsSync(spec.file),
       `${spec.file} does not exist — the service moved. Update SERVICES.`
     ).toBe(true);
+    expect(
+      existsSync(spec.typeFile ?? spec.file),
+      `${spec.typeFile} does not exist — the result type moved. Update SERVICES.`
+    ).toBe(true);
+    for (const root of spec.republisherRoots ?? []) {
+      expect(
+        existsSync(root),
+        `Republisher scan root ${root} does not exist — it moved. Update ` +
+          `SERVICES; do NOT let this tripwire scan an empty set and pass.`
+      ).toBe(true);
+    }
   });
 
   // RULE 3 — non-vacuity, three ways. A broken extractor must read RED.
@@ -898,6 +1485,53 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
       "ackState",
       "routers/mcp/handlers/capability.ts:synap_run_capability",
     ],
+    // The drop this pair was added for: `intent` is declared in the Hub REST
+    // catalog's own VerbSchema. If the engine stops seeing that schema, every
+    // verb field would read as "dropped" instead.
+    [
+      "capability-catalog-verb",
+      "intent",
+      "routers/hub-protocol/rest/capabilities-catalog.ts:/capabilities/catalog",
+    ],
+    // Passthrough on the tRPC twin (`return buildCapabilityCatalog({…})`, no
+    // response schema) — the door that was never the problem.
+    ["capability-catalog", "anatomy", "routers/capabilities.ts:catalog"],
+    // NESTED, explicit on a REPUBLISHER: the roster row names
+    // `partiallyApproved` directly. Guards both the depth-2 extraction and the
+    // republisher-root discovery at once.
+    [
+      "agent-scorecard",
+      "counts.partiallyApproved",
+      "services/diagnose/index.ts:diagnoseClass",
+    ],
+    // NESTED, covered because the WHOLE result is forwarded (`return
+    // agentScorecard({…})`). If the parent rule broke, this reads red rather
+    // than every sub-key of a passthrough door reporting a phantom drop.
+    [
+      "agent-scorecard",
+      "counts.total",
+      'services/diagnose/index.ts:diagnoseRouter#resolved.kind==="agent"',
+    ],
+    // Both `entity-get` doors, pinned. This spec is reached through a
+    // `callPattern` on a LOCAL VARIABLE name (`entityCaller.get({… includeProfile`)
+    // rather than an imported symbol, so a rename of that variable would
+    // otherwise drop a whole door from the matrix in silence — the documented
+    // way a source-scanning tripwire dies. These two make that read RED.
+    ["entity-get", "facets", "routers/mcp/handlers/read.ts:synap_get_entity"],
+    [
+      "entity-get",
+      "facets",
+      "routers/mcp/handlers/entity.ts:synap_detach_facet",
+    ],
+    // The lean projection's SIGNPOST source: `read.ts:synap_get_entity` reads
+    // `effectivePropertiesByWorkspace` to build `propertyOverlays` and returns
+    // it whole on `detail: "full"`. If this ever reads red, the lean shape has
+    // stopped consulting the field it claims to signpost.
+    [
+      "entity-get",
+      "effectivePropertiesByWorkspace",
+      "routers/mcp/handlers/read.ts:synap_get_entity",
+    ],
   ];
   it.each(KNOWN_POSITIVES)(
     "SELF-GUARD: %s.%s is detected as covered on %s",
@@ -921,6 +1555,54 @@ describe("tripwire (T4): every service field is projected by every door, or ackn
       ).toBe(true);
     }
   );
+
+  /**
+   * PIN for the arithmetic in the `agent-scorecard.counts.*` acknowledgements.
+   *
+   * Those three entries are the only ones in this file whose reason rests on a
+   * NUMERIC BOUND rather than on structure: `approved`/`rejected`/`revised` are
+   * dropped from the diagnose roster because each is exactly
+   * `round(total × <its rate>)` from values the row DOES carry. That recovery is
+   * lossless only while the rounding resolution beats one unit:
+   * `rate()` keeps `toFixed(D)` digits, so the worst-case error in
+   * `total × rate` is `total × 0.5 × 10^-D`, and the recovery is exact while
+   * that stays below 0.5 — i.e. while `SCORECARD_SCAN_LIMIT < 10^D`.
+   *
+   * Today that is 500 < 10^4, with three orders of magnitude of headroom. Raise
+   * the scan limit past 10 000 (or drop a decimal from `rate`) and three
+   * acknowledged gaps silently stop being true — the exact "a claim nobody
+   * checks" shape this file's header warns about. Both numbers are read out of
+   * the service's own source, so neither can be changed without answering here.
+   */
+  it("the counts.* acknowledgements' arithmetic bound still holds", () => {
+    const file = join(API_SRC, "services/diagnose/agent-scorecard.ts");
+    const src = stripComments(readFileSync(file, "utf8"));
+    const limit = /SCORECARD_SCAN_LIMIT\s*=\s*(\d+)/.exec(src);
+    const digits = /\(\s*n\s*\/\s*total\s*\)\.toFixed\(\s*(\d+)\s*\)/.exec(src);
+    expect(
+      limit,
+      `SCORECARD_SCAN_LIMIT was not found in ${file} — it was renamed or moved, ` +
+        `so the bound the counts.* acknowledgements rest on is no longer being ` +
+        `checked. Re-point this test; do NOT delete it.`
+    ).toBeTruthy();
+    expect(
+      digits,
+      `The \`rate()\` rounding was not found in ${file} — same problem: the ` +
+        `acknowledgements claim a LOSSLESS recovery and nothing would verify it.`
+    ).toBeTruthy();
+    const scanLimit = Number(limit![1]);
+    const decimals = Number(digits![1]);
+    expect(
+      scanLimit,
+      `SCORECARD_SCAN_LIMIT is ${scanLimit} and rate() keeps ${decimals} ` +
+        `decimals, so round(total x rate) can be off by one and ` +
+        `counts.approved / counts.rejected / counts.revised are NO LONGER ` +
+        `recoverable from the roster row. Either forward those three counts on ` +
+        `the roster (services/diagnose/index.ts, case "agent") or rewrite their ` +
+        `ACKNOWLEDGED_GAPS reasons — they are currently asserting something ` +
+        `that has stopped being true.`
+    ).toBeLessThan(10 ** decimals);
+  });
 
   it("every acknowledged gap carries a real reason", () => {
     const thin = ACKNOWLEDGED_GAPS.filter(

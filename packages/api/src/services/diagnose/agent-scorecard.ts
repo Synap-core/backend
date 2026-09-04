@@ -17,7 +17,6 @@ import {
   db,
   and,
   eq,
-  gte,
   desc,
   drizzleSql,
   isNotNull,
@@ -35,7 +34,7 @@ import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
   AGENT_PROPOSALS_PER_USER_PER_DAY,
   agentDailyProposalCap,
-  startOfUtcDay,
+  countTodayAgentProposals,
 } from "../../utils/permission-check.js";
 import type { AgentScorecard } from "./types.js";
 
@@ -231,18 +230,16 @@ export async function agentScorecard(params: {
   // roster) and scales with this agent's own trust (base 10, x3 for a proven
   // agent) — see `agentDailyProposalCap()`, the same helper `createProposal`
   // enforces against.
-  const [todayRow, cap] = await Promise.all([
-    db
-      .select({ count: drizzleSql<number>`count(*)::int` })
-      .from(proposals)
-      .where(
-        and(
-          eq(proposals.createdBy, userId),
-          eq(proposals.agentUserId, agentId),
-          gte(proposals.createdAt, startOfUtcDay())
-        )
-      )
-      .then((rows) => rows[0]),
+  //
+  // Both halves of the posture are now the ENFORCER's own functions, called —
+  // not re-derived. This query used to be a hand-copied
+  // `createdBy = <human> AND agentUserId = <agent>`, the same overloaded-column
+  // pair that made the cap inert (see `countTodayAgentProposals`); a reported
+  // posture computed by a second copy of the predicate can drift from what the
+  // membrane actually enforces, and did. Keying on `agentUserId` alone also
+  // matches the `rows` query above, so this file's two proposal reads agree.
+  const [todayCount, cap] = await Promise.all([
+    countTodayAgentProposals(agentId),
     agentDailyProposalCap(agentId),
   ]);
 
@@ -250,7 +247,7 @@ export async function agentScorecard(params: {
     agentId,
     agentName: agent.name ?? agent.email ?? null,
     agentType: agent.agentType ?? null,
-    todayCount: todayRow?.count ?? 0,
+    todayCount,
     cap,
   });
 }

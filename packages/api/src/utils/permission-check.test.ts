@@ -26,6 +26,7 @@ const {
   mockDbInsert,
   mockResolveProfile,
   mockFocusSessionFindFirst,
+  mockEmitAiDecision,
 } = vi.hoisted(() => ({
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
   mockDbSelect: vi.fn(),
@@ -39,6 +40,8 @@ const {
   // (undefined) → no forced proposal, so every existing test is unaffected. The
   // session-force-propose test overrides it with a stamped session.
   mockFocusSessionFindFirst: vi.fn().mockResolvedValue(undefined),
+  // The daily-cap REFUSAL's human-facing record (see the cap tests below).
+  mockEmitAiDecision: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@synap/database", async () => {
@@ -105,6 +108,13 @@ vi.mock("@synap/database", async () => {
     },
   };
 });
+
+// The refusal record's emitter. Mocked here for the SAME reason it is imported
+// dynamically in the source: its real module pulls `lib/ai-events` →
+// `@synap/database`, which this file replaces wholesale.
+vi.mock("./ai-feedback-events.js", () => ({
+  emitAiDecision: mockEmitAiDecision,
+}));
 
 vi.mock("@synap/jobs", () => ({
   broadcastNotification: vi.fn().mockResolvedValue(undefined),
@@ -987,6 +997,7 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
 describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () => {
   beforeEach(() => {
     mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockEmitAiDecision.mockClear();
   });
 
   /**
@@ -1111,6 +1122,24 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     expect((result as { reason: string }).reason).toContain(
       "Daily agent proposal limit"
     );
+    // The refusal must leave a HUMAN-facing record, not just a logger.warn:
+    // past the cap the write neither executes nor proposes, so this event is
+    // the ONLY row the runs feed can render (listAgentWriteRuns synthesises a
+    // `blocked_by_policy` run from it). Without it a capped agent and a dead
+    // agent are byte-identical from the UI.
+    expect(mockEmitAiDecision).toHaveBeenCalledTimes(1);
+    const emitted = mockEmitAiDecision.mock.calls[0][0] as {
+      action: string;
+      data: Record<string, unknown>;
+    };
+    expect(emitted.action).toBe("agent_write");
+    expect(emitted.data).toMatchObject({
+      kind: "agent_write",
+      outcome: "refused",
+      refusalReason: "capped",
+      subjectType: "entity",
+      writeAction: "create",
+    });
   });
 
   it("still proposes when under the cap (9 filed → 10th is allowed to propose)", async () => {

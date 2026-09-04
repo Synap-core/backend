@@ -122,6 +122,7 @@ export {
   parseCron,
   triggerToSentence,
   flowToSentenceAction,
+  flowToSentenceActions,
   flowToConditions,
 } from "./sentence.js";
 export type {

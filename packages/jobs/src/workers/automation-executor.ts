@@ -49,12 +49,12 @@ import {
   focusSessions,
   drizzleSql,
   openRunSession,
+  normalizeCommandNodeData,
 } from "@synap/database";
 import type {
   FlowDefinition,
   AutomationEdge,
   NodeErrorHandling,
-  CommandNodeDef,
   OutputNodeDef,
   GuardNodeDef,
   RunPathTaken,
@@ -817,15 +817,17 @@ async function executeAutomationFlow(params: {
 
           switch (node.type) {
             case "command": {
-              const data = node.data as {
-                commandId?: string;
-                commandTitle?: string;
-                inputMapping: Record<string, string>;
-                promptOverride?: string;
-              };
+              // Normalize the LEGACY authored field names (`prompt` / `input`)
+              // into the canonical contract BEFORE resolving, so the
+              // `resolvedInputs` persisted on the step-run row is the same
+              // mapping `executeCommandStep` actually dispatches — otherwise
+              // a legacy node records `{}` here while really sending `{input}`.
+              const data = normalizeCommandNodeData(
+                node.data as Parameters<typeof normalizeCommandNodeData>[0]
+              );
 
               const resolvedInputs = resolveInputMapping(
-                data.inputMapping ?? {},
+                data.inputMapping,
                 context
               );
 
@@ -1105,7 +1107,9 @@ async function executeAutomationFlow(params: {
                     switch (childNode.type) {
                       case "command":
                         childOutput = await executeCommandStep(
-                          childNode.data as CommandNodeDef["data"],
+                          childNode.data as Parameters<
+                            typeof executeCommandStep
+                          >[0],
                           context,
                           workspaceId,
                           ownerId,
@@ -1172,6 +1176,7 @@ async function executeAutomationFlow(params: {
                             playbookId?: string;
                             playbookName?: string;
                             paramsMapping?: Record<string, string>;
+                            agentType?: string;
                           },
                           context,
                           workspaceId,
@@ -1669,6 +1674,8 @@ async function executeAutomationFlow(params: {
                 playbookId?: string;
                 playbookName?: string;
                 paramsMapping?: Record<string, string>;
+                /** Agent selector (`agents.slug`); absent ⇒ default orchestrator. */
+                agentType?: string;
               };
 
               if (!data.playbookId && !data.playbookName)
@@ -1681,6 +1688,10 @@ async function executeAutomationFlow(params: {
                   playbookId: data.playbookId,
                   playbookName: data.playbookName,
                   paramsMapping: data.paramsMapping,
+                  // Forwarded EXPLICITLY: this call site rebuilds the object
+                  // field-by-field, so an unlisted node field is dropped here even
+                  // though it survives the loop-child path's wholesale cast.
+                  agentType: data.agentType,
                 },
                 context,
                 workspaceId,

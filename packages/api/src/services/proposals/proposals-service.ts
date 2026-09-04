@@ -15,6 +15,7 @@ import {
   ProposalStatus,
   eq,
   and,
+  or,
   desc,
   drizzleSql,
 } from "@synap/database";
@@ -22,6 +23,7 @@ import type { ProposalRevision } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { isNestedEnvelope } from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
+import { ownAgentUserFilter } from "../agent-identity-service.js";
 
 /**
  * List proposals CREATED BY a user (optionally narrowed to a workspace/status),
@@ -92,7 +94,45 @@ export async function listCreatedProposals(params: {
       .limit(params.limit ?? 20);
   }
 
-  const conditions = [eq(proposals.createdBy, params.createdBy)];
+  // AUTHOR FLOOR = me OR an agent I created.
+  //
+  // `createdBy` alone is the wrong column for agent lineage: it is overloaded
+  // ("userId or agentUserId that authored this proposal" — schema/proposals.ts),
+  // so a proposal filed by my own agent-user carries the AGENT's id there and
+  // fell out of my own queue. Measured live: 4 of 6 pending rows returned.
+  // Keying a lineage branch on `agentUserId` (FK-backed, always the agent)
+  // catches the rows measured live. The THIRD branch covers the other half of
+  // the overload: a write path that puts an agent id in `createdBy` while
+  // leaving `agentUserId` NULL. No row on this pod has that shape today, and no
+  // insert path produces it: every agent-authored write sets BOTH columns —
+  // `permission-check.ts` (:1657/:1659 pending, :1226/:1227 auto-approve
+  // receipt), `jobs/utils/automation-governance.ts` (:556/:557), and
+  // `event-backed-proposal.ts` (:164/:179, whose `createdBy` can only fall back
+  // to the agent id when `agentUserId` was passed). That invariant is
+  // hand-maintained per call site with no tripwire, and has already been broken
+  // once in the sibling direction (see the post-mortem comment at
+  // `routers/capture.ts:2734`), so this branch is kept as the cheap structural
+  // guard: both columns are indexed, so the extra semi-join is negligible.
+  //
+  // This deliberately does NOT reuse `utils/proposal-visibility.ts`'s rule: that
+  // one's second branch is a WORKSPACE-MEMBERSHIP floor, which would admit a
+  // TEAMMATE's agent-authored proposals in a shared workspace — the boundary
+  // `utils/pending-capture-dedup.ts` defends. Only the lineage half transfers;
+  // every branch here resolves through `ownAgentUserFilter`, floored on
+  // `users.createdByUserId = me AND userType = 'agent'`.
+  //
+  // NOT a claim that the workspace floor is unreachable by an agent: it already
+  // is. `synap_diagnose type:"proposal"` (services/diagnose/global.ts) counts
+  // pending under `userVisibleWhere(proposals.workspaceId, …)` and returns that
+  // number on the same MCP door. This queue simply is not that lens, and must
+  // never acquire a workspace term to make the two numbers match — on a
+  // single-user pod they coincide; add one teammate and they must not.
+  const authorFloor = or(
+    eq(proposals.createdBy, params.createdBy),
+    ownAgentUserFilter(proposals.agentUserId, params.createdBy),
+    ownAgentUserFilter(proposals.createdBy, params.createdBy)
+  )!;
+  const conditions = [authorFloor];
   if (params.workspaceId)
     conditions.push(eq(proposals.workspaceId, params.workspaceId));
   if (statusArg !== "all") conditions.push(eq(proposals.status, status));

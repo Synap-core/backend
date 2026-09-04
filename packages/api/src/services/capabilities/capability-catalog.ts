@@ -28,9 +28,13 @@ import {
   links,
   secrets,
 } from "@synap/database/schema";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import type { AbstractVerb, CapabilityDefinition } from "@synap/playbooks";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  capabilityNextAction,
+  type CapabilityNextAction,
+} from "./capability-enable-link.js";
 import { resolveNangoConnector } from "../../connectors/index.js";
 import {
   fetchCPCapabilityTemplates,
@@ -113,6 +117,19 @@ export interface CapabilityCardVerb {
    * its template definition) declares no category.
    */
   category?: string;
+  /**
+   * ROUTING intent (`ABSTRACT_VERBS`) — what this verb MEANS independent of its
+   * vendor, so a surface can ask "what can send a message?" without knowing
+   * `gmail_send`. Read off the OWNING TOOL's `capabilities[]` verb-catalog entry
+   * (installed cards) or the template's own skill def (available cards) — the
+   * two places the applier writes it. `skills` has no `intent` column, so a card
+   * verb can only carry it by that join.
+   *
+   * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
+   * declares no intent must stay out of every intent bucket (same rule as
+   * `foldVerbsByIntent`).
+   */
+  intent?: AbstractVerb;
 }
 
 /** Extract parameter NAMES from a skill `parameters` blob (JSON-schema or flat). */
@@ -262,10 +279,12 @@ export interface CapabilityCard {
    * disconnected post-hoc vault write. Empty when the template declares none.
    */
   installParams: CapabilityCardInstallParam[];
-  nextAction: {
-    kind: "add" | "connect" | "enable" | "run" | "none";
-    hint: string;
-  };
+  /**
+   * The ONE thing to do next, and WHERE. `url` is a deep link to this card
+   * (absent for an available-only template, which has no installed container);
+   * `opensIn` says which client can follow it — see `CapabilityNextAction`.
+   */
+  nextAction: CapabilityNextAction;
 }
 
 /** Map a template definition's declared params → the card's install-param specs. */
@@ -477,57 +496,14 @@ function computeInstalledStatus(
   return "partial";
 }
 
-function nextActionFor(
-  status: CapabilityCardStatus,
-  name: string,
-  connection?: CapabilityCardConnection
-): CapabilityCard["nextAction"] {
-  switch (status) {
-    case "available":
-      return { kind: "add", hint: `Add "${name}" to install its verbs.` };
-    case "needs_connection": {
-      const prov = connection?.provider;
-      // `expired` = previously connected, token now dead → RECONNECT, not connect.
-      if (connection?.state === "expired") {
-        return {
-          kind: "connect",
-          hint: prov
-            ? `Reconnect ${prov} — its access expired or was revoked.`
-            : `Reconnect the credential for "${name}" — it expired or was revoked.`,
-        };
-      }
-      return {
-        kind: "connect",
-        hint: prov
-          ? `Connect ${prov} (OAuth) to enable "${name}".`
-          : `Connect the credential for "${name}".`,
-      };
-    }
-    case "connected":
-      return {
-        kind: "enable",
-        hint: `Enable verbs for "${name}" — connection is ready.`,
-      };
-    case "draft":
-      return { kind: "enable", hint: `Enable verbs for "${name}".` };
-    case "partial":
-      return {
-        kind: "enable",
-        hint: `Enable the remaining verbs for "${name}".`,
-      };
-    case "ready":
-      return { kind: "run", hint: `Run a verb of "${name}".` };
-    case "unavailable": {
-      const prov = connection?.provider;
-      return {
-        kind: "none",
-        hint: prov
-          ? `"${name}" needs ${prov}, which this pod doesn't offer yet.`
-          : `"${name}" needs a provider this pod doesn't offer yet.`,
-      };
-    }
-  }
-}
+/**
+ * MOVED to `capability-enable-link.ts` — the ONE "what is blocking this
+ * capability" resolver, so the agent-facing doors (MCP discovery, the execute
+ * refusal) answer with the SAME hint text and now also carry the deep link to
+ * the card where the human performs it. Re-exported here because this module's
+ * `nextAction` contract is what the CLI / browser / Raycast read.
+ */
+export { capabilityNextAction } from "./capability-enable-link.js";
 
 // ── Connection-state snapshot (resilient) ─────────────────────────────────────
 
@@ -742,6 +718,9 @@ export async function buildCapabilityCatalog(
             id: tools.id,
             name: tools.name,
             credentialRef: tools.credentialRef,
+            // The verb catalog is where `intent` is persisted (`skills` has no
+            // such column) — without it the card verbs drop the routing axis.
+            capabilities: tools.capabilities,
           })
           .from(tools)
           .where(inArray(tools.id, memberToolIds))
@@ -801,6 +780,17 @@ export async function buildCapabilityCatalog(
       .map((l) => skillById.get(l.fromId))
       .filter((s): s is NonNullable<typeof s> => !!s);
 
+    // verbId (= backing skill NAME) → declared routing intent, off the member
+    // tools' verb catalogs. `ToolVerbCatalogEntry.id` IS the requiring skill's
+    // name, which is exactly the `verbId` a card verb carries, so the join is
+    // by that key and nothing else.
+    const intentByVerbId = new Map<string, AbstractVerb>();
+    for (const t of myTools) {
+      for (const entry of t.capabilities ?? []) {
+        if (entry?.intent) intentByVerbId.set(entry.id, entry.intent);
+      }
+    }
+
     const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
       const type = verbType(s.name, s.metadata);
       const enabled = s.approved === true;
@@ -827,6 +817,9 @@ export async function buildCapabilityCatalog(
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
         ...(category ? { category } : {}),
+        ...(intentByVerbId.has(s.name)
+          ? { intent: intentByVerbId.get(s.name)! }
+          : {}),
       };
     });
 
@@ -857,7 +850,12 @@ export async function buildCapabilityCatalog(
       installParams: matchedTemplate
         ? extractInstallParams(matchedTemplate.def)
         : [],
-      nextAction: nextActionFor(status, container.name, connection),
+      nextAction: capabilityNextAction(
+        status,
+        container.name,
+        connection,
+        container.id
+      ),
     });
   }
 
@@ -889,6 +887,10 @@ export async function buildCapabilityCatalog(
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
         ...(s.category ? { category: s.category } : {}),
+        // The template's own skill def carries `intent` (CapabilitySkillDef) —
+        // the same field the applier later projects onto the tool verb catalog,
+        // so an available card and its installed twin agree.
+        ...(s.intent ? { intent: s.intent } : {}),
       };
     });
 
@@ -912,7 +914,7 @@ export async function buildCapabilityCatalog(
       verbs,
       anatomy,
       installParams: extractInstallParams(def),
-      nextAction: nextActionFor("available", tpl.name, connection),
+      nextAction: capabilityNextAction("available", tpl.name, connection),
     });
   }
 

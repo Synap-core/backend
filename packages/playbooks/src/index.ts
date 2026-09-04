@@ -380,6 +380,19 @@ export interface RunContext {
   stages?: PlaybookStage[];
   /** The active stage key (mirrors focus_sessions.currentStage); null when stageless. */
   currentStage?: string | null;
+  /**
+   * AGENT SELECTOR — which agent should answer this run's kickoff, as the
+   * `agents.slug` (the same string the IS calls `agentType`; see chat-stream.ts,
+   * which resolves a channel's assigned agent to its slug for exactly this).
+   *
+   * OPTIONAL and purely additive: absent ⇒ the dispatcher's own default
+   * (`triggerAutoRespond` → "meta", the orchestrator), i.e. the pre-existing
+   * behaviour of every playbook that names no agent. Set ⇒ the executor MUST
+   * resolve it against the `agents` catalog and FAIL the run when it is unknown;
+   * a silent fall back to "meta" would tell the user a specialist ran when the
+   * orchestrator did.
+   */
+  agentType?: string | null;
 }
 
 export interface RunResult {

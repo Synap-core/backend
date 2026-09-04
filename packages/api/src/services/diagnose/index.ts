@@ -690,9 +690,29 @@ async function diagnoseClass(
             name: card.agentName,
             agentType: card.agentType,
             total: card.counts.total,
+            // Still OPEN, not yet resolved — the backlog half of the roster's
+            // job. Unlike the other buckets this one is not recoverable from a
+            // rate (there is no pendingRate), so dropping it made a queue
+            // problem invisible on the only surface that ranks agents.
+            pending: card.counts.pending,
             approveRate: card.rates.approveRate,
+            // A partially-applied proposal is EXCLUDED from `approveRate` (a
+            // gutted package is not an endorsement), so without these two the
+            // roster shows a high approve rate with no way to see that the
+            // reviewer threw work away — the same blindness the scorecard split
+            // exists to end, reproduced one layer up at the door.
+            partiallyApproved: card.counts.partiallyApproved,
+            partialApproveRate: card.rates.partialApproveRate,
             rejectRate: card.rates.rejectRate,
+            // A human had to REWRITE the proposal before it resolved — the same
+            // class of trust signal as `partialApproveRate` (work the reviewer
+            // had to redo), and excluded from `approveRate` for the same reason.
+            reviseRate: card.rates.reviseRate,
             duplicateRate: card.rates.duplicateRate,
+            // WHY the rejects happened, bucketed. `rejectRate` alone says an
+            // agent is failing but never says at what, which is the whole point
+            // of ranking a roster.
+            rejectionReasons: card.rejectionReasons,
             dailyCap: card.dailyCap.cap,
             atOrOverCap: card.dailyCap.atOrOverCap,
           };

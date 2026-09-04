@@ -853,6 +853,12 @@ async function gateMessagingSend(
     const proposalWorkspaceId = input.workspaceId ?? null;
     const proposal = await createPendingProposal({
       userId: input.userId,
+      // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
+      // `createdBy` this row falls through `?? input.agentUserId` and lands
+      // `createdBy = <agent>`, which drops it out of every human-floored
+      // consumer (the revert surface, prior-capture lookup). Stamp the human;
+      // `agentUserId` below carries the agent half.
+      createdBy: input.userId,
       workspaceId: proposalWorkspaceId,
       targetType: "messaging",
       targetId: input.threadId,
@@ -2073,6 +2079,12 @@ export async function triggerProviderAction(
       const proposalWorkspaceId = input.workspaceId ?? null;
       const proposal = await createPendingProposal({
         userId: input.userId,
+        // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
+        // `createdBy` this row falls through `?? input.agentUserId` and lands
+        // `createdBy = <agent>`, which drops it out of every human-floored
+        // consumer (the revert surface, prior-capture lookup). Stamp the human;
+        // `agentUserId` below carries the agent half.
+        createdBy: input.userId,
         workspaceId: proposalWorkspaceId,
         targetType: "capability",
         targetId: tool.id,

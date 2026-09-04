@@ -200,15 +200,117 @@ export interface TriggerNodeDef extends AutomationNodeBase {
   };
 }
 
+/**
+ * @deprecated for NEW authoring — use a `capability` node with
+ * `verbId: 'ai.generate'` (Synap Core's synchronous single-shot LLM verb).
+ *
+ * A `command` node is a DEAD END end-to-end: `executeCommandStep` calls
+ * `requestTaskExecute` with `taskId: data.commandId`, which the IS resolves as a
+ * BACKGROUND-TASK ROW (`tasks-route.ts`) — the shipped `'intelligence_execute'`
+ * has ZERO occurrences in the IS, so the lookup 404s and the step throws. Even
+ * with a row present, the prompt is only LOGGED: `executeTask(task, hubClient,
+ * body.context ?? {})` never receives `body.action`, and switches on
+ * `task.action` over four fixed analysis types. There is no generic
+ * "run this prompt" receiver behind this node type.
+ *
+ * KEPT, NOT DELETED — deliberately. Two live authoring doors still EMIT
+ * `command` nodes, so deleting the executor arm would turn a dead step into a
+ * crashing flow:
+ *   • `packages/api/src/routers/playbooks.ts` — the lazy starter graph handed to
+ *     every playbook that has no automation yet (a user can then save it).
+ *   • `packages/types/src/automations/sentence.ts` — the `run_command` sentence
+ *     action COMPILES to this node type, so it is reachable from the rule/
+ *     sentence authoring grammar.
+ * Pod-stored flows from either door are read, never rewritten, on the execution
+ * path. Retiring the node type therefore requires retiring those two doors
+ * first; this deprecation marks the direction without breaking stored rows.
+ */
 export interface CommandNodeDef extends AutomationNodeBase {
   type: "command";
   data: {
+    /** Presentational node label, as authored. Not read by the executor. */
+    label?: string;
     commandId?: string;
-    commandTitle: string;
+    commandTitle?: string;
     /** Maps step inputs to prior outputs. Uses template syntax: {{trigger.payload.entity.name}} */
     inputMapping: Record<string, string>;
     /** Optional prompt override that augments the command's template */
     promptOverride?: string;
+  };
+}
+
+/**
+ * The LEGACY authored shape of a `command` node, as written by `relay-app`'s
+ * shipped flow templates (`src/lib/relay-automations.ts`) before 2026-09-03:
+ * a free-text `prompt` and a bare `input` string instead of `promptOverride`
+ * and `inputMapping`.
+ *
+ * This is a FIELD FORK, not a rename: `input` is a `string`, `inputMapping` is
+ * a `Record<string,string>`. It did not crash — `resolveInputMapping(undefined)`
+ * returns `{}` and an absent `promptOverride` falls back to `commandTitle` — so
+ * a run would report SUCCESS while silently dropping BOTH the authored binding
+ * and the authored ~40-word prompt.
+ *
+ * SCOPE — this exists for STORED DOCUMENTS, not for a legacy BEHAVIOUR. The
+ * broken path was barely ever reached (upstream defects prune or never fire),
+ * so no production data was ever shaped by it and there is nothing to stay
+ * bug-compatible with. What DOES exist is `flow_definition` JSONB installed in
+ * live pods on 2026-07-17 still spelling these fields the old way, and nothing
+ * rewrites an installed flow — `executeAutomationFlow` only ever READS it. So
+ * this normalizes on read, and no migration is required. It is deliberately
+ * NOT defensive beyond that: no coercion, no shape-guessing, no tolerance for
+ * combinations that were never authorable.
+ */
+export interface LegacyCommandNodeData {
+  /** Free-text prompt. Canonical name: `promptOverride`. */
+  prompt?: string;
+  /** A single unkeyed input binding. Canonical name: `inputMapping`. */
+  input?: string;
+}
+
+/**
+ * Fold a `command` node's legacy authored fields into the canonical contract.
+ *
+ * THE ONE DOOR. Every reader of `CommandNodeDef["data"]` goes through this —
+ * the jobs executor (which dispatches the node) and the sentence round-trip in
+ * `@synap/types` (which re-renders it for the editor). A second, local
+ * `?? data.prompt` in either place would be the fork growing a third head.
+ *
+ * It normalizes ON READ rather than rewriting stored rows, because flows are
+ * already installed in pods' `automations.flow_definition` carrying the legacy
+ * names; fixing only the template source would leave every installed flow
+ * broken. No migration is therefore required.
+ *
+ * `prompt` → `promptOverride` is a plain rename (both are one template string).
+ *
+ * `input` → `inputMapping` needs a KEY, and the authored form has none by
+ * construction. It becomes the single entry `{ input: <template> }`:
+ *   • the key is the authored field's own name, so the mapping round-trips and
+ *     no new vocabulary is invented for a value the author never named;
+ *   • it is what the Intelligence Service receives, both as `context.input` on
+ *     the `/api/tasks/execute` payload and as the `Inputs:` prompt line.
+ * A single well-known key beats guessing a semantic one (`subjectId`,
+ * `entityId`, …) from the template's text — that guess would be a second
+ * hand-maintained mapping table, i.e. the same defect one level down.
+ *
+ * The canonical fields WIN when both are present, so a re-authored node is
+ * never overwritten by a stale legacy sibling.
+ */
+export function normalizeCommandNodeData(
+  data: CommandNodeDef["data"] & LegacyCommandNodeData
+): CommandNodeDef["data"] {
+  // Canonical key present → it wins outright. No empty-object special-casing:
+  // an `inputMapping: {}` alongside an `input` was never authorable, so
+  // treating `{}` as "absent" would be a guess about a case that cannot occur.
+  const inputMapping =
+    data.inputMapping ?? (data.input ? { input: data.input } : {});
+
+  return {
+    label: data.label,
+    commandId: data.commandId,
+    commandTitle: data.commandTitle,
+    inputMapping,
+    promptOverride: data.promptOverride ?? data.prompt,
   };
 }
 

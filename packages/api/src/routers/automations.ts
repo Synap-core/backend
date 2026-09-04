@@ -729,9 +729,50 @@ async function insertAutomationAfterGovernance(
 }
 
 /**
+ * THE materialization door for a caller outside this router — validate, then
+ * insert, with the draft floor DERIVED FROM THE PRINCIPAL rather than passed in.
+ *
+ * `agentUserId` present ⇒ `status: "draft"`, always. That is the P2-3 guarantee
+ * (see `insertAutomationAfterGovernance`) and it is decided HERE, inside the
+ * door, precisely so a new caller cannot forget to ask for it: a planted
+ * WHEN-trigger from a prompt-injected agent must not be able to fire unreviewed.
+ * A human's own create keeps its requested status.
+ *
+ * Every non-router caller (rule compilation, proposal approval) goes through
+ * this one function. Do NOT add a second `db.insert(automations)`.
+ */
+export async function materializeAutomationForPrincipal(input: {
+  database: AutomationDatabase;
+  definition: AutomationMaterializationInput;
+  /** The row's `createdBy` — the runtime principal. */
+  createdBy: string;
+  /** Present ⇒ an AGENT authored this ⇒ forced `draft`. */
+  agentUserId?: string | undefined;
+  /** Converge retries on a caller-owned id (proposal target, rule id). */
+  stableId?: string | undefined;
+}): Promise<string | null> {
+  await prepareAutomationForMaterialization(
+    input.database,
+    input.definition,
+    input.createdBy
+  );
+  return insertAutomationAfterGovernance(
+    input.database,
+    input.definition,
+    input.createdBy,
+    input.stableId,
+    Boolean(input.agentUserId)
+  );
+}
+
+/**
  * Canonical materialization path for an already-approved AI proposal.
  * It repeats current catalog validation, preserves the agent as runtime
  * principal, and converges retries on the proposal's stable target id.
+ *
+ * Thin wrapper over `materializeAutomationForPrincipal`: the agent IS the
+ * principal here, so the door's own rule forces `draft` — this path does not
+ * pass a flag for it.
  */
 export async function materializeApprovedAutomation(input: {
   database: AutomationDatabase;
@@ -739,20 +780,13 @@ export async function materializeApprovedAutomation(input: {
   agentUserId: string;
   stableId: string;
 }): Promise<string | null> {
-  await prepareAutomationForMaterialization(
-    input.database,
-    input.definition,
-    input.agentUserId
-  );
-  // forceDraft: true — this materializer is EXCLUSIVELY the agent-authored
-  // proposal-approval path (see P2-3 note on insertAutomationAfterGovernance).
-  return insertAutomationAfterGovernance(
-    input.database,
-    input.definition,
-    input.agentUserId,
-    input.stableId,
-    true
-  );
+  return materializeAutomationForPrincipal({
+    database: input.database,
+    definition: input.definition,
+    createdBy: input.agentUserId,
+    agentUserId: input.agentUserId,
+    stableId: input.stableId,
+  });
 }
 
 // ============================================================================

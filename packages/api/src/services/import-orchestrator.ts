@@ -47,6 +47,7 @@ import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import { materializeCompositeGraph } from "../utils/materialize-composite.js";
+import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
 import { relationsRouter } from "../routers/relations.js";
@@ -1041,6 +1042,16 @@ export class ImportOrchestrator {
       (err, type) =>
         logger.warn({ err, type }, "import.apply: relation create failed"),
       {
+        // Rule Loop callers — the SAME three canonical doors proposal approval
+        // wires. Without them a config op in an imported graph would be
+        // silently dropped on this direct-apply path while the identical graph
+        // materialized it on the approval path.
+        ...buildRuleLoopCallers({
+          database: db,
+          userId,
+          workspaceId: workspaceId ?? null,
+          auditSource: "rule_loop_import_apply",
+        }),
         // Per-op targetWorkspaceId only (parity with capture auto-apply +
         // composite approve). Do NOT blanket workspaceScoped.
         // U1: always key materialize so retries link instead of duplicating.
@@ -1523,6 +1534,14 @@ export class ImportOrchestrator {
             "import.applyLarge: relation create failed"
           ),
         {
+          // Rule Loop callers — same rule as apply() above; a chunk carrying a
+          // config op must materialize it, not drop it.
+          ...buildRuleLoopCallers({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            auditSource: "rule_loop_import_apply",
+          }),
           // Per-op pins only — never blanket workspaceScoped (folder prison).
           seedRefToRealId: refToRealId,
           idempotency,

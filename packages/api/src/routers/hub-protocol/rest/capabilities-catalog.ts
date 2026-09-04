@@ -20,6 +20,7 @@
 
 import { z } from "@hono/zod-openapi";
 
+import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { buildCapabilityCatalog } from "../../../services/capabilities/capability-catalog.js";
 import { buildAutomationCatalog } from "../../../services/capabilities/automation-catalog.js";
 
@@ -40,15 +41,57 @@ const ConnectionSchema = z.object({
   provider: z.string().optional(),
   state: z.enum(["connected", "missing", "expired", "unavailable"]),
   account: z.string().optional(),
+  // Pod-internal credential (a `vault://` secret the operator holds) vs a
+  // third-party OAuth account — the distinction a surface needs to label
+  // "internal key" rather than "connected account".
+  internal: z.boolean().optional(),
+});
+
+const VerbParamSchema = z.object({
+  name: z.string(),
+  type: z.string().optional(),
+  required: z.boolean().optional(),
+  description: z.string().optional(),
 });
 
 const VerbSchema = z.object({
   verbId: z.string(),
+  // Backing skill UUID — null for a verb of an available (uninstalled)
+  // template. A client that wants to act on the SKILL (enable it, open it)
+  // cannot resolve it from `verbId` (a name) alone.
+  skillId: z.string().nullable(),
   label: z.string(),
-  type: z.enum(["read", "write"]),
+  description: z.string().nullable().optional(),
+  // `action` is a THIRD class the builder emits (a mutating dispatch such as
+  // reply/send, as opposed to a create/update). Declaring only read|write here
+  // made every action verb a schema violation on the wire.
+  type: z.enum(["read", "write", "action"]),
   enabled: z.boolean(),
   governance: z.enum(["auto", "propose"]),
   runnable: z.boolean(),
+  // Parameter NAMES, then the typed schema — what `cap run <verb> --<param>`
+  // and the run form are built from.
+  params: z.array(z.string()),
+  paramsSchema: z.array(VerbParamSchema),
+  // Functional tag off the backing skill (e.g. "enrichment") — lets a surface
+  // find "the enrichment verbs" by CONFIGURATION instead of hardcoded ids.
+  category: z.string().optional(),
+  // Vendor-independent ROUTING intent (`ABSTRACT_VERBS`). Optional by nature: a
+  // verb outside the closed vocabulary omits it rather than inventing one. A
+  // field emitted by the builder but absent HERE is invisible to every generated
+  // client, so the two must move together.
+  intent: z.enum(ABSTRACT_VERBS).optional(),
+});
+
+const InstallParamSchema = z.object({
+  name: z.string(),
+  label: z.string().optional(),
+  type: z.string().optional(),
+  required: z.boolean().optional(),
+  description: z.string().optional(),
+  // Prompt masked. Absent from the declared contract, a client had no way to
+  // know an install param carries a secret.
+  secret: z.boolean().optional(),
 });
 
 const CapabilityCardSchema = z.object({
@@ -68,9 +111,26 @@ const CapabilityCardSchema = z.object({
   ]),
   connection: ConnectionSchema.optional(),
   verbs: z.array(VerbSchema),
+  // The pack's composition — what is inside it — so a hero UI can render it
+  // without re-deriving from verbs/connection.
+  anatomy: z.object({
+    tools: z.array(z.string()),
+    skills: z.array(z.string()),
+    credential: z.string().optional(),
+  }),
+  // What the caller must supply to APPLY an available template. Without these
+  // a REST client cannot prompt for them and installs without a credential.
+  installParams: z.array(InstallParamSchema),
   nextAction: z.object({
     kind: z.enum(["add", "connect", "enable", "run", "none"]),
     hint: z.string(),
+    // Deep link to THIS card — where `kind` is actually performed. Absent for an
+    // available-only template (no installed container to open). `opensIn` is
+    // present exactly when `url` is, and says which client can follow it: the
+    // route bounces to `synap://`, so it is desktop-only today (there is no
+    // pod-admin capability route the way there is `/proposal/<id>`).
+    url: z.string().optional(),
+    opensIn: z.enum(["desktop"]).optional(),
   }),
 });
 

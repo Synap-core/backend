@@ -45,6 +45,7 @@ import {
 } from "./_shared.js";
 import { classifyRuleIntent } from "../../../services/knowledge/classify-intent.js";
 import { createRuleGoverned } from "../../../services/rules/create.js";
+import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import {
   RULE_CATEGORY,
   readRuleMetadata,
@@ -96,6 +97,14 @@ const CreateRuleBodySchema = z.object({
   expiresAt: z.string().datetime({ offset: true }).optional(),
   factSkillId: z.string().uuid().optional(),
   automationIds: z.array(z.string().uuid()).default([]),
+  /**
+   * The rule's structured WHEN/WHERE/THEN. Present ⇒ the door compiles it into
+   * an automation or refuses with 403 naming the failing clause. Same schema
+   * object the tRPC door uses — bound to the shared `RuleSentenceValue` at
+   * compile time, so this REST surface can never accept a shape the compiler
+   * cannot read.
+   */
+  sentence: ruleSentenceSchema.optional(),
   /** Acting AGENT identity when the key carries one (verified, never trusted raw). */
   agentUserId: z.string().uuid().optional(),
   /** Honored only for service keys — see `resolveActingContext`. */
@@ -297,6 +306,7 @@ export function registerRulesRoutes(app: HubHono): void {
         ...(body.expiresAt ? { expiresAt: body.expiresAt } : {}),
         ...(body.factSkillId ? { factSkillId: body.factSkillId } : {}),
         automationIds: body.automationIds,
+        ...(body.sentence ? { sentence: body.sentence } : {}),
         auditSource: "hub.rules.create",
       });
 

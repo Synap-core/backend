@@ -24,8 +24,13 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "../../../services/capabilities/create-from-definition.js";
-import { ABSTRACT_VERBS } from "@synap/database/schema";
+import {
+  ABSTRACT_VERBS,
+  isAbstractVerb,
+  type AbstractVerb,
+} from "@synap/database/schema";
 import { scoreTextMatch } from "../../../services/capabilities/capability-registry.js";
+import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import {
   reconcileStandaloneConfigsToTemplates,
@@ -330,6 +335,70 @@ const DetachConfigResponseSchema = z.object({
 
 // ── Register function ──────────────────────────────────────────────────────
 
+/**
+ * Container ids holding at least one member brick that declares `intent`.
+ *
+ * `intent` is a property of a VERB, and the container list door returns
+ * `capabilities` rows plus member COUNTS — no verbs. So the match cannot be
+ * folded out of the containers themselves; it is resolved against the capability
+ * REGISTRY (the one place verbs and their intents live, and the same
+ * `foldVerbsByIntent` the `/capabilities` door and `synap_list_capabilities`
+ * use) and mapped back through each brick's DERIVED `containerId`.
+ *
+ * Same lens shape as every other pod-wide read here: a workspace narrows to that
+ * lens, its absence fans out over every accessible workspace and merges deduped
+ * by capability id — one fold AFTER the merge, because `foldVerbsByIntent`
+ * prefers a GRANTED duplicate and folding per-workspace could keep an un-granted
+ * copy and drop the granted one.
+ *
+ * A brick with `containerId == null` (in no container) contributes nothing: it
+ * is reachable through `GET /capabilities`, which has its own intent filter, and
+ * inventing a container for it would be a placeholder, not an answer.
+ */
+async function containerIdsDeclaringIntent(
+  userId: string,
+  scopes: string[],
+  workspaceId: string | null,
+  intent: AbstractVerb
+): Promise<Set<string>> {
+  const wsIds = workspaceId
+    ? [workspaceId]
+    : await getUserAccessibleWorkspaceIds(userId);
+  const settled = await Promise.allSettled(
+    wsIds.map(async (wsId) => {
+      const ctx = await createHubProtocolCallerContext(userId, scopes, wsId);
+      return playbooksRouter
+        .createCaller(ctx as never)
+        .capabilityRegistry.list();
+    })
+  );
+  const seen = new Set<string>();
+  const caps = settled
+    .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+    .filter((cap) => {
+      if (seen.has(cap.id)) return false;
+      seen.add(cap.id);
+      return true;
+    });
+  const containerOf = new Map<string, string | null>(
+    caps.map((cap) => [
+      cap.id,
+      (cap as { containerId?: string | null }).containerId ?? null,
+    ])
+  );
+  const out = new Set<string>();
+  // NO CAST. `caps` is already RegistryCapability[] here, and the cast this
+  // replaces is exactly what hid the containers-door defect: `as never` was
+  // added because a container row is NOT a RegistryCapability, which erased the
+  // one signal that would have said so. Typechecked without it — if a future
+  // change makes this argument the wrong shape, tsc must say so.
+  for (const match of foldVerbsByIntent(caps).get(intent) ?? []) {
+    const containerId = containerOf.get(match.capabilityId);
+    if (containerId) out.add(containerId);
+  }
+  return out;
+}
+
 export function registerCapabilitiesRoutes(app: HubHono): void {
   registerOpenApi(app, {
     method: "get",
@@ -343,9 +412,16 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "tool's `approved` state. Reuses the same `listCapabilities` adapter the " +
       "tRPC `playbooks.capabilityRegistry.list` exposes. Requires " +
       "hub-protocol.read scope. Pass `workspaceId` to scope to one workspace; " +
-      "OMIT it for the pod-wide read (all accessible workspaces + globals, deduped).",
+      "OMIT it for the pod-wide read (all accessible workspaces + globals, deduped). " +
+      "Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the capabilities " +
+      "declaring at least one verb with that vendor-independent routing intent — " +
+      "applied AFTER the pod-wide merge, so a capability visible through two " +
+      "workspaces is judged once. A verb declaring no intent never matches.",
     request: {
-      query: z.object({ workspaceId: z.string().uuid().optional() }),
+      query: z.object({
+        workspaceId: z.string().uuid().optional(),
+        intent: z.enum(ABSTRACT_VERBS).optional(),
+      }),
     },
     responses: {
       200: {
@@ -380,6 +456,38 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       return c.json({ error: "workspaceId query param must be a UUID" }, 400);
     }
 
+    const intentRaw = c.req.query("intent")?.trim() || undefined;
+    // Rejected at the door, never ignored: silently dropping an unknown filter
+    // returns the WHOLE catalog under a question it did not answer.
+    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
+      return c.json(
+        {
+          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
+        },
+        400
+      );
+    }
+
+    /**
+     * Keep the capabilities declaring `intentRaw`, via the SHARED reverse index
+     * — the same fold `synap_list_capabilities({intent})` uses, so the two doors
+     * can never disagree about what "declares send_message" means.
+     *
+     * Deliberately applied to the MERGED, deduped list (and to the single-lens
+     * list) rather than inside the fan-out: `foldVerbsByIntent` prefers a GRANTED
+     * duplicate, so folding per-workspace and then merging could keep an
+     * un-granted copy and drop the granted one. One fold, after the merge.
+     */
+    const applyIntentFilter = <T extends { id: string }>(caps: T[]): T[] => {
+      if (intentRaw === undefined) return caps;
+      const matchedCapIds = new Set(
+        (foldVerbsByIntent(caps as never).get(intentRaw) ?? []).map(
+          (m) => m.capabilityId
+        )
+      );
+      return caps.filter((cap) => matchedCapIds.has(cap.id));
+    };
+
     try {
       const acting = await resolveActingContext(c, { workspaceId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -412,7 +520,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
             seen.add(cap.id);
             return true;
           });
-        return c.json({ capabilities }, 200);
+        return c.json({ capabilities: applyIntentFilter(capabilities) }, 200);
       }
 
       const ctx = await createHubProtocolCallerContext(
@@ -422,7 +530,7 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       );
       const caller = playbooksRouter.createCaller(ctx as never);
       const capabilities = await caller.capabilityRegistry.list();
-      return c.json({ capabilities }, 200);
+      return c.json({ capabilities: applyIntentFilter(capabilities) }, 200);
     } catch (err) {
       logger.error({ err }, "capabilities list failed");
       return c.json(
@@ -452,11 +560,17 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       "(use the plain `/capabilities` list's `kind` filter for that axis). " +
       "Requires hub-protocol.read scope. Pass `workspaceId` to scope to one " +
       "workspace; OMIT it for the pod-wide read (all accessible workspaces + " +
-      "globals, deduped).",
+      "globals, deduped). Pass `intent` (a closed ABSTRACT_VERBS value) to keep " +
+      "only the containers holding at least one MEMBER brick that declares that " +
+      "vendor-independent routing intent — the intent lives on the verb, so the " +
+      "match is resolved against the capability REGISTRY and mapped back through " +
+      "each brick's `containerId`. A container whose members declare no intent " +
+      "never matches.",
     request: {
       query: z.object({
         workspaceId: z.string().uuid().optional(),
         query: z.string().optional(),
+        intent: z.enum(ABSTRACT_VERBS).optional(),
         limit: z.coerce.number().int().positive().optional(),
       }),
     },
@@ -492,6 +606,19 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     ) {
       return c.json({ error: "workspaceId query param must be a UUID" }, 400);
     }
+
+    const intentRaw = c.req.query("intent")?.trim() || undefined;
+    // Rejected at the door, never ignored: silently dropping an unknown filter
+    // returns the WHOLE catalog under a question it did not answer.
+    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
+      return c.json(
+        {
+          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
+        },
+        400
+      );
+    }
+
     const query = c.req.query("query")?.trim() || undefined;
     const limitCheck = z.coerce
       .number()
@@ -589,6 +716,27 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
         );
       } else {
         enriched = await enrichForWs(acting.workspaceId);
+      }
+
+      // INTENT filter — applied here, after BOTH branches have produced the
+      // merged/deduped list, and BEFORE `query`/`limit` so the intent narrows
+      // the corpus the text matcher then ranks rather than the other way round.
+      //
+      // NOT the same fold as `GET /capabilities`. `intent` lives on a VERB
+      // (`RegistryCapability.verbs[].intent`) and a container row carries no
+      // verbs at all — it is a `capabilities` row plus member COUNTS. Folding
+      // the containers themselves therefore matched nothing, ever, and returned
+      // an empty list for every intent while typechecking clean behind the
+      // `as never` the fold's argument needed. Resolve against the registry and
+      // map back through each brick's `containerId` instead.
+      if (intentRaw !== undefined) {
+        const matched = await containerIdsDeclaringIntent(
+          acting.userId,
+          scopes,
+          acting.workspaceId,
+          intentRaw
+        );
+        enriched = enriched.filter((container) => matched.has(container.id));
       }
 
       // Search (D1): rank containers against `query` using the SAME matcher the

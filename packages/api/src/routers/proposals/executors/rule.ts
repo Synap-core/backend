@@ -77,12 +77,34 @@ export function registerRuleExecutors(): void {
         // Own the rule as the APPROVER (mirrors project/skill/view) — no
         // agentUserId so the re-entrant gate auto-grants for the operator.
         agentUserId: undefined,
+        // …but the compiled automation's DRAFT FLOOR keys on who AUTHORED the
+        // behaviour, not on who approved it. Without this, approving an
+        // agent-authored rule materialized an ACTIVE automation (and a live
+        // `nextRunAt` for a cron trigger), making `rule/create` a wider path to
+        // a firing trigger than `automation/create` — whose executor has always
+        // threaded the author through (`executors/automation.ts`). Only
+        // `proposal.agentUserId` is read, NOT `createdBy`: a rule a HUMAN wrote
+        // and could not create for lack of permission is not a prompt-injection
+        // surface, and forcing it to draft would make approval a half-action.
+        ...(proposal.agentUserId
+          ? { behaviourAuthorAgentUserId: proposal.agentUserId }
+          : {}),
         workspaceId: proposal.workspaceId ?? null,
         intent,
         scope,
         ...(expiresAt ? { expiresAt } : {}),
         ...(typeof innerData.factSkillId === "string"
           ? { factSkillId: innerData.factSkillId }
+          : {}),
+        // The BEHAVIOUR half of the replay. The payload stores the structured
+        // sentence, so the approved rule compiles the same automation the
+        // reviewer saw described — and `createRuleGoverned` REFUSES here if it
+        // no longer compiles (a command deleted since the proposal was filed),
+        // which surfaces as a FORBIDDEN below instead of a rule with no
+        // behaviour. Absent for a prose-only `fact` rule and for every proposal
+        // filed before rules compiled at all; absence is inert.
+        ...(innerData.sentence !== undefined
+          ? { sentence: innerData.sentence }
           : {}),
         automationIds: Array.isArray(innerData.automationIds)
           ? (innerData.automationIds as string[]).filter(
@@ -112,7 +134,15 @@ export function registerRuleExecutors(): void {
             materialized: {
               ruleId: result.status === "created" ? result.ruleId : undefined,
               factSkillId: innerData.factSkillId,
-              automationIds: innerData.automationIds ?? [],
+              // From the RESULT, not the request payload. The payload holds only
+              // the ids that already existed when the proposal was filed; the
+              // automation compiled from the sentence is created BY this
+              // approval, so reading the payload left the one thing the approval
+              // actually made unreachable to revert and audit.
+              automationIds:
+                result.status === "created"
+                  ? result.automationIds
+                  : (innerData.automationIds ?? []),
             },
           },
         })

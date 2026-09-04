@@ -342,11 +342,79 @@ export const readHandlers: McpHandlerMap = {
     } catch {
       graph = undefined;
     }
-    return ok(
+    // `detail: "full"` returns TODAY'S payload, byte-identical — this is the
+    // pre-existing expression, untouched.
+    if ((args.detail as string | undefined) === "full") {
+      return ok(
+        graph
+          ? { ...(entityResult as Record<string, unknown>), graph }
+          : entityResult
+      );
+    }
+
+    /**
+     * LEAN (the default) — same convention as `synap_list_profiles`' `toDigest`
+     * below, and `synap_list_proposals` / `synap_orient`: the small shape is
+     * what a caller gets by default, `detail: "full"` returns the whole row.
+     *
+     * WHY. `entities.get` resolves the kind's property schema once per
+     * accessible workspace into `effectivePropertiesByWorkspace` (16 workspaces
+     * for a real user). Measured on the live pod, that fan-out is 83-93% of
+     * every entity read: `note` 34,593 chars, `decision` 120,769, `person`
+     * 205,118. Claude Code TRUNCATES MCP tool output at 25,000 tokens, and for
+     * `person` the fan-out spans chars 12,233-204,239 — so the cut lands INSIDE
+     * it, severing the JSON mid-structure (unparseable) and taking every key
+     * that follows it (`facets`, `externalLinks`, `graph`) with it.
+     *
+     * What is KEPT is the half an agent writes against: `effectiveProperties`
+     * is resolved from the entity's OWN workspace, so it IS the schema a write
+     * to THIS entity is validated against. The other entries describe how a
+     * DIFFERENT entity of the same kind would resolve under another lens.
+     *
+     * Fields are named ONE BY ONE rather than rest-spread, deliberately: a
+     * hand-written projection is only safe while something forces it to track
+     * its source, so the `entity-get` spec in
+     * `__tripwires__/cross-door-field-parity.test.ts` audits this door against
+     * `entities.get`'s own zod output schema. Add a field there and this door
+     * reds until it answers for it.
+     */
+    const row = (
       graph
         ? { ...(entityResult as Record<string, unknown>), graph }
-        : entityResult
+        : (entityResult as Record<string, unknown>)
+    ) as Record<string, unknown>;
+    const byWorkspace = (row.effectivePropertiesByWorkspace ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const workspaceIds = Object.keys(byWorkspace);
+    // COMPARED, never assumed — measured, the arrays are identical for 6 of 9
+    // types but `person` has 5 distinct variants. An overlay list built from
+    // "all of them" would be a signpost that names nothing.
+    const base = JSON.stringify(row.effectiveProperties ?? null);
+    const workspacesWithOverlay = workspaceIds.filter(
+      (id) => JSON.stringify(byWorkspace[id]) !== base
     );
+    return ok({
+      entity: row.entity,
+      profile: row.profile,
+      effectiveProperties: row.effectiveProperties,
+      facets: row.facets,
+      externalLinks: row.externalLinks,
+      graph: row.graph,
+      // The SIGNPOST. This is what makes the omission honest rather than
+      // silent: it names what was withheld, which lenses actually differ, and
+      // how to get it back.
+      propertyOverlays: {
+        workspacesWithOverlay,
+        hint:
+          `${workspacesWithOverlay.length} of ${workspaceIds.length} accessible ` +
+          `workspaces override this kind's property schema. Omitted here: ` +
+          `\`effectivePropertiesByWorkspace\` — pass detail:'full' for the ` +
+          `per-workspace map. \`effectiveProperties\` above is this entity's ` +
+          `own workspace schema, the one a write to it is validated against.`,
+      },
+    });
   },
   synap_list_profiles: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;

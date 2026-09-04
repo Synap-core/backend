@@ -1326,6 +1326,137 @@ export type GovernedWritePair<K extends GateWriteDoor = GateWriteDoor> =
     : never;
 
 /**
+ * ── DERIVE THE GATE PAIR FROM THE OPERATIONS ────────────────────────────────
+ *
+ * MEASURED DEFECT: `routers/capture.ts` called `checkPermissionOrPropose` with
+ * HARDCODED `subjectType: "entity", action: "create"` while passing the real
+ * work as an opaque `data.operations` composite batch. Every governance floor
+ * is a pure function of exactly those two literals — rung 2
+ * (`ADMIN_ACTIONS.includes(eventKey)`, strict equality, no globbing), rung 2.5
+ * (`DESTRUCTIVE_ACTIONS.includes(action)`), rung 2.6 (by-kind) — so the floors
+ * were evaluating a DECLARATION, not the write. It was safe only by
+ * coincidence: capture can emit `create_entity` / `create_relation` and nothing
+ * else, so `entity`/`create` happened to be true. The instant a producer emits
+ * another arm, the gate would still say `entity`/`create` and a floor could
+ * never fire on the arm that needed it. A DESTRUCTIVE floor cannot fire on a
+ * door that says "create".
+ *
+ * THE RULE: the gate's `(subjectType, action)` pair is DERIVED from the
+ * operations, never declared alongside them. A batch gates at its STRICTEST
+ * member. Over-gating is safe; under-gating is the bug — so this never returns
+ * a pair less strict than any member of the batch.
+ *
+ * HONEST LIMIT: one pair cannot fully represent a heterogeneous batch. The
+ * per-op evaluation (`captureGraphEventKeys` → `resolveAgentGovernanceDecision`
+ * in `@synap/api`) is the finer instrument and stays the all-or-nothing
+ * decision for capture graphs. This function exists so the ONE pair the gate
+ * does carry is the strictest true one instead of a constant.
+ */
+
+/**
+ * Composite-op arm → the governed write door that arm actually performs.
+ *
+ * `satisfies Record<..., GovernedWritePair>` is the enforcement: a pair that is
+ * not declared in {@link GATE_WRITE_DOORS} does not compile here, so a new op
+ * arm cannot be mapped to a door that governance has never heard of.
+ */
+export const COMPOSITE_OP_GATE_PAIRS = {
+  create_entity: { subjectType: "entity", action: "create" },
+  create_relation: { subjectType: "relation", action: "create" },
+  create_skill: { subjectType: "skill", action: "create" },
+  create_automation: { subjectType: "automation", action: "create" },
+  create_rule: { subjectType: "rule", action: "create" },
+} as const satisfies Record<string, GovernedWritePair>;
+
+/** The composite operation arms this module knows how to gate. */
+export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
+
+/**
+ * SECONDARY strictness ordering — BLAST RADIUS of the object the arm creates.
+ * Explicit and hand-ordered ON PURPOSE (the deliverable forbids an implicit or
+ * array-order ordering), and consulted only to break a tie in the PRIMARY,
+ * floor-derived rank below.
+ *
+ * The ordering is config-over-data: a rule, a skill and an automation are
+ * CONFIGURATION that changes what agents do in the future (durable, and it
+ * compounds — a bad skill mis-steers every later turn), while an entity and a
+ * relation are DATA (inspectable, revertible, inert). A rule outranks its own
+ * halves because it BINDS them: approving the rule is what makes the fact and
+ * the behaviour act together.
+ */
+const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
+  create_rule: 4,
+  create_skill: 3,
+  create_automation: 2,
+  create_entity: 1,
+  create_relation: 0,
+};
+
+/**
+ * PRIMARY strictness rank — DERIVED LIVE from the floors themselves, so it can
+ * never drift from the policy it is supposed to mirror. Mirrors the rung order
+ * in {@link decideAgentPolicy}: admin (rung 2) is stricter than destructive
+ * (2.5), which is stricter than "not on the default auto-approve whitelist"
+ * (rung 8), which is stricter than a whitelisted write.
+ */
+function gatePairFloorRank(pair: {
+  subjectType: string;
+  action: string;
+}): number {
+  const eventKey = `${pair.subjectType}.${pair.action}`;
+  if (ADMIN_ACTIONS.includes(eventKey)) return 3;
+  if (DESTRUCTIVE_ACTIONS.includes(pair.action)) return 2;
+  if (!DEFAULT_AUTO_APPROVE.includes(eventKey)) return 1;
+  return 0;
+}
+
+/**
+ * The strictest `(subjectType, action)` pair among a composite batch's ops.
+ *
+ * FAILS CLOSED, never silently: an empty batch or an unrecognized op arm
+ * THROWS. Defaulting to `entity`/`create` here would re-create the exact defect
+ * this function exists to remove — a gate declaring a write nobody verified.
+ */
+export function deriveGatePairFromOperations(
+  operations: ReadonlyArray<{ op?: unknown }>
+): GovernedWritePair {
+  if (!Array.isArray(operations) || operations.length === 0) {
+    throw new Error(
+      "deriveGatePairFromOperations: refusing to gate an empty operation batch — " +
+        "there is no write to derive a (subjectType, action) pair from."
+    );
+  }
+  let strictest: CompositeOpName | null = null;
+  for (const operation of operations) {
+    const arm = typeof operation?.op === "string" ? operation.op : undefined;
+    if (!arm || !(arm in COMPOSITE_OP_GATE_PAIRS)) {
+      throw new Error(
+        `deriveGatePairFromOperations: unrecognized composite operation "${String(
+          arm
+        )}". Map it to a door in COMPOSITE_OP_GATE_PAIRS before it can be gated — ` +
+          "gating it as something else would evaluate the floors against a write that never happens."
+      );
+    }
+    const name = arm as CompositeOpName;
+    if (strictest === null) {
+      strictest = name;
+      continue;
+    }
+    const candidate = gatePairFloorRank(COMPOSITE_OP_GATE_PAIRS[name]);
+    const incumbent = gatePairFloorRank(COMPOSITE_OP_GATE_PAIRS[strictest]);
+    if (
+      candidate > incumbent ||
+      (candidate === incumbent &&
+        COMPOSITE_OP_BLAST_RADIUS[name] > COMPOSITE_OP_BLAST_RADIUS[strictest])
+    ) {
+      strictest = name;
+    }
+  }
+  // `strictest` is non-null: the empty-batch guard above already returned.
+  return COMPOSITE_OP_GATE_PAIRS[strictest as CompositeOpName];
+}
+
+/**
  * Executor keys that match on `proposalType` ALONE (no `targetType` segment) —
  * `proposalExecRegistry.resolve()` tries these AFTER the exact composite key and
  * BEFORE the wildcard. They are a real, deliberate second key space, so

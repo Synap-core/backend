@@ -3,7 +3,9 @@ import {
   dispatchOpen,
   inferOpenTypeFromId,
   isSafeOpenId,
+  isMobileClient,
   isUnfurlBot,
+  OPEN_CLIENT_MOBILE,
   podAdminTarget,
 } from "./open-dispatch.js";
 
@@ -201,5 +203,115 @@ describe("dispatchOpen", () => {
       action: "redirect",
       url: `${ADMIN}/open/entity/${ID}`,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The mobile branch. Four invariants, one test each — a device-flavoured link
+// must open the phone app WITHOUT weakening any of the three behaviours that
+// were already load-bearing.
+// ---------------------------------------------------------------------------
+
+describe("isMobileClient", () => {
+  it("only the exact mobile token counts", () => {
+    expect(isMobileClient(OPEN_CLIENT_MOBILE)).toBe(true);
+    expect(isMobileClient("desktop")).toBe(false);
+    expect(isMobileClient("Mobile")).toBe(false);
+    expect(isMobileClient("")).toBe(false);
+    expect(isMobileClient(undefined)).toBe(false);
+    expect(isMobileClient(null)).toBe(false);
+  });
+});
+
+describe("dispatchOpen — ?client=mobile", () => {
+  // INVARIANT 1 — the feature itself.
+  it("proposal + mobile + admin → bounce synap://open/proposal/", () => {
+    expect(
+      dispatchOpen({
+        type: "proposal",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+      })
+    ).toEqual({
+      action: "bounce",
+      deep: `synap://open/proposal/${ID}`,
+    });
+  });
+
+  // INVARIANT 2 — a desktop browser still 302s to pod-admin. Absent param and
+  // any non-mobile value both mean desktop.
+  it("proposal without the param (and with a foreign one) still 302s", () => {
+    for (const client of [undefined, null, "", "desktop"]) {
+      expect(
+        dispatchOpen({
+          type: "proposal",
+          id: ID,
+          userAgent: HUMAN,
+          adminBase: ADMIN,
+          client,
+        })
+      ).toEqual({
+        action: "redirect",
+        url: `${ADMIN}/proposal/${ID}`,
+      });
+    }
+  });
+
+  // INVARIANT 3 — an unfurl bot NEVER takes the mobile branch. A crawler
+  // following a `?client=mobile` proposal link must behave exactly as it does
+  // without the param: 302 to the web review page, never a `synap://` bounce.
+  it("proposal + mobile + Discordbot → still 302 (bot beats the flag)", () => {
+    expect(
+      dispatchOpen({
+        type: "proposal",
+        id: ID,
+        userAgent: DISCORDBOT,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+      })
+    ).toEqual({
+      action: "redirect",
+      url: `${ADMIN}/proposal/${ID}`,
+    });
+  });
+
+  it("entity + mobile + Discordbot → the SAME bot bounce as without the flag", () => {
+    const withFlag = dispatchOpen({
+      type: "entity",
+      id: ID,
+      userAgent: DISCORDBOT,
+      adminBase: ADMIN,
+      client: OPEN_CLIENT_MOBILE,
+    });
+    const withoutFlag = dispatchOpen({
+      type: "entity",
+      id: ID,
+      userAgent: DISCORDBOT,
+      adminBase: ADMIN,
+    });
+    expect(withFlag).toEqual(withoutFlag);
+  });
+
+  it("entity/view + mobile + human → bounce (pod-admin is desktop-only)", () => {
+    expect(
+      dispatchOpen({
+        type: "entity",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+      })
+    ).toEqual({ action: "bounce", deep: `synap://open/entity/${ID}` });
+    expect(
+      dispatchOpen({
+        type: "view",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+      })
+    ).toEqual({ action: "bounce", deep: `synap://open/view/${ID}` });
   });
 });

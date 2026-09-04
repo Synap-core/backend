@@ -362,6 +362,11 @@ export {
   validateFlowDefinition,
   flowValidationErrorMessage,
 } from "./services/automations/validate-flow.js";
+// Exported for @synap/jobs' `registerAgentWaker` IoC slot: an automation's
+// `channel_message` with `wakeAgent: true` must reach the SAME auto-respond door
+// every other IS turn uses (the `a2ai-one-door` tripwire forbids a second
+// enqueue), and jobs cannot import this package statically.
+export { triggerAutoRespond } from "./utils/trigger-auto-respond.js";
 export {
   runPlaybook,
   type RunPlaybookInput,

@@ -267,6 +267,12 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace ID (optional)"
+          },
+          "detail": {
+            "type": "string",
+            "enum": ["lean", "full"],
+            "default": "lean",
+            "description": "'lean' (default) omits `effectivePropertiesByWorkspace` — the kind's property schema re-resolved once per accessible workspace, which is 83-93% of an entity read and long enough on its own to truncate the response. You still get the entity, its profile, its own workspace's `effectiveProperties` (the schema a write to this entity is validated against), facets, externalLinks and graph, plus a `propertyOverlays` signpost naming which workspaces differ. 'full' adds the per-workspace map back — ask for it only when you need to compare lenses."
           }
         },
         "required": ["entityId"]
@@ -415,7 +421,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a typed entity when you already know the exact profileSlug + fields — the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected.",
+      "description": "Create a SINGLE typed entity — no relations parameter exists here. Use when you already know the exact profileSlug + fields: the structured, deterministic sibling of synap_capture (which parses free text). Discover slugs with synap_list_profiles; synap_ask first to avoid duplicates. Same-profile same-name creates are REJECTED with candidates (reuse the existing id, enrich, or attach a facet) unless forceCreate=true. Placeholder person/company titles (e.g. 'Not publicly disclosed', 'unknown') are rejected. To create an entity TOGETHER WITH its edge to another entity in one reviewable unit, use synap_capture instead, passing both `entities` and `relations` — synap_link_entities cannot target an entity this call just proposed (its id isn't live until approved).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -648,7 +654,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. Check synap_get_relations first to avoid duplicates. May return 'proposed'. Builds the knowledge graph.",
+      "description": "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -899,7 +905,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. This also lists your projects (it supersedes the old synap_list_projects tool) — pass scope:['projects'] and/or workspaceId to narrow. Pass detail:'full' for workspace descriptions, full onboarding specs, and per-workspace profiles. Drill into a workspace's full property schemas via synap_list_profiles.",
+      "description": "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. This also lists your projects — pass scope:['projects'] and/or workspaceId to narrow. Pass detail:'full' for workspace descriptions, full onboarding specs, and per-workspace profiles. Drill into a workspace's full property schemas via synap_list_profiles.",
       "inputSchema": {
         "type": "object",
         "properties": {

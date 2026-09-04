@@ -229,7 +229,12 @@ export function ok(data: unknown): CallToolResult {
     };
   }
   return {
-    content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+    // COMPACT, not pretty. This is the single runtime serialization point for
+    // every MCP tool result, and the payload is parsed by a model, never read
+    // as a formatted document: the pretty-printer's indentation was a measured
+    // 33-36% of the BYTES across nine entity types. (Byte savings only — nobody
+    // has measured the token effect, and whitespace tokenizes efficiently.)
+    content: [{ type: "text", text: JSON.stringify(payload) }],
   };
 }
 

@@ -29,6 +29,7 @@ import {
   insertChannelMessage,
   ChannelRepository,
 } from "@synap/database";
+import { MessageRole, MessageAuthorType } from "@synap/database/schema";
 import { emitSideEffects } from "@synap/events";
 import {
   resolveVaultReferences,
@@ -40,6 +41,11 @@ import {
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
+import {
+  assertAgentWakeBudget,
+  resolveWakeAgentType,
+  wakeAgentAtMessage,
+} from "../../utils/agent-wake.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
 import { dispatchOutputVerb } from "../capability-dispatch.js";
@@ -682,6 +688,52 @@ export async function executeOutputStep(
         throw new Error("channel_message requires content");
       }
 
+      // AGENT HANDOFF (opt-in, default OFF). `wakeAgent: true` on the node makes
+      // this post WAKE an agent in the destination channel, so an automation can
+      // hand work to an agent in a shared channel. Strictly opt-in: absent (or
+      // anything other than boolean `true`) leaves every line below byte-identical
+      // to the previous terminal-leaf behaviour — no stamp, no budget read, no
+      // wake, and the same ASSISTANT/BOT authorship.
+      //
+      // NOT routed through `postChannelMessage`, deliberately: that door takes no
+      // `metadata` (the `proactiveType`/`proactiveAi` keys the feed reads would be
+      // silently dropped), does not call `mirrorMessageToBoundExternal` (every
+      // Discord-bound channel would stop delivering externally), and gates its
+      // `triggerAI` on `role === "user"` — a bot-authored automation post would be
+      // a silent no-op. The shape used instead is `IsAgentExecutor`'s:
+      // `insertChannelMessage` + the `triggerAutoRespond` ONE door, reached
+      // through the `registerAgentWaker` IoC slot (jobs cannot import api).
+      const wakeAgent = config.wakeAgent === true;
+      /** The resolved agent slug, proven to exist in the pre-flight below. */
+      let resolvedAgentType: string | null = null;
+
+      // BUDGET FIRST — before any effect. An exhausted causal chain must post
+      // NOTHING, so the step's only outcome is the distinct `blocked_by_policy`
+      // failure naming budget exhaustion (see AgentWakeBudgetExhaustedError).
+      // Posting and then refusing to wake would be a false receipt: a message
+      // sitting in a channel that nobody will ever answer, reported as sent.
+      if (wakeAgent) {
+        await assertAgentWakeBudget(
+          {
+            chainDepth: automationContext.chainDepth,
+            rootRunId: automationContext.rootRunId,
+            automationRunId: automationContext.automationRunId,
+            automationId: automationContext.automationId,
+            chainAutomationIds: automationContext.chainAutomationIds,
+          },
+          // Passed here, not read inside the wake: a run with no session cannot
+          // carry the chain, and refusing AFTER the post would leave a handoff
+          // message nobody will ever answer.
+          automationContext.focusSessionId
+        );
+        // Also pre-flight: an unknown agent selector is knowable before the
+        // post, and posting a handoff that a DIFFERENT agent would answer is
+        // the same false receipt as posting one nobody answers.
+        resolvedAgentType = await resolveWakeAgentType(
+          typeof config.agentType === "string" ? config.agentType : null
+        );
+      }
+
       // (a) SCOPE RE-VALIDATION — the security boundary for the ONLY branch that
       // takes a caller-supplied destination verbatim. Every other branch derives
       // the channel from run context through a ChannelRepository resolver, and
@@ -854,7 +906,24 @@ export async function executeOutputStep(
         id: messageId,
         channelId,
         content,
+        // AUTHORSHIP on the wake path only. The default (ASSISTANT/BOT) would
+        // hand the agent a message attributed to the assistant itself — it would
+        // read its own voice as the prompt. `role: USER` makes it a prompt to
+        // answer; `authorType: BOT` keeps it honestly machine-authored (never
+        // HUMAN, which is what IsAgentExecutor can claim and an automation
+        // cannot) AND preserves the existing mirror behaviour exactly, since the
+        // Discord firewall keys on BOT authorship. `userId: ownerId` attributes
+        // it to the automation's owning principal. Default path: all three
+        // omitted, so `insertChannelMessage` applies its unchanged defaults.
+        ...(wakeAgent
+          ? {
+              userId: ownerId,
+              role: MessageRole.USER,
+              authorType: MessageAuthorType.BOT,
+            }
+          : {}),
         metadata: {
+          ...(wakeAgent ? { agentHandoff: true } : {}),
           automationMessage: true,
           ...(proactiveType ? { proactiveType, proactiveAi: true } : {}),
           ...metadata,
@@ -868,10 +937,43 @@ export async function executeOutputStep(
         );
       }
 
+      // AGENT HANDOFF — stamp the causal chain onto the run's session (so the
+      // matcher's EXISTING depth + self-cycle guards survive the agent boundary)
+      // and dispatch through the ONE door. Throws rather than degrading: a
+      // handoff nobody will answer must not be reported as sent.
+      //
+      // Skipped when the insert CONFLICTED (`result.messageId === undefined`), a
+      // crash-redelivered run re-posting the same deterministic id: the prior
+      // delivery already woke an agent at that message, and `triggerAutoRespond`
+      // singleton-keys on `userMessageId` anyway, so a second wake would be a
+      // duplicate turn at best.
+      if (wakeAgent && result.messageId) {
+        await wakeAgentAtMessage({
+          channelId,
+          messageId,
+          content,
+          ownerId,
+          focusSessionId: automationContext.focusSessionId,
+          agentType: resolvedAgentType,
+          chain: {
+            chainDepth: automationContext.chainDepth,
+            rootRunId: automationContext.rootRunId,
+            automationRunId: automationContext.automationRunId,
+            automationId: automationContext.automationId,
+            chainAutomationIds: automationContext.chainAutomationIds,
+          },
+        });
+      }
+
       // Return the deterministic id we inserted (not the door's result, which is
       // undefined when the insert conflicted on a retry) so downstream steps get
       // a stable reference either way.
-      return { status: "sent", messageId, channelId };
+      return {
+        status: "sent",
+        messageId,
+        channelId,
+        ...(wakeAgent ? { agentWoken: Boolean(result.messageId) } : {}),
+      };
     }
 
     case "session_update": {

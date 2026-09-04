@@ -161,9 +161,12 @@ describe("capture.execute stamps threadId onto the proposal", () => {
   });
 
   it("forwards input.threadId into checkPermissionOrPropose", () => {
-    const start = executeSrc.indexOf(
-      "const perm = await checkPermissionOrPropose({"
-    );
+    // Anchored on the CALL, not on the assignment statement: the gate is now
+    // reached through a ternary (an empty capture has no batch to derive a
+    // gate pair from, so it never calls the gate at all). The assertion below
+    // is unchanged — this only stops the anchor from pinning a formatting
+    // detail of the surrounding statement.
+    const start = executeSrc.indexOf("await checkPermissionOrPropose({");
     expect(start).toBeGreaterThan(-1);
     const permCall = executeSrc.slice(
       start,

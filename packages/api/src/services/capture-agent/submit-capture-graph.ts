@@ -63,6 +63,7 @@ import {
 } from "../../utils/pending-capture-dedup.js";
 import { openLink } from "../../utils/deep-links.js";
 import { captureGraphEventKeys } from "./capture-graph-policy.js";
+import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
 import {
   collapseDuplicateEntities,
@@ -784,6 +785,16 @@ export async function submitCaptureGraph(
             // The composite ctx's `attachFacet` door — same governance context,
             // so a policy-approved graph attaches facets directly.
             facetCaller: entityCaller,
+            // Rule Loop callers — the SAME three canonical doors proposal
+            // approval wires. Without them a config op in an auto-applied
+            // graph would be silently dropped here while the identical graph
+            // materialized it on the approval path.
+            ...buildRuleLoopCallers({
+              database: db,
+              userId,
+              workspaceId: workspaceId ?? null,
+              auditSource: "rule_loop_capture_auto_apply",
+            }),
             // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
             // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
             // the SAME graph is auto-applied twice (a retry that races the

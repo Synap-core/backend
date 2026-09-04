@@ -142,14 +142,58 @@ export interface BackendTrigger {
 
 // ── Sentence → backend (forward converters) ───────────────────────────────────
 
+/**
+ * MOOD BRIDGE — the sentence's PAST-tense `ActionVerb` → the event catalog's
+ * IMPERATIVE action segment.
+ *
+ * The two vocabularies were never bridged, and the miss was invisible: the
+ * sentence says "when an entity is *created*", while every emitted event and
+ * `EVENT_ACTIONS` (`@synap-core/types/events/unified`) uses *create*. So
+ * `buildEventPattern` emitted `entity.created.completed` — a pattern no emitter
+ * produces and `validateEventPattern` REJECTS, which means the automation
+ * create door (`routers/automations.ts:579`) refused it outright. Every
+ * entity-event rule was therefore unbuildable. WHEN-side twin of the cron-key
+ * bug below and of the `type:"action"` THEN bug fixed in `7dd1b233`.
+ *
+ * Only the three CRUD verbs have an entity event to map onto. A verb with no
+ * entity event (`received`/`completed`/`approved`/`rejected`) is deliberately
+ * left UNMAPPED so it reaches `validateEventPattern` and is refused by the
+ * runtime's own message, rather than being silently rewritten into a different
+ * rule than the author wrote.
+ */
+const VERB_TO_EVENT_ACTION: Partial<Record<ActionVerb, string>> = {
+  created: "create",
+  updated: "update",
+  deleted: "delete",
+};
+
+/** Inverse of {@link VERB_TO_EVENT_ACTION}, for the round trip back to a sentence. */
+const EVENT_ACTION_TO_VERB: Record<string, ActionVerb> = {
+  create: "created",
+  update: "updated",
+  delete: "deleted",
+};
+
 export function buildEventPattern(trigger: SentenceTrigger): string {
   if (!trigger.subjectCategory) return "";
   const { subjectCategory, actionVerb } = trigger;
 
+  const entityAction = actionVerb
+    ? (VERB_TO_EVENT_ACTION[actionVerb] ?? actionVerb)
+    : "create";
+
   const PATTERN_MAP: Record<string, string> = {
-    entity: `entity.${actionVerb ?? "create"}.completed`,
+    entity: `entity.${entityAction}.completed`,
     external_message: "external_message.received.completed",
     capture: "capture.complete.completed",
+    // ⚠️ `notification` and `inbox_item` are REAL event types in
+    // `packages/events/src/event-types.ts` (`notification.created.completed`,
+    // `inbox_item.received.completed`) that `validateEventPattern` still
+    // rejects — its `SUBJECT_TYPES` list is narrower than the event catalog
+    // (it carries `inboxItem`, not `inbox_item`, and no `notification` at all).
+    // These two subject categories therefore cannot be authored through any
+    // door today. That is a vocabulary-parity gap in `events/unified.ts`, not
+    // something to paper over here with a third spelling.
     notification: "notification.created.completed",
     feed_item: "feed.new_item.completed",
     inbox_item: "inbox_item.received.completed",
@@ -157,7 +201,7 @@ export function buildEventPattern(trigger: SentenceTrigger): string {
 
   return (
     PATTERN_MAP[subjectCategory] ??
-    `${subjectCategory}.${actionVerb ?? "created"}.completed`
+    `${subjectCategory}.${entityAction}.completed`
   );
 }
 
@@ -191,10 +235,27 @@ export function toBackendTrigger(
   conditions: ConditionRow[]
 ): BackendTrigger {
   if (trigger.triggerType === "cron") {
+    const cron = buildCronExpression(trigger);
     return {
       triggerType: "cron",
       triggerConfig: {
-        cron: buildCronExpression(trigger),
+        // `expression` is the EXECUTOR-TRUE key — AUTHORITATIVE. The cron
+        // scheduler (`jobs/src/workers/automation-cron-scheduler.ts`) and the
+        // create/update door's `nextRunAt` computation
+        // (`routers/automations.ts`) both read `triggerConfig.expression`; a
+        // flow compiled with only `.cron` gets `nextRunAt: null` and NEVER
+        // FIRES — invisibly, because `triggerToSentence` below round-trips
+        // `.cron` perfectly, so the editor shows nothing wrong. WHEN-side twin
+        // of the `type:"action"`/`ActionType` THEN-side bug fixed in
+        // `7dd1b233`. Tripwire: `cron-expression-key-parity.tripwire.test.ts`
+        // (NOT `sentence.test.ts`, which carries no cron assertion — a wrong
+        // pointer is how a guard gets deleted as redundant).
+        expression: cron,
+        // `cron` is kept for BACKWARD COMPATIBILITY: automations already
+        // stored before this fix carry only `.cron`, and `triggerToSentence`
+        // below reads `expression ?? cron` so both shapes still load. Do not
+        // remove — it would orphan existing rows' round-trip.
+        cron,
         timezone: trigger.cronTimezone ?? "UTC",
       },
     };
@@ -341,7 +402,13 @@ export function triggerToSentence(
   triggerConfig: Record<string, unknown>
 ): SentenceTrigger {
   if (triggerType === "cron") {
-    const cron = (triggerConfig.cron as string) ?? "0 9 * * *";
+    // `expression` is authoritative (see `toBackendTrigger`); `cron` is the
+    // pre-fix key still carried by rows stored before this fix — read both so
+    // neither shape is orphaned.
+    const cron =
+      (triggerConfig.expression as string | undefined) ??
+      (triggerConfig.cron as string | undefined) ??
+      "0 9 * * *";
     const timezone = (triggerConfig.timezone as string) ?? "UTC";
     return { triggerType: "cron", ...parseCron(cron), cronTimezone: timezone };
   }
@@ -349,21 +416,37 @@ export function triggerToSentence(
   if (triggerType === "event") {
     const pattern = (triggerConfig.eventPattern as string) ?? "";
     const profileSlug = triggerConfig.profileSlug as string | undefined;
-    const [subjectCategory, actionVerb] = pattern.split(".");
+    const [subjectCategory, action] = pattern.split(".");
     return {
       triggerType: "event",
       subjectCategory: subjectCategory as TriggerSubjectCategory | undefined,
-      actionVerb: actionVerb as ActionVerb | undefined,
+      // Back through the mood bridge: the stored pattern is imperative, the
+      // sentence is past. Without this the editor loads `entity.create.completed`
+      // as the verb "create", which is not an `ActionVerb`, so the WHEN row
+      // renders empty and re-saving would drop it.
+      actionVerb: action
+        ? (EVENT_ACTION_TO_VERB[action] ?? (action as ActionVerb))
+        : undefined,
       profileSlug,
     };
   }
   return { triggerType: "event" };
 }
 
-export function flowToSentenceAction(flow: RuleFlowDefinition): SentenceAction {
-  // Find the first non-trigger node — it holds the sentence action
-  const actionNode = flow.nodes.find((n) => n.type !== "trigger");
-  if (!actionNode) return { type: null, config: {} };
+// Capability-THEN bookkeeping keys. A `type:"capability"` flow node (executor:
+// automation-executor.ts `case "capability"` → the shared, governed
+// `executeCapability` door) has no dedicated `ActionType` — there is no
+// `notify`/`create_entity`/… slot for "call this verb on this capability" — so
+// the sentence action for it carries `type: null` and encodes the capability +
+// verb in `config` under these `__`-prefixed keys. Mirrors
+// `browser/.../rule-sentence/sentence-io.ts`'s `makeCapabilityAction` byte-for-
+// byte so the two representations can never diverge.
+const CAPABILITY_NODE_TYPE_KEY = "__nodeType";
+const CAPABILITY_ID_KEY = "__capabilityId";
+const CAPABILITY_VERB_ID_KEY = "__verbId";
+const CAPABILITY_ACTION_KEY = "__actionKey";
+
+function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
   const data = actionNode.data;
 
   // `output` node → reverse the friendly-alias map from its executor-true outputType.
@@ -376,10 +459,43 @@ export function flowToSentenceAction(flow: RuleFlowDefinition): SentenceAction {
   }
   // `command` node → run_command; surface commandId + promptOverride back as the
   // sentence's `input`, mirroring toFlowDefinition.
+  //
+  // ⚠️ KNOWN GAP (2026-09-03): a flow ALREADY STORED in a pod may carry the
+  // LEGACY `prompt`/`input` field names (see `normalizeCommandNodeData` in
+  // `@synap/database`). `data.promptOverride` is `undefined` for those, so the
+  // sentence editor shows an empty prompt and saving writes that emptiness
+  // back. The fix is to route through `normalizeCommandNodeData`, but that is a
+  // VALUE import from `@synap/database`, and this module is deliberately
+  // frontend-safe (see the barrel's "NOT re-exported — they pull in
+  // postgres/drizzle" note). Fixing it means giving the normalizer a pure home
+  // both server and frontend can import — a package-placement decision, not a
+  // local `?? data.prompt`, which would just fork the contract a third time.
   if (actionNode.type === "command") {
     return {
       type: "run_command",
       config: { commandId: data.commandId, input: data.promptOverride },
+    };
+  }
+  // `capability` node → a verb call; see the bookkeeping-key comment above.
+  // `toFlowDefinition` does not emit this node type (a capability THEN is
+  // authored via the browser's own `sentenceToWriteInput`, not this module's
+  // writer) — this is a READ-side addition only, so an existing capability rule
+  // round-trips instead of being silently dropped.
+  if (actionNode.type === "capability") {
+    const cdata = data as {
+      capabilityId?: string;
+      verbId?: string;
+      inputMapping?: Record<string, unknown>;
+    };
+    return {
+      type: null,
+      config: {
+        [CAPABILITY_NODE_TYPE_KEY]: "capability",
+        [CAPABILITY_ID_KEY]: cdata.capabilityId ?? "",
+        [CAPABILITY_VERB_ID_KEY]: cdata.verbId ?? "",
+        [CAPABILITY_ACTION_KEY]: `verb:${cdata.verbId ?? ""}`,
+        ...(cdata.inputMapping ?? {}),
+      },
     };
   }
   // Legacy `type:"action"` nodes (stored before the executor-true fix) still
@@ -388,6 +504,30 @@ export function flowToSentenceAction(flow: RuleFlowDefinition): SentenceAction {
     type: (data.stepType ?? null) as ActionType | null,
     config: (data.config as Record<string, unknown>) ?? {},
   };
+}
+
+/**
+ * Read ALL non-trigger action nodes off a stored flow, in order — the reverse of
+ * `toFlowDefinition` (which writes N `output`/`command` nodes), plus `capability`
+ * nodes which `toFlowDefinition` does not emit (see `flowNodeToSentenceAction`).
+ * `flowToSentenceAction` (singular) is implemented in terms of this so the two
+ * can never disagree.
+ */
+export function flowToSentenceActions(
+  flow: RuleFlowDefinition
+): SentenceAction[] {
+  return flow.nodes
+    .filter((n) => n.type !== "trigger")
+    .map(flowNodeToSentenceAction);
+}
+
+/**
+ * @deprecated lossy — keeps only the FIRST action of a multi-action rule. Kept
+ * for existing single-action callers; new code should use
+ * `flowToSentenceActions` (plural).
+ */
+export function flowToSentenceAction(flow: RuleFlowDefinition): SentenceAction {
+  return flowToSentenceActions(flow)[0] ?? { type: null, config: {} };
 }
 
 export function flowToConditions(

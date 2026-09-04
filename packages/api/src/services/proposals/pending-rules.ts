@@ -72,6 +72,17 @@ export interface ProposedRuleRow {
   status: "proposed";
   /** Review door: `synap open proposal <proposalId>`. */
   proposalId: string;
+  /**
+   * The structured WHEN/WHERE/THEN this rule will COMPILE INTO an automation,
+   * when it has behaviour. Absent for a prose-only `fact` rule and for every
+   * proposal filed before rules compiled at all.
+   *
+   * A reviewer approving a behavioural rule is authorizing a trigger that will
+   * fire on its own; the prose says what the author MEANT, this says what will
+   * actually be built. Kept `unknown` on purpose — rendering it is the surface's
+   * job, and re-typing it here would be a second copy of the grammar.
+   */
+  sentence?: unknown;
 }
 
 /** The payload `createRuleGoverned` hands the gate. Every field is re-validated
@@ -87,6 +98,15 @@ export function readRulePayload(data: unknown): {
   automationIds: string[];
   /** Absent for payloads written before the classifier was wired in. */
   routing?: RuleRouting;
+  /**
+   * The structured WHEN/WHERE/THEN, when this rule has behaviour. Left
+   * `unknown`: this reader is the untrusted-payload boundary, and the sentence's
+   * own schema (`services/rules/sentence-schema.ts`) is what parses it. Carried
+   * onto `ProposedRuleRow` below so a reviewer's card can show what will be
+   * BUILT, not only the prose — a field that reached no reader while a comment
+   * claimed otherwise would be the exact severance this wave exists to close.
+   */
+  sentence?: unknown;
 } | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
@@ -109,6 +129,7 @@ export function readRulePayload(data: unknown): {
       ? d.automationIds.filter((a): a is string => typeof a === "string")
       : [],
     ...(routing ? { routing } : {}),
+    ...(d.sentence !== undefined ? { sentence: d.sentence } : {}),
   };
 }
 
@@ -199,6 +220,9 @@ export async function listPendingRuleProposals(
         }),
         status: "proposed" as const,
         proposalId: row.id,
+        ...(payload.sentence !== undefined
+          ? { sentence: payload.sentence }
+          : {}),
       },
     ];
   });

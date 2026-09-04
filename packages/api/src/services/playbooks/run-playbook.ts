@@ -129,6 +129,19 @@ export interface RunPlaybookInput {
    * to the acting principal.
    */
   targetChannelId?: string;
+  /**
+   * AGENT SELECTOR — which agent should answer this run, as the `agents.slug`
+   * (the string the IS calls `agentType`). Threaded straight through to the
+   * executor's RunContext; the `is-agent` executor resolves it against the
+   * `agents` catalog and FAILS the run on an unknown slug. Absent ⇒ the
+   * dispatcher's default orchestrator ("meta"), i.e. today's behaviour.
+   *
+   * Deliberately a RUN PARAMETER, not a `playbooks` column: the selector is a
+   * property of the CALL ("ask <agent> to do this"), the same playbook can be
+   * run by different agents, and a column would cost a hand-written migration
+   * plus a baseline + schema-coherence edit for no expressive gain.
+   */
+  agentType?: string | null;
 }
 
 export interface RunPlaybookResult {
@@ -609,6 +622,8 @@ async function executeSingleRun(
       // stage key (both empty/null for a stageless, progress-only playbook).
       stages: (playbook.stages as PlaybookStage[]) ?? [],
       currentStage: session.currentStage,
+      // Agent selector — forwarded verbatim; the executor validates it.
+      agentType: input.agentType ?? null,
       // Thread the run id so an external agent knows which run to capture back
       // against (POST /api/hub/runs/{runId}/capture); webhookUrl rides params.
       input: { ...params, runId: run.id },

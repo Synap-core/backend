@@ -54,6 +54,7 @@ import {
   loadFacetSlugsBatch,
   isNull,
   resolveWorkspacePlacement,
+  ProposalStatus,
 } from "@synap/database";
 import {
   relations,
@@ -67,6 +68,7 @@ import {
   focusSessions,
   projectMembers,
   projects,
+  proposals,
 } from "@synap/database/schema";
 import { scopedDb, AccessContext } from "../access/index.js";
 import { TRPCError } from "@trpc/server";
@@ -166,13 +168,52 @@ function relationReadAccess(
 }
 
 /**
+ * An unresolved endpoint id may not name a nonexistent/inaccessible entity at
+ * all — it may name a PENDING PROPOSAL: `entities.create`'s governed path
+ * mints `proposedEntityId` up front (stored as `data.id`, and as the
+ * proposal's own `targetId`) but the id has no `entities` row until approval.
+ * That is the single most common way an agent lands here, straight out of
+ * `synap_create_entity`.
+ *
+ * Scoped to the CALLER's own proposals only (`createdBy` / `proposedByUserId`
+ * = userId) — the caller already produced/holds this id, so confirming it is
+ * their own pending proposal reveals nothing new about anyone else's data and
+ * does not widen the existence-oracle surface below.
+ */
+async function findOwnPendingEntityProposals(
+  database: typeof db,
+  userId: string,
+  entityIds: readonly string[]
+): Promise<Map<string, string>> {
+  if (entityIds.length === 0) return new Map();
+  const rows = await database.query.proposals.findMany({
+    where: and(
+      eq(proposals.targetType, "entity"),
+      inArray(proposals.targetId, [...entityIds]),
+      eq(proposals.status, ProposalStatus.PENDING),
+      or(
+        eq(proposals.createdBy, userId),
+        eq(proposals.proposedByUserId, userId)
+      )
+    ),
+    columns: { id: true, targetId: true },
+  });
+  return new Map(rows.map((row) => [row.targetId, row.id]));
+}
+
+/**
  * Resolve relation endpoints through the canonical entity access floor before
  * an edge is placed or written. A relation can inherit a shared workspace from
  * one endpoint, so accepting a private pod-wide endpoint here would otherwise
  * expose its identifier and relation metadata to every workspace member.
  *
- * Missing and inaccessible endpoints intentionally share one error. This
- * avoids turning the relation writer into an existence oracle for private data.
+ * A missing id and an id that exists but is private to someone else
+ * intentionally produce the SAME wording for each other — naming which case
+ * applies would make this writer an existence oracle for private data. What
+ * this DOES say, safely: which side (source/target) failed — the caller
+ * already supplied both ids, so that's not new information — and, when the
+ * id matches one of the CALLER'S OWN pending proposals, that concrete fact
+ * (see {@link findOwnPendingEntityProposals}).
  */
 export async function resolveVisibleRelationEndpoints(
   database: typeof db,
@@ -195,10 +236,35 @@ export async function resolveVisibleRelationEndpoints(
   });
 
   const foundIds = new Set(endpointRows.map((endpoint) => endpoint.id));
-  if (uniqueIds.some((id) => !foundIds.has(id))) {
+  const missingIds = uniqueIds.filter((id) => !foundIds.has(id));
+  if (missingIds.length > 0) {
+    // Positional labels — the only caller (relations.create) always passes
+    // [sourceEntityId, targetEntityId] in that order.
+    const labelFor = (id: string): string =>
+      endpointIds
+        .map((endpointId, index) =>
+          endpointId === id ? (index === 0 ? "source" : "target") : undefined
+        )
+        .filter((label): label is "source" | "target" => label !== undefined)
+        .join("/") || "endpoint";
+
+    const ownProposals = await findOwnPendingEntityProposals(
+      database,
+      userId,
+      missingIds
+    );
+
+    const details = missingIds.map((id) => {
+      const proposalId = ownProposals.get(id);
+      if (proposalId) {
+        return `${labelFor(id)} entity ${id} is not live yet — it is your pending proposal ${proposalId}; approve it first, or create both the entity and this edge in one reviewable call via synap_capture (entities + relations)`;
+      }
+      return `${labelFor(id)} entity ${id} is unavailable (it may not exist, or may not be visible to you)`;
+    });
+
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: "One or more relation endpoints are unavailable.",
+      message: `One or more relation endpoints are unavailable: ${details.join("; ")}`,
     });
   }
 

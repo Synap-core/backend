@@ -198,8 +198,15 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         case "not_found":
           return c.json({ error: outcome.message }, 404);
         case "deny":
+          // The refusal carries WHAT to enable and WHERE (`enable.hint` +
+          // `enable.url`) — a 403 that only says "refused" is the dead end this
+          // door existed as until now. 4xx bodies survive the egress sanitizer
+          // (only 5xx is redacted), so the link actually reaches the caller.
           return c.json(
-            { error: `Capability refused by gate: ${outcome.reason}` },
+            {
+              error: `Capability refused by gate: ${outcome.reason}`,
+              ...(outcome.enable ? { enable: outcome.enable } : {}),
+            },
             403
           );
         case "error": {

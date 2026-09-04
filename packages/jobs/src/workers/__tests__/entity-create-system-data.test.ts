@@ -71,9 +71,16 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("../../utils/automation-governance.js", () => ({
-  checkAutomationWriteOrPropose: mocks.gate,
-}));
+// PARTIAL mock: a total replacement here collected ZERO assertions — the whole
+// file went dark the moment the import graph reached `PolicyBlockedError`, which
+// the object did not list. Only the gate is faked; everything else is real.
+vi.mock("../../utils/automation-governance.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../utils/automation-governance.js")
+    >();
+  return { ...actual, checkAutomationWriteOrPropose: mocks.gate };
+});
 
 // Import AFTER the mocks so the executor picks up the mocked exports.
 const { executeOutputStep } = await import("../automation-executor.js");

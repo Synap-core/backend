@@ -531,7 +531,53 @@ export interface AskResponse {
   intent: string;
   answers?: AskAnswerBlock[];
   verdict?: string;
+  degraded?: string[];
+  pending?: KnowledgeAnswerPending;
   [key: string]: unknown;
+}
+
+/** One source cited by POST /knowledge/answer. */
+export interface KnowledgeAnswerSource {
+  substrate: string;
+  id: string;
+  title: string;
+}
+
+/** A pending capture that text-matched the query — not a fact; do not re-capture. */
+export interface KnowledgeAnswerPendingMatch {
+  proposalId: string;
+  proposalType: string;
+  summary?: string;
+  entityTitle?: string;
+  profileSlug?: string;
+  reviewUrl: string;
+  score: number;
+}
+
+export interface KnowledgeAnswerPending {
+  notice: string;
+  matches: KnowledgeAnswerPendingMatch[];
+}
+
+export interface KnowledgeAnswerFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/**
+ * POST /knowledge/answer — retrieve (same as ask) then synthesize.
+ * `answer` is null when synthesis is unavailable; sources/pending still return.
+ */
+export interface KnowledgeAnswerResponse {
+  answer: string | null;
+  sources: KnowledgeAnswerSource[];
+  routedTo: string[];
+  degraded: string[];
+  pending?: KnowledgeAnswerPending;
+  truncated?: { omitted: number; total: number };
+  error?: string;
+  failure?: KnowledgeAnswerFailure;
 }
 
 // ─── Diagnose (third door alongside ask + capture) ───────────────────────────

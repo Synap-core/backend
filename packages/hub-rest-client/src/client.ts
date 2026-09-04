@@ -34,6 +34,7 @@ import type {
   CaptureExecuteInput,
   CaptureExecuteResponse,
   AskResponse,
+  KnowledgeAnswerResponse,
   HubDiagnoseInput,
   HubDiagnoseResult,
   CreateFocusSessionInput,
@@ -1564,6 +1565,30 @@ export class HubRestClient {
       limit: input.limit,
       parseOnly: input.parseOnly,
     });
+  }
+
+  /**
+   * `answer` — wrap existing POST /knowledge/answer (retrieve + synthesize).
+   * Same retrieval as `ask`, then one focused synthesis. `answer` is null when
+   * synthesis is unavailable; `sources` and `pending` still return so the
+   * caller can show matches instead of inventing an empty success.
+   */
+  async answer(input: {
+    query: string;
+    workspaceId?: string;
+    projectId?: string;
+    limit?: number;
+  }): Promise<KnowledgeAnswerResponse> {
+    return this.request<KnowledgeAnswerResponse>(
+      "POST",
+      "/api/hub/knowledge/answer",
+      {
+        query: input.query,
+        workspaceId: input.workspaceId ?? this.workspaceId,
+        projectId: input.projectId,
+        limit: input.limit,
+      }
+    );
   }
 
   /**

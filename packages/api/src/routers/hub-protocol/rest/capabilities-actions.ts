@@ -6,10 +6,12 @@
  * has a real execute bridge, is approved, and has a live required connection.
  */
 import { z } from "@hono/zod-openapi";
+import { ABSTRACT_VERBS, isAbstractVerb } from "@synap/database/schema";
 import {
   listCapabilities,
   type ListCapabilitiesOptions,
 } from "../../../services/capabilities/capability-registry.js";
+import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { projectRunnableActions } from "../../../services/capabilities/action-projection.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -54,12 +56,20 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       "Projects the shared capability registry into executable actions. Draft, " +
       "disconnected, teaching-only, and catalog-only entries are omitted. Each " +
       "action carries its real parameter schema, connection state, approval " +
-      "posture, and effective execution mode. Requires a workspace lens.",
+      "posture, and effective execution mode. Requires a workspace lens. " +
+      "Pass `intent` (a closed ABSTRACT_VERBS value) to keep only the actions " +
+      "whose verb declares that routing intent — the vendor-independent way to " +
+      'ask "what can send a message?". A verb that declares no intent is ' +
+      "never matched (the vocabulary is closed; absence is never guessed).",
     request: {
       query: z.object({
         workspaceId: z.string().uuid(),
         query: z.string().optional(),
         kind: z.string().optional(),
+        // Vendor-independent ROUTING filter over the SAME rows — "which action
+        // can send a message", without knowing `gmail_send`. Resolved by the
+        // shared reverse index (`foldVerbsByIntent`), never a second lookup.
+        intent: z.enum(ABSTRACT_VERBS).optional(),
         limit: z.coerce.number().int().positive().max(100).optional(),
       }),
     },
@@ -98,6 +108,18 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
 
     const query = c.req.query("query")?.trim() || undefined;
     const kind = c.req.query("kind")?.trim() || undefined;
+    const intentRaw = c.req.query("intent")?.trim() || undefined;
+    // Reject an unknown intent at the door with the closed vocabulary named.
+    // Silently ignoring it would answer a DIFFERENT question than was asked
+    // (the whole action list, read as "these all send messages").
+    if (intentRaw !== undefined && !isAbstractVerb(intentRaw)) {
+      return c.json(
+        {
+          error: `Unknown intent "${intentRaw}". The vocabulary is closed: ${ABSTRACT_VERBS.join(", ")}`,
+        },
+        400
+      );
+    }
     const limitRaw = c.req.query("limit");
     const limit = limitRaw === undefined ? undefined : Number(limitRaw);
     if (
@@ -127,7 +149,22 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
         { workspaceId: acting.workspaceId!, userId: acting.userId },
         options
       );
-      return c.json({ actions: projectRunnableActions(capabilities) }, 200);
+      const actions = projectRunnableActions(capabilities);
+      if (intentRaw === undefined) return c.json({ actions }, 200);
+      // Fold through the SHARED reverse index so this door's notion of "declares
+      // intent X" is byte-for-byte the MCP door's (same dedup, same
+      // no-intent-means-absent rule). Never re-derive `verb.intent === x` here.
+      const matched = new Set(
+        (foldVerbsByIntent(capabilities).get(intentRaw) ?? []).map(
+          (m) => m.verbId
+        )
+      );
+      return c.json(
+        // A skill-only action carries no `verbId` and therefore no intent — it
+        // is correctly absent from an intent-filtered answer.
+        { actions: actions.filter((a) => !!a.verbId && matched.has(a.verbId)) },
+        200
+      );
     } catch (err) {
       logger.error({ err }, "capabilities actions failed");
       return c.json(

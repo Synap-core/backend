@@ -1379,11 +1379,38 @@ export interface TriggerNodeDef extends AutomationNodeBase {
 		config: AutomationTriggerConfig;
 	};
 }
+/**
+ * @deprecated for NEW authoring — use a `capability` node with
+ * `verbId: 'ai.generate'` (Synap Core's synchronous single-shot LLM verb).
+ *
+ * A `command` node is a DEAD END end-to-end: `executeCommandStep` calls
+ * `requestTaskExecute` with `taskId: data.commandId`, which the IS resolves as a
+ * BACKGROUND-TASK ROW (`tasks-route.ts`) — the shipped `'intelligence_execute'`
+ * has ZERO occurrences in the IS, so the lookup 404s and the step throws. Even
+ * with a row present, the prompt is only LOGGED: `executeTask(task, hubClient,
+ * body.context ?? {})` never receives `body.action`, and switches on
+ * `task.action` over four fixed analysis types. There is no generic
+ * "run this prompt" receiver behind this node type.
+ *
+ * KEPT, NOT DELETED — deliberately. Two live authoring doors still EMIT
+ * `command` nodes, so deleting the executor arm would turn a dead step into a
+ * crashing flow:
+ *   • `packages/api/src/routers/playbooks.ts` — the lazy starter graph handed to
+ *     every playbook that has no automation yet (a user can then save it).
+ *   • `packages/types/src/automations/sentence.ts` — the `run_command` sentence
+ *     action COMPILES to this node type, so it is reachable from the rule/
+ *     sentence authoring grammar.
+ * Pod-stored flows from either door are read, never rewritten, on the execution
+ * path. Retiring the node type therefore requires retiring those two doors
+ * first; this deprecation marks the direction without breaking stored rows.
+ */
 export interface CommandNodeDef extends AutomationNodeBase {
 	type: "command";
 	data: {
+		/** Presentational node label, as authored. Not read by the executor. */
+		label?: string;
 		commandId?: string;
-		commandTitle: string;
+		commandTitle?: string;
 		/** Maps step inputs to prior outputs. Uses template syntax: {{trigger.payload.entity.name}} */
 		inputMapping: Record<string, string>;
 		/** Optional prompt override that augments the command's template */
@@ -3969,98 +3996,6 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
 export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
 /** Lifecycle of a run. */
 export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed";
-/**
- * The `value` payload of a GUIDELINE row (key = 'guideline'). `posture` is
- * stored intent only — NOT yet an executor (see file header).
- */
-export interface GuidelineValue {
-	text: string;
-	posture?: "auto" | "propose";
-}
-/**
- * EventRecord - Database representation of an event
- *
- * This is the format returned from the database.
- * It maps directly to the events table structure.
- */
-export interface EventRecord {
-	id: string;
-	timestamp: Date;
-	subjectId: string;
-	subjectType: string;
-	eventType: string;
-	userId: string;
-	data: Record<string, unknown>;
-	metadata?: Record<string, unknown>;
-	version: number;
-	causationId?: string;
-	correlationId?: string;
-	source: string;
-	isAgent?: boolean;
-	agentUserId?: string;
-	agentType?: string;
-	model?: string;
-	provider?: string;
-	costUsd?: number | null;
-	tokensIn?: number;
-	tokensOut?: number;
-	tokensTotal?: number;
-	latencyMs?: number;
-	toolCount?: number;
-	runStatus?: string;
-	finishReason?: string;
-	workspaceId?: string;
-	proposalId?: string;
-	sessionId?: string;
-}
-/**
- * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
- *
- * `costUsd === null` means NOT "$0": it means no run in the bucket carried a
- * known price. Read it together with `costedRunCount` / `uncostedRunCount`
- * before rendering any currency. Same contract for `tokensIn` / `tokensOut`.
- */
-export interface AgentSpendBucket {
-	/** SUM of the known prices. null = nothing in this bucket had a known price. */
-	costUsd: number | null;
-	tokensIn: number | null;
-	tokensOut: number | null;
-	/** All runs in the bucket, priced or not. */
-	runCount: number;
-	/** Runs with `run_status = 'failed'`. */
-	failedCount: number;
-	/** Runs the provider DID report a price for — the denominator of `costUsd`. */
-	costedRunCount: number;
-	/** Runs with NO reported price. `> 0` means `costUsd` is a FLOOR, not a total. */
-	uncostedRunCount: number;
-}
-/** A single UTC calendar day of the window. */
-export interface AgentSpendDay extends AgentSpendBucket {
-	/** UTC calendar day, ISO `YYYY-MM-DD`. */
-	day: string;
-}
-export interface AgentSpendSummary {
-	/** Every UTC day in the window, oldest → newest, gaps filled with empties. */
-	days: AgentSpendDay[];
-	/** The whole window, aggregated in the SAME SQL pass as `days`. */
-	total: AgentSpendBucket;
-	/** Inclusive window bounds as UTC calendar days (ISO `YYYY-MM-DD`). */
-	windowStart: string;
-	windowEnd: string;
-}
-/** Minimal message fields for list/preview */
-export interface LinkedMessagePreview {
-	id: string;
-	channelId: string;
-	role: string;
-	content: string;
-	timestamp: Date;
-	userId: string;
-}
-export interface LinkedMessageItem {
-	link: MessageLink;
-	message: LinkedMessagePreview;
-}
 export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
@@ -4154,9 +4089,22 @@ export type RendererRef = {
 };
 /**
  * Which layer of `getEffectiveRenderer`'s chain produced the ref.
- * `"default"` means NOTHING is bound — layer 3's hardcoded fallback answered.
+ *
+ *   `"user"`      — a `renderer_bindings` row scoped to the calling user.
+ *   `"pod"`       — a `renderer_bindings` row scoped pod-wide.
+ *   `"workspace"` — a workspace binding: a `renderer_bindings` row scoped to a
+ *                   workspace, OR the legacy `workspaces.settings
+ *                   .profileRenderers` overlay. `binding` on the result tells
+ *                   the two apart.
+ *   `"profile"`   — `profiles.defaultRenderers` or a deprecated column.
+ *   `"default"`   — NOTHING is bound; the hardcoded fallback answered.
+ *
+ * ADDITIVE by design. `"user"` and `"pod"` are new values, and every consumer
+ * branches only on `source === "default"` (see `pickEffectiveRenderer` in
+ * `@synap-core/cell-runtime`, whose precedence flip fires on that value alone),
+ * so widening the union changes no behaviour.
  */
-export type ProfileRendererSource = "workspace" | "profile" | "default";
+export type ProfileRendererSource = "user" | "workspace" | "pod" | "profile" | "default";
 /**
  * Capability renderers — the capability-subject analogue of a profile's
  * `defaultRenderers`. A capability is NOT a row in `profiles` (it lives in the
@@ -4187,6 +4135,98 @@ export type CapabilityRendererSource = "workspace" | "capability" | "default";
 export interface EffectiveCapabilityRenderer {
 	pages: CapabilityRendererPage[];
 	source: CapabilityRendererSource;
+}
+/**
+ * The `value` payload of a GUIDELINE row (key = 'guideline'). `posture` is
+ * stored intent only — NOT yet an executor (see file header).
+ */
+export interface GuidelineValue {
+	text: string;
+	posture?: "auto" | "propose";
+}
+/**
+ * EventRecord - Database representation of an event
+ *
+ * This is the format returned from the database.
+ * It maps directly to the events table structure.
+ */
+export interface EventRecord {
+	id: string;
+	timestamp: Date;
+	subjectId: string;
+	subjectType: string;
+	eventType: string;
+	userId: string;
+	data: Record<string, unknown>;
+	metadata?: Record<string, unknown>;
+	version: number;
+	causationId?: string;
+	correlationId?: string;
+	source: string;
+	isAgent?: boolean;
+	agentUserId?: string;
+	agentType?: string;
+	model?: string;
+	provider?: string;
+	costUsd?: number | null;
+	tokensIn?: number;
+	tokensOut?: number;
+	tokensTotal?: number;
+	latencyMs?: number;
+	toolCount?: number;
+	runStatus?: string;
+	finishReason?: string;
+	workspaceId?: string;
+	proposalId?: string;
+	sessionId?: string;
+}
+/**
+ * One bucket of agent-run spend — a UTC day, or the whole window (`total`).
+ *
+ * `costUsd === null` means NOT "$0": it means no run in the bucket carried a
+ * known price. Read it together with `costedRunCount` / `uncostedRunCount`
+ * before rendering any currency. Same contract for `tokensIn` / `tokensOut`.
+ */
+export interface AgentSpendBucket {
+	/** SUM of the known prices. null = nothing in this bucket had a known price. */
+	costUsd: number | null;
+	tokensIn: number | null;
+	tokensOut: number | null;
+	/** All runs in the bucket, priced or not. */
+	runCount: number;
+	/** Runs with `run_status = 'failed'`. */
+	failedCount: number;
+	/** Runs the provider DID report a price for — the denominator of `costUsd`. */
+	costedRunCount: number;
+	/** Runs with NO reported price. `> 0` means `costUsd` is a FLOOR, not a total. */
+	uncostedRunCount: number;
+}
+/** A single UTC calendar day of the window. */
+export interface AgentSpendDay extends AgentSpendBucket {
+	/** UTC calendar day, ISO `YYYY-MM-DD`. */
+	day: string;
+}
+export interface AgentSpendSummary {
+	/** Every UTC day in the window, oldest → newest, gaps filled with empties. */
+	days: AgentSpendDay[];
+	/** The whole window, aggregated in the SAME SQL pass as `days`. */
+	total: AgentSpendBucket;
+	/** Inclusive window bounds as UTC calendar days (ISO `YYYY-MM-DD`). */
+	windowStart: string;
+	windowEnd: string;
+}
+/** Minimal message fields for list/preview */
+export interface LinkedMessagePreview {
+	id: string;
+	channelId: string;
+	role: string;
+	content: string;
+	timestamp: Date;
+	userId: string;
+}
+export interface LinkedMessageItem {
+	link: MessageLink;
+	message: LinkedMessagePreview;
 }
 export interface ProjectDedupCandidate {
 	id: string;
@@ -5144,6 +5184,13 @@ export interface SearchResponse {
 	searchTimeMs: number;
 	facetCounts?: Record<string, Record<string, number>>;
 }
+declare const PROPOSAL_CLASSES: readonly [
+	"ephemeral",
+	"curatorial",
+	"objectWork",
+	"governance"
+];
+export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
 /** One distinct origin behind a cluster's proposals. */
 export interface ProposalClusterSource {
 	agentLabel?: string;
@@ -5161,6 +5208,14 @@ export interface ProposalCluster {
 	targetType: string;
 	/** Human label for the shared target (name, else `<type> · <shortId>`). */
 	targetLabel: string;
+	/**
+	 * Decision CLASS of the cluster — derived from the fingerprint's own
+	 * (proposalType, targetType), which every member shares BY CONSTRUCTION:
+	 * both columns are fingerprint inputs, so a cluster can never mix classes.
+	 */
+	class: ProposalClass;
+	/** Hours this class stays answerable; `null` when it never expires. */
+	lifetimeHours: number | null;
 	count: number;
 	/** Up to `sampleCap` member proposal ids (newest-first as fed). */
 	sampleProposalIds: string[];
@@ -6095,6 +6150,149 @@ export interface CapabilityVerbState extends ToolVerb {
 		description?: string;
 	}>;
 }
+export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial" | "unavailable";
+export interface CapabilityCardConnection {
+	required: boolean;
+	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */
+	kind: "provider" | "vault" | null;
+	/** providerConfigKey, e.g. "google" — present for provider connections. */
+	provider?: string;
+	/**
+	 * `missing` = connectable, the user just hasn't. `unavailable` = this POD
+	 * cannot offer it at all (Nango answered and doesn't declare the provider), so
+	 * "Connect" would dead-end — only claimed when availability is actually KNOWN.
+	 */
+	state: "connected" | "missing" | "expired" | "unavailable";
+	/** connectionId (or display account) when connected. */
+	account?: string;
+	/**
+	 * True for a pod-internal credential (a `vault://<id>` secret the operator
+	 * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
+	 * distinguish "internal key" from "external account" without re-parsing refs.
+	 */
+	internal?: boolean;
+}
+/** A single declared parameter of a verb (richer than `params: string[]`). */
+export interface CapabilityCardVerbParam {
+	name: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+}
+export interface CapabilityCardVerb {
+	/** Backing skill NAME — the verbId the execute door resolves. */
+	verbId: string;
+	/** Backing skill UUID (installed verbs only; null for an available template). */
+	skillId: string | null;
+	label: string;
+	/** One-line description from the backing skill (`skill.description`). */
+	description?: string | null;
+	/**
+	 * read / write / action — derived (read-ish name → read; mutating-action name
+	 * → action; else write), honoring an explicit `metadata.verbType` override.
+	 * `action` is additive: a mutating verb that is an action (reply/send/…) rather
+	 * than a create/update. TODO: promote fully to explicit skill metadata.
+	 */
+	type: "read" | "write" | "action";
+	/** Backing skill `approved === true`. */
+	enabled: boolean;
+	governance: "auto" | "propose";
+	/** enabled AND (no connection required OR connection connected). */
+	runnable: boolean;
+	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
+	params: string[];
+	/**
+	 * Typed parameter schema (name + type + required + description) derived from the
+	 * skill's `parameters` JSON-schema — for the run form + inspector, which need
+	 * types, not just names. Empty when the skill declares no parameters.
+	 */
+	paramsSchema: CapabilityCardVerbParam[];
+	/**
+	 * Free-form functional tag from the backing skill (`skills.category`, e.g.
+	 * "enrichment") — lets a surface find "the enrichment verbs for this entity"
+	 * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
+	 * its template definition) declares no category.
+	 */
+	category?: string;
+	/**
+	 * ROUTING intent (`ABSTRACT_VERBS`) — what this verb MEANS independent of its
+	 * vendor, so a surface can ask "what can send a message?" without knowing
+	 * `gmail_send`. Read off the OWNING TOOL's `capabilities[]` verb-catalog entry
+	 * (installed cards) or the template's own skill def (available cards) — the
+	 * two places the applier writes it. `skills` has no `intent` column, so a card
+	 * verb can only carry it by that join.
+	 *
+	 * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
+	 * declares no intent must stay out of every intent bucket (same rule as
+	 * `foldVerbsByIntent`).
+	 */
+	intent?: AbstractVerb$1;
+}
+/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
+export interface CapabilityCardInstallParam {
+	name: string;
+	label?: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+	secret?: boolean;
+}
+export interface CapabilityCard {
+	/** Container id; null for an available-only template. */
+	id: string | null;
+	/** Stable identity: template key if known, else container id/slug. */
+	key: string;
+	/** Pack display name, e.g. "Nango — Google Workspace". */
+	name: string;
+	description?: string | null;
+	source: "installed" | "available";
+	status: CapabilityCardStatus;
+	connection?: CapabilityCardConnection;
+	verbs: CapabilityCardVerb[];
+	/**
+	 * The pack's composition — the names of its member tools + skills and the
+	 * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
+	 * inside" without re-deriving from verbs/connection. Derived from the same
+	 * container members (or template def) the card folds in.
+	 */
+	anatomy: {
+		tools: string[];
+		skills: string[];
+		credential?: string;
+	};
+	/**
+	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
+	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
+	 * apply WITH params (which wires the credential into the tool), instead of a
+	 * disconnected post-hoc vault write. Empty when the template declares none.
+	 */
+	installParams: CapabilityCardInstallParam[];
+	/**
+	 * The ONE thing to do next, and WHERE. `url` is a deep link to this card
+	 * (absent for an available-only template, which has no installed container);
+	 * `opensIn` says which client can follow it — see `CapabilityNextAction`.
+	 */
+	nextAction: CapabilityNextAction;
+}
+/**
+ * Where the link opens. Only `"desktop"` today, and it is not decoration: the
+ * `/open/capability/<id>` route bounces to `synap://`, so a human without the
+ * desktop app cannot follow it. A future pod-admin capability route would add a
+ * `"web"` value here — until then, claiming one would be a lie.
+ */
+export type CapabilityActionSurface = "desktop";
+export interface CapabilityNextAction {
+	kind: "add" | "connect" | "enable" | "run" | "none";
+	hint: string;
+	/**
+	 * Deep link to the capability's own card — where `kind` is performed.
+	 * Absent for a brick in NO container (`containerId` null): there is no card
+	 * to open, and a link to a route that resolves to nothing is worse than none.
+	 */
+	url?: string;
+	/** Present exactly when `url` is. See `CapabilityActionSurface`. */
+	opensIn?: CapabilityActionSurface;
+}
 /**
  * A verb read-model row PLUS the declarative subset's `responseShape` — the
  * projection of what a provider verb RETURNS.
@@ -6302,14 +6500,28 @@ export interface DivergedBehaviour extends RuleBehaviourRecord {
 	status: "matches" | "diverged" | "missing";
 }
 /**
+ * The clause a refusal is about, in the user's own sentence vocabulary. A rule
+ * refusal that does not name the clause is unactionable — the whole point is
+ * that the author can see which half of their sentence failed.
+ */
+export type RuleClause = "WHEN" | "WHERE" | "THEN";
+export interface RuleCompileFailure {
+	clause: RuleClause;
+	/** Short, human, safe to show verbatim. Names the clause and the reason. */
+	reason: string;
+}
+/**
  * NON-FATAL signal: the rule's text describes something that RUNS, but no
  * behaviour is attached to it, so nothing will.
  *
- * This is INFORMATION, not a refusal — the rule is created either way. It
- * exists because `createRuleGoverned` LINKS pre-existing automations and never
- * compiles text into a flow; a caller that passes `automationIds: []` (every
- * live caller does today) would otherwise get a `skills` row of prose that
- * silently never executes, and be told nothing about it.
+ * This is INFORMATION, not a refusal — the rule is created either way. It now
+ * covers exactly ONE case: a rule whose text describes a behaviour but which
+ * carries NO sentence to compile and NO linked automation, so it is stored as
+ * prose that will never execute. A rule WITH a sentence never carries this — it
+ * either compiles into an automation or the create is refused outright.
+ * (Before the compiler existed this door only LINKED pre-existing automations
+ * and every live caller passed `automationIds: []`, so this was the common
+ * case rather than the residue.)
  *
  * A `fact` rule ("Acme prefers async") is legitimately prose-only, so it never
  * carries this. Neither does a one-shot ask, which is not a standing rule at
@@ -6324,6 +6536,14 @@ export interface RuleBehaviourGap {
 export type CreateRuleGovernedResult = {
 	status: "created";
 	ruleId: string;
+	/**
+	 * Every automation this rule is now linked to — the ones passed in PLUS
+	 * the one compiled from the sentence here. Returned because the approval
+	 * executor writes a `materialized` receipt for revert/audit, and reading
+	 * the request payload instead omitted the only automation the approval
+	 * actually created.
+	 */
+	automationIds: string[];
 	needsBehaviour?: RuleBehaviourGap;
 } | {
 	status: "proposed";
@@ -6332,6 +6552,12 @@ export type CreateRuleGovernedResult = {
 } | {
 	status: "denied";
 	reason: string;
+	/**
+	 * Present when the refusal came from COMPILING the sentence — names the
+	 * clause (WHEN / WHERE / THEN) so the editor can point at the row that
+	 * failed instead of showing a bare error.
+	 */
+	failure?: RuleCompileFailure;
 };
 /** Which read paths the newly-created verb was wired into. */
 export interface WireCreatedVerbResult {
@@ -6837,136 +7063,6 @@ export interface CapabilityConnectionView {
 	 */
 	persisted: boolean;
 }
-/**
- * Capability CATALOG read-model — the pack-grouped, status-computed view that is
- * the keystone of the capability UX consolidation (see CAPABILITIES-NORTH-STAR.md).
- *
- * Where `listCapabilities` (capability-registry.ts) returns a FLAT list — every
- * tool and every skill as its own (duplicated) entry — this builder returns ONE
- * `CapabilityCard` per PACK:
- *   - one card per installed capability CONTAINER (`capabilities` table), with its
- *     member tools (→ connection) and member skills (→ verbs) folded in, plus
- *   - one card per AVAILABLE template (from the Control Plane catalog — the
- *     single source of truth) that has NO matching installed container.
- *
- * The single computed `status` per card drives every surface (CLI / browser /
- * Raycast): each card carries exactly one `nextAction`. De-dup is by pack
- * identity (a container's NAME, which the applier sets to the template's name) —
- * fixing today's read-model that surfaces duplicate bare tools/skills.
- *
- * Read-only. No writes, no governance (reads are auto-approved). Resilient: a
- * connector-resolver failure degrades a connection to `state:"missing"`, never a
- * 500 — the catalog always renders.
- */
-export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial" | "unavailable";
-export interface CapabilityCardConnection {
-	required: boolean;
-	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */
-	kind: "provider" | "vault" | null;
-	/** providerConfigKey, e.g. "google" — present for provider connections. */
-	provider?: string;
-	/**
-	 * `missing` = connectable, the user just hasn't. `unavailable` = this POD
-	 * cannot offer it at all (Nango answered and doesn't declare the provider), so
-	 * "Connect" would dead-end — only claimed when availability is actually KNOWN.
-	 */
-	state: "connected" | "missing" | "expired" | "unavailable";
-	/** connectionId (or display account) when connected. */
-	account?: string;
-	/**
-	 * True for a pod-internal credential (a `vault://<id>` secret the operator
-	 * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
-	 * distinguish "internal key" from "external account" without re-parsing refs.
-	 */
-	internal?: boolean;
-}
-/** A single declared parameter of a verb (richer than `params: string[]`). */
-export interface CapabilityCardVerbParam {
-	name: string;
-	type?: string;
-	required?: boolean;
-	description?: string;
-}
-export interface CapabilityCardVerb {
-	/** Backing skill NAME — the verbId the execute door resolves. */
-	verbId: string;
-	/** Backing skill UUID (installed verbs only; null for an available template). */
-	skillId: string | null;
-	label: string;
-	/** One-line description from the backing skill (`skill.description`). */
-	description?: string | null;
-	/**
-	 * read / write / action — derived (read-ish name → read; mutating-action name
-	 * → action; else write), honoring an explicit `metadata.verbType` override.
-	 * `action` is additive: a mutating verb that is an action (reply/send/…) rather
-	 * than a create/update. TODO: promote fully to explicit skill metadata.
-	 */
-	type: "read" | "write" | "action";
-	/** Backing skill `approved === true`. */
-	enabled: boolean;
-	governance: "auto" | "propose";
-	/** enabled AND (no connection required OR connection connected). */
-	runnable: boolean;
-	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
-	params: string[];
-	/**
-	 * Typed parameter schema (name + type + required + description) derived from the
-	 * skill's `parameters` JSON-schema — for the run form + inspector, which need
-	 * types, not just names. Empty when the skill declares no parameters.
-	 */
-	paramsSchema: CapabilityCardVerbParam[];
-	/**
-	 * Free-form functional tag from the backing skill (`skills.category`, e.g.
-	 * "enrichment") — lets a surface find "the enrichment verbs for this entity"
-	 * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
-	 * its template definition) declares no category.
-	 */
-	category?: string;
-}
-/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
-export interface CapabilityCardInstallParam {
-	name: string;
-	label?: string;
-	type?: string;
-	required?: boolean;
-	description?: string;
-	secret?: boolean;
-}
-export interface CapabilityCard {
-	/** Container id; null for an available-only template. */
-	id: string | null;
-	/** Stable identity: template key if known, else container id/slug. */
-	key: string;
-	/** Pack display name, e.g. "Nango — Google Workspace". */
-	name: string;
-	description?: string | null;
-	source: "installed" | "available";
-	status: CapabilityCardStatus;
-	connection?: CapabilityCardConnection;
-	verbs: CapabilityCardVerb[];
-	/**
-	 * The pack's composition — the names of its member tools + skills and the
-	 * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
-	 * inside" without re-deriving from verbs/connection. Derived from the same
-	 * container members (or template def) the card folds in.
-	 */
-	anatomy: {
-		tools: string[];
-		skills: string[];
-		credential?: string;
-	};
-	/**
-	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
-	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
-	 * apply WITH params (which wires the credential into the tool), instead of a
-	 * disconnected post-hoc vault write. Empty when the template declares none.
-	 */
-	installParams: CapabilityCardInstallParam[];
-	nextAction: {
-		kind: "add" | "connect" | "enable" | "run" | "none";
-		hint: string;
-	};
-}
 export type AutomationCardStatus = "available" | "installed";
 export interface AutomationCard {
 	/** Discriminator — this is an AUTOMATION card, never a capability. */
@@ -7123,11 +7219,28 @@ export type ExecuteCapabilityResult = {
 } | {
 	kind: "deny";
 	reason: string;
+	/**
+	 * ATTEMPT moment: WHAT to enable and WHERE, as a clickable link the agent
+	 * can hand straight to the human. The refusal already knew the cause; it
+	 * just had no way to make it actionable — 0 of 11 containers on the live
+	 * pod are approved, so this is the wall every run hits today.
+	 *
+	 * A deny from this gate is ALWAYS an approval problem (a dead connection
+	 * surfaces as `kind:"error"` with `errorClass:"no_connection"`, which
+	 * carries its own `connect` block) — the two fixes stay distinct.
+	 */
+	enable?: CapabilityNextAction;
 } | {
 	kind: "error";
 	message: string;
 	errorClass?: FailureErrorClass;
 	providerRef?: string;
+	/**
+	 * CONNECTION moment: a `no_connection` / `auth` failure means the
+	 * container is fine and the ACCOUNT is not — a different fix from the
+	 * approval `deny` above, so it says `connect`, never `enable`.
+	 */
+	enable?: CapabilityNextAction;
 } | {
 	kind: "not_found";
 	message: string;
@@ -7277,7 +7390,7 @@ export interface GraphNeighbor extends GraphNode {
 	edgeType: string;
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
-	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in";
+	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in" | "body";
 }
 /** "Fetch X, get X + everything it's linked to, typed." */
 export interface GraphEnvelope {
@@ -8325,6 +8438,49 @@ export interface IntegrationRoutingRule {
 	channelId: string | null;
 	lastRunAt: string | null;
 }
+/** What a signal points AT — an object-nav address the browser can dispatch. */
+export interface SignalTarget {
+	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
+	kind: string;
+	id: string;
+}
+export type SignalKind = 
+/** A collapsed group of identical-shape pending proposals. */
+"proposal-cluster"
+/** One unread, non-proposal notification. */
+ | "notification"
+/** A past `events` row (history lens). */
+ | "event"
+/** A proposal that has been approved / rejected / expired (history lens). */
+ | "decided-proposal";
+/** One row in either lens. Deliberately identical in both, so the tray and the
+ *  history feed render from ONE shape. */
+export interface Signal {
+	id: string;
+	kind: SignalKind;
+	/** Human title, taken from data on the row — never composed ad hoc. */
+	title: string;
+	/** How many underlying things this row stands for (1 unless a cluster). */
+	count: number;
+	occurredAt: Date;
+	/** Object-nav address, or null when the source has no addressable target. */
+	target: SignalTarget | null;
+	/** Notification category vocabulary: governance | data | ai | system | inbox. */
+	category: string;
+	/**
+	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
+	 * cluster (which derives it through `proposalClassFields`, the one door).
+	 * Absent on every other kind — a notification or an event has no class.
+	 */
+	class?: ProposalClass;
+	/**
+	 * Hours this class stays answerable; `null` when it never expires. Carried
+	 * WITH `class` and only with it, for the same reason `ProposalClassFields`
+	 * returns the pair: a surface that shows the ephemeral countdown must never
+	 * re-derive the lifetime from a table it does not own.
+	 */
+	lifetimeHours?: number | null;
+}
 /**
  * Core API Router
  */
@@ -8538,7 +8694,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				instructions?: string | undefined;
 				anchorEntityId?: string | undefined;
-				dedupMode?: "title" | "semantic" | "both" | undefined;
+				dedupMode?: "title" | "both" | "semantic" | undefined;
 			};
 			output: {
 				proposals: {
@@ -8807,7 +8963,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				idempotencyKey?: string | undefined;
 				projectId?: string | null | undefined;
-				workspaceRouting?: "auto" | "ask" | "locked" | undefined;
+				workspaceRouting?: "auto" | "locked" | "ask" | undefined;
 				aiWorkspaceId?: string | null | undefined;
 				aiWorkspaceConfidence?: number | null | undefined;
 				aiWorkspaceReason?: string | null | undefined;
@@ -9046,7 +9202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					source?: string | undefined;
 					externalId?: string | undefined;
 					signals?: {
-						type: "email" | "phone" | "telegram_phone" | "linkedin_url" | "github_username" | "twitter_handle" | "website";
+						type: "email" | "website" | "phone" | "telegram_phone" | "linkedin_url" | "github_username" | "twitter_handle";
 						value: string;
 					}[] | undefined;
 					existingEntityId?: string | undefined;
@@ -9141,7 +9297,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				global?: boolean | undefined;
 				targetWorkspaceId?: string | undefined;
 				workspaceScoped?: boolean | undefined;
-				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast" | undefined;
+				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				viewContext?: {
@@ -9655,7 +9811,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				contextEntityId?: string | null | undefined;
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
-				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast" | undefined;
+				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -9709,7 +9865,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: string | undefined;
 				properties?: Record<string, unknown> | undefined;
 				workspaceId?: string | null | undefined;
-				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast" | undefined;
+				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -9758,7 +9914,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		detachFacet: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				facetId: string;
-				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast" | undefined;
+				source?: "agent" | "user" | "system" | "ai" | "intelligence" | "cli" | "raycast" | "openwebui-pipeline" | "extension" | "n8n" | undefined;
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				automationContext?: {
@@ -11569,6 +11725,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectId?: string | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
+				automationId?: string | undefined;
 				status?: "pending" | "rejected" | "all" | "validated" | undefined;
 				cursor?: string | undefined;
 			};
@@ -11670,6 +11827,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
+				targetType?: "automation" | "playbook" | "skill" | "profile" | "entity" | "document" | "view" | "whiteboard" | undefined;
+				threadId?: string | undefined;
+				sessionId?: string | undefined;
+				projectId?: string | undefined;
+				automationId?: string | undefined;
 				status?: "pending" | "rejected" | undefined;
 				limit?: number | undefined;
 				scanLimit?: number | undefined;
@@ -13278,7 +13440,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				title: string;
 				content?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
+				type?: "code" | "text" | "markdown" | "html" | "pdf" | "docx" | undefined;
 				projectId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
@@ -13294,7 +13456,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		upload: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				type: "code" | "text" | "markdown" | "pdf" | "docx" | "html";
+				type: "code" | "text" | "markdown" | "html" | "pdf" | "docx";
 				content: string;
 				title?: string | undefined;
 				language?: string | undefined;
@@ -13463,7 +13625,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				projectId?: string | undefined;
-				type?: "code" | "text" | "markdown" | "pdf" | "docx" | "html" | undefined;
+				type?: "code" | "text" | "markdown" | "html" | "pdf" | "docx" | undefined;
 			};
 			output: {
 				documents: {
@@ -15099,6 +15261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							provider: string;
 						};
 						verbs: CapabilityVerbStateWithResponseShape[];
+						blocked?: CapabilityNextAction;
 					}>;
 					skills: Array<{
 						id: string;
@@ -15107,6 +15270,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						governance: "auto" | "propose" | "none";
 						containerId: string | null;
 						containerName: string | null;
+						blocked?: CapabilityNextAction;
 					}>;
 					commands: Array<{
 						id: string;
@@ -15131,7 +15295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					toolName: string;
 					verbName: string;
-					method: "POST" | "GET" | "DELETE" | "PUT" | "PATCH";
+					method: "POST" | "GET" | "PUT" | "PATCH" | "DELETE";
 					pathTemplate: string;
 					description?: string | undefined;
 					query?: Record<string, string | string[]> | undefined;
@@ -15727,7 +15891,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "both" | "target" | undefined;
+				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -15757,7 +15921,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "both" | "target" | undefined;
+				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -17546,7 +17710,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "calendar" | "table" | "all" | "whiteboard" | "list" | "graph" | "timeline" | "kanban" | "grid" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "calendar" | "table" | "all" | "whiteboard" | "grid" | "list" | "graph" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -18020,7 +18184,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					compactMode?: boolean | undefined;
 					fontSize?: string | undefined;
 					animations?: boolean | undefined;
-					defaultView?: "list" | "timeline" | "grid" | undefined;
+					defaultView?: "grid" | "list" | "timeline" | undefined;
 					entityOpenMode?: "side" | "floating" | "modal" | undefined;
 				} | undefined;
 				graphPreferences?: {
@@ -18109,7 +18273,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		updateViewMode: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				context: "entities" | "documents" | "views";
-				mode: "table" | "list" | "grid";
+				mode: "table" | "grid" | "list";
 			};
 			output: {
 				success: boolean;
@@ -18911,6 +19075,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expiresAt?: string | undefined;
 				factSkillId?: string | undefined;
 				automationIds?: string[] | undefined;
+				sentence?: unknown;
 			};
 			output: CreateRuleGovernedResult;
 			meta: object;
@@ -20046,7 +20211,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					props?: Record<string, unknown> | undefined;
 					title?: string | undefined;
 				} | null;
-				scope?: "workspace" | "pod" | undefined;
+				scope?: "user" | "workspace" | "pod" | undefined;
+				subjectId?: string | undefined;
 			};
 			output: {
 				success: boolean;
@@ -21830,7 +21996,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		analyze: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "bookmark" | "obsidian" | "markdown" | "csv";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -21865,7 +22031,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "bookmark" | "obsidian" | "markdown" | "csv";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				workspaceId?: string | undefined;
 				operations?: Record<string, unknown>[] | undefined;
 				idempotencyKey?: string | undefined;
@@ -21884,7 +22050,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		analyzeLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "bookmark" | "obsidian" | "markdown" | "csv";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -21938,7 +22104,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		enqueueLargeImport: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "bookmark" | "obsidian" | "markdown" | "csv";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				items: {
 					path: string;
 					content: string;
@@ -21961,7 +22127,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		applyLarge: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				source: "bookmark" | "obsidian" | "markdown" | "csv";
+				source: "obsidian" | "markdown" | "csv" | "bookmark";
 				workspaceId?: string | undefined;
 				idempotencyKey?: string | undefined;
 				proposalId?: string | undefined;
@@ -22592,7 +22758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		addPeer: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				peerPodUrl: string;
-				direction: "push" | "bidirectional" | "inbound" | "pull";
+				direction: "push" | "bidirectional" | "pull" | "inbound";
 				label?: string | undefined;
 				authToken?: string | undefined;
 				workspaceIds?: string[] | undefined;
@@ -25684,7 +25850,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType?: "automation" | "playbook" | "session" | "capability" | "chat" | "capture" | "agent_write" | undefined;
+				flowType?: "automation" | "playbook" | "session" | "capability" | "chat" | "agent_write" | "capture" | undefined;
 				flowId?: string | undefined;
 				scope?: {
 					workspaceId?: string | undefined;
@@ -25729,7 +25895,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				flowType: "automation" | "playbook" | "session" | "capability" | "chat" | "capture" | "agent_write";
+				flowType: "automation" | "playbook" | "session" | "capability" | "chat" | "agent_write" | "capture";
 				id: string;
 			};
 			output: UnifiedRunDetail | null;
@@ -26642,6 +26808,40 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	signals: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+			data: import("@trpc/server").TRPCDefaultErrorData;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				lens?: "needs-you" | "history" | undefined;
+				limit?: number | undefined;
+				cursor?: string | undefined;
+				workspaceId?: string | null | undefined;
+			};
+			output: {
+				signals: Signal[];
+			};
+			meta: object;
+		}>;
+		count: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | null | undefined;
+			} | undefined;
+			output: {
+				needsYou: number;
+				distinct: number;
+				truncated: boolean;
+			};
+			meta: object;
+		}>;
+	}>>;
 	typesense: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
@@ -26824,8 +27024,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				preferences: {
 					interests: string[];
 					dislikedTopics: string[];
-					persona: "cto" | "founder" | "sales" | "marketing" | "general" | "project-manager" | "researcher";
-					frequency: "daily" | "weekly" | "hourly" | "realtime";
+					persona: "cto" | "sales" | "marketing" | "founder" | "general" | "project-manager" | "researcher";
+					frequency: "hourly" | "daily" | "weekly" | "realtime";
 					sources: {
 						id: string;
 						url: string;

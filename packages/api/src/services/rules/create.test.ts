@@ -40,6 +40,21 @@ vi.mock("../links/links-service.js", () => ({
   createLinks: async () => undefined,
 }));
 
+/**
+ * The ONE automation insert door. Mocked so these tests stay DB-free, but the
+ * arguments are recorded: the draft floor is derived from the principal INSIDE
+ * that door, and what this door is handed is exactly what the compiler produced.
+ */
+const materializeCalls: Array<Record<string, unknown>> = [];
+let materializeThrows: Error | null = null;
+vi.mock("../../routers/automations.js", () => ({
+  materializeAutomationForPrincipal: async (args: Record<string, unknown>) => {
+    materializeCalls.push(args);
+    if (materializeThrows) throw materializeThrows;
+    return "33333333-3333-3333-3333-333333333333";
+  },
+}));
+
 const gateCalls: Array<Record<string, unknown>> = [];
 
 const { createRuleGoverned } = await import("./create.js");
@@ -62,6 +77,8 @@ const metadataOfLastInsert = () => {
 beforeEach(() => {
   inserted.length = 0;
   gateCalls.length = 0;
+  materializeCalls.length = 0;
+  materializeThrows = null;
   permResult = { allowed: true };
 });
 
@@ -154,5 +171,156 @@ describe("propose → approve carries the routing", () => {
     permResult = { allowed: true };
     await create({ intent: BEHAVIOUR });
     expect(metadataOfLastInsert()?.routing).toEqual(proposedRouting);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COMPILE OR REFUSE — the reason this door exists.
+//
+// Before this, `createRuleGoverned` only LINKED pre-existing automations and
+// every live caller passed `automationIds: []`, so a behavioural rule became
+// prose that could never run and was told so only in a non-fatal signal. A rule
+// that carries a sentence now either compiles to an automation or is REFUSED
+// with the failing clause named.
+// ---------------------------------------------------------------------------
+
+/** A well-formed sentence: WHEN an entity is created → THEN notify. */
+const GOOD_SENTENCE = {
+  trigger: {
+    triggerType: "event" as const,
+    subjectCategory: "entity" as const,
+    actionVerb: "created" as const,
+  },
+  conditions: [],
+  actions: [{ type: "notify" as const, config: { message: "hi" } }],
+};
+
+describe("a rule that carries a sentence compiles or is refused", () => {
+  it("compiles the sentence into an automation through the ONE insert door", async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(result.status).toBe("created");
+    expect(materializeCalls).toHaveLength(1);
+
+    const def = materializeCalls[0]!.definition as Record<string, unknown>;
+    // Executor-true, not merely well-formed: the imperative event pattern the
+    // runtime actually emits, and an `output` node the executor dispatches.
+    expect((def.triggerConfig as Record<string, unknown>).eventPattern).toBe(
+      "entity.create.completed"
+    );
+    const nodes = (
+      def.flowDefinition as { nodes: Array<Record<string, unknown>> }
+    ).nodes;
+    expect(nodes.some((n) => n.type === "output")).toBe(true);
+  });
+
+  it("links the new automation to the rule, so `needsBehaviour` is not reported", async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(result).not.toHaveProperty("needsBehaviour");
+    expect(metadataOfLastInsert()?.behaviours?.[0]?.automationId).toBe(
+      "33333333-3333-3333-3333-333333333333"
+    );
+  });
+
+  it("passes agentUserId to the door so an agent-authored rule's automation lands DRAFT", async () => {
+    // The floor itself lives inside `materializeAutomationForPrincipal` (it must
+    // not be a flag a caller can forget). What this door owes is the principal.
+    await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      agentUserId: "agent-1",
+    });
+    expect(materializeCalls.at(-1)).toMatchObject({ agentUserId: "agent-1" });
+  });
+
+  it("the APPROVAL replay still lands the automation DRAFT for an agent-authored rule", async () => {
+    // The replay runs as the APPROVER (no `agentUserId`, so the re-entrant gate
+    // auto-grants) — but the draft floor must key on who AUTHORED the behaviour.
+    // Without the separate field this materialized an ACTIVE automation, making
+    // `rule/create` a wider path to a live trigger than `automation/create`.
+    await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      agentUserId: undefined,
+      behaviourAuthorAgentUserId: "agent-1",
+    });
+    expect(materializeCalls.at(-1)).toMatchObject({ agentUserId: "agent-1" });
+  });
+
+  it("a HUMAN-authored rule approved by someone else is NOT forced to draft", async () => {
+    // A member who lacks `create` is not a prompt-injection surface; forcing
+    // their approved rule to draft would make approval a half-action.
+    await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(materializeCalls.at(-1)).not.toHaveProperty("agentUserId");
+  });
+
+  it("REFUSES a sentence with no THEN, naming the clause", async () => {
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: { ...GOOD_SENTENCE, actions: [] },
+    });
+    expect(result).toMatchObject({
+      status: "denied",
+      failure: { clause: "THEN" },
+    });
+    // Nothing persisted, nothing proposed, no automation.
+    expect(inserted).toHaveLength(0);
+    expect(gateCalls).toHaveLength(0);
+    expect(materializeCalls).toHaveLength(0);
+  });
+
+  it("REFUSES a WHEN whose compiled pattern the runtime cannot match", async () => {
+    // `approved` is an ActionVerb the editor offers with no `entity.*` event —
+    // refused by the runtime's own validator, not by a list in this door.
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: {
+        ...GOOD_SENTENCE,
+        trigger: { ...GOOD_SENTENCE.trigger, actionVerb: "approved" as const },
+      },
+    });
+    expect(result).toMatchObject({
+      status: "denied",
+      failure: { clause: "WHEN" },
+    });
+  });
+
+  it("REFUSES an unreadable sentence rather than storing prose that cannot run", async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: { nope: 1 } });
+    expect(result.status).toBe("denied");
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("REFUSES when the insert door rejects the flow against the live catalog", async () => {
+    // The compiler is pure — it cannot know whether a commandId exists. The
+    // door can, and its refusal must reach the author, not be swallowed into a
+    // rule kept as prose.
+    materializeThrows = new Error('Unknown command "nope"');
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    expect(result).toMatchObject({
+      status: "denied",
+      failure: { clause: "THEN" },
+    });
+  });
+
+  it("carries the sentence in the gate payload so approval rebuilds the SAME behaviour", async () => {
+    permResult = { proposalId: "p-3" };
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      agentUserId: "agent-1",
+    });
+    expect(result.status).toBe("proposed");
+    expect(
+      (gateCalls.at(-1)?.data as Record<string, unknown>).sentence
+    ).toEqual(GOOD_SENTENCE);
+    // A proposed rule leaves NO automation behind — the owner has not approved.
+    expect(materializeCalls).toHaveLength(0);
+  });
+
+  it("a prose-only rule with no sentence is unchanged (still creates, still reports)", async () => {
+    const result = await create({ intent: BEHAVIOUR });
+    expect(result.status).toBe("created");
+    expect(materializeCalls).toHaveLength(0);
+    expect(result).toHaveProperty("needsBehaviour");
   });
 });

@@ -56,6 +56,11 @@ import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
+import {
+  connectionFromRegistry,
+  resolveCapabilityBlock,
+  type CapabilityNextAction,
+} from "./capability-enable-link.js";
 
 export interface CapabilityRegistryContext {
   /**
@@ -807,6 +812,17 @@ export interface SectionedCapabilities {
     connection?: { required: boolean; connected: boolean; provider: string };
     /** Verb rows incl. the declarative subset's `responseShape` (what it returns). */
     verbs: CapabilityVerbStateWithResponseShape[];
+    /**
+     * What is BLOCKING this integration and the link to where a human unblocks
+     * it — `connect` (dead/absent account) or `enable` (unapproved verbs), never
+     * collapsed, because they are different fixes. Absent when nothing blocks.
+     *
+     * This is the DISCOVERY moment: `granted:false` / `connected:false` were
+     * already returned per verb, but an agent reading them had no next step to
+     * hand back. Resolved by the same `capabilityNextAction` the catalog card
+     * uses (`capability-enable-link.ts`), so the hint can never fork.
+     */
+    blocked?: CapabilityNextAction;
   }>;
   /** Standalone runnable skills — a skill that BACKS a provider verb is shown
    *  under that integration instead, never duplicated here. */
@@ -819,6 +835,9 @@ export interface SectionedCapabilities {
     containerId: string | null;
     /** Display name of `containerId`'s container; null when it has none. */
     containerName: string | null;
+    /** See `integrations[].blocked` — a skill blocks on approval only (it has no
+     *  connection of its own), so this is `kind:"enable"` whenever present. */
+    blocked?: CapabilityNextAction;
   }>;
   /** Intelligence commands. */
   commands: Array<{ id: string; name: string; description: string | null }>;
@@ -1005,6 +1024,40 @@ export function sectionCapabilities(
   const skills = [...skillByName.values()].filter(
     (s) => !providerVerbIds.has(s.name)
   );
+
+  // ── DISCOVERY moment: attach what is blocking each row, and the link ────────
+  // Computed AFTER the merge loop, never at first insert: duplicate rows of the
+  // same integration union their verbs (preferring a granted copy), OR the
+  // connected flag up, and fill in a `containerId` the representative row lacked
+  // — so a pre-merge read would report `connect`/`enable` against state the
+  // caller never sees, and could point at a container id that only became known
+  // one row later.
+  for (const row of integrations.values()) {
+    const blocked = resolveCapabilityBlock({
+      name: row.name,
+      containerId: row.containerId,
+      connection: connectionFromRegistry(row.connection),
+      // Grants are issued per TOOL today, so every verb shares one grant state
+      // (`buildVerbStates`). "Any verb granted" is therefore the honest read of
+      // "can anything here run"; a verbless row falls back to the row's own
+      // approval, which is what `governance` is derived from.
+      enabled:
+        row.verbs.length > 0
+          ? row.verbs.some((v) => v.granted)
+          : row.governance === "auto",
+    });
+    if (blocked) row.blocked = blocked;
+  }
+  for (const row of skillByName.values()) {
+    // A standalone skill has no connection of its own — only approval can block
+    // it, so this is always `kind:"enable"`.
+    const blocked = resolveCapabilityBlock({
+      name: row.name,
+      containerId: row.containerId,
+      enabled: row.governance === "auto",
+    });
+    if (blocked) row.blocked = blocked;
+  }
 
   const full: SectionedCapabilities = {
     integrations: [...integrations.values()],

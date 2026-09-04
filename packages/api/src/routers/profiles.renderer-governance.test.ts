@@ -18,18 +18,19 @@ vi.mock("../services/profiles/set-profile-renderer.js", () => ({
   setProfileRenderer: h.setProfileRenderer,
 }));
 
-vi.mock("@synap/database", async () => {
-  const drizzle =
-    await vi.importActual<typeof import("drizzle-orm")>("drizzle-orm");
-  // The REAL reservation, not a stub — see profiles.role-create.test.ts.
-  const reserved = await vi.importActual<
-    typeof import("../../../database/src/utils/reserved-profile-slugs.js")
-  >("../../../database/src/utils/reserved-profile-slugs.js");
+vi.mock("@synap/database", async (importOriginal) => {
+  // PARTIAL mock (`importOriginal` + spread), deliberately — see
+  // auth.test.ts for the incident this pattern fixes: a TOTAL replacement
+  // breaks the moment ANY module in the import graph reaches for an export
+  // the object does not list (e.g. "No \"isNull\" export is defined on the
+  // @synap/database mock"), because a new source import elsewhere in the
+  // graph pulls in a drizzle helper this suite never mentions. Spreading the
+  // real module makes the stub additive — only `db` and the handful of
+  // repository/service symbols this test touches are faked.
+  const actual = await importOriginal<typeof import("@synap/database")>();
 
   return {
-    eq: drizzle.eq,
-    and: drizzle.and,
-    reservedProfileSlugReason: reserved.reservedProfileSlugReason,
+    ...actual,
     db: {
       query: {
         workspaceMembers: {
@@ -47,13 +48,6 @@ vi.mock("@synap/database", async () => {
     ViewRepository: class {},
     WorkspaceRepository: class {},
     eventRepository: {},
-    ProfileScope: {
-      SYSTEM: "system",
-      SHARED: "shared",
-      WORKSPACE: "workspace",
-      USER: "user",
-    },
-    workspaces: { id: "id" },
   };
 });
 

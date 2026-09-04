@@ -21,6 +21,7 @@ export const BOUNCE_TYPES = [
   "session",
   "project",
   "workspace",
+  "capability",
 ] as const;
 export type BounceType = (typeof BOUNCE_TYPES)[number];
 

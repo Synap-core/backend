@@ -168,6 +168,56 @@ describe("runs.listRuns — agent_write flow type", () => {
     );
   });
 
+  it("synthesises a REFUSED write from its event — the cap floor leaves no receipt", async () => {
+    // Past the daily cap the write neither executes nor proposes, so there is
+    // NO receipt row: the `agent_write` ai_decision event is the ONLY trace. A
+    // capped agent and a dead agent were byte-identical from the UI before this.
+    // Under a `blocked_by_policy` filter the RECEIPT half short-circuits before
+    // its query (it can only ever produce "completed"), so the refusal events
+    // read is the one and only round trip.
+    mockDb.select.mockReturnValueOnce(
+      selectChain([
+        {
+          id: "evt-capped-1",
+          correlationId: "corr-capped-1",
+          timestamp: new Date("2026-08-03T11:00:00Z"),
+          data: {
+            kind: "agent_write",
+            outcome: "refused",
+            refusalReason: "capped",
+            subjectType: "entity",
+            writeAction: "create",
+            agentUserId: AGENT,
+            workspaceId: "ws-1",
+            reason: "Daily agent proposal limit reached (10/day).",
+          },
+        },
+      ])
+    );
+
+    const runs = await listRuns({
+      userId: USER,
+      flowType: "agent_write",
+      status: "blocked_by_policy",
+    });
+
+    // One query, not two — the receipt half never ran.
+    expect(mockDb.select).toHaveBeenCalledTimes(1);
+
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      id: "corr-capped-1",
+      flowType: "agent_write",
+      flowName: "entity.create",
+      // A governance OUTCOME, not a transport failure.
+      status: "blocked_by_policy",
+      triggeredBy: AGENT,
+      workspaceId: "ws-1",
+    });
+    expect(runs[0]?.summary).toContain("capped");
+    expect(runs[0]?.summary).toContain("Daily agent proposal limit");
+  });
+
   it("contributes nothing when the caller filters a status this ledger cannot produce", async () => {
     mockDb.select.mockReturnValue(selectChain([RECEIPT_ROW]));
 

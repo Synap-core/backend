@@ -356,6 +356,35 @@ export async function materializeCompositeGraph(
   onRelationError?: (err: unknown, type: string) => void,
   options?: MaterializeOptions
 ): Promise<MaterializeResult> {
+  // ── PREFLIGHT — FAIL CLOSED on an unwired config caller ────────────────
+  // The three Rule Loop arms below used to respond to a missing caller with
+  // `logger.warn` + `continue`: a SILENT SKIP that reported success. Only ONE
+  // of this function's five call sites wired the callers, so the SAME batch
+  // would materialize its config ops on the GOVERNED (approval) path and
+  // silently drop them on the AUTO-APPROVED (direct-write) path — behaviour
+  // forking on governance state, which is exactly what a governance system
+  // must never do.
+  //
+  // Checked UP FRONT, before pass 0 writes anything, so the refusal is atomic:
+  // an unwirable batch materializes NOTHING rather than half of itself. Throwing
+  // is the whole point — a future call site that forgets to wire cannot re-open
+  // the fork quietly. (`facetCaller` is deliberately NOT checked here: a facet
+  // is an additive soft attach whose omission is a documented, additive contract,
+  // and capture attaches its facets out of band in a separate governed pass.)
+  const missingConfigCaller = operations.find(
+    (op) =>
+      (op.op === "create_skill" && !options?.skillCaller) ||
+      (op.op === "create_automation" && !options?.automationCaller) ||
+      (op.op === "create_rule" && !options?.ruleCaller)
+  );
+  if (missingConfigCaller) {
+    throw new Error(
+      `materializeCompositeGraph: batch contains a "${missingConfigCaller.op}" op but this caller wired no matching caller. ` +
+        "Wire the Rule Loop callers (utils/rule-loop-callers.ts `buildRuleLoopCallers`) at this call site. " +
+        "Refusing rather than skipping: a dropped config op reported as success is how materialization forks on governance state."
+    );
+  }
+
   // Pass 1 — entities → ref→realId map. An op may LINK an existing entity
   // (existingEntityId) instead of creating one; in that case we register its
   // refs and skip creation. Seeded with earlier-chunk refs (chunked imports) so
@@ -400,11 +429,12 @@ export async function materializeCompositeGraph(
     const op = operations[i];
     if (op.op !== "create_skill") continue;
     if (!options?.skillCaller) {
-      logger.warn(
-        { ref: op.ref, name: op.name },
-        "Skipping create_skill op: no skillCaller wired by this caller"
+      // Unreachable — the fail-closed preflight above already refused this
+      // batch. Kept as a narrowing guard that THROWS (never skips), so the
+      // silent-skip shape cannot come back by way of a refactor.
+      throw new Error(
+        "materializeCompositeGraph: create_skill op reached pass execution with no skillCaller (preflight bypassed)"
       );
-      continue;
     }
     try {
       const created = await options.skillCaller.create({
@@ -427,11 +457,12 @@ export async function materializeCompositeGraph(
     const op = operations[i];
     if (op.op !== "create_automation") continue;
     if (!options?.automationCaller) {
-      logger.warn(
-        { ref: op.ref, name: op.name },
-        "Skipping create_automation op: no automationCaller wired by this caller"
+      // Unreachable — the fail-closed preflight above already refused this
+      // batch. Kept as a narrowing guard that THROWS (never skips), so the
+      // silent-skip shape cannot come back by way of a refactor.
+      throw new Error(
+        "materializeCompositeGraph: create_automation op reached pass execution with no automationCaller (preflight bypassed)"
       );
-      continue;
     }
     const enabledRequested = op.enabled === true;
     try {
@@ -711,11 +742,12 @@ export async function materializeCompositeGraph(
     const op = operations[i];
     if (op.op !== "create_rule") continue;
     if (!options?.ruleCaller) {
-      logger.warn(
-        { ref: op.ref },
-        "Skipping create_rule op: no ruleCaller wired by this caller"
+      // Unreachable — the fail-closed preflight above already refused this
+      // batch. Kept as a narrowing guard that THROWS (never skips), so the
+      // silent-skip shape cannot come back by way of a refactor.
+      throw new Error(
+        "materializeCompositeGraph: create_rule op reached pass execution with no ruleCaller (preflight bypassed)"
       );
-      continue;
     }
     try {
       const factSkillId = op.factRef

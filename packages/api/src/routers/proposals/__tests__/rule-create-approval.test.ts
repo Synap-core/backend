@@ -101,7 +101,13 @@ beforeEach(() => {
   createRuleGoverned.mockClear();
   proposalRows = [];
   updates = [];
-  ruleResult = { status: "created", ruleId: "rule-1" };
+  // `automationIds` is what the door ACTUALLY linked — the payload's pre-existing
+  // ids PLUS any automation compiled from the sentence during this approval.
+  ruleResult = {
+    status: "created",
+    ruleId: "rule-1",
+    automationIds: ["auto-88", "auto-compiled-by-this-approval"],
+  };
 });
 
 describe("rule/create approval APPLIES (never re-proposes)", () => {
@@ -144,7 +150,12 @@ describe("rule/create approval APPLIES (never re-proposes)", () => {
     expect(materialized?.materialized).toMatchObject({
       ruleId: "rule-1",
       factSkillId: "skill-77",
-      automationIds: ["auto-88"],
+      // From the RESULT, not the request payload. The payload holds only
+      // `["auto-88"]` — the ids that already existed when the proposal was
+      // filed. The automation compiled from the sentence is created BY this
+      // approval, so reading the payload left the one thing the approval
+      // actually made unreachable to revert and audit.
+      automationIds: ["auto-88", "auto-compiled-by-this-approval"],
     });
   });
 

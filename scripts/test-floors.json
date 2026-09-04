@@ -1,5 +1,5 @@
 {
-  "$doc": "Minimum-passing-test floors. Enforced by scripts/test-floor.mjs (`pnpm test:floor`) — read that file's header first. Every `floor` here was MEASURED by `--record`, never guessed. A floor is a lower bound: if a run drops below it, tests stopped running or started failing. NEVER raise a floor to hide a newly-visible failure, and never lower one to make a red run green.",
+  "$doc": "Minimum-passing-test floors. Enforced by scripts/test-floor.mjs (`pnpm test:floor`) \u2014 read that file's header first. Every `floor` here was MEASURED by `--record`, never guessed. A floor is a lower bound: if a run drops below it, tests stopped running or started failing. NEVER raise a floor to hide a newly-visible failure, and never lower one to make a red run green.",
   "recordedAt": "2026-08-03T00:00:00.000Z",
   "recordedOn": "macOS, no local Postgres on :5432",
   "entries": [
@@ -8,7 +8,7 @@
       "dir": "packages/database",
       "args": ["-c", "vitest.unit.config.ts"],
       "floor": 429,
-      "note": "DB-free lane. Was 331 before 2026-08-03: the config's hand-maintained `include` list had drifted, leaving 10 files / 98 passing tests outside the lane. Now discovery-based (see vitest.unit.config.ts). 4 tests fail here today (pre-existing, not mine to fix) — the floor pins the PASSING count so those cannot quietly become 5."
+      "note": "DB-free lane. Was 331 before 2026-08-03: the config's hand-maintained `include` list had drifted, leaving 10 files / 98 passing tests outside the lane. Now discovery-based (see vitest.unit.config.ts). 4 tests fail here today (pre-existing, not mine to fix) \u2014 the floor pins the PASSING count so those cannot quietly become 5."
     },
     {
       "id": "@synap/jobs",
@@ -24,7 +24,7 @@
       "id": "@synap/intelligence-client",
       "dir": "packages/intelligence-client",
       "floor": 50,
-      "note": "Had NO `test` script until 2026-08-03 — 50 passing tests existed and never ran anywhere."
+      "note": "Had NO `test` script until 2026-08-03 \u2014 50 passing tests existed and never ran anywhere."
     },
     {
       "id": "@synap-core/types",
@@ -36,7 +36,7 @@
       "id": "@synap/storage",
       "dir": "packages/storage",
       "floor": 26,
-      "note": "Script was `vitest` (watch mode) until 2026-08-03 — it HUNG instead of running."
+      "note": "Script was `vitest` (watch mode) until 2026-08-03 \u2014 it HUNG instead of running."
     },
     {
       "id": "@synap/realtime",
@@ -78,14 +78,6 @@
         {
           "file": "src/__tests__/import-orchestrator-progress.test.ts",
           "reason": "Collects ZERO assertions: [vitest] No \"AUTO_ROUTE_MIN_CONFIDENCE\" export is defined on the \"@synap/database\" mock. Pre-existing as of 2026-08-03; the whole file silently tests nothing while the suite reports 0 failures."
-        },
-        {
-          "file": "src/routers/profiles.renderer-governance.test.ts",
-          "reason": "Collects ZERO assertions: [vitest] No \"isNull\" export is defined on the \"@synap/database\" mock. Pre-existing as of 2026-08-03."
-        },
-        {
-          "file": "src/routers/hub-protocol/rest/auth.test.ts",
-          "reason": "Collects ZERO assertions: [vitest] No \"isNull\" export is defined on the \"@synap/database\" mock. Pre-existing as of 2026-08-03."
         }
       ]
     },
@@ -93,7 +85,7 @@
       "id": "@synap/database (db)",
       "dir": "packages/database",
       "floor": null,
-      "floorUnpinnedReason": "Full lane, needs a live Postgres. Cannot be measured on a machine without one — and MUST NOT be guessed. Record it from an environment that has the DB: `node scripts/test-floor.mjs --record --only='@synap/database (db)'`.",
+      "floorUnpinnedReason": "Full lane, needs a live Postgres. Cannot be measured on a machine without one \u2014 and MUST NOT be guessed. Record it from an environment that has the DB: `node scripts/test-floor.mjs --record --only='@synap/database (db)'`.",
       "requires": "postgres",
       "note": "This is the original 475-total / 0-passed / 0-failed case that motivated this gate. Without Postgres every one of its tests is skipped and the JSON report says zero failures."
     }
@@ -103,18 +95,18 @@
       "id": "apps/api",
       "dir": "apps/api",
       "measured": "156 total, 124 passed, 16 failed, 16 skipped (2026-08-03, no local Postgres)",
-      "why": "Has 8 test files and NO `test` script, so none of it runs anywhere. Deliberately left unwired: (a) it needs Postgres, so its CI result is unverifiable from here, and (b) it has no vitest config, so a run collects `dist/**` as well as `src/**` — every test is counted TWICE and one dist file errors on a source file that no longer exists (`ENOENT … apps/api/dist/routers/federation.ts`). Wiring it needs a vitest config excluding dist, then a CI run to measure. Reported, not guessed."
+      "why": "Has 8 test files and NO `test` script, so none of it runs anywhere. Deliberately left unwired: (a) it needs Postgres, so its CI result is unverifiable from here, and (b) it has no vitest config, so a run collects `dist/**` as well as `src/**` \u2014 every test is counted TWICE and one dist file errors on a source file that no longer exists (`ENOENT \u2026 apps/api/dist/routers/federation.ts`). Wiring it needs a vitest config excluding dist, then a CI run to measure. Reported, not guessed."
     },
     {
       "id": "@synap/feed-service",
       "dir": "packages/feed-service",
-      "measured": "0 total — both its src and stale-dist copies fail to collect: 'Invalid configuration: database.url' (2026-08-03, no local Postgres)",
+      "measured": "0 total \u2014 both its src and stale-dist copies fail to collect: 'Invalid configuration: database.url' (2026-08-03, no local Postgres)",
       "why": "Same two blockers as apps/api: needs Postgres, and collects dist/** alongside src/**."
     },
     {
       "id": "@synap-core/core",
       "dir": "packages/core",
-      "measured": "20 total, 0 passed — all three files fail to collect: \"Cannot find package '@synap/database'\"",
+      "measured": "20 total, 0 passed \u2014 all three files fail to collect: \"Cannot find package '@synap/database'\"",
       "why": "Its `test` script is an `echo` stub and CI explicitly filters it out (`--filter='!@synap-core/core'`) because of a circular dependency on @synap/database. Left as-is; unstubbing it is a dependency-graph change, not a config change."
     }
   ]

@@ -144,6 +144,44 @@ describe("captureGraphEventKeys (all-or-nothing policy keys)", () => {
     ]);
   });
 
+  // The SAME defect class as the hardcoded gate pair: a derivation that
+  // silently ignores an op arm under-gates it. The three Rule Loop arms
+  // produced NO key, so the evaluator never scored them — and because the
+  // caller only requires every EMITTED key to say `execute`, a graph of
+  // (entity + create_rule) would have auto-applied the rule ungoverned.
+  it("scores the Rule Loop arms — skill / automation / rule each get their own key", () => {
+    const ops = [
+      {
+        op: "create_skill",
+        ref: "s0",
+        name: "n",
+        body: "b",
+        scope: "workspace",
+      },
+      { op: "create_automation", ref: "a0", name: "n", triggerType: "event" },
+      {
+        op: "create_rule",
+        ref: "r0",
+        intent: "i",
+        scope: { kind: "workspace" },
+      },
+    ] as unknown as CompositeProposalOperation[];
+    expect(captureGraphEventKeys(ops)).toEqual([
+      { subjectType: "skill", action: "create" },
+      { subjectType: "automation", action: "create" },
+      { subjectType: "rule", action: "create" },
+    ]);
+  });
+
+  it("FAILS CLOSED on an unrecognized op arm — never an empty (auto-approving) key", () => {
+    expect(() =>
+      captureGraphEventKeys([
+        entityOp(),
+        { op: "delete_everything" } as unknown as CompositeProposalOperation,
+      ])
+    ).toThrow(/unrecognized composite operation/);
+  });
+
   it("carries per-op profileSlug + uo_validated so a user_observation is scored by kind", () => {
     const uoInference = {
       op: "create_entity",

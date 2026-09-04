@@ -4,7 +4,7 @@
  * run-loop (`automation-executor.ts`) and the `transform` step's `filter:`/
  * `map:` pipes (`steps/transform.ts`) share ONE evaluator.
  */
-import { resolveReferencePath } from "./context-path.js";
+import { CONTEXT_ROOT_PATTERN, resolveReferencePath } from "./context-path.js";
 import { resolveTemplate } from "./template-resolve.js";
 import type { StepContext } from "./automation-executor-types.js";
 
@@ -21,8 +21,11 @@ function resolveOperandList(raw: string, context: StepContext): string[] {
     return t;
   };
 
-  // Bare context path → resolve to its native value.
-  if (/^(trigger|steps|automation|loop|item)\./.test(trimmed)) {
+  // Bare context path → resolve to its native value. The root test comes from
+  // context-path.ts so a bracket-rooted path (`steps["query-1"]…`) is
+  // recognised by the SAME grammar the resolver walks — a local `^root\.`
+  // copy silently rejected every bracket path as a plain string literal.
+  if (CONTEXT_ROOT_PATTERN.test(trimmed)) {
     const value = resolveReferencePath(trimmed, context);
     if (value == null) return [];
     if (Array.isArray(value))
@@ -95,7 +98,7 @@ export function evaluateCondition(
     rightValue = rightValue.slice(1, -1);
   } else if (rightValue !== "" && !isNaN(Number(rightValue))) {
     rightValue = Number(rightValue);
-  } else if (/^(trigger|steps|automation|loop|item)\./.test(rightValue)) {
+  } else if (CONTEXT_ROOT_PATTERN.test(rightValue)) {
     rightValue = resolveTemplate(`{{${rightValue}}}`, context);
   }
 

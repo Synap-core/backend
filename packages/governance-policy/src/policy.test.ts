@@ -16,6 +16,9 @@ import {
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
   findUnsafeAutoApproveEntries,
+  deriveGatePairFromOperations,
+  COMPOSITE_OP_GATE_PAIRS,
+  GATE_WRITE_DOORS,
   type RequiredPermission,
 } from "./index.js";
 
@@ -1641,5 +1644,155 @@ describe("glob dot-boundary fix — equivalence over the real corpus", () => {
     expect(findMatchingPattern("search.semantic", ["search.*"])).toBe(
       "search.*"
     );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// deriveGatePairFromOperations — the gate pair is DERIVED, never declared.
+//
+// Guards the defect described in the function's own header: a call site that
+// hardcodes `entity`/`create` while passing a composite `data.operations`
+// batch makes every floor evaluate a declaration instead of the write.
+// ─────────────────────────────────────────────────────────────────────────────
+describe("deriveGatePairFromOperations", () => {
+  it("maps each op arm to its own door", () => {
+    expect(deriveGatePairFromOperations([{ op: "create_entity" }])).toEqual({
+      subjectType: "entity",
+      action: "create",
+    });
+    expect(deriveGatePairFromOperations([{ op: "create_relation" }])).toEqual({
+      subjectType: "relation",
+      action: "create",
+    });
+    expect(deriveGatePairFromOperations([{ op: "create_skill" }])).toEqual({
+      subjectType: "skill",
+      action: "create",
+    });
+    expect(deriveGatePairFromOperations([{ op: "create_automation" }])).toEqual(
+      {
+        subjectType: "automation",
+        action: "create",
+      }
+    );
+    expect(deriveGatePairFromOperations([{ op: "create_rule" }])).toEqual({
+      subjectType: "rule",
+      action: "create",
+    });
+  });
+
+  it("today's capture batch (entities + relations) still gates as entity/create", () => {
+    // The pre-existing hardcoded literals were TRUE for this batch — the fix
+    // must not change live behaviour, only stop the declaration from being a
+    // constant. Order-independent: not derived from array position.
+    const pair = { subjectType: "entity", action: "create" };
+    expect(
+      deriveGatePairFromOperations([
+        { op: "create_entity" },
+        { op: "create_relation" },
+      ])
+    ).toEqual(pair);
+    expect(
+      deriveGatePairFromOperations([
+        { op: "create_relation" },
+        { op: "create_entity" },
+      ])
+    ).toEqual(pair);
+  });
+
+  it("a batch gates at its STRICTEST member, whatever the order", () => {
+    // skill.create is NOT on DEFAULT_AUTO_APPROVE (it defines new EGRESS
+    // ability) while entity/relation/automation are — so it outranks them.
+    for (const ops of [
+      [{ op: "create_entity" }, { op: "create_skill" }],
+      [{ op: "create_skill" }, { op: "create_entity" }],
+      [
+        { op: "create_relation" },
+        { op: "create_automation" },
+        { op: "create_skill" },
+      ],
+    ]) {
+      expect(deriveGatePairFromOperations(ops)).toEqual({
+        subjectType: "skill",
+        action: "create",
+      });
+    }
+  });
+
+  it("a rule outranks its own halves (blast-radius tiebreak)", () => {
+    // rule.create and skill.create carry the SAME floor rank (neither is on
+    // DEFAULT_AUTO_APPROVE), so the tie is broken by the explicit
+    // config-over-data blast radius — never by array order.
+    const full = [
+      { op: "create_skill" },
+      { op: "create_automation" },
+      { op: "create_rule" },
+      { op: "create_entity" },
+    ];
+    expect(deriveGatePairFromOperations(full)).toEqual({
+      subjectType: "rule",
+      action: "create",
+    });
+    expect(deriveGatePairFromOperations([...full].reverse())).toEqual({
+      subjectType: "rule",
+      action: "create",
+    });
+  });
+
+  it("never returns a pair LESS strict than a member of the batch", () => {
+    // The whole invariant, stated as a property: for every pair of arms, the
+    // derived pair equals one of them and is >= both under the floor rank.
+    const arms = [
+      "create_entity",
+      "create_relation",
+      "create_skill",
+      "create_automation",
+      "create_rule",
+    ] as const;
+    const rank = (p: { subjectType: string; action: string }) => {
+      const key = `${p.subjectType}.${p.action}`;
+      if (ADMIN_ACTIONS.includes(key)) return 3;
+      if (DESTRUCTIVE_ACTIONS.includes(p.action)) return 2;
+      if (!DEFAULT_AUTO_APPROVE.includes(key)) return 1;
+      return 0;
+    };
+    for (const a of arms) {
+      for (const b of arms) {
+        const derived = deriveGatePairFromOperations([{ op: a }, { op: b }]);
+        expect(rank(derived)).toBeGreaterThanOrEqual(
+          rank(COMPOSITE_OP_GATE_PAIRS[a])
+        );
+        expect(rank(derived)).toBeGreaterThanOrEqual(
+          rank(COMPOSITE_OP_GATE_PAIRS[b])
+        );
+      }
+    }
+  });
+
+  it("FAILS CLOSED on an empty batch — never a silent entity/create default", () => {
+    expect(() => deriveGatePairFromOperations([])).toThrow(
+      /empty operation batch/
+    );
+  });
+
+  it("FAILS CLOSED on an unrecognized op arm", () => {
+    expect(() =>
+      deriveGatePairFromOperations([
+        { op: "create_entity" },
+        { op: "delete_everything" },
+      ])
+    ).toThrow(/unrecognized composite operation/);
+    expect(() => deriveGatePairFromOperations([{}])).toThrow(
+      /unrecognized composite operation/
+    );
+  });
+
+  it("every mapped pair is a REAL declared gate door", () => {
+    for (const pair of Object.values(COMPOSITE_OP_GATE_PAIRS)) {
+      expect(
+        Object.keys(GATE_WRITE_DOORS).includes(
+          `${pair.subjectType}/${pair.action}`
+        )
+      ).toBe(true);
+    }
   });
 });

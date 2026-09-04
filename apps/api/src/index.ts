@@ -71,6 +71,7 @@ import {
 import { configuredPodAdminBase } from "./pod-admin-config.js";
 import {
   dispatchOpen,
+  OPEN_CLIENT_PARAM,
   inferOpenTypeFromId,
   isSafeOpenId,
   isTypedOpenKind,
@@ -708,16 +709,23 @@ function applyOpenDispatch(
     id,
     userAgent: c.req.header("user-agent"),
     adminBase,
+    // The device discriminator is a link-BUILD-time query param, not a UA
+    // sniff — see OPEN_CLIENT_PARAM in open-dispatch.ts for why.
+    client: c.req.query(OPEN_CLIENT_PARAM),
   });
   // Same URL 302s or 200s by User-Agent — never let a CDN cache the bot bounce
-  // for a human (or the reverse).
+  // for a human (or the reverse). `?client=` is part of the URL, so it varies
+  // the cache key on its own and needs no Vary entry.
   c.header("Vary", "User-Agent");
   c.header("Cache-Control", "private, no-store");
   if (result.action === "redirect") {
     return c.redirect(result.url, 302);
   }
+  // `proposal` is here for the MOBILE branch only: a desktop proposal always
+  // 302s above, so this fallback link is what a phone taps when relay is not
+  // installed — the same "View in browser" escape entity/view already had.
   const browserUrl =
-    adminBase && (type === "entity" || type === "view")
+    adminBase && (type === "entity" || type === "view" || type === "proposal")
       ? podAdminTarget(type, id, adminBase)
       : undefined;
   return c.html(renderDeepLinkPage(result.deep, browserUrl));
@@ -1971,6 +1979,8 @@ try {
           {
             const { registerCapabilityExecutor, registerPlaybookRunner } =
               await import("@synap/jobs/workers/automation-executor.js");
+            const { registerAgentWaker } =
+              await import("@synap/jobs/utils/agent-wake.js");
             const { registerMailFeedRunner } =
               await import("@synap/jobs/workers/mail-feed-cron.js");
             const { registerCalBackfillRunner } =
@@ -2001,6 +2011,14 @@ try {
             // to api's runPlaybook via this slot, so is-agent | external-agent |
             // hybrid all dispatch through the executor spine + triggerAutoRespond.
             registerPlaybookRunner((input) => api.runPlaybook(input));
+            // ONE agent-wake spine: an automation's `channel_message` with
+            // `wakeAgent: true` reaches `triggerAutoRespond` — the SAME door
+            // every IS auto-respond uses (`a2ai-one-door` tripwire forbids a
+            // second enqueue) — through this slot, because @synap/jobs cannot
+            // import @synap/api. Unfilled, the slot refuses the wake BEFORE the
+            // message is posted, so this registration is what makes the feature
+            // reachable at all.
+            registerAgentWaker((req) => api.triggerAutoRespond(req));
             registerMailFeedRunner(() => api.runMailFeed());
             registerCalBackfillRunner(() => api.runCalBackfill());
             // Fireflies: webhook-triggered ingest + the backfill safety net both

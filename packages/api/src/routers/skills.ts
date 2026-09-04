@@ -20,6 +20,7 @@ import {
 import { requireUserId } from "../utils/user-scoped.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { ruleNotExpiredWhere } from "../services/rules/expiry.js";
+import { ruleSentenceSchema } from "../services/rules/sentence-schema.js";
 import { safeExternalFetch } from "@synap/shared-utils";
 import {
   checkPermissionOrPropose,
@@ -469,13 +470,22 @@ export const skillsRouter = router({
         expiresAt: z.string().datetime({ offset: true }).optional(),
         factSkillId: z.string().uuid().optional(),
         automationIds: z.array(z.string().uuid()).default([]),
+        /**
+         * The rule's structured WHEN/WHERE/THEN. Present ⇒ the door COMPILES it
+         * into an automation or refuses the create naming the failing clause;
+         * absent ⇒ a prose-only `fact` rule. Validated by
+         * `ruleSentenceSchema` inside the door, which is bound to the shared
+         * `RuleSentenceValue` at compile time — re-declaring the shape here
+         * would be a second copy of the grammar.
+         */
+        sentence: ruleSentenceSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const { createRuleGoverned } =
         await import("../services/rules/create.js");
-      return createRuleGoverned({
+      const result = await createRuleGoverned({
         userId,
         ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
         workspaceId: input.scope.workspaceId ?? ctx.workspaceId ?? null,
@@ -484,8 +494,24 @@ export const skillsRouter = router({
         ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
         ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
         automationIds: input.automationIds,
+        ...(input.sentence ? { sentence: input.sentence } : {}),
         auditSource: "rules.createRule",
       });
+      // CONTRACT, deliberate and different from the Hub REST door (which maps
+      // `denied` to 403 because HTTP has no other way to say it): this
+      // procedure RETURNS the three-way verdict as a discriminated union and
+      // does not throw on a refusal.
+      //
+      // A refusal here is a REVIEWED, actionable outcome — it names the failing
+      // clause (WHEN / WHERE / THEN) and the reason, and the caller is expected
+      // to show that to the author. `browser`'s `ruleDoor.ts` already renders
+      // all three arms; throwing would collapse its refusal copy into a generic
+      // error and lose the clause. The union's discriminant makes the arm hard
+      // to ignore, which a thrown error would not.
+      //
+      // Pinned by `skills.createRule.contract.test.ts` — if this ever starts
+      // throwing, that surface silently loses its refusal message.
+      return result;
     }),
 
   /**

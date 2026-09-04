@@ -35,6 +35,8 @@ import {
   type RuleScope,
 } from "./index.js";
 import { normalizeExpiresAt } from "./expiry.js";
+import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
+import { readRuleSentence } from "./sentence-schema.js";
 import { automations, inArray } from "@synap/database";
 
 const logger = createLogger({ module: "rules-create" });
@@ -43,6 +45,20 @@ export interface CreateRuleGovernedInput {
   userId: string;
   /** Present ⇒ an AGENT authored this; the gate routes it to a proposal. */
   agentUserId?: string;
+  /**
+   * The agent that authored this rule's BEHAVIOUR, when it is not the caller.
+   *
+   * These are two different questions and they were collapsed onto one field.
+   * The approval replay deliberately re-enters this door with NO `agentUserId`
+   * so the re-entrant gate auto-grants for the operator — correct for the rule
+   * row's ownership. But the compiled automation's draft floor keys on WHO WROTE
+   * IT, and reading the same field made `rule/create` a strictly wider path than
+   * `automation/create`: an agent that cannot get a live trigger through the
+   * automation door got one through the rule door plus one human approval.
+   * The sibling executor (`executors/automation.ts`) has always threaded the
+   * author through; this is that thread.
+   */
+  behaviourAuthorAgentUserId?: string;
   workspaceId?: string | null;
   intent: string;
   scope: RuleScope;
@@ -54,6 +70,16 @@ export interface CreateRuleGovernedInput {
   expiresAt?: string | Date;
   /** Skill id of a SEPARATE fact half, when the rule did not author its own. */
   factSkillId?: string;
+  /**
+   * The rule's structured WHEN/WHERE/THEN sentence, as it arrived off the wire
+   * (tRPC input, stored proposal payload, Hub REST body) — `unknown` by design;
+   * it is parsed here through `readRuleSentence`, never trusted.
+   *
+   * Present ⇒ this rule has BEHAVIOUR, and it is compiled into an automation
+   * by this door or the create is REFUSED. Absent ⇒ prose-only (a `fact` rule),
+   * which is legitimate and unchanged.
+   */
+  sentence?: unknown;
   /** Automations this rule produced. */
   automationIds?: string[];
   /** Folded into the gate payload for observability. */
@@ -64,11 +90,14 @@ export interface CreateRuleGovernedInput {
  * NON-FATAL signal: the rule's text describes something that RUNS, but no
  * behaviour is attached to it, so nothing will.
  *
- * This is INFORMATION, not a refusal — the rule is created either way. It
- * exists because `createRuleGoverned` LINKS pre-existing automations and never
- * compiles text into a flow; a caller that passes `automationIds: []` (every
- * live caller does today) would otherwise get a `skills` row of prose that
- * silently never executes, and be told nothing about it.
+ * This is INFORMATION, not a refusal — the rule is created either way. It now
+ * covers exactly ONE case: a rule whose text describes a behaviour but which
+ * carries NO sentence to compile and NO linked automation, so it is stored as
+ * prose that will never execute. A rule WITH a sentence never carries this — it
+ * either compiles into an automation or the create is refused outright.
+ * (Before the compiler existed this door only LINKED pre-existing automations
+ * and every live caller passed `automationIds: []`, so this was the common
+ * case rather than the residue.)
  *
  * A `fact` rule ("Acme prefers async") is legitimately prose-only, so it never
  * carries this. Neither does a one-shot ask, which is not a standing rule at
@@ -82,13 +111,34 @@ export interface RuleBehaviourGap {
 }
 
 export type CreateRuleGovernedResult =
-  | { status: "created"; ruleId: string; needsBehaviour?: RuleBehaviourGap }
+  | {
+      status: "created";
+      ruleId: string;
+      /**
+       * Every automation this rule is now linked to — the ones passed in PLUS
+       * the one compiled from the sentence here. Returned because the approval
+       * executor writes a `materialized` receipt for revert/audit, and reading
+       * the request payload instead omitted the only automation the approval
+       * actually created.
+       */
+      automationIds: string[];
+      needsBehaviour?: RuleBehaviourGap;
+    }
   | {
       status: "proposed";
       proposalId: string;
       needsBehaviour?: RuleBehaviourGap;
     }
-  | { status: "denied"; reason: string };
+  | {
+      status: "denied";
+      reason: string;
+      /**
+       * Present when the refusal came from COMPILING the sentence — names the
+       * clause (WHEN / WHERE / THEN) so the editor can point at the row that
+       * failed instead of showing a bare error.
+       */
+      failure?: RuleCompileFailure;
+    };
 
 /**
  * A shape is BEHAVIOURAL when materialising it would mean something running:
@@ -135,8 +185,44 @@ export async function createRuleGoverned(
     input.scope.kind === "workspace"
       ? (input.scope.workspaceId ?? input.workspaceId ?? null)
       : (input.workspaceId ?? null);
-  const automationIds = input.automationIds ?? [];
+  // COPIED, not aliased: the compiled automation's id is pushed onto this below,
+  // and `skills.createRule` passes its zod-parsed array straight in — mutating a
+  // caller's input is a side effect nobody reading the call site can see.
+  const automationIds = [...(input.automationIds ?? [])];
+  /** Only the ids this call CREATED — the compensation below must not archive
+   *  a pre-existing automation the caller merely linked. */
+  const automationsCreatedHere: string[] = [];
   const ruleId = randomUUID();
+
+  // ── BEHAVIOUR: compile the sentence, or REFUSE ──────────────────────────
+  // Before the gate, because compiling is PURE and a rule that cannot run must
+  // not cost the owner a proposal to review. A refusal names the clause.
+  let compiled: ReturnType<typeof compileRuleSentence> | null = null;
+  if (input.sentence !== undefined && input.sentence !== null) {
+    const sentence = readRuleSentence(input.sentence);
+    if (!sentence) {
+      return {
+        status: "denied",
+        reason:
+          "This rule's WHEN/THEN could not be read. It was not saved, because a rule stored with an unreadable sentence would silently never run.",
+        failure: {
+          clause: "WHEN",
+          reason: "The rule sentence did not match the expected shape.",
+        },
+      };
+    }
+    compiled = compileRuleSentence(sentence);
+    if (!compiled.ok) {
+      // The whole point of this wave: an intent that describes something
+      // running is never persisted as prose that cannot run. Nine automation
+      // products were surveyed and not one stores an enabled-but-inert rule.
+      return {
+        status: "denied",
+        reason: compiled.failure.reason,
+        failure: compiled.failure,
+      };
+    }
+  }
 
   // Classify BEFORE the gate so the routing rides in the proposal payload —
   // an approved rule must be byte-identical to a directly created one.
@@ -155,7 +241,9 @@ export async function createRuleGoverned(
   const needsBehaviour: RuleBehaviourGap | undefined =
     isBehaviouralShape(routing.shape) &&
     !routing.oneShot &&
-    automationIds.length === 0
+    automationIds.length === 0 &&
+    // A compiled sentence IS the behaviour — it becomes an automation below.
+    compiled === null
       ? {
           shape: routing.shape,
           reason: `This rule describes something that should run (${routing.shape}), but no automation is attached to it — it is stored as prose and will not execute until a behaviour is linked.`,
@@ -180,6 +268,11 @@ export async function createRuleGoverned(
       ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
       automationIds,
       routing,
+      // Replay sufficiency: an approved rule must be byte-identical to a direct
+      // create, and the automation is built from the SENTENCE, not from the
+      // prose. Storing only `intent` would approve a rule whose behaviour the
+      // reviewer saw and the replay could not reproduce.
+      ...(compiled ? { sentence: input.sentence } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
     },
   });
@@ -195,6 +288,70 @@ export async function createRuleGoverned(
     };
   }
 
+  // ── Materialize the compiled behaviour ─────────────────────────────────
+  // AFTER the gate: a proposed rule must not leave an automation behind if the
+  // owner never approves it. Through the ONE insert door
+  // (`materializeAutomationForPrincipal`), which derives the draft floor from
+  // the principal itself — an AGENT-authored rule's automation lands `draft`,
+  // on the direct path AND on the approval replay (see
+  // `behaviourAuthorAgentUserId`). A rule a HUMAN authored but could not create
+  // for lack of permission keeps its requested status on approval, exactly like
+  // that human's own direct create: P2-3 is about an agent planting a live
+  // trigger, not about the approval step itself.
+  // Dynamic import mirrors `apply-approval.ts`: the router module pulls in the
+  // whole tRPC surface, and a service must not depend on that at load time.
+  if (compiled) {
+    // The DIRECT path never reaches here with an `agentUserId` — the gate
+    // returns `proposed` above — so on this path the author only ever arrives
+    // via `behaviourAuthorAgentUserId`, from the approval replay. Both are read
+    // so the field cannot become the only source and rot.
+    const behaviourAuthor =
+      input.agentUserId ?? input.behaviourAuthorAgentUserId;
+    const { materializeAutomationForPrincipal } =
+      await import("../../routers/automations.js");
+    try {
+      const automationId = await materializeAutomationForPrincipal({
+        database: db,
+        definition: {
+          workspaceId: workspaceId ?? null,
+          name: ruleNameFromIntent(intent),
+          description: intent,
+          triggerType: compiled.trigger.triggerType,
+          triggerConfig: compiled.trigger.triggerConfig,
+          flowDefinition: compiled.flow,
+          status: "active",
+          // `source: "user"` for BOTH principals, deliberately. The door's
+          // `"ai" | "agent"` branch demands an authored Gets/Stores/Reacts data
+          // contract, which a sentence-compiled flow has no way to produce — so
+          // declaring an agent-authored rule "agent" here would refuse every
+          // single one. The agent floor is NOT source-based anyway: the draft
+          // forcing below is derived from `agentUserId` inside the insert door.
+          source: "user",
+          metadata: { ruleId },
+        } as Parameters<
+          typeof materializeAutomationForPrincipal
+        >[0]["definition"],
+        createdBy: input.userId,
+        ...(behaviourAuthor ? { agentUserId: behaviourAuthor } : {}),
+      });
+      if (automationId) {
+        automationIds.push(automationId);
+        automationsCreatedHere.push(automationId);
+      }
+    } catch (err) {
+      // The insert door validates against the live catalog (does this command
+      // exist? is this skill resolvable?) — checks the pure compiler cannot
+      // make. A failure there means the rule cannot run, so it is a REFUSAL,
+      // not a rule kept as prose.
+      logger.warn({ err, ruleId }, "rule behaviour failed to materialize");
+      return {
+        status: "denied",
+        reason: `This rule's THEN cannot run: ${(err as Error).message}`,
+        failure: { clause: "THEN", reason: (err as Error).message },
+      };
+    }
+  }
+
   const behaviours = await snapshotBehaviours(automationIds);
   const metadata = buildRuleMetadata({
     intent,
@@ -205,28 +362,61 @@ export async function createRuleGoverned(
     routing,
   });
 
-  const [row] = await db
-    .insert(skills)
-    .values({
-      id: ruleId,
-      userId: input.userId,
-      workspaceId: input.scope.kind === "workspace" ? workspaceId : null,
-      kind: "instruction",
-      scope: input.scope.kind,
-      category: RULE_CATEGORY,
-      name: ruleNameFromIntent(intent),
-      description: intent,
-      // The rule's intent IS the fact the agent reads while reasoning — that is
-      // why a rule lives in `skills` and not in a table of its own.
-      body: intent,
-      status: "active",
-      // A rule is inert prose until an owner approves it, exactly like any
-      // other agent-authored instruction skill (prompt-injection surface).
-      approved: !input.agentUserId,
-      tags: ["rule"],
-      metadata: { [RULE_METADATA_KEY]: metadata },
-    })
-    .returning({ id: skills.id });
+  // COMPENSATION for the ordering below. The automation is created BEFORE the
+  // rule row, because the rule's metadata carries a divergence snapshot of its
+  // behaviour and cannot be built until the automation exists. If the rule
+  // insert then fails, an ACTIVE automation is left behind whose
+  // `metadata.ruleId` names a row that does not exist — a live trigger with no
+  // rule, which nothing would ever surface or clean up. Archiving is the repo's
+  // soft-delete convention and is what `status` gates firing on.
+  const archiveOrphanedBehaviour = async (cause: unknown) => {
+    if (automationsCreatedHere.length === 0) return;
+    try {
+      await db
+        .update(automations)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(inArray(automations.id, automationsCreatedHere));
+      logger.warn(
+        { err: cause, ruleId, automationIds: automationsCreatedHere },
+        "rule insert failed — archived the automation it had already created"
+      );
+    } catch (archiveErr) {
+      // Nothing left to do but say so loudly: a live trigger with no rule.
+      logger.error(
+        { err: archiveErr, ruleId, automationIds: automationsCreatedHere },
+        "rule insert failed AND its automation could not be archived — an active automation is orphaned"
+      );
+    }
+  };
+
+  let row: { id: string } | undefined;
+  try {
+    [row] = await db
+      .insert(skills)
+      .values({
+        id: ruleId,
+        userId: input.userId,
+        workspaceId: input.scope.kind === "workspace" ? workspaceId : null,
+        kind: "instruction",
+        scope: input.scope.kind,
+        category: RULE_CATEGORY,
+        name: ruleNameFromIntent(intent),
+        description: intent,
+        // The rule's intent IS the fact the agent reads while reasoning — that is
+        // why a rule lives in `skills` and not in a table of its own.
+        body: intent,
+        status: "active",
+        // A rule is inert prose until an owner approves it, exactly like any
+        // other agent-authored instruction skill (prompt-injection surface).
+        approved: !input.agentUserId,
+        tags: ["rule"],
+        metadata: { [RULE_METADATA_KEY]: metadata },
+      })
+      .returning({ id: skills.id });
+  } catch (err) {
+    await archiveOrphanedBehaviour(err);
+    throw err;
+  }
 
   const materializedId = row?.id ?? ruleId;
 
@@ -249,6 +439,7 @@ export async function createRuleGoverned(
   return {
     status: "created",
     ruleId: materializedId,
+    automationIds,
     ...(needsBehaviour ? { needsBehaviour } : {}),
   };
 }
