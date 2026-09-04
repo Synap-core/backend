@@ -120,6 +120,104 @@ describe("setRendererBinding", () => {
     expect(rec.inserts[0].subjectId).toBe("entity-7");
   });
 
+  /**
+   * REVOKE-then-INSERT is two statements, so two concurrent identical binds can
+   * both revoke the incumbent and then race on the partial unique index. The
+   * loser's 23505 is not a conflict the USER caused — by the time it retries,
+   * the winner's row is simply the new incumbent, which the retry supersedes.
+   */
+  describe("the revoke-then-insert race", () => {
+    /**
+     * A recording db whose first N inserts raise `err`. Built standalone rather
+     * than by patching `makeDb`'s result: the fake hands the TRANSACTION its
+     * own `chain` object, so overriding `db.insert` after the fact is never
+     * seen by the code under test.
+     */
+    function makeRacingDb(err: unknown, failures = 1) {
+      const rec: Recorded = { updates: [], inserts: [], order: [] };
+      let remaining = failures;
+      const chain = {
+        update: () => ({
+          set: (patch: unknown) => ({
+            where: (predicate: unknown) => {
+              rec.updates.push({ patch, predicate });
+              rec.order.push("update");
+              return { returning: async () => [], then: undefined };
+            },
+          }),
+        }),
+        insert: () => ({
+          values: (values: Record<string, unknown>) => ({
+            returning: async () => {
+              if (remaining > 0) {
+                remaining--;
+                throw err;
+              }
+              rec.inserts.push(values);
+              rec.order.push("insert");
+              return [{ id: "row-new", ...values }];
+            },
+          }),
+        }),
+      };
+      const db = {
+        ...chain,
+        transaction: async (cb: (tx: typeof chain) => Promise<unknown>) =>
+          cb(chain),
+      };
+      return { db: db as never, rec };
+    }
+
+    const pgUnique = Object.assign(new Error("duplicate key"), {
+      code: "23505",
+    });
+
+    it("retries ONCE and succeeds when the loser hits 23505", async () => {
+      const { db, rec } = makeRacingDb(pgUnique);
+      const row = await setRendererBinding(db, {
+        ...workspaceKey,
+        ref,
+        actorUserId: "u-1",
+      });
+      expect(row).toMatchObject({ scopeKind: "workspace" });
+      // The retry re-runs the WHOLE door, so the winner's row is superseded
+      // first — two revokes, and only the surviving insert is recorded (the
+      // losing one threw before it could record).
+      expect(rec.order).toEqual(["update", "update", "insert"]);
+      expect(rec.updates).toHaveLength(2);
+      expect(rec.inserts).toHaveLength(1);
+    });
+
+    it("sees 23505 through a wrapping driver error", async () => {
+      const wrapped = Object.assign(new Error("insert failed"), {
+        cause: { code: "23505" },
+      });
+      const { db } = makeRacingDb(wrapped);
+      await expect(
+        setRendererBinding(db, { ...workspaceKey, ref, actorUserId: "u-1" })
+      ).resolves.toMatchObject({ scopeKind: "workspace" });
+    });
+
+    it("gives up after ONE retry — a second 23505 is not this race", async () => {
+      const { db } = makeRacingDb(pgUnique, 2);
+      await expect(
+        setRendererBinding(db, { ...workspaceKey, ref, actorUserId: "u-1" })
+      ).rejects.toThrow(/duplicate key/);
+    });
+
+    it("never retries an error that is not a unique violation", async () => {
+      const other = Object.assign(new Error("connection reset"), {
+        code: "08006",
+      });
+      const { db, rec } = makeRacingDb(other);
+      await expect(
+        setRendererBinding(db, { ...workspaceKey, ref, actorUserId: "u-1" })
+      ).rejects.toThrow(/connection reset/);
+      // One attempt only: retrying an unrelated failure would double-revoke.
+      expect(rec.updates).toHaveLength(1);
+    });
+  });
+
   it.each([
     ["user scope without a userId", { scopeKind: "user" as const }],
     [

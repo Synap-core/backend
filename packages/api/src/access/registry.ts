@@ -8,7 +8,7 @@
  * when one is missing.
  */
 
-import { db } from "@synap/database";
+import { db, activeRendererBindingWhere } from "@synap/database";
 import {
   automations,
   automationRuns,
@@ -247,24 +247,33 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        // Pod bindings are shared substrate — every pod member reads them.
-        eq(rendererBindings.scopeKind, "pod"),
-        // A personal override is owner-private, full stop.
-        and(
-          eq(rendererBindings.scopeKind, "user"),
-          eq(rendererBindings.userId, access.userId)
-        ),
-        // Workspace bindings follow membership + the active lens. The DB CHECK
-        // guarantees `workspace_id IS NOT NULL` on this branch, so the
-        // NULL-workspace clause inside `workspaceLensWhere` can never fire here
-        // and widen a workspace binding into a pod-wide one.
-        and(
-          eq(rendererBindings.scopeKind, "workspace"),
-          workspaceLensWhere(
-            rendererBindings.workspaceId,
-            access.userId,
-            access.workspaceLens
+      and(
+        // A revoked binding is a TOMBSTONE, not a delete — the row stays as
+        // history and every reader must walk past it. Through the SHARED
+        // predicate the resolver uses, so a scopedDb read and
+        // `resolveRendererBinding` can never disagree about what is live: this
+        // rule omitted it entirely, so a scopedDb read surfaced bindings the
+        // user had explicitly unbound.
+        activeRendererBindingWhere(),
+        or(
+          // Pod bindings are shared substrate — every pod member reads them.
+          eq(rendererBindings.scopeKind, "pod"),
+          // A personal override is owner-private, full stop.
+          and(
+            eq(rendererBindings.scopeKind, "user"),
+            eq(rendererBindings.userId, access.userId)
+          ),
+          // Workspace bindings follow membership + the active lens. The DB CHECK
+          // guarantees `workspace_id IS NOT NULL` on this branch, so the
+          // NULL-workspace clause inside `workspaceLensWhere` can never fire
+          // here and widen a workspace binding into a pod-wide one.
+          and(
+            eq(rendererBindings.scopeKind, "workspace"),
+            workspaceLensWhere(
+              rendererBindings.workspaceId,
+              access.userId,
+              access.workspaceLens
+            )
           )
         )
       ),

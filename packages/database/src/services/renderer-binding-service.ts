@@ -120,9 +120,23 @@ function assertBindingShape(key: RendererBindingKey): void {
  * a whole-KIND rebind would match nothing, leave the incumbent active, and hit
  * the unique index on insert.
  */
+/**
+ * The ONE "this binding is live" predicate.
+ *
+ * A revoked binding is a TOMBSTONE, not a delete: the row stays as history and
+ * resolution must walk past it. Every reader therefore has to exclude it, and a
+ * reader that forgets serves a renderer the user explicitly unbound. Exported so
+ * the resolver (`ProfileResolutionService.resolveRendererBinding`) and the
+ * access-layer `VisibilityRule` for `rendererBindings` share this expression
+ * rather than each spelling it out — a source-scan tripwire pins that they do.
+ */
+export function activeRendererBindingWhere() {
+  return isNull(rendererBindings.revokedAt);
+}
+
 function activeRowWhere(key: RendererBindingKey) {
   return and(
-    isNull(rendererBindings.revokedAt),
+    activeRendererBindingWhere(),
     eq(rendererBindings.scopeKind, key.scopeKind),
     sql`coalesce(${rendererBindings.userId}, '') = ${key.userId ?? ""}`,
     sql`coalesce(${rendererBindings.workspaceId}::text, '') = ${
@@ -147,6 +161,34 @@ export async function setRendererBinding(
 ): Promise<RendererBinding> {
   assertBindingShape(input);
 
+  // REVOKE-then-INSERT is not atomic against a concurrent identical call: two
+  // callers can both revoke the incumbent, then race on the partial unique
+  // index and one gets 23505. That loser is not a conflict the user caused —
+  // by the time it retries, the winner's row IS the incumbent, so a single
+  // retry supersedes it and both calls report the intent they were given.
+  // One retry, not a loop: a second 23505 means something other than this race.
+  try {
+    return await bindOnce(db, input);
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    return await bindOnce(db, input);
+  }
+}
+
+/** Postgres `unique_violation`, however the driver surfaced it. */
+function isUniqueViolation(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    ((err as { code?: unknown }).code === "23505" ||
+      (err as { cause?: { code?: unknown } }).cause?.code === "23505")
+  );
+}
+
+async function bindOnce(
+  db: Db,
+  input: SetRendererBindingInput
+): Promise<RendererBinding> {
   return await db.transaction(async (tx) => {
     // Supersede, never overwrite: the incumbent becomes history.
     await tx

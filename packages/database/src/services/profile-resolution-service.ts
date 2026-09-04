@@ -13,6 +13,7 @@ import { workspaces } from "../schema/workspaces.js";
 import { profiles } from "../schema/profiles.js";
 import { capabilities } from "../schema/capabilities.js";
 import { rendererBindings } from "../schema/renderer-bindings.js";
+import { activeRendererBindingWhere } from "./renderer-binding-service.js";
 import type { RendererBindingScope } from "../schema/renderer-bindings.js";
 import type { Profile, PropertyDef } from "../schema/index.js";
 import type { AiPosture } from "../schema/profiles.js";
@@ -874,7 +875,9 @@ export class ProfileResolutionService {
       .from(rendererBindings)
       .where(
         and(
-          isNull(rendererBindings.revokedAt),
+          // The SHARED live-binding predicate — a revoked binding is a
+          // tombstone every reader must walk past.
+          activeRendererBindingWhere(),
           eq(rendererBindings.subjectKind, subjectKind),
           eq(rendererBindings.contentKind, contentKind),
           or(...scopeBranches),
