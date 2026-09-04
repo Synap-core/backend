@@ -6,6 +6,13 @@
  *
  * Templates support simple {{variable}} interpolation.
  * Variables come from the `data` object passed to NotificationService.create().
+ * Interpolation covers `titleTemplate` and `bodyTemplate` ONLY — `actions` are
+ * persisted and emitted verbatim.
+ *
+ * NOT unified here (deliberately, and still open): `notifications.workspaceUrl`
+ * and `navigation/deep-links.ts` are two further address vocabularies for the
+ * same destinations. Only the inline ACTION vocabulary is folded into the ONE
+ * route table by `navigate-object` below.
  */
 
 export type DeliveryChannel = "in_app" | "os" | "telegram" | "email_digest";
@@ -15,8 +22,50 @@ export interface NotificationActionDef {
   label: string;
   variant: "primary" | "secondary" | "destructive";
   handler:
-    | { type: "navigate"; app: string; params?: Record<string, unknown> }
+    | NotificationNavigateHandler
+    | NotificationNavigateObjectHandler
     | { type: "mutation"; procedure: string; inputKey?: string };
+}
+
+/**
+ * A destination that is NOT an object — a settings tab, the vault, a listing.
+ * These have no id and no route-table row, so they name an app directly.
+ *
+ * Anything whose destination IS an object must use `navigate-object` below;
+ * an app+params pair for an object is a second, hand-rolled routing vocabulary
+ * that drifts from the ONE route table the moment either side changes.
+ */
+export interface NotificationNavigateHandler {
+  type: "navigate";
+  app: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * A destination that IS an object. The client resolves `{kind, id}` through the
+ * ONE route table — `objectNavTarget()` in
+ * `browser/electron/renderer/src/navigation/object-nav.ts` (its `fallbackNavTarget`
+ * switch lists every routable kind) — so this registry never restates where a
+ * kind lives.
+ *
+ * `kind` is typed as a plain string on purpose: the route table is a browser
+ * module and the kind vocabulary (`OBJECT_KINDS` in
+ * `@synap-core/types/vocabulary`) is an open `Record<string, …>`, not a union.
+ *
+ * `id` is OMITTED for the common case, and then means "this notification's own
+ * `sourceId`" — which is the object id for every action migrated so far
+ * (chat.mention → channelId, automation.broken → automationId, proposal.created
+ * → proposalId). Nothing interpolates `{{tokens}}` inside a handler: `create()`
+ * stores `def.actions` VERBATIM and the persisted row does not carry `data`, so
+ * a templated id would reach the client as the literal `{{…}}` text. That was
+ * already true of the `chat.mention` action this replaces.
+ */
+export interface NotificationNavigateObjectHandler {
+  type: "navigate-object";
+  /** Object-nav kind — see `fallbackNavTarget` in object-nav.ts. */
+  kind: string;
+  /** Literal object id. Omit ⇒ the notification's own `sourceId`. */
+  id?: string;
 }
 
 export interface NotificationDef {
@@ -73,6 +122,14 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
           procedure: "proposals.reject",
           inputKey: "proposalId",
         },
+      },
+      {
+        id: "review",
+        label: "Review",
+        variant: "secondary",
+        // Deciding without reading is the failure mode this row exists to
+        // avoid. `sourceId` is the proposalId.
+        handler: { type: "navigate-object", kind: "proposal" },
       },
     ],
     ttl: 0,
@@ -330,6 +387,15 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     defaultChannels: ["in_app"],
     ttl: 0,
     groupBy: "automationId",
+    actions: [
+      {
+        id: "view",
+        label: "View Automation",
+        variant: "primary",
+        // `sourceId` is the automation id (see `scan-broken-automations.ts`).
+        handler: { type: "navigate-object", kind: "automation" },
+      },
+    ],
   },
 
   // ── Data: Entity Lifecycle ──────────────────────────────────────────────
@@ -594,11 +660,13 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         id: "view",
         label: "View",
         variant: "primary",
-        handler: {
-          type: "navigate",
-          app: "chat",
-          params: { channelId: "{{channelId}}" },
-        },
+        // The channel IS the destination — routed through the ONE route table,
+        // not an app+params pair. `sourceId` on this notification is the
+        // channelId (see `channels/send-message.ts`), so no explicit id is
+        // needed — and the `{{channelId}}` template that stood here never
+        // interpolated (handlers are stored verbatim), so this also fixes a
+        // link that shipped the literal braces to the client.
+        handler: { type: "navigate-object", kind: "channel" },
       },
     ],
   },
