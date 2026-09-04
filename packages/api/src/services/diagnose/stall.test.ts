@@ -119,7 +119,7 @@ describe("summarizeGlobalHealth — stuck_runs section", () => {
     stuckHours: 24,
     stuck: [],
     failedFlows: [],
-    backlog: { pending: 0, oldestAgeHours: null },
+    backlog: { pending: 0, oldestAgeHours: null, mineOutsideLens: 0 },
     duplicateClusters: [],
     capabilities: { enabled: 1, unapproved: 0 },
     agentActivity: [],

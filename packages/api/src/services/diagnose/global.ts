@@ -24,6 +24,7 @@ import {
   ProposalStatus,
   capabilities,
 } from "@synap/database";
+import { or } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import { listRuns, listRunGroups } from "../runs/index.js";
@@ -76,7 +77,17 @@ export interface GlobalSignals {
     failedCount: number;
     hasRunning: boolean;
   }>;
-  backlog: { pending: number; oldestAgeHours: number | null };
+  backlog: {
+    pending: number;
+    oldestAgeHours: number | null;
+    /**
+     * Pending rows traceable to this user whose `workspaceId` does NOT resolve
+     * to a workspace they belong to — malformed/orphaned placement. Reported,
+     * never dropped: a health door that hides broken records hides exactly the
+     * ones needing attention.
+     */
+    mineOutsideLens: number;
+  };
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
   capabilities: { enabled: number; unapproved: number };
   agentActivity: Array<{ agentId: string; todayCount: number; cap: number }>;
@@ -157,15 +168,24 @@ export function summarizeGlobalHealth(
       : oldest !== null && oldest > 48
         ? "degraded"
         : "attention";
+  const mineOutsideLens = signals.backlog.mineOutsideLens;
   sections.push({
     key: "review_backlog",
     status: backlogStatus,
     headline:
-      signals.backlog.pending === 0
+      signals.backlog.pending === 0 && mineOutsideLens === 0
         ? "No pending proposals"
         : `${signals.backlog.pending} pending proposal(s)` +
-          (oldest !== null ? `, oldest ${Math.round(oldest)}h` : ""),
-    detail: signals.backlog,
+          (oldest !== null ? `, oldest ${Math.round(oldest)}h` : "") +
+          // Name the gap rather than dropping it. These rows are pending and
+          // traceable to this user, but their workspaceId does not resolve to
+          // a workspace they are a member of — malformed or orphaned placement.
+          // Silently excluding them is what made this door disagree with
+          // `orient` across three external test passes.
+          (mineOutsideLens > 0
+            ? `; ${mineOutsideLens} more of yours sit outside your workspace lens (unresolvable placement) — list proposals to see them`
+            : ""),
+    detail: { ...signals.backlog, mineOutsideLens },
   });
 
   // Similar-proposal groups — a review-GROUPING signal, not a duplicate
@@ -277,6 +297,8 @@ export async function diagnoseGlobal(params: {
     groups,
     failedChatRuns,
     backlogRow,
+    // Author-floored twin of `backlogRow` — see the comment on its query.
+    mineBacklogRow,
     pendingRows,
     capRows,
     agentRows,
@@ -298,6 +320,32 @@ export async function diagnoseGlobal(params: {
       .where(
         and(
           userVisibleWhere(proposals.workspaceId, userId),
+          eq(proposals.status, ProposalStatus.PENDING),
+          workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
+        )
+      ),
+    // SECOND floor, deliberately: the count above is WORKSPACE-lensed, so a
+    // pending row whose `workspaceId` does not resolve to a workspace this user
+    // is a member of is DROPPED — and those are exactly the rows that need
+    // attention (orphaned workspace ids; one row carries a USER id in the
+    // workspace column). A health door that hides malformed records is the
+    // worst place for that to happen: three external test passes reported
+    // `diagnose` saying 11 while `orient` and `list_proposals` said 14.
+    //
+    // This adds NO disclosure. It is the same AUTHOR floor `orient` already
+    // reports to this same user (`discover.ts`), so the number is one the
+    // caller can already see — it just stops two surfaces disagreeing without
+    // explanation. It is NOT a workspace widening: no membership term.
+    db
+      .select({ mine: drizzleSql<number>`count(*)::int` })
+      .from(proposals)
+      .where(
+        and(
+          or(
+            eq(proposals.createdBy, userId),
+            ownAgentUserFilter(proposals.agentUserId, userId),
+            ownAgentUserFilter(proposals.createdBy, userId)
+          ),
           eq(proposals.status, ProposalStatus.PENDING),
           workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
         )
@@ -395,11 +443,20 @@ export async function diagnoseGlobal(params: {
     });
   }
 
+  const backlogPending = backlogRow[0]?.pending ?? 0;
   const backlog = {
-    pending: backlogRow[0]?.pending ?? 0,
+    pending: backlogPending,
     oldestAgeHours: backlogRow[0]?.oldest
       ? (now - new Date(backlogRow[0].oldest).getTime()) / HOUR_MS
       : null,
+    // Clamped at 0: the author floor is NOT a superset of the workspace floor
+    // (a teammate's row in a shared workspace is workspace-visible but not
+    // author-mine), so the difference can legitimately go negative and a
+    // negative "hidden" count would be nonsense.
+    mineOutsideLens: Math.max(
+      0,
+      (mineBacklogRow[0]?.mine ?? 0) - backlogPending
+    ),
   };
 
   const clusterRows: ClusterInputRow[] = pendingRows.map((r) => ({

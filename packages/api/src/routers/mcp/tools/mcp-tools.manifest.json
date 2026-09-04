@@ -1526,7 +1526,7 @@
                 },
                 "updateExisting": {
                   "type": "boolean",
-                  "description": "With `existingEntityId`: PATCH that entity with the properties in this item instead of discarding them. Use it whenever you recognise the subject AND learned something new about it — 'Ada moved to Acme' should update Ada, not create a second Ada and not link-and-forget the new employer. Gated as `entity`/`update` (never `entity`/`create`), so a governed pod returns a reviewable before→after diff. Without this flag your only options are a duplicate or a silent loss of the facts you just extracted."
+                  "description": "NOT SUPPORTED ON THIS LANE — sending it here is REFUSED, by design, rather than accepted and dropped. The structured `entities[]` lane materializes through a composite graph whose operations can only create or LINK, never patch, so honouring this flag is impossible here and silently ignoring it would discard the properties you sent while reporting success. To PATCH an entity you recognise: send the same information as `text` (that lane routes to the update-capable door and will patch a confident identity match that carries new facts), or call `synap_update_entity` with the entityId and the fields to change. Note `existingEntityId` ALONE still links — the target keeps its existing fields and your extracted properties are dropped."
                 },
                 "facets": {
                   "type": "array",

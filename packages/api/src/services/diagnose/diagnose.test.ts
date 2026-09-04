@@ -159,7 +159,7 @@ describe("summarizeGlobalHealth", () => {
     stuckHours: 24,
     stuck: [],
     failedFlows: [],
-    backlog: { pending: 0, oldestAgeHours: null },
+    backlog: { pending: 0, oldestAgeHours: null, mineOutsideLens: 0 },
     duplicateClusters: [],
     capabilities: { enabled: 3, unapproved: 0 },
     agentActivity: [],
@@ -198,7 +198,10 @@ describe("summarizeGlobalHealth", () => {
 
   it("flags a stale backlog as degraded, a fresh one as attention", () => {
     const stale = summarizeGlobalHealth(
-      { ...clean, backlog: { pending: 5, oldestAgeHours: 72 } },
+      {
+        ...clean,
+        backlog: { pending: 5, oldestAgeHours: 72, mineOutsideLens: 0 },
+      },
       { workspaceId: null }
     );
     expect(stale.sections.find((s) => s.key === "review_backlog")?.status).toBe(
@@ -206,7 +209,10 @@ describe("summarizeGlobalHealth", () => {
     );
 
     const fresh = summarizeGlobalHealth(
-      { ...clean, backlog: { pending: 5, oldestAgeHours: 3 } },
+      {
+        ...clean,
+        backlog: { pending: 5, oldestAgeHours: 3, mineOutsideLens: 0 },
+      },
       { workspaceId: null }
     );
     expect(fresh.sections.find((s) => s.key === "review_backlog")?.status).toBe(

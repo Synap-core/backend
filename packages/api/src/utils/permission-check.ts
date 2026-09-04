@@ -1581,8 +1581,9 @@ export function proposedMessageFor(
   return (
     "Workspace access was required, so a workspace JOIN request was filed for " +
     "review INSTEAD of the requested write — nothing about the write itself is " +
-    "pending yet. Approve the join, then retry the write; or capture the same " +
-    "content WITHOUT a workspace lens (pod scope), which needs no membership."
+    "pending yet, and no id was allocated for it. Approve the join, then retry " +
+    "the write. If you cannot wait for approval, ASK THE USER where this should " +
+    "go — do not retry into a different workspace hoping it lands."
   );
 }
 

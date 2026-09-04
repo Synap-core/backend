@@ -270,9 +270,16 @@ function buildNote(
         (pending.oldestDays >= 1 ? `, oldest ${pending.oldestDays}d old` : "") +
         `. Pending proposals are NOT yet in the graph: recall will not find them and dedup cannot see them, ` +
         `so unreviewed work looks missing and gets duplicated — and a pending workspace/template update ` +
-        `keeps its capabilities switched off. Surface this to the user early: call synap_list_proposals ` +
-        `and offer to walk the queue before doing more work. `
+        `keeps its capabilities switched off. Surface this to the user early: list the ` +
+        `pending proposals with whichever proposal-listing tool this door exposes ` +
+        `to you, and offer to walk the queue before doing more work. `
       : "";
+  // NOTE — do NOT name a concrete tool here. This is a RUNTIME RESPONSE
+  // STRING, not a tool description: the Control Plane rewrites `synap_x` ->
+  // `pod__x` only in tool DESCRIPTIONS, so a tool name baked into a response
+  // body reaches claude.ai verbatim and points at a name that door does not
+  // expose. This sentence said "call synap_list_proposals" for three external
+  // test passes; each one reported it as a dead end. Describe the ACTION.
   return (
     queue +
     `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +

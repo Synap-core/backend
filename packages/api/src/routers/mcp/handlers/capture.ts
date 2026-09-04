@@ -389,6 +389,41 @@ const captureHandler: McpToolHandler = async (
         availableWorkspaces: available,
       });
     }
+    // REFUSE `updateExisting` on THIS lane — do not accept and discard.
+    //
+    // The structured `entities[]` lane materializes through
+    // `submitCaptureGraph` -> `CompositeProposalOperation`, and that op union
+    // has NO update arm: `materializeCompositeGraph` can create or LINK, never
+    // patch. So an `updateExisting: true` here was accepted by the schema,
+    // dropped by the projection at `submit-capture-graph.ts` (which rebuilds
+    // each op field-by-field), and the entity was LINKED — its extracted
+    // properties discarded — while the receipt reported `applied`. Verified
+    // live on 2026-09-04: the target's `version` stayed 1 and no property was
+    // written, for a call the agent was told succeeded.
+    //
+    // A receipt that says `applied` for a write that dropped its payload is
+    // worse than a refusal, so this refuses BY NAME and points at the lane that
+    // does support it (the `text` lane routes to `capture.execute`, which owns
+    // `applyCaptureUpdateOps`). Teaching the composite materializer to patch is
+    // a real feature, not a wiring fix — until it exists, this door says so.
+    const updateAsks = captureEntities.filter(
+      (e) => (e as { updateExisting?: unknown }).updateExisting === true
+    );
+    if (updateAsks.length > 0) {
+      return ok({
+        status: "denied",
+        reason:
+          `${updateAsks.length} of your entities asked for updateExisting, but the structured entities[] lane cannot patch — ` +
+          "it materializes through a composite graph whose operations can only create or link, so the properties you sent would be DISCARDED and you would be told it succeeded. " +
+          "To patch an existing entity, either send this as `text` (that lane routes to the update-capable door and will patch a confident identity match that carries new facts), " +
+          "or call synap_update_entity directly with the entityId and the fields to change.",
+        failure: {
+          clause: "entities[].updateExisting",
+          reason: "this lane can create or link, never patch",
+        },
+      });
+    }
+
     const { submitCaptureGraph } =
       await import("../../../services/capture-agent/submit-capture-graph.js");
     const { buildCaptureNarrativeSummary } =
