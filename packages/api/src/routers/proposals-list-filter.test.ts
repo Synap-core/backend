@@ -28,7 +28,11 @@ describe("proposals.list proposalIds filter", () => {
   });
 
   it("conjoins IDs with the existing user-visible floor", () => {
-    const visibilityFloor = listBlock.indexOf("userVisibleWhere(");
+    // The workspace/user-visible floor now comes from the shared
+    // `buildProposalScopeConditions` (see scope-conditions.ts, reused by
+    // `groups`) rather than an inline `userVisibleWhere(` call in `list`
+    // itself — same floor, one fewer place it can drift.
+    const visibilityFloor = listBlock.indexOf("buildProposalScopeConditions(");
     const idFilter = listBlock.indexOf(
       "inArray(proposals.id, input.proposalIds)"
     );

@@ -53,11 +53,14 @@ import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 import { markProposalNotificationsActioned } from "../notifications/mark-proposal-notifications-actioned.js";
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
+import {
+  buildProposalScopeConditions,
+  resolveAutomationStepRunIds,
+} from "./proposals/scope-conditions.js";
 import { createLogger } from "@synap-core/core";
 import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
 import { relationsRouter } from "./relations.js";
@@ -190,6 +193,13 @@ export const proposalsRouter = router({
         agentUserId: z.string().optional(),
         /** When true, only return proposals where agentUserId is not null */
         agentOnly: z.boolean().optional(),
+        /**
+         * Filter to proposals produced by a specific automation's runs.
+         * Resolved through `automation_step_runs`/`automation_runs`
+         * (`proposals.stepRunId` → `runId` → `automationId`) — `proposals`
+         * carries no `automationId` column of its own.
+         */
+        automationId: z.string().uuid().optional(),
         status: z
           .enum(["pending", "validated", "rejected", "all"])
           .default("pending"),
@@ -198,27 +208,12 @@ export const proposalsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const conditions = [];
-
-      // Filter by Workspace (Security Boundary)
-      // Three-state: string = that workspace, null = pod-wide only,
-      // undefined = no filter (return all).
-      if (input.workspaceId === null) {
-        conditions.push(isNull(proposals.workspaceId));
-      } else if (typeof input.workspaceId === "string") {
-        conditions.push(eq(proposals.workspaceId, input.workspaceId));
-      } else {
-        // undefined = user-wide queue. Scope to workspaces the caller belongs
-        // to (+ pod-wide globals) — WITHOUT this, list leaks every workspace's
-        // proposals (and their data payloads) to any authenticated user.
-        conditions.push(
-          userVisibleWhere(proposals.workspaceId, requireUserId(ctx.userId))
-        );
-      }
-
-      if (input.targetType) {
-        conditions.push(eq(proposals.targetType, input.targetType));
-      }
+      // Shared with `groups` — see scope-conditions.ts. The two doors must
+      // never disagree on which rows a given scope admits.
+      const conditions = buildProposalScopeConditions(
+        input,
+        requireUserId(ctx.userId)
+      );
 
       if (input.targetId) {
         conditions.push(eq(proposals.targetId, input.targetId));
@@ -228,29 +223,16 @@ export const proposalsRouter = router({
         conditions.push(inArray(proposals.id, input.proposalIds));
       }
 
-      if (input.agentUserId) {
-        conditions.push(eq(proposals.agentUserId, input.agentUserId));
-      }
-
-      if (input.agentOnly) {
-        conditions.push(isNotNull(proposals.agentUserId));
-      }
-
-      if (input.threadId) {
-        conditions.push(eq(proposals.threadId, input.threadId));
-      }
-
       /** Filter to proposals with a specific correlationId (used to link back to focus sessions) */
       if (input.correlationId) {
         conditions.push(eq(proposals.correlationId, input.correlationId));
       }
 
-      if (input.projectId) {
-        conditions.push(eq(proposals.projectId, input.projectId));
-      }
-
-      if (input.sessionId) {
-        conditions.push(eq(proposals.sessionId, input.sessionId));
+      if (input.automationId) {
+        const stepRunIds = await resolveAutomationStepRunIds(
+          input.automationId
+        );
+        conditions.push(inArray(proposals.stepRunId, stepRunIds));
       }
 
       if (input.status === "pending") {
@@ -506,6 +488,25 @@ export const proposalsRouter = router({
         agentUserId: z.string().optional(),
         /** Only agent-authored proposals (agentUserId not null). */
         agentOnly: z.boolean().optional(),
+        /** Same scope filters `list` exposes, so a container package can show
+         *  a pending/decided COUNT for the same scope its rows come from. */
+        targetType: z
+          .enum([
+            "document",
+            "entity",
+            "whiteboard",
+            "view",
+            "profile",
+            "automation",
+            "playbook",
+            "skill",
+          ])
+          .optional(),
+        threadId: z.string().uuid().optional(),
+        sessionId: z.string().uuid().optional(),
+        projectId: z.string().uuid().optional(),
+        /** Same automationId → stepRunId walk as `list` — see scope-conditions.ts. */
+        automationId: z.string().uuid().optional(),
         /** Which queue to cluster: the actionable pending queue (default), or
          *  the terminal rejected queue for the rejection-patterns panel. */
         status: z.enum(["pending", "rejected"]).default("pending"),
@@ -520,20 +521,14 @@ export const proposalsRouter = router({
       const limit = input.limit ?? 50;
       const scanLimit = input.scanLimit ?? 1000;
 
-      // ── Same access predicate `list` builds (workspaceId three-state) ──────
-      const conditions = [];
-      if (input.workspaceId === null) {
-        conditions.push(isNull(proposals.workspaceId));
-      } else if (typeof input.workspaceId === "string") {
-        conditions.push(eq(proposals.workspaceId, input.workspaceId));
-      } else {
-        conditions.push(userVisibleWhere(proposals.workspaceId, userId));
-      }
-      if (input.agentUserId) {
-        conditions.push(eq(proposals.agentUserId, input.agentUserId));
-      }
-      if (input.agentOnly) {
-        conditions.push(isNotNull(proposals.agentUserId));
+      // Shared with `list` — see scope-conditions.ts. The two doors must never
+      // disagree on which rows a given scope admits.
+      const conditions = buildProposalScopeConditions(input, userId);
+      if (input.automationId) {
+        const stepRunIds = await resolveAutomationStepRunIds(
+          input.automationId
+        );
+        conditions.push(inArray(proposals.stepRunId, stepRunIds));
       }
       if (input.status === "rejected") {
         conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
