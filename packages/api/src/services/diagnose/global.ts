@@ -24,7 +24,7 @@ import {
   ProposalStatus,
   capabilities,
 } from "@synap/database";
-import { or } from "@synap/database";
+import { ne, or } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import { listRuns, listRunGroups } from "../runs/index.js";
@@ -411,6 +411,19 @@ export async function diagnoseGlobal(params: {
       .where(
         and(
           ownAgentUserFilter(proposals.agentUserId, userId),
+          // SAME POPULATION AS THE ENFORCER. `countTodayAgentProposals`
+          // (utils/permission-check.ts) excludes auto-approved receipts,
+          // because the budget this panel reports protects the REVIEW QUEUE
+          // and an auto-approved write never enters it. Counting receipts here
+          // made the display announce "hit the daily proposal cap" at 73/30
+          // while the enforcer — the thing that actually refuses — was
+          // counting a far smaller set and refusing nothing.
+          //
+          // This is the FOURTH time in this area that two queries answering
+          // one question diverged (broken createdBy pair; hardcoded base cap;
+          // counter vs gate population; now display vs enforcer). Pinned by
+          // `__tripwires__/diagnose-surface-parity.test.ts`.
+          ne(proposals.status, ProposalStatus.AUTO_APPROVED),
           gte(proposals.createdAt, startOfUtcDay())
         )
       )

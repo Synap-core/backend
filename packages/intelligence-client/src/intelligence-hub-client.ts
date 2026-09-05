@@ -973,6 +973,14 @@ export class IntelligenceHubClient {
       extractor: string;
       metadata?: Record<string, unknown>;
       warnings?: string[];
+      /**
+       * Extracted body text, for the pod to persist as the document body of a
+       * binary capture. Optional: the degraded early-return branch of
+       * /api/structure omits it, and older IS builds never sent it.
+       */
+      text?: string;
+      /** True when `text` was truncated by the IS. */
+      textTruncated?: boolean;
     };
   } | null> {
     try {

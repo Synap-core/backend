@@ -111,3 +111,45 @@ describe("tripwire: diagnose's two surfaces agree", () => {
     }
   });
 });
+
+describe("the DISPLAY counts what the ENFORCER counts", () => {
+  /*
+   * FOURTH divergence in this one area across one session:
+   *   1. the counter keyed on a `createdBy AND agentUserId` pair that matched
+   *      nothing for MCP-shaped rows;
+   *   2. the display hardcoded the BASE cap while the resolver applied a 3x
+   *      trust multiplier — a false "hit the cap" for an agent at 13/30;
+   *   3. the counter counted auto-approved RECEIPTS against a budget whose
+   *      docstring protects the REVIEW QUEUE — 64 counted, 11 pending pod-wide;
+   *   4. and then the DISPLAY kept counting them after the ENFORCER stopped,
+   *      announcing 73/30 while the gate refused nothing.
+   *
+   * Every one was two queries answering one question independently. This pins
+   * the population, not the number: an assertion on a live count would be
+   * green-on-a-coincidence and red every time the pod got busier.
+   */
+  const enforcer = readFileSync(
+    join(HERE, "../utils/permission-check.ts"),
+    "utf8"
+  );
+
+  it("scans a real enforcer — not asserting over an empty read", () => {
+    expect(enforcer).toContain("countTodayAgentProposals");
+  });
+
+  it("both exclude auto-approved receipts from the daily budget", () => {
+    const pattern =
+      /ne\(\s*proposals\.status,\s*ProposalStatus\.AUTO_APPROVED\s*\)/;
+    expect(
+      pattern.test(enforcer),
+      "the ENFORCER must exclude auto-approved receipts — they record a write " +
+        "that already executed and never entered the review queue."
+    ).toBe(true);
+    expect(
+      pattern.test(globalSrc),
+      "global diagnose's agent-activity count must exclude them TOO. It is the " +
+        "panel that reports this budget; counting a wider population than the " +
+        "gate enforces is how it announced a cap hit that never happened."
+    ).toBe(true);
+  });
+});

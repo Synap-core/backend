@@ -276,13 +276,20 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     labelPlural: "Widgets",
     glyph: "⊞",
   },
+  /* The kind stays `cell` — that is the engine's word and the DB's. The LABEL is
+     "Card" because that is the only word a user may see: NORTH-STAR.md §5 —
+     "User-facing word is Card. 'Cell' is the internal engine term — never shown
+     to users." This row said "Cell", so every surface resolving through the
+     vocabulary printed "Install cell" / "Cell installed" at users. Fixing it
+     here, at the one door, fixes all of them at once — which is exactly why a
+     local label map at a call site is forbidden. */
   cell: {
     kind: "cell",
     category: "cell",
     icon: "SquareDashedBottomCode",
     color: ID(5),
-    label: "Cell",
-    labelPlural: "Cells",
+    label: "Card",
+    labelPlural: "Cards",
   },
   document: {
     kind: "document",
