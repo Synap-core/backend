@@ -54,12 +54,19 @@ const SOURCE = join(
  * hid behind (the door's name was present, but only in prose).
  */
 function stripCommentsAndStrings(src: string): string {
+  // ALL THREE quote styles in ONE left-to-right pass. Stripping them in
+  // sequence is subtly wrong: the single-quote pass treats an apostrophe inside
+  // a DOUBLE-quoted string ("…didn't…") as an opening quote and swallows
+  // everything to the next apostrophe. That bit a sibling tripwire in the CLI
+  // on 2026-09-05 — it failed against correct code. It fails CLOSED (red, not
+  // green), so it is confusing rather than dangerous; fixed anyway.
   return src
     .replace(/\/\*[\s\S]*?\*\//g, " ")
     .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ")
-    .replace(/`(?:\\[\s\S]|[^\\`])*`/g, '""')
-    .replace(/'(?:\\.|[^\\'])*'/g, '""')
-    .replace(/"(?:\\.|[^\\"])*"/g, '""');
+    .replace(
+      /`(?:\\[\s\S]|[^\\`])*`|'(?:\\.|[^\\'])*'|"(?:\\.|[^\\"])*"/g,
+      '""'
+    );
 }
 
 describe("tripwire: market.install template branch applies post-workspace layer 2", () => {

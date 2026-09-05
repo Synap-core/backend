@@ -26,6 +26,7 @@ import {
   RelationDefRepository,
   drizzleSql,
   createWorkspaceFromDefinition,
+  preflightWorkspaceFromDefinition,
   reconcileWorkspaceFromDefinition,
   ONBOARDING_SCAFFOLD_SYSTEM_DATA,
   type WorkspaceDefinitionInput,
@@ -91,6 +92,50 @@ const flowAutomationTriggerConfigSchema = z
   });
 
 export const definitionEngineProcedures = {
+  /**
+   * PREFLIGHT the create path — write-free. The missing half of this door.
+   *
+   * DOOR-PARITY FIX. `createFromDefinition` (below) has always been the HUMAN
+   * door for materializing a package definition, but its preview half existed
+   * only on the AGENT door (`POST /api/hub/packages/preflight`). A browser
+   * client authenticates with a Kratos COOKIE, and the Hub auth middleware
+   * reads `Authorization: Bearer` / `X-Session-Token` only — it never looks at
+   * the cookie (`hub-protocol-rest.ts`, and `getSession()` supports cookies but
+   * is handed a fresh Headers containing just the token). So a human surface
+   * could APPLY a template but could not PREVIEW one: it had to either install
+   * blind or fake a preview from the package file. That asymmetry is this
+   * repo's dominant defect class, not a missing feature.
+   *
+   * There is no second engine here. `preflightWorkspaceFromDefinition` is the
+   * SAME shared core the Hub endpoint wraps — it applies the create door's own
+   * field-alias normalization, so what it reports is what `createFromDefinition`
+   * would do, and the two can never drift apart.
+   *
+   * INPUT IS DELIBERATELY PERMISSIVE. A typed mirror of `createFromDefinition`'s
+   * definition schema would be a second hand-maintained projection of the same
+   * shape — the exact thing that makes a preview lie once the two fall out of
+   * step. Nothing is written, and the core reads only `profiles`, `views` and
+   * `entityLinks` (all declared on the create door), so a permissive record is
+   * both safe and drift-free.
+   *
+   * A MUTATION, not a query, purely for transport: a package definition is tens
+   * of kilobytes and a tRPC query serializes its input into the URL. Same
+   * reason `reconcileFromDefinition` carries its own `dryRun`. It writes
+   * nothing — `preflightWorkspaceFromDefinition` returns `dryRun: true`.
+   *
+   * Scoped to the caller: the pod catalog is read through `ctx.userId`, so the
+   * report describes what THIS user's install would resolve to. No workspace is
+   * touched and none is named, so there is no row to gate a write on.
+   */
+  preflightFromDefinition: protectedProcedure
+    .input(z.object({ definition: z.record(z.string(), z.unknown()) }))
+    .mutation(async ({ ctx, input }) => {
+      return preflightWorkspaceFromDefinition({
+        definition: input.definition as unknown as WorkspaceDefinitionInput,
+        userId: ctx.userId,
+      });
+    }),
+
   /**
    * Create a complete workspace from a PackageDefinition in a single call.
    *

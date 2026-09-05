@@ -1143,6 +1143,7 @@ export const workspacesRouter = router({
   listPodMembers: inviteProcedures.listPodMembers,
   listAllInvites: inviteProcedures.listAllInvites,
   removeFromPod: inviteProcedures.removeFromPod,
+  preflightFromDefinition: definitionEngineProcedures.preflightFromDefinition,
   createFromDefinition: definitionEngineProcedures.createFromDefinition,
   reconcileFromDefinition: definitionEngineProcedures.reconcileFromDefinition,
   seedPlugin: inviteProcedures.seedPlugin,

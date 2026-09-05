@@ -199,6 +199,9 @@ async function loadSessions(
   id: string,
   userId: string
 ): Promise<WorkflowSession[]> {
+  // SESSION-KIND-LENS-EXEMPT: a place FEED projects its own summary shape
+  // (id/goal/status/stage), never a session row, so there is nothing for a row
+  // lens to ride on. Callers that need the population ask a list door.
   const rows = await db
     .select({
       id: focusSessions.id,

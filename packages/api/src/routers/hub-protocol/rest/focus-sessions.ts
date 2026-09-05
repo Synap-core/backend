@@ -45,6 +45,12 @@ import {
   notTriagePendingWhere,
   triagePendingWhere,
 } from "../../../services/focus-sessions/triage.js";
+import {
+  SESSION_KINDS,
+  attachSessionKind,
+  sessionAutomationWhere,
+  sessionKindWhere,
+} from "../../../services/focus-sessions/session-kind.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -87,6 +93,14 @@ const FocusSessionWireSchema = z.object({
   startedAt: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /**
+   * Projected, never stored (`services/focus-sessions/session-kind.ts`).
+   * ALWAYS present on the LIST door's rows; optional here because the same
+   * schema documents the single-row doors, which do not project it.
+   * (`triage` is projected on the list door too and is likewise not spelled
+   * out on this schema — a pre-existing doc gap, named rather than widened.)
+   */
+  kind: z.enum(SESSION_KINDS).optional(),
 });
 
 const CreateBodySchema = z
@@ -172,6 +186,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // hides agent/automation-originated sessions not yet accepted by a
         // human, `triage` returns only those. Rows carry `triage.pending`.
         lens: z.enum(["default", "triage", "all"]).optional(),
+        // Population lens (`services/focus-sessions/session-kind.ts`).
+        // Default here is `all`, NOT the tRPC door's `work`: this is the
+        // agent-facing door, and an agent listing sessions wants its own
+        // write receipts and the runs it opened — exactly the rows a person's
+        // work surface hides. Rows carry `kind` under every value.
+        kind: z.enum([...SESSION_KINDS, "all"]).optional(),
+        // FLOW-DEFINITION filters — the same two the tRPC door carries, so a
+        // detail surface narrows in SQL rather than paging and filtering.
+        // Both name a DEFINITION, never one execution: `automationId` is
+        // `metadata.automationId`, NOT `automationRunId`.
+        playbookId: z.string().uuid().optional(),
+        automationId: z.string().uuid().optional(),
         limit: z.coerce.number().int().min(1).max(50).optional(),
       }),
     },
@@ -314,6 +340,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const lens: "default" | "triage" | "all" =
       lensRaw === "default" || lensRaw === "triage" ? lensRaw : "all";
 
+    // Population lens, same vocabulary as tRPC `focusSessions.list`, DIFFERENT
+    // default — see the OpenAPI note above.
+    const kindRaw = c.req.query("kind") ?? "all";
+    const kind = (SESSION_KINDS as readonly string[]).includes(kindRaw)
+      ? (kindRaw as (typeof SESSION_KINDS)[number])
+      : "all";
+
+    // Optional: narrow to the sessions of ONE flow definition.
+    const playbookId = c.req.query("playbookId");
+    const automationId = c.req.query("automationId");
+
     // Optional: narrow to sessions ABOUT a specific subject entity (the
     // subject-spine anchor). Lets a caller fetch "the sessions linked to this
     // client/person/deal" — the session half of an entity's neighborhood.
@@ -332,6 +369,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
       if (lens === "triage") conditions.push(triagePendingWhere());
       else if (lens === "default") conditions.push(notTriagePendingWhere());
+      if (kind !== "all") conditions.push(sessionKindWhere(kind));
+      if (playbookId) {
+        conditions.push(eq(focusSessions.playbookId, playbookId));
+      }
+      if (automationId) {
+        conditions.push(sessionAutomationWhere(automationId));
+      }
 
       const rows = await db
         .select()
@@ -340,7 +384,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         .orderBy(desc(focusSessions.startedAt))
         .limit(limit);
 
-      return c.json(attachTriage(rows));
+      return c.json(attachSessionKind(attachTriage(rows)));
     } catch (err) {
       logger.error({ err }, "focus-sessions.list failed");
       return c.json(

@@ -9,9 +9,21 @@
  *
  * Disclosure (the good defaults the CLI already had, now shared):
  *   - detail:'light' (default) — names / ids / domain / live entity counts,
- *     onboarding trimmed to its `goal` line, a flat profile sample.
+ *     onboarding trimmed to its `goal` line.
  *   - detail:'full' — adds workspace descriptions, the FULL onboarding spec,
- *     and per-workspace profile lists (the old CLI `--details` fanout).
+ *     per-workspace profile lists (the old CLI `--details` fanout), the flat
+ *     profile sample, and every workspace including the empty ones.
+ *
+ * ── WHY LIGHT SUBTRACTS (2026-09-05) ──────────────────────────────────────
+ * Orient is the FIRST call of every session, so its payload is the agent's
+ * whole first impression of the pod. Measured live, light was dominated by
+ * INVENTORY rather than briefing: 26 profile rows (a schema listing that the
+ * profile-listing tool already serves on demand), 4 workspaces holding zero
+ * entities, and a `description` that was a rendering of the `domain` field
+ * sitting on the same row ("Domain: personal" on 9 of 14). None of it helps
+ * an agent decide where to write. Light now carries only what shapes the next
+ * action; `detail:'full'` keeps returning everything, unchanged — which is
+ * what makes the subtraction safe rather than lossy.
  */
 
 import {
@@ -27,6 +39,7 @@ import {
   isNotNull,
   inArray,
   drizzleSql,
+  profileSlugScopeCondition,
 } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
@@ -38,6 +51,7 @@ import {
   formatTeamRosterBlock,
   loadTeamRosterForCapture,
 } from "../team-roster-context.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 export type DiscoverDetail = "light" | "full";
 export type DiscoverScope = "workspaces" | "projects" | "profiles";
@@ -195,9 +209,28 @@ interface DiscoverResult {
   projects: DiscoverProject[];
   projectCount: number;
   workspaces: DiscoverWorkspace[];
+  /** Workspaces ACTUALLY LISTED above (light hides empty ones — see below). */
   workspaceCount: number;
-  /** Representative profile sample from the pinned / first workspace. */
-  profiles: ProfileSample[];
+  /**
+   * Empty domains hidden from the light list. Reported, never silently
+   * swallowed: orient's whole failure mode is absence reading as emptiness.
+   * Omitted when zero, and always zero under detail:'full'.
+   */
+  hiddenEmptyWorkspaceCount?: number;
+  /**
+   * Representative profile sample from the pinned / first workspace.
+   * FULL only — or when the caller explicitly asked for scope:['profiles'].
+   * The schema inventory is what the profile-listing tool is for; repeating it
+   * on every session bootstrap paid ~26 rows × 6 fields for nothing.
+   */
+  profiles?: ProfileSample[];
+  /**
+   * Durable user model, as prose — the person, not the building. Sourced from
+   * validated / high-confidence `user_observation` entities (the same rows the
+   * IS bootstrap injects as "What I Know About You"). ABSENT when there are
+   * none: an empty scaffold would teach the agent the pod knows nothing.
+   */
+  who?: string;
   /**
    * Pending-review backlog, omitted when empty. Surfaced here because the queue
    * is invisible to recall AND to dedup: unreviewed work reads as missing and
@@ -248,7 +281,8 @@ function trimProfiles(res: unknown): ProfileSample[] {
 function buildNote(
   projectCount: number,
   workspaceCount: number,
-  pending?: { count: number; oldestDays: number }
+  pending: { count: number; oldestDays: number } | undefined,
+  opts: { light: boolean; hiddenEmpty: number }
 ): string {
   // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
   // Live dogfood (2026-07-24) proved the review queue is a uniform BLIND SPOT:
@@ -280,8 +314,19 @@ function buildNote(
   // body reaches claude.ai verbatim and points at a name that door does not
   // expose. This sentence said "call synap_list_proposals" for three external
   // test passes; each one reported it as a dead end. Describe the ACTION.
+  // Same rule as the queue sentence above: name the ACTION, never a tool. The
+  // entity-type inventory left the light payload — say where it went, or an
+  // agent reads its absence as "this pod has no types" and invents its own.
+  const light = opts.light
+    ? `Entity types are not listed here — call the profile-listing tool this door exposes ` +
+      `(or re-run this with detail:'full') before creating anything, so you write an existing kind. ` +
+      (opts.hiddenEmpty > 0
+        ? `${opts.hiddenEmpty} empty domain(s) are hidden from this list — they exist and detail:'full' shows them. `
+        : ``)
+    : ``;
   return (
     queue +
+    light +
     `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
     `WRITE by kind/profile (+ roles as facets when known) — omit workspaceId unless deliberately pinning; ` +
     `server places via installed profile metadata (never invent a workspace name). ` +
@@ -291,6 +336,74 @@ function buildNote(
       : ``) +
     `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces.`
   );
+}
+
+/** An observation is worth a session's first impression at or above this. */
+const WHO_MIN_CONFIDENCE = 0.7;
+/** Hard cap — this is a briefing line, not the user-model store. */
+const WHO_MAX_LINES = 6;
+
+/**
+ * The durable user model as prose.
+ *
+ * Reads the SAME rows the IS bootstrap already injects as "What I Know About
+ * You" (`fetchUserObservations` in `bootstrap-assembler.ts`) — pod-scoped
+ * `user_observation` entities with `uo_observation` / `uo_category` /
+ * `uo_confidence` / `uo_validated`. This is not a second user model; it is the
+ * same one, reaching the door that every non-IS agent actually walks through.
+ *
+ * Floor: a row the user CONFIRMED (`uo_validated`), or an inference the writer
+ * was confident about. A low-confidence unvalidated guess is exactly what an
+ * agent should not be told in its first sentence about a person.
+ *
+ * The type match goes through `profileSlugScopeCondition` — the ONE polymorphic
+ * read door — not a hand-written type equality. `user_observation` is a primary
+ * kind today, so the door resolves to exactly that predicate; writing it by hand
+ * would have been correct only until the day it isn't, which is the whole reason
+ * the door and its kind-blind-read tripwire exist.
+ *
+ * Returns undefined — never an empty heading — when nothing qualifies.
+ */
+async function buildWhoBlock(userId: string): Promise<string | undefined> {
+  try {
+    const typeMatch = await profileSlugScopeCondition(
+      db,
+      "user_observation",
+      // Identity-wide: the durable user model is pod-scoped, and orient's lens
+      // pin narrows WORKSPACES, never who the user is.
+      await resolveFacetVisibilityScope(userId, undefined)
+    );
+    const rows = await db
+      .select({ title: entities.title, properties: entities.properties })
+      .from(entities)
+      .where(
+        and(eq(entities.userId, userId), typeMatch, isNull(entities.deletedAt))
+      )
+      .limit(40);
+
+    const lines: string[] = [];
+    for (const r of rows) {
+      const props = (r.properties ?? {}) as Record<string, unknown>;
+      const text = props.uo_observation ?? r.title;
+      if (typeof text !== "string" || !text.trim()) continue;
+      const validated = props.uo_validated === true;
+      const confidence =
+        typeof props.uo_confidence === "number" ? props.uo_confidence : 0;
+      if (!validated && confidence < WHO_MIN_CONFIDENCE) continue;
+      const category =
+        typeof props.uo_category === "string" && props.uo_category
+          ? `[${props.uo_category}] `
+          : "";
+      // Unvalidated rows are marked as inferences — the agent must be able to
+      // tell what the user confirmed from what an agent guessed about them.
+      const hedge = validated ? "" : " (inferred)";
+      lines.push(`- ${category}${text.trim()}${hedge}`);
+      if (lines.length >= WHO_MAX_LINES) break;
+    }
+    return lines.length ? lines.join("\n") : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function discover(
@@ -313,7 +426,13 @@ export async function discover(
   const lensWsIds = workspaceId ? [workspaceId] : wsIds;
 
   const needWorkspaces = want("workspaces");
-  const needProfiles = want("profiles");
+  // Light drops the profile inventory — UNLESS the caller asked for it by name.
+  // An explicit `scope:['profiles']` is a direct request; answering it with
+  // silence would be the same absence-reads-as-emptiness lie the pin guard
+  // above exists to prevent. Default light simply never asks for it.
+  const explicitProfiles = (params.scope ?? []).includes("profiles");
+  const needProfiles =
+    want("profiles") && (detail === "full" || explicitProfiles);
 
   // Workspace rows + per-workspace live entity counts (same count semantics as
   // GET /workspaces, so orient reports the truth instead of "empty").
@@ -351,7 +470,7 @@ export async function discover(
   );
   const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
 
-  // ── Profiles: representative sample (light) or per-workspace (full) ──
+  // ── Profiles: full-only inventory (or an explicit scope:['profiles']) ──
   const sampleWsId = workspaceId ?? lensWsIds[0];
   let profileSample: ProfileSample[] = [];
   const perWsProfiles = new Map<string, ProfileSample[]>();
@@ -390,12 +509,31 @@ export async function discover(
   // by meaning (CRM vs Operations vs Builder), not by inventing UUIDs. Source
   // is live workspace metadata (description / onboarding.goal / subtype) —
   // never a hard-coded product map of slug→purpose.
+  let hiddenEmptyWorkspaces = 0;
   const workspacesOut: DiscoverWorkspace[] = needWorkspaces
     ? wsRaw
         .filter((w) => {
           // Hide pure admin/system surfaces from the default domain map.
           const t = w.workspaceType ?? "";
           return t !== "operational" && t !== "agent";
+        })
+        .filter((w) => {
+          if (detail === "full") return true;
+          // Light hides EMPTY domains — an agent choosing where to write gains
+          // nothing from a workspace holding no entities, and four of them were
+          // half the list on the live pod.
+          //
+          // A pin is never hidden: if the caller asked for exactly this
+          // workspace, showing it empty is the answer, not noise.
+          if (workspaceId === w.id) return true;
+          if ((entityCountByWs.get(w.id) ?? 0) > 0) return true;
+          // Empty-but-MEANINGFUL: a fresh template install carries an
+          // onboarding spec — it is empty because it is waiting for the user,
+          // and that is exactly the domain an agent should be told about.
+          const settings = (w.settings ?? {}) as Record<string, unknown>;
+          if (settings.onboarding) return true;
+          hiddenEmptyWorkspaces++;
+          return false;
         })
         .map((w) => {
           const settings = (w.settings ?? {}) as Record<string, unknown>;
@@ -404,10 +542,16 @@ export async function discover(
             (settings.workspaceSubtype as string | undefined) ??
             w.workspaceType ??
             null;
-          const purpose =
+          // A REAL purpose only. The old `Domain: ${domain}` fallback was a
+          // rendering of the `domain` field sitting on this very row — bytes
+          // for zero information, and it read like an authored description
+          // (9 of 14 live workspaces said "Domain: personal"). Full keeps it
+          // for back-compat; light emits `description` only when there is one.
+          const authored =
             (typeof w.description === "string" && w.description.trim()) ||
             (typeof onboarding?.goal === "string" && onboarding.goal.trim()) ||
-            (domain ? `Domain: ${domain}` : null);
+            null;
+          const purpose = authored ?? (domain ? `Domain: ${domain}` : null);
           const out: DiscoverWorkspace = {
             id: w.id,
             name: w.name,
@@ -422,16 +566,14 @@ export async function discover(
                   ? { goal: onboarding.goal }
                   : undefined;
           }
-          // Light + full: agents need purpose without detail:full fanout.
-          if (purpose) {
+          // Full: unchanged. Light: authored purpose only, or nothing.
+          if (detail === "full") {
+            out.description = purpose
+              ? (w.description ?? purpose)
+              : (w.description ?? null);
+          } else if (authored) {
             out.description =
-              detail === "full"
-                ? (w.description ?? purpose)
-                : purpose.length > 220
-                  ? `${purpose.slice(0, 217)}…`
-                  : purpose;
-          } else if (detail === "full") {
-            out.description = w.description ?? null;
+              authored.length > 220 ? `${authored.slice(0, 217)}…` : authored;
           }
           if (detail === "full") {
             out.profiles = perWsProfiles.get(w.id) ?? [];
@@ -546,6 +688,10 @@ export async function discover(
     pendingSummary = undefined;
   }
 
+  // Who the user IS — the one thing orient never carried. Best-effort, same
+  // rule as the roster: a failed read costs a prose block, never the map.
+  const who = await buildWhoBlock(userId);
+
   const result: DiscoverResult = {
     me: { userId, scopes: authScopes },
     detail,
@@ -553,9 +699,16 @@ export async function discover(
     projectCount: projectsOut.length,
     workspaces: workspacesOut,
     workspaceCount: workspacesOut.length,
-    profiles: profileSample,
+    ...(hiddenEmptyWorkspaces > 0
+      ? { hiddenEmptyWorkspaceCount: hiddenEmptyWorkspaces }
+      : {}),
+    ...(needProfiles ? { profiles: profileSample } : {}),
     ...(pendingSummary ? { pendingReview: pendingSummary } : {}),
-    note: buildNote(projectsOut.length, workspacesOut.length, pendingSummary),
+    ...(who ? { who } : {}),
+    note: buildNote(projectsOut.length, workspacesOut.length, pendingSummary, {
+      light: detail !== "full",
+      hiddenEmpty: hiddenEmptyWorkspaces,
+    }),
   };
 
   // Team roster — same loader capture uses for structure. One workspace only

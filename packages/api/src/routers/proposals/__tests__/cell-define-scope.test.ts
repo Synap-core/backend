@@ -32,7 +32,14 @@ vi.mock("@synap/database", () => ({
   proposals: { __table: "proposals" },
   eq: () => ({}),
 }));
-vi.mock("@synap/database/schema", () => ({
+// PARTIAL mock, deliberately. A total `() => ({...})` replacement is the
+// documented trap here: `executors/cell.ts` later imported `CONTENT_KINDS`
+// from this module and all three tests died with "No CONTENT_KINDS export is
+// defined on the mock" — the test broke on a NEW SOURCE IMPORT it had no
+// opinion about. `importOriginal` keeps every real export and overrides only
+// what this test actually needs.
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   ProposalStatus: { APPROVED: "approved" },
 }));
 

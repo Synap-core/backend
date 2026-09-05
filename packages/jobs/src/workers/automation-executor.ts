@@ -46,7 +46,6 @@ import {
   automationStepRuns,
   automationClaims,
   users,
-  focusSessions,
   drizzleSql,
   openRunSession,
   normalizeCommandNodeData,
@@ -69,6 +68,7 @@ import {
   postRunSummary,
   resolveRunChannel,
 } from "../utils/post-run-summary.js";
+import { closeSessionViaDoor } from "../utils/session-close.js";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import {
@@ -460,10 +460,22 @@ async function executeAutomationFlow(params: {
 
   const closeSessionIfOwned = async (): Promise<void> => {
     if (sessionOwned && runSessionId && !runSuspended) {
-      await db
-        .update(focusSessions)
-        .set({ status: "closed", closedAt: new Date() })
-        .where(eq(focusSessions.id, runSessionId));
+      // ONE door. This was a raw `.update(focusSessions).set({status:'closed'})`
+      // — the dual-path defect named in @synap-core/types/focus-sessions: it
+      // skipped the review pack, the session-bound ephemeral expiry and BOTH
+      // halves of the close event, for every automation run that opened its own
+      // session. `completeFocusSession` does all four.
+      //
+      // No extra read for the userId: `ownerId` is the very id this run passed
+      // to `openRunSession({ userId: ownerId })` above, so it IS the session
+      // owner the door scopes on.
+      //
+      // 'closed' (not 'failed') even on the failure path: this door is reached
+      // from both the genuine-finish and the throw paths, the run row already
+      // carries the verdict, and `isFocusSessionLifecycleClose` (api's
+      // permission-check.ts) recognises the lifecycle-close escape ONLY on
+      // `status === "closed"`. Preserves exactly the status this site wrote.
+      await closeSessionViaDoor({ sessionId: runSessionId, userId: ownerId });
     }
   };
 

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * `TabStrip` — 36px row of seven tab pills below `TopNav`.
+ * `TabStrip` — 36px row of tab pills below `TopNav`.
  *
  * Order is load-bearing — it matches the sequence in the README and the
  * brief. Each tab links to its own route via Next.js `Link`. Active state
@@ -29,6 +29,7 @@ const TABS: Tab[] = [
   { href: "/connections", label: "Apps & Connections" },
   { href: "/trust-keys", label: "Trust & Keys" },
   { href: "/connectors", label: "Connectors" },
+  { href: "/marketplace", label: "Marketplace" },
   { href: "/intelligence", label: "Intelligence" },
   { href: "/audit", label: "Audit" },
 ];

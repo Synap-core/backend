@@ -28,7 +28,11 @@ import { join } from "path";
 // ── The three transports that must delegate to the ONE door ────────────────────
 const TRANSPORTS = [
   "src/middleware/api-key-auth.ts",
-  "src/routers/hub-protocol-rest.ts",
+  // The Hub Protocol REST auth middleware. It lived inline in
+  // `routers/hub-protocol-rest.ts` until it was extracted (verbatim) into this
+  // module so the door itself could be tested; `hub-protocol-rest.ts` now only
+  // mounts it. Consolidation MOVES a tripwire's target — it does not retire it.
+  "src/routers/hub-protocol/_middleware/auth.ts",
   "src/routers/mcp/http-handler.ts",
 ];
 // The ONE door.

@@ -197,19 +197,16 @@ export async function openRunSession(
 }
 
 /**
- * Close a run session opened by `openRunSession`. The mirror door for a
- * SYNCHRONOUS run (e.g. a single-tier enrichment) that is done the moment its
- * caller returns: leaving it `status:'active'` would ghost the RunsHome feed,
- * since the run reaper only closes sessions carrying a `metadata.automationRunId`
- * (which a direct, channel-less run never sets). Idempotent — only an `active`
- * row transitions, so a double close (or a caller racing the reaper) is a no-op.
- * NEVER pass a REUSED channel session id: a successor run may still be live in it.
+ * `closeRunSession` USED TO LIVE HERE and was removed, deliberately.
+ *
+ * It stamped `status:'closed'` with a raw UPDATE — the dual-path defect named
+ * in `@synap-core/types/focus-sessions`: every TERMINAL status MUST go through
+ * `completeFocusSession` (review pack + running-run close + session-bound
+ * ephemeral expiry + BOTH halves of the close event), and this skipped all four.
+ *
+ * The door cannot move down here (api → database, so @synap/database can never
+ * import it), so the close moved UP to its two callers instead — see
+ * `closeRunSessionViaDoor` in `packages/api/src/routers/capabilities.ts`, which
+ * calls the one door and absorbs its throws because both call sites close from
+ * a `finally`. Do not re-add a raw close helper at this layer.
  */
-export async function closeRunSession(sessionId: string): Promise<void> {
-  await db
-    .update(focusSessions)
-    .set({ status: "closed", closedAt: new Date() })
-    .where(
-      and(eq(focusSessions.id, sessionId), eq(focusSessions.status, "active"))
-    );
-}

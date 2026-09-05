@@ -572,8 +572,17 @@ fileUploadApp.get("/:entityId/url", async (c) => {
 
     // The kind filter was intentionally dropped: bytes resolve for ANY entity
     // that carries a documentId (file, brand-asset) — the canonical link, not
-    // the kind, gates downloadability. Access is still owner-gated above
-    // (entity.userId === userId).
+    // the kind, gates downloadability. Access is owner-gated above
+    // (entity.userId === userId) AND again on the documents row below.
+    //
+    // The entity check alone used to be the whole story ("authorize on the
+    // entity, not the documents row"), and it was true only while
+    // `entities.document_id` was unreachable from user input. It was not:
+    // `attachSourceBlob` wrote it from a proposal-carried `documentId`, so an
+    // entity could be pointed at ANOTHER user's document and this endpoint
+    // would presign it. That leg is now gated at the writer too — this
+    // predicate is the second lock, and the one that holds for any future
+    // writer of the column.
     // Canonical path: resolve bytes via entities.documentId → documents.storageKey.
     // Read-time fallback to the legacy properties.storageKey for un-migrated
     // rows (early `file` entities stored the storage key in entity properties
@@ -581,7 +590,10 @@ fileUploadApp.get("/:entityId/url", async (c) => {
     let storageKey: string | undefined;
     if (entity.documentId) {
       const doc = await db.query.documents.findFirst({
-        where: eq(documents.id, entity.documentId),
+        where: and(
+          eq(documents.id, entity.documentId),
+          eq(documents.userId, userId)
+        ),
         columns: { storageKey: true },
       });
       storageKey = doc?.storageKey ?? undefined;

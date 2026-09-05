@@ -14,6 +14,22 @@ export interface DocumentVersionStorageInput {
   documentType?: string | null;
   mimeType?: string | null;
   content: string | Buffer;
+  /**
+   * Text already extracted from `content` upstream (PDF/DOCX/image OCR/audio
+   * transcript — the IS `/api/structure` extraction pass).
+   *
+   * `documentVersionContentPreview` returns "" for any Buffer whose mime is not
+   * text-ish, and that is DELIBERATE: it must never stuff binary bytes into a
+   * text column. So the fix for "binaries have an empty `document_versions
+   * .content`" is to HAND IT TEXT, not to teach the gate to read binaries. When
+   * this is set it becomes the persisted preview; the uploaded object is still
+   * the ORIGINAL `content` bytes, untouched.
+   *
+   * Three consumers key off that column and see nothing without it: the entity
+   * embedding worker (`jobs/workers/entity-embedding.ts`), the retrieval body
+   * join (`api/services/retrieval/retrieve.ts`), and Typesense enrichment.
+   */
+  extractedText?: string;
 }
 
 export interface StoredDocumentVersionSnapshot {
@@ -111,8 +127,40 @@ export async function uploadDocumentVersionSnapshot(
     size: metadata.size,
     mimeType,
     checksum: metadata.checksum,
-    contentPreview: documentVersionContentPreview(input.content, mimeType),
+    contentPreview:
+      input.extractedText !== undefined
+        ? input.extractedText.slice(0, TEXT_PREVIEW_LIMIT)
+        : documentVersionContentPreview(input.content, mimeType),
     metadata,
+  };
+}
+
+/**
+ * Build a version snapshot for bytes the caller ALREADY uploaded.
+ *
+ * The source-blob door (`stageSourceBlob`) uploads the original media itself and
+ * deliberately skips `uploadDocumentVersionSnapshot` so a 25MB WAV is not stored
+ * twice. It still needs a v1 `document_versions` row — without one, a document
+ * whose `currentVersion` is 1 has NO matching version, and the retrieval join
+ * (`documentVersions.version = documents.currentVersion`) finds nothing at all.
+ *
+ * Lives here, beside `storedVersionValues`, so the row a pre-uploaded blob
+ * writes and the row an uploading caller writes are built by the same code.
+ */
+export function documentVersionSnapshotFromUpload(input: {
+  metadata: FileMetadata;
+  mimeType: string;
+  /** Persisted as `document_versions.content`; see `extractedText` above. */
+  extractedText?: string;
+}): StoredDocumentVersionSnapshot {
+  return {
+    storageUrl: input.metadata.url,
+    storageKey: input.metadata.path,
+    size: input.metadata.size,
+    mimeType: input.mimeType,
+    checksum: input.metadata.checksum,
+    contentPreview: (input.extractedText ?? "").slice(0, TEXT_PREVIEW_LIMIT),
+    metadata: input.metadata,
   };
 }
 

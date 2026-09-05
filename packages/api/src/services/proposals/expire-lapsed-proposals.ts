@@ -31,6 +31,7 @@ import {
   lt,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 import {
   CLASS_LIFETIME_HOURS,
   proposalLifetimeHours,
@@ -118,6 +119,43 @@ export function selectLapsedIds(
   return out;
 }
 
+/**
+ * Discard the staged source blobs of proposals this scan just EXPIRED.
+ *
+ * EXPIRED is terminal and is reached with NO human action at all — the whole
+ * point of the scanner — so nothing downstream will ever decide these blobs'
+ * fate. This was the dominant leak path: every un-triaged file-carrying
+ * proposal orphaned its bytes AND its `documents` row, permanently.
+ *
+ * `userId: null` says what is true — a scanner has no acting human. The discard
+ * door then deletes the document as its OWN owner, reading both the storage key
+ * and the deleting principal off the loaded `documents` row, so this can never
+ * become a cross-tenant delete. Best-effort per row: one unlucky blob must not
+ * abort an expiry pass that has already written its statuses.
+ */
+async function discardExpiredSourceBlobs(
+  expiredIds: string[],
+  rows: Array<{ id: string; data: unknown }>
+): Promise<void> {
+  if (expiredIds.length === 0) return;
+  const expired = new Set(expiredIds);
+  for (const row of rows) {
+    if (!expired.has(row.id)) continue;
+    try {
+      await discardProposalSourceBlob({
+        database: db,
+        userId: null,
+        proposalData: row.data,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, proposalId: row.id },
+        "expiry: discarding the staged source blob failed (status already written)"
+      );
+    }
+  }
+}
+
 export interface ExpireLapsedResult {
   scanned: number;
   expired: number;
@@ -148,6 +186,9 @@ export async function expireLapsedProposals(
       proposalType: proposals.proposalType,
       targetType: proposals.targetType,
       createdAt: proposals.createdAt,
+      // Carried ONLY so an expiry can discard a staged source blob — see
+      // `discardExpiredSourceBlobs`.
+      data: proposals.data,
     })
     .from(proposals)
     .where(
@@ -184,6 +225,8 @@ export async function expireLapsedProposals(
     expired += rows.length;
   }
 
+  await discardExpiredSourceBlobs(actionedIds, pending);
+
   // Expired = no longer decidable: its bell rows leave with it (one door with
   // approve/reject). ONE write for the whole scan rather than one per chunk —
   // the chunking exists to bound the UPDATE's id list, and there is no reason
@@ -219,6 +262,7 @@ export async function expireSessionEphemerals(
         id: proposals.id,
         proposalType: proposals.proposalType,
         targetType: proposals.targetType,
+        data: proposals.data,
       })
       .from(proposals)
       .where(
@@ -245,6 +289,10 @@ export async function expireSessionEphemerals(
       .returning({ id: proposals.id });
     // Expired = no longer decidable: its bell rows leave with it (one door with approve/reject).
     markProposalNotificationsActioned(rows.map((r) => r.id));
+    await discardExpiredSourceBlobs(
+      rows.map((r) => r.id),
+      pending
+    );
 
     if (rows.length > 0) {
       logger.info(

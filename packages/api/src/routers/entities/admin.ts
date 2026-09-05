@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { ownedDocumentIds } from "../../utils/store-entity-source-blob.js";
 import { podAdminProcedure } from "../../trpc.js";
 import {
   db,
@@ -161,19 +162,25 @@ export const adminProcs = {
           id: entities.id,
           type: entities.type,
           documentId: entities.documentId,
+          // Needed for the source-file half of the cascade — a provenance blob
+          // lives in `properties.sourceFileDocumentId`, NOT in `document_id`.
+          properties: entities.properties,
         });
       if (!deleted) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Entity not found" });
       }
-      // B1: a HARD delete reclaims the linked document row + ALL its storage
-      // objects (the current-content object + every version snapshot).
-      // Previously orphaned — adminDelete cleaned up neither. Unconditional
-      // reverse-cascade via the one body door. The entity row is already gone,
-      // so we pass the captured `documentId` directly.
-      if (deleted.documentId) {
-        await new EntityBodyService(database, eventRepository).deleteBody({
-          documentId: deleted.documentId,
-        });
+      // B1: a HARD delete reclaims EVERY document row the entity owned + ALL
+      // their storage objects (current content + every version snapshot).
+      // Resolving only `entities.document_id` missed the source-file document
+      // whenever the entity already had a body — object AND `documents` row
+      // survived the entity permanently. `ownedDocumentIds` is the one reader
+      // of that key (it lives beside its writer). The entity row is already
+      // gone, so we pass the captured ids directly.
+      {
+        const bodyService = new EntityBodyService(database, eventRepository);
+        for (const documentId of ownedDocumentIds(deleted)) {
+          await bodyService.deleteBody({ documentId });
+        }
       }
       console.log(
         `[pod-admin] adminDelete: entity ${deleted.id} (type=${deleted.type}) permanently deleted`
@@ -215,16 +222,19 @@ export const adminProcs = {
       const deleted = await database
         .delete(entities)
         .where(and(...conditions))
-        .returning({ id: entities.id, documentId: entities.documentId });
-      // B1: reclaim each hard-deleted entity's document + storage objects
-      // (previously orphaned). Unconditional reverse-cascade via the one body
-      // door; best-effort per row so one cleanup miss never aborts the batch.
+        .returning({
+          id: entities.id,
+          documentId: entities.documentId,
+          properties: entities.properties,
+        });
+      // B1: reclaim EVERY document row each hard-deleted entity owned (body AND
+      // source-file provenance) + their storage objects. Reading only
+      // `document_id` left the source blob orphaned — see `adminDelete` above.
+      // Best-effort per row so one cleanup miss never aborts the batch.
       const bodyService = new EntityBodyService(database, eventRepository);
       for (const row of deleted) {
-        if (row.documentId) {
-          await bodyService
-            .deleteBody({ documentId: row.documentId })
-            .catch(() => {});
+        for (const documentId of ownedDocumentIds(row)) {
+          await bodyService.deleteBody({ documentId }).catch(() => {});
         }
       }
       console.log(

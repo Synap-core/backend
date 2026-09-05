@@ -439,3 +439,77 @@ describe("publish — the object-work decision verb", () => {
     expect(resolveActionLabel("publish", "past")).toBe("Published");
   });
 });
+
+describe("session population lenses", () => {
+  it("names the three session kinds", () => {
+    // One `focus_sessions` table, three populations. A surface offering the
+    // lens must not hand-write these three words.
+    expect(resolveStatusLabel("work")).toBe("Work");
+    expect(resolveStatusLabel("run")).toBe("Run");
+    expect(resolveStatusLabel("receipt")).toBe("Receipt");
+  });
+});
+
+/**
+ * MOOD-COVERAGE tripwire — the fallback is silent, and that is the class bug.
+ *
+ * `resolveActionLabel(action, mood)` falls back to `humanizeToken(action)` for
+ * an unknown token. `humanizeToken` has no tense and **ignores `mood`
+ * entirely**, so a past-mood call for a missing verb returns a present-tense
+ * word and nothing anywhere reports a problem. That is how a settled Activity
+ * row rendered "Complete Capture" — present-imperative, in the emerald agent
+ * voice — making a thing that had already happened look like a thing about to
+ * happen. The two moods exist precisely so that cannot occur; a token missing
+ * from `ACTION_VERBS` collapses them back into one.
+ *
+ * The fallback itself is correct and must stay: a NEW enum value must never
+ * reach a user as a raw token. What must not happen silently is a token the
+ * system ROUTINELY EMITS having no entry. So this pins the emitted corpus.
+ */
+describe("every emitted action token has both moods", () => {
+  /**
+   * Action tokens that reach a user-facing surface.
+   *
+   * `EVENT_ACTIONS` is the closed list for entity events. The rest are middle
+   * segments other producers emit into `events.type` — `buildEventPattern`'s
+   * `PATTERN_MAP` (automations/sentence.ts) and `routers/capture.ts`. They are
+   * listed rather than derived because they live in another package; adding a
+   * producer means adding it here, which is the point.
+   */
+  const EMITTED = [
+    "create",
+    "update",
+    "delete",
+    "archive",
+    "restore",
+    "complete", // capture.complete.completed
+    "received", // external_message.received.completed
+    "run", // capability.run
+  ] as const;
+
+  for (const action of EMITTED) {
+    it(`\`${action}\` resolves through ACTION_VERBS, not the humanize fallback`, () => {
+      expect(ACTION_VERBS[action]).toBeDefined();
+    });
+  }
+
+  it("the two moods are actually different words where tense applies", () => {
+    // A verb whose moods are identical is either genuinely invariant or a row
+    // someone filled in twice with the same word. None of these are invariant.
+    for (const action of EMITTED) {
+      const verb = ACTION_VERBS[action];
+      expect(verb, action).toBeDefined();
+      expect(
+        verb!.imperative === verb!.past,
+        `\`${action}\` has the same word for both moods — the mood argument ` +
+          `does nothing for it, which is the defect this file guards.`
+      ).toBe(false);
+    }
+  });
+
+  it("the fallback still protects an unknown token", () => {
+    // Not a regression test for the above — the opposite. An enum value nobody
+    // has taught us must humanize, never leak.
+    expect(resolveActionLabel("declare_source", "past")).toBe("Declare source");
+  });
+});

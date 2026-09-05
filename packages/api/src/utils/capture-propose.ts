@@ -40,6 +40,7 @@ import {
   checkPermissionOrPropose,
   type PermissionResult,
 } from "./permission-check.js";
+import type { StagedSourceBlob } from "./store-entity-source-blob.js";
 
 const logger = createLogger({ module: "capture-propose" });
 
@@ -80,11 +81,35 @@ export interface FileAnchoredCaptureProposalsParams {
   relations: CaptureProposeRelation[];
   /** Validate/normalize a relation slug (falls back to a generic type). */
   resolveRelationType: (type: string) => string;
+  /**
+   * A source blob the caller already STAGED (bytes + `documents` row exist, no
+   * entity touched). Its small reference rides in `data.sourceFile` on exactly
+   * ONE of the proposals this call files — the one whose approval materializes
+   * the entity the file belongs to — and `attachSourceBlob` binds it there on
+   * approval. NEVER the bytes: proposal LIST reads select `data`, so inlining a
+   * 7MB base64 payload would drag it through every list.
+   *
+   * The carrier is chosen to mirror the direct-write path's "primary entity"
+   * rule (`created.find(c => !c.linked) ?? created[0]`): if this capture creates
+   * any NEW entity the composite `entity.create` proposal carries the file;
+   * otherwise the first existing-entity `entity.update` proposal does.
+   */
+  sourceFile?: StagedSourceBlob;
 }
 
 export async function fileAnchoredCaptureProposals(
   params: FileAnchoredCaptureProposalsParams
-): Promise<{ proposalIds: string[] }> {
+): Promise<{
+  proposalIds: string[];
+  /**
+   * False when a `sourceFile` was supplied but NO proposal was filed that could
+   * carry it (e.g. every op was empty). The caller MUST then discard the staged
+   * blob — otherwise the bytes and their `documents` row outlive every decision
+   * anyone can make about them, which is precisely the orphan this design
+   * exists to prevent.
+   */
+  sourceFileAttached: boolean;
+}> {
   const {
     userId,
     workspaceId,
@@ -94,9 +119,18 @@ export async function fileAnchoredCaptureProposals(
     entities,
     relations,
     resolveRelationType,
+    sourceFile,
   } = params;
 
   const proposalIds: string[] = [];
+  // The file rides the composite create when this capture creates anything new;
+  // otherwise the first update proposal actually filed takes it. Decided up
+  // front, claimed lazily — an existing-entity op with no properties and no
+  // description files NO proposal, so "the first op" is not the same as "the
+  // first proposal".
+  const compositeCarriesFile =
+    Boolean(sourceFile) && entities.some((e) => !e.existingEntityId);
+  let sourceFileAttached = false;
 
   // Shared gate options for every change. NO agentUserId (the human is the
   // reviewer); `source: "intelligence"` routes through the legacy-AI branch and
@@ -143,6 +177,11 @@ export async function fileAnchoredCaptureProposals(
     );
     const hasDescription = Boolean(e.description && e.description.trim());
     if (Object.keys(props).length > 0 || hasDescription) {
+      // Claim the staged file for THIS update proposal when no new entity will
+      // be created (so no composite is filed to carry it). First claimer wins.
+      const takesFile =
+        Boolean(sourceFile) && !compositeCarriesFile && !sourceFileAttached;
+      if (takesFile) sourceFileAttached = true;
       collect(
         await checkPermissionOrPropose({
           ...gateBase,
@@ -155,6 +194,10 @@ export async function fileAnchoredCaptureProposals(
             id: targetId,
             ...(hasDescription ? { description: e.description } : {}),
             ...(Object.keys(props).length > 0 ? { properties: props } : {}),
+            // Read back on approval by `stagedSourceBlobFrom` in the
+            // `entity/update` executor, and on rejection by
+            // `discardProposalSourceBlob`.
+            ...(takesFile ? { sourceFile } : {}),
           },
         })
       );
@@ -257,6 +300,7 @@ export async function fileAnchoredCaptureProposals(
   // predicate requires the first op to be a create_entity). Since a composite
   // relation exists only when it touches a new entity, this always holds.
   if (compositeOps.some((o) => o.op === "create_entity")) {
+    if (compositeCarriesFile) sourceFileAttached = true;
     collect(
       await checkPermissionOrPropose({
         ...gateBase,
@@ -267,7 +311,14 @@ export async function fileAnchoredCaptureProposals(
         reasoning: "Capture — create related entities",
         // No top-level profileSlug: the gate's create-profile guardrail fires on
         // entity + create + data.profileSlug and would hard-deny a composite.
-        data: { operations: compositeOps, source: "capture" },
+        data: {
+          operations: compositeOps,
+          source: "capture",
+          // Read back on approval by `stagedSourceBlobFrom` in the composite
+          // branch of `applyProposalApproval` (attached to the materialized
+          // primary entity), and on rejection by `discardProposalSourceBlob`.
+          ...(compositeCarriesFile ? { sourceFile } : {}),
+        },
       })
     );
   }
@@ -292,5 +343,5 @@ export async function fileAnchoredCaptureProposals(
     );
   }
 
-  return { proposalIds };
+  return { proposalIds, sourceFileAttached };
 }

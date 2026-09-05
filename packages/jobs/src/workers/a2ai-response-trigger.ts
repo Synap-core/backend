@@ -20,6 +20,11 @@
  * reattach instead of double-creating. On success the assistant row gets
  * metadata.aiSteps when the stream carried step frames; on failure the turn
  * is finished as `failed` with a durable error string.
+ *
+ * A headless failure has no live tab to stream an error frame to (unlike
+ * channels.sendMessage's SSE `turnEnvelope("error")`), so once retries are
+ * exhausted it raises an `agent.task_failed` notification instead — see
+ * `notifyA2AIFailure`.
  */
 
 import { randomUUID } from "node:crypto";
@@ -35,9 +40,15 @@ import {
   ChatTurnStatus,
   db,
   eq,
+  gte,
   messages,
   persistAssistantReply,
 } from "@synap/database";
+import {
+  notifications,
+  NotificationCategory,
+  NotificationPriority,
+} from "@synap/database/schema";
 
 const logger = createLogger({ module: "a2ai-response-trigger" });
 
@@ -145,6 +156,81 @@ async function finishHeadlessChatTurn(input: {
       updatedAt: new Date(),
     })
     .where(eq(chatTurns.id, input.turnId));
+}
+
+/**
+ * Same collapse window as the `agent.task_failed` producer in
+ * `packages/api/src/routers/hub-protocol/rest/events.ts` (one flaky agent
+ * must not spam every retry). Duplicated as a literal, not imported: that
+ * producer lives in @synap/api, and @synap/jobs cannot depend on @synap/api
+ * (api → jobs is the existing direction — see the file header).
+ */
+const AGENT_FAILURE_RENOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
+
+/**
+ * Surface a terminal (no-more-retries) headless-turn failure as a durable
+ * `agent.task_failed` notification — the SAME registered type the
+ * interactive/automation paths already raise for an agent failure, so the
+ * bell panel renders it with its existing icon/title/actions. This is the
+ * ONLY notification door @synap/jobs can reach: `NotificationService.create`
+ * (routing prefs, quiet hours, realtime emit) lives in @synap/api and is
+ * unreachable here, so — matching the existing precedent in
+ * `utils/proactive-post.ts` and `workers/steps/output.ts` — this inserts the
+ * row directly and skips that service's preference/quiet-hours gating.
+ *
+ * Never throws: a failed turn is already recorded in `chat_turns`; losing the
+ * notification on top of that must not turn a handled failure into a thrown
+ * one. Cooldown-gated per (scope, agentKey) so a burst of identical failures
+ * collapses into one bell entry instead of one per attempt.
+ */
+async function notifyA2AIFailure(input: {
+  userId: string;
+  workspaceId: string | null;
+  agentType: string;
+  agentUserId?: string;
+  turnId: string;
+  errorMessage: string;
+}): Promise<void> {
+  try {
+    const agentKey = input.agentUserId ?? input.agentType;
+    const groupKey = input.workspaceId
+      ? `${input.workspaceId}:agent.task_failed:${agentKey}`
+      : `pod:${input.userId}:agent.task_failed:${agentKey}`;
+    const cooldownFloor = new Date(
+      Date.now() - AGENT_FAILURE_RENOTIFY_COOLDOWN_MS
+    );
+
+    const [recent] = await db
+      .select({ id: notifications.id })
+      .from(notifications)
+      .where(
+        and(
+          eq(notifications.type, "agent.task_failed"),
+          eq(notifications.groupKey, groupKey),
+          gte(notifications.createdAt, cooldownFloor)
+        )
+      )
+      .limit(1);
+    if (recent) return;
+
+    await db.insert(notifications).values({
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      type: "agent.task_failed",
+      category: NotificationCategory.AI,
+      priority: NotificationPriority.HIGH,
+      title: `${input.agentType} encountered an error`,
+      body: input.errorMessage,
+      sourceType: "agent",
+      sourceId: input.turnId,
+      groupKey,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, turnId: input.turnId },
+      "A2AI failure notification could not be written (non-fatal)"
+    );
+  }
 }
 
 /**
@@ -338,7 +424,32 @@ export async function handleA2AIResponseTrigger(
         { channelId, userMessageId, turnId: turn.id, detail },
         "A2AI hub call refused the request — not retrying (a replay cannot succeed)"
       );
+      // Terminal — no retry will follow, so this is the one chance to surface it.
+      // Status is verified (the transport stamped it), so name it honestly;
+      // for anything unclassified, stay neutral about which side is at fault.
+      await notifyA2AIFailure({
+        userId,
+        workspaceId,
+        agentType,
+        agentUserId,
+        turnId: turn.id,
+        errorMessage:
+          typeof (err as { status?: unknown })?.status === "number"
+            ? `The AI service rejected the request (${(err as { status: number }).status}).`
+            : "The request to the AI service failed.",
+      });
       return;
+    }
+    if (job.retryCount >= A2AI_TRIGGER_JOB_OPTIONS.retryLimit!) {
+      // Last attempt exhausted — this failure will not be retried again.
+      await notifyA2AIFailure({
+        userId,
+        workspaceId,
+        agentType,
+        agentUserId,
+        turnId: turn.id,
+        errorMessage: "The request to the AI service failed.",
+      });
     }
     throw err; // transient — let pg-boss retry
   }
@@ -355,6 +466,16 @@ export async function handleA2AIResponseTrigger(
       status: "failed",
       error: detail,
     });
+    if (job.retryCount >= A2AI_TRIGGER_JOB_OPTIONS.retryLimit!) {
+      await notifyA2AIFailure({
+        userId,
+        workspaceId,
+        agentType,
+        agentUserId,
+        turnId: turn.id,
+        errorMessage: detail,
+      });
+    }
     // Throw so pg-boss can retry transient empty/error streams.
     throw new Error(detail);
   }
@@ -406,6 +527,18 @@ export async function handleA2AIResponseTrigger(
       status: "failed",
       error: detail,
     });
+    if (job.retryCount >= A2AI_TRIGGER_JOB_OPTIONS.retryLimit!) {
+      // The model DID answer here — this is a Synap-side save failure, not an
+      // agent/IS fault, so say so rather than blaming "an error" on the agent.
+      await notifyA2AIFailure({
+        userId,
+        workspaceId,
+        agentType,
+        agentUserId,
+        turnId: turn.id,
+        errorMessage: `The response could not be saved: ${detail}`,
+      });
+    }
     throw err;
   }
 }

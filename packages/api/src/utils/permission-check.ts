@@ -35,6 +35,7 @@ import {
 import {
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
+  resolveOriginTrust,
 } from "@synap/database/agent-governance";
 import {
   users,
@@ -74,13 +75,14 @@ import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
 import {
+  decideAgentPolicy,
   findMatchingPattern,
   requiredPermissionFor,
   isBlockedFilesystemPath,
-  isAutoApproved,
   getWorkspaceGovernanceMode,
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
+  type AgentPolicyInput,
   type ChannelCapabilityGrant,
   type GovernedWritePair,
 } from "@synap/governance-policy";
@@ -774,6 +776,129 @@ export async function previewPermissionDecision(
   return { decision: "propose" };
 }
 
+/**
+ * The facts an ANONYMOUS PRINCIPAL write actually carries. Everything the
+ * engine can consult that is NOT one of these is agent-only and has no honest
+ * value here — see {@link anonymousPolicyInput}.
+ */
+interface AnonymousPolicyFacts {
+  subjectType: string;
+  action: string;
+  /** rung 2.6 — the write subject's profile slug, when the write targets an entity. */
+  subjectProfileSlug: string | undefined;
+  /** rung 2.6 — `uo_validated` on a `user_observation` subject. */
+  subjectUoValidated: boolean | undefined;
+  /** rung 2.1 — the caller's / session's force-propose signal. */
+  forcePropose: boolean;
+  /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
+  governanceRuleVerdict: "auto" | "propose" | undefined;
+  /** rung 2.55 — server-resolved trust of the acting channel's ORIGIN. */
+  originTrust: "trusted" | "untrusted" | undefined;
+}
+
+/**
+ * Every field of {@link AgentPolicyInput}, but REQUIRED — while still permitting
+ * an explicit `undefined` value. Adding a new rung input to the engine is
+ * therefore a COMPILE ERROR inside {@link anonymousPolicyInput} until someone
+ * decides, in writing, what the anonymous principal's value for it is.
+ */
+type ExhaustiveAgentPolicyInput = AgentPolicyInput &
+  Record<keyof AgentPolicyInput, unknown>;
+
+/**
+ * THE ONE CONSTRUCTOR for the anonymous principal's `decideAgentPolicy` input.
+ *
+ * WHY A NAMED HELPER AND NOT AN INLINE OBJECT. The legacy AI-source path has no
+ * agent user row, so most of the engine's inputs have no honest value. The
+ * named failure mode is a future rung taking an agent-only input and somebody
+ * inlining a *plausible* default at the call site — which would silently give an
+ * unattributed third-party key an agent semantic. This function is the guard:
+ * it is the only place that decides, and `ExhaustiveAgentPolicyInput` makes a
+ * new field impossible to forget.
+ *
+ * PER-RUNG DISPOSITION (verified against @synap/governance-policy's ladder):
+ *   1    CBAC              — NO-OP. `agentCapabilities: undefined` → the rung's
+ *                            `caps && caps.length > 0` guard is false.
+ *   2    ADMIN             — FIRES on the event key. Unreachable in practice
+ *                            (no live admin gate door passes a `source`), and
+ *                            behaviour-identical anyway: no ADMIN key is in
+ *                            DEFAULT_AUTO_APPROVE, so both old and new propose.
+ *   2.05 HUMAN GATE        — FIRES (previously hand-mirrored here).
+ *   2.06 ARBITRARY EXEC    — FIRES (previously hand-mirrored here).
+ *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
+ *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
+ *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
+ *                            resolved an acting channel at all, so a write from
+ *                            an EXTERNAL / bridge channel auto-executed.
+ *   2.56 DAILY CEILING     — **DELIBERATELY DEFERRED**: `ceilingVerdict:
+ *                            undefined`, which is the rung's own no-op input
+ *                            (it only ever receives `"propose"`). TWO reasons,
+ *                            both load-bearing. (a) The ceiling is keyed on an
+ *                            AGENT ID — `countAgentWritesTodayUtc` /
+ *                            `governance_ceilings` resolve per acting agent —
+ *                            and there is no agent here, so there is no
+ *                            meaningful key to count against; a pod-wide count
+ *                            would be a different axis wearing this rung's name.
+ *                            (b) `DEFAULT_DAILY_WRITE_CEILING` is 500 and one
+ *                            bulk capture auto-approves ~1,600 `entity.create`
+ *                            rows, so adopting it would silently start queueing
+ *                            proposals mid-capture. Giving the anonymous
+ *                            principal its OWN ceiling axis is a follow-up.
+ *   2.6  BY-KIND           — FIRES (previously hand-mirrored here).
+ *   2.7  PER-CAPABILITY    — NO-OP. `capabilityGovernance: undefined` → the
+ *                            rung's `if (input.capabilityGovernance)` is false.
+ *   2.8  GOVERNANCE_RULES  — FIRES (previously hand-mirrored here).
+ *   3    OWNED WORKSPACE   — NO-OP. Ownership means `workspace.linkedAgentId ===
+ *                            agentUserId`; with no agent that can never be true.
+ *   4    explicit autoApproveFor — NO-OP by design (`undefined`), so rung 8
+ *                            falls back to DEFAULT_AUTO_APPROVE — byte-identical
+ *                            to what this path did by hand.
+ *   5    writesRequireProposal — NO-OP, **and it has no reachable source**. The
+ *                            flag lives ONLY on `users.agentMetadata`
+ *                            (schema/users.ts:25); there is no workspace-level
+ *                            equivalent (`settings.aiGovernance` has no such
+ *                            field). With no agent user row there is no key to
+ *                            read it from. The operator-facing way to say "every
+ *                            unattributed AI write must be reviewed" is a
+ *                            `governance_rules` row with verdict `propose` —
+ *                            rung 2.8, which DOES now fire correctly (before
+ *                            this change the deprecated `aiAutoApprove` toggle
+ *                            could silently override it).
+ *   6    agent-owned mode + destructive — NO-OP; destructive already returned at
+ *                            2.5, so the rung is unreachable regardless.
+ *   7    PER-CHANNEL GRANT — NO-OP. `channelCapabilities: undefined`. A grant is
+ *                            a per-teammate row keyed on a channel MEMBER; an
+ *                            unattributed key is not a member of anything.
+ *   8    DEFAULT_AUTO_APPROVE — FIRES (previously hand-mirrored here).
+ *   9    default            — propose.
+ */
+function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
+  const input: ExhaustiveAgentPolicyInput = {
+    subjectType: facts.subjectType,
+    action: facts.action,
+    subjectProfileSlug: facts.subjectProfileSlug,
+    subjectUoValidated: facts.subjectUoValidated,
+    forcePropose: facts.forcePropose,
+    governanceRuleVerdict: facts.governanceRuleVerdict,
+    originTrust: facts.originTrust,
+
+    // ── AGENT-ONLY INPUTS — omitted on purpose, never given a plausible
+    // default. Each line is a decision, not an oversight; see the per-rung
+    // table above for why the corresponding rung no-ops.
+    agentCapabilities: undefined, // rung 1
+    isAgentOwnedWorkspace: undefined, // rung 3
+    autoApproveFor: undefined, // rung 4 → rung 8 uses DEFAULT_AUTO_APPROVE
+    writesRequireProposal: undefined, // rung 5 — no reachable source
+    governanceMode: undefined, // rung 6
+    channelCapabilities: undefined, // rungs 2.7-tighten + 7
+    capabilityGovernance: undefined, // rung 2.7
+    capabilityExecMode: undefined, // rung 2.7
+    ceilingVerdict: undefined, // rung 2.56 — DEFERRED (see table above)
+    allowDestructiveAutoApprove: undefined, // never: no "Crazy" mode here
+  };
+  return input;
+}
+
 async function evaluatePermission(
   opts: PermissionCheckOpts,
   dryRun: boolean
@@ -1395,20 +1520,31 @@ async function evaluatePermission(
       // depth) — fall through to the legacy AI-source path below, then grant.
     }
 
-    // Legacy AI source path (no agent user row, but caller signals AI-sourced action).
+    // ─────────────────────────────────────────────────────────────────────
+    // LEGACY AI-SOURCE PATH — the ANONYMOUS PRINCIPAL.
+    //
+    // Reached when the caller signalled an AI-sourced write (`source: "ai" |
+    // "intelligence"`) but NO agent user row was resolved — an unattributed
+    // `service` / `user_pat` / `hub_inbound` key. `service` keys are
+    // DELIBERATELY handed to third parties (`services/external-registration.ts`
+    // forces `linkedUserId: null`; see the schema comment on
+    // `schema/api-keys.ts`), so this is real traffic, not a vestige. And it is a
+    // TIGHTENING, not a weakening: strip `source` and the same caller falls
+    // through to step 6's unconditional `{ granted: true }`.
+    //
+    // It used to hand-mirror PART of the ladder inline (2.05 / 2.06 / 2.1 / 2.5
+    // / 2.6 / 2.8 / 8) — a second, partial, hand-maintained copy of a 13-rung
+    // engine, which is a fork the moment it exists. It now calls the SAME
+    // engine, `decideAgentPolicy`, through `anonymousPolicyInput()` — the ONE
+    // constructor, whose docblock carries the per-rung disposition (including
+    // why 2.56 is deliberately deferred and why 5 has no reachable source).
+    // ─────────────────────────────────────────────────────────────────────
     if (source === "ai" || source === "intelligence") {
       const eventKey = `${subjectType}.${action}`;
 
-      // GOVERNANCE BY KIND (user_observation) — the inverse gap this path used
-      // to have: the agentUserId branch above consults `subjectUoValidated`
-      // via resolveAgentGovernanceDecision (mirroring rung 2.6 in
-      // governance-policy), but this legacy no-agent-row path never did, so an
-      // AI-INFERRED user_observation (uo_validated !== true) could auto-execute
-      // here through the whitelist/aiAutoApprove branches below instead of
-      // always proposing. Mirror rung 2.6's floor: an inference is never
-      // auto-executed via this path, regardless of whitelist/aiAutoApprove.
-      // Tightens only — an explicit (uo_validated === true) observation is
-      // unaffected and still falls through to the normal whitelist logic.
+      // rung 2.6 inputs — both ride in the gate `data` payload (entity
+      // create/update carries `profileSlug` + `properties`). Read defensively:
+      // absent → the rung no-ops.
       const subjectProfileSlug =
         typeof data?.profileSlug === "string" ? data.profileSlug : undefined;
       const dataProperties = (data?.properties ?? null) as Record<
@@ -1419,21 +1555,11 @@ async function evaluatePermission(
         typeof dataProperties?.uo_validated === "boolean"
           ? dataProperties.uo_validated
           : undefined;
-      const isUnvalidatedUserObservation =
-        subjectProfileSlug === "user_observation" &&
-        subjectUoValidated !== true;
 
-      // ONE-STORE (Phase B, #1 must-fix): this path used to read
-      // settings.aiGovernance.autoApproveFor DIRECTLY — a second concurrent
-      // store, alongside the agentUserId path's resolveAgentGovernanceDecision
-      // (which already reads governance_rules, not the JSONB). It now consults
-      // the SAME table via resolveGovernanceRule — `includeAgentPrincipal:
-      // false` because there is no agent user here to attribute an
-      // agent-scoped rule to, only "any"-principal (workspace-authored) rules
-      // are eligible — falling back to DEFAULT_AUTO_APPROVE when no rule
-      // matches, exactly mirroring decideAgentPolicy's rung 8. Destructive
-      // actions never auto-approve via this path (mirrors rung 2.5's hard
-      // floor), and forcePropose always wins.
+      // rung 2.8 — the ONE user-editable governance store.
+      // `includeAgentPrincipal: false`: there is no agent user here to attribute
+      // an agent-scoped rule to, so only "any"-principal (workspace-authored)
+      // rules are eligible.
       const ruleMatch = await resolveGovernanceRule({
         db,
         workspaceId,
@@ -1441,65 +1567,184 @@ async function evaluatePermission(
         action,
         includeAgentPrincipal: false,
       });
-      const isDestructive = DESTRUCTIVE_ACTIONS.includes(action);
-      const whitelisted =
-        !isDestructive &&
-        !isUnvalidatedUserObservation &&
-        (ruleMatch
-          ? ruleMatch.verdict === "auto"
-          : isAutoApproved(eventKey, DEFAULT_AUTO_APPROVE));
 
-      if (whitelisted && !effectiveForcePropose) {
-        return { granted: true };
-      }
+      // rung 2.55 — THE FIX. This path never resolved an acting channel at all,
+      // so a write arriving from an EXTERNAL / bridge channel auto-executed.
+      // Resolved server-side from the triggering message (never the request
+      // body), exactly as the agent branch above does it.
+      const actingChannelId =
+        opts.channelId ?? (await resolveActingChannelId(sourceMessageId));
+      const originTrust = await resolveOriginTrust({
+        db,
+        channelId: actingChannelId,
+        userId,
+        workspaceId,
+      });
 
-      // Legacy aiAutoApprove workspace toggle — fallback when the action isn't
-      // covered (or is destructive) by the modern whitelist. Distinct legacy
-      // field, not part of the governance_rules convergence — still read
-      // directly off the workspace row.
-      const [ws] = workspaceId
-        ? await db
-            .select({ settings: workspaces.settings })
-            .from(workspaces)
-            .where(eq(workspaces.id, workspaceId))
-            .limit(1)
-        : [undefined];
-      const settings = ws?.settings as WorkspaceSettings | undefined;
-      const aiAutoApprove =
-        settings?.aiGovernance?.autoApprove ??
-        (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
-        false;
-
-      // Note: reaching here with whitelisted === true means effectiveForcePropose
-      // is true (the whitelisted-and-not-forced case already returned above), so
-      // this unconditionally still proposes for that case. isUnvalidatedUserObservation
-      // is included so the legacy aiAutoApprove workspace toggle can't bypass the
-      // same user_observation inference floor the whitelist branch above enforces.
-      if (
-        !aiAutoApprove ||
-        effectiveForcePropose ||
-        isUnvalidatedUserObservation
-      ) {
-        // Mirror agent-path lifecycle complete escape for intelligence/AI source
-        // without an agent user row (e.g. session-recap). Same flag + close pattern;
-        // still honors deny (already returned) and explicit opts.forcePropose.
-        if (
-          opts.ignoreSessionForcePropose === true &&
-          opts.forcePropose !== true &&
-          isFocusSessionLifecycleClose(subjectType, action, data)
-        ) {
-          return { granted: true };
-        }
-        if (dryRun) return DRY_RUN_PROPOSE;
-        return createProposal({
-          envelope: writeEnvelope,
-          workspaceId,
+      const gov = decideAgentPolicy(
+        anonymousPolicyInput({
           subjectType,
           action,
-          data,
-          reasoning: opts.reasoning,
-        });
+          subjectProfileSlug,
+          subjectUoValidated,
+          forcePropose: effectiveForcePropose,
+          governanceRuleVerdict: ruleMatch?.verdict,
+          originTrust,
+        })
+      );
+
+      // `deny` is structurally unreachable for the anonymous principal: all
+      // three denying rungs (1 CBAC, 2.7 per-capability, 7 per-channel) require
+      // an input `anonymousPolicyInput` pins to `undefined`. Handled rather than
+      // cast away, so that if a future rung learns to deny on an input the
+      // anonymous principal DOES carry, it denies instead of falling through.
+      if (gov.verdict === "deny") {
+        return { denied: true, reason: gov.reason };
       }
+
+      // The propose-only fields, read ONCE through the discriminant so the rest
+      // of this block can branch on them without re-narrowing. Both are
+      // `undefined` for an `execute` verdict AND for the engine's plain
+      // default-propose (rung 9) — the latter is exactly what the legacy
+      // `aiAutoApprove` toggle below keys on.
+      const proposeReason = gov.verdict === "propose" ? gov.reason : undefined;
+      const proposeReasonCode =
+        gov.verdict === "propose" ? gov.reasonCode : undefined;
+
+      // LEGACY `aiAutoApprove` WORKSPACE TOGGLE — preserved, and now strictly
+      // NARROWER. This deprecated boolean used to grant any action the
+      // hand-mirrored whitelist did not cover, overriding even a
+      // `governance_rules` row that said "propose". It is now honoured ONLY for
+      // the engine's PLAIN DEFAULT propose (rung 9 — the one propose verdict
+      // that carries no `reasonCode`), so every NAMED rung beats it. Deleting it
+      // outright would be a silent tightening on pods that set it; narrowing it
+      // is the honest middle.
+      let autoExecute = gov.verdict === "execute";
+      if (!autoExecute && proposeReasonCode === undefined) {
+        const [ws] = workspaceId
+          ? await db
+              .select({ settings: workspaces.settings })
+              .from(workspaces)
+              .where(eq(workspaces.id, workspaceId))
+              .limit(1)
+          : [undefined];
+        const settings = ws?.settings as WorkspaceSettings | undefined;
+        autoExecute = Boolean(
+          settings?.aiGovernance?.autoApprove ??
+          (settings as Record<string, unknown> | undefined)?.aiAutoApprove ??
+          false
+        );
+      }
+
+      if (autoExecute) {
+        // DRY RUN: the verdict is "execute"; skip the receipt INSERT (the only
+        // side effect on this branch) and report it.
+        if (dryRun) return { granted: true };
+
+        // COUNTABILITY — the anonymous auto-execute used to be a bare
+        // `return { granted: true }`: no proposal row, no session, no
+        // attribution of any kind. Across every documented system (GCP Workload
+        // Identity, AWS Roles Anywhere, Kubernetes, even Wikipedia's IP edits) a
+        // mutation never gets ZERO attribution: it is either refused, or an
+        // attribution SUBSTITUTE is mandatorily captured. This receipt is that
+        // substitute — the same AUTO_APPROVED row the agent path mints, marked
+        // so the two can never be confused.
+        //
+        // Best-effort by the door's contract, exactly like the agent path's: an
+        // audit-write failure NEVER fails a write that was already granted, and
+        // is logged loudly rather than swallowed. The PRIMARY durable audit
+        // remains the event spine.
+        let autoApprovedProposalId: string | undefined;
+        const receiptProjectId = await deriveProposalProjectId({
+          projectId,
+          sessionId: sessionId ?? null,
+        });
+        try {
+          const [receipt] = await db
+            .insert(proposals)
+            .values({
+              workspaceId: workspaceId ?? null,
+              targetType: subjectType,
+              targetId: String(data?.id ?? randomUUID()),
+              proposalType: eventKey,
+              data: {
+                ...data,
+                ...(correlationId ? { correlationId } : {}),
+                ...(requestedEventId ? { requestedEventId } : {}),
+                ...(opts.reasoning ? { reasoning: opts.reasoning } : {}),
+                _autoApprove: {
+                  // THE ANONYMOUS MARKER. The agent path never sets
+                  // `principal`, so `principal === "anonymous"` is a POSITIVE,
+                  // greppable discriminator — stronger than inferring it from a
+                  // null `agentUserId`, which is null on plenty of other rows.
+                  principal: "anonymous",
+                  // Present only when rung 8 matched; absent when the legacy
+                  // `aiAutoApprove` toggle is what granted the write.
+                  matchedPattern: findMatchingPattern(
+                    eventKey,
+                    DEFAULT_AUTO_APPROVE
+                  ),
+                  approvedAt: new Date().toISOString(),
+                  approvedBy: "system:auto_approve",
+                },
+              },
+              status: ProposalStatus.AUTO_APPROVED,
+              // No agent user row exists; the authenticated bearer is the only
+              // principal there is. `agentUserId` stays NULL on purpose — this
+              // receipt must never be counted as AGENT conduct by the trust
+              // scorecard, which floors on `createdBy`/`agentUserId`.
+              createdBy: userId,
+              threadId: threadId ?? undefined,
+              commandRunId: commandRunId ?? undefined,
+              correlationId: correlationId ?? undefined,
+              requestedEventId: requestedEventId ?? undefined,
+              // The caller's session if it carried one. NOT minted here: the
+              // session resolver keys on an agent id, which does not exist.
+              sessionId: sessionId ?? undefined,
+              sourceMessageId: sourceMessageId ?? undefined,
+              projectId: receiptProjectId ?? undefined,
+              stepRunId: stepRunId ?? undefined,
+              nodeId: nodeId ?? undefined,
+              governanceReason: opts.governanceReason ?? undefined,
+            })
+            .returning({ id: proposals.id });
+          autoApprovedProposalId = receipt?.id;
+        } catch (err) {
+          logger.error(
+            { err, workspaceId, userId, eventKey },
+            "Anonymous-principal auto-approve audit-trail row insert failed (write still granted; event spine remains the primary audit)"
+          );
+        }
+
+        return { granted: true, autoApprovedProposalId };
+      }
+
+      // Mirror the agent-path lifecycle complete escape for an AI/intelligence
+      // source without an agent user row (e.g. session-recap). Same flag + close
+      // pattern; still honors deny (already returned) and explicit
+      // opts.forcePropose.
+      if (
+        opts.ignoreSessionForcePropose === true &&
+        opts.forcePropose !== true &&
+        isFocusSessionLifecycleClose(subjectType, action, data)
+      ) {
+        return { granted: true };
+      }
+      if (dryRun) return DRY_RUN_PROPOSE;
+      return createProposal({
+        envelope: writeEnvelope,
+        workspaceId,
+        subjectType,
+        action,
+        data,
+        // The engine's per-rung default reasoning + its structured reasonCode —
+        // parity with the agent path. Both are undefined for the plain
+        // default-propose case, preserving the prior behaviour of passing the
+        // caller's reasoning through unchanged.
+        reasoning: opts.reasoning ?? proposeReason,
+        governanceReason:
+          proposeReasonCode ?? opts.governanceReason ?? undefined,
+      });
     }
   } catch (error) {
     logger.error({ err: error }, "Permission check error");

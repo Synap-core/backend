@@ -37,9 +37,21 @@ const mocks = vi.hoisted(() => ({
   requestHeadlessChatText: vi.fn(),
   persistAssistantReply: vi.fn(),
   insertReturning: [] as TurnRow[],
-  selectReturning: [] as TurnRow[],
+  selectReturning: [] as unknown[],
   messageLookup: undefined as { id: string } | undefined,
   updateSets: [] as Array<Record<string, unknown>>,
+  notificationInserts: [] as Array<Record<string, unknown>>,
+  // Identity token so the db.insert mock can tell "insert into notifications"
+  // apart from "insert into chatTurns" without re-deriving column shapes.
+  notificationsTable: { __table: "notifications" },
+}));
+
+// notifyA2AIFailure imports the `notifications` table + enums from the
+// schema subpath — a separate module from the "@synap/database" mock below.
+vi.mock("@synap/database/schema", () => ({
+  notifications: mocks.notificationsTable,
+  NotificationCategory: { AI: "ai" },
+  NotificationPriority: { HIGH: "high" },
 }));
 
 // TOTAL module replacement: anything the worker imports from here must be
@@ -73,16 +85,27 @@ vi.mock("@synap/database", () => ({
   messages: { id: "id" },
   eq: () => ({}),
   and: () => ({}),
+  gte: () => ({}),
   persistAssistantReply: (...args: unknown[]) =>
     mocks.persistAssistantReply(...args),
   db: {
-    insert: () => ({
-      values: () => ({
-        onConflictDoNothing: () => ({
-          returning: async () => mocks.insertReturning,
+    insert: (table: unknown) => {
+      if (table === mocks.notificationsTable) {
+        return {
+          values: (v: Record<string, unknown>) => {
+            mocks.notificationInserts.push(v);
+            return Promise.resolve(undefined);
+          },
+        };
+      }
+      return {
+        values: () => ({
+          onConflictDoNothing: () => ({
+            returning: async () => mocks.insertReturning,
+          }),
         }),
-      }),
-    }),
+      };
+    },
     select: () => ({
       from: () => ({
         where: () => ({
@@ -114,10 +137,16 @@ vi.mock("@synap/database", () => ({
   },
 }));
 
-const { handleA2AIResponseTrigger, A2AI_TRIGGER_QUEUE } =
-  await import("../a2ai-response-trigger.js");
+const {
+  handleA2AIResponseTrigger,
+  A2AI_TRIGGER_QUEUE,
+  A2AI_TRIGGER_JOB_OPTIONS,
+} = await import("../a2ai-response-trigger.js");
 
-function baseJob(overrides: Partial<Record<string, unknown>> = {}) {
+function baseJob(
+  overrides: Partial<Record<string, unknown>> = {},
+  retryCount = 0
+) {
   return {
     id: "job-1",
     name: A2AI_TRIGGER_QUEUE,
@@ -135,7 +164,7 @@ function baseJob(overrides: Partial<Record<string, unknown>> = {}) {
       agentUserId: "agent-user",
       ...overrides,
     },
-    retryCount: 0,
+    retryCount,
   } as any;
 }
 
@@ -155,6 +184,7 @@ beforeEach(() => {
   mocks.selectReturning = [];
   mocks.messageLookup = undefined;
   mocks.updateSets.length = 0;
+  mocks.notificationInserts.length = 0;
   mocks.persistAssistantReply.mockResolvedValue({
     assistantId: assistantMessageId,
     previousHash: "p",
@@ -245,6 +275,10 @@ describe("handleA2AIResponseTrigger", () => {
       mocks.updateSets.find((s) => s.status === ChatTurnStatus.FAILED)?.error
     ).toBe("hub down");
     expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
+    // Retryable, not the last attempt (retryCount 0 < retryLimit) — a retry
+    // could still succeed, so silence is correct here; notifying now would be
+    // premature noise ahead of the retry that pg-boss is about to run.
+    expect(mocks.notificationInserts).toHaveLength(0);
   });
 
   it("finishes failed WITHOUT rethrowing when the hub refused the request", async () => {
@@ -265,6 +299,15 @@ describe("handleA2AIResponseTrigger", () => {
       mocks.updateSets.some((s) => s.status === ChatTurnStatus.FAILED)
     ).toBe(true);
     expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
+    // Terminal — a replay of a 4xx cannot succeed, so this IS the one chance
+    // to tell the user, unlike the transient-error case above.
+    expect(mocks.notificationInserts).toHaveLength(1);
+    expect(mocks.notificationInserts[0]).toMatchObject({
+      type: "agent.task_failed",
+      sourceType: "agent",
+      sourceId: turnId,
+    });
+    expect(mocks.notificationInserts[0].body).toContain("400");
   });
 
   it("finishes failed when response is empty", async () => {
@@ -282,6 +325,62 @@ describe("handleA2AIResponseTrigger", () => {
       mocks.updateSets.some((s) => s.status === ChatTurnStatus.FAILED)
     ).toBe(true);
     expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
+    expect(mocks.notificationInserts).toHaveLength(0); // not the final attempt yet
+  });
+
+  it("notifies once retries are exhausted on a transient transport error", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockRejectedValue(new Error("hub down"));
+
+    await expect(
+      handleA2AIResponseTrigger(
+        baseJob({}, A2AI_TRIGGER_JOB_OPTIONS.retryLimit)
+      )
+    ).rejects.toThrow("hub down");
+
+    expect(mocks.notificationInserts).toHaveLength(1);
+    expect(mocks.notificationInserts[0]).toMatchObject({
+      type: "agent.task_failed",
+      sourceType: "agent",
+      sourceId: turnId,
+    });
+  });
+
+  it("notifies once retries are exhausted on an empty response", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "",
+      error: "stream boom",
+      steps: [],
+    });
+
+    await expect(
+      handleA2AIResponseTrigger(
+        baseJob({}, A2AI_TRIGGER_JOB_OPTIONS.retryLimit)
+      )
+    ).rejects.toThrow("stream boom");
+
+    expect(mocks.notificationInserts).toHaveLength(1);
+    expect(mocks.notificationInserts[0].body).toBe("stream boom");
+  });
+
+  it("notifies a save failure (not an agent fault) when persist fails on the final attempt", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "pong",
+      error: null,
+      steps: [],
+    });
+    mocks.persistAssistantReply.mockRejectedValue(new Error("db down"));
+
+    await expect(
+      handleA2AIResponseTrigger(
+        baseJob({}, A2AI_TRIGGER_JOB_OPTIONS.retryLimit)
+      )
+    ).rejects.toThrow("db down");
+
+    expect(mocks.notificationInserts).toHaveLength(1);
+    expect(mocks.notificationInserts[0].body).toContain("could not be saved");
   });
 
   it("skips work when an existing turn is already completed", async () => {

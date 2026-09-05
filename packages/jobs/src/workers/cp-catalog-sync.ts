@@ -247,9 +247,12 @@ async function fetchCapabilities(
  * view (no `definition`). `category` is the CP's LIVE `PACKAGE_TYPES` vocabulary
  * (`workspace` / `workflow`), NOT the pod's internal cache `kind` — see fetchKind
  * for the mapping and the header note. Pages until the response `total` is
- * retrieved so the cache is NEVER truncated to the first page (the CP orders by
- * `installCount DESC, createdAt DESC`, so a first-page-only fetch would prune
- * every new author's template first).
+ * retrieved so the cache is NEVER truncated to the first page. Keep the paging
+ * regardless of how the CP orders: as of 2026-09-05 it orders by `createdAt
+ * DESC` (it used to be `installCount DESC` — dropped because that counter is
+ * bumped by an anonymous, non-idempotent POST), and under EITHER order a
+ * first-page-only fetch silently prunes part of the catalog. The paging is not
+ * a workaround for one sort key; it is what makes the cache complete.
  */
 async function fetchPackages(
   source: string,

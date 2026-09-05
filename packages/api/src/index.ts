@@ -360,6 +360,16 @@ export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
+// Exported for @synap/jobs' `registerSessionCloser` IoC slot. A session's
+// TERMINAL status has ONE door (@synap-core/types/focus-sessions) — three job
+// workers stamped `status:'closed'` with a raw UPDATE and skipped the review
+// pack, the ephemeral expiry and both halves of the close event. jobs cannot
+// import this package statically (circular dep), so apps/api fills the slot.
+export {
+  completeFocusSession,
+  type CompleteFocusSessionParams,
+  type CompleteFocusSessionResult,
+} from "./services/focus-sessions/complete-session.js";
 // Exported for the @synap/jobs flow-validator IoC slot: the pattern detector
 // writes `automations` directly and cannot import this package statically.
 export {
@@ -377,6 +387,17 @@ export {
   type RunPlaybookResult,
   type RunChainContext,
 } from "./services/playbooks/run-playbook.js";
+// BYOA local-spawn slot: the `external-agent` executor's no-webhook branch
+// starts the coding CLI on the pod. The spawn needs node-pty + the DevPlane
+// workspace gate, both of which live in apps/api, so apps/api fills this slot at
+// boot — the same inversion registerAgentWaker/registerPlaybookRunner use.
+export {
+  registerDevAgentSpawner,
+  getDevAgentSpawner,
+  type DevAgentSpawner,
+  type DevAgentDispatchRequest,
+  type DevAgentDispatchResult,
+} from "./services/playbooks/executors/dev-agent-spawner.js";
 export type { ConnectionSelector } from "./connectors/external-dispatch.js";
 // Nango's API shape (connection_id ≠ end_user.id) belongs in the connector, not
 // in routes — apps/api's Nango webhook needs it to attribute a sync correctly.

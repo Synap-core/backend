@@ -13,6 +13,10 @@ import {
   type ProposalEffect,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import {
+  isTerminalSessionStatus,
+  type TerminalSessionStatus,
+} from "../../../services/focus-sessions/session-statuses.js";
 
 /** Register the focus_session/* approve executors. */
 export function registerFocusSessionExecutors(): void {
@@ -207,7 +211,18 @@ export function registerFocusSessionExecutors(): void {
         });
       }
 
-      if (innerData.status === "closed") {
+      // EVERY terminal status routes to the one door, not just the "closed"
+      // literal. `cancelled` and `failed` are equally proposable (both doors
+      // derive their zod enum from UPDATABLE_SESSION_STATUSES), and gating on
+      // one of the three meant approving a "cancel this session" proposal
+      // stamped the row raw — no review pack, no running-run close, no
+      // session-bound ephemeral expiry, no close event. Derive the branch from
+      // the vocabulary so a fourth terminal status can never miss the door.
+      // `innerData` is Record<string, unknown>; the guard takes a string.
+      const requestedStatus =
+        typeof innerData.status === "string" ? innerData.status : undefined;
+      if (isTerminalSessionStatus(requestedStatus)) {
+        const terminalStatus: TerminalSessionStatus = requestedStatus;
         // Close path: human approve executes complete without re-entering agent
         // governance (no agentUserId from the original proposal).
         try {
@@ -217,6 +232,7 @@ export function registerFocusSessionExecutors(): void {
             sessionId,
             // Scope by session owner so the service's userId floor resolves.
             userId: session.userId,
+            terminalStatus,
             summary:
               typeof innerData.sessionSummary === "string"
                 ? innerData.sessionSummary
@@ -231,12 +247,12 @@ export function registerFocusSessionExecutors(): void {
           if (!result) {
             // complete returned null (ownership miss / gone) — only OK if
             // the session is already closed (idempotent re-approve).
-            if (session.status !== "closed") {
+            if (session.status !== terminalStatus) {
               const again = await db.query.focusSessions.findFirst({
                 where: eq(focusSessions.id, sessionId),
                 columns: { status: true },
               });
-              if (again?.status !== "closed") {
+              if (again?.status !== terminalStatus) {
                 throw new TRPCError({
                   code: "BAD_REQUEST",
                   message: `Focus session ${sessionId} could not be completed`,

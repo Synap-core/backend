@@ -16,6 +16,57 @@
  */
 
 import { HubApiError } from "./errors.js";
+
+/**
+ * Retry backoff tuning for `fetchWithRetry`.
+ * MAX_RETRY_AFTER_MS caps how long a single attempt will honor a server's
+ * `Retry-After` — a request-scoped HTTP client has no business blocking a
+ * caller for minutes; a value above the cap means "not worth retrying
+ * within this call" and the loop gives up rather than stalling on it.
+ */
+const RETRY_BASE_DELAY_MS = 1_000;
+const RETRY_MAX_BACKOFF_MS = 10_000;
+const MAX_RETRY_AFTER_MS = 30_000;
+
+/**
+ * Methods that mutate server state — the only ones that get an
+ * `Idempotency-Key`. GET/HEAD never do: the header is meaningless (and
+ * potentially harmful, if a caching layer ever keyed on it) for a read.
+ */
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Same 4xx-is-terminal rule as `isRetryableHubError` in
+ * @synap/intelligence-client (408/429 are 4xx by number but temporal by
+ * meaning — the request can succeed later with the same payload). Not
+ * imported: this package is deliberately zero-runtime-dependency (see file
+ * header) and intelligence-client pulls in @synap/database transitively;
+ * this also classifies a bare status code before any error object exists,
+ * a different point in the pipeline than the thrown-error check it mirrors.
+ */
+function isRetryableStatus(status: number): boolean {
+  if (status === 408 || status === 429) return true;
+  return status >= 500;
+}
+
+/** Parse `Retry-After` (delay-seconds or HTTP-date) into a millisecond delay. */
+function parseRetryAfterMs(header: string | null): number | null {
+  if (!header) return null;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const dateMs = Date.parse(header);
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+  return null;
+}
+
+/** Exponential backoff with full jitter (AWS-style), capped. */
+function backoffWithJitter(attempt: number): number {
+  const cap = Math.min(
+    RETRY_MAX_BACKOFF_MS,
+    RETRY_BASE_DELAY_MS * 2 ** (attempt - 1)
+  );
+  return Math.random() * cap;
+}
 import type {
   HubEntity,
   HubChannel,
@@ -30,6 +81,7 @@ import type {
   StoreMemoryInput,
   SendToChannelInput,
   CaptureProposal,
+  CaptureStructureInput,
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,
@@ -223,19 +275,34 @@ export class HubRestClient {
 
   /**
    * The ONE shared request loop. Per-method timeout (GET = read, else write, or a
-   * caller override) + up to `maxAttempts` with exponential backoff. Retries ONLY
-   * on a network failure or 5xx; NEVER on a 4xx or a caller abort. Returns the raw
-   * `Response` for any non-5xx (ok OR 4xx) — the typed entry points below decide
-   * how to interpret it. This is the single source of retry/timeout truth, shared
-   * by the CLI and the IS's `ISHubClient` (which reuses the protected entry points
-   * rather than re-implementing fetch).
+   * caller override) + up to `maxAttempts` with jittered exponential backoff.
+   * Retries on a network failure, 5xx, or a 408/429 (temporal 4xx — see
+   * `isRetryableStatus`); NEVER on any other 4xx or a caller abort. A 429/503
+   * `Retry-After` is honored (capped — see `MAX_RETRY_AFTER_MS`) in place of the
+   * computed backoff. Returns the raw `Response` for any non-retried status (ok
+   * OR a terminal 4xx) — the typed entry points below decide how to interpret
+   * it. This is the single source of retry/timeout truth, shared by the CLI and
+   * the IS's `ISHubClient` (which reuses the protected entry points rather than
+   * re-implementing fetch).
+   *
+   * Mutating methods (POST/PUT/PATCH/DELETE) carry an `Idempotency-Key` header
+   * so a write the pod already committed — but whose response this client
+   * never saw (network drop, timeout) — is not silently re-applied by a
+   * retry. The key is generated ONCE per logical call, here, before the
+   * attempt loop: every retry of THIS request reuses it (so the server's
+   * idempotency cache recognizes the replay as the same request), while the
+   * next call to `request()` gets a fresh one (so two distinct writes are
+   * never coalesced). Generating a new key per attempt instead of per call
+   * would silence the whole mechanism. A caller-supplied key passed via
+   * `extraHeaders` always wins over the generated one.
    */
   private async fetchWithRetry(
     method: string,
     path: string,
     body?: unknown,
     signal?: AbortSignal,
-    timeoutMsOverride?: number
+    timeoutMsOverride?: number,
+    extraHeaders?: Record<string, string>
   ): Promise<Response> {
     const url = `${this.base}${path}`;
     const perAttemptTimeout =
@@ -244,24 +311,51 @@ export class HubRestClient {
         ? this.readTimeoutMs
         : this.writeTimeoutMs);
 
+    const headers: Record<string, string> = extraHeaders
+      ? { ...this.headers, ...extraHeaders }
+      : { ...this.headers };
+    if (
+      MUTATING_METHODS.has(method.toUpperCase()) &&
+      !headers["Idempotency-Key"] &&
+      !headers["idempotency-key"]
+    ) {
+      headers["Idempotency-Key"] = crypto.randomUUID();
+    }
+
     let lastError: unknown;
+    let retryAfterMs: number | null = null;
     for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
       if (attempt > 0) {
-        await new Promise((r) => setTimeout(r, 1_000 * attempt)); // 0, 1s, 2s, …
+        const delay = retryAfterMs ?? backoffWithJitter(attempt);
+        await new Promise((r) => setTimeout(r, delay));
+        retryAfterMs = null;
       }
       const timeout = AbortSignal.timeout(perAttemptTimeout);
       const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
       try {
         const res = await fetch(url, {
           method,
-          headers: this.headers,
+          headers,
           body: body !== undefined ? JSON.stringify(body) : undefined,
           signal: combined,
         });
-        if (res.status < 500) return res; // ok or 4xx — caller decides; never retry
-        lastError = new Error(`HTTP ${res.status}`); // 5xx — retry until exhausted
+        if (!isRetryableStatus(res.status)) return res; // ok or terminal 4xx — caller decides
+        if (res.status === 429 || res.status === 503) {
+          const honored = parseRetryAfterMs(res.headers.get("retry-after"));
+          if (honored !== null && honored > MAX_RETRY_AFTER_MS) {
+            // Server says "not soon" — waiting it out here would stall this
+            // call far past its own purpose. Give up now instead of hanging.
+            throw new HubApiError(
+              `HTTP ${res.status} with Retry-After beyond ${MAX_RETRY_AFTER_MS}ms — not retrying`,
+              res.status
+            );
+          }
+          retryAfterMs = honored;
+        }
+        lastError = new Error(`HTTP ${res.status}`); // 5xx/408/429 — retry until exhausted
       } catch (err) {
         if (signal?.aborted) throw err; // caller asked to abort — honor it
+        if (err instanceof HubApiError) throw err; // Retry-After too long — give up now
         lastError = err; // network/abort-timeout — retry
       }
     }
@@ -292,9 +386,17 @@ export class HubRestClient {
     method: string,
     path: string,
     body?: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    extraHeaders?: Record<string, string>
   ): Promise<T> {
-    const res = await this.fetchWithRetry(method, path, body, signal);
+    const res = await this.fetchWithRetry(
+      method,
+      path,
+      body,
+      signal,
+      undefined,
+      extraHeaders
+    );
     if (!res.ok) throw await this.toHubError(res);
     return this.parseBody<T>(res);
   }
@@ -307,9 +409,17 @@ export class HubRestClient {
     method: string,
     path: string,
     body?: unknown,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    extraHeaders?: Record<string, string>
   ): Promise<T | null> {
-    const res = await this.fetchWithRetry(method, path, body, signal);
+    const res = await this.fetchWithRetry(
+      method,
+      path,
+      body,
+      signal,
+      undefined,
+      extraHeaders
+    );
     if (res.status === 404 || res.status === 403) return null;
     if (!res.ok) throw await this.toHubError(res);
     return this.parseBody<T | null>(res);
@@ -324,9 +434,17 @@ export class HubRestClient {
     path: string,
     body?: unknown,
     signal?: AbortSignal,
-    timeoutMsOverride?: number
+    timeoutMsOverride?: number,
+    extraHeaders?: Record<string, string>
   ): Promise<Response> {
-    return this.fetchWithRetry(method, path, body, signal, timeoutMsOverride);
+    return this.fetchWithRetry(
+      method,
+      path,
+      body,
+      signal,
+      timeoutMsOverride,
+      extraHeaders
+    );
   }
 
   // ─── Identity ─────────────────────────────────────────────────────────────
@@ -1462,12 +1580,17 @@ export class HubRestClient {
 
   // ─── Capture pipeline ─────────────────────────────────────────────────────
 
-  async captureStructure(input: {
-    text: string;
-    url?: string;
-    workspaceId?: string;
-    previousEntities?: CaptureProposal[];
-  }): Promise<CaptureStructureResponse> {
+  async captureStructure(
+    input: CaptureStructureInput
+  ): Promise<CaptureStructureResponse> {
+    // Mirror the server's CaptureStructureRequestSchema `.refine`: at least
+    // one of text/file/url is required. Fail fast client-side rather than
+    // send a request the server will 400 on.
+    if (!input.text && !input.file && !input.url) {
+      throw new Error(
+        "captureStructure requires at least one of `text`, `file`, or `url`"
+      );
+    }
     const userId = await this.resolveUserId();
     return this.request<CaptureStructureResponse>(
       "POST",
@@ -1475,7 +1598,11 @@ export class HubRestClient {
       {
         userId,
         text: input.text,
+        file: input.file,
         url: input.url,
+        html: input.html,
+        context: input.context,
+        instructions: input.instructions,
         workspaceId: input.workspaceId ?? this.workspaceId,
         previousEntities: input.previousEntities,
       }

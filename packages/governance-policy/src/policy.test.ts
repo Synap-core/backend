@@ -14,6 +14,7 @@ import {
   ADMIN_ACTIONS_LIVE,
   ADMIN_ACTIONS_RESERVED,
   HUMAN_GATE_EVENT_KEYS,
+  ARBITRARY_EXECUTION_EVENT_KEYS,
   DIRECT_PROPOSAL_DOORS,
   DESTRUCTIVE_ACTIONS,
   PROPOSE_REASON,
@@ -1918,5 +1919,121 @@ describe("rung 2.05 — human gates can never auto-approve", () => {
   it("the gate list never shrinks below the two dev-loop stops", () => {
     // Removing a human gate is the one direction this list must never move.
     expect(HUMAN_GATE_EVENT_KEYS).toEqual(expect.arrayContaining([...GATES]));
+  });
+});
+
+/**
+ * ARBITRARY CODE EXECUTION — `POST /api/hub/commands/execute` runs
+ * `execFileSync("/bin/sh", ["-c", command])` inside the API container behind a
+ * regex denylist. A shell there is the superset of every other door in this
+ * file, so the floor must survive EVERY widening lever — and it must NOT catch
+ * the other two `execute` doors (`automation.execute`, `capability.execute`),
+ * which are ordinary runs. Both halves are pinned below; the second half is the
+ * regression guard against "just add `execute` to DESTRUCTIVE_ACTIONS".
+ */
+describe("rung 2.06 — command.execute can never auto-approve", () => {
+  const SHELL = { subjectType: "command", action: "execute" } as const;
+
+  it("proposes under the widest possible auto-approve posture", () => {
+    const verdict = decideAgentPolicy({
+      ...SHELL,
+      isAgentOwnedWorkspace: true,
+      writesRequireProposal: false,
+      autoApproveFor: ["*"],
+      governanceRuleVerdict: "auto",
+      capabilityGovernance: "auto",
+      capabilityExecMode: "auto",
+      allowDestructiveAutoApprove: true,
+    });
+    expect(verdict.verdict).toBe("propose");
+    expect(verdict.verdict === "propose" && verdict.reasonCode).toBe(
+      "ARBITRARY_EXECUTION"
+    );
+  });
+
+  it("a governance_rules row (rung 2.8) cannot widen it", () => {
+    expect(
+      decideAgentPolicy({ ...SHELL, governanceRuleVerdict: "auto" }).verdict
+    ).toBe("propose");
+  });
+
+  it('autoApproveFor "*" (rung 4) cannot widen it', () => {
+    expect(decideAgentPolicy({ ...SHELL, autoApproveFor: ["*"] }).verdict).toBe(
+      "propose"
+    );
+  });
+
+  it('autoApproveFor "command.*" (rung 4 glob) cannot widen it', () => {
+    expect(
+      decideAgentPolicy({ ...SHELL, autoApproveFor: ["command.*"] }).verdict
+    ).toBe("propose");
+    // ...nor the exact key spelled out.
+    expect(
+      decideAgentPolicy({ ...SHELL, autoApproveFor: ["command.execute"] })
+        .verdict
+    ).toBe("propose");
+  });
+
+  it("the agent-owned-workspace path (rungs 3 and 6) cannot widen it", () => {
+    expect(
+      decideAgentPolicy({
+        ...SHELL,
+        isAgentOwnedWorkspace: true,
+        writesRequireProposal: false,
+      }).verdict
+    ).toBe("propose");
+  });
+
+  it("sits BELOW the CBAC deny (rung 1) — a denied capability still denies", () => {
+    expect(
+      decideAgentPolicy({ ...SHELL, agentCapabilities: ["entity.read"] })
+        .verdict
+    ).toBe("deny");
+  });
+
+  it("REGRESSION — automation.execute is NOT floored", () => {
+    // The trap this fix exists to avoid: flooring the bare verb "execute" would
+    // force every automation run to a human proposal. `automation.execute` must
+    // stay auto-executable when a widening rung says so.
+    expect(
+      decideAgentPolicy({
+        subjectType: "automation",
+        action: "execute",
+        autoApproveFor: ["automation.execute"],
+      }).verdict
+    ).toBe("execute");
+    expect(
+      decideAgentPolicy({
+        subjectType: "automation",
+        action: "execute",
+        governanceRuleVerdict: "auto",
+      }).verdict
+    ).toBe("execute");
+  });
+
+  it("REGRESSION — capability.execute is NOT floored", () => {
+    // The other live `action: "execute"` gate (guardProducerEffect,
+    // packages/jobs/src/workers/steps/command-skill-capability.ts).
+    expect(
+      decideAgentPolicy({
+        subjectType: "capability",
+        action: "execute",
+        autoApproveFor: ["capability.execute"],
+      }).verdict
+    ).toBe("execute");
+  });
+
+  it("the floor list never shrinks, and every entry names a real gate door", () => {
+    expect(ARBITRARY_EXECUTION_EVENT_KEYS).toEqual(
+      expect.arrayContaining(["command.execute"])
+    );
+    for (const key of ARBITRARY_EXECUTION_EVENT_KEYS) {
+      const [subjectType, ...rest] = key.split(".");
+      expect(
+        Object.keys(GATE_WRITE_DOORS).includes(
+          `${subjectType}/${rest.join(".")}`
+        )
+      ).toBe(true);
+    }
   });
 });

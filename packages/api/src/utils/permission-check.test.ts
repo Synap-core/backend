@@ -11,7 +11,7 @@
  * mocked so these remain fast, deterministic unit tests.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mock every module that touches the DB or external services
@@ -105,6 +105,13 @@ vi.mock("@synap/database", async () => {
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
     workspaces: { id: "id", settings: "settings" },
     eq: vi.fn((a, b) => ({ field: a, value: b })),
+    // `ne` is used by `countTodayAgentProposals` (permission-check.ts:2013) to
+    // exclude AUTO_APPROVED receipts from the daily queue-pressure count. It was
+    // missing here, and because `vi.mock` with a factory is a TOTAL replacement,
+    // one absent export threw inside every test that reaches the daily-cap path
+    // — 19 of them, red at HEAD before the 2026-09-05 wave. Adding an export to
+    // `@synap/database` therefore requires adding it here in the same change.
+    ne: vi.fn((a, b) => ({ ne: [a, b] })),
     and: vi.fn((...conds) => ({ and: conds })),
     inArray: vi.fn((col, arr) => ({ inArray: [col, arr] })),
     gte: vi.fn((a, b) => ({ gte: [a, b] })),
@@ -1272,6 +1279,20 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
     mockVerifyPermission.mockResolvedValue({ allowed: true });
   });
 
+  /**
+   * An anonymous-principal AUTO-EXECUTE. The write is granted (unchanged), and
+   * — new in this wave — an AUTO_APPROVED receipt row is minted so the write is
+   * COUNTABLE. It used to be a bare `{ granted: true }` with no row, no session
+   * and no attribution at all. Asserting both halves is strictly stronger than
+   * the `toEqual({ granted: true })` these assertions used to make.
+   */
+  function expectAnonymousAutoExecute(result: unknown) {
+    expect(result).toMatchObject({ granted: true });
+    expect(
+      (result as { autoApprovedProposalId?: string }).autoApprovedProposalId
+    ).toBeDefined();
+  }
+
   function setupWorkspaceSettings(settings: Record<string, unknown>) {
     // Chainable + thenable so the personal-agent attribution lookup
     // (`.orderBy().limit()`) and the agent daily-budget count query
@@ -1303,7 +1324,7 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
       data: { id: "ctx-1" },
     });
 
-    expect(result).toEqual({ granted: true });
+    expectAnonymousAutoExecute(result);
   });
 
   it("auto-approves an AI-sourced entity.create when the workspace autoApproveFor whitelists entity.create", async () => {
@@ -1319,7 +1340,7 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
       data: { title: "New contact" },
     });
 
-    expect(result).toEqual({ granted: true });
+    expectAnonymousAutoExecute(result);
   });
 
   it("still proposes an AI-sourced entity.delete even though autoApproveFor whitelists it (destructive floor)", async () => {
@@ -1406,7 +1427,7 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
       data: { id: "view-1" },
     });
 
-    expect(result).toEqual({ granted: true });
+    expectAnonymousAutoExecute(result);
   });
 
   it("forcePropose always proposes even for a whitelisted AI-sourced action", async () => {
@@ -1439,7 +1460,448 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
       data: { id: "view-1" },
     });
 
-    expect(result).toEqual({ granted: true });
+    expectAnonymousAutoExecute(result);
+  });
+
+  /**
+   * THE FLOORS, TESTED AT THE DOOR — not over `decideAgentPolicy`.
+   *
+   * `command.execute` runs `execFileSync("/bin/sh", ["-c", command])` inside
+   * the API container (`routers/hub-protocol/rest/commands.ts`). Rung 2.06 in
+   * `decideAgentPolicy` floors it — but ONLY on the agentUserId branch. At the
+   * REST door, `agentUserId = body.agentUserId ?? c.get("agentUserId")`; an
+   * unattributed `user_pat` / `hub_inbound` key resolves it to undefined and
+   * the call lands HERE, where `decideAgentPolicy` is never invoked.
+   *
+   * A unit test over the pure function cannot see that gap — it proves the
+   * floor in a function the reachable path does not call, which is the
+   * "tests pinned the same lie" defect. These exercise the reachable path:
+   * `source: "intelligence"` with NO `agentUserId`, under each of the two
+   * levers that still grant here.
+   *
+   * Same for `HUMAN_GATE_EVENT_KEYS` (rung 2.05), which had the identical
+   * pre-existing gap.
+   */
+  it("FLOOR: command.execute proposes on the legacy path even when a governance_rules row verdicts auto", async () => {
+    // The exact lever rung 2.06's unit test claims cannot widen it. Before the
+    // legacy-path mirror, this returned { granted: true } — a shell, granted to
+    // an unattributed caller, by a row a trusted agent can earn.
+    const ruleRow = {
+      principalKind: "any",
+      scopeKind: "workspace",
+      targetKind: "action",
+      targetPattern: "command.execute",
+      targetProfile: null,
+      verdict: "auto",
+      createdAt: new Date(),
+    };
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi
+          .fn()
+          .mockResolvedValue([
+            { settings: { aiGovernance: { autoApprove: false } } },
+          ]),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([ruleRow]).then(res, rej),
+      };
+      return b;
+    });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "command",
+      action: "execute",
+      data: { command: "cat /etc/passwd" },
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("FLOOR: command.execute proposes on the legacy path even when aiAutoApprove=true", async () => {
+    // The second lever, and the one already pinned as live behaviour by
+    // "preserves legacy behavior: aiAutoApprove=true still auto-approves an
+    // action outside the modern whitelist" directly above. `command.execute`
+    // is outside the modern whitelist, so before the mirror it took exactly
+    // that path to { granted: true }.
+    setupWorkspaceSettings({ aiGovernance: { autoApprove: true } });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "command",
+      action: "execute",
+      data: { command: "cat /etc/passwd" },
+    });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  it("FLOOR: a human gate (dev.plan_approval) proposes on the legacy path under both levers", async () => {
+    // Pre-existing gap of the same class — rung 2.05 is likewise unreachable
+    // from here. An agent that could auto-approve its own plan gate has
+    // deleted the gate and kept the paperwork.
+    setupWorkspaceSettings({ aiGovernance: { autoApprove: true } });
+
+    const viaToggle = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "dev",
+      action: "plan_approval",
+      data: { plan: "ship it" },
+    });
+    expect("granted" in viaToggle && viaToggle.granted === false).toBe(true);
+
+    const ruleRow = {
+      principalKind: "any",
+      scopeKind: "workspace",
+      targetKind: "action",
+      targetPattern: "dev.plan_approval",
+      targetProfile: null,
+      verdict: "auto",
+      createdAt: new Date(),
+    };
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi
+          .fn()
+          .mockResolvedValue([
+            { settings: { aiGovernance: { autoApprove: false } } },
+          ]),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([ruleRow]).then(res, rej),
+      };
+      return b;
+    });
+
+    const viaRule = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "dev",
+      action: "plan_approval",
+      data: { plan: "ship it" },
+    });
+    expect("granted" in viaRule && viaRule.granted === false).toBe(true);
+  });
+
+  it("the floors TIGHTEN ONLY — an ordinary AI-sourced write still auto-approves via both levers", async () => {
+    // Guards the mirror against over-reach: if `isArbitraryExecution` were
+    // computed from the bare verb, `automation.execute` would land here as a
+    // proposal and every automation run would need a human.
+    setupWorkspaceSettings({ aiGovernance: { autoApprove: true } });
+
+    const automation = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "automation",
+      action: "execute",
+      data: { id: "auto-1" },
+    });
+    expectAnonymousAutoExecute(automation);
+
+    const capability = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "capability",
+      action: "execute",
+      data: { id: "cap-1" },
+    });
+    expectAnonymousAutoExecute(capability);
+  });
+});
+
+/**
+ * ONE ENGINE — the legacy AI-source path (the ANONYMOUS PRINCIPAL) now routes
+ * through `decideAgentPolicy` instead of hand-mirroring part of the ladder.
+ *
+ * Every test here drives the REACHABLE DOOR (`checkPermissionOrPropose` with
+ * `agentUserId` undefined and `source: "intelligence"`), never the pure engine
+ * — a floor proven only over `decideAgentPolicy` is proven in a function this
+ * path did not call, which is exactly the defect being fixed.
+ */
+describe("checkPermissionOrPropose — anonymous principal routed through decideAgentPolicy", () => {
+  /** Records every `.select({...})` field-shape the door asks for. */
+  let selectShapes: string[][];
+  /** Records every row handed to `db.insert(...).values(...)`. */
+  let insertedRows: Record<string, unknown>[];
+
+  /**
+   * Dispatch db reads by the SHAPE of each `.select({...})` (mirrors the agent
+   * path's origin-trust harness). `workspaceSettings` feeds the deprecated
+   * `aiAutoApprove` toggle; `ruleRow` feeds rung 2.8; `channel` feeds rung 2.55.
+   */
+  function setupAnonymousFlow(opts: {
+    workspaceSettings?: Record<string, unknown>;
+    ruleRow?: Record<string, unknown> | null;
+    channel?: { channelType: string; externalSource?: string | null } | null;
+  }) {
+    selectShapes = [];
+    mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
+      const keys = Object.keys(fields);
+      selectShapes.push(keys);
+      let rows: unknown[] = [];
+      if (keys.includes("settings")) {
+        rows = [{ settings: opts.workspaceSettings ?? {} }];
+      } else if (keys.length === 1 && keys[0] === "channelId") {
+        // resolveActingChannelId: sourceMessageId → messages.channelId
+        rows = opts.channel ? [{ channelId: "chan-acting" }] : [];
+      } else if (keys.includes("channelType")) {
+        // resolveOriginTrust: the channels row
+        rows = opts.channel
+          ? [
+              {
+                channelType: opts.channel.channelType,
+                externalSource: opts.channel.externalSource ?? null,
+                workspaceId: null,
+              },
+            ]
+          : [];
+      } else {
+        // governance_rules (awaited directly, no `.limit()`) → the rule row.
+        rows = opts.ruleRow ? [opts.ruleRow] : [];
+      }
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(rows),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve(rows).then(res, rej),
+      };
+      return b;
+    });
+  }
+
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+    insertedRows = [];
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn((row: Record<string, unknown>) => {
+        insertedRows.push(row);
+        return {
+          returning: vi.fn().mockResolvedValue([{ id: "receipt-anon-1" }]),
+        };
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    // This file has no global mock reset, and `mockDbInsert`'s default
+    // implementation is installed once inside the `vi.mock` factory — so an
+    // override here would leak into every later test. Put it back.
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn().mockReturnThis(),
+      returning: vi.fn().mockResolvedValue([{ id: "restored-insert" }]),
+      catch: vi.fn().mockReturnThis(),
+    }));
+  });
+
+  const anonymousWrite = (over: Record<string, unknown> = {}) =>
+    checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence" as const,
+      subjectType: "entity" as const,
+      action: "create" as const,
+      data: { id: "ent-anon", title: "Anonymous write" },
+      ...over,
+    });
+
+  // ── rung 2.55 UNTRUSTED ORIGIN — the fix ────────────────────────────────
+
+  it("rung 2.55: an EXTERNAL acting channel now PROPOSES an otherwise-auto anonymous write", async () => {
+    // Before this change the anonymous path resolved no acting channel at all,
+    // so `entity.create` (in DEFAULT_AUTO_APPROVE) auto-executed no matter what
+    // channel the instruction came from — a third-party bridge message could
+    // silently mutate the pod.
+    setupAnonymousFlow({ channel: { channelType: "external" } });
+
+    const result = await anonymousWrite({ sourceMessageId: "msg-ext-anon" });
+
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  it("rung 2.55: a trusted PERSONAL acting channel leaves the anonymous write auto-executing", async () => {
+    setupAnonymousFlow({ channel: { channelType: "personal" } });
+
+    const result = await anonymousWrite({
+      sourceMessageId: "msg-personal-anon",
+    });
+
+    expect(result).toMatchObject({ granted: true });
+  });
+
+  it("rung 2.55: no acting channel → the rung no-ops (auto write unchanged)", async () => {
+    setupAnonymousFlow({ channel: { channelType: "external" } }); // never read
+
+    const result = await anonymousWrite(); // no sourceMessageId, no channelId
+
+    expect(result).toMatchObject({ granted: true });
+  });
+
+  // ── rung 2.56 DAILY WRITE CEILING — DELIBERATELY DEFERRED ───────────────
+
+  it("rung 2.56 does NOT fire for the anonymous principal — no write count is taken and the write still auto-executes", async () => {
+    // PINNED ON PURPOSE. `DEFAULT_DAILY_WRITE_CEILING` is 500 and one bulk
+    // capture auto-approves ~1,600 `entity.create` rows, so adopting this rung
+    // here would silently start queueing proposals mid-capture. The ceiling is
+    // also keyed on an AGENT ID, which does not exist on this path.
+    //
+    // What this asserts is mechanical, not a category claim: the door issues NO
+    // count-shaped query (`.select({ n })`, the shape `countAgentWritesTodayUtc`
+    // uses) and the write is granted. If a future "tightening" wires a ceiling
+    // in here, this test fails and the decision gets made deliberately.
+    setupAnonymousFlow({});
+
+    const results = [];
+    for (let i = 0; i < 3; i++) {
+      results.push(await anonymousWrite({ data: { id: `bulk-${i}` } }));
+    }
+
+    for (const r of results) expect(r).toMatchObject({ granted: true });
+    expect(
+      selectShapes.some((keys) => keys.length === 1 && keys[0] === "n")
+    ).toBe(false);
+  });
+
+  // ── rung 5 has no reachable source; rung 2.8 is the operator's door ──────
+
+  it("a governance_rules row verdicting `propose` now beats the deprecated aiAutoApprove toggle", async () => {
+    // `writesRequireProposal` (rung 5) lives ONLY on `users.agentMetadata`, so
+    // an anonymous principal has no key to read it from — there is no
+    // workspace-level equivalent. The operator-facing way to say "every
+    // unattributed AI write must be reviewed" is a `governance_rules` row.
+    //
+    // That row was previously HALF-honoured: it excluded the action from the
+    // hand-mirrored whitelist, and then the `aiAutoApprove` toggle granted the
+    // write anyway. Routing through the engine makes rung 2.8 authoritative.
+    setupAnonymousFlow({
+      workspaceSettings: { aiGovernance: { autoApprove: true } },
+      ruleRow: {
+        principalKind: "any",
+        scopeKind: "workspace",
+        targetKind: "action",
+        targetPattern: "entity.create",
+        targetProfile: null,
+        verdict: "propose",
+        createdAt: new Date(),
+      },
+    });
+
+    const result = await anonymousWrite();
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
+  // ── (d) COUNTABILITY — the receipt + its anonymous marker ────────────────
+
+  it('mints an AUTO_APPROVED receipt marked `principal: "anonymous"`, with agentUserId left NULL', async () => {
+    setupAnonymousFlow({});
+
+    const result = await anonymousWrite();
+
+    expect(result).toMatchObject({
+      granted: true,
+      autoApprovedProposalId: "receipt-anon-1",
+    });
+
+    const receipt = insertedRows.at(-1) as Record<string, unknown>;
+    expect(receipt.status).toBe("auto_approved");
+    expect(receipt.targetType).toBe("entity");
+    expect(receipt.proposalType).toBe("entity.create");
+    // The authenticated bearer is the only principal there is…
+    expect(receipt.createdBy).toBe("user-abc");
+    // …and this row must never be counted as AGENT conduct.
+    expect(receipt.agentUserId).toBeUndefined();
+    const autoApprove = (receipt.data as Record<string, unknown>)
+      ._autoApprove as Record<string, unknown>;
+    // THE MARKER — positive and greppable. The agent path never sets it.
+    expect(autoApprove.principal).toBe("anonymous");
+    expect(autoApprove.matchedPattern).toBe("entity.create");
+  });
+
+  it("a receipt INSERT failure never fails the write it is auditing", async () => {
+    setupAnonymousFlow({});
+    mockDbInsert.mockImplementation(() => ({
+      values: vi.fn(() => ({
+        returning: vi.fn().mockRejectedValue(new Error("audit table down")),
+      })),
+    }));
+
+    const result = await anonymousWrite();
+
+    expect(result).toMatchObject({ granted: true });
+    expect(
+      (result as { autoApprovedProposalId?: string }).autoApprovedProposalId
+    ).toBeUndefined();
+  });
+
+  // ── NO REGRESSION on a DEFAULT pod ──────────────────────────────────────
+
+  it("every door that auto-executed here before still auto-executes on a DEFAULT pod (no rules, no settings, no channel)", async () => {
+    // The measured ~15 anonymous auto-execute doors. A default pod has no
+    // governance rule, no `aiAutoApprove`, and no acting channel — so rungs
+    // 2.55 / 2.8 no-op and rung 8 (DEFAULT_AUTO_APPROVE) decides, exactly as
+    // the hand-mirrored whitelist did.
+    const doors: [string, string][] = [
+      ["entity", "create"],
+      ["entity", "update"],
+      ["facet", "attach"],
+      ["facet", "update"],
+      ["facet", "detach"],
+      ["document", "create"],
+      ["context", "link"],
+      ["bento", "arrange"],
+      ["automation", "create"],
+      ["focus_session", "create"],
+      ["focus_session", "update"],
+      ["link", "create"],
+      ["relation", "create"],
+      ["view", "create"],
+      ["search", "entities"],
+    ];
+
+    for (const [subjectType, action] of doors) {
+      setupAnonymousFlow({});
+      const result = await anonymousWrite({
+        subjectType,
+        action,
+        data: { id: `${subjectType}-${action}` },
+      });
+      expect(
+        result,
+        `${subjectType}.${action} must still auto-execute`
+      ).toMatchObject({ granted: true });
+    }
+  });
+
+  it("the floors still hold on a default pod — destructive, human gate and arbitrary execution all propose", async () => {
+    for (const [subjectType, action] of [
+      ["entity", "delete"],
+      ["dev", "plan_approval"],
+      ["command", "execute"],
+    ] as [string, string][]) {
+      setupAnonymousFlow({
+        workspaceSettings: { aiGovernance: { autoApprove: true } },
+      });
+      const result = await anonymousWrite({
+        subjectType,
+        action,
+        data: { id: `${subjectType}-${action}` },
+      });
+      expect(
+        "granted" in result && result.granted === false,
+        `${subjectType}.${action} must propose`
+      ).toBe(true);
+    }
   });
 });
 

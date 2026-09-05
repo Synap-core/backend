@@ -4269,6 +4269,83 @@ export interface BackfillTeamPersonBridgeResult {
 	skipped: number;
 	errors: number;
 }
+/**
+ * Write-free preview of what `createWorkspaceFromDefinition` WOULD do to the pod
+ * catalog — computed by running the REAL create-path resolver
+ * (`resolveProfileForApply`) with `dryRun:true`, so a template author (notably
+ * an AI that can't dogfood) sees profileKind conflicts and other resolution
+ * failures at install time BEFORE anything is written.
+ *
+ * The shape mirrors `ReconcileReport` where the two overlap — the resolver is
+ * the ONE shared door, so `create`/`reused`/`conflicts`/`deferred` mean exactly
+ * what the create loop and the reconcile loop do with the same `resolution`.
+ */
+export interface WorkspacePreflightReport {
+	dryRun: true;
+	/**
+	 * `true` when the apply would complete with NO skips/orphans: no structural
+	 * validation errors, no profileKind conflicts, no unresolved entityLinks, no
+	 * scope-orphaned views. `deferred` and `scopeConflicts` are ADVISORY (the
+	 * apply still succeeds) and do NOT flip this false.
+	 */
+	ok: boolean;
+	/** Structural / cross-reference errors (same set the create door throws on). */
+	validationErrors: string[];
+	profiles: {
+		/** Slugs that don't exist pod-wide → a fresh profile would be CREATED. */
+		create: string[];
+		/** Slugs resolving to an existing pod profile (grant / promote-and-share). */
+		reused: string[];
+		/**
+		 * Declared slug matches an existing profile of a DIFFERENT profileKind
+		 * (kind vs role). The create door SKIPS these entirely — never overlaid,
+		 * never mutated. The load-bearing thing a template author must see.
+		 */
+		conflicts: Array<{
+			slug: string;
+			existingKind: string;
+			declaredKind: string;
+		}>;
+		/**
+		 * A same-slug profile exists but could not be safely promoted to shared
+		 * (another user's private row, or the pod-wide seat is held by a
+		 * soft-deleted shared row), so a DUPLICATE workspace-scoped profile would be
+		 * created. Advisory — the apply still succeeds.
+		 */
+		deferred: Array<{
+			slug: string;
+			reason: string;
+		}>;
+		/**
+		 * Declared `scope`/`entityScope` on a REUSED slug diverges from the live
+		 * row. Advisory: the row is reused untouched, the declared scope NOT applied
+		 * (the first creator owns placement/visibility).
+		 */
+		scopeConflicts: Array<{
+			slug: string;
+			existingScope: string;
+			declaredScope: string;
+			existingEntityScope: string;
+			declaredEntityScope: "pod" | "workspace" | null;
+		}>;
+	};
+	/**
+	 * entityLinks whose source or target profile would NOT resolve (because that
+	 * profile is a kind CONFLICT and gets skipped) — the relation would be
+	 * silently dropped at apply. `"source → target (type)"`.
+	 */
+	entityLinks: {
+		unresolved: string[];
+	};
+	/**
+	 * Structured views that declare a `scopeProfileSlug(s)` where NONE resolve
+	 * (the scoping profile is a skipped conflict) — the view would be created
+	 * scope-less (orphaned). View name.
+	 */
+	views: {
+		wouldOrphan: string[];
+	};
+}
 export type PackageDependencyKind = "workspace" | "capability" | "skill" | "workflow" | "view" | "cell" | "automation";
 export type PackageDependencyRelation = "compose" | "require";
 /** Why a declared `targetProfileSlug` did not become a `target_profile_id`. */
@@ -7864,6 +7941,12 @@ export interface TriageProjection {
 	/** Who accepted it, or null. */
 	acceptedBy: string | null;
 }
+declare const SESSION_KINDS: readonly [
+	"work",
+	"run",
+	"receipt"
+];
+export type SessionKind = (typeof SESSION_KINDS)[number];
 export type BlockerEdgeResult = {
 	linked: true;
 } | {
@@ -9037,6 +9120,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					extractor: string;
 					metadata?: Record<string, unknown>;
 					warnings?: string[];
+					text?: string;
+					textTruncated?: boolean;
 				};
 				dedupCandidates: Record<string, Array<{
 					entityId: string;
@@ -9128,6 +9213,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					extractor: string;
 					metadata?: Record<string, unknown>;
 					warnings?: string[];
+					text?: string;
+					textTruncated?: boolean;
 				};
 				degradedReason?: string | undefined;
 				degraded: boolean;
@@ -9268,6 +9355,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					mimeType: string;
 					filename?: string | undefined;
+					extractedText?: string | undefined;
+					extractedTextTruncated?: boolean | undefined;
 				} | undefined;
 				idempotencyKey?: string | undefined;
 				projectId?: string | null | undefined;
@@ -9292,6 +9381,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				correlationId: `${string}-${string}-${string}-${string}-${string}`;
 				proposalIds: string[];
+				sourceFileStaged: {
+					documentId: string;
+					size: number;
+					mimeType: string;
+				} | null;
 			} | {
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				proposalId: string;
@@ -9308,6 +9402,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				relations: never[];
 				correlationId?: undefined;
 				proposalIds?: undefined;
+				sourceFileStaged?: undefined;
 			} | {
 				project: {
 					projectId: string;
@@ -9327,6 +9422,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				sourceFile?: {
+					status: "stored";
+					entityId: string;
+					documentId: string;
+				} | {
+					status: "proposed";
+					entityId: string;
+					documentId: string;
+					proposalId: string;
+					proposalType: string;
+					reviewUrl: string;
+				} | {
+					status: "denied";
+					entityId: string;
+					reason: string;
+				} | {
+					status: "failed";
+					entityId: string;
+				} | undefined;
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
 				updated?: CaptureUpdateResult[] | undefined;
@@ -9348,6 +9462,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
+				sourceFileStaged?: undefined;
 			} | {
 				project: {
 					rung: null;
@@ -9367,6 +9482,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				sourceFile?: {
+					status: "stored";
+					entityId: string;
+					documentId: string;
+				} | {
+					status: "proposed";
+					entityId: string;
+					documentId: string;
+					proposalId: string;
+					proposalType: string;
+					reviewUrl: string;
+				} | {
+					status: "denied";
+					entityId: string;
+					reason: string;
+				} | {
+					status: "failed";
+					entityId: string;
+				} | undefined;
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
 				updated?: CaptureUpdateResult[] | undefined;
@@ -9388,6 +9522,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
+				sourceFileStaged?: undefined;
 			} | {
 				project: {
 					projectId: string;
@@ -9407,6 +9542,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				sourceFile?: {
+					status: "stored";
+					entityId: string;
+					documentId: string;
+				} | {
+					status: "proposed";
+					entityId: string;
+					documentId: string;
+					proposalId: string;
+					proposalType: string;
+					reviewUrl: string;
+				} | {
+					status: "denied";
+					entityId: string;
+					reason: string;
+				} | {
+					status: "failed";
+					entityId: string;
+				} | undefined;
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
 				updated?: CaptureUpdateResult[] | undefined;
@@ -9428,6 +9582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
+				sourceFileStaged?: undefined;
 			} | {
 				pendingWorkspaceSwitch?: {
 					suggestedWorkspaceId: string;
@@ -9441,6 +9596,25 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					roleSlug: string;
 					reason: string;
 				}[] | undefined;
+				sourceFile?: {
+					status: "stored";
+					entityId: string;
+					documentId: string;
+				} | {
+					status: "proposed";
+					entityId: string;
+					documentId: string;
+					proposalId: string;
+					proposalType: string;
+					reviewUrl: string;
+				} | {
+					status: "denied";
+					entityId: string;
+					reason: string;
+				} | {
+					status: "failed";
+					entityId: string;
+				} | undefined;
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				threadId: string | undefined;
 				updated?: CaptureUpdateResult[] | undefined;
@@ -9462,6 +9636,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message?: undefined;
 				correlationId?: undefined;
 				proposalIds?: undefined;
+				sourceFileStaged?: undefined;
 			};
 			meta: object;
 		}>;
@@ -17240,6 +17415,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error: string;
 				}[];
 			};
+			meta: object;
+		}>;
+		preflightFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				definition: Record<string, unknown>;
+			};
+			output: WorkspacePreflightReport;
 			meta: object;
 		}>;
 		createFromDefinition: import("@trpc/server").TRPCMutationProcedure<{
@@ -25108,6 +25290,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				edges?: boolean | undefined;
 				lens?: "default" | "all" | "triage" | undefined;
+				kind?: "run" | "all" | "receipt" | "work" | undefined;
+				playbookId?: string | undefined;
+				automationId?: string | undefined;
 			};
 			output: ({
 				id: string;
@@ -25136,6 +25321,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentSessionId: string | null;
 			} & {
 				triage: TriageProjection;
+				kind: SessionKind;
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
 			meta: object;
 		}>;
@@ -25289,6 +25475,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					name: string;
 				}[];
 				triage: TriageProjection;
+				kind: "run" | "receipt" | "work";
 				id: string;
 				workspaceId: string | null;
 				projectId: string | null;

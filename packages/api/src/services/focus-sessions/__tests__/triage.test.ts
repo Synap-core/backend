@@ -104,6 +104,21 @@ describe("projectTriage — the derivation", () => {
     ).toBe(true);
   });
 
+  it("is NOT pending for a receipt — an agent's proposal package is reviewed on its proposals", () => {
+    expect(
+      projectTriage({
+        ...AGENT_SESSION,
+        metadata: {
+          ...(AGENT_SESSION.metadata ?? {}),
+          kind: "agent-proposal-package",
+        },
+      }).pending
+    ).toBe(false);
+    expect(sqlText(triagePendingWhere())).toContain(
+      "#>> '{kind}' IS DISTINCT FROM"
+    );
+  });
+
   it("is NOT pending for a session the person started themselves", () => {
     // The whole point of the `human` origin: before it existed every
     // human-started session was stamped `agent` and the lens could not tell.

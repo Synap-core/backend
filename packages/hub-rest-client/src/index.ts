@@ -143,6 +143,7 @@ export type {
   // Capture pipeline
   CaptureProposal,
   CaptureRelation,
+  CaptureStructureInput,
   CaptureStructureResponse,
   CaptureExecuteInput,
   CaptureExecuteResponse,

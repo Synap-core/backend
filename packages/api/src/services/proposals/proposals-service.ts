@@ -190,6 +190,32 @@ export type ProposalRevisionPatch = {
   fields: Record<string, unknown>;
 };
 
+/**
+ * Envelope keys that are SYSTEM-authored and therefore never patchable by a
+ * revise, at either level a reader looks for them.
+ *
+ * `sourceFile` is the staged-blob reference (`{documentId, storageKey, …}`).
+ * `stagedSourceBlobFrom` reads it off the envelope top level (composite
+ * proposals) OR off `.data` (entity/update proposals), so both levels are
+ * protected — checking only the top level would leave the nested door open.
+ */
+export const PROTECTED_ENVELOPE_FIELDS = ["sourceFile"] as const;
+
+/** True when a patch would SET or ALTER a protected field at either level. */
+function patchTouchesProtectedField(fields: Record<string, unknown>): boolean {
+  const nested =
+    fields.data &&
+    typeof fields.data === "object" &&
+    !Array.isArray(fields.data)
+      ? (fields.data as Record<string, unknown>)
+      : undefined;
+  return PROTECTED_ENVELOPE_FIELDS.some(
+    (key) =>
+      Object.hasOwn(fields, key) ||
+      (nested ? Object.hasOwn(nested, key) : false)
+  );
+}
+
 export interface ComputeRevisedEnvelopeParams {
   /** The stored `proposals.data` envelope (never mutated). */
   envelope: Record<string, unknown>;
@@ -216,6 +242,23 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   revision: ProposalRevision;
 } {
   const { envelope, patch, summary, reasoning, actorId } = params;
+
+  // ── System-authored provenance is not reviewer-editable ─────────────────
+  // `data.sourceFile` is written ONLY by `stageSourceBlob`'s callers and names
+  // a `documents` row + storage key that the approval path LINKS onto an entity
+  // and the rejection path DELETES. A revise that could set it turned the
+  // reviewer's own edit door into a cross-tenant primitive: point your own
+  // proposal at someone else's documentId, approve, and `entities.document_id`
+  // — the column the presigned-URL door trusts — hands you their bytes.
+  // Enforced HERE, in the shared core, so all three revise doors (tRPC
+  // `revise`, MCP `synap_revise_proposal`, Hub `updateProposal`) inherit it.
+  if (patch && patchTouchesProtectedField(patch.fields)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A revision cannot set or alter `sourceFile` — it is system-authored file provenance, not reviewable content.",
+    });
+  }
   const before: Record<string, unknown> = {};
   const historyPatch: Record<string, unknown> = {};
 
@@ -257,6 +300,30 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   merged.targetType = envelope.targetType;
   merged.changeType = envelope.changeType;
   merged.requestId = envelope.requestId;
+
+  // …and re-pin the protected provenance the same way. The patch cannot SET it
+  // (rejected above), but an envelope patch that REPLACES `data` wholesale —
+  // which is exactly what the Studio's "Save & Approve" sends — would drop a
+  // nested `sourceFile` and orphan the staged bytes: no terminal door would
+  // ever see a reference to discard. Restoring is the whole fix; there is
+  // nothing a reviewer legitimately expresses by removing it.
+  for (const key of PROTECTED_ENVELOPE_FIELDS) {
+    if (envelope[key] !== undefined) merged[key] = envelope[key];
+    const priorInner = envelope.data;
+    if (
+      priorInner &&
+      typeof priorInner === "object" &&
+      !Array.isArray(priorInner) &&
+      (priorInner as Record<string, unknown>)[key] !== undefined &&
+      merged.data &&
+      typeof merged.data === "object" &&
+      !Array.isArray(merged.data)
+    ) {
+      (merged.data as Record<string, unknown>)[key] = (
+        priorInner as Record<string, unknown>
+      )[key];
+    }
+  }
 
   const revision: ProposalRevision = {
     at: new Date().toISOString(),

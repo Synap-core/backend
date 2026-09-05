@@ -40,6 +40,10 @@ import {
 } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
+import {
+  attachSourceBlob,
+  stagedSourceBlobFrom,
+} from "../../../utils/store-entity-source-blob.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-entity" });
 
@@ -470,6 +474,32 @@ export function registerEntityExecutors(): void {
         deleteProperties: innerData.deleteProperties as string[] | undefined,
         source: "system",
       });
+
+      // A governed source-file attach: the bytes were STAGED before this
+      // proposal was filed (`stageSourceBlob`) and only the small reference
+      // rides in `data.sourceFile`. The property patch above already replayed
+      // the `sourceFile*` provenance keys; `attachSourceBlob` is still required
+      // because it ALSO takes the `entities.document_id` link (under its
+      // `IS NULL` no-clobber guard) — the column the embedding worker, the
+      // retrieval join and Typesense enrichment all key off. Without this the
+      // approval wrote five properties and the file stayed invisible.
+      // Best-effort: the entity update is already committed.
+      const stagedFile = stagedSourceBlobFrom(innerData);
+      if (stagedFile) {
+        try {
+          await attachSourceBlob({
+            database: db,
+            userId,
+            entityId,
+            staged: stagedFile,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, proposalId: input.proposalId, entityId },
+            "entity/update: source blob attach failed (update kept)"
+          );
+        }
+      }
 
       await db
         .update(proposals)

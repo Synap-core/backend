@@ -54,6 +54,7 @@ import { markProposalNotificationsActioned } from "../notifications/mark-proposa
 import { assertReviewedRevision } from "../utils/reviewed-revision.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
+import { discardProposalSourceBlob } from "../utils/store-entity-source-blob.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
@@ -1316,6 +1317,19 @@ export const proposalsRouter = router({
       // used to stay unread forever (Approve/Reject still offered on a decided row).
       markProposalNotificationsActioned([input.proposalId]);
 
+      // A refused proposal that was holding a STAGED source blob must not leave
+      // the bytes (and their `documents` row) behind: nothing else will ever
+      // decide their fate, and a rejected proposal is never deleted, so the
+      // orphan would be permanent. A no-op for every proposal without a
+      // `data.sourceFile`, which is nearly all of them.
+      if (proposal) {
+        await discardProposalSourceBlob({
+          database: db,
+          userId,
+          proposalData: proposal.data,
+        });
+      }
+
       // Report to IS telemetry (fire-and-forget — never blocks)
       if (proposal) {
         reportProposalOutcome({
@@ -1588,6 +1602,8 @@ export const proposalsRouter = router({
           proposedByUserId: true,
           agentUserId: true,
           createdBy: true,
+          // Needed only to discard a staged source blob on withdrawal — see below.
+          data: true,
         },
       });
       if (!proposal) {
@@ -1623,6 +1639,16 @@ export const proposalsRouter = router({
           updatedAt: new Date(),
         })
         .where(eq(proposals.id, input.proposalId));
+
+      // WITHDRAWN is terminal, and it is PENDING-only — so no reject can ever
+      // follow to clean up after it. A staged source blob left here is orphaned
+      // permanently, exactly as it would be after a rejection. Same one door
+      // `reject`/`batchReject`/the expiry scanners use.
+      await discardProposalSourceBlob({
+        database: db,
+        userId,
+        proposalData: proposal.data,
+      });
 
       // Realtime + notification clear only (no approve/reject automation side
       // effects — see emitProposalReviewed): removes it from the pending queue.
@@ -2332,6 +2358,16 @@ export const proposalsRouter = router({
           // cleared the bell for rows this call did NOT reject (already
           // decided, so someone else's decision was silently un-badged).
           actionedIds.push(proposalId);
+
+          // Parity with the single `reject` door — a staged source blob a
+          // refused proposal was holding is discarded here too. Guarded by the
+          // same `updated` check, so a row this call did NOT reject keeps its
+          // blob for whoever actually decides it.
+          await discardProposalSourceBlob({
+            database: db,
+            userId,
+            proposalData: target.data,
+          });
 
           emitProposalReviewed(
             proposalId,

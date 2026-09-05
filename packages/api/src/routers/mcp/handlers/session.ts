@@ -16,6 +16,12 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import {
+  SESSION_KINDS,
+  attachSessionKind,
+  sessionKindWhere,
+  sessionAutomationWhere,
+} from "../../../services/focus-sessions/session-kind.js";
+import {
   ok,
   requireScope,
   resolveAmbientSession,
@@ -209,6 +215,32 @@ export const sessionHandlers: McpHandlerMap = {
     if (typeof args.subjectEntityId === "string" && args.subjectEntityId) {
       conditions.push(eq(focusSessions.subjectEntityId, args.subjectEntityId));
     }
+    // Flow DEFINITION filters — the same two the tRPC and Hub REST doors take.
+    // Each names a definition, never one execution. Pair with kind 'run' or
+    // 'all': every flow-linked row classifies as a run, so under 'work' either
+    // filter alone returns nothing.
+    if (typeof args.playbookId === "string" && args.playbookId) {
+      conditions.push(eq(focusSessions.playbookId, args.playbookId));
+    }
+    if (typeof args.automationId === "string" && args.automationId) {
+      conditions.push(sessionAutomationWhere(args.automationId));
+    }
+    // Population lens (`services/focus-sessions/session-kind.ts`). MCP schemas
+    // are ADVISORY — nothing validates args server-side — so an off-enum value
+    // is answered with the vocabulary rather than silently matching zero rows.
+    // Default `all`, like the Hub REST door and unlike tRPC's `work`: an agent
+    // listing sessions wants the runs and write receipts it just opened.
+    const kindArg = (args.kind as string | undefined) ?? "all";
+    if (kindArg !== "all") {
+      if (!(SESSION_KINDS as readonly string[]).includes(kindArg)) {
+        return ok({
+          error: `Unknown session kind '${kindArg}'. Valid values: ${SESSION_KINDS.join(", ")}, plus 'all'.`,
+        });
+      }
+      conditions.push(
+        sessionKindWhere(kindArg as (typeof SESSION_KINDS)[number])
+      );
+    }
     const rawLimit =
       typeof args.limit === "number" && Number.isFinite(args.limit)
         ? args.limit
@@ -232,8 +264,12 @@ export const sessionHandlers: McpHandlerMap = {
     // asked for; an agent listing sessions is usually looking for the ones it
     // just opened, so hiding them would be the wrong default at this door.
     // The flag makes the distinction visible either way.
+    // `kind` rides along on every row for the same reason `triage` does: pure,
+    // no query, and the ONE place the predicate is decided.
     return ok({
-      sessions: attachTriage(await attachParentSessionIds(sessions)),
+      sessions: attachSessionKind(
+        attachTriage(await attachParentSessionIds(sessions))
+      ),
       count: sessions.length,
     });
   },

@@ -6,6 +6,10 @@
  * streams its output to the browser. This is the "spawn a coding adjunct on a
  * task" surface — the read-only companion to the interactive local-terminal.
  *
+ * The PTY itself is spawned by `spawnDevAgent` (dev-agent-spawn.ts) — the ONE
+ * spawn door, shared with the `external-agent` playbook executor's dispatch.
+ * This file owns only the WS transport + auth.
+ *
  * The frontend (ClaudeCodeTerminal.tsx) connects READ-ONLY (disableStdin), so
  * this handler streams PTY output → WS and only honours resize/cancel control
  * frames; it never writes browser input to the PTY.
@@ -13,8 +17,10 @@
  * SECURITY: Gated by the same `workspace.settings.devplane.localTerminalEnabled`
  * flag as local-terminal — only safe on a trusted local pod, never a cloud pod.
  *
- * WebSocket URL: ws://host/api/devplane/claude-code?taskId=X&ticket=Y
- * (workspaceId is derived from the task entity — the frontend sends only taskId.)
+ * WebSocket URL: ws://host/api/devplane/claude-code?taskId=X&ticket=Y[&sessionId=Z]
+ * (workspaceId is derived from the task entity — the frontend sends only taskId.
+ * `sessionId`, when present, keys the checkout path so two concurrent sessions
+ * in one workspace never share a working tree.)
  *
  * Messages FROM browser:
  *   - Text JSON `{ type: "resize", cols, rows }` → PTY resize
@@ -30,14 +36,10 @@ import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { db, eq, and } from "@synap/database";
-import { workspaces, entities } from "@synap/database/schema";
+import { entities } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import {
-  resolveUserId,
-  isLocalTerminalEnabled,
-  resolveProviderEnv,
-  resolveWorkspaceCwd,
-} from "./local-terminal.js";
+import { resolveUserId, isLocalTerminalEnabled } from "./local-terminal.js";
+import { spawnDevAgent, type DevAgentProcess } from "./dev-agent-spawn.js";
 
 const logger = createLogger({ module: "claude-code-terminal" });
 
@@ -54,55 +56,6 @@ function sendJson(ws: WebSocket, payload: object): void {
   }
 }
 
-/** Escape a string for safe inclusion inside a single-quoted shell argument. */
-function shellSingleQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-/**
- * Resolve the launch command for the task from the workspace's configured AI
- * CLI tool (`devplane.aiTerminal.tool`). Claude Code is seeded with the task as
- * an initial prompt; other tools launch bare and read SYNAP_TASK_* from env.
- */
-async function resolveLaunchCommand(
-  workspaceId: string,
-  instruction: string
-): Promise<string> {
-  let tool = "claude-code";
-  let customCommand = "";
-  try {
-    const workspace = await db.query.workspaces.findFirst({
-      where: eq(workspaces.id, workspaceId),
-      columns: { settings: true },
-    });
-    const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
-    const devplane = (settings["devplane"] ?? {}) as Record<string, unknown>;
-    const aiTerminal = (devplane["aiTerminal"] ?? {}) as Record<
-      string,
-      unknown
-    >;
-    if (typeof aiTerminal["tool"] === "string") tool = aiTerminal["tool"];
-    if (typeof aiTerminal["customCommand"] === "string") {
-      customCommand = aiTerminal["customCommand"];
-    }
-  } catch (err) {
-    logger.warn({ err, workspaceId }, "Failed to resolve AI terminal tool");
-  }
-
-  const quoted = shellSingleQuote(instruction);
-  switch (tool) {
-    case "opencode":
-      return "opencode";
-    case "aider":
-      return "aider";
-    case "custom":
-      return customCommand || "claude " + quoted;
-    case "claude-code":
-    default:
-      return "claude " + quoted;
-  }
-}
-
 export function handleClaudeCodeUpgrade(
   req: IncomingMessage,
   socket: Duplex,
@@ -111,6 +64,7 @@ export function handleClaudeCodeUpgrade(
   getWss().handleUpgrade(req, socket as any, head, async (ws) => {
     const url = new URL(req.url ?? "", "http://localhost");
     const taskId = url.searchParams.get("taskId") ?? "";
+    const sessionId = url.searchParams.get("sessionId") || null;
 
     // Auth
     const userId = await resolveUserId(req);
@@ -149,7 +103,6 @@ export function handleClaudeCodeUpgrade(
       return;
     }
 
-    // Vault-backed API keys + working directory + launch command
     const taskTitle = task.title ?? taskId;
     // Replace double-quotes so they don't break the quoted framing in the prompt
     // (this is prompt clarity only — shell safety is handled by shellSingleQuote).
@@ -157,43 +110,30 @@ export function handleClaudeCodeUpgrade(
     const instruction =
       `Work on this Synap task: "${promptTitle}" (id: ${taskId}, type: ${task.type}). ` +
       `Use the SYNAP_TASK_ID and SYNAP_TASK_TITLE environment variables for reference.`;
-    const [providerEnv, cwd, launchCommand] = await Promise.all([
-      resolveProviderEnv(workspaceId, userId),
-      resolveWorkspaceCwd(workspaceId),
-      resolveLaunchCommand(workspaceId, instruction),
-    ]);
 
-    // Lazy-import node-pty so the module only loads when needed
-    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    let ptyModule: typeof import("node-pty");
+    let agent: DevAgentProcess;
     try {
-      ptyModule = await import("node-pty");
-    } catch (err) {
-      logger.error({ err }, "node-pty not available");
-      sendJson(ws, {
-        type: "error",
-        message: "node-pty not installed on this server",
-      });
-      ws.close(1011, "node-pty unavailable");
-      return;
-    }
-
-    const shell = process.env["SHELL"] ?? "/bin/bash";
-
-    // eslint-disable-next-line @typescript-eslint/consistent-type-imports
-    let ptyProcess: import("node-pty").IPty;
-    try {
-      ptyProcess = ptyModule.spawn(shell, [], {
-        name: "xterm-256color",
-        cols: 220,
-        rows: 50,
-        cwd,
-        env: {
-          ...process.env,
-          ...providerEnv,
+      agent = await spawnDevAgent({
+        workspaceId,
+        userId,
+        sessionId,
+        instruction,
+        extraEnv: {
           SYNAP_TASK_ID: taskId,
           SYNAP_TASK_TITLE: taskTitle,
-        } as Record<string, string>,
+          ...(sessionId ? { SYNAP_SESSION_ID: sessionId } : {}),
+        },
+        // PTY stdout → WS (binary, same protocol as local-terminal)
+        onData: (data) => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(Buffer.from(data, "utf-8"));
+          }
+        },
+        onExit: (exitCode) => {
+          logger.info({ userId, taskId, exitCode }, "Coding PTY exited");
+          sendJson(ws, { type: "closed", exitCode });
+          ws.close(1000, "PTY exited");
+        },
       });
     } catch (err) {
       logger.error({ err }, "Failed to spawn coding PTY");
@@ -206,35 +146,17 @@ export function handleClaudeCodeUpgrade(
     }
 
     logger.info(
-      { userId, workspaceId, taskId, pid: ptyProcess.pid, shell },
+      {
+        userId,
+        workspaceId,
+        taskId,
+        sessionId,
+        pid: agent.pid,
+        cwd: agent.cwd,
+      },
       "Claude Code PTY spawned"
     );
-    sendJson(ws, { type: "ready", shell, pid: ptyProcess.pid });
-
-    // Auto-run the coding agent against the task (stdin is disabled client-side,
-    // so the command is executed here rather than waiting for the user to press Enter).
-    const autoRunTimer = setTimeout(() => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ptyProcess.write(launchCommand + "\r");
-      }
-    }, 400);
-
-    // PTY stdout → WS (binary, same protocol as local-terminal)
-    ptyProcess.onData((data: string) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(Buffer.from(data, "utf-8"));
-      }
-    });
-
-    ptyProcess.onExit(({ exitCode }) => {
-      clearTimeout(autoRunTimer);
-      logger.info(
-        { userId, pid: ptyProcess.pid, exitCode },
-        "Coding PTY exited"
-      );
-      sendJson(ws, { type: "closed", exitCode });
-      ws.close(1000, "PTY exited");
-    });
+    sendJson(ws, { type: "ready", shell: agent.shell, pid: agent.pid });
 
     // WS → PTY: read-only. Only honour resize/cancel control frames; ignore input.
     ws.on("message", (data) => {
@@ -247,9 +169,9 @@ export function handleClaudeCodeUpgrade(
           rows?: number;
         };
         if (msg.type === "resize" && msg.cols && msg.rows) {
-          ptyProcess.resize(msg.cols, msg.rows);
+          agent.resize(msg.cols, msg.rows);
         } else if (msg.type === "cancel") {
-          ptyProcess.kill();
+          agent.kill();
           ws.close(1000, "Cancelled by client");
         }
       } catch {
@@ -258,25 +180,13 @@ export function handleClaudeCodeUpgrade(
     });
 
     ws.on("close", () => {
-      clearTimeout(autoRunTimer);
-      try {
-        ptyProcess.kill();
-      } catch {
-        /* already gone */
-      }
-      logger.info(
-        { userId, pid: ptyProcess.pid },
-        "WS closed — coding PTY killed"
-      );
+      agent.kill();
+      logger.info({ userId, pid: agent.pid }, "WS closed — coding PTY killed");
     });
 
     ws.on("error", (err) => {
       logger.error({ err }, "Claude Code terminal WS error");
-      try {
-        ptyProcess.kill();
-      } catch {
-        /* already gone */
-      }
+      agent.kill();
     });
   });
 }

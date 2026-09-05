@@ -29,7 +29,6 @@ import {
   notifications,
   NotificationStatus,
   openRunSession,
-  closeRunSession,
   resolveIdentity,
   signalsFromExplicit,
   normalizeIdentitySignal,
@@ -48,6 +47,7 @@ import { createLogger } from "@synap-core/core";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { completeFocusSession } from "../services/focus-sessions/complete-session.js";
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -98,6 +98,41 @@ import {
 } from "../services/capabilities/capability-connections.js";
 
 const logger = createLogger({ module: "capabilities" });
+
+/**
+ * Close a synchronous run session through the ONE door.
+ *
+ * `@synap-core/types/focus-sessions` states the invariant: every TERMINAL status
+ * MUST go through `completeFocusSession` (review pack + running-run close +
+ * session-bound ephemeral expiry + BOTH halves of the close event). This
+ * replaces `closeRunSession` (@synap/database), which stamped `status:'closed'`
+ * with a raw UPDATE and skipped all four — the dual-path defect. That helper
+ * lived in @synap/database, which can never import this package (api →
+ * database), so the close moves UP to its two callers rather than the door
+ * moving down.
+ *
+ * NEVER THROWS — and that is load-bearing, not defensive padding. Both call
+ * sites invoke this from a `finally`, where a throw would MASK the original
+ * error (including the FORBIDDEN/proposed throws `completeFocusSession` raises
+ * when governance forces a proposal). The raw UPDATE it replaces could not
+ * throw meaningfully; the door can, so the throw is absorbed and logged here.
+ *
+ * Idempotent, like the helper it replaces: the door's own already-terminal
+ * guard makes a double close (or a caller racing the reaper) a no-op.
+ */
+async function closeRunSessionViaDoor(
+  sessionId: string,
+  userId: string
+): Promise<void> {
+  try {
+    await completeFocusSession({ sessionId, userId });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "Run session close failed — the run itself already completed; not masking the caller's result"
+    );
+  }
+}
 
 /** Default (proprietary) Synap Intelligence service — always available when no custom service is configured. */
 const DEFAULT_INTELLIGENCE_SERVICE = {
@@ -1285,7 +1320,7 @@ export const capabilitiesRouter = router({
         }
         throw err;
       } finally {
-        await closeRunSession(sessionId);
+        await closeRunSessionViaDoor(sessionId, userId);
       }
     }),
 
@@ -1496,7 +1531,7 @@ export const capabilitiesRouter = router({
         }
         throw err;
       } finally {
-        await closeRunSession(sessionId);
+        await closeRunSessionViaDoor(sessionId, userId);
       }
     }),
 

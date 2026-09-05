@@ -79,6 +79,15 @@ export function registerCellsRoutes(app: HubHono): void {
           rendererSource: r.rendererSource ?? "",
           // Null when the cell declares no view-renderer affinity (0221).
           viewTypes: r.viewRendererViewTypes ?? null,
+          // The slot this cell can fill (entity-detail / entity-card /
+          // entity-profile / collection / widget). ACCEPTING IS NOT PRODUCING:
+          // `POST /cells/define` takes `contentKind` and `defineCell` persists
+          // it, but this read door omitted it — so an agent could set the slot
+          // and then never see it, and could not tell a pickable renderer from
+          // an unpickable one. Same class as the MCP tool that accepted
+          // `contentKind` without advertising it. Found by dogfooding the
+          // approved probe cell on 2026-09-05.
+          contentKind: r.contentKind ?? null,
         }))
       );
     } catch (err) {

@@ -1595,6 +1595,22 @@ export function registerEntitiesRoutes(app: HubHono): void {
         filename,
         workspaceId: workspaceId ?? null,
       });
+      // Governance may park the attach (this is an agent-reachable door). The
+      // bytes are staged and ride the proposal, so approval attaches them —
+      // return the review handle rather than a false `ok`.
+      if (result.status === "proposed") {
+        return c.json({
+          ok: false as const,
+          status: "proposed" as const,
+          entityId,
+          proposalId: result.proposalId,
+          proposalType: result.proposalType,
+          reviewUrl: result.reviewUrl,
+          documentId: result.staged.documentId,
+          size: result.staged.size,
+          mimeType: result.staged.mimeType,
+        });
+      }
       return c.json({
         ok: true as const,
         entityId,

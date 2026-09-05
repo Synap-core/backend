@@ -21,12 +21,14 @@ import {
   db,
   and,
   eq,
+  inArray,
   drizzleSql,
   automationRuns,
   focusSessions,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { postRunSummary } from "../utils/post-run-summary.js";
+import { closeSessionViaDoor } from "../utils/session-close.js";
 
 const logger = createLogger({ module: "automation-run-reaper" });
 
@@ -133,35 +135,74 @@ export async function handleAutomationRunReaper(): Promise<void> {
       return;
     }
 
-    // 2. Close each reaped run's orphaned active focus session — mirror the
-    //    executor's closeSessionIfOwned door (status='closed', closedAt=now()).
-    //    Keyed on metadata.automationRunId (where openRunSession stamps it). A
-    //    per-run UPDATE (like vault-grant-expiry) keeps a single bound string
-    //    param and avoids array-param typing on the pod driver.
-    let sessionsClosed = 0;
-    for (const { id } of reaped) {
-      const closed = await db
-        .update(focusSessions)
-        .set({ status: "closed", closedAt: new Date() })
-        .where(
-          and(
-            // Also match `stale`: the 24h focus-session reaper can flip a long-
-            // running automation session active→stale before this per-run reaper
-            // fires (e.g. if this worker was down > 24h). Without `stale` here the
-            // run's session would keep closedAt=NULL forever. Terminal statuses
-            // (closed/failed/cancelled) still correctly don't re-close.
-            drizzleSql`${focusSessions.status} IN ('active', 'stale')`,
-            drizzleSql`${focusSessions.metadata}->>'automationRunId' = ${id}`
+    // 2. Close each reaped run's orphaned focus session through the ONE door.
+    //
+    //    This used to be a raw `.update(focusSessions).set({status:'closed'})`
+    //    — the dual-path defect named in @synap-core/types/focus-sessions: it
+    //    skipped the review pack, the session-bound ephemeral expiry and BOTH
+    //    halves of the close event. `completeFocusSession` does all four.
+    //
+    //    The door needs a userId this worker never selected. ONE batched read
+    //    (keyed on metadata.automationRunId, where openRunSession stamps it)
+    //    supplies it AND carries the old status filter AND preserves the honest
+    //    `sessionsClosed` count — the door's return cannot distinguish "closed
+    //    now" from "was already terminal". Deliberately NOT a per-run read
+    //    inside the loop: that would be an N+1 in a reaper.
+    //
+    //    `inArray` compiles to `… in ($1,$2,…)` (drizzle-orm binds each element
+    //    separately), so this is still N bound string params and never a single
+    //    array param — the pod-driver constraint the old per-run UPDATE was
+    //    written around.
+    const runIds = reaped.map((r) => r.id);
+    const openSessions = await db
+      .select({
+        id: focusSessions.id,
+        userId: focusSessions.userId,
+        runId: drizzleSql<string>`${focusSessions.metadata}->>'automationRunId'`,
+      })
+      .from(focusSessions)
+      .where(
+        and(
+          // Also match `stale`: the 24h focus-session reaper can flip a long-
+          // running automation session active→stale before this per-run reaper
+          // fires (e.g. if this worker was down > 24h). Without `stale` here the
+          // run's session would keep closedAt=NULL forever. Terminal statuses
+          // (closed/failed/cancelled) are excluded here and would no-op in the
+          // door anyway.
+          drizzleSql`${focusSessions.status} IN ('active', 'stale')`,
+          inArray(
+            drizzleSql`${focusSessions.metadata}->>'automationRunId'`,
+            runIds
           )
         )
-        .returning({ id: focusSessions.id });
-      sessionsClosed += closed.length;
+      );
 
-      // 3. Narrate the timed-out run into its channel (idempotent, non-throwing
-      //    — Wave 3.N1). `reason: "timeout"` forces the timeout copy/class even
-      //    though the row now reads `failed`. Respects narrationMode `off`;
-      //    `failures`/`changes` post it (a timeout is a failure). The internal
-      //    claim guarantees no double-post if the executor also finalized.
+    let sessionsClosed = 0;
+    for (const { id, userId } of openSessions) {
+      const result = await closeSessionViaDoor({
+        sessionId: id,
+        userId,
+        // DELIBERATELY 'closed', not 'failed'. The run row above is force-failed,
+        // so 'failed' would arguably be the more honest session verdict — but
+        // `isFocusSessionLifecycleClose` (api's permission-check.ts) recognises
+        // the lifecycle-close escape ONLY on `status === "closed"`, so changing
+        // the verdict here would quietly narrow a governance escape as a side
+        // effect of a routing fix. This change is about the four MISSING
+        // effects; the verdict question is reported separately.
+        terminalStatus: "closed",
+        summary: STALE_RUN_ERROR_MESSAGE,
+      });
+      if (result) sessionsClosed += 1;
+    }
+
+    // 3. Narrate every timed-out run into its channel (idempotent, non-throwing
+    //    — Wave 3.N1). Iterates `reaped`, NOT the sessions above: a run with no
+    //    open session still gets narrated, exactly as before. `reason:
+    //    "timeout"` forces the timeout copy/class even though the row now reads
+    //    `failed`. Respects narrationMode `off`; `failures`/`changes` post it (a
+    //    timeout is a failure). The internal claim guarantees no double-post if
+    //    the executor also finalized.
+    for (const { id } of reaped) {
       await postRunSummary(id, { reason: "timeout" });
     }
 

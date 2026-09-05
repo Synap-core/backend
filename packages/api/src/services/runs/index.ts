@@ -78,6 +78,7 @@ import {
 } from "../../utils/keyset-cursor.js";
 import { validateFlowDefinition } from "../automations/validate-flow.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
+import { sessionKindWhere } from "../focus-sessions/session-kind.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` (the agnostic-capability last-mile executor's
@@ -988,6 +989,11 @@ async function listAgentWriteRuns(
   return merged.slice(0, limit);
 }
 
+// SESSION-KIND-LENS-EXEMPT: the run LEDGER returns UnifiedRun rows, which have
+// no session-row slot for `attachSessionKind` to ride on. It does NOT get to
+// invent its own classification, though — it narrows with the shared
+// `sessionKindWhere("work")` below, so the ledger and the row projection can
+// never disagree about which population a session belongs to.
 async function listSessionRuns(
   userId: string,
   scope: RunScope,
@@ -1033,11 +1039,25 @@ async function listSessionRuns(
         ),
         exactRunId ? eq(focusSessions.id, exactRunId) : undefined,
         // No run row references this session → it is not double-counted by the
-        // playbook ledger, so surface it here (see block comment above).
+        // playbook ledger, so surface it here (see block comment above). Now
+        // belt-and-braces: `sessionKindWhere("work")` below already excludes
+        // every row carrying a playbookId, and create-session writes the column
+        // and the ledger row in ONE transaction. Kept for the row shape it
+        // cannot see — a playbook_runs row pointing at a NULL-playbookId
+        // session — which would otherwise double-count.
         isNull(playbookRuns.id),
-        // metadata.automationId absent → not an automation-origin run session
-        // (those already surface via the automation ledger — no double-count).
-        drizzleSql`${focusSessions.metadata}->>'automationId' IS NULL`,
+        // ONE predicate, shared with the row projection
+        // (`services/focus-sessions/session-kind.ts`). The session flow of the
+        // unified feed IS the work population: a machine run belongs to the
+        // playbook/automation ledgers, and an agent-write receipt is a proposal
+        // container, not a run at all. This used to be a hand-written
+        // `metadata->>'automationId' IS NULL`, which classified three row
+        // shapes differently from `attachSessionKind`: receipts leaked in,
+        // playbook-linked sessions read as ad-hoc, and any producer stamping
+        // `automationRunId` without `automationId` was invisible to the
+        // exclusion. That divergence is the whole reason the predicate is
+        // derived in one place.
+        sessionKindWhere("work"),
         statusValues ? inArray(focusSessions.status, statusValues) : undefined,
         scope.workspaceId
           ? eq(focusSessions.workspaceId, scope.workspaceId)

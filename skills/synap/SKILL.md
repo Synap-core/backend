@@ -51,12 +51,26 @@ Two reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):
   already knows. Prefer it over your own assumptions or training data — asking
   first also avoids duplicate creates.
 - **Capture — AFTER you learn something durable.** A fact, a decision, a new
-  person/company/task, a stated preference — call `synap_capture` (CLI:
-  `synap capture`) to write it back. Don't wait to be asked; this is how the
-  second brain grows.
+  person/company/task — call `synap_capture` (CLI: `synap capture`) to write it
+  back. Don't wait to be asked; this is how the second brain grows.
+- **Remember — when what you learned is about the USER, not the work.** A
+  preference, a habit, a working style, a standing constraint ("always run the
+  gate before claiming done") — call `synap_remember_fact`, NOT `synap_capture`.
+  It writes a `user_observation`, which is the ONE substrate the next agent is
+  briefed from at `synap_orient`. Pass `userStated: true` only when the user
+  told you directly; leave it off for your own inference and the write comes
+  back `proposed` for review, which is correct — an unconfirmed guess about a
+  person should not become fact silently.
 
-Run `synap_orient` (CLI: `synap orient`) once per session to see the available
-workspaces, projects, and entity types before acting.
+  This is the difference between the pod knowing *what you worked on* and
+  knowing *how to work with you*. A preference filed as generic content is
+  retrievable but never briefs anyone.
+
+Run `synap_orient` (CLI: `synap orient`) once per session. It is a BRIEFING, not
+an inventory: who the user is, the active projects and their state, the standing
+write grammar, and anything awaiting review. Read it before acting — and if the
+`who` block is thin, that is a signal to remember something at the end of the
+session, not a reason to skip it.
 
 **Writes are governed: a `"proposed"` response is normal, never an error.** It
 means the write is queued for the user's review — like a PR, not a failure. Keep

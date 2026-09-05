@@ -101,7 +101,13 @@ import {
   createRelationsFromRefs,
 } from "../utils/materialize-composite.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
-import { storeEntitySourceBlob } from "../utils/store-entity-source-blob.js";
+import {
+  storeEntitySourceBlob,
+  stageSourceBlob,
+  discardSourceBlob,
+  SourceBlobDeniedError,
+  type StagedSourceBlob,
+} from "../utils/store-entity-source-blob.js";
 import {
   emitAiDecision,
   emitCaptureTrace,
@@ -1751,6 +1757,22 @@ export const captureRouter = router({
               .max(7_000_000, "file.content too large (max ~5MB)"),
             mimeType: z.string(),
             filename: z.string().optional(),
+            /**
+             * The text `capture.structure` already extracted from THIS file and
+             * returned to the caller as `extraction.text`. Echoed back here so
+             * the pod can persist it as the stored document's v1 body.
+             *
+             * Without it a kept PDF/DOCX/audio blob has an EMPTY
+             * `document_versions.content`, and the three consumers that read
+             * that column — the entity-embedding worker, the retrieval body
+             * join, and Typesense enrichment — all see an empty document. The
+             * pod cannot re-derive it: extraction runs in the Intelligence
+             * Service, and re-running it here would be a second AI call for
+             * text the caller is already holding.
+             */
+            extractedText: z.string().max(1_000_000).optional(),
+            /** Mirrors `extraction.textTruncated`; recorded on the document. */
+            extractedTextTruncated: z.boolean().optional(),
           })
           .optional(),
         /**
@@ -2057,17 +2079,85 @@ export const captureRouter = router({
             }
           }
         }
-        const { proposalIds } = await fileAnchoredCaptureProposals({
-          userId,
-          workspaceId,
-          correlationId: captureId,
-          projectId: input.projectId ?? undefined,
-          sessionId: sessionId ?? undefined,
-          entities: input.entities,
-          relations: input.relations,
-          resolveRelationType: (type) =>
-            validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
-        });
+        // P3 on the GOVERNED path. The direct-write branch below keeps the raw
+        // blob by writing it straight onto the primary created entity; a
+        // proposed capture has no entity yet, so the bytes are STAGED here
+        // (object storage + a `documents` row, no entity touched) and only the
+        // small reference rides the proposal. Approval attaches it; rejection
+        // discards it. Without this, choosing "review before saving" silently
+        // threw the user's file away — the branch returned before any blob
+        // handling at all.
+        //
+        // Best-effort, exactly like the direct path: a storage hiccup must never
+        // cost the user their proposals.
+        let stagedCaptureFile: StagedSourceBlob | undefined;
+        if (input.keepRaw && input.file) {
+          try {
+            stagedCaptureFile = await stageSourceBlob({
+              database,
+              userId,
+              buffer: Buffer.from(input.file.content, "base64"),
+              mimeType: input.file.mimeType,
+              ...(input.file.filename ? { filename: input.file.filename } : {}),
+              workspaceId: workspaceId ?? null,
+              // No entity exists yet — namespace the storage key by the capture.
+              keyScope: captureId,
+              ...(input.file.extractedText
+                ? { extractedText: input.file.extractedText }
+                : {}),
+              ...(input.file.extractedTextTruncated
+                ? { extractedTextTruncated: true }
+                : {}),
+            });
+          } catch (err) {
+            logger.warn(
+              { err, userId, captureId },
+              "P3 propose: staging the raw source blob failed (proposals still filed)"
+            );
+          }
+        }
+
+        let proposalIds: string[];
+        let sourceFileAttached: boolean;
+        try {
+          ({ proposalIds, sourceFileAttached } =
+            await fileAnchoredCaptureProposals({
+              userId,
+              workspaceId,
+              correlationId: captureId,
+              projectId: input.projectId ?? undefined,
+              sessionId: sessionId ?? undefined,
+              entities: input.entities,
+              relations: input.relations,
+              resolveRelationType: (type) =>
+                validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
+              ...(stagedCaptureFile ? { sourceFile: stagedCaptureFile } : {}),
+            }));
+        } catch (err) {
+          // A hard RBAC/CBAC denial aborts the whole filing, so no proposal
+          // exists to carry the blob and none ever will — discard it here or it
+          // is orphaned exactly as permanently as a rejection would leave it.
+          if (stagedCaptureFile) {
+            await discardSourceBlob({
+              database,
+              userId,
+              staged: stagedCaptureFile,
+            });
+          }
+          throw err;
+        }
+
+        // No proposal took the file (nothing was proposed at all). Nothing will
+        // ever decide its fate, so discard it now rather than leave an orphan.
+        if (stagedCaptureFile && !sourceFileAttached) {
+          await discardSourceBlob({
+            database,
+            userId,
+            staged: stagedCaptureFile,
+          });
+          stagedCaptureFile = undefined;
+        }
+
         return {
           status: "proposed" as const,
           message:
@@ -2080,6 +2170,15 @@ export const captureRouter = router({
           captureId,
           correlationId: captureId,
           proposalIds,
+          // Honest receipt: the file is held, not saved. `null` covers both "no
+          // file was sent" and "staging failed" — either way nothing is waiting.
+          sourceFileStaged: stagedCaptureFile
+            ? {
+                documentId: stagedCaptureFile.documentId,
+                size: stagedCaptureFile.size,
+                mimeType: stagedCaptureFile.mimeType,
+              }
+            : null,
         };
       }
 
@@ -3095,18 +3194,40 @@ export const captureRouter = router({
       // it to the PRIMARY created entity via entity.documentId (the canonical
       // entity↔document link, same as materialize-document.ts). Best-effort —
       // a storage hiccup NEVER fails the capture (the entities are already in).
+      // What happened to the kept raw file, reported to the caller. The three
+      // other doors that call `storeEntitySourceBlob` (Hub POST
+      // /entities/:id/source-file, Hub /import/store-unit, MCP store_file) all
+      // branch on `status === "proposed"` and hand back the review handle; this
+      // one discarded the result entirely, so a governance-parked attach was
+      // invisible here — and, worse, `SourceBlobDeniedError` was logged as
+      // "raw source blob storage failed", mislabelling a governance DECISION as
+      // a storage failure.
+      let sourceFile:
+        | { status: "stored"; entityId: string; documentId: string }
+        | {
+            status: "proposed";
+            entityId: string;
+            documentId: string;
+            proposalId: string;
+            proposalType: string;
+            reviewUrl: string;
+          }
+        | { status: "denied"; entityId: string; reason: string }
+        | { status: "failed"; entityId: string }
+        | undefined;
       if (input.keepRaw && input.file) {
         // Primary = first freshly created (non-linked) entity, else first overall.
         const primary =
           created.find((c) => !c.linked) ?? created[0] ?? undefined;
         if (primary?.entityId) {
+          const fileEntityId = primary.entityId;
           try {
             // Shared door with Hub POST /entities/:id/source-file (Superwhisper, etc.).
             // Still best-effort: never fail the capture on a storage hiccup.
             // Zod on file.content still caps ~5MB base64 for this path; bulk
             // audio should use the Hub multipart source-file door instead.
             const buffer = Buffer.from(input.file.content, "base64");
-            await storeEntitySourceBlob({
+            const stored = await storeEntitySourceBlob({
               database,
               userId,
               entityId: primary.entityId,
@@ -3114,12 +3235,53 @@ export const captureRouter = router({
               mimeType: input.file.mimeType,
               filename: input.file.filename,
               workspaceId: workspaceId ?? null,
+              // Persist the caller's already-extracted text as the stored
+              // document's v1 body, so the kept binary is visible to the
+              // embedding worker / retrieval join / Typesense instead of being
+              // an empty document beside an entity.
+              ...(input.file.extractedText
+                ? { extractedText: input.file.extractedText }
+                : {}),
+              ...(input.file.extractedTextTruncated
+                ? { extractedTextTruncated: true }
+                : {}),
             });
+            sourceFile =
+              stored.status === "proposed"
+                ? {
+                    status: "proposed",
+                    entityId: fileEntityId,
+                    documentId: stored.staged.documentId,
+                    proposalId: stored.proposalId,
+                    proposalType: stored.proposalType,
+                    reviewUrl: stored.reviewUrl,
+                  }
+                : {
+                    status: "stored",
+                    entityId: fileEntityId,
+                    documentId: stored.documentId,
+                  };
           } catch (err) {
-            logger.warn(
-              { err, userId, entityId: primary.entityId },
-              "P3: raw source blob storage failed (capture preserved)"
-            );
+            // A DENIAL is a governance decision, not a storage failure — the
+            // blob was already discarded by the door, and calling it a failure
+            // is what sent users looking for a disk problem that never existed.
+            if (err instanceof SourceBlobDeniedError) {
+              sourceFile = {
+                status: "denied",
+                entityId: fileEntityId,
+                reason: err.reason,
+              };
+              logger.info(
+                { userId, entityId: fileEntityId, reason: err.reason },
+                "P3: raw source blob attach DENIED by governance (capture preserved, blob discarded)"
+              );
+            } else {
+              sourceFile = { status: "failed", entityId: fileEntityId };
+              logger.warn(
+                { err, userId, entityId: fileEntityId },
+                "P3: raw source blob storage failed (capture preserved)"
+              );
+            }
           }
         }
       }
@@ -3191,6 +3353,10 @@ export const captureRouter = router({
         // N, dropped M facets — why". Empty array on the happy path.
         captureId,
         threadId: input.threadId,
+        // Disposition of the kept raw file (keepRaw + file only): landed,
+        // parked for review with its handle, denied, or failed. Absent when
+        // the capture carried no file, so existing consumers are untouched.
+        ...(sourceFile ? { sourceFile } : {}),
         ...(facetsFailed.length ? { facetsFailed } : {}),
         // Relation ops submitted but never created (bad ref / DB failure) — the
         // honest gap behind `relations.length < requested relation count`.

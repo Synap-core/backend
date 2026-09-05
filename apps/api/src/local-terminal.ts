@@ -29,6 +29,7 @@ import { db, eq, and } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { resolveVaultSecret } from "@synap/api";
+import { resolveDevCwd } from "./dev-cwd.js";
 // Shared cookie-free WS resolver; re-exported for claude-code.ts.
 import { resolveUserId } from "./ws-auth.js";
 export { resolveUserId };
@@ -65,32 +66,6 @@ const PROVIDER_ENV_VARS: Record<string, string> = {
   openrouter: "OPENROUTER_API_KEY",
   openai: "OPENAI_API_KEY",
 };
-
-/**
- * Resolve the working directory for a terminal session from workspace settings.
- * Uses `devplane.workspacePath` when configured (the local monorepo root the
- * user set in /providers), falling back to $HOME. Shared by local-terminal and
- * the claude-code coding-adjunct so both spawn in the right project directory.
- */
-export async function resolveWorkspaceCwd(
-  workspaceId: string
-): Promise<string> {
-  try {
-    const workspace = await db.query.workspaces.findFirst({
-      where: eq(workspaces.id, workspaceId),
-      columns: { settings: true },
-    });
-    const settings = (workspace?.settings ?? {}) as Record<string, unknown>;
-    const devplane = (settings["devplane"] ?? {}) as Record<string, unknown>;
-    const workspacePath = devplane["workspacePath"];
-    if (typeof workspacePath === "string" && workspacePath.trim().length > 0) {
-      return workspacePath;
-    }
-  } catch (err) {
-    logger.warn({ err, workspaceId }, "Failed to resolve workspace cwd");
-  }
-  return process.env["HOME"] ?? "/";
-}
 
 export async function resolveProviderEnv(
   workspaceId: string,
@@ -172,8 +147,9 @@ export function handleLocalTerminalUpgrade(
     // Resolve AI provider env vars from workspace settings (vault-backed API keys)
     const providerEnv = await resolveProviderEnv(workspaceId, userId);
 
-    // Resolve the working directory (configured monorepo root, fallback $HOME)
-    const cwd = await resolveWorkspaceCwd(workspaceId);
+    // Resolve the working directory (configured monorepo root, fallback $HOME).
+    // No session here — the interactive terminal is not session-bound.
+    const cwd = await resolveDevCwd(workspaceId);
 
     // Lazy-import node-pty so the module only loads when needed
     // eslint-disable-next-line @typescript-eslint/consistent-type-imports

@@ -51,7 +51,9 @@ import {
   sanitizeErrorEgress,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
+  registerDevAgentSpawner,
 } from "@synap/api";
+import { dispatchDevAgentRun } from "./dev-agent-dispatch.js";
 import { serve } from "@hono/node-server";
 import {
   startBoss,
@@ -1905,6 +1907,14 @@ try {
       // `focus_session.closed`, this reactor derives whether the last open
       // blocker just went away and files ONE `session.unblocked` notification.
       registerSessionUnblockReactor();
+      // IoC: fill the BYOA local-spawn slot. The `external-agent` executor's
+      // no-webhook branch starts the workspace's coding CLI on this host; the
+      // spawn (node-pty + the DevPlane `localTerminalEnabled` gate) lives here,
+      // and @synap/api cannot import apps/api. Registered outside the pg-boss
+      // branch because `runPlaybook` dispatches in THIS process regardless of
+      // whether the queue is up. Until this call the branch fails the run with
+      // the reason — it never records an undispatched `running` run.
+      registerDevAgentSpawner((req) => dispatchDevAgentRun(req));
 
       if (config.server.localMode) {
         // Local mode: pg-boss is disabled (untested on PGlite and would
@@ -2008,6 +2018,8 @@ try {
               await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
               await import("@synap/jobs/utils/proactive-post.js");
+            const { registerSessionCloser } =
+              await import("@synap/jobs/utils/session-close.js");
             const { registerServiceHealthNotifier } =
               await import("@synap/jobs/workers/intelligence-health-check.js");
             const api = await import("@synap/api");
@@ -2016,6 +2028,13 @@ try {
             // to api's runPlaybook via this slot, so is-agent | external-agent |
             // hybrid all dispatch through the executor spine + triggerAutoRespond.
             registerPlaybookRunner((input) => api.runPlaybook(input));
+            // ONE session-close door: the reapers and the automation executor
+            // used to stamp `status:'closed'` with a raw UPDATE, skipping the
+            // review pack, the session-bound ephemeral expiry and both halves
+            // of the close event (@synap-core/types/focus-sessions states the
+            // invariant outright). They now call completeFocusSession through
+            // this slot.
+            registerSessionCloser((input) => api.completeFocusSession(input));
             // ONE agent-wake spine: an automation's `channel_message` with
             // `wakeAgent: true` reaches `triggerAutoRespond` — the SAME door
             // every IS auto-respond uses (`a2ai-one-door` tripwire forbids a

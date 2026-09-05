@@ -248,10 +248,6 @@ const COMMANDS = {
     script: "update-agent.sh",
     args: (p) => [p.callbackUrl || "", p.callbackJwt || ""],
   },
-  exec: {
-    script: null, // special case — exec directly via docker exec
-    args: (p) => [p.container || "backend", p.command || "echo ok"],
-  },
 };
 
 function configureEnvironment(payload) {
@@ -315,7 +311,7 @@ function respond(res, code, body) {
   res.end(JSON.stringify(body));
 }
 
-function buildResultPacket(payload, commandName, status, err, extra = {}) {
+function buildResultPacket(payload, commandName, status, err) {
   const errorSummary = err ? err.message : null;
   const base = {
     phase: commandName === "update" ? "update" : "operation",
@@ -329,7 +325,6 @@ function buildResultPacket(payload, commandName, status, err, extra = {}) {
     metadata: {
       targetVersion: payload.targetVersion || null,
       podAgent: "v1",
-      ...extra,
     },
   };
   return base;
@@ -667,77 +662,12 @@ http
       if (!COMMANDS[commandName])
         return respond(res, 400, { error: `unknown command: ${commandName}` });
 
-      // exec requires explicit allowExec claim in JWT
-      if (commandName === "exec" && !payload.allowExec) {
-        return respond(res, 403, { error: "exec requires allowExec claim" });
-      }
-
       if (activeOps.has(commandName))
         return respond(res, 429, { error: "busy" });
 
       activeOps.add(commandName);
       const cmd = COMMANDS[commandName];
       log(`${commandName} accepted`);
-
-      // exec: run docker exec and return output synchronously
-      if (commandName === "exec") {
-        const [container, command] = cmd.args(payload);
-        execFile(
-          "docker",
-          ["exec", container, "sh", "-c", command],
-          { timeout: 60_000 },
-          (err, stdout, stderr) => {
-            activeOps.delete(commandName);
-            const output =
-              (stdout || "") + (stderr ? `\n[stderr] ${stderr}` : "");
-            if (err) log(`exec failed: ${err.message}`);
-            else log(`exec done`);
-
-            // Callback with output if callbackUrl is provided
-            if (payload.callbackUrl && payload.callbackJwt) {
-              const packet = buildResultPacket(
-                payload,
-                commandName,
-                err ? "failed" : "completed",
-                err,
-                {
-                  execContainer: container,
-                }
-              );
-              const body = JSON.stringify({
-                type: "exec",
-                success: !err,
-                output: output.slice(0, FULL_OUTPUT_MAX),
-                error: err ? err.message : null,
-                correlationId: packet.correlationId,
-                step: packet.step,
-                commandType: packet.commandType,
-                errorSummary: packet.errorSummary,
-                logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
-                packet: {
-                  ...packet,
-                  logsSnippet: output.slice(0, LOGS_SNIPPET_MAX),
-                },
-              });
-              const cbReq = https.request(payload.callbackUrl, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${payload.callbackJwt}`,
-                  "Content-Length": Buffer.byteLength(body),
-                },
-                timeout: 10_000,
-              });
-              cbReq.on("error", (e) =>
-                log(`exec callback failed: ${e.message}`)
-              );
-              cbReq.end(body);
-            }
-          }
-        );
-
-        return respond(res, 202, { accepted: true, command: commandName });
-      }
 
       execFile(
         "/bin/sh",

@@ -216,13 +216,24 @@ export async function listPendingRuleProposals(
           // Same routing the approved rule will carry — a pending rule must
           // not read as "unclassified" and then acquire a shape on approval.
           ...(payload.routing ? { routing: payload.routing } : {}),
+          // ⚠️ INSIDE `rule`, where a MATERIALIZED row carries it.
+          //
+          // This used to be set at the row's TOP LEVEL, one line below. Both
+          // shapes ship in the same array from `skills.listRules`, so a client
+          // reading `row.rule.sentence` — which is where `readRuleMetadata`
+          // projects it for every approved rule — found nothing on a proposed
+          // one. Net effect: the dry-run panel said "this rule's WHEN was not
+          // stored" for exactly the rules that DO carry a sentence, since the
+          // proposal payload is where it has always lived.
+          //
+          // One shape, one slot. `buildRuleMetadata` already accepts it.
+          ...(payload.sentence !== undefined
+            ? { sentence: payload.sentence }
+            : {}),
           now: row.createdAt instanceof Date ? row.createdAt : undefined,
         }),
         status: "proposed" as const,
         proposalId: row.id,
-        ...(payload.sentence !== undefined
-          ? { sentence: payload.sentence }
-          : {}),
       },
     ];
   });

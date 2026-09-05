@@ -17,6 +17,7 @@ import {
 } from "../../../services/capability-briefs/compose-capability-brief.js";
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
+import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { automationDataContractSchema } from "../../automations.js";
@@ -1114,7 +1115,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Returns a lightweight LENS MAP — your identity, projects (companies/initiatives), workspaces (operational domains), and a profile sample. Call first in every session. This also lists your projects — pass scope:['projects'] and/or workspaceId to narrow. Pass detail:'full' for workspace descriptions, full onboarding specs, and per-workspace profiles. Drill into a workspace's full property schemas via synap_list_profiles.",
+          "Returns a lightweight LENS MAP — your identity, what is known about the user, projects (companies/initiatives), and the workspaces (operational domains) that hold data. Call first in every session. This also lists your projects — pass scope:['projects'] and/or workspaceId to narrow. Light omits the entity-type inventory and empty domains: pass detail:'full' for every workspace plus descriptions, full onboarding specs, and per-workspace profiles. For entity types and their property schemas, use the profile-listing tool.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1122,7 +1123,7 @@ export const tools = {
               type: "string",
               enum: ["light", "full"],
               description:
-                "light (default) = names/ids/domain/counts + onboarding goal; full = descriptions, full onboarding spec, and per-workspace profiles.",
+                "light (default) = names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, and per-workspace profiles.",
             },
             scope: {
               type: "array",
@@ -1410,6 +1411,25 @@ export const tools = {
               type: "string",
               description:
                 "Optional: only sessions ABOUT this entity (the subject-spine anchor).",
+            },
+            playbookId: {
+              type: "string",
+              description:
+                "Optional: only runs of this playbook DEFINITION. Pair with kind 'run' or 'all' — flow-linked rows are runs, so under the default nothing would match.",
+            },
+            automationId: {
+              type: "string",
+              description:
+                "Optional: only runs of this automation DEFINITION (not one automationRunId). Same pairing as playbookId.",
+            },
+            kind: {
+              type: "string",
+              // DERIVED from the ONE vocabulary, never hand-mirrored: a new
+              // population reaches this tool schema instead of being silently
+              // unaskable. "all" is a filter sentinel, not a kind.
+              enum: [...SESSION_KINDS, "all"],
+              description:
+                "Which population. 'work' = units of work a person owns. 'run' = a playbook or automation execution. 'receipt' = the container an agent's proposals were filed under. 'all' (default) = no filter. Every row carries its own `kind` either way.",
             },
             limit: { type: "number", default: 20 },
           },

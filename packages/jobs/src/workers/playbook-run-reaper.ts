@@ -31,11 +31,13 @@ import {
   db,
   and,
   eq,
+  inArray,
   drizzleSql,
   playbookRuns,
   focusSessions,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { closeSessionViaDoor } from "../utils/session-close.js";
 
 const logger = createLogger({ module: "playbook-run-reaper" });
 
@@ -94,25 +96,62 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       return;
     }
 
-    // 2. Close each reaped run's orphaned session (mirrors automation-run-reaper).
-    //    Per-run UPDATE keyed on the FK sessionId — a single bound string param,
-    //    no array-param typing on the pod driver. Also match 'stale' so a session
-    //    the focus-session reaper already flipped active→stale still gets a
-    //    closedAt. Terminal statuses (closed/failed/cancelled) don't re-close.
+    // 2. Close each reaped run's orphaned session through the ONE door.
+    //
+    //    This used to be a raw `.update(focusSessions).set({status:'closed'})`,
+    //    which is the dual-path defect named in @synap-core/types/focus-sessions:
+    //    it skipped the review pack, the session-bound ephemeral expiry and BOTH
+    //    halves of the close event. `completeFocusSession` does all four.
+    //
+    //    The door needs a userId this worker's RETURNING cannot yield, and it
+    //    carries its OWN already-terminal guard — so ONE batched read replaces
+    //    both the missing userId and the old `IN ('active','paused','stale')`
+    //    WHERE clause, and gives the honest `sessionsClosed` telemetry (the
+    //    door's return cannot distinguish "closed now" from "was already
+    //    terminal": both come back terminal). Deliberately NOT a per-session
+    //    read inside the loop — that would be an N+1 in a reaper.
+    //
+    //    `inArray` compiles to `id in ($1,$2,…)` — one bound string param per
+    //    id, NOT a single array param (drizzle-orm binds each element), so it
+    //    respects the pod driver's array-param constraint the old per-run UPDATE
+    //    was written around.
+    const sessionIds = reaped
+      .map((r) => r.sessionId)
+      .filter((id): id is string => !!id);
+
     let sessionsClosed = 0;
-    for (const { sessionId } of reaped) {
-      if (!sessionId) continue;
-      const closed = await db
-        .update(focusSessions)
-        .set({ status: "closed", closedAt: new Date() })
+    if (sessionIds.length > 0) {
+      const openSessions = await db
+        .select({ id: focusSessions.id, userId: focusSessions.userId })
+        .from(focusSessions)
         .where(
           and(
-            eq(focusSessions.id, sessionId),
+            inArray(focusSessions.id, sessionIds),
+            // Also match 'stale' so a session the focus-session reaper already
+            // flipped active→stale still gets a closedAt. Terminal statuses
+            // (closed/failed/cancelled) are excluded here and would no-op in the
+            // door anyway.
             drizzleSql`${focusSessions.status} IN ('active', 'paused', 'stale')`
           )
-        )
-        .returning({ id: focusSessions.id });
-      sessionsClosed += closed.length;
+        );
+
+      for (const { id, userId } of openSessions) {
+        const result = await closeSessionViaDoor({
+          sessionId: id,
+          userId,
+          // DELIBERATELY 'closed', not 'failed'. The run row is force-failed
+          // above, so 'failed' would arguably be the more honest session
+          // verdict — but `isFocusSessionLifecycleClose` (api's
+          // permission-check.ts) recognises the lifecycle-close escape ONLY on
+          // `status === "closed"`, so switching the verdict here would quietly
+          // narrow a governance escape as a side effect of a routing fix. This
+          // change is about the four MISSING effects, not about re-verdicting
+          // sessions; the verdict question is reported separately.
+          terminalStatus: "closed",
+          summary: STALE_RUN_ERROR_MESSAGE,
+        });
+        if (result) sessionsClosed += 1;
+      }
     }
 
     logger.info(

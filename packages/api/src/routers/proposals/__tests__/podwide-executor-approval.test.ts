@@ -78,33 +78,75 @@ const dbStub = {
   }),
 };
 
-vi.mock("@synap/database", () => ({
-  db: dbStub,
-  proposals: { __table: "proposals" },
-  projects: { __table: "projects" },
-  entities: { __table: "entities" },
-  links: { __table: "links" },
-  workspaces: { __table: "workspaces" },
-  relations: { __table: "relations" },
-  projectMembers: { __table: "project_members" },
-  eq: () => ({}),
-  and: () => ({}),
-  isNull: () => ({}),
-  sql: {},
-  drizzleSql: Object.assign(() => ({}), { raw: () => ({}) }),
-  getWorkspaceMembership: async (_db: unknown, wsId: string | null) => {
-    membershipCalls.push(wsId);
-    return membership;
-  },
-  ProjectRepository: class {},
-  EventRepository: class {},
-  ProfileResolutionService: class {},
-  PropertyIndexService: class {},
-  mergeEntities: async () => ({}),
-  resolveMaterializedEntityWorkspaceId: async () => null,
-  isDomainHomeWorkspace: async () => false,
-  DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE: "domain-home",
-}));
+vi.mock("@synap/database", () => {
+  // A total vi.mock REPLACES the module wholesale, so any export the source
+  // chain newly imports becomes undefined and every test in this file dies.
+  // That has happened repeatedly here (store-entity-source-blob.js pulled in
+  // a large transitive graph). The Proxy below returns a benign stub for any
+  // export not explicitly listed, so a new import upstream cannot silently
+  // break this file; explicit entries still win.
+  const base: Record<string, unknown> = {
+    db: dbStub,
+    // Pulled in transitively via store-entity-source-blob.js (source-file
+    // staging on approval). A total vi.mock replaces the module wholesale,
+    // so every export the source chain imports must be declared here.
+    DocumentRepository: class {},
+    EntityRepository: class {},
+    eventRepository: { record: async () => null },
+    documentVersionSnapshotFromUpload: () => ({}),
+    automationRuns: { __table: "automation_runs" },
+    focusSessions: { __table: "focus_sessions" },
+    channels: { __table: "channels" },
+    governanceRules: { __table: "governance_rules" },
+    governanceCeilings: { __table: "governance_ceilings" },
+    ne: () => ({}),
+    createGuideline: async () => null,
+    linkEntityToProject: async () => null,
+    resolveProjectPlacement: async () => null,
+    setChannelBranchPurpose: async () => null,
+    storedVersionValues: () => ({}),
+    uploadDocumentVersionSnapshot: async () => ({}),
+    ChannelFirewallImmutableError: class extends Error {},
+    proposals: { __table: "proposals" },
+    projects: { __table: "projects" },
+    entities: { __table: "entities" },
+    links: { __table: "links" },
+    workspaces: { __table: "workspaces" },
+    relations: { __table: "relations" },
+    projectMembers: { __table: "project_members" },
+    eq: () => ({}),
+    and: () => ({}),
+    isNull: () => ({}),
+    sql: {},
+    drizzleSql: Object.assign(() => ({}), { raw: () => ({}) }),
+    getWorkspaceMembership: async (_db: unknown, wsId: string | null) => {
+      membershipCalls.push(wsId);
+      return membership;
+    },
+    ProjectRepository: class {},
+    EventRepository: class {},
+    ProfileResolutionService: class {},
+    PropertyIndexService: class {},
+    mergeEntities: async () => ({}),
+    resolveMaterializedEntityWorkspaceId: async () => null,
+    isDomainHomeWorkspace: async () => false,
+    DOMAIN_INTO_NON_DOMAIN_HOME_MESSAGE: "domain-home",
+  };
+  return new Proxy(base, {
+    get(target, key) {
+      if (typeof key === "symbol" || key in target)
+        return target[key as string];
+      // `then` MUST stay undefined: a module namespace exposing a callable
+      // `then` is treated as a thenable, so `await import(...)` never
+      // resolves and the whole file hangs instead of failing.
+      if (key === "then" || key === "__esModule") return undefined;
+      const stub = (() => ({})) as unknown as Record<string, unknown>;
+      stub.__table = String(key);
+      return stub;
+    },
+    has: () => true,
+  });
+});
 
 vi.mock("@synap/database/schema", () => ({
   ProposalStatus: { APPROVED: "approved", PENDING: "pending" },

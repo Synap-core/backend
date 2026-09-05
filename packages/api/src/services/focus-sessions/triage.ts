@@ -46,6 +46,7 @@ import { logEvent } from "../../lib/event-helpers.js";
 import { completeFocusSession } from "./complete-session.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
+import { AGENT_PROPOSAL_PACKAGE_KIND } from "./session-kind.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_TRIAGE_ACCEPT_ACTION,
@@ -57,9 +58,16 @@ import {
 /** The origins whose sessions land in triage — nobody triages their own work. */
 const TRIAGE_ORIGINS = ["agent", "automation"] as const;
 
-/** SQL: rows that are triage-pending right now. */
+/**
+ * SQL: rows that are triage-pending right now.
+ *
+ * A receipt (an agent's proposal package, `session-kind.ts`) is agent-origin
+ * but is NOT a draft anyone accepts — its review happens on the proposals it
+ * holds. Excluded here, and in `projectTriage`, so the inbox lists drafts only.
+ */
 export function triagePendingWhere(): SQL {
   return and(
+    drizzleSql`${focusSessions.metadata} #>> '{kind}' IS DISTINCT FROM ${AGENT_PROPOSAL_PACKAGE_KIND}`,
     inArray(focusSessions.origin, [...TRIAGE_ORIGINS]),
     inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
     drizzleSql`${focusSessions.metadata} #>> '{triage,acceptedAt}' IS NULL`
@@ -121,7 +129,9 @@ function triageReceipt(metadata: unknown): {
  */
 export function projectTriage(row: TriageProjectable): TriageProjection {
   const receipt = triageReceipt(row.metadata);
+  const bag = (row.metadata ?? {}) as Record<string, unknown>;
   const pending =
+    bag["kind"] !== AGENT_PROPOSAL_PACKAGE_KIND &&
     !!row.origin &&
     (TRIAGE_ORIGINS as readonly string[]).includes(row.origin) &&
     !!row.status &&

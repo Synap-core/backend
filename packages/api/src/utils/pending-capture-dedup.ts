@@ -341,14 +341,47 @@ export async function findPendingTextMatches(
     .from(proposals)
     .where(
       and(
-        // OWNER FLOOR — never another user's review queue.
-        eq(proposals.createdBy, params.userId),
+        // OWNER FLOOR — never another user's review queue. Same INTENT,
+        // corrected MECHANISM: `createdBy` is overloaded ("userId or
+        // agentUserId that authored this row"), so an agent write that passes
+        // no explicit createdBy lands `createdBy = agentUserId = <agent>` and
+        // this floor could not see it.
+        //
+        // This is the RECALL lane, and that made it the amnesia: an agent
+        // asking about work it had just proposed got "No information found"
+        // while the row sat pending in the same queue. Verified live — a
+        // near-verbatim query for a pending agent-authored proposal returned
+        // the two human-authored rows and not the one whose summary WAS the
+        // query. `services/proposals/proposals-service.ts` documents and fixes
+        // this exact author-floor bug; the recall lane never received it, and
+        // I fixed only the sibling `findPendingSignalMatches` in this same
+        // file — one of three call sites. The guarantee is unchanged:
+        // `ownAgentUserFilter` floors on `users.createdByUserId = me AND
+        // userType = 'agent'`, so another human's agents can never enter.
+        or(
+          eq(proposals.createdBy, params.userId),
+          ownAgentUserFilter(proposals.agentUserId, params.userId),
+          ownAgentUserFilter(proposals.createdBy, params.userId)
+        ),
         // STRICT pending — an approved op's entity is already in the graph.
-        eq(proposals.status, ProposalStatus.PENDING),
-        inArray(
-          proposals.proposalType,
-          CAPTURE_GRAPH_PROPOSAL_TYPES as unknown as string[]
-        )
+        eq(proposals.status, ProposalStatus.PENDING)
+        // NO TYPE FLOOR on the RECALL lane — deliberately unlike the dedup lane
+        // above, which keeps `CAPTURE_GRAPH_PROPOSAL_TYPES` because it must
+        // compare create-ops to avoid filing a duplicate.
+        //
+        // Recall asks a different question: "is there pending work bearing on
+        // what I was just asked?" Measured on the live pod, the graph-only
+        // floor admitted 7 of 16 pending rows — so an agent asking about a
+        // workspace with a pending `join`, or a document with a pending
+        // `ai_edit`, was told nothing was pending. That is the amnesia in its
+        // second costume: the row exists, the block fires, and the one that
+        // matters is filtered out before scoring.
+        //
+        // Safe by construction: the scorer below already handles a row with no
+        // `operations[]` — "a relation-only proposal still scores on its
+        // summary" — and every proposal carries a summary. Widening admits
+        // more CANDIDATES, never more matches: a row still needs score > 0
+        // against the query's terms, and the block is capped.
       )
     )
     // Newest first: a fixed scan window over the owner-floored pending queue,
@@ -573,7 +606,17 @@ export async function findPriorCaptureGraphProposal(
     .from(proposals)
     .where(
       and(
-        eq(proposals.createdBy, params.userId),
+        // Third and last site of this floor in this file — same overloaded
+        // column, same correction. `routers/capture.ts` names this function
+        // BY NAME in its post-mortem on attribution: stamping `agentUserId`
+        // without `createdBy` "would break … `findPriorCaptureGraphProposal`".
+        // An agent re-capturing must be able to find its OWN prior proposal,
+        // or idempotency silently files a duplicate.
+        or(
+          eq(proposals.createdBy, params.userId),
+          ownAgentUserFilter(proposals.agentUserId, params.userId),
+          ownAgentUserFilter(proposals.createdBy, params.userId)
+        ),
         inArray(proposals.status, [
           ProposalStatus.PENDING,
           ProposalStatus.AUTO_APPROVED,

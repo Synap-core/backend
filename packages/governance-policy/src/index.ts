@@ -21,6 +21,11 @@
  * to be an agent user):
  *   1. CBAC capability allowlist  → deny if the agent lacks the capability
  *   2. ADMIN_ACTIONS              → always propose (even for owned workspace)
+ *   2.05 HUMAN_GATE_EVENT_KEYS   → always propose; unwidenable by any rung below
+ *   2.06 ARBITRARY_EXECUTION_EVENT_KEYS → always propose; a shell inside the API
+ *                                    container (`command.execute`) is floored on
+ *                                    the EVENT KEY, never on the bare verb —
+ *                                    `automation.execute` must stay runnable.
  *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
  *                                    merge), regardless of ANY override rung
  *                                    below (ownership, explicit autoApproveFor,
@@ -394,6 +399,43 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "dev.deploy_approval",
   "focus_session.plan_approval",
   "focus_session.deploy_approval",
+];
+
+/**
+ * ARBITRARY CODE EXECUTION — doors that hand an agent a shell, not a record.
+ *
+ * `POST /api/hub/commands/execute` runs `execFileSync("/bin/sh", ["-c", cmd])`
+ * INSIDE the API container, guarded only by a regex denylist. That is not a
+ * write to a row: it is the SUPERSET of every other door in this file. Anything
+ * that can run a shell there can read the database, mint an API key, edit
+ * membership and rewrite the governance rules that were supposed to constrain
+ * it — so no rung below may ever resolve it to "execute".
+ *
+ * WHY ITS OWN LIST, not `DESTRUCTIVE_ACTIONS`. That floor (rung 2.5) matches the
+ * BARE ACTION VERB (`DESTRUCTIVE_ACTIONS.includes(action)`). Adding `"execute"`
+ * there would also floor `automation.execute` and `capability.execute` — two
+ * real, high-traffic gate doors (`GATE_WRITE_DOORS["automation/execute"]`;
+ * `guardProducerEffect` in packages/jobs) — forcing every automation run to a
+ * human proposal. The dangerous thing here is the SUBJECT (a shell), not the
+ * verb, so the floor must be keyed on the EVENT KEY.
+ *
+ * WHY ITS OWN LIST, not {@link ADMIN_ACTIONS_LIVE} or {@link HUMAN_GATE_EVENT_KEYS}.
+ * Same reasoning that already split those two apart: ADMIN names writes that
+ * change WHO CAN DO WHAT, and its own docblock concedes "a future policy could
+ * reasonably argue about one of its entries" — this is not an entry anyone may
+ * argue about. A human gate is paperwork whose value IS the yes; a shell is a
+ * capability escape. Keeping them separate means a later "relax an admin floor"
+ * edit cannot take arbitrary code execution with it, and the review UI gets a
+ * distinct `reasonCode` to render.
+ *
+ * SAME MATCHING CONTRACT as the two lists above — exact equality on the
+ * `${subjectType}.${action}` event key composed from the RAW gate arguments. No
+ * globbing, no pluralization forgiveness. Typed as {@link GateEventKey} so a
+ * string naming no real door is a COMPILE ERROR rather than a floor that
+ * silently never fires.
+ */
+export const ARBITRARY_EXECUTION_EVENT_KEYS: readonly GateEventKey[] = [
+  "command.execute",
 ];
 
 /**
@@ -866,6 +908,8 @@ export const PROPOSE_REASON = {
     "This agent has reached its daily auto-execute write ceiling; further writes require human approval today.",
   HUMAN_GATE:
     "This is a human gate — a person must approve it, and no governance rule can widen it.",
+  ARBITRARY_EXECUTION:
+    "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -914,6 +958,22 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.HUMAN_GATE,
       reasonCode: "HUMAN_GATE",
+    };
+  }
+
+  // 2.06 ARBITRARY CODE EXECUTION → always propose. A shell inside the API
+  // container is the superset of every other door here, so it is floored ABOVE
+  // the governance_rules store (rung 2.8), ownership (3), autoApproveFor incl.
+  // wildcards (4) and DEFAULT_AUTO_APPROVE (8). Keyed on the EVENT KEY, not the
+  // bare verb: flooring `"execute"` at rung 2.5 would also catch
+  // `automation.execute` / `capability.execute`, which are ordinary runs.
+  if (
+    (ARBITRARY_EXECUTION_EVENT_KEYS as readonly string[]).includes(eventKey)
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.ARBITRARY_EXECUTION,
+      reasonCode: "ARBITRARY_EXECUTION",
     };
   }
 

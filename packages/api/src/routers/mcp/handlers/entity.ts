@@ -410,6 +410,21 @@ export const entityHandlers: McpHandlerMap = {
         filename,
         workspaceId: storeWorkspaceId,
       });
+      // Governance may park the attach — an MCP call is an AGENT write, which
+      // is exactly the case the gate exists for. The bytes are staged and ride
+      // the proposal, so approval attaches them. `proposed` is a normal
+      // outcome, not an error; report the review handle. No session artifact is
+      // recorded: nothing is attached yet, and the approval path records it.
+      if (attached.status === "proposed") {
+        return ok({
+          entityId: attachToEntityId,
+          documentId: attached.staged.documentId,
+          status: "proposed",
+          proposalId: attached.proposalId,
+          proposalType: attached.proposalType,
+          reviewUrl: attached.reviewUrl,
+        });
+      }
       // The attach produced a document ON an existing entity — the document is
       // the new thing this session made, so that is what the ledger records.
       await recordSessionArtifact({

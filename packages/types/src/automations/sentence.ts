@@ -172,11 +172,28 @@ const VERB_TO_EVENT_ACTION: Partial<Record<ActionVerb, string>> = {
   deleted: "delete",
 };
 
-/** Inverse of {@link VERB_TO_EVENT_ACTION}, for the round trip back to a sentence. */
+/**
+ * Inverse of {@link VERB_TO_EVENT_ACTION}, for the round trip back to a sentence.
+ *
+ * ⚠️ This must cover every middle segment `buildEventPattern` can EMIT, not
+ * just the three that come from `VERB_TO_EVENT_ACTION`. It did not: the
+ * `capture` entry writes `capture.complete.completed`, whose middle segment is
+ * `complete` — absent here, so the reader fell through to the raw cast below
+ * and produced `actionVerb: "complete"`, which is not in the `ActionVerb`
+ * union. A pattern this module produces, this module then refused to read: the
+ * WHEN row loaded blank and re-saving dropped the trigger. `received` and
+ * `created` round-trip only by luck (they happen to spell an `ActionVerb`).
+ *
+ * `feed.new_item.completed` is still unreadable, and deliberately left so:
+ * `new_item` has no `ActionVerb`, and inventing one here would be a fourth
+ * spelling of a vocabulary the union owns. That is the same parity gap the
+ * comment in `buildEventPattern` names.
+ */
 const EVENT_ACTION_TO_VERB: Record<string, ActionVerb> = {
   create: "created",
   update: "updated",
   delete: "deleted",
+  complete: "completed",
 };
 
 export function buildEventPattern(trigger: SentenceTrigger): string {

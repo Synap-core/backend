@@ -70,6 +70,11 @@ import type { Context } from "../../context.js";
 import { emitAiCorrection } from "../../utils/ai-feedback-events.js";
 import { AI_KIND } from "../../lib/ai-events.js";
 import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import {
+  attachSourceBlob,
+  discardProposalSourceBlob,
+  stagedSourceBlobFrom,
+} from "../../utils/store-entity-source-blob.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import { reconcileApprovedProperties } from "../../services/proposals/reconcile-proposal-properties.js";
 import { completeKnowledgeProposalProperties } from "../../services/proposals/complete-knowledge-proposal.js";
@@ -724,6 +729,54 @@ async function applyProposalApprovalInner(
           : {}),
       }
     );
+
+    // A proposed capture that carried a file: the bytes were STAGED at propose
+    // time (`stageSourceBlob`), only the reference rode in `data.sourceFile`.
+    // Now that the entities exist, bind it to the same entity the direct-write
+    // path would have chosen — the first freshly CREATED one (never a
+    // pre-existing linked entity, which is someone else's document), falling
+    // back to the materializer's `primaryId`. Best-effort: the entities are
+    // already committed, and losing the attach must not fail the approval.
+    const stagedCaptureFile = stagedSourceBlobFrom(payload);
+    if (stagedCaptureFile) {
+      const fileTargetId =
+        createdEntities.find((e) => !e.linked)?.entityId ??
+        primaryId ??
+        undefined;
+      if (fileTargetId) {
+        try {
+          await attachSourceBlob({
+            database: db,
+            userId,
+            entityId: fileTargetId,
+            staged: stagedCaptureFile,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, proposalId: input.proposalId, entityId: fileTargetId },
+            "composite proposal: source blob attach failed (entities kept)"
+          );
+        }
+      } else {
+        // APPROVED with nothing to attach to — every create op was rejected in
+        // a partial approval, so `createdEntities` is empty and `primaryId` is
+        // unset. The proposal is now terminal on the APPROVE side: no reject
+        // will ever run, so "left for reject/cleanup" was a cleanup that could
+        // not happen and the bytes orphaned permanently. Discard here.
+        logger.warn(
+          { proposalId: input.proposalId },
+          "composite proposal: no materialized entity to attach the staged source blob to — discarding it (approved, so no reject will follow)"
+        );
+        // Same door + same refusal semantics every terminal proposal state
+        // uses (it logs an ownership refusal loudly and deletes nothing); the
+        // approval itself is already committed, so it must not fail on cleanup.
+        await discardProposalSourceBlob({
+          database: db,
+          userId,
+          proposalData: payload,
+        });
+      }
+    }
 
     // Record what we materialized so `revert` can compute the inverse.
     // Only entities CREATED here (not pre-existing linked ones) are ours to

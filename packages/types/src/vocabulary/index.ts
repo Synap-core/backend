@@ -85,6 +85,19 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   archive: { imperative: "Archive", past: "Archived" },
   restore: { imperative: "Restore", past: "Restored" },
   run: { imperative: "Run", past: "Ran" },
+  // `capture.complete.completed` is emitted by `routers/capture.ts` and by
+  // `buildEventPattern`, so this token reaches users. Without a row here
+  // `resolveActionLabel(action, "past")` fell through to `humanizeToken`,
+  // which has NO tense and silently ignores the mood — so a settled history
+  // row rendered "Complete Capture", present-imperative, as if the agent were
+  // about to act. See the mood-coverage test in this package.
+  complete: { imperative: "Complete", past: "Completed" },
+  // `external_message.received.completed`. This one was invisible because
+  // `humanizeToken("received")` happens to spell the PAST form — so the past
+  // mood looked correct while the imperative silently returned "Received"
+  // too. A coincidence is not a contract.
+  receive: { imperative: "Receive", past: "Received" },
+  received: { imperative: "Receive", past: "Received" },
   merge: { imperative: "Merge", past: "Merged" },
   link: { imperative: "Link", past: "Linked" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
@@ -360,6 +373,16 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   done: "Done",
   // an agent- or automation-originated session not yet accepted from triage
   drafted: "Drafted",
+  // session POPULATION lenses (derived, never stored — see
+  // `services/focus-sessions/session-kind.ts`): one `focus_sessions` table
+  // holds a person's units of work, machine executions, and the containers an
+  // agent's writes are filed under. Lens names over one row set, like the
+  // work-state block above — NOT `focus_sessions.status` values, and not to be
+  // added to the DB enum. `run` is spelled out rather than left to humanize so
+  // it cannot drift from the object-kind noun of the same name.
+  work: "Work",
+  run: "Run",
+  receipt: "Receipt",
 };
 
 /**

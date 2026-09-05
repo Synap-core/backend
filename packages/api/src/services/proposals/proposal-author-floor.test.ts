@@ -199,3 +199,121 @@ describe("the in-flight dedup scan shares the SAME author floor", () => {
     expect(src).toMatch(/eq\(proposals\.status, ProposalStatus\.PENDING\)/);
   });
 });
+
+describe("EVERY author floor in the dedup/recall file uses the shared helper", () => {
+  /*
+   * THREE functions in `utils/pending-capture-dedup.ts` floor on proposal
+   * authorship, and I fixed exactly ONE of them — the classic "fixed the list,
+   * not the class". The one left broken was the RECALL lane
+   * (`findPendingTextMatches`), which made it the amnesia the product exists to
+   * prevent: an agent asking about work it had just proposed got "No
+   * information found" while that row sat pending in the same queue. Verified
+   * live against the pod.
+   *
+   * The third (`findPriorCaptureGraphProposal`) is named BY NAME in
+   * `routers/capture.ts`'s attribution post-mortem as a consumer this column's
+   * overload would break — so it was a documented, predicted miss.
+   *
+   * Assert the DENOMINATOR, not a list: count the narrow floors and require
+   * zero. A test that named the three functions would go green the moment a
+   * fourth appeared.
+   */
+  const dedupPath = join(here, "../../utils/pending-capture-dedup.ts");
+
+  it("scans a real file with several author floors", () => {
+    const src = readFileSync(dedupPath, "utf8");
+    expect(src.length).toBeGreaterThan(2000);
+    // 3 sites x 3 branches today; the point is that it is plural, not the 9.
+    expect((src.match(/ownAgentUserFilter\(/g) ?? []).length).toBeGreaterThan(
+      5
+    );
+  });
+
+  it("has ZERO bare `createdBy = caller` author floors left", () => {
+    const src = readFileSync(dedupPath, "utf8")
+      // strip comments so prose about the OLD floor never reads as code
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+
+    // A bare floor is one NOT immediately preceded by `or(` — inside an `or`
+    // it is the first branch of the lineage predicate, which is correct.
+    const bare = [
+      ...src.matchAll(
+        /([\s\S]{0,40})eq\(proposals\.createdBy, params\.userId\)/g
+      ),
+    ].filter((m) => !/or\(\s*$/.test(m[1])).length;
+
+    expect(
+      bare,
+      "A bare `eq(proposals.createdBy, params.userId)` author floor remains. " +
+        "`createdBy` is overloaded (userId OR agentUserId), so it cannot see " +
+        "an agent's own rows — which is the amnesia bug. Use the lineage " +
+        "predicate: or(createdBy = me, ownAgentUserFilter(agentUserId), " +
+        "ownAgentUserFilter(createdBy))."
+    ).toBe(0);
+  });
+});
+
+describe("recall and dedup lanes have DIFFERENT type floors, on purpose", () => {
+  /*
+   * `findPendingSignalMatches` (dedup) KEEPS `CAPTURE_GRAPH_PROPOSAL_TYPES`: it
+   * compares create-ops to avoid filing a duplicate, so it must only consider
+   * rows whose `operations[]` it can read.
+   *
+   * `findPendingTextMatches` (recall) has NO type floor: it answers "is there
+   * pending work bearing on this question?". Measured live, the graph-only
+   * floor admitted 7 of 16 pending rows, so an agent asking about a workspace
+   * with a pending `join` was told nothing was pending.
+   *
+   * A future reader will be tempted to unify them — they sit in one file and
+   * look like near-duplicates. They are not. This pins the asymmetry and says
+   * why, so unifying has to be a decision rather than a tidy-up.
+   */
+  const dedupPath = join(here, "../../utils/pending-capture-dedup.ts");
+  const src = readFileSync(dedupPath, "utf8");
+  const slice = (from: string, to: string): string =>
+    src.slice(src.indexOf(from), src.indexOf(to));
+
+  it("reads two real, distinct function bodies", () => {
+    const dedupFn = slice(
+      "export async function findPendingSignalMatches",
+      "export function extractQueryTerms"
+    );
+    const recallFn = slice(
+      "export async function findPendingTextMatches",
+      "export function computeCaptureGraphIdempotencyKey"
+    );
+    expect(dedupFn.length).toBeGreaterThan(200);
+    expect(recallFn.length).toBeGreaterThan(200);
+  });
+
+  it("DEDUP keeps the capture-graph type floor", () => {
+    const dedupFn = slice(
+      "export async function findPendingSignalMatches",
+      "export function extractQueryTerms"
+    );
+    expect(
+      dedupFn,
+      "the dedup lane must keep CAPTURE_GRAPH_PROPOSAL_TYPES — it reads " +
+        "operations[] to compare create-ops, and cannot do that for a row shape " +
+        "it does not understand."
+    ).toContain("CAPTURE_GRAPH_PROPOSAL_TYPES");
+  });
+
+  it("RECALL has no type floor", () => {
+    const recallFn = slice(
+      "export async function findPendingTextMatches",
+      "export function computeCaptureGraphIdempotencyKey"
+    );
+    // Strip comments: the WHY is written in prose right there and names the const.
+    const code = recallFn
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+    expect(
+      code,
+      "the recall lane must NOT filter by proposal type — every proposal " +
+        "carries a summary and the scorer already falls back to it, so a type " +
+        "floor here only hides pending work from the agent that asked about it."
+    ).not.toContain("CAPTURE_GRAPH_PROPOSAL_TYPES");
+  });
+});

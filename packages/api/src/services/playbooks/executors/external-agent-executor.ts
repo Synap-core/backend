@@ -13,12 +13,20 @@
  * runner threads through from the playbook/tool config. `callbackUrl` in the
  * envelope tells the agent where to capture back.
  *
+ * The SIBLING dispatch shape is a LOCAL SPAWN: no webhookUrl ⇒ the pod starts
+ * the coding CLI itself (DevPlane's `/api/devplane/claude-code` PTY), reached
+ * through the `registerDevAgentSpawner` IoC slot because the spawn lives in
+ * apps/api (node-pty + the DevPlane gate) and this package cannot import it.
+ * Both shapes are fire-and-forget: the agent captures back via
+ * `POST /api/hub/runs/:id/capture` exactly the same way.
+ *
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4,
  * external-agent executor; security: BYOA acts only through the Hub Protocol).
  */
 
 import type { Executor, RunContext, RunResult } from "@synap/playbooks";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
+import { getDevAgentSpawner } from "./dev-agent-spawner.js";
 
 /** Fire-and-forget POST with a hard timeout; never throws. */
 async function postWebhook(url: string, body: unknown): Promise<boolean> {
@@ -98,15 +106,50 @@ export class ExternalAgentExecutor implements Executor {
       };
     }
 
-    // NEEDS-DOGFOOD (P3.3): devplane WS spawn — driving Claude Code via the
-    // `/api/devplane/claude-code` WS handler is the other BYOA dispatch path.
-    // NOT implemented here (no process spawning in P3); a playbook that targets
-    // external-agent without a webhookUrl currently records a running run with
-    // no dispatch. Wire the devplane spawn in a follow-up.
-    return {
-      status: "running",
-      summary:
-        "external-agent run created; no webhookUrl — devplane spawn is P3.3 (not yet wired)",
-    };
+    // No webhookUrl ⇒ LOCAL SPAWN. The pod starts the workspace's coding CLI
+    // itself, in the session's own checkout (dev-cwd.ts keys the working
+    // directory on the SESSION, so two concurrent dev runs in one workspace
+    // never share a tree). Fire-and-forget like the webhook branch: the agent
+    // reports back via POST /api/hub/runs/:id/capture.
+    const spawner = getDevAgentSpawner();
+    if (!spawner) {
+      // An unfilled slot is a severance. Fail loudly rather than record a
+      // `running` run nothing will ever close — which is exactly what this
+      // branch did before it was wired.
+      return {
+        status: "failed",
+        error:
+          "external-agent run has no webhookUrl and no local dev-agent spawner is registered — apps/api must call registerDevAgentSpawner() at boot",
+      };
+    }
+
+    try {
+      const spawned = await spawner({
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        sessionId: ctx.sessionId,
+        runId: input.runId ?? null,
+        channelId: ctx.channelId ?? null,
+        goal: ctx.goal,
+        subject: ctx.subjectId
+          ? {
+              id: ctx.subjectId,
+              name: ctx.subjectName ?? null,
+              profile: ctx.subjectProfile ?? null,
+            }
+          : null,
+      });
+      return {
+        status: "running",
+        summary: `dispatched to local dev agent (pid ${spawned.pid}) in ${spawned.cwd}`,
+      };
+    } catch (err) {
+      return {
+        status: "failed",
+        error: `local dev-agent spawn failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      };
+    }
   }
 }

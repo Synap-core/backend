@@ -85,4 +85,45 @@ describe("a rule stays replayable after approval", () => {
         "never cost the rule"
     ).not.toMatch(/readRuleSentence|ruleSentenceSchema/);
   });
+
+  /**
+   * ONE SLOT, both paths.
+   *
+   * `skills.listRules` returns materialized and PROPOSED rules in the SAME
+   * array. A materialized row carries the sentence inside `rule` (that is where
+   * `readRuleMetadata` projects it); a proposed row used to carry it at the
+   * row's TOP LEVEL instead. A client reading `row.rule.sentence` — the only
+   * slot that exists for an approved rule — therefore found nothing on a
+   * proposed one, and the dry-run panel reported "this rule's WHEN was not
+   * stored" for precisely the rules that DO carry one.
+   *
+   * Two slots for one field in one array is the fork; this pins the merge.
+   */
+  it("a PROPOSED rule carries its sentence in the same slot as a materialized one", () => {
+    const src = readCode("services/proposals/pending-rules.ts");
+    const at = src.indexOf("buildRuleMetadata({");
+    expect(at, "`buildRuleMetadata` call not found").toBeGreaterThan(-1);
+
+    // Walk the call's own argument object, so a `sentence` key elsewhere in the
+    // row literal cannot satisfy this.
+    let depth = 0;
+    let i = src.indexOf("{", at);
+    const start = i;
+    for (; i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    const args = src.slice(start, i);
+
+    expect(
+      /sentence/.test(args),
+      "`listPendingRuleProposals` does not pass `sentence` into " +
+        "`buildRuleMetadata`, so a proposed rule's sentence lands somewhere a " +
+        "reader of `rule.sentence` cannot see it — and that reader is every " +
+        "client, because it is the only slot a materialized rule has."
+    ).toBe(true);
+  });
 });

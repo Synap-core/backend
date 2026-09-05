@@ -343,7 +343,36 @@ export function matchFilters(
   return true;
 }
 
-function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+/**
+ * Read a filter key out of an event payload.
+ *
+ * ⚠️ A LITERAL KEY WINS OVER A NESTED PATH, and that order is load-bearing.
+ *
+ * `entities/mutate.ts:352-356` writes the per-field change markers as FLAT keys
+ * at the top level of `data`:
+ *
+ *   `...Object.fromEntries(keys.map((k) => [`changed.${k}`, true]))`
+ *
+ * so the payload literally contains `{"changed.status": true}` — there is no
+ * `data.changed` object. This function used to split on `.` unconditionally,
+ * look for `data["changed"]["status"]`, find `undefined`, and fail the filter
+ * closed. Meanwhile `changed.<fieldName>` is ADVERTISED as a filter key by the
+ * event catalog (`packages/events/src/event-types.ts`) and was offered by the
+ * pickers. A rule filtered on it therefore reported itself live and could never
+ * match — an inert filter rendered as a live one, the same class as the three
+ * WHERE operators that compiled to `undefined`.
+ *
+ * The literal-first order is also the safe one: a dotted key that really is a
+ * nested path has no top-level literal to shadow it, so nested lookup is
+ * unchanged for every other key.
+ */
+export function getNestedValue(
+  obj: Record<string, unknown>,
+  path: string
+): unknown {
+  if (Object.prototype.hasOwnProperty.call(obj, path)) {
+    return obj[path];
+  }
   const parts = path.split(".");
   let current: unknown = obj;
   for (const part of parts) {

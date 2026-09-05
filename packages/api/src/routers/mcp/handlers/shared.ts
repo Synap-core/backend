@@ -463,6 +463,9 @@ export async function listOpenFocusSessions(
           inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
         )
       )
+      // SESSION-KIND-LENS-EXEMPT: the ambient-session RESOLVER — it answers
+      // "which session am I in?" and returns ids, not a page a consumer
+      // renders, so no lens rides on it.
       .orderBy(desc(focusSessions.startedAt))
       .limit(limit);
   } catch (err) {

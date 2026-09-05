@@ -64,6 +64,7 @@ import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js"
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { entitiesRouter } from "../entities.js";
+import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
 
 const logger = createLogger({ module: "entities-router" });
 
@@ -509,8 +510,19 @@ export const createProcs = {
             // the body as dropped rather than overwrite it.
             let dedupContentDropped = false;
             if (input.content && input.content.trim().length > 0) {
+              // `documentId` alone is NOT "has a body": `attachSourceBlob`
+              // also sets it for a source blob (a PDF, a WAV) attached as
+              // provenance, so an entity with a file and no body read as
+              // having one — and the long-form body this create carried was
+              // dropped, which is the very regression the B3 fix removed.
+              // `entityBodyDocumentIdFrom` subtracts the source-blob meaning.
               const matchHasBody =
-                !!(visibleMatch as { documentId?: string | null }).documentId ||
+                !!entityBodyDocumentIdFrom(
+                  visibleMatch as {
+                    documentId?: string | null;
+                    properties?: unknown;
+                  }
+                ) ||
                 !!(
                   (visibleMatch as { properties?: Record<string, unknown> })
                     .properties as { content?: unknown } | undefined

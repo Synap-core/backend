@@ -55,6 +55,14 @@ import {
   notTriagePendingWhere,
   type TriageProjection,
 } from "../services/focus-sessions/triage.js";
+import {
+  SESSION_KINDS,
+  attachSessionKind,
+  projectSessionKind,
+  sessionAutomationWhere,
+  sessionKindWhere,
+  type SessionKind,
+} from "../services/focus-sessions/session-kind.js";
 import { spawnProjectFromSession } from "../services/focus-sessions/spawn-project.js";
 import { revertConversion } from "../services/focus-sessions/session-conversion.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -108,6 +116,19 @@ const sessionLensSchema = z
   .enum(["default", "triage", "all"])
   .default("default");
 type SessionLens = z.infer<typeof sessionLensSchema>;
+
+/**
+ * WHICH POPULATION. Orthogonal to BOTH `status` (the row's own lifecycle) and
+ * `lens` (accepted vs waiting-to-be-triaged): `services/focus-sessions/
+ * session-kind.ts` owns the predicate. Default `work` — a person's session
+ * surfaces are about work, so machine runs and agent-write receipts leave them.
+ * That is a deliberate behaviour change at this HUMAN door; the agent-facing
+ * Hub REST door defaults to `all`.
+ */
+const sessionKindFilterSchema = z
+  .enum([...SESSION_KINDS, "all"])
+  .default("work");
+type SessionKindFilter = z.infer<typeof sessionKindFilterSchema>;
 
 // ── Links sub-router (read-only) ───────────────────────────────────────────
 
@@ -174,7 +195,9 @@ function queryUserSessions(
   { workspaceLens, projectLens }: ResolvedScope,
   status: z.infer<typeof statusFilterSchema>,
   limit: number,
-  lens: SessionLens = "default"
+  lens: SessionLens = "default",
+  kind: SessionKindFilter = "work",
+  flow: { playbookId?: string; automationId?: string } = {}
 ) {
   const conditions = [eq(focusSessions.userId, requireUserId(userId))];
 
@@ -213,6 +236,24 @@ function queryUserSessions(
   }
   // lens === "all" adds nothing — the pre-triage behaviour, kept addressable.
 
+  // KIND LENS — a WHERE clause for exactly the reason above: the page is
+  // limit-capped in SQL, and automation runs are the highest-volume population
+  // in this table, so a post-filter would let them eat the page.
+  if (kind !== "all") {
+    conditions.push(sessionKindWhere(kind));
+  }
+
+  // FLOW-DEFINITION filters, so a playbook or automation detail page lists its
+  // OWN run sessions in SQL instead of paging 50 rows and filtering them in the
+  // browser — which silently under-reports the moment the flow has run more
+  // than `limit` times. Both name a DEFINITION, never one execution.
+  if (flow.playbookId) {
+    conditions.push(eq(focusSessions.playbookId, flow.playbookId));
+  }
+  if (flow.automationId) {
+    conditions.push(sessionAutomationWhere(flow.automationId));
+  }
+
   return db
     .select()
     .from(focusSessions)
@@ -230,6 +271,7 @@ function queryUserSessions(
  */
 type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
+  kind: SessionKind;
 } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies>;
 
@@ -270,6 +312,20 @@ export const focusSessionsRouter = router({
         edges: z.boolean().optional(),
         /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
         lens: sessionLensSchema,
+        /** Which population — see `sessionKindFilterSchema`. Default `work`. */
+        kind: sessionKindFilterSchema,
+        /**
+         * Only sessions run FROM this playbook definition (the session's own
+         * `playbookId` column). Pair with `kind: "run"` or `kind: "all"` — the
+         * default `work` lens excludes playbook-linked sessions by definition,
+         * so `playbookId` alone would return nothing.
+         */
+        playbookId: z.string().uuid().optional(),
+        /**
+         * Only sessions run FROM this automation definition
+         * (`metadata.automationId`). Same pairing note as `playbookId`.
+         */
+        automationId: z.string().uuid().optional(),
       })
     )
     .query(async ({ ctx, input }): Promise<SessionListRow[]> => {
@@ -285,7 +341,9 @@ export const focusSessionsRouter = router({
         scope,
         input.status,
         input.limit,
-        input.lens
+        input.lens,
+        input.kind,
+        { playbookId: input.playbookId, automationId: input.automationId }
       );
       // Derived lineage for the whole page in ONE query (never N+1, never a
       // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
@@ -295,9 +353,12 @@ export const focusSessionsRouter = router({
       // metadata + status. That re-derivation is exactly how a second, drifting
       // copy of a rule gets written.
       const withTriage = attachTriage(withLineage);
-      if (!input.edges) return withTriage;
+      // `kind` rides along on EVERY row in EVERY lens, same contract as
+      // `triage`: pure, no query, and the one place the predicate is decided.
+      const withKind = attachSessionKind(withTriage);
+      if (!input.edges) return withKind;
       // Second batch projection, ONE more links query for the whole page.
-      const withEdges = await attachSessionEdges(withTriage);
+      const withEdges = await attachSessionEdges(withKind);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.
@@ -673,6 +734,7 @@ export const focusSessionsRouter = router({
         ...row,
         participants,
         triage: projectTriage(row),
+        kind: projectSessionKind(row),
       });
     }),
 

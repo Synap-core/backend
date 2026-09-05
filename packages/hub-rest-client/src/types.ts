@@ -325,6 +325,35 @@ export interface CaptureRelation {
   relationType: string;
 }
 
+/**
+ * Input for POST /capture/structure. `text` is optional — a binary input can
+ * arrive via `file` instead and be normalized to text by IS's extractor before
+ * structuring — but the server's `CaptureStructureRequestSchema` `.refine`
+ * requires at least one of `text` / `file` / `url`; `captureStructure()`
+ * enforces the same rule client-side before sending.
+ */
+export interface CaptureStructureInput {
+  text?: string;
+  /**
+   * Binary/text source normalized to text by IS before structuring. Shape
+   * MIRRORS the server's `file` field (and `CaptureExecuteInput.file` below) —
+   * `content` is base64/utf8 per `encoding`.
+   */
+  file?: {
+    content: string;
+    mimeType: string;
+    filename?: string;
+    encoding?: "base64" | "utf8";
+  };
+  url?: string;
+  html?: string;
+  context?: string;
+  /** Extraction bias (e.g. lead-capture channel intake hint). */
+  instructions?: string;
+  workspaceId?: string;
+  previousEntities?: CaptureProposal[];
+}
+
 export interface CaptureStructureResponse {
   proposals: CaptureProposal[];
   relations: CaptureRelation[];
@@ -883,7 +912,15 @@ export interface HubOrientResult {
   projectCount: number;
   workspaces: HubOrientWorkspace[];
   workspaceCount: number;
-  profiles: HubOrientProfile[];
+  /** Empty domains hidden from the light list — omitted when none/full. */
+  hiddenEmptyWorkspaceCount?: number;
+  /**
+   * Entity-type inventory. detail:'full' only (or an explicit
+   * scope:['profiles']) — light omits it; use the profile-listing endpoint.
+   */
+  profiles?: HubOrientProfile[];
+  /** Durable user model as prose — omitted when the pod holds none. */
+  who?: string;
   note: string;
   /** Internal team for the pinned/sample workspace — omitted when empty. */
   teamRoster?: HubOrientTeamRoster;

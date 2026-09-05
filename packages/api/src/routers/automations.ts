@@ -1107,6 +1107,48 @@ function profileSlugForSubject(subject: string): string | undefined {
 }
 
 /**
+ * Can a rule on this observed pattern EVER fire?
+ *
+ * 🔴 The observed tier reads `events.type` — the AUDIT SPINE — and offered every
+ * row in it as a pickable trigger. That is a category error, and it is not
+ * merely noisy: for a first-party subject a non-`.completed` pattern can never
+ * be matched at all.
+ *
+ * There are exactly two producers of the `automation-trigger-match` queue:
+ *
+ *   • `packages/events/src/side-effects.ts:149` — the reactor, for every
+ *     first-party emit. It sends
+ *     `` `${payload.subjectType}.${payload.action}.completed` `` — the phase is
+ *     HARDCODED. A rule stored on `entity.update.requested` is therefore never
+ *     handed to the matcher; `matchPattern` is not even reached. The rule
+ *     reports itself live and silently never runs.
+ *   • `packages/api/src/routers/hub-protocol/observations.ts:396` — sends
+ *     `obs.type` RAW, gated to `OBSERVATION_NAMESPACES` and `RESERVED_PHASES`
+ *     (`.validated .completed .failed`). For observations the phases are real,
+ *     semantically distinct, and DO fire.
+ *
+ * So the rule is asymmetric on purpose: `.completed` only for first-party
+ * subjects, every reserved phase for an observation namespace. Collapsing
+ * observations to `.completed` would destroy a distinction the runtime honours.
+ *
+ * This also removes the duplicate rows the founder reported: `entity.update` was
+ * offered four times (`requested|validated|completed|denied`), all four rendering
+ * the identical label "An entity was updated" — because `eventLabelFor` reads
+ * only the subject and the action, never the phase — and all four saving to the
+ * same one pattern the writer can address. Twelve entity rows became three.
+ */
+export function isFireableTriggerPattern(type: string): boolean {
+  const namespace = type.split(".")[0];
+  if (
+    namespace &&
+    (OBSERVATION_NAMESPACES as readonly string[]).includes(namespace)
+  ) {
+    return true;
+  }
+  return type.endsWith(".completed");
+}
+
+/**
  * Fold one capability's declared `metadata.emits` patterns into the by-pattern
  * merge map as `source:"declared"`. PURE (no DB) — shared by
  * `availableTriggerEvents` and unit-tested. Each entry is re-validated with
@@ -1581,6 +1623,8 @@ export const automationsRouter = router({
 
         for (const row of observedRows) {
           if (!row.type) continue;
+          // The audit spine is not a trigger menu — see `isFireableTriggerPattern`.
+          if (!isFireableTriggerPattern(row.type)) continue;
           const subject = row.type.split(".")[0]!;
           const existing = byPattern.get(row.type);
           byPattern.set(row.type, {

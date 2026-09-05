@@ -8,6 +8,8 @@
  * the grammar lives here.
  */
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 
 import {
   buildEventPattern,
@@ -20,6 +22,8 @@ import {
   toBackendTrigger,
   toFlowDefinition,
   triggerToSentence,
+  type ActionVerb,
+  type TriggerSubjectCategory,
 } from "./sentence.js";
 import { validateEventPattern } from "../events/unified.js";
 import { TRIGGER_FILTER_OPERATORS } from "./filter-operators.js";
@@ -701,4 +705,132 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     expect(action.config.__nodeType).toBe("playbook_run");
     expect(isActionConfigured(action)).toBe(true);
   });
+});
+
+/**
+ * ROUND-TRIP tripwire: every pattern this module can EMIT, it must be able to
+ * READ back into a legal sentence.
+ *
+ * `buildEventPattern` and `triggerToSentence` are two halves of one bridge, and
+ * they were maintained separately: the emitter's `capture` entry writes
+ * `capture.complete.completed`, while the reader's `EVENT_ACTION_TO_VERB` knew
+ * only create/update/delete. The reader fell through to a raw cast and produced
+ * `actionVerb: "complete"` — a value outside the `ActionVerb` union, which
+ * TypeScript could not catch because the cast asserted it away. The composer
+ * loaded the WHEN row blank and re-saving dropped the trigger.
+ *
+ * A hand-maintained inverse of a hand-maintained map is a fork with a
+ * countdown. This asserts the two agree over the WHOLE subject vocabulary, so
+ * adding a subject category without teaching the reader fails here.
+ */
+describe("event pattern round trip", () => {
+  const SUBJECTS: TriggerSubjectCategory[] = [
+    "entity",
+    "external_message",
+    "capture",
+    "notification",
+    "feed_item",
+    "inbox_item",
+  ];
+
+  const ACTION_VERBS = new Set<ActionVerb>([
+    "created",
+    "updated",
+    "deleted",
+    "received",
+    "completed",
+    "approved",
+    "rejected",
+  ]);
+
+  /**
+   * `feed_item` emits `feed.new_item.completed`. `new_item` is not an
+   * `ActionVerb` and there is no honest one to map it to — the gap is in
+   * `events/unified.ts`'s vocabulary, named in `buildEventPattern`'s own
+   * comment. Listed here so it is a KNOWN hole, not an invisible one.
+   */
+  const KNOWN_UNREADABLE = new Set<TriggerSubjectCategory>(["feed_item"]);
+
+  it("covers every subject category the union declares", () => {
+    // If the union grows, this list must too — otherwise the sweep below
+    // silently stops testing the new one.
+    expect(SUBJECTS).toHaveLength(6);
+  });
+
+  for (const subjectCategory of SUBJECTS) {
+    it(`\`${subjectCategory}\` survives emit → read`, () => {
+      const pattern = buildEventPattern({
+        triggerType: "event",
+        subjectCategory,
+      } as never);
+      expect(pattern).not.toBe("");
+
+      const back = triggerToSentence("event", { eventPattern: pattern });
+
+      if (KNOWN_UNREADABLE.has(subjectCategory)) {
+        expect(ACTION_VERBS.has(back.actionVerb as ActionVerb)).toBe(false);
+        return;
+      }
+
+      // The verb must be a REAL member of the union, not a raw middle segment
+      // that a cast made look like one.
+      expect(ACTION_VERBS.has(back.actionVerb as ActionVerb)).toBe(true);
+      expect(back.subjectCategory).toBe(pattern.split(".")[0]);
+    });
+  }
+});
+
+/**
+ * SOURCE-SCAN tripwire: no editor may OFFER an operator the runtime cannot
+ * evaluate.
+ *
+ * `contains`, `starts_with` and `changed_to` compile to `undefined`
+ * (`conditionToFilterValue`), and `toBackendTrigger` folds with
+ * `if (compiled !== undefined)` — so a row using one is dropped in silence and
+ * the rule WIDENS, firing on exactly the events its author excluded.
+ *
+ * This cannot be caught server-side. `automations.create` accepts an
+ * already-compiled `triggerConfig: z.record(z.string(), z.unknown())`, so the
+ * operator does not exist by the time the pod is called. Only `skills.createRule`
+ * sees a sentence and refuses by name (`services/rules/compile.ts`). The two
+ * editors are therefore the ONLY guard for the automations door, which makes
+ * their operator menus load-bearing.
+ *
+ * `UNEVALUABLE_CONDITION_OPERATORS` was exported for exactly this and had ZERO
+ * frontend consumers — built and severed, this codebase's dominant defect. The
+ * scan requires each editor to REFERENCE it rather than to re-list the safe
+ * operators by hand, because a hand-kept subset is a second vocabulary that
+ * drifts the moment the matcher learns a new operator.
+ */
+describe("no editor offers an unevaluable operator", () => {
+  const REPO = path.resolve(__dirname, "../../../../..");
+  const EDITORS = [
+    "synap-app/packages/features/automations-heroui/src/sentence/WhereClause.tsx",
+    "browser/electron/renderer/src/shared/rule-sentence/RuleSentence.tsx",
+  ];
+
+  it("finds the editors it claims to guard", () => {
+    // A scan whose paths have moved passes by checking nothing. Two surfaces
+    // render a WHERE row today; if a third appears, add it here.
+    for (const rel of EDITORS) {
+      expect(fs.existsSync(path.join(REPO, rel)), `missing: ${rel}`).toBe(true);
+    }
+  });
+
+  for (const rel of EDITORS) {
+    it(`${rel.split("/").pop()} derives its menu from the SSOT`, () => {
+      const src = fs
+        .readFileSync(path.join(REPO, rel), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/(^|[^:])\/\/.*$/gm, "$1");
+      // A CALL or a member access, not a bare mention — an import line alone
+      // has satisfied a scan in this repo twice.
+      expect(
+        /UNEVALUABLE_CONDITION_OPERATORS\s*[.[(]/.test(src),
+        `${rel} must filter its operator menu through ` +
+          "UNEVALUABLE_CONDITION_OPERATORS. Offering `contains` / `starts_with` " +
+          "/ `changed_to` silently widens the rule the user just narrowed."
+      ).toBe(true);
+    });
+  }
 });

@@ -1139,6 +1139,33 @@ export function registerCaptureRoutes(app: HubHono): void {
         source,
       });
 
+      // The create door is GOVERNED: when the ladder parks the write it returns
+      // `{ status: "proposed", entity: null }` and NO `id`. Reading `created.id`
+      // blindly produced `undefined`, which was then handed to
+      // `storeEntitySourceBlob` as the entityId — uploading the bytes and
+      // creating a `documents` row bound to nothing, immediately orphaned, while
+      // the response still reported an `id` of `undefined`. Branch on the status
+      // and return the proposal receipt instead.
+      const createdStatus = (created as { status?: string }).status;
+      if (createdStatus === "proposed" || typeof created.id !== "string") {
+        return c.json({
+          status: "proposed",
+          message:
+            (created as { message?: string }).message ??
+            "Entity creation proposed for review",
+          proposalId: (created as { proposalId?: string }).proposalId,
+          proposalType: (created as { proposalType?: string }).proposalType,
+          reviewUrl: (created as { reviewUrl?: string }).reviewUrl,
+          profileSlug,
+          title,
+          // The blob is NOT stored: there is no entity to anchor it to, and
+          // staging it here would leak on rejection. Say so rather than
+          // reporting a silent success.
+          audio: null,
+          audioSkippedReason: fileBuffer?.length ? "entity_proposed" : null,
+        });
+      }
+
       const entityId = created.id as string;
       let audio: {
         documentId: string;
@@ -1159,12 +1186,19 @@ export function registerCaptureRoutes(app: HubHono): void {
             filename: fileName,
             workspaceId: workspaceId ?? null,
           });
-          audio = {
-            documentId: stored.documentId,
-            storageKey: stored.storageKey,
-            size: stored.size,
-            mimeType: stored.mimeType,
-          };
+          if (stored.status === "proposed") {
+            // Governance parked the attach. The bytes ARE staged and ride the
+            // proposal, so approval attaches them — report it honestly instead
+            // of claiming the file landed.
+            audioSkippedReason = "proposed";
+          } else {
+            audio = {
+              documentId: stored.documentId,
+              storageKey: stored.storageKey,
+              size: stored.size,
+              mimeType: stored.mimeType,
+            };
+          }
         } catch (err) {
           if (err instanceof SourceBlobTooLargeError) {
             audioSkippedReason = "over_limit";
