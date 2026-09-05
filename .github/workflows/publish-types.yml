@@ -23,11 +23,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          # Must match the repo's `packageManager: pnpm@10.28.0`. On 9 the
-          # workspace-protocol rewrite behaviour is not the one this pipeline
-          # is verified against.
-          version: 10
+        # Version is taken from the repo's `packageManager: pnpm@10.28.0`, which
+        # pins it MORE precisely than the `version: 10` that used to sit here.
+        # That pin was not merely redundant: action-setup rejects being given
+        # both ("Multiple versions of pnpm specified") and failed at setup on
+        # every run for at least two days, so this pipeline had never published.
+        # The original concern still holds — on pnpm 9 the workspace-protocol
+        # rewrite is not the behaviour this pipeline is verified against — and
+        # `packageManager` is what enforces it. Same door as ci.yml.
 
       - uses: actions/setup-node@v4
         with:
