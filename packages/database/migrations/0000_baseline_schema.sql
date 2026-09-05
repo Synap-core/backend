@@ -1007,7 +1007,10 @@ CREATE TABLE IF NOT EXISTS "entity_facets" (
   "created_by_kind"     text,
   "created_by_user_id"  text REFERENCES "users"("id") ON DELETE SET NULL,
   "agent_user_id"       text REFERENCES "users"("id") ON DELETE SET NULL,
-  "source_proposal_id"  uuid REFERENCES "proposals"("id") ON DELETE SET NULL,
+  -- FK added after "proposals" is created — see the guarded ADD CONSTRAINT at
+  -- the end of section 28. Declaring it inline here fails on a FRESH database
+  -- (42P01) because entity_facets is section ~17 and proposals is section 28.
+  "source_proposal_id"  uuid,
   "correlation_id"      uuid,
   "created_at"          timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"          timestamp with time zone NOT NULL DEFAULT now(),
@@ -1025,7 +1028,7 @@ ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "metadata" jsonb DEFAULT '{
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_by_kind" text;
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_by_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "agent_user_id" text REFERENCES "users"("id") ON DELETE SET NULL;
-ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "source_proposal_id" uuid REFERENCES "proposals"("id") ON DELETE SET NULL;
+ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "source_proposal_id" uuid;
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "correlation_id" uuid;
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "entity_facets" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -1258,6 +1261,12 @@ CREATE INDEX IF NOT EXISTS "channels_type_idx"
 CREATE UNIQUE INDEX IF NOT EXISTS "channels_external_source_id_unique"
   ON "channels" ("external_source", "external_id")
   WHERE "external_id" IS NOT NULL;
+
+-- `assigned_agent_id` (0012) — the uniqueness index below keys on it, but the
+-- column was never carried into this baseline, so a FRESH database died here
+-- with 42703. The FK to "agents" is deferred to section 32: agents is created
+-- long after channels.
+ALTER TABLE "channels" ADD COLUMN IF NOT EXISTS "assigned_agent_id" uuid;
 
 -- V2 channel uniqueness — keyed on the LIVE `channel_type` column (0014 keyed
 -- these on the retired `thread_kind`, so they enforced nothing; re-cut in
@@ -1931,6 +1940,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS "proposals_agent_dedup_uq"
 -- (idx_proposals_session_id moved next to the proposals.session_id ALTER
 --  after the focus_sessions section below.)
 
+-- entity_facets.source_proposal_id FK — deferred to here because entity_facets
+-- is created in section 17, long before "proposals" exists. Declaring it inline
+-- up there made 0000_baseline_schema.sql fail on any FRESH database with
+-- 42P01 "relation \"proposals\" does not exist", which is why the CI smoke test
+-- (which always starts from an empty DB) could never publish an image while
+-- existing databases migrated fine.
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name = 'entity_facets'
+      AND constraint_name = 'entity_facets_source_proposal_id_fkey'
+  ) THEN
+    ALTER TABLE "entity_facets"
+      ADD CONSTRAINT "entity_facets_source_proposal_id_fkey"
+      FOREIGN KEY ("source_proposal_id") REFERENCES "proposals"("id") ON DELETE SET NULL;
+  END IF;
+END; $$;
+
 -- ─── 29. knowledge_facts ─────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS "knowledge_facts" (
@@ -1967,6 +1994,21 @@ ALTER TABLE "knowledge_facts"
   ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint;
 ALTER TABLE "knowledge_facts"
   ALTER COLUMN "dedup_bucket" SET DEFAULT floor(extract(epoch FROM now()) / 600);
+-- `fact_hash` / `dedup_bucket` (0216) — the unique index below keys on both, but
+-- neither column was carried into this baseline. Verbatim from
+-- 0216_knowledge_facts_dedup.sql, including the ADD-then-SET-DEFAULT order (a
+-- default at ADD time would backfill every row to one bucket and make
+-- pre-existing duplicates collide when the unique index is built).
+ALTER TABLE "knowledge_facts"
+  ADD COLUMN IF NOT EXISTS "fact_hash" text
+  GENERATED ALWAYS AS (encode(digest(fact, 'sha256'), 'hex')) STORED;
+
+ALTER TABLE "knowledge_facts"
+  ADD COLUMN IF NOT EXISTS "dedup_bucket" bigint;
+
+ALTER TABLE "knowledge_facts"
+  ALTER COLUMN "dedup_bucket" SET DEFAULT floor(extract(epoch FROM now()) / 600);
+
 CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
   ON "knowledge_facts" ("user_id", "fact_hash", "dedup_bucket");
 
@@ -2078,6 +2120,13 @@ ALTER TABLE "agents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time z
 CREATE INDEX IF NOT EXISTS "agents_created_by_idx" ON "agents" ("created_by");
 CREATE INDEX IF NOT EXISTS "agents_user_id_idx"    ON "agents" ("user_id");
 CREATE INDEX IF NOT EXISTS "agents_active_idx"     ON "agents" ("active");
+
+-- NOTE: no FK from channels.assigned_agent_id -> agents.id here, deliberately.
+-- This baseline declares `agents.id` as TEXT while src/schema/agents.ts declares
+-- it as `uuid(...)`. Until that divergence is resolved a FK cannot be created
+-- (PG: "foreign key constraint cannot be implemented"), and inventing one here
+-- would encode a guess about which side is right. The column above is what the
+-- uniqueness index needs; the FK is tracked separately.
 
 -- ─── 33. agent_configs ───────────────────────────────────────────────────────
 
@@ -3937,6 +3986,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_links_unique_edge"
 -- focus_sessions → playbooks link (placed here: FK target must exist first)
 ALTER TABLE "focus_sessions"
   ADD COLUMN IF NOT EXISTS "playbook_id" uuid REFERENCES "playbooks"("id") ON DELETE SET NULL;
+-- `playbook_id` (0126) — indexed below but never created in this baseline.
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "playbook_id" uuid;
+
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_playbook_id"
   ON "focus_sessions" ("playbook_id")
   WHERE "playbook_id" IS NOT NULL;
@@ -4379,7 +4431,12 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "origin" text;  -- 0240 (p
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("origin");
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "scope" text;  -- 0240 (session template vs project/engagement blueprint; NULL reads as 'session')
 CREATE INDEX IF NOT EXISTS "idx_playbooks_scope" ON "playbooks" ("scope");
-ALTER TABLE "projects" ADD COLUMN IF NOT EXISTS "phase" text;  -- 0240 (the long-running container's lifecycle position; free text — the label is a config concern)
+-- NOTE: `projects.phase` is NOT declared here. The `projects` table is not part
+-- of this baseline at all — it is created by 0151_consolidate_projects_table.sql
+-- — so an ALTER on it here fails on a FRESH database with 42P01. The column is
+-- owned by 0240_process_plane_tiers.sql:86, which runs after 0151. The
+-- "add every new column to the baseline too" convention only holds for tables
+-- the baseline actually creates.
 
 -- ── renderer_bindings — the ONE renderer store (0243) ────────────────────────
 -- Layered ABOVE the three legacy stores it replaces (workspaces.settings
