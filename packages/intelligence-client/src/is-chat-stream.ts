@@ -29,7 +29,16 @@ export interface ISChatStreamFrame {
   decision?: unknown;
   routing?: unknown;
   proposal?: unknown;
-  data?: { content?: string; [k: string]: unknown };
+  data?: {
+    content?: string;
+    /**
+     * Present ONLY on a `complete` frame whose turn died mid-stream and whose
+     * partial text was committed anyway. Typed as unknown here so this leaf
+     * parser stays dependency-free; `drainISChatStream` narrows it.
+     */
+    partialFailure?: unknown;
+    [k: string]: unknown;
+  };
   error?: string;
   /**
    * Structured failure evidence on an `error` frame (code / retryable /
@@ -80,6 +89,46 @@ export async function* iterateISChatStream(
   }
 }
 
+/**
+ * Structural mirror of the IS's `ProviderFailure`
+ * (`lib/provider-failure.ts`). Duplicated as a shape, not imported: this
+ * package must not depend on the IS. Only the fields a backend consumer can
+ * act on are declared.
+ *
+ * ⚠️ `message` is the RAW underlying provider error. It is diagnostic — the IS
+ * documents it as NOT user-facing copy. Log it; never render it.
+ */
+export interface ISPartialFailure {
+  code: string;
+  message: string;
+  retryable: boolean;
+  status?: number;
+  providerId?: string;
+  providerCode?: string;
+  retryAfterSeconds?: number;
+}
+
+function narrowPartialFailure(raw: unknown): ISPartialFailure | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj.code !== "string") return null;
+  return {
+    code: obj.code,
+    message: typeof obj.message === "string" ? obj.message : "",
+    retryable: obj.retryable === true,
+    ...(typeof obj.status === "number" ? { status: obj.status } : {}),
+    ...(typeof obj.providerId === "string"
+      ? { providerId: obj.providerId }
+      : {}),
+    ...(typeof obj.providerCode === "string"
+      ? { providerCode: obj.providerCode }
+      : {}),
+    ...(typeof obj.retryAfterSeconds === "number"
+      ? { retryAfterSeconds: obj.retryAfterSeconds }
+      : {}),
+  };
+}
+
 /** Options for draining an IS chat stream (headless / non-interactive). */
 export type DrainISChatStreamOptions = {
   /** Invoked for each content delta as it arrives. */
@@ -95,6 +144,15 @@ export type DrainISChatStreamOptions = {
 export type DrainISChatStreamResult = {
   text: string;
   error: string | null;
+  /**
+   * Set when the IS's `complete` frame reported a COMMITTED PARTIAL turn: the
+   * provider died mid-stream, the text produced so far was committed, and the
+   * stream ended normally. `text` is real but TRUNCATED and `error` stays null
+   * (there was no `error` frame) — so a caller that only reads `error` records
+   * a truncated answer as a complete success. That is the exact defect this
+   * field exists to close: check it before writing a terminal status.
+   */
+  partialFailure?: ISPartialFailure;
   /** Present only when `collectSteps: true` was requested. */
   steps?: unknown[];
 };
@@ -113,7 +171,10 @@ function normalizeDrainOptions(
  * do not forward deltas onward (e.g. the a2ai worker). Accumulates `content`
  * frames and prefers them; falls back to the authoritative `complete.data.content`
  * when the agent produced text only in its final message. Surfaces the first
- * `error` frame. Never throws on frame content; transport errors propagate.
+ * `error` frame, AND the `complete` frame's `partialFailure` — a mid-stream
+ * provider death commits its partial text and ends the stream NORMALLY, so
+ * `error` is null and only `partialFailure` distinguishes a truncated answer
+ * from a finished one. Never throws on frame content; transport errors propagate.
  *
  * Second arg accepts either a legacy `onContent` callback or an options object
  * `{ onContent?, collectSteps? }`. When `collectSteps` is true, `step` frames
@@ -127,6 +188,7 @@ export async function drainISChatStream(
   let acc = "";
   let completeContent = "";
   let streamError: string | null = null;
+  let partialFailure: ISPartialFailure | null = null;
   const steps: unknown[] | undefined = options.collectSteps ? [] : undefined;
 
   for await (const frame of iterateISChatStream(response)) {
@@ -142,6 +204,8 @@ export async function drainISChatStream(
       steps.push(frame.step);
     } else if (frame.type === "complete") {
       completeContent = frame.data?.content ?? "";
+      partialFailure =
+        partialFailure ?? narrowPartialFailure(frame.data?.partialFailure);
     } else if (frame.type === "error") {
       streamError = streamError ?? frame.error ?? "unknown IS stream error";
     }
@@ -151,6 +215,9 @@ export async function drainISChatStream(
     text: acc || completeContent,
     error: streamError,
   };
+  if (partialFailure) {
+    result.partialFailure = partialFailure;
+  }
   if (steps !== undefined) {
     result.steps = steps;
   }

@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  __idempotencyStoreSizeForTests,
   __resetIdempotencyStoreForTests,
   idempotencyMiddleware,
 } from "./idempotency.js";
@@ -198,5 +199,88 @@ describe("idempotencyMiddleware", () => {
     const firstBody = (await first.json()) as { id: number };
     const secondBody = (await second.json()) as { id: number };
     expect(firstBody).toEqual(secondBody);
+  });
+});
+
+describe("idempotency store bound (memory)", () => {
+  // The client mints a FRESH Idempotency-Key per mutating call, so the cache
+  // hit rate is ~0 outside a within-call retry and every write allocates a
+  // 24h entry. Without a cap the Map grows with write volume for a whole day.
+  const MAX_ENTRIES = 5_000;
+
+  async function post(
+    app: ReturnType<typeof buildApp>,
+    key: string
+  ): Promise<Response> {
+    return app.request("/things", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": key,
+      },
+      body: JSON.stringify({ x: 1 }),
+    });
+  }
+
+  it("never exceeds MAX_ENTRIES under a stream of unique keys", async () => {
+    const app = buildApp();
+    app.post("/things", async (c) => c.json({ ok: true }));
+
+    // MAX_ENTRIES + 250 distinct keys — an unbounded Map would hold them all.
+    for (let i = 0; i < MAX_ENTRIES + 250; i++) {
+      await post(app, `unique-key-${i.toString().padStart(6, "0")}`);
+    }
+
+    expect(__idempotencyStoreSizeForTests()).toBe(MAX_ENTRIES);
+  }, 60_000);
+
+  it("evicts least-recently-USED, not merely oldest-written", async () => {
+    const app = buildApp();
+    let invocations = 0;
+    app.post("/things", async (c) => {
+      invocations++;
+      return c.json({ ok: true });
+    });
+
+    // Fill exactly to the cap. `oldest` is the first key written.
+    const oldest = "unique-key-000000";
+    for (let i = 0; i < MAX_ENTRIES; i++) {
+      await post(app, `unique-key-${i.toString().padStart(6, "0")}`);
+    }
+    expect(invocations).toBe(MAX_ENTRIES);
+
+    // Replay it — a cache HIT, which must also mark it as most-recently used.
+    const replay = await post(app, oldest);
+    expect(replay.headers.get("X-Idempotent-Replay")).toBe("true");
+    expect(invocations).toBe(MAX_ENTRIES); // handler did NOT run again
+
+    // Push the cap over with fresh keys. A FIFO would drop `oldest` first;
+    // an LRU drops the keys that were never touched again.
+    for (let i = 0; i < 100; i++) {
+      await post(app, `overflow-key-${i.toString().padStart(6, "0")}`);
+    }
+    expect(__idempotencyStoreSizeForTests()).toBe(MAX_ENTRIES);
+
+    // Still a hit → it survived eviction because it was recently used.
+    const stillCached = await post(app, oldest);
+    expect(stillCached.headers.get("X-Idempotent-Replay")).toBe("true");
+    expect(invocations).toBe(MAX_ENTRIES + 100);
+  }, 60_000);
+
+  it("still serves a within-call retry — the benefit the bound must not cost", async () => {
+    const app = buildApp();
+    let invocations = 0;
+    app.post("/things", async (c) => {
+      invocations++;
+      return c.json({ id: invocations });
+    });
+
+    const key = "retry-key-0001";
+    const first = await post(app, key);
+    const retry = await post(app, key);
+
+    expect(invocations).toBe(1);
+    expect(retry.headers.get("X-Idempotent-Replay")).toBe("true");
+    expect(await retry.json()).toEqual(await first.json());
   });
 });

@@ -49,6 +49,7 @@ export type {
   ISChatStreamFrame,
   DrainISChatStreamOptions,
   DrainISChatStreamResult,
+  ISPartialFailure,
 } from "./is-chat-stream.js";
 
 export {

@@ -14,6 +14,9 @@
  *     never cached (so a client can recover after a server-side fix or a
  *     transient 5xx).
  *   - Replays return the cached response with `X-Idempotent-Replay: true`.
+ *   - The store is BOUNDED: `MAX_ENTRIES` with LRU eviction on top of the TTL.
+ *     Losing an entry early only costs a replay its cache hit — the middleware
+ *     already fails open — whereas an unbounded Map is a real leak.
  *   - The middleware fails OPEN: if the cache backend errors, the request is
  *     processed normally. Idempotency is a safety net, never a hard dependency.
  *
@@ -45,6 +48,25 @@ import type { MiddlewareHandler } from "hono";
 
 const IDEMPOTENT_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h
+
+/**
+ * Hard ceiling on cached entries. TTL alone is not a bound: an entry lives 24h
+ * regardless of volume, and the GC only reclaims EXPIRED ones — so on a busy
+ * pod the Map grows with write throughput for a whole day before anything is
+ * reclaimed.
+ *
+ * That was survivable while the header was rare. It stopped being survivable
+ * when `@synap/hub-rest-client` began minting a fresh `crypto.randomUUID()`
+ * key on every mutating request: a unique key per call means near-zero hit
+ * rate outside a within-call retry, so essentially every write now ALLOCATES a
+ * 24h entry that will never be read. The retry-safety that change bought is
+ * worth keeping; unbounded retention is not the price of it.
+ *
+ * 5k entries × a few KB of response body ≈ tens of MB worst case. Eviction is
+ * least-recently-USED, not merely oldest-written: the entries worth keeping
+ * are the ones a retry is still likely to replay.
+ */
+const MAX_ENTRIES = 5_000;
 
 /**
  * Default regex for response bodies that should never be cached. Matches the
@@ -83,6 +105,11 @@ interface CacheEntry {
 }
 
 // ── In-memory store (degraded mode — see file header) ─────────────────────
+//
+// Insertion order IS the recency order: `cacheGet` re-inserts on a hit and
+// `cacheSet` deletes-then-sets, so the FIRST key returned by `store.keys()` is
+// always the least recently used one. That is what makes the O(1) eviction in
+// `cacheSet` an LRU rather than a FIFO.
 const store = new Map<string, CacheEntry>();
 
 // Periodic GC of expired entries (cheap; runs every 5 min)
@@ -117,11 +144,33 @@ async function cacheGet(key: string): Promise<CachedResponse | null> {
     store.delete(key);
     return null;
   }
+  // Touch: move to the most-recent end so eviction never drops a key that is
+  // still being replayed.
+  store.delete(key);
+  store.set(key, entry);
   return entry.value;
 }
 
 async function cacheSet(key: string, value: CachedResponse): Promise<void> {
+  // Delete first so a re-set moves the key to the most-recent end instead of
+  // keeping its original insertion position.
+  store.delete(key);
   store.set(key, { value, expiresAt: Date.now() + TTL_MS });
+  while (store.size > MAX_ENTRIES) {
+    const lru = store.keys().next();
+    if (lru.done) break;
+    store.delete(lru.value);
+  }
+}
+
+/**
+ * Test-only view of the store size, so the bound can be asserted without
+ * exporting the store itself.
+ *
+ * @internal
+ */
+export function __idempotencyStoreSizeForTests(): number {
+  return store.size;
 }
 
 /**

@@ -229,6 +229,22 @@ app.use(
       // hazard as /setup/agent. Two replays of the same Idempotency-Key would
       // otherwise be served the same access_token from cache.
       "/auth/exchange",
+      // ── Unauthenticated setup/auth-bootstrap doors ───────────────────────
+      // These fall to `userId = "anonymous"` (they are in `skipAuthPaths`), so
+      // the cache key is NOT partitioned by a real user — a replayed
+      // Idempotency-Key would serve one caller another caller's response.
+      // `/setup/magic-link` is the sharpest: it returns `{ token, url }` where
+      // `token` is a signed setup JWT (rest/setup.ts:1471), and the default
+      // `secretBodyPattern` matches neither `token` nor `url`, so the
+      // belt-and-suspenders body check does NOT save it either. `/mcp/redeem`
+      // returns `apiKey` and is caught by that pattern — but one layer is not
+      // a design. NEVER cache any of these.
+      "/setup/magic-link",
+      "/setup/first-admin",
+      "/setup/accept-invite",
+      "/federation/oidc-config",
+      "/mcp/redeem",
+      "/mcp/revoke",
     ],
     // secretBodyPattern uses the default — see middleware source.
   })

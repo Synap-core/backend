@@ -31,6 +31,7 @@ type TurnRow = {
   userMessageId: string;
   assistantMessageId: string;
   status: string;
+  error?: string | null;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -409,6 +410,161 @@ describe("handleA2AIResponseTrigger", () => {
     expect(mocks.persistAssistantReply).not.toHaveBeenCalled();
     expect(
       mocks.updateSets.some((s) => s.status === ChatTurnStatus.COMPLETED)
+    ).toBe(true);
+  });
+});
+
+describe("handleA2AIResponseTrigger — committed partial turn", () => {
+  // The IS commits the text it produced and ends the SSE NORMALLY when a
+  // provider dies mid-stream: no `error` frame, non-empty `text`. Before
+  // `partialFailure` was surfaced, the worker read that as a clean success and
+  // wrote `status: completed` — a truncated answer recorded as a durable win.
+  const partialFailure = {
+    code: "provider_error",
+    message: "upstream 503 — raw provider prose, NOT user-facing",
+    retryable: true,
+    status: 503,
+    providerId: "deepseek",
+  };
+
+  it("persists the partial answer but records the turn as FAILED, not completed", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "Half an ans",
+      error: null,
+      steps: [],
+      partialFailure,
+    });
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    // The answer that DID arrive is still delivered to the channel.
+    expect(mocks.persistAssistantReply).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "Half an ans" })
+    );
+
+    const finish = mocks.updateSets.at(-1)!;
+    expect(finish.status).toBe(ChatTurnStatus.FAILED);
+    expect(
+      mocks.updateSets.some((u) => u.status === ChatTurnStatus.COMPLETED)
+    ).toBe(false);
+  });
+
+  it("writes a durable reason built from the CLASSIFIED evidence, never the raw provider message", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "Half an ans",
+      error: null,
+      steps: [],
+      partialFailure,
+    });
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    const error = mocks.updateSets.at(-1)!.error as string;
+    expect(error).toContain("cut off");
+    expect(error).toContain("provider_error");
+    expect(error).toContain("503");
+    // ProviderFailure.message is documented as diagnostic, NOT user-facing.
+    expect(error).not.toContain("raw provider prose");
+  });
+
+  it("does NOT raise agent.task_failed — a truncated answer is not silence", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "Half an ans",
+      error: null,
+      steps: [],
+      partialFailure,
+    });
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    expect(mocks.notificationInserts).toHaveLength(0);
+  });
+
+  it("does not throw — a retry would post a second, duplicate answer", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "Half an ans",
+      error: null,
+      steps: [],
+      partialFailure,
+    });
+
+    await expect(handleA2AIResponseTrigger(baseJob())).resolves.toBeUndefined();
+  });
+
+  it("a partial with NO content still fails the turn with the partial reason, not 'empty'", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "",
+      error: null,
+      steps: [],
+      partialFailure,
+    });
+
+    await expect(handleA2AIResponseTrigger(baseJob())).rejects.toThrow(
+      /cut off/
+    );
+
+    const finish = mocks.updateSets.at(-1)!;
+    expect(finish.status).toBe(ChatTurnStatus.FAILED);
+    expect(finish.error).toContain("cut off");
+  });
+
+  it("a clean turn is unaffected — still completed, still no notification", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "pong",
+      error: null,
+      steps: [],
+      partialFailure: null,
+    });
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    expect(mocks.updateSets.at(-1)!.status).toBe(ChatTurnStatus.COMPLETED);
+    expect(mocks.notificationInserts).toHaveLength(0);
+  });
+
+  it("a duplicate job does NOT flip a recorded partial back to completed", async () => {
+    // Crash recovery ("assistant persisted, finish never ran") legitimately
+    // marks such a turn completed. A committed-partial turn looks the same
+    // from the outside — assistant row present — so without the reason check
+    // the honest record would be erased on the very next duplicate job.
+    mocks.insertReturning = [];
+    mocks.selectReturning = [
+      {
+        ...runningTurn(),
+        status: ChatTurnStatus.FAILED,
+        error:
+          "Response was cut off — the model provider stopped responding mid-stream (provider_error, HTTP 503). The partial answer was delivered.",
+      },
+    ];
+    mocks.messageLookup = { id: assistantMessageId };
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    expect(mocks.requestHeadlessChatText).not.toHaveBeenCalled();
+    expect(mocks.updateSets).toHaveLength(0);
+  });
+
+  it("still recovers an ordinary crashed turn (failed for another reason) to completed", async () => {
+    mocks.insertReturning = [];
+    mocks.selectReturning = [
+      {
+        ...runningTurn(),
+        status: ChatTurnStatus.FAILED,
+        error: "Could not persist the AI response",
+      },
+    ];
+    mocks.messageLookup = { id: assistantMessageId };
+
+    await handleA2AIResponseTrigger(baseJob());
+
+    expect(
+      mocks.updateSets.some((u) => u.status === ChatTurnStatus.COMPLETED)
     ).toBe(true);
   });
 });

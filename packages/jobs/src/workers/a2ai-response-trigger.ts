@@ -21,6 +21,13 @@
  * metadata.aiSteps when the stream carried step frames; on failure the turn
  * is finished as `failed` with a durable error string.
  *
+ * A COMMITTED PARTIAL turn (provider died mid-stream, the IS committed the
+ * text it had and closed the SSE normally) is finished as `failed` too, with
+ * the assistant reply still persisted. It is NOT a completion: nothing in the
+ * stream said "error", so before `drainISChatStream` surfaced `partialFailure`
+ * this worker recorded a truncated answer as a durable success — the exact
+ * blindness the interactive path already fixed.
+ *
  * A headless failure has no live tab to stream an error frame to (unlike
  * channels.sendMessage's SSE `turnEnvelope("error")`), so once retries are
  * exhausted it raises an `agent.task_failed` notification instead — see
@@ -34,6 +41,7 @@ import {
   requestHeadlessChatText,
   isRetryableHubError,
 } from "@synap/intelligence-client";
+import type { ISPartialFailure } from "@synap/intelligence-client";
 import {
   and,
   chatTurns,
@@ -88,6 +96,15 @@ export const A2AI_TRIGGER_JOB_OPTIONS: PgBoss.SendOptions = {
 export const A2AI_TRIGGER_QUEUE = "a2ai-response-trigger";
 
 type DurableHeadlessTurn = typeof chatTurns.$inferSelect;
+
+/**
+ * Stable opening of the `chat_turns.error` text written for a COMMITTED
+ * PARTIAL turn. Deliberately narrow: the crash-recovery path matches on it to
+ * tell "assistant persisted, finish never ran" (recover → completed) apart
+ * from "assistant persisted, but the answer was cut off" (leave failed).
+ * Producer and consumer are both in this file — change them together.
+ */
+const PARTIAL_TURN_ERROR_PREFIX = "Response was cut off";
 
 /**
  * Reserve (or reattach to) the durable chat_turn for this headless response.
@@ -277,11 +294,17 @@ async function callIntelligenceHub(
     focusSessionId?: string | null;
     agentUserId?: string;
   }
-): Promise<{ text: string; error: string | null; steps: unknown[] }> {
+): Promise<{
+  text: string;
+  error: string | null;
+  steps: unknown[];
+  partialFailure: ISPartialFailure | null;
+}> {
   const {
     text: finalText,
     error: streamError,
     steps,
+    partialFailure,
   } = await requestHeadlessChatText(serviceUrl, serviceApiKey, {
     ...payload,
     priority: "background",
@@ -293,6 +316,8 @@ async function callIntelligenceHub(
       finalLen: finalText.length,
       streamError: streamError || undefined,
       stepCount: steps?.length ?? 0,
+      // Raw provider prose stays HERE (diagnostic) and never reaches a user.
+      partialFailure: partialFailure ?? undefined,
     },
     "A2AI SSE drained"
   );
@@ -303,7 +328,26 @@ async function callIntelligenceHub(
     );
   }
 
-  return { text: finalText, error: streamError, steps: steps ?? [] };
+  return {
+    text: finalText,
+    error: streamError,
+    steps: steps ?? [],
+    partialFailure: partialFailure ?? null,
+  };
+}
+
+/**
+ * Durable, operator-readable detail for a COMMITTED PARTIAL turn.
+ *
+ * Built from the CLASSIFIED evidence only (`code` / `status`). The IS's
+ * `ProviderFailure.message` is documented as diagnostic, NOT user-facing copy
+ * — it is logged at the drain site and deliberately not reproduced here, since
+ * `chat_turns.error` is read back by surfaces a user can see.
+ */
+function describePartialTurn(failure: ISPartialFailure): string {
+  const status =
+    typeof failure.status === "number" ? `, HTTP ${failure.status}` : "";
+  return `${PARTIAL_TURN_ERROR_PREFIX} — the model provider stopped responding mid-stream (${failure.code}${status}). The partial answer was delivered.`;
 }
 
 export async function handleA2AIResponseTrigger(
@@ -352,6 +396,22 @@ export async function handleA2AIResponseTrigger(
       columns: { id: true },
     });
     if (existingAssistant) {
+      // …unless a previous attempt ALREADY recorded a terminal failure with
+      // its reason. That is what a committed-partial turn looks like: assistant
+      // row present (a truncated answer was delivered) + status `failed` + a
+      // durable reason. Blindly flipping it to `completed` here would erase the
+      // one record that says the answer was cut off — re-introducing, on the
+      // duplicate-job path, exactly the lie this worker no longer tells.
+      if (
+        turn.status === ChatTurnStatus.FAILED &&
+        turn.error?.startsWith(PARTIAL_TURN_ERROR_PREFIX)
+      ) {
+        logger.info(
+          { channelId, turnId: turn.id, error: turn.error },
+          "A2AI turn already terminal with a recorded reason — leaving it as failed"
+        );
+        return;
+      }
       await finishHeadlessChatTurn({
         turnId: turn.id,
         status: "completed",
@@ -388,6 +448,7 @@ export async function handleA2AIResponseTrigger(
   let fullContent: string;
   let streamError: string | null = null;
   let aiSteps: unknown[] = [];
+  let partialFailure: ISPartialFailure | null = null;
   try {
     const result = await callIntelligenceHub(serviceUrl, serviceApiKey, {
       query: content,
@@ -403,6 +464,7 @@ export async function handleA2AIResponseTrigger(
     fullContent = result.text;
     streamError = result.error;
     aiSteps = result.steps;
+    partialFailure = result.partialFailure;
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.error(
@@ -456,7 +518,10 @@ export async function handleA2AIResponseTrigger(
 
   if (!fullContent) {
     const detail =
-      streamError ?? "A2AI response was empty — no content to persist";
+      streamError ??
+      (partialFailure
+        ? describePartialTurn(partialFailure)
+        : "A2AI response was empty — no content to persist");
     logger.warn(
       { channelId, userMessageId, turnId: turn.id, streamError },
       "A2AI response was empty — finishing turn as failed"
@@ -499,6 +564,46 @@ export async function handleA2AIResponseTrigger(
         agentType,
       },
     });
+
+    // A COMMITTED PARTIAL is not a completion. The provider died mid-stream,
+    // the IS committed the text produced so far and ended the SSE normally —
+    // no `error` frame, so every signal this worker used to read said
+    // "success". Recording it as `completed` is precisely the defect the
+    // interactive path already fixed (the IS counts the same turn via
+    // `recordAgentTurnFailed`); the headless ledger must agree with it.
+    //
+    // `failed` is the honest existing status — the turn did NOT complete —
+    // and `chat_turns.status` accepts only running|completed|failed|cancelled,
+    // so no new value is invented. The assistant reply is still persisted
+    // above: the user DID receive a (truncated) answer, carrying the IS's own
+    // "this response was cut off" note. Nothing is thrown, so pg-boss does not
+    // retry — replaying would post a second, duplicate answer to the channel.
+    if (partialFailure) {
+      await finishHeadlessChatTurn({
+        turnId: turn.id,
+        status: "failed",
+        error: describePartialTurn(partialFailure),
+      });
+      logger.error(
+        {
+          channelId,
+          assistantId,
+          serviceId,
+          turnId: turn.id,
+          stepCount: aiSteps.length,
+          contentLength: fullContent.length,
+          failure: partialFailure,
+        },
+        "A2AI response persisted PARTIALLY — provider died mid-stream, turn recorded as failed"
+      );
+      // Deliberately NO notifyA2AIFailure. `agent.task_failed` means the agent
+      // produced nothing; here a visible answer landed in the channel with the
+      // IS's own truncation note attached. Raising a bell entry that says the
+      // task failed would contradict what the user can read, on a path that is
+      // also not retried. Silence is not the alternative — the truncation is
+      // stated in the message itself, and the ledger row carries the evidence.
+      return;
+    }
 
     await finishHeadlessChatTurn({
       turnId: turn.id,
