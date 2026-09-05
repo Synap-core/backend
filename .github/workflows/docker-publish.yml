@@ -136,6 +136,8 @@ jobs:
             -e HYDRA_PUBLIC_URL=http://localhost:9999 \
             -e HYDRA_ADMIN_URL=http://localhost:9999 \
             -e ORY_HYDRA_SECRETS_SYSTEM=smoke-test \
+            -e MINIO_ACCESS_KEY_ID=smoke-test \
+            -e MINIO_SECRET_ACCESS_KEY=smoke-test-secret \
             synap-backend:smoke-test
 
           # Wait up to 30s for health check
