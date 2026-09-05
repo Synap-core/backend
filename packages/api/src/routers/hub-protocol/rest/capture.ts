@@ -35,6 +35,7 @@ import {
   CaptureGraphRawSourceSchema,
   CaptureExecuteRequestSchema,
   CaptureStructureRequestSchema,
+  CaptureStructureResponseSchema,
   ClusterTabsRequestSchema,
   ClusterTabsResponseSchema,
   ImportRequestSchema,
@@ -156,14 +157,14 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, project and projectCandidate. Two dissimilar payloads share this route, which is why the 200 schema stays a free-form record rather than claiming one shape.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
     responses: {
       200: {
         description: "Structured entity proposals",
-        schema: z.record(z.string(), z.unknown()),
+        schema: CaptureStructureResponseSchema,
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },

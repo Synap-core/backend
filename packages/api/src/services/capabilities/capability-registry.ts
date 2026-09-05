@@ -287,6 +287,45 @@ function deriveGovernance(
 interface ZodFieldLike {
   isOptional?: () => boolean;
   description?: string;
+  /** Zod 4 introspection. `def.type` is a string tag; wrappers nest an `innerType`. */
+  def?: {
+    type?: string;
+    innerType?: ZodFieldLike;
+    entries?: Record<string, unknown>;
+  };
+}
+
+/**
+ * The param types a client can render a real control for.
+ *
+ * Closed on purpose: an open string would let a Zod tag nobody has a control
+ * for reach the wire, and the client would fall back to a text box WITHOUT
+ * saying so. `undefined` is the honest "we could not tell" — which
+ * `paramsSchemaToFormSpec` already treats as "render untyped, never drop".
+ */
+export type ParamValueType = "string" | "number" | "boolean" | "date" | "enum";
+
+const ZOD_TAG_TO_PARAM_TYPE: Record<string, ParamValueType> = {
+  string: "string",
+  number: "number",
+  bigint: "number",
+  boolean: "boolean",
+  date: "date",
+  enum: "enum",
+};
+
+/** Unwrap `optional` / `nullable` / `default` to the type that carries meaning. */
+function unwrapZod(field: ZodFieldLike): ZodFieldLike {
+  let current = field;
+  // Bounded: these wrappers nest at most a few deep, and a cycle would hang.
+  for (let i = 0; i < 8; i++) {
+    const tag = current.def?.type;
+    if (tag !== "optional" && tag !== "nullable" && tag !== "default") break;
+    const inner = current.def?.innerType;
+    if (!inner) break;
+    current = inner;
+  }
+  return current;
 }
 
 /**
@@ -296,19 +335,55 @@ interface ZodFieldLike {
  * re-deriving from the seeded JSON `parameters` doc, so this can never drift from
  * what the handler actually accepts.
  */
-export function deriveBuiltinVerbParamsSchema(
-  verbId: string
-): Record<string, { required: boolean; description?: string }> | undefined {
+export function deriveBuiltinVerbParamsSchema(verbId: string):
+  | Record<
+      string,
+      {
+        required: boolean;
+        description?: string;
+        type?: ParamValueType;
+        options?: string[];
+      }
+    >
+  | undefined {
   const schema = BUILTIN_VERB_PARAM_SCHEMAS[verbId];
   if (!schema) return undefined;
   const shape = (schema as unknown as { shape: Record<string, ZodFieldLike> })
     .shape;
-  const out: Record<string, { required: boolean; description?: string }> = {};
+  const out: Record<
+    string,
+    {
+      required: boolean;
+      description?: string;
+      type?: ParamValueType;
+      options?: string[];
+    }
+  > = {};
   for (const [key, field] of Object.entries(shape)) {
+    // ⚠️ THE TYPE WAS ALWAYS HERE AND WAS NEVER READ. This walked the Zod shape
+    // for `required` and `description` and ignored the one thing that decides
+    // which control renders — so every action param reached the phone as a
+    // bare text box.
+    //
+    // ⚠️ Measured, after an earlier version of this comment named examples it
+    // had not checked: of 100 top-level params across the 30 builtin schemas,
+    // 80 are `string`, 4 `enum`, 3 `number` (all `z.coerce`), and there are
+    // ZERO booleans and ZERO dates. `profileSlug` is `z.string()`, not an enum.
+    // So this pays off for the 4 enums and 3 numbers, and the honest majority
+    // stays a text box. Read at the EXECUTION-TIME schema, so the
+    // control can never disagree with what the executor will accept.
+    const inner = unwrapZod(field);
+    const tag = inner.def?.type;
+    const type = tag ? ZOD_TAG_TO_PARAM_TYPE[tag] : undefined;
+    const entries = inner.def?.entries;
     out[key] = {
       required:
         typeof field.isOptional === "function" ? !field.isOptional() : true,
       description: field.description,
+      // Omitted rather than guessed: an unknown tag degrades to an untyped
+      // text box, which is the documented and correct behaviour.
+      ...(type ? { type } : {}),
+      ...(type === "enum" && entries ? { options: Object.keys(entries) } : {}),
     };
   }
   return out;

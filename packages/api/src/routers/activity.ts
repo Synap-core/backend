@@ -19,7 +19,7 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { proposalUserFloor } from "./proposals/scope-conditions.js";
 import { db, proposals, and, eq, isNotNull, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 
@@ -39,9 +39,14 @@ export const activityRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // The access floor — identical predicate to proposals.list, so a user only
-      // ever aggregates pending proposals they are permitted to see.
-      const visible = userVisibleWhere(proposals.workspaceId, userId);
+      // The access floor — the SAME predicate `proposals.list` builds
+      // (`proposalUserFloor`), so this attention count and the queue it
+      // summarizes can never disagree. It is LENS ∪ OWNERSHIP: the lens alone
+      // dropped the caller's OWN pending rows whose workspace is orphaned or
+      // unjoinable, which would make the badge under-report its own list.
+      // Widens what is COUNTED, never what may be done — approve/reject stay
+      // gated by `canReviewProposal`.
+      const visible = proposalUserFloor(userId);
       const pending = eq(proposals.status, ProposalStatus.PENDING);
 
       if (input.projectId) {

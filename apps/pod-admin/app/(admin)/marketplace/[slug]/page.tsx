@@ -41,10 +41,11 @@ import {
   OBJECT_KIND_ALIASES,
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
+import { readableDescription } from "../../../../lib/marketplace";
 import type { PackageDetail } from "../../../../lib/marketplace";
 import { SectionCard } from "../../components/section-card";
 import { ResourceRowError } from "../../components/resource-row";
-import { kindIcon, kindLabel } from "../_lib/kind-icon";
+import { kindIcon, kindLabel, kindPackagePhrase } from "../_lib/kind-icon";
 import type {
   AppliedResult,
   InstallError,
@@ -228,13 +229,17 @@ export default function PackageDetailPage() {
     // the empty branch below then asserted "declares no profiles, views or
     // capabilities" about a definition this page was holding in memory. The
     // landing detail page already folds the object form; this matches it.
-    const count = Array.isArray(value)
-      ? value.length
-      : row.key === "capabilities" &&
-          pkg.definition?.capability &&
-          typeof pkg.definition.capability === "object"
-        ? 1
-        : 0;
+    // The array is checked for LENGTH, not just presence: `capabilities: []`
+    // alongside a singular `capability` object is a real shape here (25 shipped
+    // templates write `skills: []` present-but-empty), and testing
+    // `Array.isArray` first would let that empty array shadow the object and
+    // report 0 — the same false "declares nothing" this fold exists to prevent.
+    const arrayCount = Array.isArray(value) ? value.length : 0;
+    const hasSingularCapability =
+      row.key === "capabilities" &&
+      !!pkg.definition?.capability &&
+      typeof pkg.definition.capability === "object";
+    const count = arrayCount > 0 ? arrayCount : hasSingularCapability ? 1 : 0;
     return { ...row, ...nounsFor(row), count };
   }).filter((row) => row.count > 0);
 
@@ -269,9 +274,9 @@ export default function PackageDetailPage() {
           </div>
         </div>
 
-        {pkg.description && (
+        {readableDescription(pkg.description) && (
           <p className="text-[13px] leading-relaxed text-foreground/70">
-            {pkg.description}
+            {readableDescription(pkg.description)}
           </p>
         )}
 
@@ -531,8 +536,9 @@ function InstallPanel({
           <p className="text-[12.5px] leading-relaxed text-foreground/75">
             Pod Admin can preview and install workspace packages, because it can
             check their definition against your data before writing anything. It
-            can&rsquo;t do that for a {category} package yet — install this one
-            from the CLI, which applies it directly:
+            can&rsquo;t do that for{" "}
+            {category ? kindPackagePhrase(category) : "this kind of package"}{" "}
+            yet — install this one from the CLI, which applies it directly:
           </p>
           <code className="w-fit rounded-lg bg-foreground/[0.06] px-2 py-1 font-mono text-[11.5px] text-foreground/70">
             synap market install {slug}

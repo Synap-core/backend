@@ -29,36 +29,27 @@ vi.mock("../../notifications/mark-proposal-notifications-actioned.js", () => ({
 let pendingRows: Array<Record<string, unknown>> = [];
 let movedIds: string[] = [];
 
-// TOTAL mock — every symbol the module under test imports from @synap/database
-// must be listed, or it is `undefined` at runtime with no type error.
-vi.mock("@synap/database", () => ({
-  db: {
-    select: () => ({
-      from: () => ({ where: () => Promise.resolve(pendingRows) }),
-    }),
-    update: () => ({
-      set: () => ({
-        where: () => ({
-          returning: () => Promise.resolve(movedIds.map((id) => ({ id }))),
+// PARTIAL mock (`importOriginal`) — only `db` is faked; the real table objects
+// and operators are used, so a new export this module starts importing resolves
+// to the real thing instead of killing the whole file at collection time.
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: {
+      select: () => ({
+        from: () => ({ where: () => Promise.resolve(pendingRows) }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: () => ({
+            returning: () => Promise.resolve(movedIds.map((id) => ({ id }))),
+          }),
         }),
       }),
-    }),
-  },
-  proposals: {
-    id: "id",
-    proposalType: "proposal_type",
-    targetType: "target_type",
-    createdAt: "created_at",
-    data: "data",
-    status: "status",
-    sessionId: "session_id",
-  },
-  ProposalStatus: { PENDING: "pending", EXPIRED: "expired" },
-  eq: (...a: unknown[]) => ({ _eq: a }),
-  and: (...a: unknown[]) => ({ _and: a }),
-  inArray: (...a: unknown[]) => ({ _in: a }),
-  lt: (...a: unknown[]) => ({ _lt: a }),
-}));
+    },
+  };
+});
 
 import {
   expireLapsedProposals,

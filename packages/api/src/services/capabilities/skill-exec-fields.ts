@@ -21,6 +21,35 @@ import { canonicalJson } from "./capability-drift.js";
  * Execution-defining fields — a change to any of them means the skill may now
  * run different code, so an approved row is demoted.
  */
+/**
+ * The egress allowlist a skill's sandbox actually enforces, read out of the
+ * free-form `metadata` bag.
+ *
+ * `metadata.allowedHosts` is the ONLY thing standing between an approved skill
+ * and an arbitrary host: `run-skill-in-sandbox.ts:178` reads it, and
+ * `host.fetch` refuses anything not on it (SSRF-checked, redirects rejected).
+ * It is therefore execution-defining in every sense that matters — but it could
+ * not be added to `RE_APPROVAL_FIELDS`, because `metadata` is a bag that is
+ * SHALLOW-MERGED rather than spread, and is peeled off the update payload
+ * before the field comparison ever runs (`routers/skills.ts`). So the fields
+ * check literally cannot see it.
+ *
+ * The hole that left: re-pointing a declarative skill's `providerSpec.baseUrl`
+ * at evil.com demotes it (there is a test), while ADDING evil.com to its egress
+ * allowlist did not — the narrower-looking edit was the ungated one.
+ */
+export function allowedHostsChanged(
+  metadataPatch: Record<string, unknown> | undefined,
+  existingMetadata: Record<string, unknown> | null | undefined
+): boolean {
+  if (!metadataPatch || !("allowedHosts" in metadataPatch)) return false;
+  const before = (existingMetadata ?? {})["allowedHosts"];
+  // VALUE, not presence — mirrors `execFieldsChanged`. A form that re-sends an
+  // unchanged allowlist on every save must not demote the skill, which is the
+  // exact regression a presence test caused on the MCP-server door.
+  return canonicalJson(metadataPatch["allowedHosts"]) !== canonicalJson(before);
+}
+
 export const RE_APPROVAL_FIELDS = [
   "code",
   // For a `declarative` skill the providerSpec IS the executable — it defines

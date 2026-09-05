@@ -885,9 +885,28 @@ export const definitionEngineProcedures = {
               scopes: [],
             });
           } catch (err) {
-            logger.warn(
+            // ⚠️ KNOWN, UNRESOLVED HONESTY GAP — do not "tidy" this to a warn.
+            //
+            // Swallowing this makes `createFromDefinition` return a CLEAN
+            // report for an install whose capabilities, playbooks and
+            // automations all failed: the browser and pod-admin then both say
+            // "Installed". The workspace itself really was created, so failing
+            // the whole call would also be a lie in the other direction — hence
+            // non-fatal. What is missing is a CHANNEL to report partial
+            // success: `ReconcileReport` (in the built `@synap/database`) has no
+            // slot for "the workspace landed, this layer did not", and adding
+            // one is a typed contract change across two UIs, not a log tweak.
+            //
+            // Note the asymmetry while it stands: `market.install` RETHROWS in
+            // exactly this situation. Two doors, opposite honesty postures, for
+            // the same failure.
+            //
+            // Logged at ERROR because a silent partial install is the defect
+            // class this codebase keeps re-shipping — an absent signal read as
+            // success — and `warn` is where that goes to die.
+            logger.error(
               { err, workspaceId },
-              "createFromDefinition: post-workspace layer reconcile failed (non-fatal)"
+              "createFromDefinition: post-workspace layer FAILED — the workspace exists but its capabilities/playbooks/automations did not apply, and the caller is being told the install succeeded"
             );
           }
         }

@@ -41,10 +41,53 @@ describe("playbookActionOptions (playbooks → playbook_run THEN options)", () =
         ],
       },
     ]);
+    // ⚠️ This asserted `{key,label,required}` exactly, with fixtures that
+    // declare `type: "text"` and `type: "number"` — so it pinned the DROP as
+    // correct, the second test in this repo to do so. `PlaybookParam.type` is
+    // REQUIRED in the authoring contract, and playbook params are the only ones
+    // that carry `boolean` and `choice`; a client reading this projection had
+    // no way to render either.
     expect(opt.params).toEqual([
-      { key: "topic", label: "Topic", required: true },
-      { key: "max_sources", label: "How many sources", required: false },
+      { key: "topic", label: "Topic", required: true, type: "string" },
+      {
+        key: "max_sources",
+        label: "How many sources",
+        required: false,
+        type: "number",
+      },
     ]);
+  });
+
+  it("maps choice to an enum with its options, and boolean through", () => {
+    const [opt] = playbookActionOptions([
+      {
+        id: PB,
+        name: "P",
+        params: [
+          { name: "tone", type: "choice", options: ["brief", "full"] },
+          { name: "dry_run", type: "boolean" },
+        ],
+      },
+    ]);
+    expect(opt.params).toEqual([
+      {
+        key: "tone",
+        label: "Tone",
+        required: false,
+        type: "enum",
+        options: ["brief", "full"],
+      },
+      { key: "dry_run", label: "Dry run", required: false, type: "boolean" },
+    ]);
+  });
+
+  it("omits `entity` rather than declaring a type with no control", () => {
+    // There is no entity picker in the param renderer. A declared type the
+    // client cannot render is worse than an honest text box.
+    const [opt] = playbookActionOptions([
+      { id: PB, name: "P", params: [{ name: "who", type: "entity" }] },
+    ]);
+    expect(opt.params).toEqual([{ key: "who", label: "Who", required: false }]);
   });
 
   it("drops malformed param entries instead of offering a nameless field", () => {

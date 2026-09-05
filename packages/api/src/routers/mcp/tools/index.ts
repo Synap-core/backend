@@ -19,6 +19,7 @@ import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
@@ -1327,7 +1328,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Close a focus session with a summary and optional reports; also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1344,6 +1345,12 @@ export const tools = {
               type: "object",
               description:
                 "Optional structured verification report (e.g. what was checked, confidence levels, summary of what was accomplished).",
+            },
+            terminalStatus: {
+              type: "string",
+              enum: [...TERMINAL_SESSION_STATUSES],
+              description:
+                "How the session ended. 'closed' (default) = the work finished. 'cancelled' = abandoned on purpose. 'failed' = attempted and could not be completed. All three run the SAME close (review pack, playbook_run close, ephemeral expiry, close event) — only the recorded outcome differs.",
             },
           },
           required: ["sessionId"],
@@ -2189,7 +2196,15 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
-            proposalId: { type: "string", description: "Proposal UUID" },
+            proposalId: {
+              type: "string",
+              // Matches `synap_reject_proposal`: this door also accepts a
+              // leading fragment (handlers/build.ts), which was undocumented.
+              description:
+                "Proposal UUID, as returned verbatim by synap_list_proposals. " +
+                "A leading fragment of one also resolves, but pass the full id " +
+                "you were given — do not shorten it yourself.",
+            },
             summary: { type: "string" },
             reasoning: { type: "string" },
           },
@@ -2213,7 +2228,15 @@ export const tools = {
             proposalId: {
               type: "string",
               description:
-                "Proposal UUID, or the 8-char short id printed by synap_list_proposals / the CLI.",
+                // Do NOT re-advertise a "short id printed by synap_list_proposals":
+                // that door emits FULL uuids (`toProposalBasic` returns `row.id`
+                // verbatim) and never printed a short one. The old text cited a
+                // producer that does not exist, so a model read it, saw a uuid,
+                // TRUNCATED it itself to comply, and hit a resolver on a
+                // narrower floor. The schema manufactured its own failing input.
+                "Proposal UUID, as returned verbatim by synap_list_proposals. " +
+                "A leading fragment of one also resolves, but pass the full id " +
+                "you were given — do not shorten it yourself.",
             },
             reason: {
               type: "string",

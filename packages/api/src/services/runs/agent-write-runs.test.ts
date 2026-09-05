@@ -149,7 +149,22 @@ describe("runs.listRuns — agent_write flow type", () => {
     expect(column).toMatchObject({ name: "workspace_id" });
 
     const where = chain._captured.where as { and: unknown[] };
-    expect(where.and).toContainEqual({ __userVisible: USER });
+    // LENS **or** OWNERSHIP. "What did MY agents execute?" is an ownership
+    // question, so the lens is one BRANCH of an `or`, never the whole floor —
+    // a receipt in an unjoinable workspace is still the caller's own run. The
+    // lens branch must still be present: widening must not replace the floor.
+    const floor = where.and.find(
+      (c): c is { or: unknown[] } =>
+        typeof c === "object" &&
+        c !== null &&
+        Array.isArray((c as { or?: unknown }).or) &&
+        (c as { or: unknown[] }).or.some(
+          (b) => JSON.stringify(b) === JSON.stringify({ __userVisible: USER })
+        )
+    );
+    expect(floor).toBeDefined();
+    // …and the other branch is the authorship predicate, not a second lens.
+    expect(floor!.or.length).toBe(2);
 
     // Only AUTO_APPROVED receipts — a pending proposal is a queue item, not a
     // record of something that happened.

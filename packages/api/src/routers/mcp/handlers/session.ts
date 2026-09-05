@@ -15,6 +15,7 @@ import {
   attachParentSessionIds,
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
+import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
 import {
   SESSION_KINDS,
   attachSessionKind,
@@ -109,13 +110,22 @@ export const sessionHandlers: McpHandlerMap = {
       summary: args.summary as string | undefined,
       verificationReport: args.verificationReport as
         Record<string, unknown> | undefined,
+      // Every lifecycle exit, not just `closed`. The service has accepted this
+      // since it was written; this door never forwarded it, so an agent could
+      // record "I finished" but never "I abandoned" or "I could not" — and the
+      // tRPC / Hub PATCH doors could. Validated by the tool schema's enum,
+      // which derives from TERMINAL_SESSION_STATUSES.
+      terminalStatus: args.terminalStatus as TerminalSessionStatus | undefined,
     });
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }
     // Gate 2: proposal pack on complete — one review unit for the session.
     return ok({
-      status: "closed",
+      // The status the ROW now holds — not a hardcoded "closed". With
+      // terminalStatus reachable, a literal here would report every cancel and
+      // every failure as a successful close.
+      status: result.session.status,
       session: result.session,
       pendingProposals: result.pendingProposals,
       counts: result.counts,

@@ -852,6 +852,35 @@ const actionOptionSchema = z.object({
         key: z.string(),
         label: z.string(),
         required: z.boolean(),
+        /**
+         * What KIND of value this param takes — the field that decides which
+         * control a client renders.
+         *
+         * ⚠️ This contract carried only `{key,label,required}`, so every param
+         * reached every client as a bare text box.
+         *
+         * ⚠️ Measured: 100 top-level params across 30 builtin schemas — 80
+         * string, 4 enum, 3 number, ZERO boolean, ZERO date. An earlier
+         * version of this comment named `profileSlug` as an enum and cited
+         * booleans; neither is true of this corpus. The type was present in the execution-time
+         * Zod schema the whole time and was dropped one hop before the wire
+         * (`paramsFromVerbSchema`). Relay's composer being "a wall of text
+         * boxes" was this field's absence, not a rendering choice.
+         *
+         * OPTIONAL on purpose. Provider verbs have no type to give — their
+         * params are found by regex-scanning `{{token}}` and `paramMapping`
+         * declares no type — so absent means "we could not tell", and a client
+         * must degrade to an untyped input rather than guess. Inferring a type
+         * from adjacent hints would type a couple of params and MISTYPE the
+         * rest, which is worse than the honest text box.
+         */
+        type: z
+          .enum(["string", "number", "boolean", "date", "enum"])
+          .optional(),
+        /** The admissible values, when `type` is `enum`. Renders a picker. */
+        options: z.array(z.string()).optional(),
+        /** The schema's own one-liner — help text, already authored. */
+        description: z.string().optional(),
       })
     )
     .optional(),
@@ -870,11 +899,41 @@ export function paramsFromVerbSchema(
 ): NonNullable<ActionOption["params"]> {
   const out: NonNullable<ActionOption["params"]> = [];
   for (const [key, spec] of Object.entries(schema)) {
-    const required =
-      typeof spec === "object" && spec !== null && "required" in spec
-        ? (spec as { required?: unknown }).required === true
-        : false;
-    out.push({ key, label: humanizeToken(key), required });
+    const rec =
+      typeof spec === "object" && spec !== null
+        ? (spec as {
+            required?: unknown;
+            description?: unknown;
+            type?: unknown;
+            options?: unknown;
+          })
+        : {};
+    // Forward everything the deriver produced. This used to build
+    // `{key,label,required}` and silently drop `description` (which
+    // `deriveBuiltinVerbParamsSchema` had already captured) — and there was no
+    // type to drop because nobody read it. A projection narrower than its
+    // producer is this codebase's most repeated defect; the parity test beside
+    // this function now pins the two together.
+    const type =
+      typeof rec.type === "string" &&
+      ["string", "number", "boolean", "date", "enum"].includes(rec.type)
+        ? (rec.type as NonNullable<
+            NonNullable<ActionOption["params"]>[number]["type"]
+          >)
+        : undefined;
+    const options = Array.isArray(rec.options)
+      ? rec.options.filter((o): o is string => typeof o === "string")
+      : undefined;
+    out.push({
+      key,
+      label: humanizeToken(key),
+      required: rec.required === true,
+      ...(type ? { type } : {}),
+      ...(options && options.length > 0 ? { options } : {}),
+      ...(typeof rec.description === "string" && rec.description
+        ? { description: rec.description }
+        : {}),
+    });
   }
   return out;
 }
@@ -937,9 +996,36 @@ export function playbookActionOptions(
             name?: unknown;
             label?: unknown;
             required?: unknown;
+            type?: unknown;
+            options?: unknown;
           };
           if (typeof spec.name !== "string" || spec.name.length === 0)
             return [];
+          // ⚠️ The THIRD door with the same defect, and the one that matters
+          // most. `PlaybookParam.type` is REQUIRED in the authoring contract
+          // (`packages/playbooks/src/index.ts:142-149`) and this projection
+          // dropped it — while playbook params are the only ones that actually
+          // carry `boolean` and `choice`. The builtin corpus has zero booleans,
+          // so a client that only ever saw builtin params could look correct
+          // and still render every playbook toggle as a text box.
+          //
+          // An explicit map, not a passthrough: the two vocabularies are not
+          // the same word list. `entity` has NO control (there is no entity
+          // picker in the param renderer) so it is deliberately omitted — a
+          // type with no control is worse than an honest text box.
+          const playbookType =
+            spec.type === "text"
+              ? ("string" as const)
+              : spec.type === "number"
+                ? ("number" as const)
+                : spec.type === "boolean"
+                  ? ("boolean" as const)
+                  : spec.type === "choice"
+                    ? ("enum" as const)
+                    : undefined;
+          const playbookOptions = Array.isArray(spec.options)
+            ? spec.options.filter((o): o is string => typeof o === "string")
+            : undefined;
           return [
             {
               key: spec.name,
@@ -948,6 +1034,12 @@ export function playbookActionOptions(
                   ? spec.label
                   : humanizeToken(spec.name),
               required: spec.required === true,
+              ...(playbookType ? { type: playbookType } : {}),
+              ...(playbookType === "enum" &&
+              playbookOptions &&
+              playbookOptions.length > 0
+                ? { options: playbookOptions }
+                : {}),
             },
           ];
         })
@@ -1122,14 +1214,22 @@ function profileSlugForSubject(subject: string): string | undefined {
  *     HARDCODED. A rule stored on `entity.update.requested` is therefore never
  *     handed to the matcher; `matchPattern` is not even reached. The rule
  *     reports itself live and silently never runs.
- *   • `packages/api/src/routers/hub-protocol/observations.ts:396` — sends
- *     `obs.type` RAW, gated to `OBSERVATION_NAMESPACES` and `RESERVED_PHASES`
- *     (`.validated .completed .failed`). For observations the phases are real,
- *     semantically distinct, and DO fire.
+ *   • `packages/api/src/routers/hub-protocol/observations.ts:395` — sends
+ *     `obs.type` RAW, whatever its shape, for any type in an
+ *     `OBSERVATION_NAMESPACES` namespace.
  *
- * So the rule is asymmetric on purpose: `.completed` only for first-party
- * subjects, every reserved phase for an observation namespace. Collapsing
- * observations to `.completed` would destroy a distinction the runtime honours.
+ * So the rule is asymmetric on purpose: a first-party pattern must end
+ * `.completed` because that is the only phase its producer can send; an
+ * observation type is offered as-is because its producer forwards it verbatim.
+ *
+ * ⚠️ An earlier version of this comment said observations were "gated TO
+ * `RESERVED_PHASES`" and that those phases "DO fire". That is BACKWARDS.
+ * `RESERVED_PHASES` is a REFUSAL list: `observations.ts:169` refines with
+ * `!RESERVED_PHASES.some((p) => t.endsWith(p))`, so `dev.build.validated` can
+ * never be recorded at all — "an observation reports a fact, it never asserts
+ * an outcome". Observation types are therefore PHASE-LESS (`dev.commit`), which
+ * is exactly why a `.completed` suffix check is the wrong test for them and the
+ * namespace allowlist is the right one. Same behaviour, true reason.
  *
  * This also removes the duplicate rows the founder reported: `entity.update` was
  * offered four times (`requested|validated|completed|denied`), all four rendering
@@ -1169,6 +1269,13 @@ export function foldDeclaredEmits(
     } catch {
       continue;
     }
+    // A DECLARATION is a producer's own claim, but it is still subject to what
+    // the runtime can actually match: a capability declaring
+    // `entity.update.requested` in `metadata.emits` would surface an option
+    // that can never fire, because the reactor hardcodes `.completed`. The
+    // observed tier was filtered and this one was not — an asymmetry with no
+    // justification, and the same unfireable row by a different route.
+    if (!isFireableTriggerPattern(pattern)) continue;
     const subject = pattern.split(".")[0]!;
     const existing = byPattern.get(pattern);
     byPattern.set(pattern, {

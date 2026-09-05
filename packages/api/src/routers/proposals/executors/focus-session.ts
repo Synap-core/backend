@@ -181,7 +181,8 @@ export function registerFocusSessionExecutors(): void {
   // ── focus_session / update ──────────────────────────────────────────────────
   // A gated updateFocusSession / completeFocusSession / Hub PATCH lands here on
   // approval. Without this executor the `*/*` catch-all flipped APPROVED but
-  // never applied the patch or closed the session. Close reuses completeFocusSession
+  // never applied the patch or closed the session. EVERY terminal status
+  // (closed | cancelled | failed) reuses completeFocusSession
   // (human authority — no agentUserId) so playbook_run + verificationReport stay
   // consistent with the direct complete door. Non-close applies defined fields
   // via direct db.update and emits focus_session.update.completed.
@@ -223,8 +224,8 @@ export function registerFocusSessionExecutors(): void {
         typeof innerData.status === "string" ? innerData.status : undefined;
       if (isTerminalSessionStatus(requestedStatus)) {
         const terminalStatus: TerminalSessionStatus = requestedStatus;
-        // Close path: human approve executes complete without re-entering agent
-        // governance (no agentUserId from the original proposal).
+        // Terminal path: human approve executes complete without re-entering
+        // agent governance (no agentUserId from the original proposal).
         try {
           const { completeFocusSession } =
             await import("../../../services/focus-sessions/complete-session.js");
@@ -247,12 +248,16 @@ export function registerFocusSessionExecutors(): void {
           if (!result) {
             // complete returned null (ownership miss / gone) — only OK if
             // the session is already closed (idempotent re-approve).
-            if (session.status !== terminalStatus) {
+            // ANY terminal state satisfies this, not just the one requested:
+            // a session another path already `failed` must not error here just
+            // because this proposal asked for `cancelled`. The lifecycle has
+            // exited, which is what the approval was asking for.
+            if (!isTerminalSessionStatus(session.status)) {
               const again = await db.query.focusSessions.findFirst({
                 where: eq(focusSessions.id, sessionId),
                 columns: { status: true },
               });
-              if (again?.status !== terminalStatus) {
+              if (!isTerminalSessionStatus(again?.status)) {
                 throw new TRPCError({
                   code: "BAD_REQUEST",
                   message: `Focus session ${sessionId} could not be completed`,

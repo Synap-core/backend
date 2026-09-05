@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, getWorkspaceMembership } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  getWorkspaceMembership,
+  workspaces,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../../utils/audit-log.js";
@@ -200,6 +206,39 @@ export function registerWorkspaceExecutors(): void {
     async execute({ proposal, payload, userId, input, deps }) {
       void payload;
       const joinData = (proposal.data ?? {}) as Record<string, unknown>;
+
+      // Pre-flight: `proposals.workspaceId` has NO foreign key to `workspaces`
+      // (workspaceMembers does, ON DELETE CASCADE), so a pending join can
+      // outlive the workspace it targets. Without this check, approve would
+      // emit `.validated`, flip the row APPROVED, and only THEN — in the
+      // materializer worker, async — hit the membership insert's FK violation.
+      // The reviewer would see success while no membership was ever granted.
+      // This does not replace the materializer's FK (still the backstop for
+      // any other route into that insert); it only turns the failure loud and
+      // synchronous on the approve path instead of silent and deferred.
+      //
+      // Resolve the target the SAME way `materializeWorkspace` does
+      // (`data.workspaceId || workspaceId || subjectId` in materializer.ts) —
+      // the audit event below stamps `data.workspaceId: proposal.workspaceId`
+      // and the worker is invoked with that same `proposal.workspaceId`, so
+      // both arms of that `||` collapse to `proposal.workspaceId`, falling
+      // back to `proposal.targetId` (the materializer's `subjectId`).
+      const targetWorkspaceId = proposal.workspaceId || proposal.targetId;
+      if (targetWorkspaceId) {
+        const [existing] = await db
+          .select({ id: workspaces.id })
+          .from(workspaces)
+          .where(eq(workspaces.id, targetWorkspaceId));
+        if (!existing) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              `Workspace ${targetWorkspaceId} no longer exists — this join ` +
+              "proposal cannot be approved and should be rejected.",
+          });
+        }
+      }
+
       const validatedEvent = await auditLog({
         subjectType: "workspace",
         action: "join",

@@ -4,8 +4,11 @@
  * The MCP handlers (`synap_list_proposals`, `synap_governance`,
  * `synap_revise_proposal`) delegate here so the adapter does ZERO bespoke DB
  * work. These preserve the adapter's exact, creator-scoped semantics — which
- * differ from the Hub `proposals` tRPC router (that one scopes by workspace
- * visibility, not `createdBy`, so it is NOT interchangeable here).
+ * differ from the review-queue doors (`proposals.list`/`groups` and Hub
+ * `GET /api/hub/proposals`, which floor on LENS ∪ OWNERSHIP via
+ * `proposalUserFloor`, so they also admit a TEAMMATE's rows in a shared
+ * workspace). This door is the pure-ownership lens and is NOT interchangeable
+ * with them.
  */
 
 import {
@@ -123,10 +126,21 @@ export async function listCreatedProposals(params: {
   //
   // NOT a claim that the workspace floor is unreachable by an agent: it already
   // is. `synap_diagnose type:"proposal"` (services/diagnose/global.ts) counts
-  // pending under `userVisibleWhere(proposals.workspaceId, …)` and returns that
-  // number on the same MCP door. This queue simply is not that lens, and must
-  // never acquire a workspace term to make the two numbers match — on a
-  // single-user pod they coincide; add one teammate and they must not.
+  // pending on the same MCP door under a workspace-bearing predicate.
+  //
+  // UPDATED (B1): the REVIEW-QUEUE doors — `proposals.list`/`groups` (tRPC)
+  // and Hub `GET /api/hub/proposals` — no longer floor on the bare workspace
+  // lens. Their default population is now LENS ∪ OWNERSHIP
+  // (`proposalUserFloor`, routers/proposals/scope-conditions.ts), so a caller's
+  // own row in an orphaned/unjoinable workspace is no longer invisible there.
+  //
+  // That does NOT make this queue interchangeable with them, and the contract
+  // this comment protects is unchanged: THIS list is the pure-OWNERSHIP door
+  // and must never acquire a workspace term. A membership branch here would
+  // admit a TEAMMATE's rows — the union doors accept that deliberately (a
+  // workspace admin is expected to review a teammate's proposal); this one is
+  // the "what did *I* file" answer and must not. On a single-user pod the two
+  // numbers coincide; add one teammate and they must not.
   const authorFloor = or(
     eq(proposals.createdBy, params.createdBy),
     ownAgentUserFilter(proposals.agentUserId, params.createdBy),

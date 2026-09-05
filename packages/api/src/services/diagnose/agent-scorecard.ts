@@ -17,6 +17,7 @@ import {
   db,
   and,
   eq,
+  or,
   desc,
   drizzleSql,
   isNotNull,
@@ -29,6 +30,7 @@ import type { ProposalRevision } from "@synap/database";
 import { isPartiallyApprovedData } from "@synap-core/types/proposals";
 import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { authoredByUser } from "../agent-identity-service.js";
 import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
@@ -201,8 +203,10 @@ export async function agentScorecard(params: {
     return { error: `No agent-user found for id ${agentId}` };
   }
 
-  // USER floor: only proposals in workspaces the caller can see. An agent acting
-  // for a different owner never leaks into this card.
+  // "How has MY agent behaved?" — the agent row above is already owner-floored
+  // (`users.createdByUserId = userId`) and this keys on that agent, so every row
+  // is by construction the caller's own. LENS **or** OWNERSHIP: on the lens alone
+  // the agent's writes in an unjoinable workspace vanished from its own card.
   const rows = await db
     .select({
       proposalType: proposals.proposalType,
@@ -220,7 +224,10 @@ export async function agentScorecard(params: {
     .where(
       and(
         eq(proposals.agentUserId, agentId),
-        userVisibleWhere(proposals.workspaceId, userId)
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        )
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -316,7 +323,13 @@ export async function allAgentsScorecard(params: {
     .where(
       and(
         isNotNull(proposals.agentUserId),
-        userVisibleWhere(proposals.workspaceId, userId)
+        // Same window + floor as `computeAgentScorecard` above: LENS **or**
+        // OWNERSHIP. Splitting them would make the pod-wide grid and the
+        // per-agent card report different totals for the same agent.
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        )
       )
     )
     .groupBy(proposals.agentUserId, proposals.status, isPartial);

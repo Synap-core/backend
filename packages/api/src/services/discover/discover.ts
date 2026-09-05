@@ -542,16 +542,16 @@ export async function discover(
             (settings.workspaceSubtype as string | undefined) ??
             w.workspaceType ??
             null;
-          // A REAL purpose only. The old `Domain: ${domain}` fallback was a
-          // rendering of the `domain` field sitting on this very row — bytes
-          // for zero information, and it read like an authored description
-          // (9 of 14 live workspaces said "Domain: personal"). Full keeps it
-          // for back-compat; light emits `description` only when there is one.
+          // A REAL purpose only — never a `Domain: ${domain}` rendering of the
+          // `domain` field sitting on this very row. That fallback was bytes
+          // for zero information and read like an authored description (9 of
+          // 14 live workspaces said "Domain: personal"); both full and light
+          // now emit `description` only when there is a real one.
           const authored =
             (typeof w.description === "string" && w.description.trim()) ||
             (typeof onboarding?.goal === "string" && onboarding.goal.trim()) ||
             null;
-          const purpose = authored ?? (domain ? `Domain: ${domain}` : null);
+          const purpose = authored;
           const out: DiscoverWorkspace = {
             id: w.id,
             name: w.name,
@@ -566,7 +566,7 @@ export async function discover(
                   ? { goal: onboarding.goal }
                   : undefined;
           }
-          // Full: unchanged. Light: authored purpose only, or nothing.
+          // Full: real description/goal, or nothing. Light: same, truncated.
           if (detail === "full") {
             out.description = purpose
               ? (w.description ?? purpose)

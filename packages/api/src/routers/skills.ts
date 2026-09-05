@@ -27,7 +27,10 @@ import {
   createPendingProposal,
 } from "../utils/permission-check.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
-import { skillExecFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
+import {
+  allowedHostsChanged,
+  skillExecFieldsChanged,
+} from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -246,6 +249,7 @@ export function assertSkillGlobalsAllowed(
  */
 export {
   RE_APPROVAL_FIELDS,
+  allowedHostsChanged,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 
@@ -1223,7 +1227,15 @@ export const skillsRouter = router({
         // stop. A human editing their own skill is unaffected. Deliberately
         // PRESENCE-based, not value-based: an agent that submits a body must
         // re-earn approval even in the edge case where the text is unchanged.
-        (updateData.body !== undefined && !!input.agentUserId);
+        (updateData.body !== undefined && !!input.agentUserId) ||
+        // Widening the sandbox's egress allowlist is an execution change: it is
+        // what decides which hosts an approved skill may reach. It cannot ride
+        // in `RE_APPROVAL_FIELDS` because `metadata` is peeled off `updateData`
+        // above and merged separately, so the fields check never sees it.
+        allowedHostsChanged(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        );
 
       // The column is typed `ProviderVerbSpec`; the input accepts the open
       // `z.record` shape the spec is stored as. Narrow it for the write — same

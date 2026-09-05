@@ -23,6 +23,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
   PACKAGE_KINDS,
+  readableDescription,
   type CatalogPage,
   type CatalogPackage,
 } from "../../../lib/marketplace";
@@ -86,14 +87,33 @@ export default function MarketplacePage() {
 
   const packages = page?.packages ?? [];
 
-  // Kind chips carry their catalog count so an empty filter is visible BEFORE
-  // it is clicked. Counts are for the current result set, hence the label.
+  // Kind chips carry a count so an empty filter is visible BEFORE it is
+  // clicked. The count is over `packages` — the current PAGE_SIZE-capped page —
+  // because a catalog-wide count would cost one extra CP request per kind on
+  // every keystroke. It is therefore shown ONLY when the page happens to hold
+  // the whole catalog (`pageIsWholeCatalog` below); past that it is omitted
+  // rather than caveated.
   const countsInPage = useMemo(() => {
     const counts = new Map<string, number>();
     for (const p of packages)
       counts.set(p.category, (counts.get(p.category) ?? 0) + 1);
     return counts;
   }, [packages]);
+
+  /**
+   * True only when this page holds the ENTIRE catalog, so a per-kind count is a
+   * fact rather than a sample.
+   *
+   * The counts are computed over `packages`, which the CP caps at PAGE_SIZE.
+   * Today total=53 < 60, so they are exact — the defect is latent and appears
+   * silently at the 61st package. A bare "24" beside "Capability" reads as "the
+   * catalog has 24", and a `title` tooltip does not fix that: tooltips are
+   * invisible to touch and to keyboard, so the correction never reaches most of
+   * the people being misled. When the page stops being the whole catalog we
+   * therefore show NO number rather than a number that needs a caveat. The
+   * footer's "Showing N of total" already carries the honest scale.
+   */
+  const pageIsWholeCatalog = !!page && page.total <= packages.length;
 
   return (
     <div className="px-6 py-6 max-w-[1400px]">
@@ -130,7 +150,11 @@ export default function MarketplacePage() {
             <FilterChip
               key={k}
               label={kindLabel(k)}
-              count={kind === null ? countsInPage.get(k) : undefined}
+              count={
+                kind === null && pageIsWholeCatalog
+                  ? countsInPage.get(k)
+                  : undefined
+              }
               active={kind === k}
               onPress={() => setKind(kind === k ? null : k)}
             />
@@ -243,7 +267,7 @@ function PackageCard({ pkg }: { pkg: CatalogPackage }) {
       </div>
 
       <p className="line-clamp-2 text-[12px] leading-relaxed text-foreground/60">
-        {pkg.description ?? "No description."}
+        {readableDescription(pkg.description) ?? "No description."}
       </p>
 
       <div className="mt-auto flex items-center gap-1.5 pt-1 text-[11px] text-foreground/40">

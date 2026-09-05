@@ -259,10 +259,44 @@ type DedupCandidate = {
 type DegradedCaptureReason =
   "is_auth_error" | "is_invalid_response" | "is_empty_result";
 
+/**
+ * A degraded reason as it may arrive OFF THE WIRE. The Intelligence Service
+ * emits its own extraction-honesty reasons (`vision_provider_not_configured`,
+ * `pdf_scanned_needs_ocr`, …) which are strictly MORE specific than this pod's
+ * three plumbing reasons, and it may add new ones without this union knowing.
+ * Widening here is what lets an IS reason survive instead of being replaced by
+ * a generic pod one — see the empty-result guard in `structure`.
+ */
+type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
+
+/**
+ * Pick the reason to report when the IS returned a well-formed 200 with ZERO
+ * entities.
+ *
+ * `is_empty_result` is this pod's LAST-RESORT label — it means "we don't know
+ * why". Whenever the IS already said WHY (its extraction-honesty vocabulary:
+ * `vision_provider_not_configured`, `pdf_scanned_needs_ocr`,
+ * `transcription_provider_not_configured`, `unsupported_type`, …) that reason
+ * is strictly more specific and MUST win.
+ *
+ * This existed inline and unconditionally chose `is_empty_result`, which is how
+ * a pod with no vision provider — a PERMANENT configuration state — reported
+ * itself to CLI/Raycast/agent callers as a transient outage, telling the user
+ * to retry forever. Extracted so the choice is directly testable rather than
+ * buried in a 500-line procedure.
+ */
+export function resolveEmptyResultDegradedReason(
+  isSuppliedReason: string | undefined | null
+): DegradedCaptureReasonOrUnknown {
+  const trimmed =
+    typeof isSuppliedReason === "string" ? isSuppliedReason.trim() : "";
+  return trimmed.length > 0 ? trimmed : "is_empty_result";
+}
+
 /** Build the generic-item fallback proposal returned when IS cannot structure input. */
 export function buildDegradedCaptureFallback(
   inputText: string,
-  degradedReason: DegradedCaptureReason
+  degradedReason: DegradedCaptureReasonOrUnknown
 ) {
   return {
     proposals: [
@@ -1170,8 +1204,9 @@ export const captureRouter = router({
       //   is_auth_error      — IS rejected the pod credentials (401/403)
       //   is_invalid_response — IS reachable but returned null (5xx/validation/
       //                         timeout/network) — NOT a credentials problem
-      const degradedFallback = (degradedReason: DegradedCaptureReason) =>
-        buildDegradedCaptureFallback(inputText, degradedReason);
+      const degradedFallback = (
+        degradedReason: DegradedCaptureReasonOrUnknown
+      ) => buildDegradedCaptureFallback(inputText, degradedReason);
 
       const structureInput = {
         text: input.text ?? "",
@@ -1310,12 +1345,33 @@ export const captureRouter = router({
       // gave us text and we'd silently hand back nothing, not flagged as
       // degraded. A followUp is a legitimate non-empty outcome (the model is
       // asking a question), so only treat the truly-empty case as degraded.
+      //
+      // HONESTY: `is_empty_result` is this pod's LAST-RESORT label — it means
+      // "we don't know why". When the IS already told us WHY (its extraction
+      // honesty reasons: `vision_provider_not_configured`,
+      // `pdf_scanned_needs_ocr`, `unsupported_type`, …) that reason is strictly
+      // more specific and MUST win. Overwriting it here is what made a
+      // permanently-unconfigured vision provider read to CLI/Raycast/agent
+      // callers as a transient "AI structuring unavailable — retry when it's
+      // back", i.e. an instruction to retry a configuration state forever.
+      // `extraction` (kind/extractor/warnings) rides along for the same reason:
+      // it is the evidence behind the reason, and this branch was dropping it.
       if (!structureResult.followUp && structureResult.entities.length === 0) {
-        logger.warn(
-          { userId },
-          "IS returned zero entities without error — marking degraded (is_empty_result)"
+        const emptyReason = resolveEmptyResultDegradedReason(
+          structureResult.degradedReason
         );
-        return degradedFallback("is_empty_result");
+        logger.warn(
+          { userId, degradedReason: emptyReason },
+          emptyReason === "is_empty_result"
+            ? "IS returned zero entities without error — marking degraded (is_empty_result)"
+            : "IS returned zero entities with an explicit degradedReason — forwarding the IS reason"
+        );
+        return {
+          ...degradedFallback(emptyReason),
+          ...(structureResult.extraction
+            ? { extraction: structureResult.extraction }
+            : {}),
+        };
       }
 
       // Normalise every Knowledge proposal before the caller validates or

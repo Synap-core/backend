@@ -9113,7 +9113,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					score: number;
 				}[]>;
 				degraded: true;
-				degradedReason: "is_auth_error" | "is_invalid_response" | "is_empty_result";
+				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
 			} | {
 				extraction: {
 					kind: string;
@@ -24201,6 +24201,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						key: string;
 						label: string;
 						required: boolean;
+						type?: "string" | "number" | "boolean" | "date" | "enum" | undefined;
+						options?: string[] | undefined;
+						description?: string | undefined;
 					}[] | undefined;
 				}[];
 			};

@@ -17,15 +17,53 @@ import {
 import type { RunnableCapabilityAction } from "../services/capabilities/action-projection.js";
 
 describe("paramsFromVerbSchema (verb params → activate-gate shape)", () => {
-  it("projects each param to {key,label,required} with a humanized label", () => {
+  it("forwards everything the deriver produced, with a humanized label", () => {
+    // ⚠️ This asserted `{key,label,required}` EXACTLY — with a fixture that
+    // passes a `description` — so it pinned the drop as correct. The deriver
+    // had captured that description and the projection threw it away, and this
+    // test said that was the contract. A `type` was dropped the same way, which
+    // is why every action param reached the phone as a bare text box.
     const params = paramsFromVerbSchema({
-      query: { required: true, description: "the search text" },
-      num_results: { required: false },
+      query: { required: true, description: "the search text", type: "string" },
+      num_results: { required: false, type: "number" },
+      mode: { required: false, type: "enum", options: ["fast", "deep"] },
     });
     expect(params).toEqual([
-      { key: "query", label: "Query", required: true },
+      {
+        key: "query",
+        label: "Query",
+        required: true,
+        type: "string",
+        description: "the search text",
+      },
       // humanizeToken is the ONE door — snake_case becomes words, never a raw token.
-      { key: "num_results", label: "Num results", required: false },
+      {
+        key: "num_results",
+        label: "Num results",
+        required: false,
+        type: "number",
+      },
+      {
+        key: "mode",
+        label: "Mode",
+        required: false,
+        type: "enum",
+        options: ["fast", "deep"],
+      },
+    ]);
+  });
+
+  it("omits a type it cannot vouch for rather than guessing one", () => {
+    // A provider verb has no declared type. Absent must stay absent: a client
+    // degrades to an untyped input, which is honest. Inferring one from the
+    // key's name is the substring-guessing that mistyped a `budget` number.
+    const params = paramsFromVerbSchema({
+      account_id: { required: true },
+      amount: { required: false, type: "nonsense" },
+    });
+    expect(params).toEqual([
+      { key: "account_id", label: "Account id", required: true },
+      { key: "amount", label: "Amount", required: false },
     ]);
   });
 

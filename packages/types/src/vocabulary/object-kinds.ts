@@ -591,6 +591,17 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   relations: "link",
   property_def: "property",
   property_defs: "property",
+  /**
+   * The Control Plane's PUBLISH vocabulary calls this kind `workflow`; the pod's
+   * install/runtime vocabulary calls the same thing `automation`. Without this
+   * row `resolveObjectNoun("workflow")` fell through to `humanizeToken` and the
+   * icon lookup missed entirely — so one package rendered as "Automation" on the
+   * landing site and "Workflow" with a fallback Box icon in the browser and
+   * pod-admin. Same object, three presentations, which is precisely what this
+   * table exists to prevent.
+   */
+  workflow: "automation",
+  workflows: "automation",
 };
 
 /**

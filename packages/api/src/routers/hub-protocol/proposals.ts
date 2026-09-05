@@ -11,7 +11,7 @@ import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { db, proposals, eq, and, desc, count } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { proposalUserFloor } from "../proposals/scope-conditions.js";
 import { mergeProposalRevision } from "../../services/proposals/proposals-service.js";
 import {
   PROPOSAL_STATUS_FILTERS,
@@ -64,12 +64,20 @@ export const proposalsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Scope to the caller's own workspaces (+ pod-wide) — without this the
-      // optional-workspaceId filter degrades to a null-where that returns EVERY
-      // proposal on the pod (all users, all workspaces).
-      const conditions = [
-        userVisibleWhere(proposals.workspaceId, ctx.userId as string),
-      ];
+      // The SAME user floor `proposals.list` / `proposals.groups` / `signals`
+      // build (`proposalUserFloor`, routers/proposals/scope-conditions.ts) —
+      // LENS ∪ OWNERSHIP. Without a floor at all, the optional-workspaceId
+      // filter degrades to a null-where that returns EVERY proposal on the pod
+      // (all users, all workspaces).
+      //
+      // The floor is kept as its own condition and `workspaceId` is AND-ed on
+      // top, rather than passing the three-state through
+      // `buildProposalScopeConditions`: that builder REPLACES the floor with an
+      // equality when a concrete workspace is named, which is safe only because
+      // its tRPC callers separately run the `assertProposalWorkspaceRead`
+      // editor+ gate. This door has no such gate, so replacing the floor here
+      // would let any hub caller name any workspace id and read it.
+      const conditions = [proposalUserFloor(ctx.userId as string)];
 
       if (input.workspaceId) {
         conditions.push(eq(proposals.workspaceId, input.workspaceId));

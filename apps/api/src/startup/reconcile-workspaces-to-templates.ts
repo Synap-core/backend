@@ -2,11 +2,18 @@
  * reconcileWorkspacesToTemplates
  * ==============================
  *
- * Boot-time convergence: for every workspace whose `settings.workspaceSubtype`
- * maps to a canonical template in `@synap-core/workspace-templates` (crm,
- * content-studio, brand-library, …), additively reconcile the live workspace to
- * that template — creating any missing profiles, workspace-overlay properties,
- * and entity-link relation defs.
+ * Boot-time convergence: for every workspace whose stamped template identity
+ * (`settings.packageSlug` → the promoted `package_slug` column →
+ * `settings.workspaceSubtype`, in that order — see `templateKeyOf` below for
+ * why the SLUG and not the subtype is the key) resolves to a canonical template
+ * in `@synap-core/workspace-templates` (crm, content-studio, brand-library, …),
+ * additively reconcile the live workspace to that template — creating any
+ * missing profiles, workspace-overlay properties, and entity-link relation defs.
+ *
+ * A workspace with NO stamped identity is invisible to this pass by design —
+ * the field that identifies it is the field that is missing. Recovering those
+ * orphans is `backfill-workspace-identity.ts`'s job, behind an explicit opt-in;
+ * this pass never infers.
  *
  * WHY THIS EXISTS: workspace schema updates used to depend on a specific frontend
  * app loading in a browser (the CRM app's client-side `reconcileCrmSchema`). That
@@ -66,6 +73,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
       id: workspaces.id,
       ownerId: workspaces.ownerId,
       settings: workspaces.settings,
+      packageSlug: workspaces.packageSlug,
     })
     .from(workspaces);
 
@@ -124,32 +132,66 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     );
   }
 
-  // Resolve each DISTINCT subtype ONCE through the cache-first resolver (CP
+  // Resolve each DISTINCT template key ONCE through the cache-first resolver (CP
   // catalog cache → frozen bundle). Async, so it can't run inside the pure
   // synchronous `orderWorkspacesByTemplateDependencies` lookup — pre-resolve
   // here, then feed the ordering a sync lookup backed by this map. A `null`
   // resolution (neither cache nor bundle knows the slug) matches the old
-  // `!getWorkspaceTemplate(subtype)` skip exactly.
-  const subtypeOf = (ws: (typeof rows)[number]): string | undefined =>
-    (ws.settings as { workspaceSubtype?: string } | null)?.workspaceSubtype ??
-    undefined;
+  // `!getWorkspaceTemplate(key)` skip exactly.
+  //
+  // ⚠️ THE KEY IS THE TEMPLATE SLUG, NOT THE SUBTYPE. This resolved by
+  // `settings.workspaceSubtype` alone, which is wrong in BOTH directions
+  // because `subtype` is not a template identity:
+  //   • it is not injective — `crm` is the declared subtype of THREE bundled
+  //     templates (crm, business-developer, networking), `research-base` of
+  //     three, `brand-library`/`ecosystem`/`operations` of two each. A
+  //     `business-developer` workspace stamped subtype "crm" resolved the
+  //     `crm` template and converged to the WRONG schema;
+  //   • it often is not a lookup key at all — 10 of 30 bundled templates have
+  //     `workspace.subtype !== meta.slug` (`builder-workspace` declares
+  //     subtype "builder"), and both `WORKSPACE_TEMPLATES` and
+  //     `cp_catalog_cache` are keyed by SLUG, so `resolveWorkspaceTemplate`
+  //     returned null and the workspace was skipped FOREVER.
+  // `packageSlug` (JSONB, dual-written to the promoted `package_slug` column
+  // by `mergeSettings`) IS that key on both resolution paths. Subtype stays as
+  // the last fallback so a legacy row whose subtype happens to also be a
+  // template slug keeps converging exactly as before — this only ever ADDS
+  // resolvable rows, never redirects one that already resolved by slug.
+  //
+  // This stays STRICTLY a read of a stamp the workspace already earned. No
+  // inference happens here by design: fingerprint-based identification lives
+  // in `backfill-workspace-identity.ts`, behind an explicit opt-in, because a
+  // silent mis-identification inside the boot reconciler would additively pour
+  // the wrong template's profiles and views into a live workspace.
+  const templateKeyOf = (ws: (typeof rows)[number]): string | undefined => {
+    const settings = ws.settings as {
+      packageSlug?: string;
+      workspaceSubtype?: string;
+    } | null;
+    return (
+      settings?.packageSlug ??
+      ws.packageSlug ??
+      settings?.workspaceSubtype ??
+      undefined
+    );
+  };
 
-  const resolvedBySubtype = new Map<string, ResolvedWorkspaceTemplate | null>();
+  const resolvedByKey = new Map<string, ResolvedWorkspaceTemplate | null>();
   for (const ws of rows) {
-    const subtype = subtypeOf(ws);
-    if (!subtype || resolvedBySubtype.has(subtype)) continue;
-    resolvedBySubtype.set(subtype, await resolveWorkspaceTemplate(subtype));
+    const key = templateKeyOf(ws);
+    if (!key || resolvedByKey.has(key)) continue;
+    resolvedByKey.set(key, await resolveWorkspaceTemplate(key));
   }
 
   // Sync lookup for the deps-first ordering, backed by the pre-resolved map.
   // Node identity lives in template-slug space (== the subtype); dependency
   // edges come from the RESOLVED template's own `dependencies` (freshest CP
   // graph on a cache hit, frozen-bundle graph offline).
-  const lookupTemplate = (subtype: string) => {
-    const resolved = resolvedBySubtype.get(subtype);
+  const lookupTemplate = (key: string) => {
+    const resolved = resolvedByKey.get(key);
     if (!resolved) return undefined;
     return {
-      meta: { slug: subtype },
+      meta: { slug: key },
       dependencies: resolved.dependencies.map((d) => ({ slug: d.slug })),
     };
   };
@@ -159,15 +201,15 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
   // no template / caught in a dependency cycle are all preserved — the sort
   // never drops a row, so this stays a full pass over every workspace.
   const ordered = orderWorkspacesByTemplateDependencies(
-    rows.map((ws) => ({ ws, subtype: subtypeOf(ws) })),
+    rows.map((ws) => ({ ws, subtype: templateKeyOf(ws) })),
     lookupTemplate
   );
 
-  for (const { ws, subtype } of ordered) {
+  for (const { ws, subtype: templateKey } of ordered) {
     // No subtype (e.g. a bare "personal" workspace) or no template resolves for
     // it (cache miss AND not in the frozen bundle) → nothing to converge to.
-    const resolved = subtype ? resolvedBySubtype.get(subtype) : undefined;
-    if (!subtype || !resolved) {
+    const resolved = templateKey ? resolvedByKey.get(templateKey) : undefined;
+    if (!templateKey || !resolved) {
       skipped++;
       continue;
     }
@@ -189,7 +231,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         userId: ws.ownerId,
         definition:
           resolved.workspaceDefinition as unknown as WorkspaceDefinitionInput,
-        packageSlug: subtype,
+        packageSlug: templateKey,
         packageVersion: resolved.version,
       });
 
@@ -205,7 +247,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
         logger.info(
           {
             workspaceId: ws.id,
-            subtype,
+            templateKey,
             source: resolved.source,
             version: resolved.version,
             profilesAdded: report.profiles.added,
@@ -221,7 +263,7 @@ export async function reconcileWorkspacesToTemplates(): Promise<void> {
     } catch (err) {
       failed++;
       logger.warn(
-        { err, workspaceId: ws.id, subtype },
+        { err, workspaceId: ws.id, templateKey },
         "Workspace template reconcile failed (non-fatal)"
       );
     }

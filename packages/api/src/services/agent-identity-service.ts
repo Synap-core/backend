@@ -14,10 +14,12 @@ import {
   db,
   eq,
   and,
+  or,
   inArray,
   isNull,
   sql,
   apiKeys,
+  proposals,
   EventRepository,
   ApiKeyRepository,
   type ApiKeyScope,
@@ -149,6 +151,39 @@ export function ownAgentUserFilter(
   userId: string
 ): SQL {
   return inArray(agentUserIdColumn, ownAgentUserIds(userId));
+}
+
+/**
+ * "This proposal is MINE" — the authorship floor, as ONE predicate.
+ *
+ * Three branches, and all three are needed because `proposals.createdBy` is
+ * OVERLOADED: it holds the userId **or** the agentUserId that authored the row,
+ * depending on which door wrote it.
+ *
+ *   1. `createdBy = me`                    — I authored it directly.
+ *   2. `agentUserId ∈ my agents`           — my agent authored it, attributed.
+ *   3. `createdBy ∈ my agents`             — my agent authored it, and the door
+ *                                            put the agent id in `createdBy`.
+ *
+ * This is NOT a workspace widening: there is no membership term, and every
+ * branch is floored on THIS user's own lineage, so it can never admit another
+ * human's rows (or their agents'). That distinction matters — a
+ * workspace-membership branch bolted on here would do exactly that.
+ *
+ * Extracted because this exact three-branch `or(...)` was already copy-pasted
+ * verbatim in `diagnose/global.ts` and `diagnose/index.ts`, and the site that
+ * did NOT have it (`diagnose/resolve-object-kind.ts`) was the live bug: the
+ * global summary told the user "4 more of yours sit outside your workspace
+ * lens", and asking diagnose about one of them answered "no diagnosable
+ * object found". One definition, so a lens question and an ownership question
+ * can never silently become the same query again.
+ */
+export function authoredByUser(userId: string): SQL {
+  return or(
+    eq(proposals.createdBy, userId),
+    ownAgentUserFilter(proposals.agentUserId, userId),
+    ownAgentUserFilter(proposals.createdBy, userId)
+  ) as SQL;
 }
 
 /**

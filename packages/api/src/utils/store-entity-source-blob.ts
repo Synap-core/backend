@@ -21,9 +21,14 @@
  *                        (a capture that proposed onto an existing entity).
  *   discardSourceBlob()  delete the object + the `documents` row. Called when
  *                        the gate DENIES, and — through
- *                        `discardProposalSourceBlob` — from `proposals.reject`
- *                        and `proposals.batchReject`, so a staged blob never
- *                        outlives the decision that refused it.
+ *                        `discardProposalSourceBlob` — from EVERY door that
+ *                        writes a terminal proposal status without attaching:
+ *                        `reject`, `batchReject`, `withdraw`, both expiry
+ *                        scanners, and the partial-approval branch that
+ *                        materialized no entity to attach to. So a staged blob
+ *                        never outlives the decision that ended its proposal.
+ *                        (`__tripwires__/source-blob-ownership-and-terminal-discard`
+ *                        derives that door list from `ProposalStatus` itself.)
  *
  * Producers of the staged reference: `storeEntitySourceBlob` below (the direct
  * door, on a `proposed` verdict) and `capture.execute`'s propose branch via

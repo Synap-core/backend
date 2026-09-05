@@ -166,6 +166,7 @@ export {
   ensureSystemProfiles,
   ensureDevplaneProfiles,
   ensureTeamMemberRoleProfile,
+  RETIRED_PROFILE_PROPERTIES,
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 

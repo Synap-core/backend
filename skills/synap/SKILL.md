@@ -62,8 +62,8 @@ Two reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):
   back `proposed` for review, which is correct — an unconfirmed guess about a
   person should not become fact silently.
 
-  This is the difference between the pod knowing *what you worked on* and
-  knowing *how to work with you*. A preference filed as generic content is
+  This is the difference between the pod knowing _what you worked on_ and
+  knowing _how to work with you_. A preference filed as generic content is
   retrievable but never briefs anyone.
 
 Run `synap_orient` (CLI: `synap orient`) once per session. It is a BRIEFING, not

@@ -100,6 +100,13 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("entity_facet")).toBe("Facet");
     expect(resolveObjectNoun("entity_facets")).toBe("Facet");
     expect(resolveObjectNoun("property_def")).toBe("Property");
+    // CP publish vocabulary → pod runtime vocabulary. A marketplace package of
+    // this kind must not read "Workflow" in one surface and "Automation" in
+    // another; before the alias, `workflow` humanized and missed the icon.
+    expect(resolveObjectNoun("workflow")).toBe(resolveObjectNoun("automation"));
+    expect(resolveObjectNoun("workflows")).toBe(
+      resolveObjectNoun("automation")
+    );
     expect(resolveObjectNoun("property_defs")).toBe("Property");
     expect(resolveObjectNoun("relation")).toBe("Link");
     expect(resolveObjectNoun("relations")).toBe("Link");

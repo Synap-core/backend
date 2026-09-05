@@ -32,12 +32,14 @@ import {
   db,
   desc,
   eq,
+  or,
   proposals,
   ProposalStatus,
   type SQL,
 } from "@synap/database";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { authoredByUser } from "../agent-identity-service.js";
 import {
   RULE_CATEGORY,
   buildRuleMetadata,
@@ -167,7 +169,15 @@ export async function listPendingRuleProposals(
   const conditions: SQL[] = [
     eq(proposals.targetType, RULE_TARGET_TYPE),
     eq(proposals.status, ProposalStatus.PENDING),
-    userVisibleWhere(proposals.workspaceId, input.userId),
+    // "Is a rule like this ALREADY pending?" — a question about the caller's own
+    // filings, so LENS **or** OWNERSHIP. Floored on the lens alone, the caller's
+    // own proposal in an unjoinable workspace was invisible and the next agent
+    // re-proposed the same rule — the exact duplicate this file exists to stop.
+    // `scopeVisibleToCaller` below still applies the pod/user/workspace tier.
+    or(
+      userVisibleWhere(proposals.workspaceId, input.userId),
+      authoredByUser(input.userId)
+    ) as SQL,
   ];
 
   const rows = await db.query.proposals.findMany({

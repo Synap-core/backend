@@ -274,3 +274,21 @@ describe("the runs ledger classifies through this predicate, not its own", () =>
     expect(code).not.toMatch(/->>'automationId'/);
   });
 });
+
+describe("ambient attribution files writes under WORK only", () => {
+  it("the MCP ambient-session resolver narrows to sessionKindWhere('work')", () => {
+    // Which session an agent's write is FILED UNDER is decided here. An open
+    // run or receipt is often the newest open session (08:00 crons), and
+    // attributing a write to it is exactly the mis-grouping this guards.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(
+      join(here, "../../../routers/mcp/handlers/shared.ts"),
+      "utf8"
+    );
+    const fn = src.slice(
+      src.indexOf("export async function listOpenFocusSessions")
+    );
+    const body = fn.slice(0, fn.indexOf(".orderBy("));
+    expect(body).toContain('sessionKindWhere("work")');
+  });
+});

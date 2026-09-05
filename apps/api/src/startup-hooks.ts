@@ -39,6 +39,10 @@ import {
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 import { backfillAllWorkspacesTeamPersonBridge } from "./startup/backfill-team-person-bridge.js";
+import {
+  backfillWorkspaceIdentity,
+  formatIdentityReport,
+} from "./startup/backfill-workspace-identity.js";
 import { backfillFederationOidcCredentials } from "./routers/federation.js";
 
 const logger = createLogger({ module: "startup-hooks" });
@@ -615,6 +619,33 @@ export async function runStartupHooks(): Promise<void> {
       { err },
       "Failed to seed widget definitions on startup (non-fatal)"
     );
+  }
+
+  // OPT-IN ONLY — recover workspaces that carry NO template identity at all, so
+  // the reconcile pass immediately below can actually see them. This is NEVER
+  // automatic: without `WORKSPACE_IDENTITY_BACKFILL` it does not run, and even
+  // `=report` only prints. `=stamp` writes an identity for UNAMBIGUOUS
+  // fingerprint matches only, logging the evidence for each; it is idempotent
+  // (an identity that exists is never overwritten) so leaving the flag on is
+  // harmless. Placed BEFORE the reconcile so a stamp converges the SAME boot.
+  // See `startup/backfill-workspace-identity.ts` for why inference is confined
+  // to this gated pass and never allowed inside the reconciler.
+  const identityMode = process.env.WORKSPACE_IDENTITY_BACKFILL?.trim();
+  if (identityMode === "report" || identityMode === "stamp") {
+    try {
+      const result = await backfillWorkspaceIdentity({
+        stamp: identityMode === "stamp",
+      });
+      logger.info(
+        { report: formatIdentityReport(result) },
+        "Workspace identity backfill"
+      );
+    } catch (err) {
+      logger.warn(
+        { err },
+        "Workspace identity backfill failed on startup (non-fatal)"
+      );
+    }
   }
 
   // Converge every workspace to its canonical template (crm.yaml, content-studio.yaml,

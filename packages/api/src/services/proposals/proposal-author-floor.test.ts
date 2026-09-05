@@ -38,7 +38,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
@@ -316,4 +316,105 @@ describe("recall and dedup lanes have DIFFERENT type floors, on purpose", () => 
         "floor here only hides pending work from the agent that asked about it."
     ).not.toContain("CAPTURE_GRAPH_PROPOSAL_TYPES");
   });
+});
+
+/**
+ * A surface that ADVERTISES outside-lens rows must be able to RESOLVE them.
+ *
+ * ── THE LIVE CONTRADICTION ─────────────────────────────────────────────────
+ * Found by dogfooding the deployed pod, not by any test. Whole-pod health says,
+ * verbatim:
+ *
+ *   "4 more of yours sit outside your workspace lens (unresolvable placement)
+ *    — list proposals to see them"
+ *
+ * …because `diagnose/global.ts` counts them on the OWNERSHIP floor
+ * (`authoredByUser`, no membership term). The user then lists them, picks one,
+ * and asks `diagnose({ id })` — which probed proposals on the bare WORKSPACE
+ * lens and answered "No diagnosable object found for id …". The product told
+ * the user those rows exist and then denied they existed.
+ *
+ * ── WHY THIS TEST IS NARROW ON PURPOSE ─────────────────────────────────────
+ * There are ~29 `userVisibleWhere(proposals.workspaceId, …)` call sites across
+ * ~17 files, and MOST ARE CORRECT: `userVisibleWhere` is the right floor for a
+ * LENS question ("what is in my workspaces"). It is wrong only for an
+ * OWNERSHIP question ("what is mine"). A blanket "every proposal query needs an
+ * author branch" rule would be a standing invitation to widen access floors —
+ * the opposite of safe.
+ *
+ * So this pins the one invariant that is unambiguously true: the ADVERTISER
+ * (global.ts) and the RESOLVER (resolve-object-kind.ts) must agree. It is
+ * derived from the advertisement's own existence — delete `mineOutsideLens` and
+ * the obligation lifts by itself.
+ */
+describe("advertising outside-lens rows obliges resolving them", () => {
+  const globalPath = join(here, "../diagnose/global.ts");
+  const resolverPath = join(here, "../diagnose/resolve-object-kind.ts");
+
+  const strip = (src: string): string =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
+      .replace(/(^|[^:])\/\/[^\n]*/gm, (_m, p1) => p1);
+
+  it("both files exist", () => {
+    expect(existsSync(globalPath), globalPath).toBe(true);
+    expect(existsSync(resolverPath), resolverPath).toBe(true);
+  });
+
+  it("global health still ADVERTISES outside-lens rows (the premise)", () => {
+    // NON-VACUITY: if the advertisement is ever removed, this whole obligation
+    // is moot — and this test must say so loudly rather than pass on absence.
+    const src = strip(readFileSync(globalPath, "utf8"));
+    expect(
+      src,
+      "`mineOutsideLens` is gone from whole-pod health. If that was deliberate, " +
+        "delete this describe block too — it exists only to keep the resolver " +
+        "honest about rows the summary promises."
+    ).toContain("mineOutsideLens");
+  });
+
+  /*
+   * BOTH HALVES. `diagnose({id})` runs two queries: `resolve-object-kind.ts`
+   * FINDS the row, then `index.ts` diagnoseObject LOADS it. Fixing only the
+   * resolver changed the error from "No diagnosable object found for id …" to
+   * "Proposal not found" — still broken, and this test passed on that half-fix
+   * because it scanned one file. Scanning the path, not a file, is the point.
+   *
+   * `diagnoseClass` (also in index.ts) is deliberately NOT a counter-example:
+   * it lists on the lens and separately COUNTS ownership as `mineOutsideLens`,
+   * disclosing the gap instead of hiding it. That is why the assertion is
+   * "ownership appears at least as often as the lens" per file rather than
+   * "every lens hit is paired" — a file may legitimately do both.
+   */
+  const idPath: Array<[string, string]> = [
+    ["resolve-object-kind.ts", resolverPath],
+    ["diagnose/index.ts", join(here, "../diagnose/index.ts")],
+  ];
+
+  it.each(idPath)(
+    "%s reaches a proposal the caller AUTHORED outside their lens",
+    (_label, path) => {
+      expect(existsSync(path), path).toBe(true);
+      const src = strip(readFileSync(path, "utf8"));
+
+      const lensHits = (
+        src.match(/userVisibleWhere\(\s*proposals\.workspaceId/g) ?? []
+      ).length;
+      const ownershipHits = (src.match(/authoredByUser\(/g) ?? []).length;
+
+      expect(
+        lensHits,
+        "this file no longer queries proposals by workspace lens at all — " +
+          "the matcher is stale, not satisfied."
+      ).toBeGreaterThan(0);
+
+      expect(
+        ownershipHits,
+        `floors on the workspace lens at ${lensHits} site(s) but reaches the ` +
+          `ownership floor at ${ownershipHits}. Whole-pod health advertises ` +
+          "rows OUTSIDE that lens, so a bare-lens query on the diagnose id " +
+          "path denies rows the same tool just told the user to go read."
+      ).toBeGreaterThanOrEqual(lensHits);
+    }
+  );
 });

@@ -46,6 +46,7 @@ import {
   workspaceLensWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { authoredByUser } from "../agent-identity-service.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import {
@@ -929,7 +930,14 @@ async function listAgentWriteRuns(
         drizzleSql`${proposals.agentUserId} IS NOT NULL`,
         drizzleSql`${proposals.proposalType} NOT IN (${CAPTURE_PROPOSAL_TYPE}, ${CAPABILITY_RUN_PROPOSAL_TYPE})`,
         isNull(proposals.stepRunId),
-        userVisibleWhere(proposals.workspaceId, userId),
+        // "What did MY agents actually execute?" — this lane is auto-approved
+        // agent-authored writes, so LENS **or** OWNERSHIP. On the lens alone a
+        // receipt landing outside it disappeared: the agent reported "done" and
+        // the runs feed showed nothing ran.
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        ),
         exactRunId
           ? or(
               eq(proposals.correlationId, exactRunId),

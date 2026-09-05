@@ -39,7 +39,7 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
-import { ownAgentUserFilter } from "../agent-identity-service.js";
+import { authoredByUser } from "../agent-identity-service.js";
 import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -231,7 +231,16 @@ async function diagnoseObject(
         .where(
           and(
             eq(proposals.id, id),
-            userVisibleWhere(proposals.workspaceId, userId)
+            // LENS **or** OWNERSHIP — the same pairing `resolve-object-kind.ts`
+            // uses to FIND the row. Without it the two halves disagreed: the
+            // resolver identified an outside-lens proposal and this loader then
+            // answered "Proposal not found", so the fix upstream just changed
+            // which error the user got. Both halves of the id path must reach
+            // the rows `mineOutsideLens` advertises.
+            or(
+              userVisibleWhere(proposals.workspaceId, userId),
+              authoredByUser(userId)
+            )
           )
         )
         .limit(1);
@@ -611,11 +620,7 @@ async function diagnoseClass(
         .from(proposals)
         .where(
           and(
-            or(
-              eq(proposals.createdBy, userId),
-              ownAgentUserFilter(proposals.agentUserId, userId),
-              ownAgentUserFilter(proposals.createdBy, userId)
-            ),
+            authoredByUser(userId),
             eq(proposals.status, ProposalStatus.PENDING),
             workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
           )

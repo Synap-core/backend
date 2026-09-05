@@ -54,7 +54,7 @@ import {
   workspaces,
   ProfileRepository,
 } from "@synap/database";
-import { ownAdjunctFilter } from "../agent-identity-service.js";
+import { ownAdjunctFilter, authoredByUser } from "../agent-identity-service.js";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { LinkEndpointType } from "@synap/playbooks";
 import { getLinksFor } from "../links/links-service.js";
@@ -921,7 +921,13 @@ export async function getTemporalNeighbors(
       .where(
         and(
           inArray(proposals.id, proposalIds),
-          userVisibleWhere(proposals.workspaceId, userId)
+          // The `proposalIds` fed in already came from `events` filtered on
+          // `events.userId = userId`, so these are the caller's own decisions —
+          // LENS **or** OWNERSHIP, else the object's own history had holes.
+          or(
+            userVisibleWhere(proposals.workspaceId, userId),
+            authoredByUser(userId)
+          )
         )
       );
     for (const p of proposalRows) {

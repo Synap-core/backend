@@ -81,6 +81,8 @@ import type {
 } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { authoredByUser } from "../agent-identity-service.js";
+import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { getCapabilityMemberParts } from "../links/links-service.js";
 import { buildCapabilityComposition } from "../diagnose/capability-composition.js";
 import type { CapabilityComposition } from "../diagnose/types.js";
@@ -1387,7 +1389,14 @@ export async function resolveProvenance(
       .where(
         and(
           eq(proposals.id, id),
-          userVisibleWhere(proposals.workspaceId, userId)
+          // "Where did THIS proposal come from?" — a single-id provenance
+          // lookup for a row the caller already holds, so LENS **or**
+          // OWNERSHIP. On the lens alone the caller's own outside-lens proposal
+          // answered "no provenance" instead of showing its own run.
+          or(
+            userVisibleWhere(proposals.workspaceId, userId),
+            authoredByUser(userId)
+          )
         )
       )
       .limit(1);
@@ -1710,12 +1719,18 @@ export async function getSignalSummary(
       ),
     // 4. Proposals awaiting the caller's decision (pod-wide, or scoped to the
     //    capability's channels via the run that produced each proposal).
+    //    Floored with `proposalUserFloor` — the SAME predicate the review queue
+    //    (`proposals.list` / Hub `GET /api/hub/proposals`) uses. This metric
+    //    LABELS that queue, so a bare lens here would report a smaller number
+    //    than the list it describes, for the caller's own orphaned-workspace
+    //    rows. Unlike the run-side predicates below, this one counts a
+    //    person's decisions, not a workspace's activity.
     db
       .select({ value: count() })
       .from(proposals)
       .where(
         and(
-          userVisibleWhere(proposals.workspaceId, userId),
+          proposalUserFloor(userId),
           inArray(proposals.status, [
             ProposalStatus.PENDING,
             ProposalStatus.APPROVAL_FAILED,

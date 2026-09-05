@@ -240,6 +240,71 @@ export const CaptureStructureRequestSchema = z
   })
   .openapi("CaptureStructureRequest");
 
+/**
+ * The extraction summary the Intelligence Service returns when a `file` input
+ * was normalized to text before structuring. Shared by the structure response
+ * codec below and (as `file.extractedText`) by the execute request, which is
+ * how a caller round-trips the extracted body back so the pod can persist it
+ * as the kept document's v1 content.
+ *
+ * MIRRORS the tRPC `capture.structure` output field of the same name (see
+ * `intelligence-client`'s `structure()` return). Declared — not passthrough —
+ * because a passthrough record is not a contract: it publishes nothing, and
+ * this door dropped `extraction` for exactly that long.
+ */
+export const CaptureExtractionSchema = z
+  .object({
+    kind: z.string(),
+    extractor: z.string(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    warnings: z.array(z.string()).optional(),
+    /** Extracted body text — echo back as `file.extractedText` on execute. */
+    text: z.string().optional(),
+    /** True when the IS truncated `text`. */
+    textTruncated: z.boolean().optional(),
+  })
+  .openapi("CaptureExtraction");
+
+/**
+ * POST /capture/structure 200 body — the AI PLAN payload.
+ *
+ * Loose (`.passthrough()`) on purpose: this route serves TWO dissimilar
+ * payloads (an agent gets the ephemeral plan below; a human caller gets the
+ * persisted-proposal confirm-mode envelope: status/proposalId/reviewUrl/…),
+ * and the plan itself carries additive fields. What the schema DOES pin is the
+ * honesty triple the CLI/Raycast/agent doors depend on — `degraded`,
+ * `degradedReason` and `extraction` — so it can never again be true that the
+ * tRPC door forwards a reason the REST door never declared.
+ */
+export const CaptureStructureResponseSchema = z
+  .object({
+    proposals: z.array(z.record(z.string(), z.unknown())).optional(),
+    relations: z.array(z.record(z.string(), z.unknown())).optional(),
+    followUp: z.unknown().optional(),
+    targetWorkspaceId: z.string().nullish(),
+    targetWorkspaceName: z.string().nullish(),
+    targetWorkspaceReason: z.string().nullish(),
+    targetWorkspaceConfidence: z.number().nullish(),
+    targetProjectId: z.string().nullish(),
+    targetProjectReason: z.string().nullish(),
+    targetProjectConfidence: z.number().nullish(),
+    /** True when the plan came from the degraded fallback path, not a real structuring. */
+    degraded: z.boolean().optional(),
+    /**
+     * WHY it degraded. Either one of the pod's plumbing reasons
+     * (`is_auth_error` | `is_invalid_response` | `is_empty_result`) or — and
+     * this is the one that matters — an Intelligence Service extraction reason
+     * (`vision_provider_not_configured`, `pdf_scanned_needs_ocr`,
+     * `transcription_provider_not_configured`, `unsupported_type`, …). Kept an
+     * open string: the IS owns this vocabulary and may add to it, and a closed
+     * enum here would turn a NEW honest reason into a validation failure.
+     */
+    degradedReason: z.string().optional(),
+    extraction: CaptureExtractionSchema.optional(),
+  })
+  .passthrough()
+  .openapi("CaptureStructureResponse");
+
 /** POST /capture/execute request body. */
 export const CaptureExecuteRequestSchema = z
   .object({
@@ -300,6 +365,22 @@ export const CaptureExecuteRequestSchema = z
         content: z.string().max(7_000_000, "file.content too large (max ~5MB)"),
         mimeType: z.string(),
         filename: z.string().optional(),
+        /**
+         * The text `/capture/structure` already extracted from THIS file and
+         * returned as `extraction.text`. Echoed back so the pod can persist it
+         * as the kept document's v1 body.
+         *
+         * These two fields exist on the tRPC `capture.execute` contract and
+         * were the ONLY ones this codec omitted — and because zod STRIPS what
+         * it does not declare, extracted text could never round-trip through
+         * the REST door. Every CLI/Raycast/agent file capture therefore landed
+         * a kept blob with an EMPTY `document_versions.content`, blinding the
+         * embedding worker, the retrieval body join and Typesense enrichment,
+         * with no error anywhere. Declared, not passthrough, for that reason.
+         */
+        extractedText: z.string().max(1_000_000).optional(),
+        /** Mirrors `extraction.textTruncated`; recorded on the document. */
+        extractedTextTruncated: z.boolean().optional(),
       })
       .optional(),
     /** Retry namespace: same key + tempIds links prior entities instead of duplicating. */

@@ -18,6 +18,7 @@ import {
   proposals,
   eq,
   and,
+  or,
   drizzleSql,
   getWorkspaceMembership,
 } from "@synap/database";
@@ -26,6 +27,7 @@ import { apiKeys } from "@synap/database/schema";
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { authoredByUser } from "../../../services/agent-identity-service.js";
 import { getUserWorkspaceIds } from "../../../utils/workspace-membership.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
@@ -225,14 +227,39 @@ export async function resolveProposalId(
   // (permission-check.ts:1254), but the agent-initiated paths stamp the AGENT
   // (:771, :1393) — so an AI proposal would list fine, print its short id, then
   // 404 on approve. `userVisibleWhere` also covers pod-wide (NULL workspace)
-  // proposals. This is disambiguation, not authorization: approve/reject still
-  // gate downstream.
+  // proposals.
+  //
+  // LENS **or** OWNERSHIP, and the `or` is the whole point. This filter used to
+  // be the lens ALONE, described as "disambiguation, not authorization". That
+  // was inverted: the authority gate behind it, `computeCanReviewApproval`
+  // (routers/proposals/review-authority.ts), treats membership and ownership as
+  // ALTERNATIVES — `allowed = canReviewProposal({ memberRole, isOwner })`. So a
+  // lens-only pre-filter is a SECOND, STRICTER, UNDECLARED authorization that
+  // denies rows the declared gate would allow.
+  //
+  // Reproduced live on the deployed pod: rejecting proposal
+  // `dc46aa36-…` by FULL uuid succeeded (isOwner, no membership — its workspace
+  // had been deleted), while the 8-char prefix for the SAME row returned
+  // "No proposal matches". Same caller, same door, same proposal.
+  //
+  // The predicate is not invented here: `services/diagnose/resolve-object-kind.ts`
+  // already ships `or(userVisibleWhere(...), authoredByUser(...))` for the same
+  // reason. This is consolidation onto that floor, not a new rule.
+  //
+  // It is NOT an existence oracle: `authoredByUser` has no membership term and
+  // all three of its branches anchor to THIS caller, so the resolvable set is
+  // exactly (lens list) ∪ (ownership list) — two doors that already hand this
+  // caller the same rows with full uuids. Never add a third term without a list
+  // door behind it; that WOULD build the oracle.
   const rows = await db
     .select({ id: proposals.id })
     .from(proposals)
     .where(
       and(
-        userVisibleWhere(proposals.workspaceId, userId),
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        ),
         drizzleSql`${proposals.id}::text LIKE ${`${raw}%`}`
       )
     )

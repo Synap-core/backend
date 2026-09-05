@@ -39,6 +39,7 @@ import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
 } from "../../../services/focus-sessions/session-statuses.js";
 import {
   attachTriage,
@@ -166,6 +167,12 @@ const UsedCapabilityBodySchema = z.object({
 const CompleteBodySchema = z.object({
   summary: z.string().optional(),
   verificationReport: z.record(z.string(), z.unknown()).optional(),
+  // Every lifecycle exit, not just `closed`. The PATCH door above has always
+  // been able to cancel/fail a session (its enum derives from
+  // UPDATABLE_SESSION_STATUSES); this route hardcoded `closed`, so the CLI and
+  // the MCP door — which both close through here — could record only success.
+  // Derived from the SSOT so a fourth terminal status is accepted by default.
+  terminalStatus: z.enum(TERMINAL_SESSION_STATUSES).optional(),
 });
 
 // ── Registration ───────────────────────────────────────────────────────────
@@ -856,6 +863,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         agentUserId,
         summary: parsed.data.summary,
         verificationReport: parsed.data.verificationReport,
+        terminalStatus: parsed.data.terminalStatus,
       });
 
       if (!result) {
@@ -863,7 +871,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       return c.json({
-        status: "closed" as const,
+        // The status the ROW holds. A literal here would report a cancel or a
+        // failure as a successful close.
+        status: result.session.status,
         session: result.session,
         pendingProposals: result.pendingProposals,
         counts: result.counts,

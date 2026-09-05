@@ -12,11 +12,13 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
  * `where` tree — never silently dropped.
  */
 
-const { mockDb, mockChannelVisibility, mockUserVisible } = vi.hoisted(() => ({
-  mockDb: { select: vi.fn() },
-  mockChannelVisibility: vi.fn(),
-  mockUserVisible: vi.fn(),
-}));
+const { mockDb, mockChannelVisibility, mockUserVisible, mockAuthoredBy } =
+  vi.hoisted(() => ({
+    mockAuthoredBy: vi.fn(),
+    mockDb: { select: vi.fn() },
+    mockChannelVisibility: vi.fn(),
+    mockUserVisible: vi.fn(),
+  }));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -47,6 +49,14 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 vi.mock("../../utils/channel-visibility.js", () => ({
   channelVisibilityWhere: mockChannelVisibility,
+}));
+// The OWNERSHIP half of the floor. Mocked to a marker for the same reason
+// `userVisibleWhere` is: the real predicate is opaque Drizzle SQL, so without a
+// marker a test cannot tell whether the branch is present — and this branch
+// silently disappearing is precisely the defect this pairing exists to fix.
+vi.mock("../agent-identity-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-identity-service.js")>()),
+  authoredByUser: mockAuthoredBy,
 }));
 vi.mock("../../utils/user-visible-where.js", () => ({
   userVisibleWhere: mockUserVisible,
@@ -118,6 +128,7 @@ beforeEach(() => {
   mockChannelVisibility.mockImplementation((uid: string) => ({
     channelFloor: uid,
   }));
+  mockAuthoredBy.mockImplementation((uid: string) => ({ ownedBy: uid }));
   mockUserVisible.mockImplementation((_col: unknown, uid: string) => ({
     userFloor: uid,
   }));
@@ -502,8 +513,59 @@ describe("resolveProvenance", () => {
     // The proposal read is user-floored; the message read is channel-floored.
     expect(mockUserVisible).toHaveBeenCalledWith(expect.anything(), "u1");
     expect(mockChannelVisibility).toHaveBeenCalledWith("u1");
-    const propLeaves = flattenWhere(h.wheres[0]);
-    expect(propLeaves).toContainEqual({ userFloor: "u1" });
+    // LENS **or** OWNERSHIP on the proposal read. "Where did MY proposal come
+    // from?" is an ownership question, so the lens is one BRANCH of an `or` —
+    // a proposal of mine in an unjoinable workspace is still mine. The lens
+    // branch must remain present: widening must never REPLACE the floor.
+    //
+    // Located by CONTENT, not by index: `authoredByUser` builds its lineage
+    // subquery with `db.select().from(users).where(...)` (twice — branches 2
+    // and 3), and this harness captures those, so the proposal read is no
+    // longer `h.wheres[0]`. Pinning an index here made a correct change look
+    // like a regression.
+    // Flattened across ALL captured predicates, not `h.wheres[0]`:
+    // `authoredByUser` builds its lineage subquery with
+    // `db.select().from(users).where(...)`, which this harness records too, so
+    // the proposal read is no longer the first captured WHERE. Pinning an
+    // index made a correct change look like a regression.
+    // (Deep-equal via toContainEqual — a real Drizzle column is circular and
+    // cannot be JSON.stringify'd.)
+    // LENS **or** OWNERSHIP on the proposal read. "Where did MY proposal come
+    // from?" is an ownership question, so the lens became one BRANCH of an
+    // `or` — a proposal of mine in an unjoinable workspace is still mine. The
+    // lens must NOT be replaced, only joined.
+    //
+    // Asserted by COUNT, and that is load-bearing. Two reads in this path are
+    // user-floored (the proposal read and the run read) and both render the
+    // identical `{userFloor}` marker, so `toContainEqual` alone is VACUOUS —
+    // deleting the lens from the proposal read still finds the run read's
+    // marker and the test stays green. Measured: 2 with the lens, 1 without.
+    // An index (`h.wheres[0]`) cannot be used either: `authoredByUser` builds
+    // its lineage subquery via `db.select().from(users).where(...)`, which this
+    // harness also records, so the proposal read is no longer first.
+    const allLeaves = h.wheres.flatMap(flattenWhere);
+    const lensLeaves = allLeaves.filter(
+      (l): l is { userFloor: string } =>
+        typeof l === "object" &&
+        l !== null &&
+        Object.keys(l).length === 1 &&
+        (l as { userFloor?: string }).userFloor === "u1"
+    );
+    expect(
+      lensLeaves.length,
+      "expected BOTH user-floored reads in this path (the proposal read and " +
+        "the run read) to carry userVisibleWhere. A drop to 1 means one of " +
+        "them lost its lens — widening must never REPLACE the floor."
+    ).toBe(2);
+    // …and the OWNERSHIP branch is actually there. Without this, dropping
+    // `authoredByUser` and returning to the bare lens — the original defect —
+    // leaves this test green.
+    expect(
+      allLeaves,
+      "the ownership branch is gone: this read is back to a bare workspace " +
+        "lens, so the caller's own proposal in an unjoinable workspace is " +
+        "invisible again."
+    ).toContainEqual({ ownedBy: "u1" });
   });
 
   it("an unseeable proposal resolves to nothing (no leak)", async () => {

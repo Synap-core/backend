@@ -24,9 +24,12 @@ import {
   ProposalStatus,
   capabilities,
 } from "@synap/database";
-import { ne, or } from "@synap/database";
+import { ne } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { ownAgentUserFilter } from "../agent-identity-service.js";
+import {
+  ownAgentUserFilter,
+  authoredByUser,
+} from "../agent-identity-service.js";
 import { listRuns, listRunGroups } from "../runs/index.js";
 import {
   collapseProposalsToClusters,
@@ -351,11 +354,7 @@ export async function diagnoseGlobal(params: {
       .from(proposals)
       .where(
         and(
-          or(
-            eq(proposals.createdBy, userId),
-            ownAgentUserFilter(proposals.agentUserId, userId),
-            ownAgentUserFilter(proposals.createdBy, userId)
-          ),
+          authoredByUser(userId),
           eq(proposals.status, ProposalStatus.PENDING),
           workspaceId ? eq(proposals.workspaceId, workspaceId) : undefined
         )

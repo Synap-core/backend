@@ -16,6 +16,50 @@ import {
   ProfileScope,
 } from "../index.js";
 
+/**
+ * Profile-property links this seeder must actively REMOVE from pods that were
+ * seeded by an older version of it.
+ *
+ * WHY THIS TABLE EXISTS: the link pass in `ensureSystemProfiles` is additive
+ * only — it links every slug the seed declares and never unlinks one the seed
+ * dropped. So deleting a line from `profilePropertyLinks` is a no-op on every
+ * pod that already ran the older seed. The link is a fossil that outlives its
+ * source, and a fossil carrying `required: true` rejects every write made under
+ * the newer contract.
+ *
+ * Each entry is a RETIREMENT, not a deletion: the link goes, the property def
+ * stays (it may be global and shared with other profiles), and stored values
+ * stay in entity JSONB for migration/renderer fallback. Retiring removes the
+ * schema CLAIM — the key stops being required, editable and queryable there.
+ *
+ * Add an entry whenever a slug is removed from a system profile's
+ * `propertySlugs`. Removing the line alone does not converge existing pods.
+ */
+export const RETIRED_PROFILE_PROPERTIES: ReadonlyArray<{
+  profileSlug: string;
+  propertySlug: string;
+  reason: string;
+}> = [
+  {
+    profileSlug: "file",
+    propertySlug: "storageKey",
+    reason:
+      "Canonical `file` entities keep storage pointers on the `documents` row " +
+      "+ `entities.documentId`, never duplicated into properties. The now-deleted " +
+      "`scripts/seed-profiles.ts` linked this as REQUIRED, so pods seeded while it " +
+      "existed reject every file-entity create with \"Property 'storageKey' is " +
+      'required" — a live 500 on POST /api/hub/files and on every other door.',
+  },
+  {
+    profileSlug: "knowledge",
+    propertySlug: "ek_type",
+    reason:
+      "Legacy ek_type survives in entity JSON for migration/renderer fallback, but " +
+      "removing the profile link means it is not a second editable classification. " +
+      "New writes normalise it into the sole knowledgeForm.",
+  },
+];
+
 export interface EnsureSystemProfilesResult {
   status: "created" | "exists" | "error";
   message: string;
@@ -1696,15 +1740,44 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
     }
 
-    // Legacy ek_type survives in entity JSON for migration/renderer fallback,
-    // but removing the profile link means it is not a second editable
-    // classification. New writes normalise it into the sole knowledgeForm.
-    const legacyKnowledgeTypeId = createdPropertyDefs.get("ek_type");
-    if (legacyKnowledgeTypeId && knowledgeProfileId) {
-      await profilePropertyRepo.unlink(
-        knowledgeProfileId,
-        legacyKnowledgeTypeId
-      );
+    // ── RETIREMENT PASS ──────────────────────────────────────────────────
+    // The link loop above is ADDITIVE ONLY: it links every slug the seed
+    // declares and never unlinks one the seed dropped. Deleting a line from
+    // `profilePropertyLinks` therefore changes NOTHING on a pod that already
+    // ran the older seed — the fossil link survives forever, and if it carried
+    // `required: true` it rejects every write that follows the new contract.
+    //
+    // That is not hypothetical: `scripts/seed-profiles.ts` (deleted wholesale
+    // in the wave0 dead-code pass) had linked `file.storageKey` as REQUIRED.
+    // Deleting a seeder's SOURCE does not un-write what it already wrote, so
+    // every pod seeded while that file existed still rejects `file` entity
+    // creation with "Property 'storageKey' is required" — a live 500 on
+    // `POST /api/hub/files` and on every other file-creation door.
+    //
+    // So a slug removed from the seed needs an explicit retirement entry HERE.
+    // This table is the ONE door for that; `ek_type` (the first such case, and
+    // for a long time the only one) is folded into it rather than kept as a
+    // hand-rolled one-off beside it.
+    //
+    // Retiring UNLINKS the link, never the property def (a def can be global
+    // and shared by other profiles) and never the stored values — legacy JSONB
+    // survives for migration/renderer fallback exactly as before. What it
+    // removes is the SCHEMA claim: the key stops being required, editable and
+    // queryable on that profile.
+    for (const retired of RETIRED_PROFILE_PROPERTIES) {
+      const profileId = createdProfiles.get(retired.profileSlug);
+      if (!profileId) continue;
+
+      // Resolve through the profile's ACTUAL links rather than
+      // `createdPropertyDefs`: a retired slug is by definition no longer in the
+      // seed, so it is absent from that map. Looking it up from the live links
+      // is what lets this pass see a fossil the current seed cannot name.
+      const links = await profilePropertyRepo.getByProfile(profileId);
+      for (const link of links) {
+        const def = await propertyDefRepo.getById(link.propertyDefId);
+        if (def?.slug !== retired.propertySlug) continue;
+        await profilePropertyRepo.unlink(profileId, link.propertyDefId);
+      }
     }
 
     const totalCreated = profilesCreated + propertiesCreated + linksCreated;

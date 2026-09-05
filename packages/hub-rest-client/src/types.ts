@@ -354,11 +354,61 @@ export interface CaptureStructureInput {
   previousEntities?: CaptureProposal[];
 }
 
+/**
+ * WHY a capture degraded.
+ *
+ * Two families, and the difference is what a client must tell its user:
+ *  • pod plumbing (`is_*`) — the structurer itself failed; retrying is sensible.
+ *  • Intelligence Service extraction honesty (everything else) — the input
+ *    could not be read. Several of these are PERMANENT CONFIGURATION states
+ *    (`vision_provider_not_configured`, `transcription_provider_not_configured`)
+ *    where telling the user to "retry when it's back" is simply false.
+ *
+ * Open-ended on purpose (`string & {}`): the IS owns this vocabulary and may
+ * add reasons this union has not been taught. A client must humanize an
+ * unknown value, never leak the raw token.
+ */
+export type CaptureDegradedReason =
+  | "is_auth_error"
+  | "is_invalid_response"
+  | "is_empty_result"
+  | "pdf_scanned_needs_ocr"
+  | "pdf_missing_binary"
+  | "vision_provider_not_configured"
+  | "image_missing_binary"
+  | "transcription_provider_not_configured"
+  | "audio_missing_binary"
+  | "docx_missing_binary"
+  | "docx_empty"
+  | "html_empty"
+  | "unsupported_type"
+  | (string & {});
+
+/**
+ * Summary of the extraction pass, present when a `file` input was normalized to
+ * text before structuring. Echo `text` back as `CaptureExecuteInput.file
+ * .extractedText` so a kept original lands with a real document body.
+ */
+export interface CaptureExtraction {
+  kind: string;
+  extractor: string;
+  metadata?: Record<string, unknown>;
+  warnings?: string[];
+  /** Extracted body text (absent on the degraded early-return branch). */
+  text?: string;
+  /** True when the IS truncated `text`. */
+  textTruncated?: boolean;
+}
+
 export interface CaptureStructureResponse {
   proposals: CaptureProposal[];
   relations: CaptureRelation[];
-  /** The intelligence service was unavailable, so the pod returned a raw-note fallback. */
+  /** The structurer could not produce a real plan, so the pod returned a raw-note fallback. */
   degraded?: boolean;
+  /** WHY it degraded — see `CaptureDegradedReason`. Present whenever `degraded`. */
+  degradedReason?: CaptureDegradedReason;
+  /** Extraction summary for a `file` input (kind/extractor/warnings/text). */
+  extraction?: CaptureExtraction;
   followUp: string | StructuredFollowUp | null;
   formSpec?: DynamicFormSpec | null;
   targetWorkspaceId?: string | null;
@@ -428,6 +478,15 @@ export interface CaptureExecuteInput {
     content: string;
     mimeType: string;
     filename?: string;
+    /**
+     * `CaptureStructureResponse.extraction.text` echoed back, so the kept
+     * original is stored with a real document body instead of an empty one.
+     * The pod cannot re-derive it — extraction runs in the Intelligence
+     * Service and the caller is already holding the result.
+     */
+    extractedText?: string;
+    /** Mirrors `extraction.textTruncated`; recorded on the stored document. */
+    extractedTextTruncated?: boolean;
   };
   /** Client-stable retry namespace for this capture execution. */
   idempotencyKey?: string;

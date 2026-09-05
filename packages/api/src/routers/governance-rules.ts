@@ -36,6 +36,7 @@ import {
   db,
   eq,
   and,
+  or,
   isNotNull,
   desc,
   ProposalStatus,
@@ -49,6 +50,7 @@ import {
   proposals,
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { authoredByUser } from "../services/agent-identity-service.js";
 import {
   activeRulePredicate,
   podOrWorkspaceScopePredicate,
@@ -367,8 +369,12 @@ export const governanceRulesRouter = router({
       const SCAN_LIMIT = 500;
       const limit = Math.min(input.window ?? SCAN_LIMIT, SCAN_LIMIT);
 
-      // USER floor + agent-only: rung 2.8 governs AGENT writes, so a human-filed
-      // proposal (agentUserId NULL) was never subject to a rule — exclude it.
+      // Agent-only: rung 2.8 governs AGENT writes, so a human-filed proposal
+      // (agentUserId NULL) was never subject to a rule — exclude it.
+      // "How many of MY past proposals would this draft rule have flipped?" —
+      // LENS **or** OWNERSHIP, the same window+floor `allAgentsScorecard` uses,
+      // so the retro metric and the grid it is read beside cannot disagree.
+      // (Not an authorization gate — `assertCanManageRule` above is that.)
       const rows = await db
         .select({
           targetType: proposals.targetType,
@@ -382,7 +388,10 @@ export const governanceRulesRouter = router({
         .where(
           and(
             isNotNull(proposals.agentUserId),
-            userVisibleWhere(proposals.workspaceId, ctx.userId)
+            or(
+              userVisibleWhere(proposals.workspaceId, ctx.userId),
+              authoredByUser(ctx.userId)
+            )
           )
         )
         .orderBy(desc(proposals.createdAt))

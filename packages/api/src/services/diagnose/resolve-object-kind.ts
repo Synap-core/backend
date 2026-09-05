@@ -46,6 +46,7 @@ import {
 } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { authoredByUser } from "../agent-identity-service.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
@@ -137,7 +138,16 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(proposals.id, id),
-              userVisibleWhere(proposals.workspaceId, userId)
+              // LENS **or** OWNERSHIP. The bare lens here was a live
+              // contradiction: whole-pod health reports "N more of yours sit
+              // outside your workspace lens — list proposals to see them", and
+              // then this probe answered "no diagnosable object found" for
+              // exactly those rows. `authoredByUser` carries no membership
+              // term, so this admits nothing beyond the caller's own rows.
+              or(
+                userVisibleWhere(proposals.workspaceId, userId),
+                authoredByUser(userId)
+              )
             )
           )
           .limit(1);
@@ -399,7 +409,13 @@ export async function resolveObjectKind(
     .where(
       and(
         eq(proposals.correlationId, id),
-        userVisibleWhere(proposals.workspaceId, userId)
+        // Same reason as the row-id probe above: an agent hands back a
+        // correlationId from a run whose proposal may be placed outside the
+        // caller's workspace lens.
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        )
       )
     )
     .orderBy(drizzleSql`${proposals.createdAt} DESC`)

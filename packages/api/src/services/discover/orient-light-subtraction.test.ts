@@ -200,7 +200,7 @@ describe("orient light — subtraction", () => {
 });
 
 describe("detail:'full' still carries everything light drops", () => {
-  it("returns the profile inventory, every workspace, and the domain fallback", async () => {
+  it("returns the profile inventory and every workspace", async () => {
     const full = await run("full");
     expect(full.profiles?.map((p) => p.slug)).toEqual(["task", "person"]);
 
@@ -208,9 +208,10 @@ describe("detail:'full' still carries everything light drops", () => {
     expect(ids).toContain("ws-empty");
     expect(full.hiddenEmptyWorkspaceCount).toBeUndefined();
 
-    // The `Domain: <x>` fallback is back-compat, and full is where it lives.
+    // The `Domain: <x>` filler is gone from BOTH detail levels — a workspace
+    // with no real description/goal gets none, not a rendering of `domain`.
     const builder = full.workspaces.find((w) => w.id === "ws-full")!;
-    expect(builder.description).toBe("Domain: personal");
+    expect(builder.description).toBeNull();
 
     // Per-workspace profiles + the FULL onboarding spec (not just `goal`).
     expect(full.workspaces.every((w) => Array.isArray(w.profiles))).toBe(true);

@@ -96,7 +96,12 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // `humanizeToken("received")` happens to spell the PAST form — so the past
   // mood looked correct while the imperative silently returned "Received"
   // too. A coincidence is not a contract.
-  receive: { imperative: "Receive", past: "Received" },
+  //
+  // ⚠️ Keyed on `received`, the token the producer actually emits — NOT on a
+  // base form `receive`. I added both; `receive` had zero occurrences across
+  // all four repos, so it was a row nobody could reach, and it put a
+  // second spelling of one verb into a table whose whole job is to have one.
+  // A key here earns its place by being emitted, not by being well-formed.
   received: { imperative: "Receive", past: "Received" },
   merge: { imperative: "Merge", past: "Merged" },
   link: { imperative: "Link", past: "Linked" },

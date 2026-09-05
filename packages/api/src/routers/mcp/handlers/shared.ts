@@ -394,6 +394,7 @@ export function isReadOnlyTool(toolName: string): boolean {
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
 import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
+import { sessionKindWhere } from "../../../services/focus-sessions/session-kind.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -460,12 +461,18 @@ export async function listOpenFocusSessions(
       .where(
         and(
           eq(focusSessions.userId, userId),
-          inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+          inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+          // WORK only. This resolver decides which session an agent's write is
+          // FILED UNDER. An open automation run or a receipt is newer than the
+          // person's work most mornings (the 08:00 crons), and filing a write
+          // there is the mis-grouping ambient attach exists to avoid.
+          sessionKindWhere("work")
         )
       )
-      // SESSION-KIND-LENS-EXEMPT: the ambient-session RESOLVER — it answers
-      // "which session am I in?" and returns ids, not a page a consumer
-      // renders, so no lens rides on it.
+      // SESSION-KIND-LENS-EXEMPT: the ambient-session RESOLVER returns ids for
+      // attribution, not a page a consumer renders — it NARROWS to work above
+      // (which session a write is filed under is the whole question) and
+      // projects nothing.
       .orderBy(desc(focusSessions.startedAt))
       .limit(limit);
   } catch (err) {
