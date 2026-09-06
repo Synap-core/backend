@@ -17,6 +17,7 @@
  * once those packages are published to the registry pod-admin consumes.
  */
 
+import { headers } from "next/headers";
 import { ProposalReview } from "./ProposalReview";
 
 export const dynamic = "force-dynamic";
@@ -27,5 +28,16 @@ interface ProposalPageProps {
 
 export default async function ProposalPage({ params }: ProposalPageProps) {
   const { id } = await params;
-  return <ProposalReview proposalId={id} />;
+  // Same header plumbing the (admin) layout uses. A decision surface reached
+  // from an email has to say WHICH pod it speaks for and who the reader is
+  // signed in as — without that, a legitimate approval request is
+  // indistinguishable from a phishing page.
+  const h = await headers();
+  return (
+    <ProposalReview
+      proposalId={id}
+      podHost={h.get("host") ?? undefined}
+      identity={h.get("x-pod-admin-email") ?? undefined}
+    />
+  );
 }

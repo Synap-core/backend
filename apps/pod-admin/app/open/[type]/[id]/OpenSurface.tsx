@@ -4,21 +4,20 @@ import { useEffect, type ReactNode } from "react";
 import {
   Accordion,
   AccordionItem,
-  Card,
   CardBody,
   CardHeader,
   Chip,
   Spinner,
 } from "@heroui/react";
 import { Box, ExternalLink, LayoutGrid } from "lucide-react";
+import { openIn } from "../../../../lib/open-in";
+import {
+  ReceiverIdentityProvider,
+  ReceiverShell,
+} from "../../../_lib/receiver-shell";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import {
-  isUuid,
-  labelForOpenType,
-  openInAppHref,
-  type ParsedOpen,
-} from "../../open-params";
+import { isUuid, labelForOpenType, type ParsedOpen } from "../../open-params";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -60,7 +59,23 @@ type ViewPayload = {
   };
 };
 
-export function OpenSurface({ parsed }: { parsed: ParsedOpen }) {
+export function OpenSurface({
+  parsed,
+  podHost,
+  identity,
+}: {
+  parsed: ParsedOpen;
+  podHost?: string;
+  identity?: string;
+}) {
+  return (
+    <ReceiverIdentityProvider podHost={podHost} identity={identity}>
+      <OpenSurfaceBody parsed={parsed} />
+    </ReceiverIdentityProvider>
+  );
+}
+
+function OpenSurfaceBody({ parsed }: { parsed: ParsedOpen }) {
   const entityEnabled = parsed.status === "host" && parsed.type === "entity";
   const viewEnabled = parsed.status === "host" && parsed.type === "view";
   const queryId = parsed.status === "host" ? parsed.id : PLACEHOLDER_UUID;
@@ -325,18 +340,12 @@ function ViewCard({
   );
 }
 
+/* Shared with /proposal and the other inbound routes — see
+   `app/_lib/receiver-shell.tsx` for why these pages need chrome at all.
+   Pod identity comes from the route-level provider, so the three components
+   that call this all render the same header without threading props. */
 function shell(children: ReactNode) {
-  return (
-    <main className="flex min-h-screen items-start justify-center px-6 py-16">
-      <Card
-        radius="lg"
-        shadow="none"
-        className="w-full max-w-2xl bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10"
-      >
-        {children}
-      </Card>
-    </main>
-  );
+  return <ReceiverShell>{children}</ReceiverShell>;
 }
 
 function kindIcon(icon: ReactNode) {
@@ -390,14 +399,41 @@ function emptyBody({
   );
 }
 
+/**
+ * The only affordance on a bounce card — so it had better not be a dead end.
+ *
+ * Seven of the nine typed kinds (document, cell, channel, session, project,
+ * workspace, capability) have no web renderer here, and until 2026-09-06 this
+ * card offered a bare `synap://` link and nothing else. When the desktop app is
+ * not installed that link does NOTHING — no navigation, no error, no feedback
+ * of any kind — and the reader is stranded on a page whose single button
+ * appears broken. These links arrive from email, Discord and CLI output, so
+ * "not installed yet" is the common case, not the edge case.
+ *
+ * The exit is resolved through `openIn()` so the download fallback travels
+ * with it automatically, the same as every other exit in the app.
+ */
 function OpenInAppLink({ type, id }: { type: string; id: string }) {
+  const exit = openIn({ kind: "objectInApp", objectKind: type, id });
   return (
-    <a
-      href={openInAppHref(type, id)}
-      className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-1 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-    >
-      Open in the Synap app <ExternalLink size={14} aria-hidden />
-    </a>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+      <a
+        href={exit.href}
+        className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-1 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+      >
+        Open in the Synap app <ExternalLink size={14} aria-hidden />
+      </a>
+      {exit.fallback && (
+        <a
+          href={exit.fallback.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[12px] text-foreground/40 underline-offset-2 transition-colors hover:text-foreground/70 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+        >
+          {exit.fallback.label}
+        </a>
+      )}
+    </div>
   );
 }
 

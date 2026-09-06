@@ -3,7 +3,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
-  Card,
   CardBody,
   CardHeader,
   Chip,
@@ -13,6 +12,7 @@ import {
 } from "@heroui/react";
 import { Check, X, ExternalLink, ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
+import { ReceiverShell } from "../../_lib/receiver-shell";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
@@ -101,7 +101,15 @@ const OUTCOME_TONE: Record<
   },
 };
 
-export function ProposalReview({ proposalId }: { proposalId: string }) {
+export function ProposalReview({
+  proposalId,
+  podHost,
+  identity,
+}: {
+  proposalId: string;
+  podHost?: string;
+  identity?: string;
+}) {
   const query = trpc.proposals.get.useQuery({ proposalId });
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
@@ -173,16 +181,13 @@ export function ProposalReview({ proposalId }: { proposalId: string }) {
     </span>
   );
 
+  /* The frame is now shared with every other inbound route (invite, agent
+     approval, OAuth consent, /open) so a reader who lands on two of them
+     recognises the second. `openInApp` moves into the shell's footer slot. */
   const shell = (children: ReactNode) => (
-    <main className="flex min-h-screen items-start justify-center px-6 py-16">
-      <Card
-        radius="lg"
-        shadow="none"
-        className="w-full max-w-2xl bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10"
-      >
-        {children}
-      </Card>
-    </main>
+    <ReceiverShell podHost={podHost} identity={identity} footer={openInApp}>
+      {children}
+    </ReceiverShell>
   );
 
   if (query.isLoading) {

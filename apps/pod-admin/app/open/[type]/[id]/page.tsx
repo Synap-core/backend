@@ -16,6 +16,8 @@ import { redirect } from "next/navigation";
 import { OpenSurface } from "./OpenSurface";
 import { openDocumentTitle, parseOpenParams } from "../../open-params";
 
+import { headers } from "next/headers";
+
 export const dynamic = "force-dynamic";
 
 interface OpenPageProps {
@@ -37,5 +39,14 @@ export default async function OpenPage({ params }: OpenPageProps) {
   if (parsed.status === "bounce" && parsed.type === "proposal") {
     redirect(`/proposal/${parsed.id}`);
   }
-  return <OpenSurface parsed={parsed} />;
+  // Same identity plumbing as /proposal: an object link arriving from an
+  // email or a CLI must say which pod it belongs to before it shows content.
+  const h = await headers();
+  return (
+    <OpenSurface
+      parsed={parsed}
+      podHost={h.get("host") ?? undefined}
+      identity={h.get("x-pod-admin-email") ?? undefined}
+    />
+  );
 }
