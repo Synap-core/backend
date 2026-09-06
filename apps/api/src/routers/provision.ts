@@ -22,6 +22,7 @@
  */
 
 import { Hono, type Context } from "hono";
+import { probeIntelligenceService } from "./provision-intelligence-probe.js";
 import { z } from "zod";
 import { randomUUID, randomBytes } from "crypto";
 import bcrypt from "bcrypt";
@@ -874,6 +875,12 @@ provisionRouter.get("/status", async (c) => {
       }
     }
 
+    // LIVE reachability of the URL the runtime would actually use. Every field
+    // above this line is a cached DB row; this one asks the service. Both are
+    // reported, because they answer different questions and a pod can be
+    // unregistered-but-serving (env fallback) or registered-but-down.
+    const serviceProbe = await probeIntelligenceService(resolvedIsUrl);
+
     // Build detailed issue descriptions for each connection issue
     const connectionIssueDetails: Array<{ code: string; hint: string }> = [];
     const issueHints: Record<string, string> = {
@@ -921,6 +928,17 @@ provisionRouter.get("/status", async (c) => {
             source: resolvedIsSource,
           }
         : null,
+      // LIVE probe of the resolved IS URL — the ONE fact here that is measured
+      // rather than remembered. `reachable: true` alongside
+      // `intelligenceService: null` is a real and common state: the pod is
+      // serving AI through the env fallback while the CP registration row is
+      // absent or stale. Consumers must treat this as evidence of REACHABILITY
+      // only — it does not assert that credentials are valid.
+      serviceProbe: {
+        ...serviceProbe,
+        url: resolvedIsUrl,
+        source: resolvedIsSource,
+      },
       // Pod version info — read from env (set by install.sh / synap update)
       podVersion: process.env.BACKEND_VERSION || null,
       // Courier (SMTP) status — drives the "no recovery email arriving" warning
@@ -1125,28 +1143,23 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
   }
 
   // 2. Health check
-  let healthResult: { reachable: boolean; status?: number; body?: unknown } = {
-    reachable: false,
+  // Same probe `/status` uses — one implementation, so the two endpoints can
+  // never disagree about whether the service answered. `noCache` because a
+  // diagnostic must reflect NOW, not a memo from five seconds ago.
+  const probe = await probeIntelligenceService(resolvedUrl, {
+    timeoutMs: 5_000,
+    noCache: true,
+  });
+  const healthResult = {
+    reachable: probe.reachable,
+    status: probe.httpStatus,
+    latencyMs: probe.latencyMs,
   };
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5_000);
-    try {
-      const resp = await fetch(`${resolvedUrl}/health`, {
-        signal: controller.signal,
-      });
-      const body = await resp.json().catch(() => null);
-      healthResult = { reachable: true, status: resp.status, body };
-      if (!resp.ok) issues.push("health_check_failed");
-    } finally {
-      clearTimeout(timer);
-    }
-  } catch {
-    healthResult = { reachable: false };
-    issues.push("unreachable");
+  if (!probe.reachable) {
+    issues.push(probe.error === "timeout" ? "health_timeout" : "unreachable");
   }
 
-  // 3. Ready check (only if healthy)
+  // Readiness — distinct from health: the process answers, but is it serving?
   let readyResult: { reachable: boolean; latencyMs?: number } = {
     reachable: false,
   };
@@ -1170,31 +1183,22 @@ provisionRouter.get("/diagnose-intelligence", async (c) => {
     }
   }
 
-  // 4. Auth validation (only if reachable and we have a key)
-  let authResult: { valid: boolean | null; keyPrefix?: string | null } = {
+  // Credential validity is NOT probed here, and must not be guessed.
+  //
+  // What stood here sent the LITERAL STRING "redacted" as the API key to
+  // `/api/validate` and reported `valid: resp.ok`. It could never validate
+  // anything: a real key was never sent, so a rejection proved nothing and an
+  // acceptance would have proved less. It reported `key_rejected` on a healthy
+  // pod with correct credentials.
+  //
+  // The live credential check already exists as its own door —
+  // POST /api/provision/validate-credentials — which holds the decrypted key
+  // and refreshes the cached `intelligenceServices.status`. `null` here means
+  // "not checked on this path", which is the truth.
+  const authResult: { valid: boolean | null; keyPrefix?: string | null } = {
     valid: null,
     keyPrefix,
   };
-  if (healthResult.reachable && keyPrefix) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 5_000);
-      try {
-        // Use /health with the API key header as a lightweight auth check
-        const resp = await fetch(`${resolvedUrl}/api/validate`, {
-          headers: { "X-API-Key": keyPrefix ? "redacted" : "" },
-          signal: controller.signal,
-        });
-        // If the IS has a /api/validate endpoint, use it; otherwise treat 2xx as valid
-        authResult = { valid: resp.ok, keyPrefix };
-        if (!resp.ok) issues.push("key_rejected");
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch {
-      authResult = { valid: null, keyPrefix };
-    }
-  }
 
   return c.json({
     resolved: { url: resolvedUrl, source: resolvedSource },
