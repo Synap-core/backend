@@ -7230,7 +7230,13 @@ export interface RunAgent {
 export type HealthStatus = "ok" | "attention" | "degraded";
 /** One section of the whole-pod health read. */
 export interface HealthSection {
-	key: "stuck_runs" | "failed_flows" | "review_backlog" | "duplicate_proposals" | "capabilities" | "agent_activity";
+	key: "stuck_runs" | "failed_flows" | "review_backlog" | "duplicate_proposals" | "capabilities" | "agent_activity"
+	/**
+	 * How often the human says YES when the pod asks. Present only when the
+	 * signal was computed (see `GlobalSignals.reviewQueue`) — absent means
+	 * "not measured", never "0%".
+	 */
+	 | "review_queue";
 	status: HealthStatus;
 	/** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
 	headline: string;

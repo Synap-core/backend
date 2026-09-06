@@ -80,7 +80,13 @@ export interface HealthSection {
     | "review_backlog"
     | "duplicate_proposals"
     | "capabilities"
-    | "agent_activity";
+    | "agent_activity"
+    /**
+     * How often the human says YES when the pod asks. Present only when the
+     * signal was computed (see `GlobalSignals.reviewQueue`) — absent means
+     * "not measured", never "0%".
+     */
+    | "review_queue";
   status: HealthStatus;
   /** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
   headline: string;

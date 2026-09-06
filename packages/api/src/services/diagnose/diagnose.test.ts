@@ -236,6 +236,66 @@ describe("summarizeGlobalHealth", () => {
     expect(fresh.status).toBe("attention");
   });
 
+  it("omits the review-queue section entirely when the signal was not computed", () => {
+    // Absent must mean NOT MEASURED, never "0% approval".
+    const report = summarizeGlobalHealth(clean, { workspaceId: null });
+    expect(
+      report.sections.find((s) => s.key === "review_queue")
+    ).toBeUndefined();
+    expect(report.sections).toHaveLength(6);
+  });
+
+  it("flags a credible high approval rate as attention, and names the denominator", () => {
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        reviewQueue: {
+          reviewed: 100,
+          approvedInFull: 95,
+          approvedWithItemsDenied: 2,
+          rejected: 3,
+          approveRateOfReviewed: 0.95,
+          lowSample: false,
+          autoApprovedNeverReviewed: 40,
+          truncated: false,
+        },
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "review_queue");
+    expect(report.sections).toHaveLength(7);
+    // A measurement is never an outage.
+    expect(section?.status).toBe("attention");
+    expect(section?.detail.verdict).toBe("approval_fatigue");
+    // The headline carries the DENOMINATOR, not a bare percentage.
+    expect(section?.headline).toContain("95 of 100 reviewed proposal(s)");
+    expect(section?.headline).toContain("auto-approved and never reached you");
+  });
+
+  it("says nothing confident about a tiny sample", () => {
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        reviewQueue: {
+          reviewed: 3,
+          approvedInFull: 3,
+          approvedWithItemsDenied: 0,
+          rejected: 0,
+          approveRateOfReviewed: 1,
+          lowSample: true,
+          autoApprovedNeverReviewed: 0,
+          truncated: false,
+        },
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "review_queue");
+    expect(section?.status).toBe("ok");
+    expect(section?.detail.verdict).toBe("unknown");
+    expect(section?.headline).toContain("read the counts not the rate");
+    expect(report.status).toBe("ok");
+  });
+
   it("flags an agent over the daily cap as degraded", () => {
     const report = summarizeGlobalHealth(
       { ...clean, agentActivity: [{ agentId: "a", todayCount: 10, cap: 10 }] },

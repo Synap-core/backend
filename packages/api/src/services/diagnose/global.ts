@@ -50,6 +50,13 @@ import {
   classifyStalls,
   type StallReport,
 } from "./stall.js";
+import {
+  reviewQueueApproval,
+  reviewQueueVerdict,
+  APPROVAL_FATIGUE_RATE,
+  MIN_CONFIDENT_REVIEW_SAMPLE,
+  type ReviewQueueApproval,
+} from "./review-queue.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const PENDING_SCAN_LIMIT = 1000;
@@ -101,6 +108,13 @@ export interface GlobalSignals {
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
   capabilities: { enabled: number; unapproved: number };
   agentActivity: Array<{ agentId: string; todayCount: number; cap: number }>;
+  /**
+   * How often the human APPROVES what the pod asks about — the decide queue's
+   * own effectiveness. Optional for the same reason `stall` is: absent means
+   * NOT COMPUTED, and the report then says nothing about the queue rather than
+   * printing a fabricated 0%.
+   */
+  reviewQueue?: ReviewQueueApproval;
 }
 
 /**
@@ -248,6 +262,44 @@ export function summarizeGlobalHealth(
           : "No agent flooding the queue",
     detail: { overCap, nearCap },
   });
+
+  // Review-queue approval rate — is the decide queue doing work, or is it
+  // theatre? `attention` (never `degraded`) when a CREDIBLE sample approves
+  // almost everything: that is a finding about the product, not a fault in the
+  // pod, and a measurement must not masquerade as an outage. The headline
+  // always carries the DENOMINATOR, because "93%" with no "of what" is the
+  // lens-relative count this codebase has shipped unlabelled before.
+  const rq = signals.reviewQueue;
+  if (rq) {
+    const verdict = reviewQueueVerdict(rq);
+    const pct =
+      rq.approveRateOfReviewed === null
+        ? null
+        : Math.round(rq.approveRateOfReviewed * 100);
+    sections.push({
+      key: "review_queue",
+      status: verdict === "approval_fatigue" ? "attention" : "ok",
+      headline:
+        rq.reviewed === 0
+          ? "No proposal has been reviewed yet — no approval rate to report"
+          : `You approved ${rq.approvedInFull} of ${rq.reviewed} reviewed proposal(s) in full (${pct}%)` +
+            (rq.lowSample
+              ? ` — sample under ${MIN_CONFIDENT_REVIEW_SAMPLE}, read the counts not the rate`
+              : verdict === "approval_fatigue"
+                ? `; over ${Math.round(APPROVAL_FATIGUE_RATE * 100)}% — the queue may be asking questions you always answer yes to`
+                : "") +
+            (rq.autoApprovedNeverReviewed > 0
+              ? ` (${rq.autoApprovedNeverReviewed} more were auto-approved and never reached you — not counted)`
+              : ""),
+      detail: {
+        ...rq,
+        verdict,
+        denominator:
+          "reviewed = proposals YOU decided (approved in full + approved with items denied + rejected); excludes pending, withdrawn, expired and auto-approved",
+        lens: "proposals visible in your workspaces or authored by you (proposalUserFloor)",
+      },
+    });
+  }
 
   // Roll up: worst section wins.
   const rank: Record<HealthStatus, number> = {
@@ -532,6 +584,13 @@ export async function diagnoseGlobal(params: {
     }))
   );
 
+  // The queue's own effectiveness. Its own read (two small aggregates) rather
+  // than a term in the big Promise.all above: it is floored by
+  // `proposalUserFloor`, the queue's OWN builder, not by the bare workspace
+  // lens the backlog counts use — mixing the two floors into one query is how
+  // this file's counts disagreed with `orient` before.
+  const reviewQueue = await reviewQueueApproval({ userId, workspaceId });
+
   return summarizeGlobalHealth(
     {
       stuckHours,
@@ -543,6 +602,7 @@ export async function diagnoseGlobal(params: {
       duplicateClusters,
       capabilities: capabilitiesSignal,
       agentActivity,
+      reviewQueue,
     },
     { workspaceId }
   );
