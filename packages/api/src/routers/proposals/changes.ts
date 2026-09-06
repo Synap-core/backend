@@ -131,6 +131,16 @@ export function buildProposalChanges(
     });
   }
 
+  // The ONE nested key this builder promotes (see the block after the fallback).
+  // Resolved BEFORE the fallback because the fallback needs to know whether the
+  // promotion will fire — not to reorder the pushes, which must stay as they are.
+  const allowedHosts = (
+    data.metadata && typeof data.metadata === "object"
+      ? (data.metadata as Record<string, unknown>)
+      : {}
+  )["allowedHosts"];
+  const promotesAllowedHosts = Array.isArray(allowedHosts);
+
   // Generic fallback: a non-entity proposal (e.g. a flat `property_def` payload of
   // { slug, valueType, constraints, overlay, required, … }) matches none of the
   // entity-shape keys above, so `changes` is still empty and the review card would
@@ -142,6 +152,16 @@ export function buildProposalChanges(
     for (const [key, value] of Object.entries(data)) {
       if (NON_ENTITY_INFRA_KEYS.has(key)) continue;
       if (value === undefined) continue;
+      // `metadata` is NOT in NON_ENTITY_INFRA_KEYS and must not be added to it:
+      // that Set is a byte-identical cross-repo duplicate of synap-app's
+      // `INFRA_KEYS`, and a one-sided edit forks it. Suppress the bag HERE, and
+      // only when the promoted `metadata.allowedHosts` row below will actually
+      // render it — otherwise a metadata-only payload with no hosts would lose
+      // its last visible key and the card would go blank, which is worse than
+      // opaque. When the promotion fires, this blob is a strict duplicate of it
+      // plus noise (marketSource baselines, run counters) — the exact thing the
+      // promotion exists to displace.
+      if (key === "metadata" && promotesAllowedHosts) continue;
       changes.push({
         path: key,
         label: labelFromPath(key),
@@ -151,6 +171,35 @@ export function buildProposalChanges(
         valueType: valueTypeOf(value),
       });
     }
+  }
+
+  // ── Egress: the ONE nested key promoted to its own change row ──────────────
+  //
+  // A `skill.update` proposal that widens `metadata.allowedHosts` is the single
+  // most consequential skill edit a reviewer can approve — it is what decides
+  // which hosts the (default-deny) sandbox will let that skill reach. It reached
+  // the card as NOTHING: the top-level loop only walks
+  // title/description/profileSlug/documentId, and the generic fallback fires
+  // only when `changes` is still empty AND would emit the whole opaque
+  // `metadata` bag (marketSource baselines, run counters) as one blob.
+  //
+  // Pushed AFTER the fallback on purpose: pushing it before would make
+  // `changes.length === 0` false and suppress the fallback entirely, silently
+  // erasing every other key of a metadata-carrying payload from the card.
+  //
+  // So promote exactly this key, and nothing else in the bag. `before` is
+  // deliberately left undefined — this builder has no skill row to read the
+  // prior list from, and the card renders an unknown previous value honestly
+  // rather than implying the list was empty.
+  if (promotesAllowedHosts) {
+    changes.push({
+      path: "metadata.allowedHosts",
+      label: "External hosts",
+      operation,
+      before: undefined,
+      after: allowedHosts,
+      valueType: valueTypeOf(allowedHosts),
+    });
   }
 
   return changes;

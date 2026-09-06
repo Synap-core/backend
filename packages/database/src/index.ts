@@ -63,6 +63,7 @@ export * from "./utils/message-hash.js";
 export * from "./utils/persist-assistant-reply.js";
 export * from "./utils/emit-message-event.js";
 export * from "./utils/open-run-session.js";
+export * from "./utils/resolve-session-project.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";
@@ -224,12 +225,19 @@ export {
   reconcileWorkspaceFromDefinition,
   type ReconcileOptions,
   type ReconcileReport,
+  type InstallLayerReport,
 } from "./utils/reconcile-workspace-from-definition.js";
 export {
   resolveProfileForApply,
   type ProfileApplyResolution,
 } from "./utils/resolve-profile-for-apply.js";
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
+export {
+  buildStoredConstraints,
+  readStoredEnum,
+  type TemplateEnumSource,
+  type StoredEnumSource,
+} from "./utils/property-enum.js";
 
 // Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
 export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";

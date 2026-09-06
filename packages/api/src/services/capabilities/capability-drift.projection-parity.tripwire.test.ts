@@ -29,6 +29,9 @@ import type { ToolVerbCatalogEntry } from "@synap/database/schema";
 import {
   PROJECTED_SKILL_FIELDS,
   DRIFT_COMPARATOR_VERSION,
+  projectSkillMetadata,
+  declaredAllowedHosts,
+  canonicalJson,
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
   type DefinitionSkillRow,
@@ -84,7 +87,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       applied.length,
       "extracted no projected keys from the applier — the extraction is broken, " +
         "not the code under test"
-    ).toBeGreaterThanOrEqual(10);
+    ).toBeGreaterThanOrEqual(11);
     const compared = Object.keys(PROJECTED_SKILL_FIELDS).sort();
     const unread = applied.filter((k) => !compared.includes(k));
     expect(
@@ -102,13 +105,13 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     expect(
       Object.keys(PROJECTED_SKILL_FIELDS).length,
       "the projected-field set changed. " + WHY_IT_MATTERS
-    ).toBe(10);
+    ).toBe(11);
     expect(
       DRIFT_COMPARATOR_VERSION,
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(2);
+    ).toBe(3);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -135,6 +138,13 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       def: { timeoutSeconds: 60 },
       live: { timeoutSeconds: 30 },
     },
+    // The applier writes exactly ONE key of this bag (`projectSkillMetadata`),
+    // so the perturbation is on that key — a `marketSource` difference is DB
+    // state and must NOT be drift (asserted separately below).
+    metadata: {
+      def: { metadata: { allowedHosts: ["api.vendor.com"] } },
+      live: { metadata: { allowedHosts: [] } },
+    },
   };
 
   const BASE = {
@@ -149,6 +159,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     agentTypes: null,
     executionMode: "sync",
     timeoutSeconds: 30,
+    metadata: { allowedHosts: [] },
   } as const;
 
   it("every pinned field is LIVE — a change to it alone is reported as drift", () => {
@@ -170,6 +181,74 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
         skills: [{ ...BASE } as DefinitionSkillRow],
       }).drifted
     ).toEqual([]);
+  });
+
+  // The `metadata` entry is NARROWED to one key, so it needs its own pins: the
+  // comparator must be blind to DB-owned keys (else every boot re-applies), and
+  // the applier's projection must in fact write only that key (else the marker
+  // asserts a convergence nobody checked — the durable-lie shape).
+  describe("metadata is narrowed to the egress declaration, honestly", () => {
+    it("a DB-owned metadata key is not drift", () => {
+      const live: InstalledSkillRow = {
+        ...BASE,
+        metadata: {
+          allowedHosts: [],
+          marketSource: { slug: "x", baseline: { code: "1" } },
+          runCount: 7,
+        },
+      };
+      expect(
+        capabilityDefinitionDrift([live], {
+          skills: [{ ...BASE } as DefinitionSkillRow],
+        }).drifted
+      ).toEqual([]);
+    });
+
+    it("a definition that declares NO hosts leaves a live list alone (skip, not revoke)", () => {
+      const live: InstalledSkillRow = {
+        ...BASE,
+        metadata: { allowedHosts: ["api.vendor.com"] },
+      };
+      const def = { ...BASE, metadata: {} } as DefinitionSkillRow;
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted
+      ).toEqual([]);
+      expect(projectSkillMetadata(live.metadata, def.metadata)).toBeUndefined();
+    });
+
+    it("the applier's projection writes ONLY allowedHosts, preserving the rest", () => {
+      const existing = {
+        allowedHosts: ["old.example.com"],
+        marketSource: { slug: "x" },
+        runCount: 7,
+      };
+      const next = projectSkillMetadata(existing, {
+        allowedHosts: ["api.vendor.com"],
+        verbType: "ignored",
+      });
+      expect(next).toEqual({
+        allowedHosts: ["api.vendor.com"],
+        marketSource: { slug: "x" },
+        runCount: 7,
+      });
+      // Every key the comparator does NOT read is byte-identical.
+      for (const k of Object.keys(existing)) {
+        if (k === "allowedHosts") continue;
+        expect(canonicalJson(next?.[k])).toBe(
+          canonicalJson(existing[k as keyof typeof existing])
+        );
+      }
+    });
+
+    it("a non-array declaration is ignored, never persisted", () => {
+      expect(
+        declaredAllowedHosts({ allowedHosts: "api.vendor.com" })
+      ).toBeUndefined();
+      expect(declaredAllowedHosts({ allowedHosts: ["a", 1, "b"] })).toEqual([
+        "a",
+        "b",
+      ]);
+    });
   });
 });
 

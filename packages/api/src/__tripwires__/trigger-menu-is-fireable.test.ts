@@ -31,6 +31,20 @@ describe("the trigger menu only offers fireable patterns", () => {
     // one file's behaviour while its comment claimed that file was "the ONLY
     // first-party producer" — nothing pinned the uniqueness, so a third
     // producer could appear and the menu would silently be wrong about it.
+    const QUEUE = "automation-trigger-match";
+
+    // PASS 1 — which identifiers are BOUND to this queue name anywhere?
+    // Matching `.send("automation-trigger-match"` alone is literal-only, and
+    // hoisting the string to a constant is a tidy-up anyone might do (this repo
+    // already keeps `A2AI_TRIGGER_QUEUE` that way). The dangerous case is a NEW
+    // producer using a constant while the old two keep their literal: a
+    // literal-only census still returns exactly the two expected paths and
+    // stays green with a third producer invisible.
+    //
+    // Resolving the binding is the precise fix. Matching any SHOUTY name
+    // containing QUEUE/TRIGGER is NOT — I tried it, and it flagged ten files
+    // that send to entirely different queues.
+    const queueAliases = new Set<string>();
     const sends: string[] = [];
     const walk = (dir: string): void => {
       const full = path.join(REPO, dir);
@@ -41,20 +55,59 @@ describe("the trigger menu only offers fireable patterns", () => {
         if (entry.isDirectory()) walk(rel);
         else if (/\.ts$/.test(entry.name) && !entry.name.includes(".test.")) {
           const body = read(rel);
-          // A SEND, not a mention.
-          if (/\.send\(\s*["'`]automation-trigger-match["'`]/.test(body)) {
-            sends.push(rel);
+          // A SEND, not a mention — and not only a LITERAL one. Hoisting the
+          // queue name to a constant (`boss.send(TRIGGER_QUEUE, …)`) is a
+          // tidy-up anyone might do; this repo already keeps
+          // `A2AI_TRIGGER_QUEUE` that way. If ALL sends moved to a constant
+          // this census would return `[]` and fail loudly — fine. The
+          // dangerous case is a NEW producer using a constant while the old
+          // two keep their literal: the census would still return exactly the
+          // two expected paths and stay green with a third producer invisible.
+          if (sendsToQueue(body)) sends.push(rel);
+        }
+      }
+    };
+    const sendsToQueue = (body: string): boolean => {
+      if (new RegExp(`\\.send\\(\\s*["'\`]${QUEUE}["'\`]`).test(body))
+        return true;
+      for (const alias of queueAliases) {
+        if (new RegExp(`\\.send\\(\\s*${alias}\\s*[,)]`).test(body))
+          return true;
+      }
+      return false;
+    };
+
+    // EVERY package, not a hand-picked three. The previous list walked
+    // events/api/jobs only, so a producer in `packages/database/src` would
+    // have been invisible to a census whose whole claim is that it knows all
+    // of them.
+    const roots = fs
+      .readdirSync(path.join(REPO, "packages"))
+      .map((pkg) => `packages/${pkg}/src`);
+
+    // Collect the aliases first, then scan — a constant may be declared in a
+    // different package from the one that sends with it.
+    const collect = (dir: string): void => {
+      const full = path.join(REPO, dir);
+      if (!fs.existsSync(full)) return;
+      for (const entry of fs.readdirSync(full, { withFileTypes: true })) {
+        if (entry.name === "node_modules" || entry.name === "dist") continue;
+        const rel = `${dir}/${entry.name}`;
+        if (entry.isDirectory()) collect(rel);
+        else if (/\.ts$/.test(entry.name) && !entry.name.includes(".test.")) {
+          for (const m of read(rel).matchAll(
+            new RegExp(
+              `(?:const|let)\\s+(\\w+)[^=\\n]*=\\s*["'\`]${QUEUE}["'\`]`,
+              "g"
+            )
+          )) {
+            queueAliases.add(m[1]!);
           }
         }
       }
     };
-    for (const root of [
-      "packages/events/src",
-      "packages/api/src",
-      "packages/jobs/src",
-    ]) {
-      walk(root);
-    }
+    for (const root of roots) collect(root);
+    for (const root of roots) walk(root);
     expect(
       sends.sort(),
       "A producer of `automation-trigger-match` was added or removed. The " +

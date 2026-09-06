@@ -70,8 +70,11 @@ import {
   skillsRouter,
   assertSkillGlobalsAllowed,
 } from "../../routers/skills.js";
-import { skillExecFieldsChanged } from "./skill-exec-fields.js";
-import { canonicalJson } from "./capability-drift.js";
+import {
+  skillExecFieldsChanged,
+  allowedHostsChanged,
+} from "./skill-exec-fields.js";
+import { canonicalJson, projectSkillMetadata } from "./capability-drift.js";
 import { capabilityContainersRouter } from "../../routers/capability-containers.js";
 import type { Context } from "../../types/context.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -740,6 +743,9 @@ export async function createCapabilityFromDefinition(
         timeoutSeconds: skillsTable.timeoutSeconds,
         body: skillsTable.body,
         approved: skillsTable.approved,
+        // Read so the egress projection can MERGE onto the live bag rather than
+        // replace it, and so `allowedHostsChanged` can compare by value.
+        metadata: skillsTable.metadata,
       })
       .from(skillsTable)
       .where(
@@ -770,17 +776,30 @@ export async function createCapabilityFromDefinition(
       //
       // The patch mirrors the `.set({...})` projection below exactly — a field
       // this comparator reads must be a field that update actually writes.
-      const execContentChanged = skillExecFieldsChanged(
-        {
-          kind: s.kind ?? "code",
-          code: s.code ?? null,
-          providerSpec: s.providerSpec ?? null,
-          parameters: s.parameters,
-          executionMode: s.executionMode ?? "sync",
-          timeoutSeconds: s.timeoutSeconds ?? 30,
-        },
-        existingSkill as unknown as Record<string, unknown>
-      );
+      const execContentChanged =
+        skillExecFieldsChanged(
+          {
+            kind: s.kind ?? "code",
+            code: s.code ?? null,
+            providerSpec: s.providerSpec ?? null,
+            parameters: s.parameters,
+            executionMode: s.executionMode ?? "sync",
+            timeoutSeconds: s.timeoutSeconds ?? 30,
+          },
+          existingSkill as unknown as Record<string, unknown>
+        ) ||
+        // Widening (or narrowing) the sandbox's egress allowlist is an
+        // execution change — `metadata.allowedHosts` is the ONE thing deciding
+        // which hosts an approved skill may reach. It cannot ride in
+        // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
+        // spread column, so the field comparison literally cannot see it. This
+        // is the SAME rule `routers/skills.ts` applies on the human/agent edit
+        // door — the two doors drifted once, which is why the rule lives in
+        // `skill-exec-fields.ts` and both doors call it.
+        allowedHostsChanged(
+          s.metadata as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        );
 
       // NARROWER than `execContentChanged` on purpose: the globals scan must
       // fire only when the CODE ITSELF is being rewritten. Gating it on the
@@ -820,6 +839,10 @@ export async function createCapabilityFromDefinition(
           agentTypes: s.agentTypes,
           executionMode: s.executionMode ?? "sync",
           timeoutSeconds: s.timeoutSeconds ?? 30,
+          // The ONLY definition-owned key of this DB-owned bag. `undefined`
+          // when the definition declares no hosts, which Drizzle SKIPS — the
+          // live bag (marketSource, rule, counters) is then untouched.
+          metadata: projectSkillMetadata(existingSkill.metadata, s.metadata),
           updatedAt: new Date(),
           ...(execContentChanged && existingSkill.approved
             ? { approved: false }
@@ -858,6 +881,13 @@ export async function createCapabilityFromDefinition(
       category: s.category,
       executionMode: s.executionMode ?? "sync",
       timeoutSeconds: s.timeoutSeconds ?? 30,
+      // Persist the declared sandbox egress allowlist — the ONE key of the
+      // definition's `metadata` bag that is definition-owned. Without this a
+      // published package could never grant its own skill egress: the sandbox
+      // is default-deny, so the skill installed fine and failed at run with
+      // `domain_not_approved`. Narrowed to the one key rather than passing the
+      // whole bag, which also carries read-only catalog hints (`verbType`).
+      metadata: projectSkillMetadata(null, s.metadata),
       workspaceId: connWorkspaceId,
     });
 

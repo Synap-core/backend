@@ -10,6 +10,7 @@ import {
   type PropertyDef,
   type NewPropertyDef,
   type PropertyValueType,
+  type PropertyUIHints,
 } from "../schema/property-defs.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
@@ -18,7 +19,19 @@ export interface CreatePropertyDefInput {
   slug: string;
   valueType: PropertyValueType;
   constraints?: Record<string, unknown>;
-  uiHints?: Record<string, unknown>;
+  /**
+   * TYPED, not `Record<string, unknown>`.
+   *
+   * The `ui_hints` column declares `$type<PropertyUIHints>()`, and this input
+   * widened it straight back — so any key at all typechecked on the way in. That
+   * is how 364 template properties came to carry their closed value set on
+   * `uiHints.enumValues`, a key no reader keys on and
+   * `property-validation-service` cannot enforce, with every gate green.
+   *
+   * A closed value set is a VALIDATION RULE: it belongs in `constraints.enum`,
+   * and `utils/property-enum.ts` is the one mapper that puts it there.
+   */
+  uiHints?: PropertyUIHints;
   /**
    * When set, scopes this def to a specific profile (allows reusing slug
    * names across profiles — e.g. `status` on both `task` and `campaign`).

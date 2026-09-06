@@ -75,6 +75,47 @@ describe("action param projection carries everything the deriver produces", () =
     ).toEqual([]);
   });
 
+  it("forwards every field the CONTRACT declares, not just the ones the corpus happens to use", () => {
+    // ⚠️ The test above derives its field set from the CORPUS, so it can only
+    // ever catch a field some builtin verb already emits. When `reference`
+    // landed, no builtin verb declared one — so `refKind`/`refCardinality` were
+    // dropped by this very projection and the corpus-derived guard beside it
+    // stayed green. That is the "a corpus tripwire proves the CORPUS, not the
+    // contract" trap, and it cost this wave a silent re-run of the defect the
+    // file exists to prevent.
+    //
+    // This assertion feeds a SYNTHETIC spec carrying every field the wire
+    // declares, so the guard tracks the CONTRACT and fires the day a field is
+    // added to `actionOptionSchema.params` without being forwarded here —
+    // years before any verb happens to use it.
+    const fullSpec = {
+      probe: {
+        required: true,
+        description: "a description",
+        type: "reference",
+        refKind: "entity",
+        refCardinality: "single",
+        options: undefined,
+      },
+    };
+    const [row] = paramsFromVerbSchema(fullSpec);
+    expect(row, "the synthetic spec produced no row").toBeTruthy();
+
+    const declared = Object.entries(fullSpec.probe)
+      .filter(([, v]) => v !== undefined)
+      .map(([k]) => k);
+    const dropped = declared.filter((f) => !(f in (row as object)));
+    expect(
+      dropped,
+      "Declared on the wire, produced by the spec, and NOT forwarded by " +
+        "`paramsFromVerbSchema`. Half-forwarding a reference is worse than " +
+        "dropping it whole: `actionOptionSchema` refuses a reference with no " +
+        "kind, so the entire action list fails to parse and the composer " +
+        "renders no actions at all.\n" +
+        dropped.join(", ")
+    ).toEqual([]);
+  });
+
   it("actually types the params users fill, not just the easy ones", () => {
     // A parity test can pass while the deriver types NOTHING (it would produce
     // no `type` field to drop). Assert the capability is real, on the params
@@ -143,37 +184,32 @@ describe("playbook param projection carries the authored type", () => {
       ["boolean", "choice", "entity", "number", "text"].sort()
     );
 
-    // Each mapped member must appear in the projection's map.
-    for (const member of ["text", "number", "boolean", "choice"]) {
+    // ⚠️ Only the UNION DERIVATION is asserted here, deliberately.
+    //
+    // This block also source-scanned for `spec.type === "text"` and friends,
+    // plus the shape of the spread. Those were BRITTLE without being stronger:
+    // refactoring the if-chain into a lookup object (`{ text: "string", … }`)
+    // — a perfectly good cleanup — turns them all red on byte-identical
+    // behaviour, and a guard that cries wolf on a legitimate refactor gets
+    // deleted rather than heeded.
+    //
+    // They were also redundant. `automations.playbook-then.test.ts` covers the
+    // same ground BEHAVIOURALLY, on a pure exported function: it pins the
+    // `choice → enum` mapping WITH its options, the boolean passthrough, and
+    // the deliberate `entity` omission. A behavioural test beats a regex
+    // whenever one is possible, and here one is.
+    //
+    // What a behavioural test CANNOT do is notice the authoring contract
+    // growing a SIXTH member: nothing would fail, and the new type would
+    // silently degrade to a text box. That is the only thing left here.
+    for (const member of members) {
+      if (member === "entity") continue; // deliberately unmapped — no control
       expect(
         new RegExp(`spec\\.type === "${member}"`).test(source),
-        `playbookActionOptions does not map PlaybookParamType "${member}" — ` +
-          "a playbook author can declare it and the client will render a text box."
+        `PlaybookParamType "${member}" is not handled by playbookActionOptions. ` +
+          "Map it, or — if no control exists — omit it deliberately the way " +
+          "`entity` is, and say so here."
       ).toBe(true);
     }
-
-    // `entity` is deliberately unmapped: there is no entity control in the
-    // param renderer, and a type with no control is worse than an honest text
-    // box. If an entity picker is ever built, map it here.
-    expect(
-      /spec\.type === "entity"/.test(source),
-      "`entity` is mapped but the param renderer has no entity control — " +
-        "either build the control or leave it degrading to text."
-    ).toBe(false);
-  });
-
-  it("forwards options only for the choice type", () => {
-    expect(/playbookType === "enum" &&/.test(source)).toBe(true);
-  });
-
-  it("actually SPREADS the mapped type onto the projected param", () => {
-    // Mapping without forwarding is the same defect one step later, and the
-    // assertions above cannot see it: deleting the spread leaves every
-    // `spec.type === "…"` branch in place and they all still pass. Verified by
-    // mutation — this is the line that caught nothing until it was added.
-    expect(
-      /\.\.\.\(playbookType \? \{ type: playbookType \} : \{\}\)/.test(source),
-      "playbookActionOptions computes a type and does not put it on the param."
-    ).toBe(true);
   });
 });

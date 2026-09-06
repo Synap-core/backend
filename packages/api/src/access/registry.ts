@@ -118,10 +118,28 @@ registerVisibility({
 registerVisibility({
   table: artifacts,
   query: () => db.query.artifacts,
+  // Since 0245 `artifacts.workspace_id` is NULLABLE, so a pod-personal session
+  // can record what it produced. A flat `workspace` rule reads NULL as pod-wide
+  // config and would hand every user every other user's personal outputs — the
+  // artifact ledger is private data, never shared substrate. Same shape as
+  // `relations` above: workspace rows follow membership, NULL rows keep an owner
+  // floor. NOT `workspaceOwned` (owner-only on ALL rows) — that would hide a
+  // teammate's artifacts inside a shared workspace, which is a regression.
   rule: {
-    kind: "workspace",
-    workspaceColumn: artifacts.workspaceId,
-    nullWorkspaceMeans: "podGlobalConfig",
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(artifacts.workspaceId),
+          workspaceLensWhere(
+            artifacts.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(isNull(artifacts.workspaceId), eq(artifacts.userId, access.userId))
+      ),
+    nullWorkspaceMeans: "ownerPrivate",
   },
 });
 

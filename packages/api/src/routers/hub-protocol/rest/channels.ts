@@ -15,6 +15,7 @@ import {
   playbooks as playbooksTable,
   eq,
   and,
+  or,
   desc,
   isNull,
   inArray,
@@ -137,16 +138,29 @@ export function registerChannelsRoutes(app: HubHono): void {
     method: "get",
     path: "/channels",
     tags: ["Channels"],
-    summary: "List channels",
+    summary: "List/search channels",
     description:
-      "Returns channels the authenticated user has access to. Supports optional workspace and type filters.",
+      "Returns channels the authenticated user has access to. Supports optional " +
+      "workspace and type filters. When `q` is set the SAME query is narrowed " +
+      "server-side by title / branch purpose — browse and search are one code " +
+      "path over one access floor, never two loaders.",
     request: {
       query: z.object({
         userId: z.string().optional(),
         workspaceId: z.string().optional(),
         channelType: z.string().optional(),
         contextObjectId: z.string().optional(),
+        q: z
+          .string()
+          .optional()
+          .describe("Free-text search over channel title / branch purpose."),
         limit: z.string().optional(),
+        offset: z
+          .string()
+          .optional()
+          .describe(
+            "Zero-based offset for cursor-free pagination (default 0)."
+          ),
       }),
     },
     responses: {
@@ -176,6 +190,7 @@ export function registerChannelsRoutes(app: HubHono): void {
     }
     const workspaceId = q.workspaceId;
     const limit = q.limit ? Math.min(parseInt(q.limit, 10), 100) : 20;
+    const offset = q.offset ? Math.max(parseInt(q.offset, 10) || 0, 0) : 0;
     try {
       // Canonical channel visibility — see utils/channel-visibility.ts.
       const conditions = [channelVisibilityWhere(userId)];
@@ -200,12 +215,26 @@ export function registerChannelsRoutes(app: HubHono): void {
           eq(channelsTable.externalSource, q.externalSource as never)
         );
       }
+      // Free-text narrow — ANDed into the SAME conditions as every other
+      // filter, so `q` never becomes a divergent second loader and can never
+      // widen past `channelVisibilityWhere` above. Absent/blank ⇒ plain browse.
+      const searchTerm = q.q?.trim();
+      if (searchTerm) {
+        const pattern = `%${searchTerm}%`;
+        conditions.push(
+          or(
+            drizzleSql`${channelsTable.title} ILIKE ${pattern}`,
+            drizzleSql`${channelsTable.branchPurpose} ILIKE ${pattern}`
+          )!
+        );
+      }
       const rows = await db
         .select()
         .from(channelsTable)
         .where(and(...conditions))
         .orderBy(desc(channelsTable.updatedAt))
-        .limit(limit);
+        .limit(limit)
+        .offset(offset);
       return c.json({ channels: rows });
     } catch (err) {
       logger.error({ err, userId, workspaceId }, "channels.list failed");

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const {
   findFirstMock,
+  channelFindFirstMock,
   insertValuesMock,
   returningMock,
   recordSessionSpawnMock,
@@ -12,6 +13,7 @@ const {
   }));
   return {
     findFirstMock: vi.fn(),
+    channelFindFirstMock: vi.fn(async () => undefined),
     insertValuesMock,
     returningMock,
     recordSessionSpawnMock: vi.fn(async () => ({
@@ -23,12 +25,24 @@ const {
 
 vi.mock("../client-pg.js", () => ({
   db: {
-    query: { focusSessions: { findFirst: findFirstMock } },
+    // `channels` is here because `openRunSession` now resolves a project
+    // placement, and the ladder's rung 3 reads the bound channel's projectId.
+    // Defaults to no row ⇒ the resolver ABSTAINS and the session is written
+    // with `projectId: null` — which is the behaviour these tests assert, and
+    // the safety property the ladder is built around (project placement
+    // abstains where workspace placement would default).
+    query: {
+      focusSessions: { findFirst: findFirstMock },
+      channels: { findFirst: channelFindFirstMock },
+      relations: { findMany: vi.fn(async () => []) },
+    },
     insert: () => ({ values: insertValuesMock }),
   },
 }));
 vi.mock("../schema/focus-sessions.js", () => ({ focusSessions: {} }));
 vi.mock("../schema/links.js", () => ({ links: {} }));
+vi.mock("../schema/channels.js", () => ({ channels: {} }));
+vi.mock("../schema/relations.js", () => ({ relations: {} }));
 // `openRunSession` now imports the `spawned_from` producer (session-spawn.js),
 // which pulls in `inArray` + `sql`. A vi.mock factory is a TOTAL replacement, so
 // a named export it omits is an import-time failure for the whole file — the
@@ -39,7 +53,14 @@ vi.mock("../schema/links.js", () => ({ links: {} }));
 vi.mock("./session-spawn.js", () => ({
   recordSessionSpawn: recordSessionSpawnMock,
 }));
-vi.mock("drizzle-orm", () => ({
+// PARTIAL mock, deliberately. A total `() => ({...})` replacement is the
+// documented trap in this repo: the moment the module under test reaches a NEW
+// drizzle export, every test in the file dies with "No <x> export is defined on
+// the mock" — which is what happened when `openRunSession` began resolving a
+// project placement and pulled in `relations`. `importOriginal` keeps every
+// real export and overrides only the query builders this file asserts on.
+vi.mock("drizzle-orm", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("drizzle-orm")>()),
   and: vi.fn(),
   desc: vi.fn(),
   eq: vi.fn(),

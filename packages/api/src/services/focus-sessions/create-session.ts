@@ -12,6 +12,7 @@ import {
   eq,
   and,
   recordSessionSpawn,
+  resolveSessionProjectPlacement,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -109,7 +110,7 @@ export async function createFocusSession(
   const {
     userId,
     workspaceId = null,
-    projectId = null,
+    projectId: explicitProjectId = null,
     subjectEntityId = null,
     goal,
     agentUserId,
@@ -134,6 +135,28 @@ export async function createFocusSession(
     });
     if (existing) return { status: "created", session: existing };
   }
+
+  // PROJECT LENS — derived from the context this door already holds, rather
+  // than waited for. Before this, `projectId` was whatever the caller passed and
+  // essentially nobody passed one (measured: 10% of sessions). The ladder's
+  // rung 1 is the caller's own pin, so an explicit project is byte-identical to
+  // before; the widening is only over the callers that supplied nothing.
+  //
+  // Placed BEFORE the governance membrane so the derived lens is the one stamped
+  // on the proposal's provenance too. `projectId` is PROVENANCE in
+  // `checkPermissionOrPropose` (it is folded into the WriteEnvelope and never
+  // read by an access decision), so deriving it here cannot widen a permission.
+  //
+  // `NONE` → null. No AI rung, no "the only project" fallback.
+  const projectId = (
+    await resolveSessionProjectPlacement(db, {
+      userId,
+      explicitProjectId,
+      parentSessionId,
+      channelId,
+      subjectEntityId,
+    })
+  ).projectId;
 
   // Governance membrane — AI callers route through proposals. A session with no
   // workspace is a personal resource and auto-grants via checkPermissionOrPropose.

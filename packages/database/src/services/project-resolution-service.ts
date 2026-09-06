@@ -28,6 +28,10 @@
  *   1. Explicit    — the caller passed a project (a pinned lens / surface override).
  *   2. Session     — the active focus session's `projectId`.
  *   3. Channel     — the bound channel's `projectId`.
+ * 3.5. Focus       — the acting agent's DECLARED sticky project focus
+ *                    (`agentMetadata.focusProjectId`, set by
+ *                    `synap_set_project_focus`). See the rung's own comment for
+ *                    why it sits exactly here.
  *   4. Relational  — the MAJORITY project among the `belongs_to_project` edges of
  *                    the entities this one is being linked/related to IN THE SAME
  *                    batch. One bounded hop only — never a wider graph walk. A tie
@@ -42,7 +46,13 @@ import { BELONGS_TO_PROJECT } from "../utils/entity-project-membership.js";
 
 type Db = PostgresJsDatabase<typeof schema>;
 
-export type ProjectResolutionRung = 1 | 2 | 3 | 4;
+/**
+ * 3.5 is deliberately fractional: the declared-focus rung was inserted BETWEEN
+ * the channel and relational rungs, and renumbering 4 → 5 would silently move
+ * every existing assertion and telemetry value that already means "relational
+ * gravity".
+ */
+export type ProjectResolutionRung = 1 | 2 | 3 | 3.5 | 4;
 
 export interface ProjectPlacement {
   /** The resolved project TABLE id, or `null` when no deterministic context. */
@@ -61,6 +71,18 @@ export interface ResolveProjectPlacementInput {
   sessionId?: string | null;
   /** Rung 3 — a bound channel; its `projectId` is consulted. */
   channelId?: string | null;
+  /**
+   * Rung 3.5 — the acting agent's DECLARED sticky project focus, read live from
+   * `agentMetadata.focusProjectId`. The CALLER reads it and passes the value;
+   * this resolver never reaches for an ambient identity of its own.
+   *
+   * DECLARATION, NOT INFERENCE: this value can only have been written by an
+   * explicit `synap_set_project_focus` call whose target was verified to exist
+   * and be visible at set time. Nothing may pass an AI-derived project here —
+   * `belongs_to_project` widens access, which is why this ladder has no AI rung
+   * and no default.
+   */
+  focusProjectId?: string | null;
   /**
    * Rung 4 — the entities THIS one is being linked/related to in the SAME
    * create/capture batch. Their existing `belongs_to_project` edges provide
@@ -125,6 +147,37 @@ export async function resolveProjectPlacement(
         reason: "channel is bound to this project",
       };
     }
+  }
+
+  // ── Rung 3.5 — the acting agent's DECLARED sticky project focus. ──
+  //
+  // WHY BELOW RUNG 1: an explicit per-call `projectId` IS rung 1's meaning — a
+  // deliberate pin on THIS write must always beat a standing default, exactly
+  // as an explicit workspaceId beats `agentMetadata.focusWorkspaceId`.
+  //
+  // WHY BELOW RUNGS 2 AND 3 (the real judgement call): a focus session and a
+  // bound channel are bindings on THIS unit of work — someone scoped that
+  // container to that project when they opened it. A focus is ambient and
+  // sticky: it outlives the task it was set for, so it is the value most likely
+  // to be STALE. When a standing default and a container binding disagree, the
+  // narrower, more recent, work-specific one is the honest answer. (This also
+  // fails safe: `belongs_to_project` widens access, so on conflict we prefer
+  // the project the caller bound this specific work to.)
+  //
+  // WHY ABOVE RUNG 4: rung 4 is an INFERENCE (the majority project among
+  // neighbouring entities). A declaration must beat an inference — otherwise
+  // saying "I am working on Apollo" would be overridden by who happens to be
+  // linked in the batch, which is precisely the guessing this ladder refuses.
+  //
+  // And it is still NOT a default: with no focus declared we fall through, and
+  // the ladder ends in NONE. Project placement abstains where workspace
+  // placement defaults, because filing into a project GRANTS ACCESS.
+  if (input.focusProjectId) {
+    return {
+      projectId: input.focusProjectId,
+      rung: 3.5,
+      reason: "the acting agent declared this project as its working focus",
+    };
   }
 
   // ── Rung 4 — relational gravity: the MAJORITY project among the existing

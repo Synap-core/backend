@@ -244,6 +244,66 @@ export async function setAgentFocusWorkspace(
 }
 
 /**
+ * Read the agent-user's live runtime PROJECT focus (`agentMetadata.focusProjectId`)
+ * — the cross-cutting sibling of `getAgentFocusWorkspaceId`, and read the same
+ * way: LIVE, so `synap_set_project_focus` flips it between calls with no
+ * re-provisioning. Returns null when the agent has no user row, no
+ * agentMetadata, or no focus set; every caller treats null as "no declared
+ * project", never an error — and NEVER as a licence to guess one.
+ */
+export async function getAgentFocusProjectId(
+  agentUserId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  const meta = row?.agentMetadata as AgentMetadata | null | undefined;
+  return meta?.focusProjectId ?? null;
+}
+
+/**
+ * Set or clear the agent-user's runtime PROJECT focus. `projectId: null` clears.
+ *
+ * CALLER CONTRACT — non-negotiable: the caller MUST have verified that
+ * `projectId` names a REAL project VISIBLE to the acting human, using an
+ * EXISTING visibility predicate, BEFORE calling this. `belongs_to_project`
+ * widens access, and `relations.target_entity_id` has no FK to `projects`, so
+ * an unverified focus would later stamp a GHOST membership edge that the
+ * project lens never resolves — a silent drop reported as success. The one
+ * caller today (`synap_set_project_focus`) resolves the target out of the
+ * caller's own visible project rows, which IS that verification.
+ *
+ * Dual-write-safe: merges into whatever `agentMetadata` JSONB already holds
+ * (focusWorkspaceId, autoApproveFor, …) rather than overwriting the column.
+ */
+export async function setAgentFocusProject(
+  agentUserId: string,
+  projectId: string | null
+): Promise<void> {
+  const [row] = await db
+    .select({ agentMetadata: users.agentMetadata })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  const current = (row?.agentMetadata as AgentMetadata | null | undefined) ?? {
+    agentType: "unknown",
+    createdByUserId: agentUserId,
+  };
+  const next: AgentMetadata = { ...current };
+  if (projectId) {
+    next.focusProjectId = projectId;
+  } else {
+    delete next.focusProjectId;
+  }
+  await db
+    .update(users)
+    .set({ agentMetadata: next })
+    .where(eq(users.id, agentUserId));
+}
+
+/**
  * Populate the 1:1 registry↔user link (agents.userId). Intended to be called
  * from the agent / agent-user creation flows; not yet wired there.
  */

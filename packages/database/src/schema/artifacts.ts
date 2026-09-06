@@ -2,7 +2,8 @@
  * Artifact Ledger Schema
  *
  * An artifact = a reference to an existing renderable object (view / cell /
- * document / entity / url) + lifecycle metadata (provenance, placement, state).
+ * document / entity / url / automation / playbook) + lifecycle metadata
+ * (provenance, placement, state).
  *
  * This is NOT a new rendering object. Everything already renders through the
  * cell registry. The only new layer is lifecycle + provenance on cell instances.
@@ -20,22 +21,50 @@ import {
   jsonb,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 export const artifacts = pgTable(
   "artifacts",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    /** Workspace this artifact is scoped to. */
-    workspaceId: text("workspace_id").notNull(),
+    /**
+     * Workspace this artifact is filed under, or NULL for a POD-PERSONAL
+     * artifact (0245).
+     *
+     * Nullable because `focus_sessions.workspaceId` is: a pod-personal session
+     * produces pod-personal outputs, and a NOT NULL here made the session
+     * room's output ledger refuse the majority of sessions outright. NULL rows
+     * are owner-private — the access-layer rule floors them to `userId`, the
+     * same way `entities` / `documents` / `channels` treat an unfiled row.
+     */
+    workspaceId: text("workspace_id"),
     /** Owner — the human (or agent user) who created it. */
     userId: text("user_id").notNull(),
 
     // ── What it references ─────────────────────────────────────────────────
-    /** What kind of renderable object this artifact references. */
+    /**
+     * What kind of renderable object this artifact references.
+     *
+     * `automation` and `playbook` (0246) are outputs like any other: a session
+     * whose whole point was "set up the follow-up rule" produced an automation,
+     * and the room could not record it. The COLUMN is plain `text` with no CHECK
+     * constraint, so widening is a TypeScript change — but it is still the
+     * single source the door enums derive from (`SESSION_ARTIFACT_KINDS`), so
+     * adding a value here is what widens both write doors.
+     */
     kind: text("kind", {
-      enum: ["view", "cell", "document", "entity", "url"],
+      enum: [
+        "view",
+        "cell",
+        "document",
+        "entity",
+        "url",
+        "automation",
+        "playbook",
+      ],
     }).notNull(),
     /**
      * ID of the underlying view / document / entity / url.
@@ -96,6 +125,35 @@ export const artifacts = pgTable(
     ),
     sessionIdIdx: index("idx_artifacts_session_id").on(table.sessionId),
     userIdIdx: index("idx_artifacts_user_id").on(table.userId),
+    /**
+     * IDEMPOTENCY for the session output ledger (0246).
+     *
+     * Both attach-output doors did a plain INSERT, so a retry after a failed
+     * request — or a double-click on "record this as an output" — wrote a
+     * SECOND provenance row claiming the same fact, and the session room then
+     * listed the same object twice.
+     *
+     * The declared-slot claim is PART OF THE KEY, not collapsed out of it: the
+     * same document may legitimately satisfy two different `expectedOutputs`
+     * labels, and a key of (session, kind, ref) alone would make the second
+     * claim a silent no-op. `COALESCE(..., '')` because a unique index treats
+     * NULLs as distinct, which would exempt the common unlabelled case — the
+     * exact rows this index exists to dedupe.
+     *
+     * Expression index ⇒ `ON CONFLICT` cannot target it cleanly through
+     * drizzle (same note as `automations_workspace_name_active_uq`), so the
+     * writer uses a bare `.onConflictDoNothing()` and re-selects the winner.
+     */
+    sessionRefUniq: uniqueIndex("artifacts_session_ref_unique")
+      .on(
+        table.sessionId,
+        table.kind,
+        table.refId,
+        sql`COALESCE(${table.props}->>'expectedLabel', '')`
+      )
+      .where(
+        sql`${table.sessionId} IS NOT NULL AND ${table.refId} IS NOT NULL`
+      ),
   })
 );
 

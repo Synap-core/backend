@@ -54,6 +54,7 @@ import {
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
+import { getAgentFocusProjectId } from "../../services/agent-identity-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
@@ -800,10 +801,22 @@ export const createProcs = {
       // inline behavior exactly; rung 2 (session) is the additive gain. An
       // AI-guessed project never routes through here — that stays a propose/advisory
       // chip, never an auto-link (belongs_to_project WIDENS cross-workspace access).
+      //
+      // Rung 3.5 (declared focus) is threaded here because this door already
+      // carries the acting agent identity. Read ONLY when nothing more specific
+      // could pin a project, so the extra lookup costs nothing on the common
+      // path — and it is a DECLARATION the agent made via
+      // `synap_set_project_focus` (verified to exist and be visible at set
+      // time), never anything derived from this entity's content.
+      const declaredFocusProjectId =
+        !input.projectId && input.agentUserId
+          ? await getAgentFocusProjectId(input.agentUserId)
+          : null;
       const projectPlacement = await resolveProjectPlacement(placementDb, {
         userId: ctx.userId,
         explicitProjectId: input.projectId,
         sessionId: ctx.sessionId,
+        focusProjectId: declaredFocusProjectId,
       });
       const resolvedProjectId = projectPlacement.projectId;
 

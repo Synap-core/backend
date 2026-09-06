@@ -1012,16 +1012,32 @@ async function linkSessionProduced(
     sessionId: proposal.sessionId,
   });
   if (placement.projectId) {
-    await linkEntityToProject(db, {
+    // Report what the DOOR returned, not that we called it. `linkEntityToProject`
+    // can REFUSE when the project is gone or invisible; logging success
+    // unconditionally makes this operator-facing lane assert a link that never
+    // landed — the same false-success the caller-facing receipts had.
+    const link = await linkEntityToProject(db, {
       entityId,
       projectId: placement.projectId,
       userId,
       workspaceId: workspaceId ?? null,
     });
-    logger.info(
-      { projectId: placement.projectId, entityId, rung: placement.rung },
-      "Linked entity --belongs_to_project--> project"
-    );
+    if (link.linked) {
+      logger.info(
+        { projectId: placement.projectId, entityId, rung: placement.rung },
+        "Linked entity --belongs_to_project--> project"
+      );
+    } else {
+      logger.warn(
+        {
+          projectId: placement.projectId,
+          entityId,
+          rung: placement.rung,
+          reason: link.reason,
+        },
+        "Project link REFUSED — entity materialized without project membership"
+      );
+    }
   }
 }
 

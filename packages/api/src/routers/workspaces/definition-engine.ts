@@ -31,6 +31,7 @@ import {
   ONBOARDING_SCAFFOLD_SYSTEM_DATA,
   type WorkspaceDefinitionInput,
   type ReconcileReport,
+  type InstallLayerReport,
 } from "@synap/database";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
@@ -55,6 +56,7 @@ import {
   ComposeBaseNotFoundError,
 } from "../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../services/package-apply-post-workspace.js";
+import { summarizePostWorkspaceLayers } from "../../services/capabilities/install-layers.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
 import {
   logger,
@@ -800,10 +802,26 @@ export const definitionEngineProcedures = {
       // e.g. bundle fallback), fall back to the prior unconditional behavior
       // (reconcile against the caller-supplied `input.definition`) — no
       // regression for that edge.
+      /**
+       * INSTALL-LAYER HONESTY (A1). This helper runs BOTH install layers and
+       * neither is fatal — so before today a failure in either was written to a
+       * log and the caller was handed a clean payload. It now returns
+       * `{ report, layers }`: `layers` is the K8s-`status.conditions[]`-shaped
+       * per-layer verdict (`InstallLayerReport`), reported for a FAILED layer.
+       *
+       * `report` keeps its exact prior meaning ("a fresh layer-1 reconcile
+       * happened"), because both call sites derive the `outcome` discriminator
+       * from its presence — synthesizing a report for a failure would have
+       * flipped an `unchanged` install to `reconciled`.
+       */
       const reconcileExisting = async (
         workspaceId: string,
         currentSettings: WorkspaceSettings | null
-      ) => {
+      ): Promise<{
+        report: ReconcileReport | undefined;
+        layers: InstallLayerReport[];
+      }> => {
+        const layers: InstallLayerReport[] = [];
         // ── 1. Additive profiles / property-defs / views / entityLinks sync.
         const outcome = await reconcileWorkspaceIfStale({
           workspaceId,
@@ -831,6 +849,14 @@ export const definitionEngineProcedures = {
                 input.definition as unknown as WorkspaceDefinitionInput,
             });
           } catch (err) {
+            // Non-fatal, but NO LONGER SILENT: `report` stays undefined and was
+            // returned verbatim as this mutation's success payload, so a failed
+            // layer-1 reconcile was indistinguishable from "already in sync".
+            layers.push({
+              layer: "template-reconcile",
+              status: "failed",
+              message: err instanceof Error ? err.message : String(err),
+            });
             logger.warn(
               { err, workspaceId },
               "createFromDefinition: additive template reconcile failed (non-fatal)"
@@ -874,7 +900,11 @@ export const definitionEngineProcedures = {
                     pkg.automations as CreateDefinitionPostWorkspaceSlice["flowAutomations"],
                 }
               : (input.definition as CreateDefinitionPostWorkspaceSlice);
-            await applyPackagePostWorkspace({
+            // The applier catches each item and reports `{status:"error"}` in
+            // its RESULT BAG instead of throwing, so an install where every
+            // capability errored reaches neither catch. That bag was discarded
+            // here. Summarize it through the ONE derivation.
+            const post = await applyPackagePostWorkspace({
               workspaceId,
               body: buildPostWorkspaceBodyFromDefinition(
                 postWorkspaceSource,
@@ -884,33 +914,45 @@ export const definitionEngineProcedures = {
               agentUserId: (ctx as { agentUserId?: string }).agentUserId,
               scopes: [],
             });
+            layers.push(...summarizePostWorkspaceLayers(post));
           } catch (err) {
-            // ⚠️ KNOWN, UNRESOLVED HONESTY GAP — do not "tidy" this to a warn.
+            // A1 — THE CHANNEL THAT WAS MISSING NOW EXISTS. Historical note kept
+            // deliberately: this catch is still non-fatal (the workspace really
+            // was created and is usable, so throwing would be a lie in the other
+            // direction), but the partial is now REPORTED on two axes instead of
+            // only logged:
+            //   • durably — `applyPackagePostWorkspace` already stamped
+            //     `provisioningStatus:"failed"` / `failedStep` / `failedStepError`
+            //     into `workspace.settings`, and Hub `GET /workspaces` now
+            //     PROJECTS those three fields (it used to drop them);
+            //   • in-response — `layers[]` below, the same `InstallLayerReport`
+            //     shape every install door uses.
+            // The resume path is unchanged: re-running the install re-runs this
+            // layer (`resumeIfFailed`).
             //
-            // Swallowing this makes `createFromDefinition` return a CLEAN
-            // report for an install whose capabilities, playbooks and
-            // automations all failed: the browser and pod-admin then both say
-            // "Installed". The workspace itself really was created, so failing
-            // the whole call would also be a lie in the other direction — hence
-            // non-fatal. What is missing is a CHANNEL to report partial
-            // success: `ReconcileReport` (in the built `@synap/database`) has no
-            // slot for "the workspace landed, this layer did not", and adding
-            // one is a typed contract change across two UIs, not a log tweak.
-            //
-            // Note the asymmetry while it stands: `market.install` RETHROWS in
-            // exactly this situation. Two doors, opposite honesty postures, for
-            // the same failure.
+            // Note the asymmetry that REMAINS by design: `market.install`
+            // RETHROWS here. Two doors, two postures, one shape — see the report
+            // in `.wave2-reports/im-lifecycle.md`.
             //
             // Logged at ERROR because a silent partial install is the defect
             // class this codebase keeps re-shipping — an absent signal read as
             // success — and `warn` is where that goes to die.
+            layers.push({
+              layer: "post-workspace",
+              status: "failed",
+              message: err instanceof Error ? err.message : String(err),
+            });
             logger.error(
               { err, workspaceId },
-              "createFromDefinition: post-workspace layer FAILED — the workspace exists but its capabilities/playbooks/automations did not apply, and the caller is being told the install succeeded"
+              "createFromDefinition: post-workspace layer FAILED — the workspace exists but its capabilities/playbooks/automations did not apply"
             );
           }
         }
-        return report;
+        // Attach to the report too when there IS one, so a consumer holding only
+        // `result.reconciled` (both UIs derive that via `RouterOutputs`) sees the
+        // same verdict as one reading the top-level `layers`.
+        if (report && layers.length > 0) report = { ...report, layers };
+        return { report, layers };
       };
 
       // Serialise concurrent calls with the same (userId, proposalId) so a
@@ -1018,14 +1060,26 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for non-active (pending)
               // workspaces to avoid racing an in-flight provisioning build.
-              const reconciled =
+              const reconcileOutcome =
                 provStatus === "active"
                   ? await reconcileExisting(ws.id, wsSettings)
                   : undefined;
+              const reconciled = reconcileOutcome?.report;
+              const layers = reconcileOutcome?.layers ?? [];
               return {
                 workspaceId: ws.id,
                 entityIds: [],
                 reconciled,
+                // A1: a FAILED install layer, surfaced even when layer 1 was a
+                // no-op (`reconciled` undefined). `undefined` = nothing failed.
+                //
+                // ALWAYS present, never a conditional spread. `...(cond ? {k} : {})`
+                // makes the return literal a UNION of two shapes, and that union
+                // propagates to every consumer: it is what broke
+                // `useCreateWorkspaceFromProposal`'s read of `.composed`, since a
+                // property present on only SOME members of a union cannot be
+                // accessed at all. Keep the key uniform; vary only the value.
+                layers: layers.length > 0 ? layers : undefined,
                 // E4 fix: explicit discriminator alongside `reconciled` so a
                 // caller doesn't have to infer "reused vs freshly reconciled"
                 // from presence/absence of the report.
@@ -1126,10 +1180,12 @@ export const definitionEngineProcedures = {
               // Active workspace already exists → additively sync it to the
               // current template (add-only). Skipped for pending workspaces to
               // avoid racing an in-flight provisioning build.
-              const reconciled =
+              const reconcileOutcome =
                 provStatus === "active"
                   ? await reconcileExisting(ws.id, wsSettings)
                   : undefined;
+              const reconciled = reconcileOutcome?.report;
+              const layers = reconcileOutcome?.layers ?? [];
               return {
                 status:
                   provStatus === "active"
@@ -1137,6 +1193,9 @@ export const definitionEngineProcedures = {
                     : ("pending" as const),
                 workspaceId: ws.id,
                 reconciled,
+                // A1: see the sibling branch above — uniform key, never a
+                // conditional spread.
+                layers: layers.length > 0 ? layers : undefined,
                 // E4 fix: `status:"created"` above is the pre-existing
                 // (overloaded) field, kept for backward-compat. `outcome` is
                 // the honest discriminator: this branch is ALWAYS an
@@ -1220,8 +1279,12 @@ export const definitionEngineProcedures = {
               // fed loop-style `definition.automations` into the graph-automation
               // applier step, where each threw on an undefined `triggerType` and
               // was silently swallowed (install-path parity bug, Phase 4 4.T1).
+              // A1: the compose-overlay branch swallows layer 2 exactly like
+              // `reconcileExisting` does, and returned an equally clean payload.
+              // Same shape, same non-fatal posture, now reported.
+              const composeLayers: InstallLayerReport[] = [];
               try {
-                await applyPackagePostWorkspace({
+                const composePost = await applyPackagePostWorkspace({
                   workspaceId: core.composeTargetWorkspaceId,
                   body: buildPostWorkspaceBodyFromDefinition(
                     input.definition as CreateDefinitionPostWorkspaceSlice,
@@ -1231,7 +1294,15 @@ export const definitionEngineProcedures = {
                   agentUserId: (ctx as { agentUserId?: string }).agentUserId,
                   scopes: [],
                 });
+                composeLayers.push(
+                  ...summarizePostWorkspaceLayers(composePost)
+                );
               } catch (err) {
+                composeLayers.push({
+                  layer: "post-workspace",
+                  status: "failed",
+                  message: err instanceof Error ? err.message : String(err),
+                });
                 logger.warn(
                   {
                     err,
@@ -1254,6 +1325,12 @@ export const definitionEngineProcedures = {
                 workspaceId: core.composeTargetWorkspaceId,
                 composed: true as const,
                 dependencies: core.dependencies,
+                // Uniform key, never a conditional spread — see the sibling
+                // branches. A spread is not a fresh object literal, so it
+                // defeats TypeScript's `prop?: undefined` normalization across
+                // the returned union, which is what made `composed` unreadable
+                // on the union for every consumer.
+                layers: composeLayers.length > 0 ? composeLayers : undefined,
               };
             }
             // status "resolved" — no compose base. Fall through to the normal

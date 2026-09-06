@@ -20,7 +20,15 @@ const DiagnoseRequestSchema = z.object({
   agentId: z.string().optional(),
   id: z.string().optional(),
   type: z
-    .enum(["proposal", "session", "capability", "agent", "entity", "run"])
+    .enum([
+      "proposal",
+      "session",
+      "capability",
+      "agent",
+      "entity",
+      "run",
+      "workspace",
+    ])
     .optional(),
   workspaceId: z.string().nullable().optional(),
   stuckThresholdHours: z.number().optional(),

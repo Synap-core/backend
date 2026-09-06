@@ -11,6 +11,7 @@
  *   PATCH  /focus-sessions/:id      — update progress / status / correlationId
  *   POST   /focus-sessions/:id/complete — lifecycle close + proposal pack
  *   POST   /focus-sessions/:id/used — record capability usage link
+ *   POST   /focus-sessions/:id/outputs — record an existing object as an output
  *   POST   /focus-sessions/:sessionId/complete-run — close running playbook_run
  *
  * Uses Drizzle directly — focusSessions lives on coreRouter, not hubProtocolRouter,
@@ -53,6 +54,11 @@ import {
   sessionKindWhere,
 } from "../../../services/focus-sessions/session-kind.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
+import {
+  recordSessionArtifact,
+  SESSION_ARTIFACT_KINDS,
+} from "../../../services/focus-sessions/record-session-artifact.js";
+import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -157,6 +163,27 @@ const UpdateBodySchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
+});
+
+/**
+ * Door parity with the tRPC `focusSessions.attachOutput` — same field names,
+ * same DERIVED kind list (`SESSION_ARTIFACT_KINDS`, the artifacts ledger's own),
+ * so the human door and the agent door cannot drift.
+ */
+const AttachOutputBodySchema = z.object({
+  kind: z.enum(SESSION_ARTIFACT_KINDS),
+  refId: z.string().min(1),
+  label: z.string().min(1).max(500).optional(),
+  /** A declared `expectedOutputs[].label` this output is claimed against. */
+  expectedLabel: z.string().min(1).max(500).optional(),
+  /**
+   * FALLBACK lens, used ONLY when the session itself has none — parity with the
+   * tRPC door. The session's own workspace always wins, so this can never
+   * re-file an output away from the session that produced it. Omitted on a
+   * pod-personal session ⇒ a pod-personal (NULL-workspace) row, which
+   * `artifacts.workspace_id` has allowed since 0245.
+   */
+  workspaceId: z.string().uuid().optional(),
 });
 
 const UsedCapabilityBodySchema = z.object({
@@ -291,6 +318,31 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     },
     responses: {
       200: { description: "Updated session", schema: FocusSessionWireSchema },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs",
+    tags: ["FocusSessions"],
+    summary: "Record an existing object as a session output",
+    description:
+      "Writes one `artifacts` provenance row attributing an already-existing " +
+      "view/cell/document/entity/url to this session. `expectedLabel` claims a " +
+      "declared deliverable slot for the join; it never stamps it done.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: AttachOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Recorded",
+        schema: z.object({ ok: z.boolean(), outputId: z.string() }),
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -970,6 +1022,107 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ status: "recorded" as const });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.used failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/outputs
+   *
+   * Record an EXISTING object as this session's output. Parity door for the
+   * tRPC `focusSessions.attachOutput`.
+   *
+   * FLOOR — WORKSPACE MEMBERSHIP, not the owner floor the tRPC door uses. This
+   * is a DELIBERATE asymmetry, kept in parity with `POST .../used` directly
+   * above rather than tightened here in passing: this door is walked by an
+   * AGENT acting on a session it did not open (the IS records what a run
+   * produced), so an owner floor would refuse the ledger write the door exists
+   * to make. The tRPC door is the HUMAN surface, where the caller IS the owner
+   * and anything else is a cross-user write. Membership is still a real floor —
+   * `resolveActingContext` binds to the ROW's workspace, never a body-supplied
+   * one — and the ledger row records who produced it either way. Tightening
+   * this to an owner floor is a decision about the whole hub session surface
+   * (`/used`, PATCH, `/complete-run` all share it), not about this handler.
+   *
+   * The row's OWNER is still `session.userId`, and the `refId` floor below is
+   * evaluated against that owner — so a member cannot use this door to surface
+   * an object the session's owner cannot see.
+   *
+   * Ungoverned, like `POST .../used` directly above: both write a PROVENANCE
+   * row about work that already happened, not a domain mutation. Routing this
+   * through `checkPermissionOrPropose` would mint a `focus_session/update`
+   * proposal no executor re-applies — a silent no-op on approval, which is
+   * worse than an honest ungoverned ledger write. Scope + workspace membership
+   * are the floor, and the row records WHO produced it either way.
+   */
+  app.post("/focus-sessions/:id/outputs", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = AttachOutputBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    const {
+      kind,
+      refId,
+      label,
+      expectedLabel,
+      workspaceId: fallbackWorkspaceId,
+    } = parsed.data;
+    try {
+      // Load by id, bind to the row's workspace (membership check) — the same
+      // two steps `/used` and the PATCH door take.
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const acting = await resolveActingContext(c, {
+        workspaceId: session.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      // The object the output POINTS AT must already be visible to the SESSION
+      // OWNER — otherwise attaching it and re-reading the room leaks its live
+      // title. Same floor, same reason, as the tRPC door.
+      const refVisible = await isOutputRefVisible({
+        userId: session.userId,
+        kind,
+        refId,
+      });
+      if (!refVisible) {
+        return c.json({ error: `No ${kind} ${refId} you can access` }, 404);
+      }
+
+      const outputId = await recordSessionArtifact({
+        sessionId: session.id,
+        // A pod-personal session files a pod-personal output; the body's
+        // `workspaceId` is only a fallback for a session with no lens.
+        workspaceId: session.workspaceId ?? fallbackWorkspaceId ?? null,
+        // Owner of the ledger row is the session's owner, even when an agent
+        // acted — the same rule `recordSessionArtifact` documents.
+        userId: session.userId,
+        kind,
+        refId,
+        title: label ?? refId,
+        expectedLabel,
+        agentUserId: c.get("agentUserId") as string | undefined,
+      });
+      if (!outputId) {
+        return c.json({ error: "Could not record the session output" }, 500);
+      }
+      return c.json({ ok: true as const, outputId });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.outputs failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

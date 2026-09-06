@@ -43,9 +43,11 @@ import {
   skills,
   tools,
   events,
+  workspaces,
 } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
@@ -92,6 +94,10 @@ export const PROBE_ORDER: ObjectKind[] = [
   "automation_run",
   "playbook_run",
   "agent",
+  // A WORKSPACE id. Sits above the broad `entity` catch for the same reason
+  // every specific probe does; its own table is disjoint from all the others,
+  // so its position relative to `view`/`document` is only ever cosmetic.
+  "workspace",
   // `view` and `document` sit ABOVE the broad `entity` catch and BELOW every
   // specific governance/capability probe — the same slot they held in the
   // `/resolve/:id` list this prober absorbed (which probed entities → views →
@@ -294,6 +300,27 @@ export async function resolveObjectKind(
           )
           .limit(1);
         return r ? { displayName: r.name ?? null } : null;
+      },
+    },
+    {
+      kind: "workspace",
+      run: async () => {
+        const [r] = await db
+          .select({ name: workspaces.name })
+          .from(workspaces)
+          // The canonical three-branch workspace floor (member ∪ owner ∪
+          // pod-visible) applied to the workspace's OWN id column — the same
+          // predicate every workspace-scoped read is floored with, so the
+          // prober can never admit a workspace a listing would hide.
+          .where(
+            // The ONE workspace floor, shared with `diagnose/workspace.ts` so the
+            // prober and the probe can never disagree about which workspaces the
+            // caller may see. It was written for this and left unused — the
+            // predicate was duplicated here byte-for-byte instead.
+            visibleWorkspaceWhere(id, userId)
+          )
+          .limit(1);
+        return r ? { displayName: r.name ?? null, workspaceId: id } : null;
       },
     },
     {

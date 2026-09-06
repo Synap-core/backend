@@ -59,10 +59,13 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v3 = v2 + `metadata.allowedHosts` (the sandbox egress declaration — see
+ *      `declaredAllowedHosts`). Adding it retires every v2 stamp so each
+ *      container re-diffs once and a declared allowlist actually lands.
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 2;
+export const DRIFT_COMPARATOR_VERSION = 3;
 
 /** The subset of a live `skills` row the drift check reads. */
 export interface InstalledSkillRow {
@@ -77,6 +80,9 @@ export interface InstalledSkillRow {
   agentTypes?: string[] | null;
   executionMode?: string | null;
   timeoutSeconds?: number | null;
+  /** The live row's `skills.metadata` bag. Only its `allowedHosts` key is
+   *  definition-owned; every other key is DB state (see `SKILL_METADATA_*`). */
+  metadata?: Record<string, unknown> | null;
 }
 
 /** The subset of a `CapabilitySkillDef` the drift check reads. */
@@ -94,6 +100,78 @@ export interface DefinitionSkillRow {
   agentTypes?: string[] | null;
   executionMode?: string | null;
   timeoutSeconds?: number | null;
+  /** The definition's `metadata` bag — see `declaredAllowedHosts`. */
+  metadata?: Record<string, unknown> | null;
+}
+
+/**
+ * The ONLY key of a `skills.metadata` bag that a capability definition owns.
+ *
+ * `metadata` is otherwise DB state — `marketSource` (the standalone-config
+ * reconcile's install baseline), `rule`, `skillType`, execution counters — and
+ * the applier deliberately does not touch it. But ONE key inside it is the
+ * thing the sandbox actually enforces: `run-skill-in-sandbox.ts` reads
+ * `skill.metadata?.allowedHosts ?? []` and `host.fetch` refuses every host not
+ * on that list (default-deny, SSRF-checked, redirects rejected).
+ *
+ * Until this existed the list had NO writer reachable from a package: the
+ * applier passed no `metadata` at all, so a published third-party skill could
+ * never grant itself egress to its own vendor's API — it installed cleanly and
+ * died at run with `domain_not_approved`. Threading exactly this one key (and
+ * nothing else) is what makes the existing gate usable without turning the
+ * whole DB-owned bag into template-owned state.
+ */
+export const SKILL_METADATA_ALLOWED_HOSTS = "allowedHosts";
+
+/**
+ * The egress allowlist a definition DECLARES, or `undefined` when it declares
+ * none.
+ *
+ * `undefined` is load-bearing in both directions:
+ * - to `projectSkillMetadata`: write nothing, leave the live bag alone;
+ * - to `PROJECTED_SKILL_FIELDS.metadata.expected`: nothing to converge to, so
+ *   the comparator skips the field (the same rule `category`/`agentTypes` use).
+ *
+ * So a template that omits the key does NOT revoke a list set through the
+ * tRPC door — honest under-convergence, and nothing stamps otherwise. A
+ * template that NARROWS or WIDENS the list does converge, and widening it under
+ * an existing approval demotes the row (`allowedHostsChanged`).
+ *
+ * A non-array declaration is ignored rather than persisted: the sandbox calls
+ * `.includes()` on it, and a string would silently allowlist by substring.
+ */
+export function declaredAllowedHosts(
+  metadata: Record<string, unknown> | null | undefined
+): string[] | undefined {
+  const raw = (metadata ?? {})[SKILL_METADATA_ALLOWED_HOSTS];
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter((h): h is string => typeof h === "string");
+}
+
+/**
+ * THE applier's `skills.metadata` projection — the single expression the
+ * template applier's `.set({ metadata: ... })` uses, and the one the drift
+ * comparator is derived from.
+ *
+ * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
+ * every key of the live bag is preserved byte-identically and ONLY
+ * `allowedHosts` is ever written. That is what lets `PROJECTED_SKILL_FIELDS`
+ * carry a `metadata` entry that reads just this one key without the stamp
+ * overclaiming: the marker asserts exactly what the comparator checked.
+ *
+ * Returns `undefined` when the definition declares nothing — Drizzle's `.set()`
+ * SKIPS an undefined key, so the live bag is not rewritten at all.
+ */
+export function projectSkillMetadata(
+  existing: Record<string, unknown> | null | undefined,
+  definitionMetadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> | undefined {
+  const declared = declaredAllowedHosts(definitionMetadata);
+  if (declared === undefined) return undefined;
+  return {
+    ...((existing ?? {}) as Record<string, unknown>),
+    [SKILL_METADATA_ALLOWED_HOSTS]: declared,
+  };
 }
 
 /**
@@ -154,6 +232,15 @@ export const PROJECTED_SKILL_FIELDS: Record<
   agentTypes: {
     expected: (d) => d.agentTypes,
     actual: (i) => i.agentTypes ?? null,
+  },
+  // NARROWED ON PURPOSE. The applier's `.set({ metadata })` writes exactly one
+  // key of this bag (`projectSkillMetadata` above); every other key is DB-owned
+  // and preserved. So this entry reads exactly that key — comparing the whole
+  // bag would report drift on `marketSource`/counters the template never owns,
+  // i.e. a re-apply on every boot. Marker coverage == applier coverage.
+  metadata: {
+    expected: (d) => declaredAllowedHosts(d.metadata),
+    actual: (i) => declaredAllowedHosts(i.metadata) ?? null,
   },
 };
 

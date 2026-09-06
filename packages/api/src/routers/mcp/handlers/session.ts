@@ -133,7 +133,11 @@ export const sessionHandlers: McpHandlerMap = {
       note:
         result.counts.pending > 0
           ? `Review pack: ${result.counts.pending} pending proposal(s) for this session — use synap_list_proposals with sessionId, or open the session room.`
-          : "Session closed with no pending proposals in the pack.",
+          : // The status the row HOLDS, not "closed". Cancelling a session and
+            // being told it "closed" is the same hardcoded-literal slip the
+            // response `status` above already had — caught live: a cancel
+            // returned `status:"cancelled"` while this line still said closed.
+            `Session ${result.session.status} with no pending proposals in the pack.`,
     });
   },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {

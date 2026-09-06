@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IntelligenceHubClient } from "./intelligence-hub-client.js";
+import { narrowPartialFailure } from "./is-chat-stream.js";
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
@@ -84,5 +85,68 @@ describe("IntelligenceHubClient.sendMessageStream", () => {
       projectId: "79f58d96-dca2-4f96-ad20-9a3ae619fdf3",
       turnContext: { surface: { name: "Inbox" } },
     });
+  });
+});
+
+describe("IntelligenceHubClient.sendMessageStream — committed partial turn", () => {
+  // THE INTERACTIVE PATH. A mid-stream provider death commits its partial text
+  // and ends the stream NORMALLY, so there is no `error` frame — `complete` is
+  // the only carrier. This client had ZERO occurrences of `partialFailure`, and
+  // a truncated answer reached the browser looking finished. The frame's `data`
+  // must stay an OPEN pass-through: picking named fields off it here is exactly
+  // how the signal would be lost again.
+  it("forwards partialFailure on the complete event's data", async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        'data: {"type":"content","content":"Half an ans"}\n\n' +
+          'data: {"type":"complete","data":{"content":"Half an ans","partialFailure":{"code":"insufficient_credit","message":"Insufficient Balance","retryable":false}}}\n\n',
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      )
+    );
+
+    const client = new IntelligenceHubClient("http://intelligence.test", "key");
+    const events = [];
+    for await (const event of client.sendMessageStream({
+      query: "hello",
+      threadId: "thread-1",
+      userId: "user-1",
+    })) {
+      events.push(event);
+    }
+
+    const complete = events.find((event) => event.type === "complete");
+    expect(
+      narrowPartialFailure(
+        (complete?.data as { partialFailure?: unknown } | undefined)
+          ?.partialFailure
+      )
+    ).toMatchObject({ code: "insufficient_credit", retryable: false });
+  });
+
+  it("a clean complete carries no partialFailure", async () => {
+    fetchMock.mockResolvedValue(
+      new Response('data: {"type":"complete","data":{"content":"done"}}\n\n', {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      })
+    );
+
+    const client = new IntelligenceHubClient("http://intelligence.test", "key");
+    const events = [];
+    for await (const event of client.sendMessageStream({
+      query: "hello",
+      threadId: "thread-1",
+      userId: "user-1",
+    })) {
+      events.push(event);
+    }
+
+    const complete = events.find((event) => event.type === "complete");
+    expect(
+      narrowPartialFailure(
+        (complete?.data as { partialFailure?: unknown } | undefined)
+          ?.partialFailure
+      )
+    ).toBeNull();
   });
 });

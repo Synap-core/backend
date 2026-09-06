@@ -595,6 +595,31 @@ export function registerWorkspacesRoutes(app: HubHono): void {
             installedPacks: settings.installedPacks ?? [],
             systemSlug: settings.systemSlug ?? null,
             entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
+            // ── INSTALL HEALTH (A1) ──────────────────────────────────────────
+            // `applyPackagePostWorkspace` stamps these three into
+            // `workspace.settings` before rethrowing, so after a swallowed
+            // layer-2 failure the pod DURABLY knows which workspace is partial
+            // and why. This projection dropped all three — which is the single
+            // line where "partially installed" became "installed" for every
+            // client of this door (CLI `market installed`, the browser install
+            // banner, pod-admin). Distinct from the TemplateHealth triad above:
+            // that answers "is it BEHIND its template", this answers "did it
+            // fully LAND". `null` = never stamped = the install completed.
+            //
+            // Recoverable, not fatal: the workspace exists and is usable, and
+            // re-running the install resumes exactly this layer (`resumeIfFailed`).
+            provisioningStatus:
+              typeof settings.provisioningStatus === "string"
+                ? settings.provisioningStatus
+                : null,
+            failedStep:
+              typeof settings.failedStep === "string"
+                ? settings.failedStep
+                : null,
+            failedStepError:
+              typeof settings.failedStepError === "string"
+                ? settings.failedStepError
+                : null,
           };
         });
       return c.json({ workspaces: list, podEntityCount });

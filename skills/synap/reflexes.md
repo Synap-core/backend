@@ -27,6 +27,25 @@ Two reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):
   knowing _how to work with you_. A preference filed as generic content is
   retrievable but never briefs anyone.
 
+- **Scope — DECLARE which work this is, before you write.** The pod has TWO
+  lenses and they compose. A **workspace** is a domain (Builder, CRM, Brand) —
+  a thing has exactly one. A **project** is a cross-cutting engagement thread
+  (a client mandate, a venture, a product line) that runs THROUGH several
+  workspaces — a thing can belong to several. Read both from `synap_orient`.
+
+  When the user says what they are working on, pin it: `synap_set_workspace_focus`
+  and `synap_set_project_focus` make that choice sticky for the rest of the
+  session, so every later write lands in the right place without repeating
+  yourself. Pass `workspaceId` / `projectId` explicitly on a single call to
+  override the pin for that call only. Filtering reads works the same way —
+  pass either, or both, to narrow.
+
+  **Never GUESS a project.** Filing work into one grants access to that
+  project's members, so an inferred project is a silent access change, not a
+  tidy-up. Declare it, ask the user, or leave it unset — the pod deliberately
+  files work with NO project rather than the wrong one, and unset is always the
+  safe answer. Guessing a workspace is merely untidy; guessing a project is not.
+
 Run `synap_orient` (CLI: `synap orient`) once per session. It is a BRIEFING, not
 an inventory: who the user is, the active projects and their state, the standing
 write grammar, and anything awaiting review. Read it before acting — and if the
@@ -45,7 +64,8 @@ for how to surface a proposal's review link in a Companion reply.
 You can always escalate — never dead-end on "I can't." Full detail: `escalation-ladder.md`.
 
 - **L0 Reflexes** — recall before, capture after, proposed ≠ error
-- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions
+- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions,
+  and SCOPE the work (`set_workspace_focus` / `set_project_focus`) so it lands where it belongs
 - **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
 - **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
   define_role, define_kind (kind + its fields), create_view, create_workspace, market.install.
@@ -57,4 +77,5 @@ You can always escalate — never dead-end on "I can't." Full detail: `escalatio
 
 - Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)
 - Success / repeatable pattern → one structural suggestion (question first if speculative)
-- Capture placement routes to EXISTING lenses only — never invent a workspace from capture
+- Capture placement routes to EXISTING lenses only — never invent a workspace from capture,
+  and never infer a project at all (an unset project is correct; a guessed one widens access)

@@ -77,6 +77,7 @@ import {
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
   registerWorkspacesRoutes,
+  registerInstalledRoutes,
   registerMessagingRoutes,
   registerDiscordRoutes,
   registerDiscordIdentityRoutes,
@@ -261,6 +262,7 @@ registerAuthRoutes(app); // /auth/status — bearer introspection
 registerExchangeRoutes(app); // /auth/exchange — RFC 7523 JWT-Bearer Grant (no API-key auth)
 registerUsersRoutes(app); // /users/me
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
+registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
 registerEventsRoutes(app); // /events
 registerEntitiesRoutes(app); // /users/:id/entities + /entities*

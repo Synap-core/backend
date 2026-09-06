@@ -44,6 +44,7 @@ import {
   resolveActionLabel,
   resolveObjectNoun,
   humanizeToken,
+  OBJECT_KINDS,
 } from "@synap-core/types/vocabulary";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
 import {
@@ -826,7 +827,112 @@ const eventOptionSchema = z.object({
 });
 export type EventOption = z.infer<typeof eventOptionSchema>;
 
-const actionOptionSchema = z.object({
+/**
+ * The param value types the wire can carry — the ONE list.
+ *
+ * Extracted from the inline `z.enum([...])` it used to be so that it has a
+ * single declaration site: `paramsFromVerbSchema` below carried a HAND-COPIED
+ * `["string","number",...]` array to validate the deriver's tag, which was a
+ * third copy of the same vocabulary living two hundred lines from the first.
+ * Both now read this schema.
+ *
+ * The pinned client mirror is `PARAM_VALUE_TYPES` in
+ * `synap-app/packages/core/automation-intent/src/rule-vocabulary.ts`, kept in
+ * lockstep by `action-option-parity.test.ts` (a cross-repo source scan).
+ */
+const paramValueTypeSchema = z.enum([
+  "string",
+  "number",
+  "boolean",
+  "date",
+  "enum",
+  "reference",
+]);
+export type ParamValueType = z.infer<typeof paramValueTypeSchema>;
+
+/**
+ * Which OBJECT a `reference` param points at.
+ *
+ * Sourced from the vocabulary SSOT (`OBJECT_KINDS`, 37 kinds) rather than a
+ * bespoke enum ON PURPOSE: `(kind, id)` is already `objectNavTarget`'s
+ * signature, so a reference authored into a rule is deep-linkable, labelable
+ * and icon-able by every surface for free. A second kind vocabulary here would
+ * be a fork of the registry the moment a kind is added.
+ *
+ * The tag is AUTHORED, never INFERRED. Nothing in this file may pattern-match
+ * `*Id` / `*Slug` on the wire to guess it — that is how a `budget` number once
+ * got typed as text.
+ */
+const REF_KIND_TOKENS = Object.keys(OBJECT_KINDS) as [string, ...string[]];
+const refKindSchema = z.enum(REF_KIND_TOKENS);
+
+/**
+ * How many objects a `reference` param admits.
+ *
+ * Part of the type FROM DAY ONE, and the stored value is ALWAYS an array (see
+ * `referenceValueSchema`), so widening a param from single to multiple later is
+ * a declaration change and not a data migration. Home Assistant retrofitted
+ * cardinality onto an already-shipped single-value shape and broke its editor;
+ * this is the cheap way not to repeat that.
+ */
+export const REFERENCE_CARDINALITIES = ["single", "multiple"] as const;
+const referenceCardinalitySchema = z.enum(REFERENCE_CARDINALITIES);
+
+/**
+ * How a `reference` param's value is SUPPLIED.
+ *
+ * - `bound` — the author picked the object(s) now; `value` holds them.
+ * - `ask`   — DELIBERATELY UNBOUND: "ask me when it runs". The rule stores the
+ *             question, not an answer, and the runtime disambiguates with the
+ *             human at execution time. This is Apple App Intents'
+ *             `requestDisambiguation`, and it is the mobile unlock — no web
+ *             rule builder offers it, because a web builder assumes the author
+ *             is present at authoring time and absent at run time.
+ */
+export const REFERENCE_MODES = ["bound", "ask"] as const;
+
+/** One picked object: the id plus the label it was picked BY (display only). */
+const referenceTargetSchema = z.object({
+  id: z.string(),
+  /** What the picker showed. Cached for display; never the identity. */
+  label: z.string().optional(),
+});
+
+/**
+ * The STORED VALUE of a `reference` param — a tagged union on `mode`, never a
+ * bare id string.
+ *
+ * A bare id cannot express "ask me when it runs", cannot carry the kind it
+ * belongs to (so no surface can label or link it), and cannot grow a second
+ * mode without every reader having to sniff the shape. n8n's `resourceLocator`
+ * learned this the same way; the tag is the whole point.
+ *
+ * `value` is ALWAYS an array, for both cardinalities — see
+ * `REFERENCE_CARDINALITIES`. A `single` param admits exactly one element; the
+ * cardinality lives on the DECLARATION, so the value shape never changes.
+ *
+ * ⚠️ NOT YET WIRED TO AN EXECUTOR. This wave declares the contract; no producer
+ * emits `type: "reference"` yet, and `packages/jobs/.../steps/output.ts` still
+ * reads `config.entityId` / `config.channelId` as bare strings. Tagging those
+ * params before the executor can read a `{mode,value}` would store values
+ * nothing can execute — see the note on `SENTENCE_ACTION_PARAMS`.
+ */
+export const referenceValueSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("bound"),
+    refKind: refKindSchema,
+    value: z.array(referenceTargetSchema).min(1),
+  }),
+  z.object({
+    mode: z.literal("ask"),
+    refKind: refKindSchema,
+    /** The question to put to the human at run time. Absent → the param label. */
+    prompt: z.string().optional(),
+  }),
+]);
+export type ReferenceValue = z.infer<typeof referenceValueSchema>;
+
+export const actionOptionSchema = z.object({
   key: z.string(),
   label: z.string(),
   // Which flow node this action compiles to. "output" (default) → an `output`
@@ -848,40 +954,72 @@ const actionOptionSchema = z.object({
   playbookId: z.string().uuid().optional(),
   params: z
     .array(
-      z.object({
-        key: z.string(),
-        label: z.string(),
-        required: z.boolean(),
-        /**
-         * What KIND of value this param takes — the field that decides which
-         * control a client renders.
-         *
-         * ⚠️ This contract carried only `{key,label,required}`, so every param
-         * reached every client as a bare text box.
-         *
-         * ⚠️ Measured: 100 top-level params across 30 builtin schemas — 80
-         * string, 4 enum, 3 number, ZERO boolean, ZERO date. An earlier
-         * version of this comment named `profileSlug` as an enum and cited
-         * booleans; neither is true of this corpus. The type was present in the execution-time
-         * Zod schema the whole time and was dropped one hop before the wire
-         * (`paramsFromVerbSchema`). Relay's composer being "a wall of text
-         * boxes" was this field's absence, not a rendering choice.
-         *
-         * OPTIONAL on purpose. Provider verbs have no type to give — their
-         * params are found by regex-scanning `{{token}}` and `paramMapping`
-         * declares no type — so absent means "we could not tell", and a client
-         * must degrade to an untyped input rather than guess. Inferring a type
-         * from adjacent hints would type a couple of params and MISTYPE the
-         * rest, which is worse than the honest text box.
-         */
-        type: z
-          .enum(["string", "number", "boolean", "date", "enum"])
-          .optional(),
-        /** The admissible values, when `type` is `enum`. Renders a picker. */
-        options: z.array(z.string()).optional(),
-        /** The schema's own one-liner — help text, already authored. */
-        description: z.string().optional(),
-      })
+      z
+        .object({
+          key: z.string(),
+          label: z.string(),
+          required: z.boolean(),
+          /**
+           * What KIND of value this param takes — the field that decides which
+           * control a client renders.
+           *
+           * ⚠️ This contract carried only `{key,label,required}`, so every param
+           * reached every client as a bare text box.
+           *
+           * ⚠️ Measured: 100 top-level params across 30 builtin schemas — 80
+           * string, 4 enum, 3 number, ZERO boolean, ZERO date. An earlier
+           * version of this comment named `profileSlug` as an enum and cited
+           * booleans; neither is true of this corpus. The type was present in the execution-time
+           * Zod schema the whole time and was dropped one hop before the wire
+           * (`paramsFromVerbSchema`). Relay's composer being "a wall of text
+           * boxes" was this field's absence, not a rendering choice.
+           *
+           * OPTIONAL on purpose. Provider verbs have no type to give — their
+           * params are found by regex-scanning `{{token}}` and `paramMapping`
+           * declares no type — so absent means "we could not tell", and a client
+           * must degrade to an untyped input rather than guess. Inferring a type
+           * from adjacent hints would type a couple of params and MISTYPE the
+           * rest, which is worse than the honest text box.
+           */
+          type: paramValueTypeSchema.optional(),
+          /** The admissible values, when `type` is `enum`. Renders a picker. */
+          options: z.array(z.string()).optional(),
+          /**
+           * WHICH object kind this param points at — required when (and only
+           * when) `type` is `"reference"`. An `OBJECT_KINDS` token, so
+           * `(refKind, id)` is directly `objectNavTarget`'s signature.
+           */
+          refKind: refKindSchema.optional(),
+          /**
+           * How many of them — required alongside `refKind`. Absent-with-a-
+           * refKind is rejected below rather than defaulted, so a half-declared
+           * reference fails at this door instead of rendering as a lone picker
+           * that silently truncates a multi-select.
+           */
+          refCardinality: referenceCardinalitySchema.optional(),
+          /** The schema's own one-liner — help text, already authored. */
+          description: z.string().optional(),
+        })
+        .superRefine((param, ctx) => {
+          // A reference param that does not say WHICH kind is unrenderable: the
+          // picker has nothing to list. And `refKind` on a non-reference param
+          // is a producer that half-migrated. Both are producer bugs, and this
+          // door parses its own output (see `.parse(actions)` below), so they
+          // fail loudly here rather than reaching a client that must guess.
+          const isReference = param.type === "reference";
+          if (isReference && (!param.refKind || !param.refCardinality)) {
+            ctx.addIssue({
+              code: "custom",
+              message: `param "${param.key}" is type "reference" but does not declare both refKind and refCardinality`,
+            });
+          }
+          if (!isReference && (param.refKind || param.refCardinality)) {
+            ctx.addIssue({
+              code: "custom",
+              message: `param "${param.key}" declares refKind/refCardinality but its type is not "reference"`,
+            });
+          }
+        })
     )
     .optional(),
 });
@@ -906,6 +1044,8 @@ export function paramsFromVerbSchema(
             description?: unknown;
             type?: unknown;
             options?: unknown;
+            refKind?: unknown;
+            refCardinality?: unknown;
           })
         : {};
     // Forward everything the deriver produced. This used to build
@@ -914,21 +1054,36 @@ export function paramsFromVerbSchema(
     // type to drop because nobody read it. A projection narrower than its
     // producer is this codebase's most repeated defect; the parity test beside
     // this function now pins the two together.
-    const type =
-      typeof rec.type === "string" &&
-      ["string", "number", "boolean", "date", "enum"].includes(rec.type)
-        ? (rec.type as NonNullable<
-            NonNullable<ActionOption["params"]>[number]["type"]
-          >)
-        : undefined;
+    // Validated against the ONE list (`paramValueTypeSchema`), not a copy of
+    // it: this used to hand-repeat the members, which is a vocabulary fork
+    // waiting for the sixth member — and `"reference"` was the sixth member.
+    const parsedType = paramValueTypeSchema.safeParse(rec.type);
+    const type = parsedType.success ? parsedType.data : undefined;
     const options = Array.isArray(rec.options)
       ? rec.options.filter((o): o is string => typeof o === "string")
+      : undefined;
+    // A reference declaration is THREE fields, and forwarding only the tag is
+    // worse than forwarding none of it: `actionOptionSchema` refuses a
+    // half-declared reference, so a deriver that emitted `type:"reference"`
+    // whose kind was dropped here would make the WHOLE action list fail to
+    // parse at the door — the composer would show no actions at all, for a
+    // field this function merely forgot to copy. Validated against the same
+    // schemas the wire declares, never a re-listing of their members.
+    const parsedKind = refKindSchema.safeParse(rec.refKind);
+    const refKind = parsedKind.success ? parsedKind.data : undefined;
+    const parsedCardinality = referenceCardinalitySchema.safeParse(
+      rec.refCardinality
+    );
+    const refCardinality = parsedCardinality.success
+      ? parsedCardinality.data
       : undefined;
     out.push({
       key,
       label: humanizeToken(key),
       required: rec.required === true,
       ...(type ? { type } : {}),
+      ...(refKind ? { refKind } : {}),
+      ...(refCardinality ? { refCardinality } : {}),
       ...(options && options.length > 0 ? { options } : {}),
       ...(typeof rec.description === "string" && rec.description
         ? { description: rec.description }
@@ -1140,6 +1295,15 @@ function actionLabelFor(
  * read key. A mismatch on any of the three reintroduces the seam-fork this repo
  * has been bitten by, which is why every key below is cross-checked against all
  * three sources (cited per field).
+ *
+ * ⚠️ `entity_update.entityId` and `channel_message.channelId` are the obvious
+ * candidates for `type: "reference"` (refKind `entity` / `channel`) and are
+ * DELIBERATELY still untyped. The executor reads `config.entityId` as a BARE
+ * STRING (output.ts:414) and `config.channelId` likewise; tagging them here
+ * would make clients write a `{mode,value}` object into a field nothing can
+ * read — a rule that saves green and dies at run time, i.e. exactly the class
+ * this file's parity guards exist to prevent. Tag them in the same wave that
+ * teaches the executor to resolve a `referenceValueSchema`.
  */
 const SENTENCE_ACTION_PARAMS: Record<
   string,

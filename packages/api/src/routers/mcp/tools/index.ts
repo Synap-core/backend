@@ -345,7 +345,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = approved vs awaiting; type:"run" = per-flow failure counts); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
+          'Understand what\'s happening / what\'s wrong — the pod\'s health door (the third door, alongside ask + capture). The MODE is derived from what you pass (never a tool name you choose): NO ARGS → whole-pod health (stuck runs, failed flows, review backlog + age, duplicate-proposal clusters, capability posture, agents hitting the daily cap) with a plain-language summary; `type` → a class as a surface (type:"proposal" = the review queue: pending count, oldest, duplicate clusters; type:"session" = stuck sessions; type:"agent" = agent roster + quality; type:"capability" = approved vs awaiting; type:"run" = per-flow failure counts; type:"workspace" = the workspace landscape: per-workspace entity counts + which kinds live in each, PAIRWISE profile-slug overlap between workspaces, and flags for empty / duplicate-named / no-authored-identity workspaces — the "do I have too many workspaces?" read); `id` → auto-detects what the id is (proposal / session / capability / automation-run / playbook-run / agent / entity / view / document / workspace) and explains its state + WHY; `agentId` → an agent\'s behavioural scorecard (approve/reject/revise rates, top rejection reasons, duplicate rate, daily-cap posture). Backward-compatible: `runId`+`flowType` → that run\'s activity timeline (a capture\'s decision + trace events, each with a machine-readable reason + fixHint); `flowType`/`flowId` → the run feed. USER-scoped automatically.',
         inputSchema: {
           type: "object",
           properties: {
@@ -358,14 +358,15 @@ export const tools = {
                 "agent",
                 "entity",
                 "run",
+                "workspace",
               ],
               description:
-                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures).",
+                "Diagnose a whole CLASS as a surface (the review queue, stuck sessions, the agent roster, capability health, per-flow run failures, the workspace landscape).",
             },
             id: {
               type: "string",
               description:
-                "Any object id — the door auto-detects whether it is a proposal / session / capability / run / agent / entity and explains its state + why.",
+                "Any object id — the door auto-detects whether it is a proposal / session / capability / run / agent / entity / view / document / workspace and explains its state + why.",
             },
             agentId: {
               type: "string",
@@ -1738,6 +1739,29 @@ export const tools = {
               type: "string",
               description:
                 "Workspace name or id to focus on. Omit, or pass 'none'/'clear', to clear the current focus.",
+            },
+          },
+          required: [],
+        },
+      },
+
+      {
+        name: "synap_set_project_focus",
+        annotations: {
+          title: "Set project focus",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "DECLARE which project you are working on, so writes that don't pin their own project file into it — the 'everything I do now is for the Apollo migration' scenario. Sticky across calls until cleared. A call that passes an explicit projectId still wins. Filing into a project GRANTS ACCESS to it, so this is a DECLARATION only: the project is verified to exist and be visible to you at set time, and nothing infers a project from what you write. Pass `project` as a name (matched against the projects you can see) or an id; omit it (or pass 'none'/'clear') to clear the focus.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            project: {
+              type: "string",
+              description:
+                "Project name or id to declare. Omit, or pass 'none'/'clear', to clear the current focus.",
             },
           },
           required: [],

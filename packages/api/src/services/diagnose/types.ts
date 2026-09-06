@@ -20,7 +20,20 @@ import type {
 
 /** A diagnosable class — the CLASS mode surfaces (`diagnose({ type })`). */
 export type DiagnoseClass =
-  "proposal" | "session" | "capability" | "agent" | "entity" | "run";
+  | "proposal"
+  | "session"
+  | "capability"
+  | "agent"
+  | "entity"
+  | "run"
+  /**
+   * The workspace LANDSCAPE — "do I have too many workspaces?", answered with
+   * evidence (per-workspace kinds + counts, pairwise profile-slug overlap,
+   * empty/duplicate-name/no-identity flags). Added because the pod could not
+   * answer a structural question about its own organising dimension: the read
+   * was only reachable by raw SQL against Postgres.
+   */
+  | "workspace";
 
 /** The kinds `resolveObjectKind` can detect for a bare id. */
 export type ObjectKind =
@@ -39,6 +52,12 @@ export type ObjectKind =
    */
   | "view"
   | "document"
+  /**
+   * A WORKSPACE — the pod's own organising lens. It was the one kind the pod is
+   * structured by that `diagnose` could not explain (`diagnose({id:<wsId>})`
+   * answered "No diagnosable object found" on the live pod).
+   */
+  | "workspace"
   /**
    * A completed external-dispatch send (messaging.external.send / provider
    * proxy call) — resolved ONLY via its `correlationId` (there is no separate

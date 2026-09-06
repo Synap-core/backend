@@ -11,6 +11,17 @@ export { registerHealthRoutes } from "./health.js";
 export { registerHealthDependenciesRoutes } from "./health-dependencies.js";
 export { registerUsersRoutes } from "./users.js";
 export { registerWorkspacesRoutes } from "./workspaces.js";
+// Kept as its OWN export statement: `check-orphan-routes.mjs` recognises a
+// route file only via an `export { register*Routes }` block containing nothing
+// else, so folding the helpers below into this one would make the file read as
+// an orphaned route.
+export { registerInstalledRoutes } from "./installed.js";
+export {
+  packageSlugFromCellTypeKey,
+  INSTALLED_KINDS,
+  type InstalledKind,
+  type InstalledRow,
+} from "./installed.js";
 export { registerThreadsRoutes } from "./threads.js";
 export { registerEventsRoutes } from "./events.js";
 export { registerEntitiesRoutes } from "./entities.js";

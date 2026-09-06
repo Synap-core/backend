@@ -299,6 +299,7 @@ export const readHandlers: McpHandlerMap = {
         | "agent"
         | "entity"
         | "run"
+        | "workspace"
         | undefined,
       workspaceId: (args.workspaceId as string | undefined) ?? undefined,
       stuckThresholdHours: args.stuckThresholdHours as number | undefined,

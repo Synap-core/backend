@@ -13,6 +13,7 @@ import {
   FALLBACK_ICON,
   resolveProposalKindLabel,
   PROPOSAL_KIND_LABELS,
+  resolveObjectNounPlural,
 } from "./index.js";
 import { buildFallbackTitle } from "../proposals/proposal-utils.js";
 
@@ -518,5 +519,36 @@ describe("every emitted action token has both moods", () => {
     // Not a regression test for the above — the opposite. An enum value nobody
     // has taught us must humanize, never leak.
     expect(resolveActionLabel("declare_source", "past")).toBe("Declare source");
+  });
+});
+
+describe("resolveObjectNounPlural", () => {
+  it("uses the registry's curated plural, not singular + s", () => {
+    // The three that prove the point: none is the singular plus "s".
+    expect(resolveObjectNounPlural("person")).toBe("People");
+    expect(resolveObjectNounPlural("company")).toBe("Companies");
+    expect(resolveObjectNounPlural("entity")).toBe("Entities");
+  });
+
+  it("never returns the singular with a bare `s` for a registry kind", () => {
+    // The defect this exists to prevent, asserted over the WHOLE registry
+    // rather than the three examples above: a curated plural that happens to
+    // equal singular+s is fine, but a kind falling through to that by accident
+    // is not detectable here — so assert the resolver READ the registry.
+    for (const [kind, def] of Object.entries(OBJECT_KINDS)) {
+      expect(resolveObjectNounPlural(kind), kind).toBe(def.labelPlural);
+    }
+  });
+
+  it("resolves aliases the same way the singular does", () => {
+    expect(resolveObjectNounPlural("focus_session")).toBe(
+      resolveObjectNounPlural("session")
+    );
+  });
+
+  it("pluralises the backend-only tail and never leaks a raw token", () => {
+    expect(resolveObjectNounPlural("api_key")).toBe("API keys");
+    expect(resolveObjectNounPlural("some_new_thing")).toBe("Some new things");
+    expect(resolveObjectNounPlural(null)).toBe("");
   });
 });

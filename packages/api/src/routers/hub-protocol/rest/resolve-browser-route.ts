@@ -64,6 +64,14 @@ const ROUTE_BY_KIND: Record<ObjectKind, BrowserRoute | null> = {
   view: { label: "view" },
   document: { label: "document" },
   entity: { label: "entity" },
+  // OPENABLE, deliberately. `object-nav.ts` has a real `workspace` arm: the
+  // `workspace-detail` cell (identity · members · intelligence · packs), side
+  // placement, prop-driven by `workspaceId`. It is a read-detail door, NOT the
+  // SettingsView `workspace` section — opening it does not hijack the user's
+  // active-workspace lens. Emitting the label is therefore correct; omitting it
+  // would have made the pod's own workspace diagnosis the one result with no
+  // way to open what it describes.
+  workspace: { label: "workspace" },
   // NO BROWSER DOOR. Not an oversight: an external send has no row and no
   // surface — object-nav has no arm for it and inventing one here would be a
   // link into nothing.

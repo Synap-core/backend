@@ -55,6 +55,10 @@ import { agentScorecard } from "./agent-scorecard.js";
 import { diagnoseGlobal } from "./global.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
 import { resolveObjectKind } from "./resolve-object-kind.js";
+import {
+  diagnoseWorkspaceClass,
+  diagnoseWorkspaceObject,
+} from "./workspace.js";
 import type {
   DiagnoseClass,
   DiagnoseResult,
@@ -72,6 +76,7 @@ const CLASS_VALUES: DiagnoseClass[] = [
   "agent",
   "entity",
   "run",
+  "workspace",
 ];
 
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` — the agnostic-capability last-mile executor's
@@ -524,6 +529,14 @@ async function diagnoseObject(
       };
     }
 
+    // A WORKSPACE — the pod's organising lens. Delegated whole to
+    // `./workspace.ts` (entity count, the kinds that actually live here, the
+    // pod-scoped share, last activity, empty/duplicate-name flags) rather than
+    // inlined, so OBJECT and CLASS mode read the SAME landscape loader and can
+    // never report two different pictures of the same workspace.
+    case "workspace":
+      return diagnoseWorkspaceObject(userId, id);
+
     // A completed external-dispatch send — resolved by `resolveObjectKind`'s
     // correlationId fallback (no row of its own; `id` here IS the
     // correlationId). Re-read the SAME audit event to explain it.
@@ -802,6 +815,11 @@ async function diagnoseClass(
         },
       };
     }
+
+    // The workspace LANDSCAPE — the "do I have too many workspaces?" read.
+    // `workspaceId` narrows it to one lens, exactly like every other class arm.
+    case "workspace":
+      return diagnoseWorkspaceClass(userId, workspaceId);
 
     // Entities are diagnosed per-id (OBJECT), not as a health surface.
     case "entity":

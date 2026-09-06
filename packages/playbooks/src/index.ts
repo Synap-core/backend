@@ -793,9 +793,28 @@ export interface CapabilitySkillDef {
    *  applier and surfaced on the catalog verb, so a surface can find verbs by
    *  CONFIGURATION instead of hardcoding verb ids. */
   category?: string;
-  /** Free-form definition metadata. Read (not persisted) for the catalog's
-   *  `metadata.verbType` override so an available template's verb renders the
-   *  same `type` before and after install. */
+  /**
+   * Definition metadata. MOSTLY read-only — `metadata.verbType` is the catalog's
+   * type override (so an available template's verb renders the same `type`
+   * before and after install) and is NOT persisted.
+   *
+   * ONE key is persisted onto the `skills` row, because it is the one the
+   * runtime enforces:
+   *
+   *   `allowedHosts: string[]` — the sandbox egress allowlist. `host.fetch`
+   *   inside a skill is DEFAULT-DENY: `run-skill-in-sandbox.ts` reads
+   *   `skill.metadata?.allowedHosts ?? []` and refuses any hostname not on it
+   *   (`domain_not_approved`), after an SSRF check, with redirects rejected. So
+   *   a package that omits it publishes a skill that cannot reach ANY host —
+   *   including its own vendor's API. Declare the hostnames the skill calls.
+   *
+   * The list is disclosed to the approver before install (it is rendered on the
+   * install/proposal card), and CHANGING it on an already-approved skill demotes
+   * that skill back to unapproved on BOTH write doors (`allowedHostsChanged`) —
+   * an approved skill's egress can never be widened without re-earning approval.
+   * Omitting the key on a re-apply leaves an existing list untouched; it does not
+   * revoke one.
+   */
   metadata?: Record<string, unknown>;
   executionMode?: "sync" | "async";
   timeoutSeconds?: number;

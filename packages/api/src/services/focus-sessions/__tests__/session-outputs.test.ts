@@ -232,3 +232,176 @@ describe("joinSessionOutputs — provenance", () => {
     expect(outputs.map((o) => o.refId)).toEqual([DOC_A, DOC_B]);
   });
 });
+
+/**
+ * Rule 3 — DECLARED LABEL. A person attaching an object they made by hand
+ * leaves no proposal, so lineage cannot speak for them. Without an explicit
+ * label claim the join could only ever put such an output on the FIRST declared
+ * slot of its kind, which is wrong the moment two documents are declared.
+ */
+describe("joinSessionOutputs — declared label", () => {
+  it("an artifact's expectedLabel claims THAT slot, not the first of its kind", () => {
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({
+          kind: "document",
+          refId: DOC_A,
+          originKind: "user",
+          expectedLabel: "Summary",
+        }),
+      ],
+      expectedOutputs: [
+        { kind: "document", label: "Spec" },
+        { kind: "document", label: "Summary" },
+      ],
+    });
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.expected!.label).toBe("Summary");
+    expect(outputs[0]!.producedBy).toBe("human");
+    expect(pendingExpected.map((e) => e.label)).toEqual(["Spec"]);
+  });
+
+  it("claiming a slot never stamps it done", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "document", refId: DOC_A, expectedLabel: "Spec" }),
+      ],
+      expectedOutputs: [{ kind: "document", label: "Spec" }],
+    });
+    expect(outputs[0]!.expected).toEqual({ label: "Spec" });
+    expect(outputs[0]!.expected!.status).toBeUndefined();
+  });
+
+  it("a label claim outranks the kind guess for a DIFFERENT object", () => {
+    // DOC_A is older, so the kind fallback would have taken it for "Spec".
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "document", refId: DOC_A, createdAt: t(1) }),
+        artifact({
+          kind: "document",
+          refId: DOC_B,
+          createdAt: t(2),
+          expectedLabel: "Spec",
+        }),
+      ],
+      expectedOutputs: [{ kind: "document", label: "Spec" }],
+    });
+    const spec = outputs.find((o) => o.expected?.label === "Spec");
+    expect(spec!.refId).toBe(DOC_B);
+  });
+
+  it("a guess may not overrule a claim for a different slot", () => {
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "document", refId: DOC_A, expectedLabel: "Nope" }),
+      ],
+      expectedOutputs: [{ kind: "document", label: "Spec" }],
+    });
+    // The artifact said it was "Nope"; letting the kind guess file it under
+    // "Spec" anyway would make the claim inert and the report wrong.
+    expect(outputs[0]!.expected).toBeUndefined();
+    expect(pendingExpected.map((e) => e.label)).toEqual(["Spec"]);
+  });
+
+  it("proposal lineage still wins over a label claim", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "document", refId: DOC_A, createdAt: t(1) }),
+        artifact({
+          kind: "document",
+          refId: DOC_B,
+          createdAt: t(2),
+          expectedLabel: "Spec",
+        }),
+      ],
+      expectedOutputs: [
+        { kind: "document", label: "Spec", satisfiedByProposalId: PROPOSAL },
+      ],
+      proposals: [
+        {
+          id: PROPOSAL,
+          targetType: "document",
+          targetId: DOC_A,
+          agentUserId: null,
+        },
+      ],
+    });
+    const spec = outputs.find((o) => o.expected?.label === "Spec");
+    expect(spec!.refId).toBe(DOC_A);
+  });
+});
+
+/**
+ * `automation` and `playbook` joined the `artifacts.kind` enum in 0246. A
+ * session whose whole point was "set up the follow-up rule" produced an
+ * automation, and the ledger had no value to record it under.
+ *
+ * The join's coordinate is `normalizeObjectKind(kind):refId`, so what has to
+ * hold is a ROUND TRIP: the kind the door wrote must survive normalization and
+ * still key the live title `resolveTitles` looked up. A kind that normalized to
+ * something else (the way `workflow` normalizes to `automation`) would produce
+ * an output whose title silently fell back to the stored copy.
+ */
+describe("joinSessionOutputs — automation and playbook outputs", () => {
+  const AUTOMATION = "55555555-5555-4555-8555-555555555555";
+  const PLAYBOOK = "66666666-6666-4666-8666-666666666666";
+
+  it("round-trips an automation artifact and takes its live name", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "automation", refId: AUTOMATION, title: "Stale" }),
+      ],
+      // The key `resolveTitles` writes for `automations.name`.
+      titles: new Map([[`automation:${AUTOMATION}`, "Renewal follow-up"]]),
+    });
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.kind).toBe("automation");
+    expect(outputs[0]!.id).toBe(`automation:${AUTOMATION}`);
+    expect(outputs[0]!.refId).toBe(AUTOMATION);
+    expect(outputs[0]!.title).toBe("Renewal follow-up");
+  });
+
+  it("round-trips a playbook artifact and takes its live name", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [
+        artifact({ kind: "playbook", refId: PLAYBOOK, title: "Stale" }),
+      ],
+      titles: new Map([[`playbook:${PLAYBOOK}`, "Client onboarding"]]),
+    });
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.kind).toBe("playbook");
+    expect(outputs[0]!.id).toBe(`playbook:${PLAYBOOK}`);
+    expect(outputs[0]!.refId).toBe(PLAYBOOK);
+    expect(outputs[0]!.title).toBe("Client onboarding");
+  });
+
+  it("collapses an automation artifact and a `produced` edge naming it", () => {
+    // The edge ledger writes `toType` from a different vocabulary — `workflow`
+    // normalizes onto `automation`, so both must land on ONE output rather than
+    // two rows for the same rule.
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [artifact({ kind: "automation", refId: AUTOMATION })],
+      produced: [{ toType: "workflow", toId: AUTOMATION, createdAt: t(5) }],
+    });
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.source).toEqual(["artifact", "produced_edge"]);
+  });
+
+  it("satisfies a declared automation slot by id join", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [artifact({ kind: "automation", refId: AUTOMATION })],
+      expectedOutputs: [{ kind: "automation", label: "The rule" }],
+    });
+    const slot = outputs.find((o) => o.expected?.label === "The rule");
+    expect(slot!.refId).toBe(AUTOMATION);
+  });
+});

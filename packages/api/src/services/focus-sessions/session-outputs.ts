@@ -17,8 +17,9 @@
  * "a document". This service joins them by REF ID first — an artifact's `refId`
  * and a produced edge's `toId` are the same coordinate, and an expected
  * output's `satisfiedByProposalId` resolves through the proposal's `targetId`
- * to that same coordinate — and only falls back to kind matching for an
- * expected output that carries no proposal lineage at all.
+ * to that same coordinate — then honours an explicit DECLARED-LABEL claim
+ * (`artifacts.props.expectedLabel`, written by the human attach door), and only
+ * falls back to kind matching for an expected output with no lineage at all.
  *
  * The join itself (`joinSessionOutputs`) is PURE so the precedence rule is
  * testable without a database; everything around it is fetching.
@@ -33,6 +34,8 @@ import {
   entities,
   documents,
   views,
+  automations,
+  playbooks,
   and,
   eq,
   inArray,
@@ -97,6 +100,12 @@ export interface JoinArtifactRow {
   originKind: "user" | "agent" | "deeplink" | "system";
   state: "working" | "kept" | "swept";
   createdAt: Date;
+  /**
+   * The declared-output LABEL this artifact was attached against, when its
+   * producer named one (`artifacts.props.expectedLabel`). A claim about WHICH
+   * slot — never a `done` stamp; only `satisfy-expected-output.ts` writes that.
+   */
+  expectedLabel?: string | null;
 }
 
 /** Minimal produced-edge shape. */
@@ -144,8 +153,16 @@ function coordinate(kind: string, refId: string): string {
  *   2. PROPOSAL LINEAGE — an expected output's `satisfiedByProposalId` resolves
  *      through the proposal's `targetType:targetId` onto a produced coordinate.
  *      This is evidence, so it wins over any kind guess.
- *   3. KIND FALLBACK — only for an expected output with NO proposal lineage,
- *      and only onto an output nothing else has claimed.
+ *   3. DECLARED LABEL — an artifact recorded with `props.expectedLabel` names
+ *      the slot its producer MEANT. A person attaching an existing object to a
+ *      session has no proposal to leave lineage on, so without this a
+ *      human-produced output could only ever land on the FIRST declared slot of
+ *      its kind — wrong the moment two documents are declared. An explicit
+ *      claim, so it outranks the kind guess; still evidence-free about
+ *      completion, so it never stamps `done`.
+ *   4. KIND FALLBACK — only for an expected output with NO proposal lineage,
+ *      and only onto an output nothing else has claimed, and never onto one
+ *      that claimed a different label (a guess may not overrule a claim).
  *
  * Whatever is left over is `pendingExpected`: declared, not delivered.
  */
@@ -153,10 +170,18 @@ export function joinSessionOutputs(
   input: JoinSessionOutputsInput
 ): SessionOutputsResult {
   const byId = new Map<string, SessionOutput>();
+  /** Declared label → the coordinate whose artifact claimed it (first wins). */
+  const byExpectedLabel = new Map<string, string>();
+  /** The reverse: coordinate → the label its artifact claimed. */
+  const labelClaimOf = new Map<string, string>();
 
   for (const a of input.artifacts) {
     const refId = artifactRefId(a);
     const id = coordinate(a.kind, refId);
+    if (a.expectedLabel && !byExpectedLabel.has(a.expectedLabel)) {
+      byExpectedLabel.set(a.expectedLabel, id);
+      labelClaimOf.set(id, a.expectedLabel);
+    }
     const existing = byId.get(id);
     if (existing) {
       // Two artifact rows for one object: keep the earliest, widen nothing.
@@ -215,11 +240,24 @@ export function joinSessionOutputs(
       );
       if (candidate && !claimed.has(candidate.id)) target = candidate;
     }
-    // (3) Kind fallback — ONLY when there is no lineage to read.
+    // (3) Declared label — an explicit claim from the producer. Allowed even
+    // when a proposal exists but did not resolve: a named slot beats a guess.
+    if (!target) {
+      const claimedId = byExpectedLabel.get(e.label);
+      const candidate = claimedId ? byId.get(claimedId) : undefined;
+      if (candidate && !claimed.has(candidate.id)) target = candidate;
+    }
+    // (4) Kind fallback — ONLY when there is no lineage to read.
     if (!target && !proposal) {
       const wanted = normalizeObjectKind(e.kind);
       target = [...byId.values()].find(
-        (o) => o.kind === wanted && !claimed.has(o.id)
+        (o) =>
+          o.kind === wanted &&
+          !claimed.has(o.id) &&
+          // An output that claimed a DIFFERENT slot is not up for guessing.
+          // Otherwise the first declared slot would swallow it before its own
+          // label was ever reached, and the claim would be inert.
+          (labelClaimOf.get(o.id) ?? e.label) === e.label
       );
     }
     if (!target) {
@@ -282,6 +320,7 @@ export async function listSessionOutputs(
         originKind: artifactsTable.originKind,
         state: artifactsTable.state,
         createdAt: artifactsTable.createdAt,
+        props: artifactsTable.props,
       })
       .from(artifactsTable)
       .where(eq(artifactsTable.sessionId, sessionId)),
@@ -335,7 +374,10 @@ export async function listSessionOutputs(
   ]);
 
   return joinSessionOutputs({
-    artifacts: artifactRows as JoinArtifactRow[],
+    artifacts: artifactRows.map((a) => ({
+      ...(a as unknown as JoinArtifactRow),
+      expectedLabel: readExpectedLabel(a.props),
+    })),
     produced: producedRows as JoinProducedRow[],
     expectedOutputs,
     proposals: proposalRows,
@@ -344,10 +386,27 @@ export async function listSessionOutputs(
 }
 
 /**
- * Live titles for every referenced object, THREE queries total (one per backing
+ * Read the declared-output label an artifact was attached against.
+ * `artifacts.props` is free-form JSONB, so this narrows rather than trusts.
+ */
+export function readExpectedLabel(props: unknown): string | null {
+  if (!props || typeof props !== "object") return null;
+  const value = (props as { expectedLabel?: unknown }).expectedLabel;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * Live titles for every referenced object, FIVE queries total (one per backing
  * table) — never one per output. Keyed by the same `<kind>:<refId>` coordinate
  * the join uses. A kind with no backing table here (cell, url) simply has no
  * entry and keeps the artifact's own title.
+ *
+ * The bare `inArray(id)` carries NO visibility predicate, and that is correct
+ * ONLY because the write doors now refuse a `refId` the caller cannot already
+ * see (`assert-output-ref-visible.ts`). Before that floor existed, posting any
+ * uuid to your own session and re-reading the room turned this join into a
+ * title oracle over the whole pod. If a sixth kind is added here, add it to the
+ * door's floor in the same change.
  */
 async function resolveTitles(
   database: typeof db,
@@ -366,32 +425,51 @@ async function resolveTitles(
   const entityIds = [...(byKind.get("entity") ?? [])];
   const documentIds = [...(byKind.get("document") ?? [])];
   const viewIds = [...(byKind.get("view") ?? [])];
+  // `normalizeObjectKind` maps `workflow`/`workflows` onto `automation`, so
+  // these two keys are the canonical kinds the join's coordinates already use.
+  const automationIds = [...(byKind.get("automation") ?? [])];
+  const playbookIds = [...(byKind.get("playbook") ?? [])];
 
-  const [entityRows, documentRows, viewRows] = await Promise.all([
-    entityIds.length
-      ? database
-          .select({ id: entities.id, title: entities.title })
-          .from(entities)
-          .where(inArray(entities.id, entityIds))
-      : Promise.resolve([]),
-    documentIds.length
-      ? database
-          .select({ id: documents.id, title: documents.title })
-          .from(documents)
-          .where(inArray(documents.id, documentIds))
-      : Promise.resolve([]),
-    viewIds.length
-      ? database
-          .select({ id: views.id, name: views.name })
-          .from(views)
-          .where(inArray(views.id, viewIds))
-      : Promise.resolve([]),
-  ]);
+  const [entityRows, documentRows, viewRows, automationRows, playbookRows] =
+    await Promise.all([
+      entityIds.length
+        ? database
+            .select({ id: entities.id, title: entities.title })
+            .from(entities)
+            .where(inArray(entities.id, entityIds))
+        : Promise.resolve([]),
+      documentIds.length
+        ? database
+            .select({ id: documents.id, title: documents.title })
+            .from(documents)
+            .where(inArray(documents.id, documentIds))
+        : Promise.resolve([]),
+      viewIds.length
+        ? database
+            .select({ id: views.id, name: views.name })
+            .from(views)
+            .where(inArray(views.id, viewIds))
+        : Promise.resolve([]),
+      automationIds.length
+        ? database
+            .select({ id: automations.id, name: automations.name })
+            .from(automations)
+            .where(inArray(automations.id, automationIds))
+        : Promise.resolve([]),
+      playbookIds.length
+        ? database
+            .select({ id: playbooks.id, name: playbooks.name })
+            .from(playbooks)
+            .where(inArray(playbooks.id, playbookIds))
+        : Promise.resolve([]),
+    ]);
 
   for (const r of entityRows) {
     if (r.title) titles.set(`entity:${r.id}`, r.title);
   }
   for (const r of documentRows) titles.set(`document:${r.id}`, r.title);
   for (const r of viewRows) titles.set(`view:${r.id}`, r.name);
+  for (const r of automationRows) titles.set(`automation:${r.id}`, r.name);
+  for (const r of playbookRows) titles.set(`playbook:${r.id}`, r.name);
   return titles;
 }

@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { channels } from "../schema/channels.js";
 
 /** Postgres `uuid` accepts only this shape; anything else is a 22P02 statement error. */
 const UUID_SHAPE =
@@ -291,17 +292,38 @@ export const PROPOSAL_PROVENANCE_KEYS = [
  * costs the lens, never the proposal.
  */
 export async function deriveProposalProjectId(
-  input: { projectId?: string | null; sessionId?: string | null },
+  input: {
+    projectId?: string | null;
+    sessionId?: string | null;
+    /** The CHANNEL this proposal was raised in (`proposals.thread_id` FKs
+     *  `channels.id`) — rung 3 of the deterministic ladder. */
+    threadId?: string | null;
+  },
   executor: typeof db | DbTx = db
 ): Promise<string | null> {
   if (input.projectId) return input.projectId;
-  if (!input.sessionId || !UUID_SHAPE.test(input.sessionId)) return null;
-  const [session] = await executor
-    .select({ projectId: focusSessions.projectId })
-    .from(focusSessions)
-    .where(eq(focusSessions.id, input.sessionId))
+  if (input.sessionId && UUID_SHAPE.test(input.sessionId)) {
+    const [session] = await executor
+      .select({ projectId: focusSessions.projectId })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, input.sessionId))
+      .limit(1);
+    if (session?.projectId) return session.projectId;
+  }
+  // Rung 3 — the bound channel. EXTENSION, not a rewrite: the session rung above
+  // is untouched and still wins. Proposals carry `sessionId` on roughly half the
+  // population but `threadId` on a different (chat-originated) slice, and a
+  // proposal raised in a project-bound room belongs to that project just as
+  // deterministically as one raised in a project-bound session. Same shape-guard
+  // as the session lookup: a body-supplied non-uuid costs the lens, never the
+  // proposal.
+  if (!input.threadId || !UUID_SHAPE.test(input.threadId)) return null;
+  const [channel] = await executor
+    .select({ projectId: channels.projectId })
+    .from(channels)
+    .where(eq(channels.id, input.threadId))
     .limit(1);
-  return session?.projectId ?? null;
+  return channel?.projectId ?? null;
 }
 
 /**
@@ -357,7 +379,11 @@ export async function insertPendingProposal(
   // session's project — derived through the SHARED `deriveProposalProjectId`
   // (above) so the AUTO_APPROVED receipt door computes it identically.
   const projectId = await deriveProposalProjectId(
-    { projectId: input.projectId, sessionId: input.sessionId },
+    {
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      threadId: input.threadId,
+    },
     executor
   );
 

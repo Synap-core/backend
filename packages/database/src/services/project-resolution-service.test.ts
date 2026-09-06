@@ -62,6 +62,59 @@ describe("resolveProjectPlacement — rung 1 (explicit)", () => {
   });
 });
 
+describe("resolveProjectPlacement — rung 3.5 (declared agent focus)", () => {
+  it("a declared focus places when nothing more specific pinned a project", async () => {
+    const r = await resolveProjectPlacement(makeDb(), {
+      userId: USER,
+      focusProjectId: PROJ_A,
+    });
+    expect(r).toEqual({
+      projectId: PROJ_A,
+      rung: 3.5,
+      reason: "the acting agent declared this project as its working focus",
+    });
+  });
+
+  it("an EXPLICIT per-call pin still wins over the sticky focus (rung 1)", async () => {
+    const r = await resolveProjectPlacement(makeDb(), {
+      userId: USER,
+      explicitProjectId: PROJ_A,
+      focusProjectId: PROJ_B,
+    });
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(1);
+  });
+
+  it("a DECLARATION beats relational gravity — rung 3.5 runs before rung 4", async () => {
+    // The batch's neighbours all belong to B; the agent declared A. A wins:
+    // an inference must never override a declaration.
+    const r = await resolveProjectPlacement(
+      makeDb({ membershipEdges: [PROJ_B, PROJ_B] }),
+      {
+        userId: USER,
+        focusProjectId: PROJ_A,
+        relatedEntityIds: ["e1", "e2"],
+      }
+    );
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(3.5);
+  });
+
+  it("NO focus declared → the ladder still abstains (there is no project default)", async () => {
+    // The load-bearing property: workspace placement may default, project
+    // placement must not — `belongs_to_project` WIDENS cross-workspace access.
+    const r = await resolveProjectPlacement(makeDb(), {
+      userId: USER,
+      focusProjectId: null,
+    });
+    expect(r).toEqual({
+      projectId: null,
+      rung: null,
+      reason: "no deterministic project context",
+    });
+  });
+});
+
 describe("resolveProjectPlacement — rung 4 (relational gravity)", () => {
   it("strict majority project among related entities → rung 4", async () => {
     // A appears twice, B once → A is the strict majority.

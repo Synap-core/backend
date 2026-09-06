@@ -20,7 +20,9 @@ import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { SYSTEM_PROFILE_SLUGS } from "./ensure-system-profiles.js";
 import { resolvePropertyTargetProfiles } from "./resolve-property-target-profiles.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
+import { buildStoredConstraints } from "./property-enum.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
+import { asPropertyInputType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { ViewRepository } from "../repositories/view-repository.js";
@@ -1331,21 +1333,26 @@ export async function createWorkspaceFromDefinition(
         // For reused profiles, skip properties that already exist
         if (profileIsReused && existingPropSlugs.has(prop.slug)) continue;
         try {
-          // Merge targetProfileSlug into constraints for entity_id properties
-          const propConstraints: Record<string, unknown> = {
-            ...(prop.constraints ?? {}),
-            ...(prop.targetProfileSlug
-              ? { targetProfileSlug: prop.targetProfileSlug }
-              : {}),
-          };
+          // Merge targetProfileSlug into constraints for entity_id properties,
+          // and fold the `enumValues` authoring spelling into `constraints.enum`.
+          const propConstraints: Record<string, unknown> =
+            buildStoredConstraints(
+              prop,
+              prop.targetProfileSlug
+                ? { targetProfileSlug: prop.targetProfileSlug }
+                : undefined
+            );
           const propDef = await propDefRepo.create({
             slug: prop.slug,
             valueType: prop.valueType as PropertyValueType,
+            // The template's `enumValues` AUTHORING spelling is folded into
+            // `constraints.enum` above — the STORED TRUTH every picker reads
+            // and `property-validation-service` enforces. Writing it here
+            // instead produced a property BORN unreadable AND unvalidated.
             uiHints: {
               label: prop.label,
-              inputType: prop.inputType,
+              inputType: asPropertyInputType(prop.inputType),
               placeholder: prop.placeholder,
-              enumValues: prop.enumValues,
             },
             ...(Object.keys(propConstraints).length > 0
               ? { constraints: propConstraints }

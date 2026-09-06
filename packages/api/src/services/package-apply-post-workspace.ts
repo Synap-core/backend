@@ -319,7 +319,18 @@ export interface PackagePostWorkspaceBody {
    * `/packages/apply` body; the approve-executor path passes the stored
    * definition, which carries it too.
    */
-  _meta?: { slug?: string };
+  _meta?: {
+    slug?: string;
+    /**
+     * Package version — already carried by `PackageApplySchema._meta` and
+     * already read at the workspace layer (`packageVersion` on the create), but
+     * this local type declared only `slug`, so the cells step below could not
+     * see it and every cell installed through THIS door was stamped with the
+     * `widget_definitions.version` column default. B3: door parity with
+     * `market.install({kind:"cell"})`.
+     */
+    version?: string;
+  };
   /**
    * Entity-detail action placements to merge into `settings.actionPlacements`.
    * Applied AFTER playbooks/loops so playbook/automation refs resolve to the
@@ -772,6 +783,11 @@ async function applyPackagePostWorkspaceInner(
           packageSlug,
           cellKey: cell.key,
           workspaceId,
+          // B3: same stamp the `market.install({kind:"cell"})` door writes, so
+          // the two cell-install doors cannot report different versions for the
+          // same row. Absent `_meta.version` ⇒ omitted ⇒ omit-is-silence in
+          // `defineCell` (never clobbers a stamped version with a default).
+          packageVersion: body._meta?.version,
           userId,
         });
         cellResults.push({
@@ -873,21 +889,43 @@ async function applyPackagePostWorkspaceInner(
         .select({ id: entities.id })
         .from(entities)
         .where(eq(entities.workspaceId, workspaceId));
+      // Count what the DOOR actually did, never the loop iterations.
+      // `linkEntityToProject` can REFUSE (`{linked:false}`) when the project is
+      // gone or invisible — it stopped writing ghost edges. Incrementing
+      // unconditionally turned that refusal into a report of `status:"linked",
+      // entities: N` for zero writes: a ghost EDGE replaced by a ghost REPORT,
+      // which is worse because it is asserted rather than merely absent.
       let linked = 0;
+      let refused = 0;
       for (const row of rows) {
-        await linkEntityToProject(db, {
+        const link = await linkEntityToProject(db, {
           entityId: row.id,
           projectId: body.projectId,
           userId,
           workspaceId,
         });
-        linked++;
+        if (link.linked) linked++;
+        else refused++;
       }
-      result.projectLink = {
-        status: "linked",
-        projectId: body.projectId,
-        entities: linked,
-      };
+      result.projectLink =
+        linked > 0
+          ? {
+              status: "linked",
+              projectId: body.projectId,
+              entities: linked,
+              ...(refused > 0 ? { refused } : {}),
+            }
+          : {
+              // Nothing landed. Say so — the project lens will show zero, and a
+              // "linked" receipt here is how that becomes a silent mystery.
+              status: "not_linked",
+              projectId: body.projectId,
+              entities: 0,
+              refused,
+              message:
+                `Project ${body.projectId} is not visible or no longer exists — ` +
+                `no entity was filed into it.`,
+            };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };
     }

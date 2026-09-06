@@ -18,31 +18,132 @@ import { relationDefs } from "./relation-defs.js";
 import { workspaces } from "./workspaces.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
+/**
+ * The authored input control for a property.
+ *
+ * ⚠️ MEASURED, not designed. This union used to declare 8 members
+ * (`email · phone · url · person · richtext · datetime · datetime-local ·
+ * select`) while `CreatePropertyDefInput.uiHints` was `Record<string, unknown>`
+ * — so nothing ever checked it. A census of every literal actually written
+ * (2026-09-06) found:
+ *
+ *   backend src : text 71 · select 33 · textarea 17 · url 13 · number 13 ·
+ *                 tags 10 · date 7 · datetime-local 7 · entity-select 7 ·
+ *                 checkbox 4 · richtext 3 · email 1 · phone 1
+ *   templates   : select 364 · text 343 · textarea 233 · number 142 ·
+ *                 date 102 · url 61 · entity 35 · json 12 · checkbox 9 ·
+ *                 email 6 · tags 2 · tel 1 · color 1
+ *
+ * The union was therefore wrong in BOTH directions: `text` — the single most
+ * written value, 414 times — was not declared, and `person` / `datetime` are
+ * declared but written ZERO times. The list below is the measured reality, so
+ * the type finally describes what the database holds.
+ *
+ * 🚧 NOT yet converged, deliberately. `entity` (35) and `entity-select` (7) are
+ * the same intent spelled two ways, as are `tel` (1) and `phone` (1), and
+ * reconciling them against the renderer's own `PropertyRenderKind` vocabulary is
+ * a separate wave — a blind rename here would mis-map the near-miss tokens. They
+ * are recorded as distinct members precisely so the duplication is visible in
+ * the type instead of hiding in the data.
+ */
+export type PropertyInputType =
+  // declared before the census, and genuinely written
+  | "email"
+  | "phone"
+  | "url"
+  | "richtext"
+  | "datetime-local"
+  | "select"
+  // declared before the census, written NOWHERE (kept: frontend may author them)
+  | "person"
+  | "datetime"
+  // written all along, never declared
+  | "text"
+  | "textarea"
+  | "number"
+  | "date"
+  | "checkbox"
+  | "tags"
+  | "json"
+  | "color"
+  | "entity"
+  | "entity-select"
+  | "tel";
+
+/** Every member of `PropertyInputType`, for runtime narrowing. */
+export const PROPERTY_INPUT_TYPES = [
+  "email",
+  "phone",
+  "url",
+  "richtext",
+  "datetime-local",
+  "select",
+  "person",
+  "datetime",
+  "text",
+  "textarea",
+  "number",
+  "date",
+  "checkbox",
+  "tags",
+  "json",
+  "color",
+  "entity",
+  "entity-select",
+  "tel",
+] as const satisfies readonly PropertyInputType[];
+
+/**
+ * Narrow an AUTHORED `inputType` (template YAML, seed data — both plain
+ * strings) to the declared union.
+ *
+ * Returns `undefined` for an unrecognised spelling rather than storing it: a
+ * hint no classifier can read is not a hint, and the classifier's own inference
+ * is a better answer than a token it will ignore. `PROPERTY_INPUT_TYPES` was
+ * built from a census of every value actually written, so an unrecognised value
+ * means a NEW spelling was authored — the caller should log it rather than let
+ * it pass silently.
+ */
+export function asPropertyInputType(
+  value: unknown
+): PropertyInputType | undefined {
+  return typeof value === "string" &&
+    (PROPERTY_INPUT_TYPES as readonly string[]).includes(value)
+    ? (value as PropertyInputType)
+    : undefined;
+}
+
 export interface PropertyUIHints {
   displayName?: string;
+  /**
+   * The AUTHORING twin of `displayName`. Workspace templates and
+   * `ensure-system-profiles.ts` write `label`; readers must go
+   * through `resolvePropertyLabel` (`displayName ?? label ?? humanized slug`)
+   * and never read either key directly.
+   *
+   * Declared here because it is genuinely written and read — leaving it out of
+   * the type while `CreatePropertyDefInput.uiHints` was `Record<string,
+   * unknown>` is what let `enumValues`, a key NO reader keys on, be written
+   * here for 364 template properties without a single typecheck complaint.
+   */
+  label?: string;
   placeholder?: string;
-  inputType?:
-    | "email"
-    | "phone"
-    | "url"
-    | "person"
-    | "richtext"
-    | "datetime"
-    | "datetime-local"
-    | "select";
+  inputType?: PropertyInputType;
   displayAs?: "status" | "priority" | "progress" | "person";
   format?: "locale" | "currency" | "percent" | "compact";
   includeTime?: boolean;
   linkedProfileSlug?: string;
   linkedTable?: "workspace_members" | "free_text";
   itemValueType?:
-    | "string"
-    | "number"
-    | "boolean"
-    | "date"
-    | "entity_id"
-    | "url";
+    "string" | "number" | "boolean" | "date" | "entity_id" | "url";
   pluginHints?: Record<string, unknown>;
+  /** Authored helper copy shown under the field. Written by the system seeds. */
+  helpText?: string;
+  /** Authored long-form description. Written by the system seeds. */
+  description?: string;
+  /** Authoring-time requiredness hint. The enforced flag is on the LINK row
+   *  (`profile_properties.required`); this is the template's declaration of it. */
+  required?: boolean;
 }
 
 /**

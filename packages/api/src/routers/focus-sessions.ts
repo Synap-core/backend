@@ -37,6 +37,11 @@ import {
 } from "../services/focus-sessions/session-statuses.js";
 import { listSessionOutputs } from "../services/focus-sessions/session-outputs.js";
 import {
+  recordSessionArtifact,
+  SESSION_ARTIFACT_KINDS,
+} from "../services/focus-sessions/record-session-artifact.js";
+import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
+import {
   addSessionBlocker,
   removeSessionBlocker,
   attachSessionEdges,
@@ -1168,6 +1173,95 @@ export const focusSessionsRouter = router({
       });
 
       return { granted: true, status: "granted" as const };
+    }),
+
+  /**
+   * Record an EXISTING object as something this session produced — the human
+   * counterpart to the agent write doors, which reach `recordSessionArtifact`
+   * only as a side effect of creating the object themselves. A person looking
+   * at a document/view/entity they made by hand had no way to say "this is the
+   * session's output"; the room could only ever show what an agent made.
+   *
+   * Ungoverned on purpose, exactly like `update` above: `protectedProcedure` IS
+   * the person, and a provenance row is not an AI mutation.
+   *
+   * `expectedLabel` names WHICH declared deliverable this satisfies. It is a
+   * claim about the slot, stored on the artifact and honoured by
+   * `joinSessionOutputs` (rule 3) — it does NOT stamp `status: "done"`, which
+   * only `satisfyExpectedOutputs` may write (an approval, not an assertion).
+   */
+  attachOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        // DERIVED from the artifacts ledger's own kind list, never re-typed.
+        kind: z.enum(SESSION_ARTIFACT_KINDS),
+        refId: z.string().min(1),
+        /** Display title. Live titles still win on read for backed kinds. */
+        label: z.string().min(1).max(500).optional(),
+        /** A declared `expectedOutputs[].label` this output is claimed against. */
+        expectedLabel: z.string().min(1).max(500).optional(),
+        /**
+         * FALLBACK lens, used ONLY when the session itself has none. The
+         * session's own workspace always wins — this can never re-file an
+         * output away from the session that produced it. Omitted on a
+         * pod-personal session ⇒ the row is recorded pod-personal (NULL), which
+         * `artifacts.workspace_id` has allowed since 0245.
+         */
+        workspaceId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Owner floor — the same predicate `get`/`update`/`outputs` use.
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      // A pod-personal session files a pod-personal output. `input.workspaceId`
+      // is only a fallback for a session that has no lens of its own.
+      const workspaceId = session.workspaceId ?? input.workspaceId ?? null;
+
+      // The object the output POINTS AT must already be visible to the caller —
+      // otherwise attaching it and re-reading the room returns its live title.
+      const refVisible = await isOutputRefVisible({
+        userId: ctx.userId,
+        kind: input.kind,
+        refId: input.refId,
+      });
+      if (!refVisible) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No ${input.kind} ${input.refId} you can access`,
+        });
+      }
+
+      const outputId = await recordSessionArtifact({
+        sessionId: session.id,
+        workspaceId,
+        userId: ctx.userId,
+        kind: input.kind,
+        refId: input.refId,
+        title: input.label ?? input.refId,
+        expectedLabel: input.expectedLabel,
+        // No agentUserId — a person did this, so the ledger says originKind
+        // "user" and the join reports `producedBy: "human"`.
+      });
+      if (!outputId) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not record the session output",
+        });
+      }
+      return { ok: true as const, outputId };
     }),
 
   /**

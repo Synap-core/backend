@@ -3832,7 +3832,10 @@ END $$;
 -- ── Artifacts (0125_artifacts.sql catch-up) ───────────────────────────────────
 CREATE TABLE IF NOT EXISTS "artifacts" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
-  "workspace_id" text        NOT NULL,
+  -- NULLABLE since 0245: NULL = a pod-personal artifact, owned by user_id and
+  -- floored to that owner by the access layer. A pod-personal session must be
+  -- able to record what it produced.
+  "workspace_id" text,
   "user_id"      text        NOT NULL,
   "kind"         text        NOT NULL,
   "ref_id"       text,
@@ -3854,6 +3857,20 @@ CREATE INDEX IF NOT EXISTS "idx_artifacts_workspace_state"
 CREATE INDEX IF NOT EXISTS "idx_artifacts_session_id"
   ON "artifacts" ("session_id")
   WHERE "session_id" IS NOT NULL;
+
+-- Session output-ledger idempotency (0246). The declared-slot claim is part of
+-- the key: the same object may satisfy two different `expectedOutputs` labels.
+-- COALESCE because a unique index treats NULLs as distinct, which would exempt
+-- the unlabelled rows this guard exists to dedupe.
+CREATE UNIQUE INDEX IF NOT EXISTS "artifacts_session_ref_unique"
+  ON "artifacts" (
+    "session_id",
+    "kind",
+    "ref_id",
+    (COALESCE("props"->>'expectedLabel', ''))
+  )
+  WHERE "session_id" IS NOT NULL
+    AND "ref_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_artifacts_user_id"
   ON "artifacts" ("user_id");
 

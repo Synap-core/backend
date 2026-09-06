@@ -80,6 +80,7 @@ import {
   tools,
   users,
   views,
+  workspaces,
 } from "@synap/database";
 import { PROBE_ORDER, resolveObjectKind } from "./resolve-object-kind.js";
 
@@ -209,6 +210,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, []);
     mockDb.__push(entities, [{ title: "Acme", type: "company" }]);
@@ -223,6 +225,27 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     });
   });
 
+  it("workspace: a matching row id resolves to kind 'workspace' (the pod's own organising lens, which used to dead-end at \"no diagnosable object\")", async () => {
+    mockDb.__push(proposals, []);
+    mockDb.__push(focusSessions, []);
+    mockDb.__push(capabilities, []);
+    mockDb.__push(skills, []);
+    mockDb.__push(tools, []);
+    mockDb.__push(automationRuns, []);
+    mockDb.__push(playbookRuns, []);
+    mockDb.__push(users, []);
+    mockDb.__push(workspaces, [{ name: "Foundation" }]);
+    const result = await resolveObjectKind(ID, USER_ID);
+    expect(result).toMatchObject({
+      kind: "workspace",
+      id: ID,
+      displayName: "Foundation",
+      // A workspace IS its own workspace lens — carried so a consumer that
+      // routes on `workspaceId` does not have to special-case this kind.
+      workspaceId: ID,
+    });
+  });
+
   it("view: a matching row id resolves to kind 'view' (a probe that existed ONLY in the old /resolve list)", async () => {
     mockDb.__push(proposals, []);
     mockDb.__push(focusSessions, []);
@@ -232,6 +255,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, [{ name: "Pipeline" }]);
     const result = await resolveObjectKind(ID, USER_ID);
     expect(result).toMatchObject({
@@ -250,6 +274,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, [{ title: "Q3 memo" }]);
     const result = await resolveObjectKind(ID, USER_ID);
@@ -270,6 +295,7 @@ describe("resolveObjectKind — every PROBE_ORDER kind actually resolves", () =>
       "automation_run",
       "playbook_run",
       "agent",
+      "workspace",
       "view",
       "document",
       "entity",
@@ -290,6 +316,7 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, []);
     mockDb.__push(entities, []);
@@ -313,6 +340,7 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, []);
     mockDb.__push(entities, []);
@@ -334,6 +362,7 @@ describe("resolveObjectKind — correlationId fallbacks (a minted handle must al
     mockDb.__push(automationRuns, []);
     mockDb.__push(playbookRuns, []);
     mockDb.__push(users, []);
+    mockDb.__push(workspaces, []);
     mockDb.__push(views, []);
     mockDb.__push(documents, []);
     mockDb.__push(entities, []);

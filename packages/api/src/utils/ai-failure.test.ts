@@ -3,6 +3,7 @@ import {
   classifyAiFailure,
   describeAiFailure,
   aiFailureMessage,
+  describePartialTurnFailure,
 } from "./ai-failure.js";
 
 /**
@@ -265,5 +266,80 @@ describe("known class in, copy out", () => {
     const described = describeAiFailure("invalid_response");
     expect(described.class).toBe("invalid_response");
     expect(described.retryable).toBe(false);
+  });
+});
+
+describe("describePartialTurnFailure — the IS code union is NOT ours", () => {
+  // The IS emits `ProviderFailureCode` (insufficient_credit, auth,
+  // context_length_exceeded, …). The client switches on `AiFailureCode`
+  // (provider_no_credit, provider_auth, …). Forwarding the IS code raw makes
+  // every case fall to the surface's `default` branch, which prints
+  // `ProviderFailure.message` — RAW PROVIDER TEXT the IS documents as NOT
+  // user-facing copy. These pin the translation.
+  it("translates insufficient_credit → provider_no_credit, no retry, operator", () => {
+    const verdict = describePartialTurnFailure({
+      code: "insufficient_credit",
+      message: "Insufficient Balance",
+      retryable: false,
+    });
+    expect(verdict.code).toBe("provider_no_credit");
+    expect(verdict.recoverable).toBe(false);
+    expect(verdict.needsOperator).toBe(true);
+    // The raw provider fragment never reaches the user.
+    expect(verdict.message).not.toContain("Insufficient Balance");
+    expect(verdict.message).toContain("stopped early");
+  });
+
+  it("translates auth → provider_auth and never offers a retry", () => {
+    const verdict = describePartialTurnFailure({
+      code: "auth",
+      message: "invalid api key",
+      retryable: false,
+    });
+    expect(verdict.code).toBe("provider_auth");
+    expect(verdict.recoverable).toBe(false);
+    expect(verdict.needsOperator).toBe(true);
+  });
+
+  it("keeps a genuinely retryable truncation retryable", () => {
+    const verdict = describePartialTurnFailure({
+      code: "provider_error",
+      message: "502 Bad Gateway",
+      retryable: true,
+    });
+    expect(verdict.code).toBe("upstream_error");
+    expect(verdict.recoverable).toBe(true);
+    expect(verdict.needsOperator).toBe(false);
+  });
+
+  it.each([
+    ["context_length_exceeded", "context_length_exceeded"],
+    ["content_filter", "content_filter"],
+  ])(
+    "maps the IS code %s instead of falling to unknown",
+    (isCode, expected) => {
+      // Both were absent from IS_CODE_TO_CLASS and resolved to `unknown`,
+      // whose copy says "we do not yet know why" — a claim of ignorance about
+      // a failure the IS had already classified precisely.
+      const verdict = describePartialTurnFailure({
+        code: isCode,
+        message: "raw provider text",
+        retryable: false,
+      });
+      expect(verdict.code).toBe(expected);
+      expect(verdict.code).not.toBe("unknown");
+      // Neither is an operator problem: an operator cannot shorten a prompt.
+      expect(verdict.needsOperator).toBe(false);
+    }
+  );
+
+  it("an IS code we have never seen degrades to unknown, never leaks raw", () => {
+    const verdict = describePartialTurnFailure({
+      code: "some_future_is_code",
+      message: "raw provider text",
+      retryable: false,
+    });
+    expect(verdict.code).toBe("unknown");
+    expect(verdict.message).not.toContain("raw provider text");
   });
 });

@@ -1414,6 +1414,7 @@ async function evaluatePermission(
         const receiptProjectId = await deriveProposalProjectId({
           projectId,
           sessionId: governedSessionId,
+          threadId,
         });
         try {
           const [receipt] = await db
@@ -1658,6 +1659,7 @@ async function evaluatePermission(
         const receiptProjectId = await deriveProposalProjectId({
           projectId,
           sessionId: sessionId ?? null,
+          threadId,
         });
         try {
           const [receipt] = await db

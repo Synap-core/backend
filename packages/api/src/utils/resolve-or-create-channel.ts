@@ -25,7 +25,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, and, desc, eq } from "@synap/database";
+import { db, and, desc, eq, resolveProjectPlacement } from "@synap/database";
 import {
   channels,
   ChannelStatus,
@@ -199,13 +199,23 @@ export async function resolveOrCreateChannel(
         (await resolveSlugToAgentId("orchestrator")))
       : await resolveSlugToAgentId("orchestrator");
 
+    // PROJECT LENS — a branch of a project-tagged room belongs to that project.
+    // Rung 3 (bound channel) of the deterministic ladder, asked with the parent
+    // this door already loaded. An explicit `projectId` is rung 1 and still
+    // wins; no context → NULL, never a guess.
+    const branchPlacement = await resolveProjectPlacement(db, {
+      userId,
+      explicitProjectId: projectId ?? null,
+      channelId: parentChannelId,
+    });
+
     const [branch] = await db
       .insert(channels)
       .values({
         id: randomUUID(),
         userId,
         workspaceId: workspaceId ?? parent.workspaceId ?? null,
-        projectId: projectId ?? null,
+        projectId: branchPlacement.projectId,
         parentChannelId,
         branchPurpose: branchPurpose ?? "Branch",
         assignedAgentId: orchestratorAgentId,
@@ -272,13 +282,27 @@ export async function resolveOrCreateChannel(
 
     if (existing) return existing;
 
+    // PROJECT LENS — a thread ABOUT an entity belongs to that entity's project.
+    // Rung 4 (relational gravity) with exactly ONE bounded id, so the ladder's
+    // strict-majority test degenerates to "the subject's own project, if it has
+    // exactly one"; an entity in two projects is a tie and abstains. Only an
+    // `entity` context object is passed — a proposal/document/view id is not an
+    // entity id and feeding it in would be fabricating an input.
+    const threadPlacement = await resolveProjectPlacement(db, {
+      userId,
+      explicitProjectId: projectId ?? null,
+      ...(contextObjectType === "entity"
+        ? { relatedEntityIds: [contextObjectId] }
+        : {}),
+    });
+
     const [created] = await db
       .insert(channels)
       .values({
         id: randomUUID(),
         userId,
         workspaceId,
-        projectId: projectId ?? null,
+        projectId: threadPlacement.projectId,
         channelType: ChannelType.THREAD,
         contextObjectId,
         contextObjectType,

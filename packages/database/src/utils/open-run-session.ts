@@ -2,6 +2,7 @@ import { and, desc, eq, sql as drizzleSql } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { recordSessionSpawn } from "./session-spawn.js";
+import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
 
 export interface OpenRunSessionInput {
   /** Owner of the run (the operator on whose behalf the automation/agent acts). */
@@ -124,6 +125,24 @@ export async function openRunSession(
     return { sessionId: reusedId, reused: true };
   }
 
+  // PROJECT LENS — derived, not waited for. `openRunSession` used to write
+  // `input.projectId ?? null` and nothing upstream ever passed one, which is why
+  // only 10% of sessions carried a project. The ladder is consulted with the
+  // context this door ALREADY holds: the caller's explicit pin (rung 1, still
+  // wins), the session this run was pushed from (rung 2), the channel it binds
+  // (rung 3), and the entity it is about (rung 4). No AI rung, no fallback — a
+  // `NONE` placement writes NULL, which is the correct answer, not a gap.
+  //
+  // Deliberately AFTER the reuse early-return above: a reused channel session
+  // already has its own placement and must never be re-filed by a later run.
+  const placement = await resolveSessionProjectPlacement(db, {
+    userId: input.userId,
+    explicitProjectId: input.projectId ?? null,
+    parentSessionId: input.parentSessionId ?? null,
+    channelId: input.channelId ?? null,
+    subjectEntityId: input.subjectEntityId ?? null,
+  });
+
   const metadata: Record<string, unknown> = {
     source: input.source,
     ...(input.automationId ? { automationId: input.automationId } : {}),
@@ -142,7 +161,7 @@ export async function openRunSession(
         status: "active",
         workspaceId: input.workspaceId ?? null,
         channelId,
-        projectId: input.projectId ?? null,
+        projectId: placement.projectId,
         subjectEntityId: input.subjectEntityId ?? null,
         // The template that spawned this session — the automation itself.
         templateId: input.automationId ?? null,

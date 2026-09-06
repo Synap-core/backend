@@ -215,6 +215,34 @@ export function resolveObjectNoun(kind: string | null | undefined): string {
 }
 
 /**
+ * The human noun for an object kind, PLURAL.
+ *
+ * The registry already carries a curated plural on every kind (`labelPlural` is
+ * a required field), and it is not always the singular plus "s": `person` →
+ * "People", `company` → "Companies", `entity` → "Entities". Appending an `s` at
+ * a call site produces "your persons" and "your companys", which is precisely
+ * the hand-written label map `.claude/rules/vocabulary.md` forbids — and it was
+ * shipped once, in relay's reference-param sheet, before a review caught it.
+ *
+ * Same resolution order as {@link resolveObjectNoun}. The backend-only tail has
+ * no curated plural, so those fall back to the singular + "s"; every one of them
+ * ("API key", "SSH key", "MCP server", "Relation type", "Environment variable",
+ * "Page") pluralises correctly that way.
+ */
+export function resolveObjectNounPlural(
+  kind: string | null | undefined
+): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const backendOnly = OBJECT_NOUNS[key];
+  if (backendOnly) return `${backendOnly}s`;
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  const entry = OBJECT_KINDS[canonical];
+  if (entry?.labelPlural) return entry.labelPlural;
+  return `${humanizeToken(canonical)}s`;
+}
+
+/**
  * Compose a proposal title from its structured parts — the ONE place the
  * "<verb> <noun> "<name>"" sentence is built.
  *

@@ -719,6 +719,17 @@ export async function listChannelsWithFlags(params: {
    * restore flows) opt in explicitly.
    */
   includeArchived?: boolean;
+  /**
+   * Free-text narrow over the channel's own visible labels (`title`, and
+   * `branch_purpose` — which is what an untitled branch renders as). ANDed into
+   * the SAME condition list as every other filter, so BROWSE (no `search`) and
+   * SEARCH are one code path with one access floor; there is no second loader
+   * that could drift from this one.
+   *
+   * Server-side by design: a picker that filters "page 1 of everything" in the
+   * client cannot tell an absent result from a not-yet-loaded one.
+   */
+  search?: string;
   limit: number;
   offset?: number;
 }): Promise<
@@ -784,6 +795,20 @@ export async function listChannelsWithFlags(params: {
 
   if (params.assignedAgentId) {
     conditions.push(eq(channels.assignedAgentId, params.assignedAgentId));
+  }
+
+  // Free-text narrow — same shape as `entities.adminList` (routers/entities/
+  // admin.ts): trim, bail on empty, ILIKE the display columns, AND it into the
+  // shared `conditions`. Empty/absent query ⇒ no condition ⇒ plain browse.
+  const searchTerm = params.search?.trim();
+  if (searchTerm) {
+    const pattern = `%${searchTerm}%`;
+    conditions.push(
+      or(
+        drizzleSql`${channels.title} ILIKE ${pattern}`,
+        drizzleSql`${channels.branchPurpose} ILIKE ${pattern}`
+      )!
+    );
   }
 
   // Per-instance link: channels where this agent-user is the ai_agent member.

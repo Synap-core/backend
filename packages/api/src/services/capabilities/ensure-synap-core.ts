@@ -715,6 +715,10 @@ export async function ensureSynapCoreCapability(): Promise<void> {
           agentTypes: skills.agentTypes,
           executionMode: skills.executionMode,
           timeoutSeconds: skills.timeoutSeconds,
+          // PROJECTED_SKILL_FIELDS.metadata reads `allowedHosts` out of this
+          // bag. Omit the column and it is `undefined` on every row — a
+          // declared egress allowlist would then never be seen as drift.
+          metadata: skills.metadata,
         })
         .from(skills)
         .where(

@@ -72,6 +72,18 @@ export interface DefineCellInput {
    * of an EXISTING row leaves the stored kind untouched.
    */
   contentKind?: ContentKind;
+  /**
+   * PACKAGE VERSION this cell was installed at — the source-link half cells
+   * were missing (B3). `widget_definitions.version` is a REAL column that has
+   * always existed and that every writer left at its column default `'1.0.0'`,
+   * so an installed cell reported a version it had never earned.
+   *
+   * Same omit-is-silence rule as `viewTypes` / `contentKind`: undefined on an
+   * upsert of an EXISTING row leaves the stored version untouched, so a door
+   * that knows nothing about package versions (the AI cell generator, a
+   * source-only re-push) can never erase a stamped one.
+   */
+  version?: string | null;
   /** Acting user — stamped on the realtime event. */
   userId: string;
 }
@@ -120,6 +132,9 @@ export async function defineCell(
   // Same omit-is-silence rule as `viewTypesUpdate` — see `DefineCellInput.contentKind`.
   const contentKindUpdate =
     input.contentKind === undefined ? {} : { contentKind: input.contentKind };
+  // Same omit-is-silence rule — see `DefineCellInput.version`.
+  const versionUpdate =
+    input.version === undefined ? {} : { version: input.version };
 
   const values = {
     typeKey,
@@ -140,6 +155,8 @@ export async function defineCell(
     ...(input.contentKind === undefined
       ? {}
       : { contentKind: input.contentKind }),
+    // INSERT branch: omitted ⇒ let the column default ('1.0.0') apply.
+    ...versionUpdate,
   };
 
   let changeType: "created" | "updated" = "created";
@@ -159,6 +176,7 @@ export async function defineCell(
           isActive: true,
           ...viewTypesUpdate,
           ...contentKindUpdate,
+          ...versionUpdate,
           updatedAt: new Date(),
         },
       })
@@ -189,6 +207,7 @@ export async function defineCell(
         isActive: true,
         ...viewTypesUpdate,
         ...contentKindUpdate,
+        ...versionUpdate,
         updatedAt: new Date(),
       })
       .where(

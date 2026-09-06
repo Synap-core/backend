@@ -515,6 +515,26 @@ export const ListWorkspacesResponseSchema = z
           .number()
           .optional()
           .describe("Live (non-deleted) entity count in this workspace."),
+        // ── Install health (A1) — see the projection in rest/workspaces.ts. ──
+        provisioningStatus: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            'Install lifecycle state stamped into settings by the applier. "failed" = a post-workspace layer did not apply; the workspace exists and is usable, and re-running the install resumes it. null/absent = the install completed.'
+          ),
+        failedStep: z
+          .string()
+          .nullable()
+          .optional()
+          .describe(
+            'Which install layer failed, e.g. "post-workspace" (capabilities / playbooks / automations / loops / cells).'
+          ),
+        failedStepError: z
+          .string()
+          .nullable()
+          .optional()
+          .describe("Operator-facing failure detail (truncated to 500 chars)."),
       })
     ),
     podEntityCount: z

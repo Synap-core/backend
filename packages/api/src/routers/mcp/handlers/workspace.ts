@@ -8,9 +8,24 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import { db, workspaces, inArray } from "@synap/database";
+import {
+  db,
+  workspaces,
+  projects,
+  inArray,
+  and,
+  or,
+  eq,
+  isNull,
+  isNotNull,
+} from "@synap/database";
+import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
-import { setAgentFocusWorkspace } from "../../../services/agent-identity-service.js";
+import {
+  setAgentFocusWorkspace,
+  setAgentFocusProject,
+} from "../../../services/agent-identity-service.js";
+import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
@@ -73,11 +88,34 @@ export const workspaceHandlers: McpHandlerMap = {
 
     // 1) exact id match among accessible workspaces
     let resolved = memberRows.find((w) => w.id === raw);
-    // 2) exact case-insensitive name match
+    // 2) exact case-insensitive name match — AMBIGUITY-CHECKED, like step 3.
+    //
+    // This used to be `.find()`, which returns the FIRST match and silently
+    // discards the rest. Workspace names are NOT unique: the live pod carries
+    // two "Foundation" and two "CRM". So "focus the Foundation workspace"
+    // silently pinned whichever row came back first and reported success, and
+    // every subsequent unqualified write landed in a workspace the caller did
+    // not choose. Verified live before the fix.
+    //
+    // The ambiguity guard existed only on the SUBSTRING branch below, so an
+    // EXACT duplicate never reached it. The test that covers this
+    // (`__tests__/workspace-focus.test.ts`) used "CRM Sales"/"CRM Support"
+    // queried as "CRM" — substring ambiguity — and never two identical names.
+    //
+    // `build.ts:518` states the house rule this now follows: "Multi-match
+    // returns candidates … never a silent pick."
     if (!resolved) {
-      resolved = memberRows.find(
+      const exactMatches = memberRows.filter(
         (w) => w.name.toLowerCase() === raw.toLowerCase()
       );
+      if (exactMatches.length === 1) {
+        resolved = exactMatches[0];
+      } else if (exactMatches.length > 1) {
+        return ok({
+          error: `"${raw}" is the name of ${exactMatches.length} workspaces — pass the id.`,
+          candidates: exactMatches.map((w) => ({ id: w.id, name: w.name })),
+        });
+      }
     }
     // 3) unique case-insensitive substring match
     if (!resolved) {
@@ -109,6 +147,95 @@ export const workspaceHandlers: McpHandlerMap = {
       workspaceId: resolved.id,
       workspaceName: resolved.name,
       message: `Focused on ${resolved.name} — new writes will land there until you clear it.`,
+    });
+  },
+  /**
+   * synap_set_project_focus — the PROJECT DECLARATION channel.
+   *
+   * WHY THIS IS A DECLARATION AND NOT AN INFERENCE. `belongs_to_project` is a
+   * whitelisted `EXPOSURE_RELATION_TYPE`, OR'd into the access floor, so filing
+   * something into a project GRANTS ACCESS to it across workspaces. That is why
+   * `resolveProjectPlacement` has NO AI rung and why it abstains rather than
+   * defaulting. This tool does not soften that: a focus is only ever set by an
+   * EXPLICIT call naming a project, which is rung-1-shaped intent arriving by a
+   * sticky route. Nothing here — and nothing downstream of here — may infer a
+   * project from content, titles, embeddings or similarity.
+   *
+   * WHY THE EXISTENCE CHECK IS AT SET TIME. `relations.target_entity_id` has no
+   * FK to `projects`, so a focus pinned to a project that does not exist (or is
+   * invisible to the caller) would later stamp a GHOST membership edge that the
+   * project lens never resolves — "a SILENT DROP reported as `✓ stored`"
+   * (`routers/capture.ts:2260-2273`). We therefore resolve the target out of the
+   * caller's OWN visible project rows, loaded with the SAME pod-wide-owner /
+   * workspace-member predicate `projects.ts` and the capture door already use.
+   * A bare id that is not in that set is `not_found`, never trusted.
+   *
+   * Ambiguity is reported, never guessed — see `focus-target-match.ts`.
+   */
+  synap_set_project_focus: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (!agentUserId) {
+      return ok({
+        error:
+          "No agent identity on this key — project focus is per-agent and this call isn't authenticated as one.",
+      });
+    }
+    const raw = typeof args.project === "string" ? args.project.trim() : "";
+    if (isClearFocusArg(raw)) {
+      await setAgentFocusProject(agentUserId, null);
+      return ok({
+        status: "cleared",
+        message:
+          "Project focus cleared — writes stop declaring a project (placement abstains again).",
+      });
+    }
+
+    // The caller's VISIBLE projects — the existence + visibility verification.
+    // Same predicate as `projects.list` / `loadVisibleProject` / the capture
+    // door: pod-wide projects (NULL workspace) only for their owner, and
+    // workspace-scoped projects for workspace members. Never a new floor.
+    const visibleProjects = await db
+      .select({ id: projects.id, name: projects.name })
+      .from(projects)
+      .where(
+        or(
+          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
+          and(
+            isNotNull(projects.workspaceId),
+            userVisibleWhere(projects.workspaceId, userId)
+          )
+        )!
+      );
+    if (visibleProjects.length === 0) {
+      return ok({ error: "You have no projects to focus on yet." });
+    }
+
+    const match = matchFocusTarget(raw, visibleProjects);
+    if (match.kind === "ambiguous") {
+      return ok({
+        error:
+          match.matchedBy === "name"
+            ? `"${raw}" is the name of ${match.candidates.length} projects — pass the id.`
+            : `"${raw}" matches ${match.candidates.length} projects — be more specific or pass the id.`,
+        candidates: match.candidates,
+      });
+    }
+    if (match.kind === "not_found") {
+      return ok({
+        error: `No project named "${raw}" among the projects you can see.`,
+        candidates: visibleProjects,
+      });
+    }
+
+    await setAgentFocusProject(agentUserId, match.target.id);
+    return ok({
+      status: "focused",
+      projectId: match.target.id,
+      projectName: match.target.name,
+      message: `Focused on project ${match.target.name} — writes that don't pin their own project will declare it until you clear it.`,
     });
   },
   synap_create_workspace: async (

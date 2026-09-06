@@ -332,7 +332,18 @@ function buildNote(
     `server places via installed profile metadata (never invent a workspace name). ` +
     `READ by name/id/role across everything you can access; pass workspaceId only to narrow a list. ` +
     (projectCount > 0
-      ? `A project is a cross-domain engagement thread — use projectId when working one client mandate. `
+      ? // The project lens is the half agents never reach for. Measured: project
+        // is set on ~7% of proposals and 0% of channels, while the SAME agents
+        // place a workspace on essentially everything — because the workspace
+        // lens is sticky (`set_workspace_focus`) and the project lens was not.
+        // So SAY it is choosable, say it STICKS, and say the one thing that
+        // makes project different from workspace: guessing it grants access.
+        `A project is a cross-domain engagement thread that runs THROUGH ` +
+        `workspaces (a client mandate, a venture) — a thing has one workspace ` +
+        `but can belong to several projects. Pin it with set_project_focus and ` +
+        `every later write inherits it; pass projectId to narrow a read. NEVER ` +
+        `infer a project from content — filing work into one grants access to ` +
+        `its members, so unset is the correct answer when nobody said. `
       : ``) +
     `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces.`
   );

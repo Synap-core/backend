@@ -81,6 +81,25 @@ export interface InstallCellFromDefinitionInput {
   cellKey?: string;
   /** Omit / null → pod-global cell. */
   workspaceId?: string | null;
+  /**
+   * CP package version this cell is installed at (B3). Cells were the ONE
+   * package kind carrying no version at all — the natural key
+   * `cell:<package>:<key>` names WHICH package a row came from, but nothing
+   * recorded WHICH VERSION, so no installed-list could report drift and a
+   * republished fix was invisible. Stamped onto the real
+   * `widget_definitions.version` column (no migration; it has always existed
+   * and every writer left it at the default `'1.0.0'`).
+   *
+   * DELIBERATELY NOT a `metadata.marketSource` stamp like view/skill/automation.
+   * That stamp's load-bearing member is `baseline` — the merge base a
+   * comparator reads — and cells have NO reconciler and no comparator. Writing a
+   * baseline nothing ever compares would be a marker asserting a convergence
+   * that never runs, which is the exact defect `backend-rules.md`'s
+   * "Template→installed convergence" section forbids. Version + natural key is
+   * what we can honestly earn today; a `baseline` belongs in the same change
+   * that adds the cell reconciler, not before it.
+   */
+  packageVersion?: string | null;
   userId: string;
 }
 
@@ -130,6 +149,9 @@ export async function installCellFromDefinition(
       definition.contentKind,
       definition.viewTypes
     ),
+    // Omitted when the caller has no version to give, so an upsert can never
+    // erase a stamp a versioned install wrote — see `packageVersion`.
+    version: input.packageVersion ?? undefined,
     userId: input.userId,
   });
 }

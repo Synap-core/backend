@@ -131,6 +131,32 @@ export const crudProcedures = {
         agentSlug: z.string().max(100).optional(),
       })
     )
+    // ⚠️ KNOWN DEFECT, deliberately NOT fixed here — see the blast radius below.
+    //
+    // This door WRITES (find-or-CREATE) while being declared a `.query`, so
+    // React Query retries it, refetches it on window focus and dedupes it by
+    // cache key. That is a duplicate-create hazard for every channel kind with
+    // no uniqueness index — THREAD / SUB_THREAD / EXTERNAL / AGENT_COLLAB.
+    // (FEED and PERSONAL are protected by migration 0182's partial unique
+    // indexes, and PERSONAL is what most callers ask for, which is why this has
+    // not bitten loudly yet.)
+    //
+    // Converting it to `.mutation()` is the correct fix and was attempted. It
+    // breaks FOURTEEN call sites across three repos, because a mutation is
+    // POST-only and exposes neither `.query()` nor `utils.*.fetch()`:
+    //   synap-app  10 — 6 `useQuery` (ChatApp, AIChatCell, ChatWorkspace,
+    //                   useEntityChannel, AgentChatRecentWidget,
+    //                   usePersonalConversationLifecycle, ChannelPane),
+    //                   2 `.query()` + 1 raw GET (telegram)
+    //   browser     2 — `utils.chat.resolveOrCreateChannel.fetch()`
+    //                   (WhiteboardApp, useDiscussProposal)
+    //   relay-app   2 — 1 `.query()` + 1 raw `GET /trpc/...?input=` which NO
+    //                   typecheck can catch (useAIChat, useEnsurePersonChannel)
+    //
+    // Six of those are declarative fetch-on-mount `useQuery`s whose component
+    // lifecycle changes when they become imperative mutations. That is its own
+    // wave with its own dogfood, not a rider on a picker change — shipping the
+    // conversion without it would break every surface that opens a chat.
     .query(async ({ input, ctx }) => {
       const channel = await resolveOrCreateChannel({
         userId: ctx.userId,
@@ -793,16 +819,31 @@ export const crudProcedures = {
     }),
 
   /**
-   * List channels (optionally filtered by workspace)
+   * List channels (optionally filtered by workspace).
+   *
+   * BROWSE and SEARCH are the SAME door: `search` is an optional extra
+   * condition inside `listChannelsWithFlags`, not a second loader. An absent
+   * `search` is a plain browse; a present one narrows server-side over the same
+   * access floor (`channelVisibilityWhere`), so a picker can never surface a
+   * channel the caller cannot open, and can never mistake "not on page 1" for
+   * "does not exist".
+   *
+   * Pagination is `limit` + `offset` with a `hasMore` probe, the shape
+   * `listThreads` / `listAgentCollabChannels` below already use. `channels` is
+   * kept as the response key (pinned — existing frontends read it); the
+   * `pagination` block is additive.
    */
   listChannels: protectedProcedure
     .input(
       z.object({
         workspaceId: z.string().uuid().optional(),
+        /** Free-text narrow over channel title / branch purpose. */
+        search: z.string().optional(),
         /** Project lens (cross-cutting): filter channels tagged to this project. */
         projectId: z.string().uuid().optional(),
         channelType: z.enum(CHANNEL_TYPE_VALUES).optional(),
         limit: z.number().min(1).max(100).default(20),
+        offset: z.number().min(0).default(0),
         contextObjectId: z.string().uuid().optional(),
         contextObjectType: z.enum(CONTEXT_OBJECT_TYPE_VALUES).optional(),
         assignedAgentId: z.string().uuid().optional(),
@@ -813,9 +854,11 @@ export const crudProcedures = {
       })
     )
     .query(async ({ input, ctx }) => {
+      // limit + 1 probe — same hasMore idiom as listThreads below.
       const channelsWithFlags = await listChannelsWithFlags({
         userId: ctx.userId,
         workspaceId: input.workspaceId,
+        search: input.search,
         projectId: input.projectId,
         channelType: input.channelType,
         contextObjectId: input.contextObjectId,
@@ -823,14 +866,23 @@ export const crudProcedures = {
         assignedAgentId: input.assignedAgentId,
         agentMemberId: input.agentUserId,
         includeArchived: input.includeArchived,
-        limit: input.limit,
+        limit: input.limit + 1,
+        offset: input.offset,
       });
 
-      if (channelsWithFlags.length === 0) {
-        return { channels: [] };
-      }
+      const hasMore = channelsWithFlags.length > input.limit;
+      const trimmed = hasMore
+        ? channelsWithFlags.slice(0, input.limit)
+        : channelsWithFlags;
 
-      return { channels: channelsWithFlags };
+      return {
+        channels: trimmed,
+        pagination: {
+          hasMore,
+          limit: input.limit,
+          offset: input.offset,
+        },
+      };
     }),
 
   /**

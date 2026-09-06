@@ -77,6 +77,7 @@ import {
   stampMarketSource,
   readMarketSource,
 } from "./market-source.js";
+import { summarizePostWorkspaceLayers } from "./install-layers.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "marketplace-install" });
@@ -349,12 +350,19 @@ export async function applyMarketInstall(
         packageSlug: slugPackage as string,
         cellKey: slugCellKey as string,
         workspaceId: input.workspaceId,
+        // B3 — the version was resolved here and DISCARDED. Cells were the only
+        // kind with no version at all, so `market installed` could never say a
+        // cell was behind its package. Same precedence the other five kinds use
+        // (catalog row → explicit request → unknown).
+        packageVersion: entry?.version ?? input.version ?? null,
         userId: input.userId,
       });
       return {
         kind: "cell",
         typeKey: result.typeKey,
         changeType: result.changeType,
+        packageSlug: slugPackage as string,
+        packageVersion: entry?.version ?? input.version ?? null,
       };
     }
 
@@ -514,6 +522,16 @@ export async function applyMarketInstall(
         }
       }
 
+      // A1 — ONE SHAPE ACROSS BOTH INSTALL DOORS. This door RETHROWS a
+      // whole-layer failure (the deliberate asymmetry with
+      // `createFromDefinition`, which returns a `failed` layer instead — see
+      // that catch). But a whole-layer throw is not the only partial: the
+      // applier catches each item and records `{status:"error"}` in the bag,
+      // and NOTHING read those statuses, so an install whose every capability
+      // errored returned `postWorkspace` and looked resolved. `layers[]` is the
+      // same `InstallLayerReport` type `createFromDefinition` emits — not a
+      // second shape — so a consumer branches on one field for either door.
+      const layers = summarizePostWorkspaceLayers(postWorkspace);
       return {
         kind: "template",
         workspaceId: result.workspaceId,
@@ -522,6 +540,7 @@ export async function applyMarketInstall(
         // two existing consumers (builtin-verbs' passthrough result and the
         // `capability.install` executor, which stores the object opaquely).
         ...(postWorkspace ? { postWorkspace } : {}),
+        ...(layers.length > 0 ? { layers } : {}),
       };
     }
 

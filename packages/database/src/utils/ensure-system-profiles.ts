@@ -15,6 +15,7 @@ import {
   PropertyValueType,
   ProfileScope,
 } from "../index.js";
+import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
@@ -130,7 +131,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
 
   try {
     // 1. Create system property definitions
-    const propertyDefs = [
+    const propertyDefs: CreatePropertyDefInput[] = [
       {
         slug: "title",
         valueType: PropertyValueType.STRING,
@@ -298,7 +299,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     }
 
     // 2. Additional property definitions for capture hierarchy
-    const capturePropertyDefs = [
+    const capturePropertyDefs: CreatePropertyDefInput[] = [
       {
         slug: "url",
         valueType: PropertyValueType.STRING,
@@ -1824,7 +1825,7 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
 
   try {
     // 1. Property definitions for all DevPlane profiles
-    const devplanePropertyDefs = [
+    const devplanePropertyDefs: CreatePropertyDefInput[] = [
       // devplane_app
       {
         slug: "appName",

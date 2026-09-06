@@ -59,7 +59,9 @@ import { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
+import { buildStoredConstraints, readStoredEnum } from "./property-enum.js";
 import type { PropertyValueType } from "../schema/property-defs.js";
+import { asPropertyInputType } from "../schema/property-defs.js";
 import { PropertyDefRepository } from "../repositories/property-def-repository.js";
 import { ProfilePropertyRepository } from "../repositories/profile-property-repository.js";
 import { RelationDefRepository } from "../repositories/relation-def-repository.js";
@@ -112,6 +114,44 @@ export interface ReconcileOptions {
    */
   packageSlug?: string;
   packageVersion?: string;
+}
+
+/**
+ * INSTALL LAYER — one axis of "did this install fully land?".
+ *
+ * Prior art is K8s `status.conditions[]`: a LIST of typed axes, not a boolean,
+ * so an object can honestly report "the workspace exists and is usable, but
+ * this layer is degraded". dpkg's `iF` half-configured state and Terraform's
+ * partially-updated state are the same idea — record the partial, name it, and
+ * give the caller a read door, rather than rolling back or claiming success.
+ *
+ * WHY THIS EXISTS. A workspace install has two layers:
+ *   1. `template-reconcile` — profiles / property-defs / views / entity links
+ *      (`reconcileWorkspaceFromDefinition`).
+ *   2. `post-workspace` — capabilities / playbooks / automations / loops / cells
+ *      / action placements (`applyPackagePostWorkspace`).
+ * Layer 2 failing does NOT make the workspace unusable, so `createFromDefinition`
+ * deliberately does not throw — but it also had nowhere to SAY so, and therefore
+ * returned a clean report for an install whose living layers all failed. The
+ * applier already stamps the durable half of this truth into
+ * `workspace.settings` (`provisioningStatus:"failed"`, `failedStep`,
+ * `failedStepError`, projected by Hub `GET /workspaces`); this is the
+ * response-shaped half, for the caller that is holding the install result right
+ * now.
+ *
+ * OPTIONAL BY CONTRACT. Both UI consumers derive their type via
+ * `RouterOutputs[...]`, so an optional field keeps them compiling and lets each
+ * surface opt in to rendering it. ABSENT means "no layer reported a failure",
+ * never "unknown".
+ */
+export interface InstallLayerReport {
+  /** Which install layer this axis describes. */
+  layer: "template-reconcile" | "post-workspace";
+  /** `applied` = the layer ran to completion. `failed` = it threw; the workspace
+   *  itself still exists and the install is resumable (re-run to resume). */
+  status: "applied" | "failed";
+  /** Operator-facing failure detail. Present only for `failed`. */
+  message?: string;
 }
 
 export interface ReconcileReport {
@@ -235,6 +275,14 @@ export interface ReconcileReport {
    * (workspace-scoped or pod-wide) → left untouched.
    */
   relationDefs: { created: string[]; skipped: string[] };
+  /**
+   * PER-LAYER install health — see `InstallLayerReport`. OPTIONAL and additive:
+   * absent means no layer reported a failure. Populated by the callers that own
+   * the multi-layer install (`createFromDefinition`), not by this reconciler
+   * itself — layer 2 is not the reconciler's business, but the report is the
+   * only channel the caller has back to the installer.
+   */
+  layers?: InstallLayerReport[];
 }
 
 export async function reconcileWorkspaceFromDefinition(
@@ -462,11 +510,19 @@ export async function reconcileWorkspaceFromDefinition(
           // newly-added template value (e.g. a `prospect` entry status) appear in
           // EXISTING workspaces' pickers without dropping anything. valueType /
           // constraints are never mutated here (that stays a reported conflict).
-          const liveHints =
-            (live.uiHints as Record<string, unknown> | undefined) ?? undefined;
-          const liveEnum = Array.isArray(liveHints?.enumValues)
-            ? (liveHints!.enumValues as string[])
-            : undefined;
+          const liveConstraints =
+            (live.constraints as Record<string, unknown> | undefined) ??
+            undefined;
+          // Read through the ONE mapper: the canonical `constraints.enum`,
+          // falling back to the legacy `uiHints.enumValues` for rows written
+          // before migration 0247. Without the fallback the first reconcile
+          // after the fix would read `undefined` on every un-migrated pod,
+          // treat the template list as new, and report a change on every
+          // property it has ever installed.
+          const liveEnum = readStoredEnum({
+            constraints: liveConstraints,
+            uiHints: live.uiHints as Record<string, unknown> | undefined,
+          });
           const tplEnum = Array.isArray(prop.enumValues)
             ? (prop.enumValues as string[])
             : undefined;
@@ -481,8 +537,12 @@ export async function reconcileWorkspaceFromDefinition(
               merged.some((v, idx) => v !== liveEnum[idx]);
             if (changed) {
               if (!dryRun) {
+                // Write the STORED TRUTH. This is the key
+                // `property-validation-service` enforces and every picker
+                // reads; writing `uiHints.enumValues` here produced a
+                // property whose options no reader could see.
                 await propDefRepo.update(live.id, {
-                  uiHints: { ...(liveHints ?? {}), enumValues: merged },
+                  constraints: { ...(liveConstraints ?? {}), enum: merged },
                 });
               }
               report.properties.enumsUpdated.push({
@@ -506,20 +566,26 @@ export async function reconcileWorkspaceFromDefinition(
       }
       report.properties.added.push({ profile: profile.slug, slug: prop.slug });
       if (!dryRun) {
-        const propConstraints: Record<string, unknown> = {
-          ...(prop.constraints ?? {}),
-          ...(prop.targetProfileSlug
+        // Fold the template's `enumValues` AUTHORING spelling into the stored
+        // truth `constraints.enum` through the ONE mapper. Writing it to
+        // `uiHints.enumValues` (as this did) produced a property that was BORN
+        // unreadable: no picker could list its options AND
+        // `property-validation-service` accepted any string for it, because its
+        // guard is `if (constraints.enum && …)` — the check did not fail, it
+        // never ran.
+        const propConstraints: Record<string, unknown> = buildStoredConstraints(
+          prop,
+          prop.targetProfileSlug
             ? { targetProfileSlug: prop.targetProfileSlug }
-            : {}),
-        };
+            : undefined
+        );
         const propDef = await propDefRepo.create({
           slug: prop.slug,
           valueType: prop.valueType as PropertyValueType,
           uiHints: {
             label: prop.label,
-            inputType: prop.inputType,
+            inputType: asPropertyInputType(prop.inputType),
             placeholder: prop.placeholder,
-            enumValues: prop.enumValues,
           },
           ...(Object.keys(propConstraints).length > 0
             ? { constraints: propConstraints }

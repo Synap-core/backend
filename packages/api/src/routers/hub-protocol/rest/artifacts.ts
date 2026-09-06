@@ -415,8 +415,10 @@ export function registerArtifactsRoutes(app: HubHono): void {
       }
 
       // Step 2: verify the caller's membership in the row's workspace.
+      // `workspaceId` is nullable since 0245 (a pod-personal artifact); `?? undefined`
+      // is the same shape the focus-sessions REST doors use for a lens-less row.
       const acting = await resolveActingContext(c, {
-        workspaceId: existing.workspaceId,
+        workspaceId: existing.workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;

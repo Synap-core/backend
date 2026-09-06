@@ -255,7 +255,10 @@ export const signalsRouter = router({
  * Recently DECIDED proposals (approved / auto-approved / rejected / expired),
  * newest decision first. Access starts from the identical predicate
  * `proposals.list` and `proposals.groups` build: the `workspaceId` three-state,
- * defaulting to `userVisibleWhere`.
+ * defaulting to `proposalUserFloor` — LENS ∪ OWNERSHIP, not the bare
+ * `userVisibleWhere` this comment used to name. History and the live queue must
+ * answer over the SAME population, or a row visible in the queue vanishes from
+ * the record of what happened to it.
  *
  * Ordered by the DECISION time, not `createdAt`: history answers "what was
  * decided, and when" — a month-old proposal decided this morning belongs at the

@@ -58,8 +58,7 @@ const BLOCKED_HOSTNAMES: RegExp[] = [
 ];
 
 export type ValidateUrlResult =
-  | { valid: true; url: URL }
-  | { valid: false; reason: string };
+  { valid: true; url: URL } | { valid: false; reason: string };
 
 /**
  * Validate that `raw` is a safe URL to fetch from server-side code.
@@ -85,7 +84,13 @@ export function validateExternalUrl(raw: string): ValidateUrlResult {
     };
   }
 
-  const hostname = url.hostname.toLowerCase();
+  // IPv6 hostnames arrive from `URL` WITH their brackets — `new URL("http://[::1]/")`
+  // gives `"[::1]"`, not `"::1"`. Every IPv6 rule below is anchored with `^`, so
+  // without stripping them `/^::1$/`, `/^fc00:/`, `/^fd..:/` and `/^fe80:/` could
+  // never match anything and the loopback / unique-local / link-local blocks were
+  // dead code: `http://[::1]/` passed this guard cleanly. Strip once, here, so
+  // every rule sees a bare address.
+  const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
 
   if (BLOCKED_HOSTNAMES.some((re) => re.test(hostname))) {
     return { valid: false, reason: `Hostname '${hostname}' is not allowed` };

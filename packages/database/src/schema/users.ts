@@ -42,6 +42,22 @@ export interface AgentMetadata {
    * a 403 on mismatch — an explicit per-call workspace always overrides it).
    */
   focusWorkspaceId?: string;
+  /**
+   * Runtime, sticky PROJECT focus — the cross-cutting sibling of
+   * `focusWorkspaceId`, settable at runtime via the `synap_set_project_focus`
+   * MCP tool and cleared by unsetting the field. Read LIVE at request time; no
+   * migration (this column is JSONB).
+   *
+   * DECLARATION, NEVER INFERENCE. `belongs_to_project` is a whitelisted
+   * exposure relation — filing something into a project WIDENS cross-workspace
+   * access — so this field may only ever be written by an EXPLICIT
+   * `synap_set_project_focus` call whose target was verified to exist and be
+   * visible to the caller at SET time. Nothing may derive it from content,
+   * titles, embeddings or similarity, and no rung of
+   * `resolveProjectPlacement` may default to a project when this is unset:
+   * project placement abstains where workspace placement defaults.
+   */
+  focusProjectId?: string;
   /** Reserved for the enforced (hard read+write scope) follow-on wave; only
    * "advisory" is implemented today — the field exists so a future "enforced"
    * value doesn't require another migration. */
