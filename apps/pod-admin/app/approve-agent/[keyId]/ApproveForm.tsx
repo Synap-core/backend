@@ -84,7 +84,7 @@ export function ApproveForm({
           <Bot className="h-5 w-5" strokeWidth={2} />
         </span>
         <div className="flex flex-col gap-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
             Agent access request
           </p>
           <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">

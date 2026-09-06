@@ -17,14 +17,18 @@
  */
 
 import { ExternalLink } from "lucide-react";
-import type { Exit } from "./open-in";
+import { DESKTOP_FALLBACK, type Exit } from "./open-in";
 
 /**
  * Contrast floor. Computed against this app's own themes (`tailwind.config.ts`)
  * with the text composited over the `foreground/[0.04]` card, over the page:
  *
- *   foreground/40 → 2.46:1 light   foreground/55 → 3.75:1 light
- *   foreground/70 → 6.04:1 light / 8.01:1 dark   ← first step that passes AA
+ *   foreground/45 → 2.81:1   foreground/55 → 3.75:1   foreground/60 → 4.37:1
+ *   foreground/65 → 5.13:1   ← first step that passes AA in LIGHT
+ *   foreground/70 → 6.04:1 light / 8.01:1 dark   ← the floor used here
+ *
+ * Light is reachable: `providers.tsx` sets `enableSystem`, so it is not a dead
+ * branch. Dark is more forgiving at every step; light is the binding case.
  *
  * This link is the only way out of a `synap://` that silently did nothing, so
  * it is the last thing that should be hard to read. Do not lower it.
@@ -82,14 +86,28 @@ export function ExitLink({
  */
 export function ExitFallback({ exit }: { exit: Exit }) {
   if (!exit.fallback) return null;
+  return <DesktopFallbackLink />;
+}
+
+/**
+ * The escape hatch with no `Exit` in hand.
+ *
+ * A LIST whose rows are all desktop links has no single exit to hang the
+ * fallback off — `intelligence` rendered its own `<a href={DESKTOP_FALLBACK.href}>`
+ * with its own classes, which is the seven-copy drift returning inside the wave
+ * that removed it. The tripwire could not see it either: it matched
+ * `exit.fallback` only. One component, and the guard now matches
+ * `DESKTOP_FALLBACK.href` too.
+ */
+export function DesktopFallbackLink() {
   return (
     <a
-      href={exit.fallback.href}
+      href={DESKTOP_FALLBACK.href}
       target="_blank"
       rel="noopener noreferrer"
       className={FALLBACK_CLASS}
     >
-      {exit.fallback.label}
+      {DESKTOP_FALLBACK.label}
     </a>
   );
 }

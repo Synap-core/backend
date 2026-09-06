@@ -8,7 +8,7 @@
  */
 
 import { Tab, Tabs } from "@heroui/react";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";

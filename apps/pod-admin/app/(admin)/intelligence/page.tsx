@@ -57,7 +57,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { openIn, DESKTOP_FALLBACK } from "../../../lib/open-in";
+import { openIn } from "../../../lib/open-in";
+import { DesktopFallbackLink } from "../../../lib/exit-link";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { HandoffCard } from "../components/handoff-card";
@@ -1542,15 +1543,7 @@ function FailedAiTurnsSection() {
           reader is left staring at a button that did nothing. */}
       {runs.length > 0 && (
         <p className="mt-3 px-3 text-[11.5px] text-foreground/50">
-          Conversations open in the desktop app.{" "}
-          <a
-            href={DESKTOP_FALLBACK.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline-offset-2 hover:text-foreground/80 hover:underline"
-          >
-            {DESKTOP_FALLBACK.label}
-          </a>
+          Conversations open in the desktop app. <DesktopFallbackLink />
         </p>
       )}
     </SectionCard>

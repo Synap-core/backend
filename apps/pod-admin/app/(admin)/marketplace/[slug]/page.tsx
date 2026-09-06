@@ -48,7 +48,7 @@ import { openIn } from "../../../../lib/open-in";
 import { HandoffCard } from "../../components/handoff-card";
 import { SectionCard } from "../../components/section-card";
 import { ResourceRowError } from "../../components/resource-row";
-import { kindIcon, kindLabel, kindPackagePhrase } from "../_lib/kind-icon";
+import { kindIcon, kindLabel } from "../_lib/kind-icon";
 import type {
   AppliedResult,
   InstallError,

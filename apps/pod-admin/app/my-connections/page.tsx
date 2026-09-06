@@ -210,7 +210,7 @@ export default function MyConnectionsPage() {
         consequence={
           <>
             <p>Anything using this key loses access to this Pod.</p>
-            <p className="mt-2 text-foreground/50">
+            <p className="mt-2 text-foreground/65">
               Depending on the key, revoking may need admin approval before it
               takes effect.
             </p>

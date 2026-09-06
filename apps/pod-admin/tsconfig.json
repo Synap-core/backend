@@ -5,6 +5,13 @@
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
+    // Matches the repo root (synap-backend/tsconfig.json). This app is a
+    // standalone tsconfig with no `extends`, so it silently ran without these
+    // — which is why four orphan imports survived a wave that deleted their
+    // only call sites. eslint cannot parse TS here either, so tsc is the ONLY
+    // thing that can catch them.
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "noEmit": true,
     "esModuleInterop": true,
     "module": "esnext",

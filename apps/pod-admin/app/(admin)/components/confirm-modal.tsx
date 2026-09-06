@@ -69,7 +69,19 @@ export function ConfirmModal({
           </div>
         </ModalBody>
         <ModalFooter className="gap-2">
-          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
+          {/* Disabled in flight for the same reason `isDismissable` is: the
+              modal now deliberately stays up until the mutation resolves, and
+              Cancel was the one control that still tore it down mid-request —
+              returning the operator to an unchanged list with a revoke still
+              running. Blocking Esc and the backdrop but not the button left
+              the hole exactly where a user would click. */}
+          <Button
+            variant="flat"
+            radius="md"
+            size="sm"
+            isDisabled={isPending}
+            onPress={onClose}
+          >
             Cancel
           </Button>
           <Button

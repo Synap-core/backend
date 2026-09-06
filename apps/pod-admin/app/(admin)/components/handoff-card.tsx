@@ -51,14 +51,14 @@ export function HandoffCard({
       <div className="flex items-start gap-3">
         {Icon && (
           <Icon
-            className="mt-0.5 h-4 w-4 shrink-0 text-foreground/45"
+            className="mt-0.5 h-4 w-4 shrink-0 text-foreground/65"
             strokeWidth={2}
             aria-hidden
           />
         )}
         <div className="flex min-w-0 flex-col gap-1">
           <p className="text-[13px] font-medium text-foreground">{title}</p>
-          <p className="text-[12.5px] leading-relaxed text-foreground/60">
+          <p className="text-[12.5px] leading-relaxed text-foreground/65">
             {body}
           </p>
         </div>

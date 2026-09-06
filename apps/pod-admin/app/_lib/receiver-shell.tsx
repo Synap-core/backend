@@ -69,6 +69,19 @@ interface ReceiverShellProps {
   width?: "sm" | "md";
 }
 
+/**
+ * Width → container class. A pure function, and exported, ON PURPOSE.
+ *
+ * `width` shipped once as a prop that was declared, defaulted, documented and
+ * passed by three routes — and never read. It typechecked perfectly and every
+ * single-decision card rendered at the wrong width. A prop whose only proof is
+ * "I can see it in the signature" is not proven at all; this is the smallest
+ * shape a test can actually execute.
+ */
+export function receiverWidthClass(width: "sm" | "md"): string {
+  return width === "sm" ? "max-w-md" : "max-w-2xl";
+}
+
 export function ReceiverShell({
   podHost,
   identity,
@@ -82,7 +95,9 @@ export function ReceiverShell({
   const who = identity ?? inherited.identity;
   return (
     <main className="flex min-h-screen flex-col items-center px-6 py-12 sm:py-16">
-      <div className="flex w-full max-w-2xl flex-col gap-4">
+      <div
+        className={`flex w-full flex-col gap-4 ${receiverWidthClass(width)}`}
+      >
         <ReceiverHeader podHost={host} identity={who} />
 
         <Card
@@ -138,7 +153,7 @@ function ReceiverHeader({
       )}
 
       {identity && (
-        <span className="ml-auto truncate text-[12px] text-foreground/60">
+        <span className="ml-auto truncate text-[12px] text-foreground/65">
           Signed in as <span className="text-foreground/80">{identity}</span>
         </span>
       )}

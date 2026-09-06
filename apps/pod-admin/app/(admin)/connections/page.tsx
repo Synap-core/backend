@@ -321,7 +321,7 @@ export default function ApplicationConnectionsPage() {
             <p>
               Its browser origins immediately lose permission to call this Pod.
             </p>
-            <p className="mt-2 text-foreground/50">
+            <p className="mt-2 text-foreground/65">
               This does not remove people, revoke trusted issuers, or invalidate
               direct Pod sign-in sessions.
             </p>

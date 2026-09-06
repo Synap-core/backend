@@ -17,8 +17,24 @@ import { ACCOUNT_PAGES } from "../lib/open-in";
  */
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-const SCAN_DIRS = ["app", "lib"];
-const SKIP_DIRS = new Set(["node_modules", ".next", "__tripwires__"]);
+
+/**
+ * Walk the WHOLE app and exclude, rather than listing roots to include.
+ *
+ * This was `SCAN_DIRS = ["app", "lib"]` — a hand-listed set, in the file whose
+ * own docblock forbids hand-listed sets. The walk was recursive only *within*
+ * those two roots, so a new top-level directory (`components/`, `hooks/`,
+ * `server/`) would carry a raw `synap://` or a `/studio/` href with all guards
+ * green. An exclude-list fails safe: a directory nobody thought about is
+ * scanned, not skipped.
+ */
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".next",
+  "__tripwires__",
+  ".turbo",
+  "coverage",
+]);
 
 function sourceFiles(): string[] {
   const out: string[] = [];
@@ -36,7 +52,7 @@ function sourceFiles(): string[] {
       out.push(full);
     }
   };
-  for (const dir of SCAN_DIRS) walk(join(APP_ROOT, dir));
+  walk(APP_ROOT);
   return out;
 }
 
@@ -114,11 +130,16 @@ describe("pod-admin exit door", () => {
     // different opacities (two below 2.5:1 contrast), a focus ring on one of
     // four, target="_blank" on pod-admin's own routes, and one list repeating
     // it per row. `lib/exit-link.tsx` is now the only place that reads it.
+    // `DESKTOP_FALLBACK.(href|label)` is the SECOND spelling: a list whose rows
+    // are all desktop links has no single `Exit`, and `intelligence` hand-rolled
+    // its anchor that way — invisible to a guard matching only `exit.fallback`.
+    // Both spellings belong to `exit-link.tsx` alone.
     const allowed = new Set(["lib/exit-link.tsx"]);
     const hits = FILES.filter(
       (f) =>
-        /\bexit\.fallback\b|\bfallback\.href\b/.test(f.body) &&
-        !allowed.has(f.path)
+        /\bexit\.fallback\b|\bfallback\.href\b|\bDESKTOP_FALLBACK\s*\.\s*(?:href|label)\b/.test(
+          f.body
+        ) && !allowed.has(f.path)
     );
     expect(hits.map((h) => h.path)).toEqual([]);
   });
@@ -191,6 +212,15 @@ describe("landing destinations exist", () => {
     "download/browser",
     "guides/quickstart",
   ];
+
+  // In CI the sibling checkout is REQUIRED. Skipping there would make the one
+  // guard the whole plan came from — "never emit a link whose receiver you have
+  // not read" — report green by not running, which is precisely the failure it
+  // exists to prevent. Locally, a backend-only clone may legitimately skip.
+  it("can actually see the landing repo (required in CI)", () => {
+    if (process.env.CI) expect(present).toBe(true);
+    else expect(typeof present).toBe("boolean");
+  });
 
   it.skipIf(!present).each(routes)("synap.live/%s is a real route", (route) => {
     expect(existsSync(join(LANDING, route, "page.tsx"))).toBe(true);

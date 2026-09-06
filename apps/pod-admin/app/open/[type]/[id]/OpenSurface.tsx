@@ -9,7 +9,7 @@ import {
   Chip,
   Spinner,
 } from "@heroui/react";
-import { Box, ExternalLink, LayoutGrid } from "lucide-react";
+import { Box, LayoutGrid } from "lucide-react";
 import { openIn } from "../../../../lib/open-in";
 import { ExitLink } from "../../../../lib/exit-link";
 import {
@@ -18,7 +18,7 @@ import {
 } from "../../../_lib/receiver-shell";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { isUuid, labelForOpenType, type ParsedOpen } from "../../open-params";
+import { labelForOpenType, type ParsedOpen } from "../../open-params";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -215,7 +215,7 @@ function EntityCard({
         <div className="flex min-w-0 flex-1 items-start gap-3">
           {kindIcon(<Box className="h-5 w-5" strokeWidth={2} />)}
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
               Entity
             </p>
             <h1 className="break-words text-balance font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
@@ -310,7 +310,7 @@ function ViewCard({
         <div className="flex min-w-0 flex-1 items-start gap-3">
           {kindIcon(<LayoutGrid className="h-5 w-5" strokeWidth={2} />)}
           <div className="flex min-w-0 flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
               View
             </p>
             <h1 className="break-words text-balance font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
@@ -377,7 +377,7 @@ function emptyBody({
     <>
       <CardHeader className="flex items-start justify-between gap-3 px-7 pb-0 pt-7">
         <div className="min-w-0 flex-1 flex flex-col gap-1">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
             {eyebrow}
           </p>
           <h1 className="break-words text-balance font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
