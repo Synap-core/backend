@@ -6,7 +6,7 @@
  * Per-workspace AI defaults live in Studio's `AgentsTab`. This tab is the
  * pod operator's view: which providers are configured, which IS instances
  * are healthy, what the pod-wide defaults are, and a thin OpenClaw
- * summary that links out.
+ * status readout.
  *
  * This is the only tab that uses the emerald accent. Per the brief: use
  * it sparingly — header icons, key indicators, primary CTAs only.
@@ -18,7 +18,7 @@
  *   3. IS instances     — `intelligenceRegistry.list`
  *   4. Proactive AI     — pod-wide proactive defaults
  *   5. Failed AI turns  — thin list from runs.list(flowType=chat, status=failed)
- *   6. OpenClaw summary — thin card with "Manage in OpenClaw" link
+ *   6. OpenClaw summary — read-only status; nothing here manages it
  */
 
 import {
@@ -54,11 +54,12 @@ import {
   Settings,
   Sparkles,
   Trash2,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { openIn, DESKTOP_FALLBACK } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
+import { HandoffCard } from "../components/handoff-card";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -758,6 +759,19 @@ function ProviderHealthSection() {
           ))}
         </div>
       )}
+
+      {/* Rendered unconditionally: "where configuration lives" is true whether
+          or not the list loaded, and a reader who hits an error still needs the
+          way out. */}
+      <div className="mt-3">
+        <HandoffCard
+          icon={Settings}
+          title="Service configuration lives in the desktop app"
+          body="Credentials and endpoints for a provider are edited in the AI provider registry above. Which models an agent may reach, and the governance around them, are set per workspace in the desktop app's AI settings."
+          exit={openIn({ kind: "settings", section: "ai-governance" })}
+          cta="Open AI settings"
+        />
+      </div>
     </SectionCard>
   );
 }
@@ -821,24 +835,11 @@ function ProviderCard({
         </div>
       )}
 
+      {/* No "Configure" here. pod-admin is the front desk: it reports a
+          service's health, it does not own the service's configuration. The
+          section-level handoff below says where that lives — a disabled button
+          taught "broken", which was never true. */}
       <div className="mt-auto flex items-center gap-1">
-        <Tooltip content="Pending: intelligenceRegistry.updateServiceConfig">
-          <span className="block">
-            <Button
-              size="sm"
-              variant="light"
-              radius="md"
-              isDisabled
-              startContent={<Settings className="h-3 w-3" />}
-              className="text-foreground/55"
-              // TODO(phase-C): open a modal that calls
-              // trpc.intelligenceRegistry.getServiceConfig + .update — gated
-              // behind scoped permissions today.
-            >
-              Configure
-            </Button>
-          </span>
-        </Tooltip>
         {!card.isBuiltIn && (
           <Button
             size="sm"
@@ -1385,6 +1386,15 @@ function ProactiveDefaultsSection() {
  * Thin operator surface for failed Companion / Discord / external agent turns.
  * Reuses `runs.list({ flowType: "chat", status: "failed" })` — same ledger as
  * browser Runs (Failed filter). No redesign: SectionCard + ResourceRow only.
+ *
+ * Each row exits to its CHANNEL, not to the run. A run's address is
+ * `{flowType, runId}` — `object-nav.ts`'s `run` arm reads `flowType` off the
+ * link's params and defaults to `automation` when it is absent, so a bare
+ * `synap://open/run/<id>` would resolve to a descriptor that queries the wrong
+ * ledger and lands on an empty surface. `openIn` emits no params, so the run
+ * link is not one we can honestly emit from here. The channel is: the failed
+ * turn happened in a conversation, and that conversation is where an operator
+ * reads what went wrong.
  */
 function FailedAiTurnsSection() {
   const query = trpc.runs.list.useQuery(
@@ -1392,6 +1402,10 @@ function FailedAiTurnsSection() {
     { staleTime: 15_000, refetchOnWindowFocus: true }
   );
   const runs = query.data?.runs ?? [];
+
+  /* One shared "you need the app" escape hatch for every row exit below —
+     spelled once beneath the list rather than once per row. */
+  const desktopFallback = DESKTOP_FALLBACK;
 
   return (
     <SectionCard
@@ -1418,6 +1432,15 @@ function FailedAiTurnsSection() {
         <div className="-mx-2">
           {runs.map((run) => {
             const when = formatRelativeTime(run.startedAt);
+            // Absent on a turn whose channel was since deleted — no channel,
+            // no exit, rather than a link to nothing.
+            const exit = run.channelId
+              ? openIn({
+                  kind: "object",
+                  objectKind: "channel",
+                  id: run.channelId,
+                })
+              : null;
             const err =
               typeof run.error === "string" && run.error.trim()
                 ? run.error.trim()
@@ -1438,10 +1461,43 @@ function FailedAiTurnsSection() {
                 primary={run.flowName || "Chat"}
                 secondary={secondary}
                 status={{ kind: "down", label: "Failed" }}
+                actions={
+                  exit ? (
+                    <Button
+                      as="a"
+                      href={exit.href}
+                      size="sm"
+                      variant="light"
+                      radius="md"
+                      startContent={<Eye className="h-3 w-3" />}
+                      className="text-foreground/55"
+                    >
+                      Open channel
+                    </Button>
+                  ) : undefined
+                }
               />
             );
           })}
         </div>
+      )}
+
+      {/* The per-row exits are all `synap://` and all share one fallback, so
+          it is spelled once here rather than fifteen times inside the list. A
+          desktop link that does not resolve fails SILENTLY — without this the
+          reader is left staring at a button that did nothing. */}
+      {runs.length > 0 && desktopFallback && (
+        <p className="mt-3 px-3 text-[11.5px] text-foreground/50">
+          Conversations open in the desktop app.{" "}
+          <a
+            href={desktopFallback.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline-offset-2 hover:text-foreground/80 hover:underline"
+          >
+            {desktopFallback.label}
+          </a>
+        </p>
       )}
     </SectionCard>
   );
@@ -1520,17 +1576,10 @@ function OpenClawSummarySection() {
             </span>
           </div>
         </div>
-        <Button
-          as="a"
-          href="/openclaw"
-          size="sm"
-          variant="solid"
-          color="primary"
-          radius="md"
-          startContent={<Zap className="h-3 w-3" />}
-        >
-          Manage in OpenClaw
-        </Button>
+        {/* This was a `href="/openclaw"` button. pod-admin serves no such
+            route and there is no rewrite, so it was a hard 404 — and no
+            verified OpenClaw URL exists to retarget it at. Rather than invent
+            a destination, the card now simply reports what it knows. */}
       </div>
     </SectionCard>
   );

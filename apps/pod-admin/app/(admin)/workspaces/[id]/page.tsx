@@ -13,10 +13,8 @@ import { Suspense } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { trpc } from "../../../../lib/trpc";
 import { StatusPill } from "../../components/status-pill";
-import {
-  formatRelative,
-  studioDeepLinkForWorkspace,
-} from "../../people/_lib/helpers";
+import { formatRelative } from "../../people/_lib/helpers";
+import { openIn } from "../../../../lib/open-in";
 import { OverviewTab } from "./_lib/overview-tab";
 import { MembersTab } from "./_lib/members-tab";
 import { ApiKeysTab } from "./_lib/api-keys-tab";
@@ -41,11 +39,7 @@ type Workspace = {
 };
 
 type WorkspaceTab =
-  | "overview"
-  | "members"
-  | "api-keys"
-  | "connections"
-  | "governance";
+  "overview" | "members" | "api-keys" | "connections" | "governance";
 const TABS: WorkspaceTab[] = [
   "overview",
   "members",
@@ -53,6 +47,35 @@ const TABS: WorkspaceTab[] = [
   "connections",
   "governance",
 ];
+
+function DesktopExit({ workspaceId }: { workspaceId: string }) {
+  const exit = openIn({
+    kind: "object",
+    objectKind: "workspace",
+    id: workspaceId,
+  });
+  return (
+    <div className="flex items-center gap-2">
+      <a
+        href={exit.href}
+        className="flex items-center gap-1.5 rounded-md bg-foreground/[0.04] px-3 py-1.5 text-[12.5px] text-foreground/70 ring-1 ring-inset ring-foreground/10 hover:bg-foreground/[0.07] transition-colors"
+      >
+        Open in the desktop app
+        <ExternalLink className="h-3 w-3" />
+      </a>
+      {exit.fallback && (
+        <a
+          href={exit.fallback.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[11.5px] text-foreground/45 underline-offset-2 transition-colors hover:text-foreground/75 hover:underline"
+        >
+          {exit.fallback.label}
+        </a>
+      )}
+    </div>
+  );
+}
 
 // ─── Helpers (same as list page) ──────────────────────────────────────
 
@@ -195,15 +218,11 @@ function WorkspaceDetailInner() {
             <span className="text-[11.5px] text-foreground/40">
               updated {formatRelative(new Date(ws.updatedAt))}
             </span>
-            <a
-              href={studioDeepLinkForWorkspace(ws.id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 rounded-md bg-foreground/[0.04] px-3 py-1.5 text-[12.5px] text-foreground/70 ring-1 ring-inset ring-foreground/10 hover:bg-foreground/[0.07] transition-colors"
-            >
-              Open in Studio
-              <ExternalLink className="h-3 w-3" />
-            </a>
+            {/* This page owns the workspace's admin surfaces; its CONTENTS
+                live in the desktop app. That is a `synap://` link, which does
+                nothing at all when the app is not installed — so the download
+                fallback sits right beside it. */}
+            <DesktopExit workspaceId={ws.id} />
           </div>
         ) : null}
       </header>

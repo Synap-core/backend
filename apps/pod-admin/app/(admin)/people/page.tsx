@@ -36,6 +36,7 @@ import {
   CircleUser,
   Clock,
   Copy,
+  ExternalLink,
   KeyRound,
   Mail,
   MoreHorizontal,
@@ -58,11 +59,49 @@ import {
 import { SectionCard } from "../components/section-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
-import {
-  formatExpiresAt,
-  formatRelative,
-  studioDeepLinkForWorkspace,
-} from "./_lib/helpers";
+import { formatExpiresAt, formatRelative } from "./_lib/helpers";
+import { openIn } from "../../../lib/open-in";
+
+/**
+ * The one exit from a membership row to that workspace in the desktop app.
+ *
+ * pod-admin cannot render a workspace, so this is a `synap://` link — which
+ * does nothing at all, with no error, when the app is not installed. That is
+ * why the download fallback is rendered beside it rather than left implicit.
+ */
+function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
+  const exit = openIn({
+    kind: "object",
+    objectKind: "workspace",
+    id: workspaceId,
+  });
+  return (
+    <div className="flex items-center gap-1.5">
+      <Button
+        as="a"
+        href={exit.href}
+        isIconOnly
+        size="sm"
+        radius="full"
+        variant="light"
+        aria-label="Open this workspace in the desktop app"
+        className="h-6 w-6 min-w-6 text-foreground/45 hover:text-foreground"
+      >
+        <ExternalLink className="h-3 w-3" />
+      </Button>
+      {exit.fallback && (
+        <a
+          href={exit.fallback.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[10.5px] text-foreground/35 underline-offset-2 hover:text-foreground/70 hover:underline"
+        >
+          {exit.fallback.label}
+        </a>
+      )}
+    </div>
+  );
+}
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -253,26 +292,15 @@ function UserDetailDrawer({
           classNames={{ base: "shrink-0" }}
         />
       }
+      /* The footer used to carry a single "Open in Studio" button built from
+         `member.workspaces[0]` — an arbitrary pick that silently lied whenever
+         someone belonged to more than one workspace, and pointed at the
+         deprecated fluid app besides. Each membership row below now carries
+         its own exit, so the destination always matches the row you clicked. */
       footer={
-        <>
-          <Button variant="flat" radius="md" size="sm" onPress={onClose}>
-            Close
-          </Button>
-          {member?.workspaces[0] ? (
-            <Button
-              as="a"
-              href={studioDeepLinkForWorkspace(member.workspaces[0].id)}
-              target="_blank"
-              rel="noopener noreferrer"
-              color="primary"
-              variant="solid"
-              radius="md"
-              size="sm"
-            >
-              Open in Studio
-            </Button>
-          ) : null}
-        </>
+        <Button variant="flat" radius="md" size="sm" onPress={onClose}>
+          Close
+        </Button>
       }
     >
       {member ? (
@@ -310,6 +338,7 @@ function UserDetailDrawer({
                     <span className="tabular text-[11px] text-foreground/40">
                       {formatRelative(new Date(ws.joinedAt))}
                     </span>
+                    <WorkspaceExit workspaceId={ws.id} />
                   </div>
                 </div>
               ))}

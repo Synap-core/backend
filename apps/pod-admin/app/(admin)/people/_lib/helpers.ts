@@ -3,21 +3,16 @@
  *
  * `formatRelative` mirrors the Overview implementation so the People tab
  * doesn't depend on Overview internals; both are tiny enough that
- * duplicating beats coupling.
+ * duplicating beats coupling. It is also imported by the Entities tab and
+ * the workspace Overview tab — keep the name and signature stable.
  *
- * `studioDeepLinkForWorkspace` returns the URL Studio uses to land on a
- * specific workspace. Studio currently reads the active workspace from
- * the auth context (see `synap-app/apps/studio/components/providers/
- * SynapProvider.tsx`) — there is no `?ws=` query-param switch wired yet,
- * so we still encode the workspace id as a hint (so Studio can pick it
- * up later without the link breaking) and the operator may need to
- * switch workspaces manually inside Studio for now.
- *
- * TODO(phase-e): teach Studio to honour `?ws=<id>` by reading the param
- * in its auth provider and calling `updateWorkspaceId`. Until then, this
- * helper is best-effort: the URL opens Studio on its default workspace.
- *
- * In dev, `NEXT_PUBLIC_SYNAP_HUB_URL` points to the local Hub dev server.
+ * This file used to also export `studioDeepLinkForWorkspace` /
+ * `studioDeepLinkForWorkspaceSettings`, which built `hub.synap.live?ws=<id>`
+ * from `NEXT_PUBLIC_SYNAP_HUB_URL`. All three are gone: that target is the
+ * deprecated fluid web app, it sits behind a second login on a different auth
+ * stack, and it never read `?ws` at all — so the workspace you clicked from
+ * was silently dropped. Exits now go through `openIn()` (`lib/open-in.ts`),
+ * the one door, which only emits destinations whose receiver has been read.
  */
 
 export function formatRelative(date: Date): string {
@@ -44,21 +39,4 @@ export function formatExpiresAt(date: Date): string {
   if (hours < 24) return `${hours}h left`;
   const days = Math.floor(hours / 24);
   return `${days}d left`;
-}
-
-const HUB_BASE =
-  process.env.NEXT_PUBLIC_SYNAP_HUB_URL ?? "https://hub.synap.live";
-
-export function studioDeepLinkForWorkspace(workspaceId: string): string {
-  const url = new URL(HUB_BASE);
-  url.searchParams.set("ws", workspaceId);
-  return url.toString();
-}
-
-export function studioDeepLinkForWorkspaceSettings(
-  workspaceId: string
-): string {
-  const url = new URL("/settings/workspace/general", HUB_BASE);
-  url.searchParams.set("ws", workspaceId);
-  return url.toString();
 }

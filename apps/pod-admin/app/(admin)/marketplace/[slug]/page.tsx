@@ -27,10 +27,13 @@ import { Button, Chip, Spinner } from "@heroui/react";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
   CheckCircle2,
   CircleAlert,
   Clock,
+  Copy,
   Info,
+  Store,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -43,6 +46,8 @@ import {
 } from "@synap-core/types/vocabulary";
 import { readableDescription } from "../../../../lib/marketplace";
 import type { PackageDetail } from "../../../../lib/marketplace";
+import { openIn } from "../../../../lib/open-in";
+import { HandoffCard } from "../../components/handoff-card";
 import { SectionCard } from "../../components/section-card";
 import { ResourceRowError } from "../../components/resource-row";
 import { kindIcon, kindLabel, kindPackagePhrase } from "../_lib/kind-icon";
@@ -423,14 +428,13 @@ function InstallPanel({
   }
 
   if (stage.kind === "failed") {
-    // "This kind has no preview here yet" is a limit, not a failure — an
-    // amber note with the door that does work, never a red error box.
+    // A kind this front desk does not install is a BOUNDARY, not a failure —
+    // an amber note plus the surface that owns it, never a red error box and
+    // never an apology for a feature nobody is coming to build here.
     const blockedByKind = stage.error.reason === "kind_not_installable_here";
     return (
       <SectionCard
-        title={
-          blockedByKind ? "Not installable from here yet" : "Install failed"
-        }
+        title={blockedByKind ? "Installs in the desktop app" : "Install failed"}
       >
         <div className="flex items-start gap-2.5">
           <CircleAlert
@@ -460,11 +464,7 @@ function InstallPanel({
                 ))}
               </ul>
             )}
-            {blockedByKind && (
-              <code className="w-fit rounded-lg bg-foreground/[0.06] px-2 py-1 font-mono text-[11.5px] text-foreground/70">
-                synap market install {slug}
-              </code>
-            )}
+            {blockedByKind && <KindHandoff category={category} slug={slug} />}
             {/*
              * "Start over" belongs on BOTH branches. It used to be hidden when
              * `blockedByKind`, which left that card with no exit at all — the
@@ -520,6 +520,41 @@ function InstallPanel({
     );
   }
 
+  /**
+   * Where a non-workspace package actually installs.
+   *
+   * `POST /api/marketplace/install` answers 501 for `capability | cell | view |
+   * automation | skill`; only `workspace` has a web install path. Before this,
+   * the page said "Not installable from here yet" — which reads as a defect in
+   * the product rather than what it is: a boundary. pod-admin is the pod's front
+   * desk, and installing a capability into a running workspace is desktop work.
+   *
+   * So: name the real destination first, and keep the CLI as a genuine second
+   * option rather than the apologetic only one. Operators who live in a terminal
+   * legitimately prefer it, and it is the one path that works for every kind.
+   */
+  function KindHandoff({ category, slug }: { category: string; slug: string }) {
+    const noun = resolveObjectNoun(category);
+    return (
+      <div className="flex flex-col gap-3">
+        <HandoffCard
+          title={`${noun} packages install in the desktop app`}
+          body={`Installing a ${noun.toLowerCase()} binds it to a live workspace, so it happens where that workspace is open. The pod's marketplace here is for browsing and for workspace packages.`}
+          exit={openIn({ kind: "app", appId: "marketplace" })}
+          cta="Open the marketplace in the app"
+        />
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[11.5px] text-foreground/50">
+            Or install it from a terminal:
+          </p>
+          <code className="w-fit rounded-md bg-foreground/[0.06] px-2.5 py-1.5 font-mono text-[11.5px] text-foreground/80">
+            synap market install {slug}
+          </code>
+        </div>
+      </div>
+    );
+  }
+
   // The install door only handles workspace packages — `POST /api/marketplace/
   // install` answers 501 for the other five kinds. `category` is known HERE, at
   // render, so say it BEFORE offering the button. Presenting an identical CTA
@@ -528,22 +563,8 @@ function InstallPanel({
   // as a broken feature.
   if (category !== "workspace") {
     return (
-      <SectionCard
-        title="Not installable from here yet"
-        hint="Pod Admin installs workspace packages; other kinds go through the CLI"
-      >
-        <div className="flex flex-col gap-2.5">
-          <p className="text-[12.5px] leading-relaxed text-foreground/75">
-            Pod Admin can preview and install workspace packages, because it can
-            check their definition against your data before writing anything. It
-            can&rsquo;t do that for{" "}
-            {category ? kindPackagePhrase(category) : "this kind of package"}{" "}
-            yet — install this one from the CLI, which applies it directly:
-          </p>
-          <code className="w-fit rounded-lg bg-foreground/[0.06] px-2 py-1 font-mono text-[11.5px] text-foreground/70">
-            synap market install {slug}
-          </code>
-        </div>
+      <SectionCard title="Install" hint="This kind installs in the desktop app">
+        <KindHandoff category={category} slug={slug} />
       </SectionCard>
     );
   }

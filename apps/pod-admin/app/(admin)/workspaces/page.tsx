@@ -1,17 +1,24 @@
 "use client";
 
 /**
- * Workspaces tab — list-only.
+ * Workspaces tab — the index over every workspace on this pod.
  *
- * The Pod Admin app intentionally does NOT render workspace internals
- * (members, profiles, settings). Studio owns those surfaces. This tab
- * therefore answers ONE question: "what workspaces live on this pod,
- * and how do I jump into one?"
+ * This is the entry point, not the whole story: clicking a row opens
+ * `/workspaces/[id]`, which pod-admin serves itself and which DOES render
+ * workspace internals — Overview, Members, API keys, Connections and
+ * Governance. (An earlier version of this comment claimed pod-admin
+ * "intentionally does NOT render workspace internals" and that Studio owned
+ * them. Both halves are false: the detail page has owned them for a while,
+ * and Studio — the fluid web app — is deprecated.)
  *
- * Layout:
- *   1. Header: title + stats chip cluster + Create button
- *   2. Single SectionCard with one row per workspace
- *   3. Click row → Drawer with read-only details + Open-in-Studio CTA
+ * So this page answers two questions: "what workspaces live on this pod?"
+ * and "which one do I want to open?" Lifecycle verbs that only a pod admin
+ * has (create, archive/restore, delete) live in the row's action menu.
+ *
+ * The one thing this page cannot do is show a workspace's *contents* —
+ * the desktop app owns that. That exit is resolved by `openIn()`
+ * (`lib/open-in.ts`) and, being a `synap://` link, always renders its
+ * download fallback beside it.
  *
  * Data source: `workspaces.adminListAll` (podAdmin only). Each row's
  * "Active / Idle / Archived" status is derived from `updatedAt` + a
@@ -56,11 +63,8 @@ import {
 } from "../components/resource-row";
 import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
-import {
-  formatRelative,
-  studioDeepLinkForWorkspace,
-  studioDeepLinkForWorkspaceSettings,
-} from "../people/_lib/helpers";
+import { formatRelative } from "../people/_lib/helpers";
+import { openIn } from "../../../lib/open-in";
 
 // Pull the workspace shape from the query response so we don't drift.
 // We declare it inline (rather than using `inferRouterOutputs`) because
@@ -333,9 +337,15 @@ function WorkspaceRowActions({
   isSystem: boolean;
   archived: boolean;
 }) {
+  const router = useRouter();
   const utils = trpc.useUtils();
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const desktopExit = openIn({
+    kind: "object",
+    objectKind: "workspace",
+    id: ws.id,
+  });
 
   const deleteMutation = trpc.workspaces.adminDelete.useMutation({
     onSuccess: (data) => {
@@ -399,31 +409,42 @@ function WorkspaceRowActions({
         </PopoverTrigger>
         <PopoverContent className="min-w-[220px] max-w-[280px] p-1">
           <div className="flex w-full flex-col">
+            {/* The workspace's contents live in the desktop app. `synap://`
+                does nothing at all when the app is not installed, so the
+                download fallback is rendered right underneath — never a
+                click with no way out. */}
             <Button
               as="a"
-              href={studioDeepLinkForWorkspace(ws.id)}
-              target="_blank"
-              rel="noopener noreferrer"
+              href={desktopExit.href}
               variant="light"
               size="sm"
               radius="sm"
               className="justify-start text-[12.5px]"
               startContent={<ExternalLink className="h-3.5 w-3.5" />}
             >
-              Open in Studio
+              Open in the desktop app
             </Button>
+            {desktopExit.fallback && (
+              <a
+                href={desktopExit.fallback.href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 pb-1 text-[11px] text-foreground/45 underline-offset-2 transition-colors hover:text-foreground/75 hover:underline"
+              >
+                {desktopExit.fallback.label}
+              </a>
+            )}
+            {/* Members, API keys, connections and governance are pod-admin's
+                own surfaces — internal navigation, not an exit. */}
             <Button
-              as="a"
-              href={studioDeepLinkForWorkspaceSettings(ws.id)}
-              target="_blank"
-              rel="noopener noreferrer"
               variant="light"
               size="sm"
               radius="sm"
               className="justify-start text-[12.5px]"
               startContent={<Settings2 className="h-3.5 w-3.5" />}
+              onPress={() => router.push(`/workspaces/${ws.id}`)}
             >
-              Settings in Studio
+              Members, keys &amp; governance
             </Button>
             {archived ? (
               <Button

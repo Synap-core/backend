@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import {
   ResourceRow,
@@ -50,11 +51,7 @@ import { formatRelative } from "./format";
 type IssuerStatus = "pending" | "approved" | "rejected" | "revoked";
 
 type IssuerFilter =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "revoked"
-  | "built-in";
+  "pending" | "approved" | "rejected" | "revoked" | "built-in";
 
 /** Derived from the generated tRPC contract so this UI cannot submit a scope
  * the Pod does not recognize. */
@@ -151,13 +148,16 @@ const STATUS_TO_KIND: Record<IssuerStatus, StatusKind> = {
   revoked: "down",
 };
 
-const FILTER_LABELS: Record<IssuerFilter, string> = {
-  pending: "Pending",
-  approved: "Approved",
-  rejected: "Rejected",
-  revoked: "Revoked",
-  "built-in": "Built-in",
-};
+/**
+ * Filter chip labels. Four of the five chips ARE the `issuers.status` domain
+ * values, so they resolve through the vocabulary SSOT rather than a local
+ * table — otherwise this map forks from the row's own status label the moment
+ * either side changes. `built-in` is the exception: it is not a status but a
+ * property of the issuer, so it stays product copy here.
+ */
+function filterLabel(filter: IssuerFilter): string {
+  return filter === "built-in" ? "Built-in" : resolveStatusLabel(filter);
+}
 
 const FILTER_ORDER: IssuerFilter[] = [
   "pending",
@@ -286,7 +286,7 @@ export function IssuersSection() {
                   : "text-foreground/55 hover:bg-content2/50 hover:text-foreground",
               ].join(" ")}
             >
-              {FILTER_LABELS[f]}
+              {filterLabel(f)}
               <span className="tabular text-[11px] text-foreground/45">
                 {counts[f]}
               </span>
@@ -388,9 +388,13 @@ function IssuerRow({
   const statusKind: StatusKind = issuer.isBuiltIn
     ? "healthy"
     : STATUS_TO_KIND[issuer.status];
+  // `issuer.status` is a lifecycle status on a DB row, so its label comes from
+  // the vocabulary SSOT — never a local map, never a hand-rolled capitalise.
+  // "Built-in" is not a status: it is a property of the issuer overriding the
+  // status display, so it stays product copy.
   const statusLabel = issuer.isBuiltIn
     ? "Built-in"
-    : issuer.status.charAt(0).toUpperCase() + issuer.status.slice(1);
+    : resolveStatusLabel(issuer.status);
 
   const secondary = [
     issuer.issuerUrl,

@@ -5,9 +5,9 @@
  *
  * Pod Admin's Connectors tab is the META picture: how many providers are
  * connected on this pod, how many of those are healthy, plus a per-workspace
- * grid that points operators back into Studio when something needs hands-on
- * editing. Per-workspace connector configuration lives in Studio's
- * `IntegrationsTab` — Pod Admin does not duplicate it.
+ * grid that hands operators off to the desktop app when something needs
+ * hands-on editing. Per-workspace connector configuration lives in the
+ * desktop app's Settings → Connectors — Pod Admin does not duplicate it.
  *
  * Sections:
  *   1. Health grid — one card per Nango provider type (aggregate)
@@ -19,7 +19,7 @@
  * work because we derive aggregates from any connectors list query.
  */
 
-import { Button, Tooltip } from "@heroui/react";
+import { Button } from "@heroui/react";
 import {
   AlertTriangle,
   Building2,
@@ -28,15 +28,14 @@ import {
   ExternalLink,
   Layers,
   Plug,
-  RefreshCw,
   Rss,
   Server,
-  Trash2,
 } from "lucide-react";
-import Link from "next/link";
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
+import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { DetailDrawer } from "../components/detail-drawer";
+import { HandoffCard } from "../components/handoff-card";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -81,7 +80,7 @@ function ConnectorsInner() {
         </h1>
         <p className="text-[13px] text-foreground/55">
           External services connected to this pod. Per-workspace configuration
-          happens in Studio — Pod Admin shows the aggregate health.
+          happens in the desktop app — Pod Admin shows the aggregate health.
         </p>
       </header>
 
@@ -305,8 +304,8 @@ function ProviderCardSkeleton() {
  * pollers, …). They MAY be workspace-scoped (`workspaceId`) or pod-wide
  * (`workspaceId = null`).
  *
- * Mutations (re-auth, edit) deep-link to Studio per the same "Pod Admin
- * is meta, Studio is detail" rule.
+ * Mutations (re-auth, edit) are not Pod Admin's: they hand off to the
+ * desktop app per the same "Pod Admin is meta, the app is detail" rule.
  */
 
 interface SourceConfigRow {
@@ -392,8 +391,8 @@ function iconForProvider(providerType: string) {
  * Pod-wide grid of every connector instance, grouped by workspace.
  * Backed by `trpc.connectors.allConnections` (admin-scope).
  *
- * Click → opens a side Drawer with the row's detail and a deep link out
- * to Studio.
+ * Click → opens a side Drawer with the row's detail and a handoff out to
+ * the desktop app.
  */
 
 interface ConnectionRow {
@@ -547,10 +546,6 @@ function ConnectorDetailDrawer({
   row: ConnectionRow | null;
   onClose: () => void;
 }) {
-  const studioHref = row?.workspaceId
-    ? `/studio/workspaces/${row.workspaceId}/settings/integrations`
-    : "/studio/settings/integrations";
-
   return (
     <DetailDrawer
       isOpen={!!row}
@@ -563,50 +558,6 @@ function ConnectorDetailDrawer({
               ? `workspace ${row.workspaceId.slice(0, 8)}`
               : "Pod-wide"))
           : undefined
-      }
-      footer={
-        row ? (
-          <>
-            <Button
-              as={Link}
-              href={studioHref}
-              size="sm"
-              variant="solid"
-              color="primary"
-              radius="md"
-              endContent={<ExternalLink className="h-3 w-3" />}
-            >
-              Open in Studio
-            </Button>
-            <Tooltip content="Pending: connectors.reauthenticate">
-              <span className="block">
-                <Button
-                  size="sm"
-                  variant="flat"
-                  radius="md"
-                  startContent={<RefreshCw className="h-3 w-3" />}
-                  isDisabled
-                >
-                  Re-authenticate
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip content="Pending: connectors.remove">
-              <span className="ml-auto block">
-                <Button
-                  size="sm"
-                  variant="light"
-                  radius="md"
-                  startContent={<Trash2 className="h-3 w-3" />}
-                  isDisabled
-                  className="text-status-down"
-                >
-                  Remove
-                </Button>
-              </span>
-            </Tooltip>
-          </>
-        ) : null
       }
     >
       {row ? (
@@ -641,6 +592,19 @@ function ConnectorDetailDrawer({
               {row.connectionId}
             </span>
           </DrawerField>
+
+          {/* Re-auth and removal hold the OAuth grant itself — they belong
+              wherever the connection was made, not on a read-only health
+              console. This replaces three exits that all failed: two buttons
+              permanently disabled behind "Pending: connectors.*", and an
+              "Open in Studio" link to a /studio route pod-admin never served. */}
+          <HandoffCard
+            icon={Plug}
+            title="Connector settings live in the desktop app"
+            body="Re-authenticating a provider or removing a connection happens where the connection was made. Pod Admin reports health across the whole pod; it does not hold the grant."
+            exit={openIn({ kind: "settings", section: "connectors" })}
+            cta="Open Connectors settings"
+          />
         </div>
       ) : null}
     </DetailDrawer>
@@ -744,5 +708,4 @@ function formatRelative(date: Date): string {
 }
 
 // Suppress unused-import warnings for icons referenced by lookup only.
-void Plug;
 void Building2;
