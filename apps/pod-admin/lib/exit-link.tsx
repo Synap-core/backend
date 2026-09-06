@@ -34,7 +34,8 @@ import { DESKTOP_FALLBACK, type Exit } from "./open-in";
  * it is the last thing that should be hard to read. Do not lower it.
  */
 const FALLBACK_CLASS =
-  "text-[12px] text-foreground/70 underline-offset-2 transition-colors " +
+  "inline-flex min-h-10 items-center text-[12px] text-foreground/70 " +
+  "underline-offset-2 transition-colors " +
   "hover:text-foreground hover:underline rounded-sm " +
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
@@ -44,35 +45,46 @@ const PRIMARY_CLASS =
   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
 
 /**
+ * Does clicking this take the reader out of pod-admin?
+ *
+ * NOT the same question as `externalProps` below, though both hang off the
+ * href. "Opens a tab" is `https?:` only; LEAVING is the broader set — a
+ * `synap://` hand-off leaves for the desktop app without opening a tab. Only
+ * `openIn`'s same-origin routes (`/proposal/:id`, `/open/:kind/:id`) stay, and
+ * those are exactly the relative hrefs.
+ */
+function leavesThisApp(href: string): boolean {
+  return !href.startsWith("/");
+}
+
+/**
  * `openIn` returns pod-admin's OWN routes as web exits (`/proposal/:id`,
  * `/open/:kind/:id`). Those must navigate in place — gating on the scheme
  * rather than on `isDesktopLink` is what keeps a same-app link from spawning
  * a tab.
+ *
+ * Exported because `HandoffCard` renders its own primary affordance (a HeroUI
+ * `Button as="a"`) and hand-rolled the same three lines. One rule, one spelling.
  */
-function externalProps(href: string) {
+export function externalProps(href: string) {
   return /^https?:/.test(href)
     ? { target: "_blank", rel: "noopener noreferrer" as const }
     : {};
 }
 
-export function ExitLink({
-  exit,
-  label,
-  className,
-}: {
-  exit: Exit;
-  label: string;
-  /** Override the primary link's classes; the fallback's floor is fixed. */
-  className?: string;
-}) {
+export function ExitLink({ exit, label }: { exit: Exit; label: string }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
       <a
         href={exit.href}
         {...externalProps(exit.href)}
-        className={className ?? PRIMARY_CLASS}
+        className={PRIMARY_CLASS}
       >
-        {label} <ExternalLink size={14} aria-hidden />
+        {label}
+        {/* The icon is a promise about behaviour: it means "this opens away
+            from here". pod-admin's own routes (`/proposal/:id`, `/open/:kind/:id`)
+            navigate in place, so they must not wear it. */}
+        {leavesThisApp(exit.href) && <ExternalLink size={14} aria-hidden />}
       </a>
       <ExitFallback exit={exit} />
     </span>

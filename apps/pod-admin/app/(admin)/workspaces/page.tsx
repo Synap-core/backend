@@ -62,6 +62,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
+import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
 import { formatRelative } from "../people/_lib/helpers";
@@ -494,162 +495,104 @@ function WorkspaceRowActions({
         </PopoverContent>
       </Popover>
 
-      {confirmArchive ? (
-        <ConfirmArchiveWorkspaceModal
-          workspaceName={ws.name}
-          isPending={archiveMutation.isPending}
-          onCancel={() => setConfirmArchive(false)}
-          onConfirm={() => archiveMutation.mutate({ workspaceId: ws.id })}
-        />
-      ) : null}
+      <ConfirmModal
+        isOpen={confirmArchive}
+        onClose={() => setConfirmArchive(false)}
+        onConfirm={() => archiveMutation.mutate({ workspaceId: ws.id })}
+        title={`Archive ${ws.name}?`}
+        consequence={
+          <p>
+            Archived workspaces stay on the pod but are hidden from the default
+            list. Nothing inside is deleted, and you can restore from the "Show
+            archived" toggle.
+          </p>
+        }
+        confirmLabel="Archive workspace"
+        /* Amber, not red: archive hides a workspace, it does not destroy one.
+           Painting it destructive would say the opposite of the copy. */
+        confirmColor="warning"
+        isPending={archiveMutation.isPending}
+      />
 
-      {confirmDelete ? (
-        <ConfirmDeleteWorkspaceModal
-          workspaceName={ws.name}
-          isPending={deleteMutation.isPending}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() =>
-            deleteMutation.mutate({
-              workspaceId: ws.id,
-              confirmName: ws.name,
-            })
-          }
-        />
-      ) : null}
+      <DeleteWorkspaceConfirm
+        workspaceName={ws.name}
+        isOpen={confirmDelete}
+        isPending={deleteMutation.isPending}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() =>
+          deleteMutation.mutate({
+            workspaceId: ws.id,
+            confirmName: ws.name,
+          })
+        }
+      />
     </>
   );
 }
 
-function ConfirmArchiveWorkspaceModal({
+/**
+ * Workspace delete — `ConfirmModal` plus the one thing it deliberately does
+ * not own: the type-the-name gate.
+ *
+ * The chrome, the pending behaviour and the tone all come from the shared
+ * modal; this wrapper holds only the typed value and the match rule, and
+ * clears it on close so a dismissed attempt never leaves the gate pre-cleared
+ * for the next one.
+ */
+function DeleteWorkspaceConfirm({
   workspaceName,
+  isOpen,
   isPending,
-  onCancel,
+  onClose,
   onConfirm,
 }: {
   workspaceName: string;
+  isOpen: boolean;
   isPending: boolean;
-  onCancel: () => void;
+  onClose: () => void;
   onConfirm: () => void;
 }) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose: onCancel,
-  });
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-foreground">
-            Archive {workspaceName}?
-          </h2>
-        </ModalHeader>
-        <ModalBody className="gap-2 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            Archived workspaces stay on the pod but are hidden from the default
-            list. You can restore from the "Show archived" toggle.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="warning"
-            variant="solid"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={onConfirm}
-          >
-            Archive workspace
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-function ConfirmDeleteWorkspaceModal({
-  workspaceName,
-  isPending,
-  onCancel,
-  onConfirm,
-}: {
-  workspaceName: string;
-  isPending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose: onCancel,
-  });
   const [typed, setTyped] = useState("");
   const matches = typed.trim() === workspaceName;
 
   return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-danger">
-            Permanently delete {workspaceName}?
-          </h2>
-        </ModalHeader>
-        <ModalBody className="gap-3 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
+    <ConfirmModal
+      isOpen={isOpen}
+      onClose={() => {
+        setTyped("");
+        onClose();
+      }}
+      onConfirm={onConfirm}
+      title={`Permanently delete ${workspaceName}?`}
+      consequence={
+        <>
+          <p>
             This <strong>cannot be undone</strong>. It removes the workspace and
             all of its workspace-scoped data — entities, relations, proposals,
             and documents (including stored files and search index). Pod-wide
             data shared with other workspaces is not affected.
           </p>
-          <p className="text-[12px] text-foreground/60">
+          <p className="mt-2">
             Type{" "}
-            <span className="font-medium text-foreground/85">
-              {workspaceName}
-            </span>{" "}
+            <span className="font-medium text-foreground">{workspaceName}</span>{" "}
             to confirm.
           </p>
-          <Input
-            size="sm"
-            radius="md"
-            value={typed}
-            onValueChange={setTyped}
-            placeholder={workspaceName}
-            aria-label="Type the workspace name to confirm deletion"
-            isDisabled={isPending}
-          />
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            variant="solid"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            isDisabled={!matches}
-            onPress={onConfirm}
-          >
-            Delete permanently
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
+        </>
+      }
+      confirmLabel="Delete permanently"
+      isConfirmDisabled={!matches}
+      isPending={isPending}
+    >
+      <Input
+        size="sm"
+        radius="md"
+        value={typed}
+        onValueChange={setTyped}
+        placeholder={workspaceName}
+        aria-label="Type the workspace name to confirm deletion"
+        isDisabled={isPending}
+      />
+    </ConfirmModal>
   );
 }
 

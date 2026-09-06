@@ -1,14 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  Button,
-  Card,
-  CardBody,
-  CardHeader,
-  Spinner,
-  addToast,
-} from "@heroui/react";
+import { Button, CardBody, CardHeader, Spinner, addToast } from "@heroui/react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -27,6 +20,7 @@ import {
   DEFAULT_CONNECT_REDIRECT_PREFIXES,
   type IntegrationKind,
 } from "@synap-core/external-connect-client";
+import { ReceiverShell } from "../_lib/receiver-shell";
 import { trpc } from "../../lib/trpc";
 import { publicPodUrl } from "../../lib/public-pod-url";
 
@@ -63,6 +57,10 @@ type Step =
   | { kind: "issuer-assertion-failed"; detail: string };
 
 interface ConnectFormProps {
+  /** The pod this key would be minted on. Anchors the page against phishing. */
+  podHost?: string;
+  /** Who the reader is signed in as, when known. */
+  identity?: string;
   integration: IntegrationKind;
   redirectUri: string;
   issuerAssertion: string;
@@ -78,6 +76,8 @@ export function ConnectForm({
   issuerAssertion,
   agentType = null,
   extraRedirectPrefixes = [],
+  podHost,
+  identity,
 }: ConnectFormProps) {
   // CP-MCP consent-code path: claude.ai → CP → this page. We record consent as a
   // one-time code and hand ONLY the code to the CP callback — the claude-web agent
@@ -304,135 +304,126 @@ export function ConnectForm({
   }, [step]);
 
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-16">
-      <Card
-        radius="lg"
-        shadow="none"
-        className="
-          w-full max-w-md
-          bg-foreground/[0.04]
-          ring-1 ring-inset ring-foreground/10
-        "
-      >
-        <CardHeader className="flex flex-col items-start gap-3 px-7 pt-7 pb-0">
-          <span
-            aria-hidden
-            className="
-              flex h-11 w-11 items-center justify-center
-              rounded-lg
-              bg-primary/10 ring-1 ring-inset ring-primary/20
-              text-primary
-            "
-          >
-            <Plug className="h-5 w-5" strokeWidth={2} />
-          </span>
-          <div className="flex flex-col gap-1">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/45">
-              Data pod
-            </p>
-            <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-              Connect {connectLabel}
-            </h1>
-            <p className="text-[13px] leading-relaxed text-foreground/65">
-              {connectDescription}
+    // `sm`: one decision — mint this key, or don't. There is no object to read.
+    <ReceiverShell podHost={podHost} identity={identity} width="sm">
+      <CardHeader className="flex flex-col items-start gap-3 px-7 pt-7 pb-0">
+        <span
+          aria-hidden
+          className="
+            flex h-11 w-11 items-center justify-center
+            rounded-lg
+            bg-primary/10 ring-1 ring-inset ring-primary/20
+            text-primary
+          "
+        >
+          <Plug className="h-5 w-5" strokeWidth={2} />
+        </span>
+        <div className="flex flex-col gap-1">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-foreground/65">
+            Data pod
+          </p>
+          <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
+            Connect {connectLabel}
+          </h1>
+          <p className="text-[13px] leading-relaxed text-foreground/65">
+            {connectDescription}
+          </p>
+        </div>
+      </CardHeader>
+
+      <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
+        {step.kind === "idle" && (
+          <IdleStep
+            integration={integration}
+            label={connectLabel}
+            description={connectDescription}
+            isMcpConnect={isMcpConnect}
+            redirectUri={hasRedirect ? redirectUri : null}
+            redirectIsAllowed={redirectIsAllowed}
+            existingCount={isMcpConnect ? 0 : existingForIntegration.length}
+            strategy={strategy}
+            onStrategy={setStrategy}
+            onGenerate={handleGenerate}
+            disabled={
+              !sessionReady ||
+              bootstrapping ||
+              (hasRedirect && !redirectIsAllowed)
+            }
+            bootstrapping={bootstrapping}
+          />
+        )}
+
+        {step.kind === "generating" && (
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <Spinner size="md" color="primary" />
+            <p className="text-[13px] text-foreground/65">
+              Minting integration key…
             </p>
           </div>
-        </CardHeader>
+        )}
 
-        <CardBody className="flex flex-col gap-5 px-7 pb-7 pt-5">
-          {step.kind === "idle" && (
-            <IdleStep
-              integration={integration}
-              label={connectLabel}
-              description={connectDescription}
-              isMcpConnect={isMcpConnect}
-              redirectUri={hasRedirect ? redirectUri : null}
-              redirectIsAllowed={redirectIsAllowed}
-              existingCount={isMcpConnect ? 0 : existingForIntegration.length}
-              strategy={strategy}
-              onStrategy={setStrategy}
-              onGenerate={handleGenerate}
-              disabled={
-                !sessionReady ||
-                bootstrapping ||
-                (hasRedirect && !redirectIsAllowed)
-              }
-              bootstrapping={bootstrapping}
-            />
-          )}
-
-          {step.kind === "generating" && (
-            <div className="flex flex-col items-center gap-3 py-8 text-center">
-              <Spinner size="md" color="primary" />
-              <p className="text-[13px] text-foreground/65">
-                Minting integration key…
+        {step.kind === "redirecting" && (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <span
+              aria-hidden
+              className="
+                flex h-12 w-12 items-center justify-center
+                rounded-full
+                bg-success/10 ring-1 ring-inset ring-success/20
+                text-success
+              "
+            >
+              <Check className="h-6 w-6" strokeWidth={2.2} />
+            </span>
+            <div className="flex flex-col gap-1">
+              <p className="text-[14px] font-medium text-foreground">
+                Key created
+              </p>
+              <p className="text-[12.5px] text-foreground/65">
+                Opening {connectLabel}…
               </p>
             </div>
-          )}
+          </div>
+        )}
 
-          {step.kind === "redirecting" && (
-            <div className="flex flex-col items-center gap-3 py-6 text-center">
-              <span
-                aria-hidden
-                className="
-                  flex h-12 w-12 items-center justify-center
-                  rounded-full
-                  bg-success/10 ring-1 ring-inset ring-success/20
-                  text-success
-                "
-              >
-                <Check className="h-6 w-6" strokeWidth={2.2} />
-              </span>
-              <div className="flex flex-col gap-1">
-                <p className="text-[14px] font-medium text-foreground">
-                  Key created
-                </p>
-                <p className="text-[12.5px] text-foreground/65">
-                  Opening {connectLabel}…
-                </p>
-              </div>
-            </div>
-          )}
+        {step.kind === "done" && (
+          <DoneStep
+            apiKey={step.apiKey}
+            podUrl={step.podUrl}
+            workspaceId={step.workspaceId}
+            copied={copied}
+            onCopy={handleCopy}
+          />
+        )}
 
-          {step.kind === "done" && (
-            <DoneStep
-              apiKey={step.apiKey}
-              podUrl={step.podUrl}
-              workspaceId={step.workspaceId}
-              copied={copied}
-              onCopy={handleCopy}
-            />
-          )}
+        {step.kind === "error" && (
+          <ErrorStep
+            message={step.message}
+            flowId={step.flowId}
+            onRetry={() => setStep({ kind: "idle" })}
+          />
+        )}
 
-          {step.kind === "error" && (
-            <ErrorStep
-              message={step.message}
-              flowId={step.flowId}
-              onRetry={() => setStep({ kind: "idle" })}
-            />
-          )}
-
-          {step.kind === "issuer-assertion-failed" && (
-            <IssuerAssertionFailedStep
-              detail={step.detail}
-              connectLabel={connectLabel}
-              // The one-shot SSO assertion is stale (expired — they last 5
-              // minutes — or already consumed). It is NON-FATAL: this page only
-              // renders behind a valid pod session, so we let the operator
-              // PROCEED with that session rather than reload the same dead
-              // assertion (which just fails again — the retry loop).
-              onProceed={() => {
-                setStep({ kind: "idle" });
-                setSessionReady(true);
-              }}
-              // Escape hatch for the rare genuine no-session case: manual login,
-              // then middleware returns here.
-              onSignIn={() => window.location.assign(window.location.href)}
-            />
-          )}
-        </CardBody>
-      </Card>
-    </main>
+        {step.kind === "issuer-assertion-failed" && (
+          <IssuerAssertionFailedStep
+            detail={step.detail}
+            connectLabel={connectLabel}
+            // The one-shot SSO assertion is stale (expired — they last 5
+            // minutes — or already consumed). It is NON-FATAL: this page only
+            // renders behind a valid pod session, so we let the operator
+            // PROCEED with that session rather than reload the same dead
+            // assertion (which just fails again — the retry loop).
+            onProceed={() => {
+              setStep({ kind: "idle" });
+              setSessionReady(true);
+            }}
+            // Escape hatch for the rare genuine no-session case: manual login,
+            // then middleware returns here.
+            onSignIn={() => window.location.assign(window.location.href)}
+          />
+        )}
+      </CardBody>
+    </ReceiverShell>
   );
 }
 

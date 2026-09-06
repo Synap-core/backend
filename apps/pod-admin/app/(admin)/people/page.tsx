@@ -50,6 +50,7 @@ import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { useOperatorEmail } from "../components/admin-shell";
+import { ConfirmModal } from "../components/confirm-modal";
 import { DetailDrawer } from "../components/detail-drawer";
 import {
   ResourceRow,
@@ -414,47 +415,28 @@ function UserDetailDrawer({
         </div>
       ) : null}
 
-      {confirmRemove && member ? (
-        <Modal isOpen onClose={() => setConfirmRemove(false)} size="md">
-          <ModalContent>
-            <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-              <h2 className="text-[15px] font-medium text-foreground">
-                Remove {member.email}?
-              </h2>
-            </ModalHeader>
-            <ModalBody className="gap-2 px-6 py-4">
-              <p className="text-[12.5px] text-foreground/85">
-                This removes them from all workspaces and deletes their pod
-                account. They can be re-invited with the same email afterwards.
-              </p>
-              <p className="text-[11.5px] text-foreground/55">
-                This cannot be undone.
-              </p>
-            </ModalBody>
-            <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-              <Button
-                variant="flat"
-                radius="md"
-                size="sm"
-                onPress={() => setConfirmRemove(false)}
-                isDisabled={removeMutation.isPending}
-              >
-                Cancel
-              </Button>
-              <Button
-                color="danger"
-                variant="solid"
-                radius="md"
-                size="sm"
-                isLoading={removeMutation.isPending}
-                onPress={() => removeMutation.mutate({ userId: member.id })}
-              >
-                Remove user
-              </Button>
-            </ModalFooter>
-          </ModalContent>
-        </Modal>
-      ) : null}
+      <ConfirmModal
+        isOpen={confirmRemove && Boolean(member)}
+        onClose={() => setConfirmRemove(false)}
+        onConfirm={() => {
+          if (member) removeMutation.mutate({ userId: member.id });
+        }}
+        title={`Remove ${member?.email ?? "this person"}?`}
+        consequence={
+          <>
+            <p>
+              This removes them from all workspaces and deletes their pod
+              account. This cannot be undone.
+            </p>
+            <p className="mt-2">
+              They can be re-invited with the same email afterwards, and the
+              data they created stays on the pod.
+            </p>
+          </>
+        }
+        confirmLabel="Remove user"
+        isPending={removeMutation.isPending}
+      />
     </DetailDrawer>
   );
 }
@@ -813,82 +795,50 @@ function AgentUserActions({ userId }: { userId: string }) {
         </PopoverContent>
       </Popover>
 
-      {confirm === "revoke" ? (
-        <ConfirmAgentActionModal
-          title="Revoke API keys"
-          message="Revoke all API keys for this agent? Existing connections using those keys will fail immediately."
-          confirmLabel="Revoke keys"
-          isPending={revokeMutation.isPending}
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => revokeMutation.mutate({ userId })}
-        />
-      ) : null}
-      {confirm === "remove" ? (
-        <ConfirmAgentActionModal
-          title="Remove agent"
-          message="Remove this agent and revoke all its keys? This drops every workspace membership and cannot be undone."
-          confirmLabel="Remove agent"
-          isPending={removeMutation.isPending}
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => removeMutation.mutate({ userId })}
-        />
-      ) : null}
+      <ConfirmModal
+        isOpen={confirm === "revoke"}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => revokeMutation.mutate({ userId })}
+        title="Revoke API keys"
+        consequence={
+          <>
+            <p>
+              Revokes all API keys for this agent. Existing connections using
+              those keys will fail immediately.
+            </p>
+            <p className="mt-2">
+              The agent itself stays on the pod with its workspace memberships
+              intact, and can be issued a new key.
+            </p>
+          </>
+        }
+        confirmLabel="Revoke keys"
+        /* Scoped to THIS mutation, and only one of the two dialogs can be open
+           at a time — `confirm` is a single slot, so a revoke in flight can
+           never render the remove dialog already spinning. */
+        isPending={revokeMutation.isPending}
+      />
+      <ConfirmModal
+        isOpen={confirm === "remove"}
+        onClose={() => setConfirm(null)}
+        onConfirm={() => removeMutation.mutate({ userId })}
+        title="Remove agent"
+        consequence={
+          <>
+            <p>
+              Removes this agent and revokes all its keys. This drops every
+              workspace membership and cannot be undone.
+            </p>
+            <p className="mt-2">
+              Data the agent already wrote stays on the pod — this removes the
+              identity, not its work.
+            </p>
+          </>
+        }
+        confirmLabel="Remove agent"
+        isPending={removeMutation.isPending}
+      />
     </>
-  );
-}
-
-function ConfirmAgentActionModal({
-  title,
-  message,
-  confirmLabel,
-  isPending,
-  onCancel,
-  onConfirm,
-}: {
-  title: string;
-  message: string;
-  confirmLabel: string;
-  isPending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose: onCancel,
-  });
-
-  return (
-    <Modal isOpen={isOpen} onOpenChange={onOpenChange} size="md">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-foreground">{title}</h2>
-        </ModalHeader>
-        <ModalBody className="gap-2 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">{message}</p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            variant="solid"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={onConfirm}
-          >
-            {confirmLabel}
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
   );
 }
 

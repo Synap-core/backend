@@ -16,11 +16,6 @@ import {
   Button,
   Checkbox,
   Input,
-  Modal,
-  ModalBody,
-  ModalContent,
-  ModalFooter,
-  ModalHeader,
   Select,
   SelectItem,
   Spinner as _Spinner,
@@ -41,6 +36,7 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../components/resource-row";
+import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
 import { formatRelative } from "../people/_lib/helpers";
 
@@ -386,14 +382,26 @@ function EntitiesInner() {
       </SectionCard>
 
       {/* Bulk delete confirm */}
-      {confirmBulkDelete ? (
-        <ConfirmDeleteModal
-          count={selectedIds.size}
-          isPending={batchDeleteMutation.isPending}
-          onCancel={() => setConfirmBulkDelete(false)}
-          onConfirm={handleBulkDelete}
-        />
-      ) : null}
+      <ConfirmModal
+        isOpen={confirmBulkDelete}
+        onClose={() => setConfirmBulkDelete(false)}
+        onConfirm={handleBulkDelete}
+        title={`Delete ${selectedIds.size} entities?`}
+        consequence={
+          <>
+            <p>
+              This permanently deletes {selectedIds.size} entities from the
+              database, along with the documents and stored files each one
+              owned. This cannot be undone.
+            </p>
+            <p className="mt-2">
+              Other entities that reference them are not deleted.
+            </p>
+          </>
+        }
+        confirmLabel={`Delete ${selectedIds.size} entities`}
+        isPending={batchDeleteMutation.isPending}
+      />
     </div>
   );
 }
@@ -490,74 +498,25 @@ function EntityTableRow({
         </div>
       </div>
 
-      {confirmDelete ? (
-        <ConfirmDeleteModal
-          count={1}
-          label={item.title ?? item.id.slice(0, 8)}
-          isPending={deleteMutation.isPending}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={() => deleteMutation.mutate({ id: item.id })}
-        />
-      ) : null}
+      <ConfirmModal
+        isOpen={confirmDelete}
+        onClose={() => setConfirmDelete(false)}
+        onConfirm={() => deleteMutation.mutate({ id: item.id })}
+        title={`Delete "${item.title ?? item.id.slice(0, 8)}"?`}
+        consequence={
+          <>
+            <p>
+              This permanently deletes the entity from the database, along with
+              the documents and stored files it owned. This cannot be undone.
+            </p>
+            <p className="mt-2">
+              Other entities that reference it are not deleted.
+            </p>
+          </>
+        }
+        confirmLabel="Delete entity"
+        isPending={deleteMutation.isPending}
+      />
     </>
-  );
-}
-
-// ─── Confirm modal ────────────────────────────────────────────────────
-
-function ConfirmDeleteModal({
-  count,
-  label,
-  isPending,
-  onCancel,
-  onConfirm,
-}: {
-  count: number;
-  label?: string;
-  isPending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const title =
-    count === 1
-      ? `Delete "${label ?? "this entity"}"?`
-      : `Delete ${count} entities?`;
-
-  return (
-    <Modal isOpen onClose={onCancel} size="md">
-      <ModalContent>
-        <ModalHeader className="flex flex-col gap-1 border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-foreground">{title}</h2>
-        </ModalHeader>
-        <ModalBody className="gap-2 px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            This permanently deletes{" "}
-            {count === 1 ? "the entity" : `${count} entities`} from the
-            database. This cannot be undone.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            variant="solid"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={onConfirm}
-          >
-            {count === 1 ? "Delete entity" : `Delete ${count} entities`}
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
   );
 }

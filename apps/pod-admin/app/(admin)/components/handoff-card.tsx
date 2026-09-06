@@ -25,7 +25,7 @@
 import { Button } from "@heroui/react";
 import { ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { Exit } from "../../../lib/open-in";
-import { ExitFallback } from "../../../lib/exit-link";
+import { ExitFallback, externalProps } from "../../../lib/exit-link";
 
 interface HandoffCardProps {
   /** What lives elsewhere, phrased as a statement of fact. */
@@ -72,9 +72,7 @@ export function HandoffCard({
         <Button
           as="a"
           href={exit.href}
-          {...(/^https?:/.test(exit.href)
-            ? { target: "_blank", rel: "noopener noreferrer" }
-            : {})}
+          {...externalProps(exit.href)}
           size="sm"
           radius="sm"
           variant="flat"

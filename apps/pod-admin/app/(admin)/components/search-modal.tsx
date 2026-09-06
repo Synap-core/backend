@@ -9,12 +9,17 @@
  *   • Agents           → `trpc.system.listUsers({ type: "agent" })`
  *   • Trusted issuers  → `trpc.trustedIssuers.list`
  *   • API keys         → `trpc.apiKeys.adminListAll` (stub: surfaces names only)
+ *   • Entities         → `trpc.entities.adminList` (SERVER-side `search`)
  *   • Proposals        → `trpc.proposals.list` (pod-level, every status)
  *   • Audit events     → `trpc.system.listAuditLogs` (stub: most recent 25)
  *
  * Selection navigates to the appropriate tab with `?focus=<id>` (and, when
  * needed, `?section=<sub-tab>`) so the receiver can scroll the row into
- * view + apply the temporary highlight ring.
+ * view + apply the temporary highlight ring. Two receivers do NOT honour
+ * `?focus=` and are therefore linked without it: a workspace-scoped API key
+ * goes to `/workspaces/<id>?tab=api-keys` (the pod-wide Trust & Keys list
+ * skips workspace keys, so focusing one there would show nothing), and an
+ * entity goes to `/entities`.
  *
  * Keyboard model:
  *   ⌘K / Ctrl+K  — toggle open
@@ -32,6 +37,7 @@ import {
   Building2,
   CircleUser,
   ClipboardCheck,
+  Database,
   KeyRound,
   Mailbox,
   Search,
@@ -48,6 +54,7 @@ import {
 } from "react";
 import {
   buildObjectActionTitle,
+  resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
@@ -63,6 +70,7 @@ type ResultCategory =
   | "agent"
   | "issuer"
   | "api-key"
+  | "entity"
   | "proposal"
   | "audit";
 
@@ -86,9 +94,16 @@ const CATEGORY_META: Record<
   agent: { label: "Agents", tab: "People", Icon: Bot },
   issuer: { label: "Trusted issuers", tab: "Trust & Keys", Icon: ShieldCheck },
   "api-key": { label: "API keys", tab: "Trust & Keys", Icon: KeyRound },
+  entity: { label: "Entities", tab: "Entities", Icon: Database },
   proposal: { label: "Proposals", tab: "Audit", Icon: ClipboardCheck },
   audit: { label: "Audit events", tab: "Audit", Icon: Mailbox },
 };
+
+// Per-bucket truncation so a noisy category doesn't crowd the others. Shared
+// with the server-side `entities.adminList` limit so its page and the bucket
+// cap can never disagree.
+const PER_CATEGORY_WHEN_QUERIED = 8;
+const PER_CATEGORY_DEFAULT = 4;
 
 const CATEGORY_ORDER: ResultCategory[] = [
   "workspace",
@@ -96,6 +111,7 @@ const CATEGORY_ORDER: ResultCategory[] = [
   "agent",
   "issuer",
   "api-key",
+  "entity",
   "proposal",
   "audit",
 ];
@@ -152,6 +168,17 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     staleTime: 30_000,
   });
 
+  // Entities are the pod's largest population, so this one filters SERVER-side
+  // (`adminList` takes `search`) instead of client-side like the rest.
+  const entitiesQuery = trpc.entities.adminList.useQuery(
+    {
+      search: query.trim() || undefined,
+      limit: query.trim() ? PER_CATEGORY_WHEN_QUERIED : PER_CATEGORY_DEFAULT,
+      offset: 0,
+    },
+    { enabled: isOpen, staleTime: 15_000 }
+  );
+
   // Pod-level (`workspaceId: null`) so this window matches the one Audit →
   // Proposals queries. Both now filter server-side; when only this one did,
   // a result ranked outside the other's unfiltered 100 would navigate to a
@@ -172,10 +199,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     const q = query.trim().toLowerCase();
     const matches: SearchResult[] = [];
 
-    // Build per-category; truncate each bucket so a noisy category doesn't
-    // crowd the others. With no query we show the most-recent few in each.
-    const PER_CATEGORY_WHEN_QUERIED = 8;
-    const PER_CATEGORY_DEFAULT = 4;
+    // With no query we show the most-recent few in each bucket.
     const cap = q ? PER_CATEGORY_WHEN_QUERIED : PER_CATEGORY_DEFAULT;
 
     // Workspaces
@@ -257,23 +281,43 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     }
     matches.push(...bucket);
 
-    // API keys
+    // API keys — routed BY SCOPE. Trust & Keys → API keys skips every
+    // workspace-scoped key (`hubId` `workspace:<id>`), so linking one there
+    // lands the operator on a page that filters it out; those go to the
+    // workspace's own API-keys tab instead.
     bucket = [];
-    const keyItems = (apiKeysQuery.data ?? []) as unknown as Array<{
-      id: string;
-      keyName: string;
-      keyPrefix: string;
-      isActive: boolean;
-    }>;
+    const keyItems = apiKeysQuery.data ?? [];
     for (const k of keyItems) {
       const hay = `${k.keyName} ${k.keyPrefix}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
+      const scopedWorkspaceId = k.hubId?.startsWith("workspace:")
+        ? k.hubId.slice("workspace:".length)
+        : null;
       bucket.push({
         id: k.id,
         category: "api-key",
         primary: k.keyName,
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
-        href: `/trust-keys?section=api-keys&focus=${encodeURIComponent(k.id)}`,
+        href: scopedWorkspaceId
+          ? `/workspaces/${encodeURIComponent(scopedWorkspaceId)}?tab=api-keys`
+          : `/trust-keys?section=api-keys&focus=${encodeURIComponent(k.id)}`,
+      });
+      if (bucket.length >= cap) break;
+    }
+    matches.push(...bucket);
+
+    // Entities — already filtered server-side, so no `q` test here. Kind
+    // labelled through the ONE vocabulary door, never the raw profile slug.
+    bucket = [];
+    const entityItems = entitiesQuery.data?.items ?? [];
+    for (const e of entityItems) {
+      const noun = resolveObjectNoun(e.profileSlug);
+      bucket.push({
+        id: e.id,
+        category: "entity",
+        primary: e.title ?? noun,
+        secondary: `${noun} · ${e.workspaceName ?? "Pod-wide"}`,
+        href: "/entities",
       });
       if (bucket.length >= cap) break;
     }
@@ -328,6 +372,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     agentsQuery.data,
     issuersQuery.data,
     apiKeysQuery.data,
+    entitiesQuery.data,
     proposalsQuery.data,
     auditQuery.data,
   ]);
@@ -397,7 +442,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                 size="md"
                 radius="md"
                 variant="flat"
-                placeholder="Search this pod… workspaces, people, issuers, proposals, audit events"
+                placeholder="Search this pod… workspaces, people, entities, issuers, proposals, audit events"
                 value={query}
                 onValueChange={setQuery}
                 onKeyDown={handleKeyDown}
@@ -519,8 +564,8 @@ function SearchEmpty({ hasQuery }: { hasQuery: boolean }) {
       </p>
       {!hasQuery && (
         <p className="text-[11px] text-foreground/45">
-          Workspaces · People · Trusted issuers · API keys · Proposals · Audit
-          events
+          Workspaces · People · Trusted issuers · API keys · Entities ·
+          Proposals · Audit events
         </p>
       )}
     </div>

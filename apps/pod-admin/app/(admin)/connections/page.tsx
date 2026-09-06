@@ -328,7 +328,13 @@ export default function ApplicationConnectionsPage() {
           </>
         }
         confirmLabel="Revoke access"
-        isPending={revoke.isPending}
+        /* Scoped to THIS row. `revoke.isPending` alone is the mutation's flag,
+           shared by every row: dismissing A mid-flight and opening B rendered
+           B already-spinning, and A's onSuccess then closed B and toasted
+           success for a revoke B never fired. */
+        isPending={
+          revoke.isPending && revoke.variables?.id === pendingRevoke?.id
+        }
       />
     </div>
   );

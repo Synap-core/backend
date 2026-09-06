@@ -31,6 +31,7 @@
  *                       minted. Falls back to inline sign-in on failure.
  */
 
+import { headers } from "next/headers";
 import { ConnectForm } from "./ConnectForm";
 
 interface ConnectPageProps {
@@ -115,6 +116,12 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
     ...readAllowedHttpsOrigins(),
   ];
 
+  // Which pod is minting, and who the reader is signed in as. A page that
+  // hands an API key to an integration is the most phishing-shaped surface the
+  // pod has; the identity row is the only anchor a reader arriving from a CLI
+  // banner or a control-plane redirect has that this pod is the one they meant.
+  const h = await headers();
+
   return (
     <ConnectForm
       integration={integration}
@@ -122,6 +129,8 @@ export default async function ConnectPage({ searchParams }: ConnectPageProps) {
       redirectUri={redirectUri}
       issuerAssertion={issuerAssertion}
       extraRedirectPrefixes={extraRedirectPrefixes}
+      podHost={h.get("host") ?? undefined}
+      identity={h.get("x-pod-admin-email") ?? undefined}
     />
   );
 }

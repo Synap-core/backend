@@ -25,6 +25,8 @@
  * offers next to it so the click is never a dead end.
  */
 
+import { HOST_TYPES } from "../app/open/open-params";
+
 /**
  * Landing-site origin. A CONSTANT, deliberately.
  *
@@ -79,11 +81,14 @@ export const ACCOUNT_PAGES = [
 export type AccountPage = (typeof ACCOUNT_PAGES)[number];
 
 /**
- * Object kinds pod-admin renders itself, on the web, signed-in.
- * Mirrors `HOST_TYPES` in `app/open/open-params.ts` plus `proposal`, which has
- * its own dedicated route (`/proposal/[id]`) rather than going through `/open`.
+ * Object kinds pod-admin renders itself, on the web, signed-in — DERIVED from
+ * the `/open` page's own `HOST_TYPES`, which is contract-locked against the
+ * backend's `TYPED_OPEN_KINDS`. Hand-copying it here would have made this the
+ * one link in that chain nothing checks: the route would keep serving a kind
+ * this door had stopped naming, silently. (`proposal` is not in the set — it
+ * has its own `/proposal/[id]` route and is handled ahead of the lookup.)
  */
-const WEB_HOSTED_OBJECTS = new Set(["entity", "view"]);
+const WEB_HOSTED_OBJECTS: ReadonlySet<string> = new Set(HOST_TYPES);
 
 export type ExitTarget =
   /** An object addressed by kind + id. Web-hosted when pod-admin can render it. */

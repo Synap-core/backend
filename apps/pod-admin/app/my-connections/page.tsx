@@ -217,7 +217,11 @@ export default function MyConnectionsPage() {
           </>
         }
         confirmLabel="Revoke key"
-        isPending={revoke.isPending}
+        /* Scoped to THIS key — see connections/page.tsx for the cross-row
+           staleness this prevents. */
+        isPending={
+          revoke.isPending && revoke.variables?.keyId === pendingRevoke?.id
+        }
       />
     </div>
   );

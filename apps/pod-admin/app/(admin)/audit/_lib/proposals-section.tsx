@@ -134,14 +134,25 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
     onClose: () => setSelected(null),
   });
 
-  // ?focus=<proposalId> from ⌘K. Open the drawer once the matching proposal
-  // is rendered (proposals only includes pod-level rows).
+  /**
+   * `?focus=<proposalId>` from ⌘K.
+   *
+   * Resolved against the UNFILTERED rows, not the date-filtered `podLevel`.
+   * This tab seeds its range to the last 7 days (`defaultDateRange()`), and
+   * ⌘K queries with no date bound at all — so looking the row up in the
+   * filtered set meant any proposal older than a week was listed in search,
+   * navigated to, and then silently opened nothing.
+   *
+   * An explicit navigation is a stronger signal than an incidental default
+   * filter, so focus wins. Aligning the workspace axis earlier fixed half of
+   * this; the date axis was the other half.
+   */
   const focusId = useFocusRow({ ready: !list.isLoading });
   useEffect(() => {
     if (!focusId || selected) return;
-    const found = podLevel.find((p) => p.id === focusId);
+    const found = items.find((p) => p.id === focusId);
     if (found) setSelected(found);
-  }, [focusId, podLevel]);
+  }, [focusId, items, selected]);
 
   return (
     <>
