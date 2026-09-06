@@ -9,6 +9,7 @@
  *   • Agents           → `trpc.system.listUsers({ type: "agent" })`
  *   • Trusted issuers  → `trpc.trustedIssuers.list`
  *   • API keys         → `trpc.apiKeys.adminListAll` (stub: surfaces names only)
+ *   • Proposals        → `trpc.proposals.list` (pod-level, every status)
  *   • Audit events     → `trpc.system.listAuditLogs` (stub: most recent 25)
  *
  * Selection navigates to the appropriate tab with `?focus=<id>` (and, when
@@ -30,6 +31,7 @@ import {
   Bot,
   Building2,
   CircleUser,
+  ClipboardCheck,
   KeyRound,
   Mailbox,
   Search,
@@ -44,6 +46,10 @@ import {
   useState,
   type KeyboardEvent,
 } from "react";
+import {
+  buildObjectActionTitle,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 
 interface SearchModalProps {
@@ -57,6 +63,7 @@ type ResultCategory =
   | "agent"
   | "issuer"
   | "api-key"
+  | "proposal"
   | "audit";
 
 interface SearchResult {
@@ -79,6 +86,7 @@ const CATEGORY_META: Record<
   agent: { label: "Agents", tab: "People", Icon: Bot },
   issuer: { label: "Trusted issuers", tab: "Trust & Keys", Icon: ShieldCheck },
   "api-key": { label: "API keys", tab: "Trust & Keys", Icon: KeyRound },
+  proposal: { label: "Proposals", tab: "Audit", Icon: ClipboardCheck },
   audit: { label: "Audit events", tab: "Audit", Icon: Mailbox },
 };
 
@@ -88,6 +96,7 @@ const CATEGORY_ORDER: ResultCategory[] = [
   "agent",
   "issuer",
   "api-key",
+  "proposal",
   "audit",
 ];
 
@@ -142,6 +151,14 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     enabled: isOpen,
     staleTime: 30_000,
   });
+
+  // Pod-level (`workspaceId: null`) so the result set matches exactly what
+  // Audit → Proposals renders — the receiver's `?focus=` scroll-into-view
+  // only searches that same pod-level list.
+  const proposalsQuery = trpc.proposals.list.useQuery(
+    { workspaceId: null, status: "all", limit: 100 },
+    { enabled: isOpen, staleTime: 15_000 }
+  );
 
   const auditQuery = trpc.system.listAuditLogs.useQuery(
     { limit: 25 },
@@ -232,7 +249,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         id: i.id,
         category: "issuer",
         primary: i.displayName,
-        secondary: `${i.issuerUrl} · ${i.status}`,
+        secondary: `${i.issuerUrl} · ${resolveStatusLabel(i.status)}`,
         href: `/trust-keys?section=issuers&focus=${encodeURIComponent(i.id)}`,
       });
       if (bucket.length >= cap) break;
@@ -256,6 +273,29 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         primary: k.keyName,
         secondary: `${k.keyPrefix}… · ${k.isActive ? "active" : "revoked"}`,
         href: `/trust-keys?section=api-keys&focus=${encodeURIComponent(k.id)}`,
+      });
+      if (bucket.length >= cap) break;
+    }
+    matches.push(...bucket);
+
+    // Proposals — labelled via the ONE vocabulary door (never a bare UUID or
+    // raw `proposalType`/`targetType` token).
+    bucket = [];
+    const proposalItems = proposalsQuery.data?.items ?? [];
+    for (const p of proposalItems) {
+      const title = buildObjectActionTitle({
+        action: p.proposalType,
+        objectKind: p.targetType,
+        objectName: p.targetName ?? undefined,
+      });
+      const hay = `${title} ${p.proposalType} ${p.targetType}`.toLowerCase();
+      if (q && !hay.includes(q)) continue;
+      bucket.push({
+        id: p.id,
+        category: "proposal",
+        primary: title,
+        secondary: `${resolveStatusLabel(p.status)} · ${new Date(p.createdAt).toLocaleString()}`,
+        href: `/audit?section=proposals&focus=${encodeURIComponent(p.id)}`,
       });
       if (bucket.length >= cap) break;
     }
@@ -287,6 +327,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     agentsQuery.data,
     issuersQuery.data,
     apiKeysQuery.data,
+    proposalsQuery.data,
     auditQuery.data,
   ]);
 
@@ -355,7 +396,7 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
                 size="md"
                 radius="md"
                 variant="flat"
-                placeholder="Search this pod… workspaces, people, issuers, audit events"
+                placeholder="Search this pod… workspaces, people, issuers, proposals, audit events"
                 value={query}
                 onValueChange={setQuery}
                 onKeyDown={handleKeyDown}
@@ -477,7 +518,8 @@ function SearchEmpty({ hasQuery }: { hasQuery: boolean }) {
       </p>
       {!hasQuery && (
         <p className="text-[11px] text-foreground/45">
-          Workspaces · People · Trusted issuers · API keys · Audit events
+          Workspaces · People · Trusted issuers · API keys · Proposals · Audit
+          events
         </p>
       )}
     </div>
