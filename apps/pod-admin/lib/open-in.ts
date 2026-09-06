@@ -25,10 +25,22 @@
  * offers next to it so the click is never a dead end.
  */
 
-/** Landing site origin. Overridable so a dev pod can point at a local landing. */
-const WEB_BASE = (
-  process.env.NEXT_PUBLIC_SYNAP_WEB_URL ?? "https://synap.live"
-).replace(/\/$/, "");
+/**
+ * Landing-site origin. A CONSTANT, deliberately.
+ *
+ * This started as `process.env.NEXT_PUBLIC_SYNAP_WEB_URL ?? …`, which was a
+ * false affordance twice over. `NEXT_PUBLIC_*` values are build-time
+ * substitutions, and the pod-admin image is REUSABLE across pods whose
+ * hostnames change at claim/restore — so a per-pod override could never have
+ * taken effect; every deploy would have silently resolved to the default. It
+ * was also never set in `deploy/`, so the "override" advertised a knob nobody
+ * could turn. `lib/public-pod-url.ts` documents this exact reasoning and
+ * solves the pod's own URL with a server-injected runtime value instead.
+ *
+ * Unlike the pod URL, the landing site is ONE global origin for every pod, so
+ * it does not need that machinery — it needs to be a constant and say so.
+ */
+const WEB_BASE = "https://synap.live";
 
 /**
  * Browser Settings sections pod-admin hands off to. This is a SUBSET of the
