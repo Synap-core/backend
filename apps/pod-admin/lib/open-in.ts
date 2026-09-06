@@ -41,8 +41,13 @@ import { HOST_TYPES } from "../app/open/open-params";
  *
  * Unlike the pod URL, the landing site is ONE global origin for every pod, so
  * it does not need that machinery — it needs to be a constant and say so.
+ *
+ * `www.` is deliberate, not cosmetic: the apex 307-redirects to it (verified
+ * live 2026-09-06), so emitting the apex made every account, docs and download
+ * link pay an extra round trip — on exactly the links a stranded user follows
+ * because a `synap://` did nothing.
  */
-const WEB_BASE = "https://synap.live";
+const WEB_BASE = "https://www.synap.live";
 
 /**
  * Browser Settings sections pod-admin hands off to. This is a SUBSET of the

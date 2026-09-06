@@ -38,6 +38,7 @@ import {
 } from "../components/resource-row";
 import { ConfirmModal } from "../components/confirm-modal";
 import { SectionCard } from "../components/section-card";
+import { useFocusRow } from "../components/use-focus-row";
 import { formatRelative } from "../people/_lib/helpers";
 
 // ─── Types ────────────────────────────────────────────────────────────
@@ -52,6 +53,11 @@ type EntityRow = {
   createdAt: Date | string;
   propertiesPreview: string;
 };
+
+/** `?focus=` must be a real entity id before we spend a query on it —
+ * `entities.adminGet` rejects anything that is not a UUID. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // ─── Page shell ───────────────────────────────────────────────────────
 
@@ -86,6 +92,20 @@ function EntitiesInner() {
   const [offset, setOffset] = useState(0);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
+  /**
+   * `?focus=<entityId>` from ⌘K.
+   *
+   * The highlight must not fire before we know whether the row is reachable:
+   * this list is SERVER-paginated (limit 50) and carries profile / workspace /
+   * search filters, so the focused id is frequently absent from the rendered
+   * page. `focusResolved` is flipped only once both the page query AND the
+   * unfiltered single-entity lookup below have settled — otherwise the hook
+   * would exhaust its 8 retries against a DOM that has nothing to find yet and
+   * then never retry.
+   */
+  const [focusResolved, setFocusResolved] = useState(false);
+  const focusId = useFocusRow({ ready: focusResolved });
 
   const LIMIT = 50;
 
@@ -135,6 +155,47 @@ function EntitiesInner() {
   const currentPage = Math.floor(offset / LIMIT) + 1;
 
   const profiles = profilesQuery.data ?? [];
+
+  /**
+   * Focus resolution, deliberately against the UNFILTERED source.
+   *
+   * ⌘K searches every entity on the pod; this page shows one 50-row page of a
+   * filtered slice. Looking the focused id up in `items` alone would repeat the
+   * audit-tab bug: a result the palette listed is navigated to and then
+   * silently focuses nothing. So when the id is not on the current page we ask
+   * `entities.adminGet` — which takes an id and no filters — and pin the row
+   * above the table with a plain line saying it is outside the current view.
+   * The pin carries `data-row-id`, so the highlight lands on a real row either
+   * way. We do NOT auto-clear the filters or hunt for the row's page: the
+   * operator's filters are their state, and `adminList` cannot search by id, so
+   * there is no honest way to page to it.
+   */
+  const focusOnPage = focusId != null && items.some((i) => i.id === focusId);
+  const focusLookupEnabled =
+    focusId != null &&
+    !focusOnPage &&
+    !entitiesQuery.isLoading &&
+    UUID_RE.test(focusId);
+
+  const focusLookup = trpc.entities.adminGet.useQuery(
+    { id: focusId ?? "" },
+    { enabled: focusLookupEnabled, retry: false, staleTime: 30_000 }
+  );
+
+  useEffect(() => {
+    if (!focusId || focusResolved) return;
+    if (entitiesQuery.isLoading) return;
+    if (focusLookupEnabled && focusLookup.isLoading) return;
+    setFocusResolved(true);
+  }, [
+    focusId,
+    focusResolved,
+    entitiesQuery.isLoading,
+    focusLookupEnabled,
+    focusLookup.isLoading,
+  ]);
+
+  const pinnedFocus = !focusOnPage ? focusLookup.data : undefined;
 
   const allSelected =
     items.length > 0 && items.every((item) => selectedIds.has(item.id));
@@ -332,6 +393,39 @@ function EntitiesInner() {
           ) : null
         }
       >
+        {/* Focused row that no active filter / page reaches — surfaced rather
+            than silently dropped. */}
+        {pinnedFocus && (
+          <div
+            data-row-id={pinnedFocus.id}
+            className="mb-3 rounded-md bg-content2/40 px-3 py-2 ring-1 ring-inset ring-foreground/10"
+          >
+            <p className="mb-1 text-[11px] text-foreground/65">
+              Not in the current view — shown because you navigated to it.
+            </p>
+            <div className="flex min-w-0 items-center gap-2">
+              <Database className="h-3.5 w-3.5 shrink-0 text-foreground/35" />
+              <span className="truncate text-[12.5px] text-foreground">
+                {pinnedFocus.title ?? (
+                  <span className="text-foreground/65 italic">Untitled</span>
+                )}
+              </span>
+              <span className="truncate font-mono text-[11px] text-foreground/65">
+                {pinnedFocus.type}
+              </span>
+              <span className="truncate font-mono text-[11px] text-foreground/65">
+                {pinnedFocus.workspaceName ?? "Pod-wide"}
+              </span>
+            </div>
+          </div>
+        )}
+        {focusLookupEnabled && focusLookup.isError && (
+          <p className="mb-3 text-[11.5px] text-foreground/65">
+            The entity you navigated to could not be loaded — it may have been
+            deleted.
+          </p>
+        )}
+
         {entitiesQuery.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={6} />
         ) : entitiesQuery.isError ? (
@@ -443,7 +537,11 @@ function EntityTableRow({
 
   return (
     <>
-      <div className="group flex items-center gap-3 rounded-md px-3 py-2 hover:bg-content2/30">
+      {/* `data-row-id` is the ⌘K focus receiver's hook — see `useFocusRow`. */}
+      <div
+        data-row-id={item.id}
+        className="group flex items-center gap-3 rounded-md px-3 py-2 hover:bg-content2/30"
+      >
         <Checkbox
           size="sm"
           isSelected={isSelected}

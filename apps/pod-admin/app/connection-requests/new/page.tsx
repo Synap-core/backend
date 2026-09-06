@@ -2,14 +2,20 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Alert, Button, Card, CardBody, Spinner } from "@heroui/react";
+import { Alert, Button, CardBody, Spinner } from "@heroui/react";
 import { ArrowLeft, ShieldCheck } from "lucide-react";
+import { ReceiverShell } from "../../_lib/receiver-shell";
 import { trpc } from "../../../lib/trpc";
 
 /**
  * Pod-owned continuation of an application handoff. The proxy guarantees a
  * local Kratos session before this page renders; this page deliberately never
  * receives or renders the external application's credentials.
+ *
+ * It wears `ReceiverShell` because it is the FIRST page of the connection flow
+ * a reader sees, and `/connection-requests/[requestId]` — the page it hands off
+ * to a beat later — already does. Chrome that appears halfway through one flow
+ * reads as the second page belonging to a different site than the first.
  */
 export default function NewConnectionRequestPage() {
   return (
@@ -132,63 +138,63 @@ function NewConnectionRequestContent() {
   }, [requestId, redeem]);
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl items-center px-5 py-10">
-      <Card
-        shadow="none"
-        className="w-full border border-foreground/10 bg-content1"
-      >
-        <CardBody className="gap-5 px-6 py-7">
-          <div className="flex items-start gap-3">
-            <span
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
-              aria-hidden
-            >
-              <ShieldCheck size={19} />
-            </span>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
-                Pod connection
-              </p>
-              <h1 className="mt-1 text-xl font-semibold tracking-tight">
-                Prepare application review
-              </h1>
-            </div>
+    // `sm`: a single line of status or a single failure message. Nothing is
+    // rendered here for the reader to read through — the object with fields is
+    // the review page this redirects to.
+    <ReceiverShell
+      width="sm"
+      footer={
+        <p className="text-xs text-foreground/65">
+          Your application never receives your Pod credentials.
+        </p>
+      }
+    >
+      <CardBody className="gap-5 px-6 py-7">
+        <div className="flex items-start gap-3">
+          <span
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
+            aria-hidden
+          >
+            <ShieldCheck size={19} />
+          </span>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
+              Pod connection
+            </p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">
+              Prepare application review
+            </h1>
           </div>
+        </div>
 
-          {error ? (
-            <>
-              <Alert
-                color="warning"
-                title="Setup link unavailable"
-                role="alert"
-              >
-                {error}
-              </Alert>
-              <Button
-                variant="flat"
-                startContent={<ArrowLeft size={16} />}
-                onPress={() => router.back()}
-              >
-                Go back
-              </Button>
-            </>
-          ) : !requestId ? (
-            <Alert color="danger" title="Missing setup link" role="alert">
-              Return to the application and start the connection again.
+        {error ? (
+          <>
+            <Alert color="warning" title="Setup link unavailable" role="alert">
+              {error}
             </Alert>
-          ) : (
-            <div
-              className="flex items-center gap-3 text-sm text-foreground/65"
-              role="status"
+            <Button
+              variant="flat"
+              startContent={<ArrowLeft size={16} />}
+              onPress={() => router.back()}
             >
-              <Spinner size="sm" />
-              Preparing the Pod-owned review. Your app never receives your Pod
-              credentials.
-            </div>
-          )}
-        </CardBody>
-      </Card>
-    </main>
+              Go back
+            </Button>
+          </>
+        ) : !requestId ? (
+          <Alert color="danger" title="Missing setup link" role="alert">
+            Return to the application and start the connection again.
+          </Alert>
+        ) : (
+          <div
+            className="flex items-center gap-3 text-sm text-foreground/65"
+            role="status"
+          >
+            <Spinner size="sm" />
+            Preparing the Pod-owned review.
+          </div>
+        )}
+      </CardBody>
+    </ReceiverShell>
   );
 }
 

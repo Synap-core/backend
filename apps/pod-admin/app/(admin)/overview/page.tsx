@@ -7,14 +7,15 @@
  *
  *   1. Sync     — pod-to-pod replication state.
  *   2. Backups  — last/next backup, success/failure.
- *   3. Capacity — disk %, doc count, vector index size.
+ *   3. Contents — how much this pod holds (entities, documents, users).
  *   4. Alerts   — urgent issues across the pod (max 5; "View all" link).
- *   5. Approval queue — pending pod-level proposals + Kratos signups.
+ *   5. Approval queue — pending pod-level proposals.
  *
  * Each card pulls its own data via tRPC; queries run in parallel and a
- * loading state never blocks adjacent cards from rendering. When a tRPC
- * procedure is missing or the shape doesn't fit, we render a graceful
- * stub with a TODO comment pointing at the gap.
+ * loading state never blocks adjacent cards from rendering. Every card
+ * shows only what its procedure actually returns — a card that advertises
+ * a number nobody computes teaches the reader the app is broken, exactly
+ * as a permanently disabled button does.
  */
 
 import { Button } from "@heroui/react";
@@ -58,7 +59,7 @@ export default function OverviewPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <SyncCard />
         <BackupsCard />
-        <CapacityCard />
+        <ContentsCard />
         <AlertsCard />
         <ApprovalQueueCard />
       </div>
@@ -262,48 +263,45 @@ function truncateMiddle(s: string, max: number): string {
   return `${s.slice(0, half)}…${s.slice(s.length - half)}`;
 }
 
-// ─── 3. Capacity ──────────────────────────────────────────────────────
+// ─── 3. Contents ──────────────────────────────────────────────────────
 
-function CapacityCard() {
-  // `system.getDataPodStats` returns counts but no disk usage. We display
-  // counts here and stub the percent-full + vector-index bytes — those
-  // need a follow-up endpoint.
-  // TODO(phase-C): extend `system.getDataPodStats` (or add a sibling
-  // `getCapacity` procedure) so this card shows real disk + vector usage.
+function ContentsCard() {
+  // Named for what it can actually answer. `system.getDataPodStats` returns
+  // five row counts (users, agents, workspaces, entities, documents) and
+  // nothing about bytes — no disk, no vector-index size. This card was
+  // titled "Capacity" and closed with a line promising disk and vector
+  // usage "once the capacity procedure ships": the same defect as a
+  // disabled button naming a missing procedure, in prose.
   const { data, isLoading, isError, refetch } =
     trpc.system.getDataPodStats.useQuery(undefined, { staleTime: 30_000 });
 
   if (isLoading) {
     return (
-      <SectionCard title="Capacity" hint="Storage and indexes">
+      <SectionCard title="Contents" hint="What this pod holds">
         <CardLoadingPanel />
       </SectionCard>
     );
   }
   if (isError || !data) {
     return (
-      <SectionCard title="Capacity" hint="Storage and indexes">
+      <SectionCard title="Contents" hint="What this pod holds">
         <CardErrorPanel
-          message="Couldn't load capacity stats."
+          message="Couldn't load pod stats."
           onRetry={() => void refetch()}
         />
       </SectionCard>
     );
   }
 
-  const totalRecords = (data.entityCount ?? 0) + (data.documentCount ?? 0);
+  const totalRecords = data.entityCount + data.documentCount;
 
   return (
-    <SectionCard title="Capacity" hint="Storage and indexes">
+    <SectionCard title="Contents" hint="What this pod holds">
       <CardSummary
         icon={Database}
         headline={`${totalRecords.toLocaleString()} records`}
-        subline={`${data.entityCount.toLocaleString()} entities · ${data.documentCount.toLocaleString()} docs · ${data.userCount.toLocaleString()} users`}
+        subline={`${data.entityCount.toLocaleString()} entities · ${data.documentCount.toLocaleString()} documents · ${data.workspaceCount.toLocaleString()} workspaces · ${data.userCount.toLocaleString()} users`}
       />
-      <p className="mt-3 text-[11.5px] text-foreground/45">
-        Disk and vector-index usage will appear here once the capacity procedure
-        ships.
-      </p>
     </SectionCard>
   );
 }
@@ -447,20 +445,26 @@ function ApprovalQueueCard() {
     { staleTime: 30_000 }
   );
 
-  // Pending Kratos signups would also live here (no list endpoint yet).
-  // TODO(phase-C): wire `trpc.system.listPendingIdentities` once the
-  // identity-introspection procedure ships.
+  // Proposals only. Pending Kratos signups are NOT in this queue and the
+  // card must not imply they are — there is no identity-introspection
+  // procedure, so a reader who trusted this card would miss every signup.
 
   if (isLoading) {
     return (
-      <SectionCard title="Approval queue" hint="Items awaiting your review">
+      <SectionCard
+        title="Approval queue"
+        hint="Pod-level proposals awaiting review"
+      >
         <ResourceRowSkeleton count={3} />
       </SectionCard>
     );
   }
   if (isError || !data) {
     return (
-      <SectionCard title="Approval queue" hint="Items awaiting your review">
+      <SectionCard
+        title="Approval queue"
+        hint="Pod-level proposals awaiting review"
+      >
         <CardErrorPanel
           message="Couldn't load proposals."
           onRetry={() => void refetch()}
@@ -474,7 +478,7 @@ function ApprovalQueueCard() {
   return (
     <SectionCard
       title="Approval queue"
-      hint="Items awaiting your review"
+      hint="Pod-level proposals awaiting review"
       actions={
         podLevel.length > 0 ? (
           <Button

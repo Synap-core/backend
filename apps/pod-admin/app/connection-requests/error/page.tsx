@@ -1,9 +1,20 @@
 "use client";
 
+/**
+ * /connection-requests/error — the dead end of a connection handoff.
+ *
+ * A receiver route: the reader arrives from an outside application, not from
+ * the console. It wears `ReceiverShell` for the same reason the review page it
+ * shares a flow with does — a page that tells a stranger their setup failed has
+ * to say which pod is telling them, or it reads as the failure being the link's
+ * fault rather than the pod's configuration.
+ */
+
 import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Alert, Button, Card, CardBody } from "@heroui/react";
+import { Alert, Button, CardBody } from "@heroui/react";
 import { ArrowLeft, Settings2 } from "lucide-react";
+import { ReceiverShell } from "../../_lib/receiver-shell";
 
 const messages: Record<string, string> = {
   POD_ADMIN_URL_REQUIRED:
@@ -30,48 +41,45 @@ function ConnectionRequestErrorContent() {
     "This Pod could not prepare the requested connection. Return to the application and try again.";
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-2xl items-center px-5 py-10">
-      <Card
-        shadow="none"
-        className="w-full border border-foreground/10 bg-content1"
-      >
-        <CardBody className="gap-5 px-6 py-7">
-          <div className="flex items-start gap-3">
-            <span
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning"
-              aria-hidden
-            >
-              <Settings2 size={19} />
-            </span>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
-                Pod connection
-              </p>
-              <h1 className="mt-1 text-xl font-semibold tracking-tight">
-                Connection setup needs attention
-              </h1>
-            </div>
+    // `sm`: one sentence and one way out. Nothing was created, so there is no
+    // object with fields for the reader to work through.
+    <ReceiverShell
+      width="sm"
+      footer={
+        <p className="text-xs text-foreground/65">
+          Your application never received your Pod credentials. You can safely
+          return and retry after the Pod owner has fixed the configuration.
+        </p>
+      }
+    >
+      <CardBody className="gap-5 px-6 py-7">
+        <div className="flex items-start gap-3">
+          <span
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-warning/10 text-warning"
+            aria-hidden
+          >
+            <Settings2 size={19} />
+          </span>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-foreground/50">
+              Pod connection
+            </p>
+            <h1 className="mt-1 text-xl font-semibold tracking-tight">
+              Connection setup needs attention
+            </h1>
           </div>
-          <Alert
-            color="warning"
-            title="The request was not started"
-            role="alert"
-          >
-            {message}
-          </Alert>
-          <p className="text-sm leading-6 text-foreground/65">
-            Your application never received your Pod credentials. You can safely
-            return and retry after the Pod owner has fixed the configuration.
-          </p>
-          <Button
-            variant="flat"
-            startContent={<ArrowLeft size={16} />}
-            onPress={() => router.back()}
-          >
-            Return to the application
-          </Button>
-        </CardBody>
-      </Card>
-    </main>
+        </div>
+        <Alert color="warning" title="The request was not started" role="alert">
+          {message}
+        </Alert>
+        <Button
+          variant="flat"
+          startContent={<ArrowLeft size={16} />}
+          onPress={() => router.back()}
+        >
+          Return to the application
+        </Button>
+      </CardBody>
+    </ReceiverShell>
   );
 }
