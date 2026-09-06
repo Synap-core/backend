@@ -9,10 +9,11 @@
  *   • trpc.proposals.batchApprove({ proposalIds, comment? })
  *   • trpc.proposals.batchReject({ proposalIds, reason? })   (TODO: confirm)
  *
- * The brief says "pod-level proposals only" — so we mirror the Proposals
- * sub-tab and filter to `workspaceId == null`. Bulk approve/reject use
- * the batch endpoints; we surface per-row errors when partial failure
- * occurs.
+ * Scope mirrors the Proposals sub-tab: every pending proposal the viewer may
+ * already review (`proposals.list` floors on their lens ∪ authorship when
+ * `workspaceId` is omitted), pod-wide and workspace-scoped alike. Bulk
+ * approve/reject use the batch endpoints; we surface per-row errors when
+ * partial failure occurs.
  */
 
 import {
@@ -69,32 +70,42 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
 
   const utils = trpc.useUtils();
 
+  /* Names for the workspace column. The queue now spans workspaces, and the
+     raw proposal row carries only `workspaceId` — `enrichProposalsForDisplay`
+     resolves author/target/session labels but no workspace name. */
+  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const workspaceNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const w of workspaces.data ?? []) map.set(w.id, w.name);
+    return map;
+  }, [workspaces.data]);
+
   const items = (list.data?.items ?? []) as unknown as PendingProposal[];
 
-  const podLevel = useMemo(() => {
+  const inRange = useMemo(() => {
     const fromMs = filters.fromDate ? new Date(filters.fromDate).getTime() : 0;
     const toMs = filters.toDate
       ? new Date(filters.toDate).getTime()
       : Number.POSITIVE_INFINITY;
     return items.filter((p) => {
-      if (p.workspaceId != null) return false;
       const t = new Date(p.createdAt).getTime();
-      if (t < fromMs || t > toMs) return false;
-      return true;
+      return t >= fromMs && t <= toMs;
     });
   }, [items, filters.fromDate, filters.toDate]);
 
   // Search term — narrows the visible list further.
   const [search, setSearch] = useState("");
   const visible = useMemo(() => {
-    if (!search.trim()) return podLevel;
+    if (!search.trim()) return inRange;
     const q = search.toLowerCase();
-    return podLevel.filter((p) =>
+    return inRange.filter((p) =>
       [p.targetType, p.proposalType, p.targetId, p.agentUserId ?? ""]
         .filter(Boolean)
         .some((s) => s.toLowerCase().includes(q))
     );
-  }, [podLevel, search]);
+  }, [inRange, search]);
 
   // Selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -253,6 +264,7 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
             />
             <span className="w-[140px] shrink-0">Target</span>
             <span className="w-[100px] shrink-0">Type</span>
+            <span className="w-[150px] shrink-0">Workspace</span>
             <span className="min-w-0 flex-1">Agent / actor</span>
             <span className="w-[120px] shrink-0 text-right">Created</span>
           </div>
@@ -268,7 +280,11 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
         ) : visible.length === 0 ? (
           <ResourceRowEmpty
             message={
-              search ? "No matching proposals." : "Nothing waiting for review."
+              search
+                ? "No matching proposals."
+                : items.length > 0
+                  ? "Nothing waiting for review in this date range."
+                  : "Nothing waiting for your review."
             }
           />
         ) : (
@@ -276,6 +292,12 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
             <ApprovalRow
               key={p.id}
               proposal={p}
+              workspaceLabel={
+                p.workspaceId == null
+                  ? "Pod-wide"
+                  : (workspaceNames.get(p.workspaceId) ??
+                    `Workspace ${shortId(p.workspaceId)}`)
+              }
               selected={selectedIds.has(p.id)}
               onToggle={() => toggleOne(p.id)}
             />
@@ -303,10 +325,12 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
 
 function ApprovalRow({
   proposal,
+  workspaceLabel,
   selected,
   onToggle,
 }: {
   proposal: PendingProposal;
+  workspaceLabel: string;
   selected: boolean;
   onToggle: () => void;
 }) {
@@ -330,6 +354,9 @@ function ApprovalRow({
       </div>
       <div className="w-[100px] shrink-0 truncate text-[11.5px] text-foreground/55">
         {proposal.proposalType}
+      </div>
+      <div className="w-[150px] shrink-0 truncate text-[11.5px] text-foreground/65">
+        {workspaceLabel}
       </div>
       <div className="min-w-0 flex-1 truncate text-[11.5px] text-foreground/55">
         {proposal.agentUserId

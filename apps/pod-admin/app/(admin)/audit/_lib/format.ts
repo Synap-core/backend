@@ -38,12 +38,20 @@ export function shortId(id: string | null | undefined, head = 6, tail = 4) {
 }
 
 /**
- * `from` and `to` for "last 7 days" — used as the default date range.
+ * `from` and `to` for the default date range shared by all three Audit
+ * sub-tabs.
+ *
+ * 30 days, not 7. The window was sized when Proposals and the Approval queue
+ * showed pod-wide rows only — a handful. Now that both show every proposal the
+ * viewer may review, a week hides most of the governance backlog, and an
+ * unreviewed proposal does not stop mattering on its eighth day. The Activity
+ * log shares this seed and is only ever narrowed by it client-side, so a wider
+ * default costs it nothing.
  */
 export function defaultDateRange(): { fromDate: string; toDate: string } {
   const to = new Date();
   const from = new Date();
-  from.setDate(from.getDate() - 7);
+  from.setDate(from.getDate() - 30);
   return {
     fromDate: from.toISOString(),
     toDate: to.toISOString(),

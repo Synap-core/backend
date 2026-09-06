@@ -92,6 +92,12 @@ export async function proxy(req: NextRequest) {
   const isSelfService =
     path === "/connect" ||
     path === "/my-connections" ||
+    // Your OWN vault, exactly like your own keys above. `secretsVault.list` /
+    // `.delete` are scoped to `ctx.userId` server-side, so this grants no
+    // reach — it only stops `pod_admin` being required to manage secrets that
+    // are already yours. Requiring it would lock every non-admin pod member
+    // out of their own vault, the same way it would have for /oauth/consent.
+    path === "/my-vault" ||
     path === "/oauth/consent" ||
     path.startsWith("/approve-agent") ||
     path.startsWith("/connection-requests/") ||

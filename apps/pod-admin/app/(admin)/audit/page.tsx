@@ -5,8 +5,9 @@
  *
  * Three sub-tabs over the same filter bar:
  *   1. Activity log    — pod-wide event log with workspace filter (live data)
- *   2. Proposals       — pod-level proposal history (workspaceId IS NULL)
- *   3. Approval queue  — pending pod-level proposals + bulk actions
+ *   2. Proposals       — proposal history the viewer may review (their
+ *                        workspace lens ∪ what they authored, pod-wide included)
+ *   3. Approval queue  — pending proposals in that same scope + bulk actions
  *
  * The active sub-tab is encoded in `?section=` so deep links from
  * Overview's Approval queue card land in the right place.

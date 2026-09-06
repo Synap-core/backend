@@ -334,7 +334,7 @@ function ActivityRow({
 
         {/* Workspace */}
         <div className="w-[160px] shrink-0 truncate text-right text-[11px] text-foreground/45">
-          {workspace ? workspace.name : event.workspaceId ? "—" : "pod-level"}
+          {workspace ? workspace.name : event.workspaceId ? "—" : "Pod-wide"}
         </div>
       </button>
     </li>
@@ -434,7 +434,7 @@ function EventDrawer({
               v={
                 workspace
                   ? `${workspace.name}`
-                  : (event.workspaceId ?? "pod-level")
+                  : (event.workspaceId ?? "Pod-wide")
               }
             />
             <Field k="Source" v={event.source} />

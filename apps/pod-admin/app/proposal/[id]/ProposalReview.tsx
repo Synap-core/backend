@@ -10,14 +10,26 @@ import {
   Textarea,
   addToast,
 } from "@heroui/react";
-import { Check, X, ShieldCheck } from "lucide-react";
+import { Check, X, ShieldCheck, ExternalLink } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
 import {
   buildObjectActionTitle,
+  resolveObjectNoun,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { ExitLink } from "../../../lib/exit-link";
+import { ExitFallback, ExitLink, externalProps } from "../../../lib/exit-link";
 import { ReceiverShell } from "../../_lib/receiver-shell";
+/* Relative time is NOT vocabulary — `.claude/rules/vocabulary.md` excludes
+   date/duration formatting on purpose. Reusing the AUDIT copy rather than the
+   People one because it accepts `Date | string`: `createdAt` is typed `Date`
+   through superjson, and a helper that only accepts `Date` would be a lie the
+   day a plain-JSON path feeds this page. Writing a third copy is what the rule
+   forbids. */
+import { formatRelative } from "../../(admin)/audit/_lib/format";
+/* The pod's own uuid predicate, not a fourth regex. `workspaceId` is a TEXT
+   column while `workspaces.get` takes `.uuid()` — without this guard a
+   non-uuid workspace ref would fire a request that can only fail. */
+import { isUuid } from "../../open/open-params";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
@@ -116,6 +128,28 @@ export function ProposalReview({
   identity?: string;
 }) {
   const query = trpc.proposals.get.useQuery({ proposalId });
+
+  /* WHERE the request came from. `proposals.source` enforces the SAME access
+     gate as `get`, so this adds no exposure — it only names objects the reader
+     is already allowed to see. Gated on `query.data` so a proposal that does
+     not exist (or that this reader may not see) does not fire a second call
+     that can only 404/403. `retry: false`: a provenance panel is evidence, and
+     evidence that is absent must stay absent rather than retry into view. */
+  const source = trpc.proposals.source.useQuery(
+    { proposalId },
+    { enabled: !!query.data, retry: false }
+  );
+
+  /* WHICH workspace. The proposal row carries only `workspaceId`; the name is
+     a separate read, member-gated exactly like the review itself. A pod-wide
+     proposal has no workspace at all (measured: ~70% of recent rows) — hence
+     `enabled`, and hence the segment is OMITTED rather than filled with an id.*/
+  const workspaceId = query.data?.workspaceId ?? undefined;
+  const workspace = trpc.workspaces.get.useQuery(
+    { id: workspaceId ?? "" },
+    { enabled: !!workspaceId && isUuid(workspaceId), retry: false }
+  );
+
   const [reason, setReason] = useState("");
   const [rejecting, setRejecting] = useState(false);
 
@@ -176,8 +210,21 @@ export function ProposalReview({
      the Synap desktop app" on the loading, not-found and unauthorized cards —
      a link into nothing for a proposal that does not exist or that the reader
      is not allowed to see. */
-  const shell = (children: ReactNode, footer?: ReactNode) => (
-    <ReceiverShell podHost={podHost} identity={identity} footer={footer}>
+  /* `requested` is opt-in for the same reason `footer` is: the loading,
+     not-found and unauthorized cards have no request to describe, and a
+     provenance line rendered over nothing is the guess this page exists to
+     avoid. */
+  const shell = (
+    children: ReactNode,
+    footer?: ReactNode,
+    requested?: ReactNode
+  ) => (
+    <ReceiverShell
+      podHost={podHost}
+      identity={identity}
+      requested={requested}
+      footer={footer}
+    >
       {children}
     </ReceiverShell>
   );
@@ -223,6 +270,36 @@ export function ProposalReview({
   const actionable = isActionable(status);
   const busy = approve.isPending || reject.isPending;
 
+  /* "Who asked, on what, when" — built from fields the payload GENUINELY
+     carries. `authorName` is the enrichment's resolved display name (the raw
+     row has only ids); a segment whose source is missing is dropped, never
+     defaulted, so this line can never assert a requester nobody resolved. */
+  const requestedParts = [
+    p.authorName ? `Requested by ${p.authorName}` : undefined,
+    workspace.data?.name ? `in ${workspace.data.name}` : undefined,
+    p.createdAt ? formatRelative(p.createdAt) : undefined,
+  ].filter((part): part is string => !!part);
+  const requested =
+    requestedParts.length > 0 ? (
+      <p className="text-[12px] text-foreground/65">
+        {requestedParts.join(" · ")}
+      </p>
+    ) : undefined;
+
+  /* Provenance targets, resolved through the ONE exit door. Every kind
+     `source` can return (session, channel, automation, skill, playbook, agent)
+     lives in the desktop app, so each resolves to a `synap://` link. */
+  const sourceExits = (source.data?.targets ?? []).map((target) => ({
+    target,
+    exit: openIn({ kind: "object", objectKind: target.kind, id: target.id }),
+  }));
+  /* One fallback beneath the LIST, not one per row — six rows must not tell
+     the reader to install the app six times (the defect `exit-link.tsx`
+     documents). Same shape as the workspaces row menu. */
+  const sourceFallbackExit = sourceExits.find(
+    ({ exit }) => exit.isDesktopLink
+  )?.exit;
+
   return shell(
     <>
       <CardHeader className="flex items-start justify-between gap-3 px-7 pb-0 pt-7">
@@ -256,6 +333,42 @@ export function ProposalReview({
           <p className="text-[13px] leading-relaxed text-foreground/65">
             {reasoning}
           </p>
+        )}
+
+        {/* Absent, not empty: a proposal with no resolvable lineage renders no
+            section at all. An "Where this came from — (none)" box would be a
+            claim about provenance dressed as an admission of ignorance. */}
+        {sourceExits.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
+            <p className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/45">
+              Where this came from
+            </p>
+            <ul className="flex flex-col gap-1">
+              {sourceExits.map(({ target, exit }) => (
+                <li
+                  key={`${target.kind}:${target.id}`}
+                  className="flex flex-wrap items-baseline gap-x-2"
+                >
+                  <span className="text-[12px] text-foreground/65">
+                    {resolveObjectNoun(target.kind)}
+                  </span>
+                  <a
+                    href={exit.href}
+                    {...externalProps(exit.href)}
+                    className="inline-flex items-center gap-1.5 rounded-sm text-[13px] text-foreground/75 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                  >
+                    {target.label}
+                    {/* Same promise the shared link makes: the icon means
+                        "this leaves pod-admin". A desktop hand-off does. */}
+                    {exit.isDesktopLink && (
+                      <ExternalLink size={14} aria-hidden />
+                    )}
+                  </a>
+                </li>
+              ))}
+            </ul>
+            {sourceFallbackExit && <ExitFallback exit={sourceFallbackExit} />}
+          </div>
         )}
 
         <div className="flex flex-col gap-2 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
@@ -359,6 +472,7 @@ export function ProposalReview({
         )}
       </CardBody>
     </>,
-    openInApp
+    openInApp,
+    requested
   );
 }

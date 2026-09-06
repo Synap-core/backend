@@ -9,7 +9,7 @@
  *   2. Backups  — last/next backup, success/failure.
  *   3. Contents — how much this pod holds (entities, documents, users).
  *   4. Alerts   — urgent issues across the pod (max 5; "View all" link).
- *   5. Approval queue — pending pod-level proposals.
+ *   5. Approval queue — pending proposals the viewer may review.
  *
  * Each card pulls its own data via tRPC; queries run in parallel and a
  * loading state never blocks adjacent cards from rendering. Every card
@@ -438,11 +438,24 @@ function AlertsCard() {
 // ─── 5. Approval queue ────────────────────────────────────────────────
 
 function ApprovalQueueCard() {
-  // `proposals.list` accepts `workspaceId: null` for server-side
-  // pod-level filtering — no client-side `.filter()` needed.
+  // `workspaceId` is OMITTED, not `null`. `null` means "pod-wide only", which
+  // hid every workspace-scoped proposal — nearly the whole queue, since almost
+  // every governed AI write is workspace-scoped. Omitted, the server falls to
+  // `proposalUserFloor`: the viewer's own lens ∪ what they authored. Same
+  // entitlement, honest count.
   const { data, isLoading, isError, refetch } = trpc.proposals.list.useQuery(
-    { workspaceId: null, status: "pending", limit: 25 },
+    { status: "pending", limit: 25 },
     { staleTime: 30_000 }
+  );
+
+  // The row carries only `workspaceId`; `proposals.list` resolves author and
+  // target names but no workspace name. Without it a cross-workspace queue
+  // reads as an undifferentiated pile.
+  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const workspaceNames = new Map(
+    (workspaces.data ?? []).map((w) => [w.id, w.name] as const)
   );
 
   // Proposals only. Pending Kratos signups are NOT in this queue and the
@@ -451,20 +464,14 @@ function ApprovalQueueCard() {
 
   if (isLoading) {
     return (
-      <SectionCard
-        title="Approval queue"
-        hint="Pod-level proposals awaiting review"
-      >
+      <SectionCard title="Approval queue" hint="Proposals awaiting your review">
         <ResourceRowSkeleton count={3} />
       </SectionCard>
     );
   }
   if (isError || !data) {
     return (
-      <SectionCard
-        title="Approval queue"
-        hint="Pod-level proposals awaiting review"
-      >
+      <SectionCard title="Approval queue" hint="Proposals awaiting your review">
         <CardErrorPanel
           message="Couldn't load proposals."
           onRetry={() => void refetch()}
@@ -473,14 +480,14 @@ function ApprovalQueueCard() {
     );
   }
 
-  const podLevel = data.items ?? [];
+  const pending = data.items ?? [];
 
   return (
     <SectionCard
       title="Approval queue"
-      hint="Pod-level proposals awaiting review"
+      hint="Proposals awaiting your review"
       actions={
-        podLevel.length > 0 ? (
+        pending.length > 0 ? (
           <Button
             as={Link}
             href="/audit?section=queue"
@@ -494,17 +501,22 @@ function ApprovalQueueCard() {
         ) : null
       }
     >
-      {podLevel.length === 0 ? (
-        <ResourceRowEmpty message="No pod-level proposals pending." />
+      {pending.length === 0 ? (
+        <ResourceRowEmpty message="Nothing waiting for your review." />
       ) : (
         <div className="-mx-2">
-          {podLevel.slice(0, 4).map((p) => {
+          {pending.slice(0, 4).map((p) => {
             const proposal = p as unknown as {
               id: string;
               title?: string | null;
               targetType?: string | null;
+              workspaceId?: string | null;
               createdAt?: string | Date | null;
             };
+            const workspaceLabel =
+              proposal.workspaceId == null
+                ? "Pod-wide"
+                : (workspaceNames.get(proposal.workspaceId) ?? "Workspace");
             return (
               <ResourceRow
                 key={proposal.id}
@@ -514,6 +526,7 @@ function ApprovalQueueCard() {
                 }
                 secondary={[
                   proposal.targetType ?? "—",
+                  workspaceLabel,
                   proposal.createdAt
                     ? formatRelative(new Date(proposal.createdAt))
                     : null,
@@ -524,9 +537,9 @@ function ApprovalQueueCard() {
               />
             );
           })}
-          {podLevel.length > 4 && (
+          {pending.length > 4 && (
             <p className="mt-2 px-3 text-[11.5px] text-foreground/45">
-              +{podLevel.length - 4} more
+              +{pending.length - 4} more
             </p>
           )}
         </div>

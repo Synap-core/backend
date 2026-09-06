@@ -59,6 +59,18 @@ interface ReceiverShellProps {
   podHost?: string;
   /** Who the reader is signed in as, when known. */
   identity?: string;
+  /**
+   * WHO asked, on WHAT, and WHEN — the third header line.
+   *
+   * The header above answers "which pod" and "who am I"; a consent page that
+   * stops there has told the reader where they are but nothing about the
+   * request they are being asked to authorise. Optional because only a route
+   * that ACTUALLY holds that provenance may claim it — the four other receiver
+   * routes pass nothing and render exactly as before. A slot rather than
+   * fields: each route composes the line from what its own data genuinely
+   * carries, so an unavailable signal is absent instead of guessed.
+   */
+  requested?: ReactNode;
   children: ReactNode;
   /** Exits and secondary affordances, rendered under the card. */
   footer?: ReactNode;
@@ -85,6 +97,7 @@ export function receiverWidthClass(width: "sm" | "md"): string {
 export function ReceiverShell({
   podHost,
   identity,
+  requested,
   children,
   footer,
   width = "md",
@@ -99,6 +112,10 @@ export function ReceiverShell({
         className={`flex w-full flex-col gap-4 ${receiverWidthClass(width)}`}
       >
         <ReceiverHeader podHost={host} identity={who} />
+
+        {/* Sits between the pod line and the card: it qualifies the REQUEST,
+            not the reader, so it belongs above the decision it describes. */}
+        {requested && <div className="px-1">{requested}</div>}
 
         <Card
           radius="lg"

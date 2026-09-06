@@ -10,7 +10,7 @@
  *   • Trusted issuers  → `trpc.trustedIssuers.list`
  *   • API keys         → `trpc.apiKeys.adminListAll` (stub: surfaces names only)
  *   • Entities         → `trpc.entities.adminList` (SERVER-side `search`)
- *   • Proposals        → `trpc.proposals.list` (pod-level, every status)
+ *   • Proposals        → `trpc.proposals.list` (reviewable scope, every status)
  *   • Audit events     → `trpc.system.listAuditLogs` (stub: most recent 25)
  *
  * Selection navigates to the appropriate tab with `?focus=<id>` (and, when
@@ -179,12 +179,12 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     { enabled: isOpen, staleTime: 15_000 }
   );
 
-  // Pod-level (`workspaceId: null`) so this window matches the one Audit →
-  // Proposals queries. Both now filter server-side; when only this one did,
-  // a result ranked outside the other's unfiltered 100 would navigate to a
-  // page that silently focused nothing.
+  // `workspaceId` OMITTED — the server then floors on the viewer's lens ∪ what
+  // they authored (`scope-conditions.ts`), which is every proposal they may
+  // already review. `null` would have meant pod-wide only. Audit → Proposals
+  // omits it too, so a result found here can always be focused there.
   const proposalsQuery = trpc.proposals.list.useQuery(
-    { workspaceId: null, status: "all", limit: 100 },
+    { status: "all", limit: 100 },
     { enabled: isOpen, staleTime: 15_000 }
   );
 
@@ -333,13 +333,21 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
         objectKind: p.targetType,
         objectName: p.targetName ?? undefined,
       });
-      const hay = `${title} ${p.proposalType} ${p.targetType}`.toLowerCase();
+      // Workspace names come from the palette's own Workspaces query — the
+      // proposal row carries only `workspaceId`, and a cross-workspace result
+      // list with no scope is ambiguous.
+      const workspaceLabel =
+        p.workspaceId == null
+          ? "Pod-wide"
+          : (wsItems.find((w) => w.id === p.workspaceId)?.name ?? "Workspace");
+      const hay =
+        `${title} ${p.proposalType} ${p.targetType} ${workspaceLabel}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
       bucket.push({
         id: p.id,
         category: "proposal",
         primary: title,
-        secondary: `${resolveStatusLabel(p.status)} · ${new Date(p.createdAt).toLocaleString()}`,
+        secondary: `${resolveStatusLabel(p.status)} · ${workspaceLabel} · ${new Date(p.createdAt).toLocaleString()}`,
         href: `/audit?section=proposals&focus=${encodeURIComponent(p.id)}`,
       });
       if (bucket.length >= cap) break;

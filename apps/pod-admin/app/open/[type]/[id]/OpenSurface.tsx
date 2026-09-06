@@ -18,7 +18,7 @@ import {
 } from "../../../_lib/receiver-shell";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
-import { labelForOpenType, type ParsedOpen } from "../../open-params";
+import { isUuid, labelForOpenType, type ParsedOpen } from "../../open-params";
 
 const PLACEHOLDER_UUID = "00000000-0000-4000-8000-000000000000";
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -60,6 +60,19 @@ type ViewPayload = {
   };
 };
 
+/** The four facts a bounce card needs to stop being anonymous. */
+type BounceReceipt = {
+  title: string;
+  workspaceId: string | null;
+  updatedAt: Date | string | null;
+};
+
+/** Every bounce lookup below reduces to this shape before it is read. */
+type NamedRow = {
+  workspaceId?: string | null;
+  updatedAt?: Date | string | null;
+} | null;
+
 export function OpenSurface({
   parsed,
   podHost,
@@ -90,13 +103,92 @@ function OpenSurfaceBody({ parsed }: { parsed: ParsedOpen }) {
     { enabled: viewEnabled }
   );
 
+  /* A bounce card that can't say WHICH object it bounced is an ask to install a
+     desktop app to find out what you were sent. Six of the seven bounce kinds
+     have a `get` this client can already reach, so the card names the object and
+     still bounces. `cell` is deliberately absent: `synap://open/cell/<id>`
+     addresses a registered cell TYPE KEY (browser `object-nav.ts`, `case 'cell'`),
+     not a `cell_instances` row, so `cellInstances.get` would resolve a different
+     object — a confidently wrong name is worse than no name.
+     Gated on `isUuid` because a bounce id only has to pass `SAFE_ID_RE`, and
+     every one of these inputs is a uuid. */
+  const bounceType = parsed.status === "bounce" ? parsed.type : null;
+  const bounceId =
+    parsed.status === "bounce" && isUuid(parsed.id)
+      ? parsed.id
+      : PLACEHOLDER_UUID;
+  const bounceOn = (type: string) =>
+    bounceType === type && bounceId !== PLACEHOLDER_UUID;
+
+  // WHY the whole document: `documents.get` is the only door this client can
+  // reach (`getInWorkspace` is a workspaceProcedure and pod-admin sets no
+  // X-Workspace-Id), and it returns the resolved body alongside the row. We read
+  // only `document`; the body is the cost of the one reachable door.
+  const documentQuery = trpc.documents.get.useQuery(
+    { documentId: bounceId },
+    { enabled: bounceOn("document"), retry: false }
+  );
+  const sessionQuery = trpc.focusSessions.get.useQuery(
+    { id: bounceId },
+    { enabled: bounceOn("session"), retry: false }
+  );
+  const projectQuery = trpc.projects.get.useQuery(
+    { id: bounceId },
+    { enabled: bounceOn("project"), retry: false }
+  );
+  const workspaceQuery = trpc.workspaces.get.useQuery(
+    { id: bounceId },
+    { enabled: bounceOn("workspace"), retry: false }
+  );
+  const channelQuery = trpc.chat.getChannel.useQuery(
+    { channelId: bounceId, includeContext: false, includeBranches: false },
+    { enabled: bounceOn("channel"), retry: false }
+  );
+  const capabilityQuery = trpc.capabilities.containers.get.useQuery(
+    { id: bounceId },
+    { enabled: bounceOn("capability"), retry: false }
+  );
+
+  const bounceQuery = bounceOn("document")
+    ? documentQuery
+    : bounceOn("session")
+      ? sessionQuery
+      : bounceOn("project")
+        ? projectQuery
+        : bounceOn("workspace")
+          ? workspaceQuery
+          : bounceOn("channel")
+            ? channelQuery
+            : bounceOn("capability")
+              ? capabilityQuery
+              : null;
+
+  const receipt = bounceType
+    ? bounceReceipt(bounceType, bounceQuery?.data)
+    : null;
+
+  /* The row carries a workspace UUID, and a UUID is not a workspace. `list` is
+     the cheapest name resolver the client already holds — one cached array
+     shared by every kind — and it is only asked for once a receipt resolved. */
+  const workspaceNamesQuery = trpc.workspaces.list.useQuery(undefined, {
+    enabled: Boolean(receipt?.workspaceId),
+    retry: false,
+  });
+  const workspaceName = receipt?.workspaceId
+    ? (workspaceNamesQuery.data ?? []).find(
+        (row) => row.id === receipt.workspaceId
+      )?.name
+    : undefined;
+
   useEffect(() => {
-    if (parsed.status !== "host") return;
-    const err = entityQuery.error ?? viewQuery.error;
+    // An expired cookie still passes the middleware's presence check, so every
+    // lookup on this route — host card or bounce receipt — re-auths the same way
+    // rather than reporting a load failure the operator can't act on.
+    const err = entityQuery.error ?? viewQuery.error ?? bounceQuery?.error;
     if (err) {
       redirectToLoginIfUnauthorized(err);
     }
-  }, [entityQuery.error, viewQuery.error, parsed]);
+  }, [entityQuery.error, viewQuery.error, bounceQuery?.error]);
 
   if (parsed.status === "invalid-id") {
     return shell(
@@ -122,13 +214,32 @@ function OpenSurfaceBody({ parsed }: { parsed: ParsedOpen }) {
   }
 
   if (parsed.status === "bounce") {
+    if (bounceQuery?.isLoading) {
+      return shell(
+        <CardBody className="items-center gap-3 px-7 py-16">
+          <Spinner label="Loading…" />
+        </CardBody>
+      );
+    }
+    // Failed, forbidden, or nameless → exactly today's card. A receipt that
+    // errors is worse than a bounce that works, so nothing here is conditional
+    // on the lookup SUCCEEDING for the exit to render.
     return shell(
       emptyBody({
         eyebrow: labelForOpenType(parsed.type),
-        title: `This ${parsed.type} opens in the Synap app`,
+        title: receipt?.title ?? `This ${parsed.type} opens in the Synap app`,
         message:
           "The web host only shows entities and views. Open it in the Synap app for the full surface.",
         chip: "Opens in app",
+        details: receipt
+          ? detailRows(
+              parsed.id,
+              receipt.updatedAt,
+              workspaceName
+                ? [{ label: "Workspace", value: workspaceName }]
+                : []
+            )
+          : undefined,
         deepLink: { type: parsed.type, id: parsed.id },
       })
     );
@@ -365,12 +476,15 @@ function emptyBody({
   title,
   message,
   chip,
+  details,
   deepLink,
 }: {
   eyebrow: string;
   title: string;
   message: string;
   chip: string;
+  /** Present only when a bounce lookup resolved — same rows the host cards use. */
+  details?: Array<{ label: string; value: string }>;
   deepLink?: { type: string; id: string };
 }) {
   return (
@@ -392,6 +506,7 @@ function emptyBody({
         <p className="text-[13px] leading-relaxed text-foreground/70">
           {message}
         </p>
+        {details && details.length > 0 ? <DetailsWell rows={details} /> : null}
         {deepLink ? (
           <OpenInAppLink type={deepLink.type} id={deepLink.id} />
         ) : null}
@@ -457,6 +572,61 @@ function DetailsWell({
       </AccordionItem>
     </Accordion>
   );
+}
+
+/**
+ * One bounce payload → the receipt, or null.
+ *
+ * Null on ANY doubt — no data, or a row whose name is empty (an untitled channel
+ * is the real case). The caller then renders today's card, so the worst outcome
+ * of a miss is the status quo. Never falls back to the id: a raw UUID is not a
+ * name, it is the thing the receipt exists to replace.
+ */
+function bounceReceipt(type: string, data: unknown): BounceReceipt | null {
+  if (data == null || typeof data !== "object") return null;
+  const payload = data as Record<string, unknown>;
+
+  // Each door's own return shape, verified against its router:
+  //   document   documents.get           → { document, content }
+  //   session    focusSessions.get       → the row (its name is `goal`)
+  //   project    projects.get            → { project, subject, phaseCategory }
+  //   workspace  workspaces.get          → the projected row
+  //   channel    chat.getChannel         → { channel, … }  (title is NULLABLE)
+  //   capability capabilities.containers.get → { capability, parts }
+  const [name, row]: [unknown, NamedRow] = (() => {
+    const nested = (key: string): [unknown, NamedRow] => {
+      const inner = payload[key];
+      if (inner == null || typeof inner !== "object") return [null, null];
+      const record = inner as Record<string, unknown>;
+      return [record.name ?? record.title ?? record.goal, record as NamedRow];
+    };
+    switch (type) {
+      case "document":
+        return nested("document");
+      case "project":
+        return nested("project");
+      case "channel":
+        return nested("channel");
+      case "capability":
+        return nested("capability");
+      case "session":
+        return [payload.goal, payload as NamedRow];
+      case "workspace":
+        return [payload.name, payload as NamedRow];
+      default:
+        return [null, null];
+    }
+  })();
+
+  const title = stringOrFallback(name);
+  if (!title || !row) return null;
+  return {
+    title,
+    // A workspace IS the scope — it has no workspace of its own to name.
+    workspaceId:
+      type === "workspace" ? null : stringOrFallback(row.workspaceId) || null,
+    updatedAt: row.updatedAt ?? null,
+  };
 }
 
 function loadFailure(

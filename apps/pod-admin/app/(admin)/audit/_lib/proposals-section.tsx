@@ -3,11 +3,9 @@
 /**
  * Audit → Proposals sub-tab.
  *
- * Pod-level proposals only — those with `workspaceId === null`.  The
- * `proposals.list` procedure has a `workspaceId` filter but no "pod-only"
- * flag, so we pull a generous slice of all statuses and filter client-side.
- *
- * TODO(phase-C+): add a server-side "pod-only" filter to `proposals.list`.
+ * Every proposal the viewer is entitled to see — pod-wide AND workspace-scoped.
+ * Almost every governed AI write is workspace-scoped, so a pod-wide-only list
+ * showed a fraction of the real governance history.
  */
 
 import { Button, Chip, useDisclosure } from "@heroui/react";
@@ -87,16 +85,36 @@ function filterLabel(filter: string): string {
 export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   const [statusFilter, setStatusFilter] = useState<ProposalStatusUI>("all");
 
-  /* `workspaceId: null` filters POD-LEVEL ON THE SERVER. This used to ask for
-     the newest 100 proposals across every workspace and then drop the
-     workspace-scoped ones in the browser, which had two consequences: pod-level
-     history was silently truncated by workspace noise, and the window stopped
-     matching the ⌘K palette's (which does filter server-side). A search result
-     ranked #150 overall would navigate here and quietly find nothing to focus. */
+  /* `workspaceId` is OMITTED on purpose. The filter is three-state on the
+     server (`scope-conditions.ts`): `null` means pod-wide only, a string means
+     that one workspace, and `undefined` falls to `proposalUserFloor` — the
+     viewer's own lens union what they authored. Omitting it therefore widens
+     the list to everything this user may already review and grants no reach.
+     The ⌘K palette omits it too, so the two windows still match: a result
+     ranked in search can always be focused here. */
   const list = trpc.proposals.list.useQuery(
-    { workspaceId: null, status: statusFilter, limit: 100 },
+    { status: statusFilter, limit: 100 },
     { staleTime: 30_000 }
   );
+
+  /* Names for the workspace column. Once the list spans workspaces a bare row
+     is ambiguous, and `proposals.list` enriches author/target/session labels
+     but NOT the workspace — the row carries only `workspaceId`. */
+  const workspaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const workspaceNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const w of workspaces.data ?? []) map.set(w.id, w.name);
+    return map;
+  }, [workspaces.data]);
+
+  function workspaceLabel(workspaceId: string | null): string {
+    if (workspaceId == null) return "Pod-wide";
+    return (
+      workspaceNames.get(workspaceId) ?? `Workspace ${shortId(workspaceId)}`
+    );
+  }
 
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
@@ -108,16 +126,14 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
 
   const items = (list.data?.items ?? []) as unknown as ProposalRow[];
 
-  // Date range, plus a belt-and-braces repeat of the pod-level predicate the
-  // server now applies. Kept so this list can never render a workspace row if
-  // the server filter is ever relaxed.
-  const podLevel = useMemo(() => {
+  // Client-side narrowing for the axes the list procedure does not take:
+  // the filter bar's date range and actor selection.
+  const visible = useMemo(() => {
     const fromMs = filters.fromDate ? new Date(filters.fromDate).getTime() : 0;
     const toMs = filters.toDate
       ? new Date(filters.toDate).getTime()
       : Number.POSITIVE_INFINITY;
     return items.filter((p) => {
-      if (p.workspaceId != null) return false;
       const t = new Date(p.createdAt).getTime();
       if (t < fromMs || t > toMs) return false;
       if (filters.userIds.length > 0) {
@@ -137,11 +153,11 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   /**
    * `?focus=<proposalId>` from ⌘K.
    *
-   * Resolved against the UNFILTERED rows, not the date-filtered `podLevel`.
-   * This tab seeds its range to the last 7 days (`defaultDateRange()`), and
-   * ⌘K queries with no date bound at all — so looking the row up in the
-   * filtered set meant any proposal older than a week was listed in search,
-   * navigated to, and then silently opened nothing.
+   * Resolved against the UNFILTERED rows, not the date-filtered `visible`.
+   * This tab seeds its range from `defaultDateRange()` while ⌘K queries with
+   * no date bound at all — so looking the row up in the filtered set meant any
+   * proposal older than that window was listed in search, navigated to, and
+   * then silently opened nothing.
    *
    * An explicit navigation is a stronger signal than an incidental default
    * filter, so focus wins. Aligning the workspace axis earlier fixed half of
@@ -187,10 +203,10 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
             message="Couldn't load proposals."
             onRetry={() => void list.refetch()}
           />
-        ) : podLevel.length === 0 ? (
-          <ResourceRowEmpty message="No pod-level proposals match these filters." />
+        ) : visible.length === 0 ? (
+          <ResourceRowEmpty message="No proposals you can review match these filters." />
         ) : (
-          podLevel.map((p) => (
+          visible.map((p) => (
             <div
               key={p.id}
               data-row-id={p.id}
@@ -200,9 +216,9 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
                 Icon={Mailbox}
                 primary={`${prettyTargetType(p.targetType)} · ${p.proposalType}`}
                 secondary={[
+                  workspaceLabel(p.workspaceId),
                   p.agentUserId ? `agent ${shortId(p.agentUserId)}` : null,
                   formatRelative(p.createdAt),
-                  p.workspaceId == null ? "pod-level" : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -219,6 +235,7 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
 
       <ProposalDrawer
         proposal={selected}
+        workspaceLabel={selected ? workspaceLabel(selected.workspaceId) : "—"}
         isOpen={drawer.isOpen}
         onOpenChange={drawer.onOpenChange}
       />
@@ -238,10 +255,12 @@ function prettyTargetType(t: string): string {
 
 function ProposalDrawer({
   proposal,
+  workspaceLabel,
   isOpen,
   onOpenChange,
 }: {
   proposal: ProposalRow | null;
+  workspaceLabel: string;
   isOpen: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -270,6 +289,7 @@ function ProposalDrawer({
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
             <Field k="Status" v={resolveStatusLabel(proposal.status)} />
+            <Field k="Workspace" v={workspaceLabel} />
             {/* `targetType` used to render raw here while the row above it
                 humanized the same value — the two-spellings defect, inside one
                 component. Both now go through the registry. */}
