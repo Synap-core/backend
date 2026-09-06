@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { DetailDrawer } from "../../components/detail-drawer";
 import {
@@ -56,17 +57,30 @@ interface AuditEvent {
 
 const PAGE_SIZE = 50;
 
-const SUBJECT_TYPE_LABELS: Record<string, string> = {
-  workspaces: "Workspace",
-  workspace_members: "Member",
-  api_keys: "API key",
-  proposals: "Proposal",
-  agents: "Agent",
-  users: "User",
-  secrets: "Secret",
-  intelligence_services: "IS",
-  trusted_issuers: "Trusted issuer",
-};
+/**
+ * An audit row's `subjectType` is the DB TABLE the row touched — plural
+ * (`api_keys`), where the object registry is keyed singular (`api_key`).
+ *
+ * This was a hand-written label map, which is the exact shape the vocabulary
+ * rule forbids: a second table that forks the moment someone adds a row to one
+ * and not the other. It had already drifted — `intelligence_services` read
+ * "IS", an abbreviation used in no other surface.
+ *
+ * So the only thing kept local is the mechanical plural→singular step, which
+ * is grammar, not vocabulary. The WORD always comes from the registry, and
+ * `resolveObjectNoun` falls back to `humanizeToken`, so a table added tomorrow
+ * reads as words instead of leaking `trusted_issuers` at a user.
+ */
+function subjectTypeLabel(subjectType: string): string {
+  return resolveObjectNoun(singularizeTable(subjectType));
+}
+
+function singularizeTable(table: string): string {
+  if (table.endsWith("ies")) return `${table.slice(0, -3)}y`;
+  if (table.endsWith("sses")) return table.slice(0, -2);
+  if (table.endsWith("s") && !table.endsWith("ss")) return table.slice(0, -1);
+  return table;
+}
 
 export function ActivitySection({
   filters,
@@ -253,8 +267,7 @@ function ActivityRow({
   onSelect: () => void;
 }) {
   const actorLabel = actor?.email ?? actor?.name ?? shortId(event.userId);
-  const subjectLabel =
-    SUBJECT_TYPE_LABELS[event.subjectType] ?? event.subjectType;
+  const subjectLabel = subjectTypeLabel(event.subjectType);
 
   const { Icon, tone } = actionPresentation(event.action);
 
@@ -412,10 +425,7 @@ function EventDrawer({
             <Field k="When" v={new Date(event.timestamp).toLocaleString()} />
             <Field k="Action" v={event.action || "—"} />
             <Field k="Phase" v={event.phase || "—"} />
-            <Field
-              k="Subject"
-              v={`${SUBJECT_TYPE_LABELS[event.subjectType] ?? event.subjectType}`}
-            />
+            <Field k="Subject" v={subjectTypeLabel(event.subjectType)} />
             <Field k="Subject ID" v={event.subjectId} mono />
             <Field k="Actor" v={actor?.email ?? actor?.name ?? event.userId} />
             <Field k="Actor ID" v={event.userId} mono />

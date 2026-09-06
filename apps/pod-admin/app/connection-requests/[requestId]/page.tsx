@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { useParams, useRouter } from "next/navigation";
 import {
   Alert,
@@ -184,8 +185,11 @@ export default function ConnectionRequestPage() {
   }).format(new Date(data.expiresAt));
   const statusLabel =
     data.status === "awaiting_local_auth"
-      ? "Awaiting Pod sign-in"
-      : data.status.charAt(0).toUpperCase() + data.status.slice(1);
+      ? // Deliberately local: this is not the status's NAME, it is an
+        // instruction to the reader about what the pod is waiting for. The
+        // vocabulary rule keeps sentences like this out of the SSOT.
+        "Awaiting Pod sign-in"
+      : resolveStatusLabel(data.status);
   const chipColor =
     data.status === "approved" || matchingApproved
       ? "success"

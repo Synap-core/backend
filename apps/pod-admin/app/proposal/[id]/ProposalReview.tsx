@@ -12,6 +12,7 @@ import {
   addToast,
 } from "@heroui/react";
 import { Check, X, ExternalLink, ShieldCheck } from "lucide-react";
+import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { AlwaysApproveMenu } from "./AlwaysApproveMenu";
@@ -141,13 +142,35 @@ export function ProposalReview({ proposalId }: { proposalId: string }) {
       }),
   });
 
+  /* Resolved through the one door rather than hand-written, so this link is
+     covered by the same fallback rule as every other exit: a synap:// href
+     does nothing at all when the app isn't installed, and this page is often
+     someone's FIRST contact with Synap — arriving from an email or a CLI
+     link — so "nothing happened" is the worst possible outcome here. */
+  const appExit = openIn({
+    kind: "objectInApp",
+    objectKind: "proposal",
+    id: proposalId,
+  });
   const openInApp = (
-    <a
-      href={`synap://open/proposal/${proposalId}`}
-      className="inline-flex min-h-10 items-center gap-1.5 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75"
-    >
-      Open in the Synap desktop app <ExternalLink size={14} />
-    </a>
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
+      <a
+        href={appExit.href}
+        className="inline-flex min-h-10 items-center gap-1.5 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75"
+      >
+        Open in the Synap desktop app <ExternalLink size={14} />
+      </a>
+      {appExit.fallback && (
+        <a
+          href={appExit.fallback.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-[12px] text-foreground/40 underline-offset-2 transition-colors hover:text-foreground/70 hover:underline"
+        >
+          {appExit.fallback.label}
+        </a>
+      )}
+    </span>
   );
 
   const shell = (children: ReactNode) => (

@@ -79,3 +79,15 @@ describe("openIn — injection safety", () => {
     expect(exit.href).toBe("synap://open/workspace/..%2F..%2Fevil%3Fx%3D1");
   });
 });
+
+describe("openIn — objectInApp", () => {
+  it("forces the desktop link even for a kind pod-admin hosts on the web", () => {
+    // `/proposal/[id]` IS the web renderer; asking for `kind: "object"` there
+    // would hand back the page the reader is already looking at.
+    const web = openIn({ kind: "object", objectKind: "proposal", id: ID });
+    const app = openIn({ kind: "objectInApp", objectKind: "proposal", id: ID });
+    expect(web.href).toBe(`/proposal/${ID}`);
+    expect(app.href).toBe(`synap://open/proposal/${ID}`);
+    expect(app.fallback).toBeDefined();
+  });
+});

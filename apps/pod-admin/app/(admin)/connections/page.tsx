@@ -3,7 +3,13 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner } from "@heroui/react";
-import { ChevronDown, ExternalLink, ShieldCheck, ShieldOff } from "lucide-react";
+import {
+  ChevronDown,
+  ExternalLink,
+  ShieldCheck,
+  ShieldOff,
+} from "lucide-react";
+import { ConfirmModal } from "../components/confirm-modal";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { applicationConnectionCapabilities } from "../../_lib/application-connection-capabilities";
@@ -55,15 +61,16 @@ export default function ApplicationConnectionsPage() {
       ),
   });
 
+  /* Was a native `window.confirm`. The consequence copy below is the reason
+     this needed a real modal: it has to say what revoking does AND what it
+     pointedly does not, and an OS dialog renders that as one grey wall. */
+  const [pendingRevoke, setPendingRevoke] = useState<{
+    id: string;
+    displayName: string;
+  } | null>(null);
+
   function confirmRevoke(connection: { id: string; displayName: string }) {
-    if (
-      !window.confirm(
-        `Revoke ${connection.displayName}? Those browser origins will immediately lose permission to call this Pod. This does not remove people, revoke trusted issuers, or invalidate direct Pod sign-in sessions.`
-      )
-    ) {
-      return;
-    }
-    revoke.mutate({ id: connection.id });
+    setPendingRevoke(connection);
   }
 
   // Expired session → login, not a dead "couldn't load" error.
@@ -72,8 +79,7 @@ export default function ApplicationConnectionsPage() {
       redirectToLoginIfUnauthorized(connections.error, "/connections");
     }
   }, [connections.isError, connections.error]);
-  const isAuthRedirecting =
-    connections.error?.data?.code === "UNAUTHORIZED";
+  const isAuthRedirecting = connections.error?.data?.code === "UNAUTHORIZED";
 
   if (connections.isLoading || isAuthRedirecting) {
     return (
@@ -290,6 +296,30 @@ export default function ApplicationConnectionsPage() {
           ) : null}
         </section>
       ) : null}
+
+      <ConfirmModal
+        isOpen={pendingRevoke !== null}
+        onClose={() => setPendingRevoke(null)}
+        onConfirm={() => {
+          if (!pendingRevoke) return;
+          revoke.mutate({ id: pendingRevoke.id });
+          setPendingRevoke(null);
+        }}
+        title={`Revoke ${pendingRevoke?.displayName ?? "this app"}?`}
+        consequence={
+          <>
+            <p>
+              Its browser origins immediately lose permission to call this Pod.
+            </p>
+            <p className="mt-2 text-foreground/50">
+              This does not remove people, revoke trusted issuers, or invalidate
+              direct Pod sign-in sessions.
+            </p>
+          </>
+        }
+        confirmLabel="Revoke access"
+        isPending={revoke.isPending}
+      />
     </div>
   );
 }

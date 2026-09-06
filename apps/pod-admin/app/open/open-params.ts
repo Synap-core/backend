@@ -9,6 +9,8 @@
  * apps/api/src/open-dispatch.ts (enforced by open-kinds.lock.test.ts).
  */
 
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+
 export const HOST_TYPES = ["entity", "view"] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
@@ -89,7 +91,10 @@ export function openDocumentTitle(parsed: ParsedOpen): string {
 
 export function labelForOpenType(type: string): string {
   if (!type) return "Object";
-  return type.charAt(0).toUpperCase() + type.slice(1);
+  // These ARE object kinds, so the noun comes from the registry rather than
+  // upper-casing the token. `resolveObjectNoun` falls back to `humanizeToken`,
+  // so a kind added to TYPED_OPEN_KINDS still reads as words.
+  return resolveObjectNoun(type);
 }
 
 export function openInAppHref(type: string, id: string): string {

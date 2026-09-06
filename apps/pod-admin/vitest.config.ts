@@ -12,6 +12,10 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["app/**/*.test.ts", "lib/**/*.test.ts"],
+    // Broad on purpose. A narrow include is how a newly-added suite silently
+    // never runs — the __tripwires__ dir was invisible to the first version of
+    // this config, so the exit-door tripwire passed by not existing.
+    include: ["**/*.test.ts", "**/*.test.tsx"],
+    exclude: ["node_modules/**", ".next/**"],
   },
 });

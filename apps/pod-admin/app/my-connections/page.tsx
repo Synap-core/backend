@@ -19,6 +19,7 @@
 import { useEffect, useState } from "react";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug } from "lucide-react";
+import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
@@ -45,6 +46,7 @@ export default function MyConnectionsPage() {
   const keys = trpc.apiKeys.list.useQuery();
   const utils = trpc.useUtils();
   const [showRevoked, setShowRevoked] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<UnifiedKey | null>(null);
 
   const revoke = trpc.apiKeys.revoke.useMutation({
     onSuccess: async (res) => {
@@ -104,15 +106,11 @@ export default function MyConnectionsPage() {
   const active = all.filter((k) => k.isActive);
   const revoked = all.filter((k) => !k.isActive);
 
+  /* Was a native `window.confirm`. Same shared modal the admin surfaces use —
+     revoking your own key is exactly as consequential as an admin revoking it,
+     so it should not look like a cheaper decision. */
   function confirmRevoke(key: UnifiedKey) {
-    if (
-      !window.confirm(
-        `Revoke "${key.keyName}"? Anything using this key will lose access to this Pod (a revoke may need admin approval first).`
-      )
-    ) {
-      return;
-    }
-    revoke.mutate({ keyId: key.id });
+    setPendingRevoke(key);
   }
 
   return (
@@ -192,6 +190,28 @@ export default function MyConnectionsPage() {
           ) : null}
         </section>
       ) : null}
+
+      <ConfirmModal
+        isOpen={pendingRevoke !== null}
+        onClose={() => setPendingRevoke(null)}
+        onConfirm={() => {
+          if (!pendingRevoke) return;
+          revoke.mutate({ keyId: pendingRevoke.id });
+          setPendingRevoke(null);
+        }}
+        title={`Revoke "${pendingRevoke?.keyName ?? "this key"}"?`}
+        consequence={
+          <>
+            <p>Anything using this key loses access to this Pod.</p>
+            <p className="mt-2 text-foreground/50">
+              Depending on the key, revoking may need admin approval before it
+              takes effect.
+            </p>
+          </>
+        }
+        confirmLabel="Revoke key"
+        isPending={revoke.isPending}
+      />
     </div>
   );
 }

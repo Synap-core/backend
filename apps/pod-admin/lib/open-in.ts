@@ -80,6 +80,13 @@ export type ExitTarget =
   | { kind: "settings"; section: BrowserSettingsSection }
   /** A desktop app by manifest id (e.g. `marketplace`, `data`, `governance`). */
   | { kind: "app"; appId: string }
+  /**
+   * The same object, but explicitly IN THE DESKTOP APP even when pod-admin can
+   * render it on the web. Needed by `/proposal/[id]`, which IS the web
+   * renderer and still wants an "open this in the app" sub-action — asking for
+   * `kind: "object"` there would just return the page you are already on.
+   */
+  | { kind: "objectInApp"; objectKind: string; id: string }
   /** A page in the landing site's account area. */
   | { kind: "account"; page: AccountPage }
   /** A documentation page: `synap.live/guides/<slug>`. */
@@ -143,6 +150,11 @@ export function openIn(target: ExitTarget): Exit {
         `synap://open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
       );
     }
+
+    case "objectInApp":
+      return desktop(
+        `synap://open/${encodeURIComponent(target.objectKind)}/${encodeURIComponent(target.id)}`
+      );
 
     case "settings":
       // Receiver verified: `useDeepLinkHandler.ts` routes `open/app/<id>/<seg>`

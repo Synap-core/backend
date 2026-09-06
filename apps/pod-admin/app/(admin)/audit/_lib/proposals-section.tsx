@@ -13,6 +13,10 @@
 import { Button, Chip, useDisclosure } from "@heroui/react";
 import { Mailbox } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import {
+  resolveObjectNoun,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { DetailDrawer } from "../../components/detail-drawer";
 import {
@@ -46,12 +50,38 @@ interface ProposalRow {
   request?: unknown;
 }
 
-const STATUS_LABEL: Record<string, { kind: StatusKind; label: string }> = {
-  pending: { kind: "stale", label: "Pending" },
-  approved: { kind: "healthy", label: "Approved" },
-  auto_approved: { kind: "healthy", label: "Auto-approved" },
-  rejected: { kind: "down", label: "Rejected" },
+/**
+ * Status → pill COLOUR only. The pill's WORD comes from
+ * `resolveStatusLabel` (`@synap-core/types/vocabulary`), the SSOT.
+ *
+ * This used to be one map carrying both, which is how the same status ends up
+ * spelled two ways in two surfaces — the defect the vocabulary rule exists to
+ * prevent. Colour is presentation and stays local; the label is domain
+ * vocabulary and never is.
+ */
+const STATUS_KIND: Record<string, StatusKind> = {
+  pending: "stale",
+  approved: "healthy",
+  auto_approved: "healthy",
+  rejected: "down",
 };
+
+/**
+ * The list filter's `validated` is an API bucket token, not a row status: rows
+ * come back `approved` / `auto_approved`. Mapping it onto the status it
+ * SELECTS keeps the SSOT as the source of the word — rendering the raw token
+ * would put "Validated" in front of users, a word this product uses nowhere
+ * else, while hand-writing "Approved" here is the local override the rule
+ * forbids.
+ */
+const FILTER_STATUS: Record<string, string> = {
+  validated: "approved",
+};
+
+function filterLabel(filter: string): string {
+  if (filter === "all") return "All";
+  return resolveStatusLabel(FILTER_STATUS[filter] ?? filter);
+}
 
 export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   const [statusFilter, setStatusFilter] = useState<ProposalStatusUI>("all");
@@ -115,9 +145,7 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
                   : "text-foreground/55 hover:bg-content2/50 hover:text-foreground",
               ].join(" ")}
             >
-              {s === "validated"
-                ? "Approved"
-                : s.charAt(0).toUpperCase() + s.slice(1)}
+              {filterLabel(s)}
             </button>
           );
         })}
@@ -150,12 +178,10 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
                 ]
                   .filter(Boolean)
                   .join(" · ")}
-                status={
-                  STATUS_LABEL[p.status] ?? {
-                    kind: "unknown" as StatusKind,
-                    label: p.status,
-                  }
-                }
+                status={{
+                  kind: STATUS_KIND[p.status] ?? ("unknown" as StatusKind),
+                  label: resolveStatusLabel(p.status),
+                }}
                 onSelect={() => setSelected(p)}
               />
             </div>
@@ -172,8 +198,14 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   );
 }
 
+/**
+ * A proposal's target type is an object kind — so the noun comes from the
+ * registry, not from upper-casing the token. `resolveObjectNoun` falls back to
+ * `humanizeToken`, so a kind added to the DB tomorrow still reads as words
+ * rather than leaking raw.
+ */
 function prettyTargetType(t: string): string {
-  return t.charAt(0).toUpperCase() + t.slice(1);
+  return resolveObjectNoun(t);
 }
 
 function ProposalDrawer({
@@ -209,11 +241,11 @@ function ProposalDrawer({
       {proposal ? (
         <>
           <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-[11.5px]">
-            <Field
-              k="Status"
-              v={STATUS_LABEL[proposal.status]?.label ?? proposal.status}
-            />
-            <Field k="Target type" v={proposal.targetType} />
+            <Field k="Status" v={resolveStatusLabel(proposal.status)} />
+            {/* `targetType` used to render raw here while the row above it
+                humanized the same value — the two-spellings defect, inside one
+                component. Both now go through the registry. */}
+            <Field k="Target type" v={prettyTargetType(proposal.targetType)} />
             <Field k="Target ID" v={proposal.targetId} mono />
             <Field
               k="Created"
