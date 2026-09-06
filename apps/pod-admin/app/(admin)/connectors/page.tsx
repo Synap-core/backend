@@ -138,7 +138,7 @@ function ProviderHealthGrid() {
 
   useEffect(() => {
     if (providersQuery.isError) {
-      redirectToLoginIfUnauthorized(providersQuery.error, "/connectors");
+      redirectToLoginIfUnauthorized(providersQuery.error);
     }
   }, [providersQuery.isError, providersQuery.error]);
   const isAuthRedirecting = providersQuery.error?.data?.code === "UNAUTHORIZED";
@@ -334,7 +334,7 @@ function PodLevelConnectorsSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/connectors");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -431,7 +431,7 @@ function PerWorkspaceGridSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/connectors");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";

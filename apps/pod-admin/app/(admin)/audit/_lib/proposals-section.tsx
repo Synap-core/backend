@@ -101,7 +101,7 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (list.isError) {
-      redirectToLoginIfUnauthorized(list.error, "/audit");
+      redirectToLoginIfUnauthorized(list.error);
     }
   }, [list.isError, list.error]);
   const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";

@@ -124,7 +124,7 @@ export function ProposalReview({
   // my-connections/page.tsx) so render stays pure.
   useEffect(() => {
     if (query.error) {
-      redirectToLoginIfUnauthorized(query.error, `/proposal/${proposalId}`);
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.error, proposalId]);
 

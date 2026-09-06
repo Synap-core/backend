@@ -82,7 +82,7 @@ export default function ApplicationConnectionsPage() {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (connections.isError) {
-      redirectToLoginIfUnauthorized(connections.error, "/connections");
+      redirectToLoginIfUnauthorized(connections.error);
     }
   }, [connections.isError, connections.error]);
   const isAuthRedirecting = connections.error?.data?.code === "UNAUTHORIZED";

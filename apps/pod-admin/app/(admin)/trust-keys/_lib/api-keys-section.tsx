@@ -164,7 +164,7 @@ export function ApiKeysSection() {
   useEffect(() => {
     const err = operatorKeys.error ?? systemKeys.error;
     if (operatorKeys.isError || systemKeys.isError) {
-      redirectToLoginIfUnauthorized(err, "/trust-keys");
+      redirectToLoginIfUnauthorized(err);
     }
   }, [
     operatorKeys.isError,
@@ -211,7 +211,7 @@ export function ApiKeysSection() {
       }
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Create failed",
         description: err.message,
@@ -253,7 +253,7 @@ export function ApiKeysSection() {
       addToast({ title: "Key revoked", color: "default" });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Revoke failed",
         description: err.message,
@@ -275,7 +275,7 @@ export function ApiKeysSection() {
       }
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Rotate failed",
         description: err.message,
@@ -291,7 +291,7 @@ export function ApiKeysSection() {
       addToast({ title: "Key deleted", color: "default" });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Delete failed",
         description: err.message,

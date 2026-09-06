@@ -20,6 +20,7 @@ import {
 import { Plus, UserMinus } from "lucide-react";
 import { useState } from "react";
 import { trpc } from "../../../../../lib/trpc";
+import { ConfirmModal } from "../../../components/confirm-modal";
 import { SectionCard } from "../../../components/section-card";
 import {
   ResourceRowEmpty,
@@ -175,10 +176,28 @@ export function MembersTab({ workspaceId }: { workspaceId: string }) {
       ) : null}
 
       {removeTarget ? (
-        <ConfirmRemoveModal
-          member={removeTarget}
+        <ConfirmModal
+          isOpen
+          title="Remove member?"
+          consequence={
+            <>
+              <p>
+                <span className="font-medium text-foreground">
+                  {removeTarget.user.name ??
+                    removeTarget.user.email ??
+                    removeTarget.userId}
+                </span>{" "}
+                loses access to this workspace immediately.
+              </p>
+              <p className="mt-2 text-foreground/65">
+                This does not remove them from the pod, revoke their API keys,
+                or delete anything they created here.
+              </p>
+            </>
+          }
+          confirmLabel="Remove member"
           isPending={removeMutation.isPending}
-          onCancel={() => setRemoveTarget(null)}
+          onClose={() => setRemoveTarget(null)}
           onConfirm={() =>
             removeMutation.mutate({
               workspaceId,
@@ -292,71 +311,6 @@ function InviteMemberModal({
             }}
           >
             Send invite
-          </Button>
-        </ModalFooter>
-      </ModalContent>
-    </Modal>
-  );
-}
-
-// ─── Confirm remove modal ────────────────────────────────────────────
-
-function ConfirmRemoveModal({
-  member,
-  isPending,
-  onCancel,
-  onConfirm,
-}: {
-  member: Member;
-  isPending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const { isOpen, onOpenChange } = useDisclosure({
-    defaultOpen: true,
-    onClose: onCancel,
-  });
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onOpenChange={onOpenChange}
-      size="sm"
-      placement="center"
-    >
-      <ModalContent>
-        <ModalHeader className="border-b border-foreground/[0.06] px-6 py-4">
-          <h2 className="text-[15px] font-medium text-foreground">
-            Remove member?
-          </h2>
-        </ModalHeader>
-        <ModalBody className="px-6 py-4">
-          <p className="text-[12.5px] text-foreground/85">
-            Remove{" "}
-            <span className="font-medium">
-              {member.user.name ?? member.user.email ?? member.userId}
-            </span>{" "}
-            from this workspace? They will lose access immediately.
-          </p>
-        </ModalBody>
-        <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">
-          <Button
-            variant="flat"
-            radius="md"
-            size="sm"
-            onPress={onCancel}
-            isDisabled={isPending}
-          >
-            Cancel
-          </Button>
-          <Button
-            color="danger"
-            radius="md"
-            size="sm"
-            isLoading={isPending}
-            onPress={onConfirm}
-          >
-            Remove
           </Button>
         </ModalFooter>
       </ModalContent>

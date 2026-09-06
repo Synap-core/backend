@@ -163,7 +163,7 @@ function WorkspacesInner() {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/workspaces");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -358,7 +358,7 @@ function WorkspaceRowActions({
       setConfirmDelete(false);
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/workspaces")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Delete failed",
         description: err.message,
@@ -381,7 +381,7 @@ function WorkspaceRowActions({
       setConfirmArchive(false);
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/workspaces")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: archived ? "Restore failed" : "Archive failed",
         description: err.message,
@@ -616,7 +616,7 @@ function CreateWorkspaceModal({
       handleClose();
     },
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/workspaces")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       setError(e.message);
     },
   });

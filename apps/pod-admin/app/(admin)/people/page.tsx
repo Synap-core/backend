@@ -146,7 +146,7 @@ function PeopleInner() {
 
   useEffect(() => {
     if (podMembersQuery.isError) {
-      redirectToLoginIfUnauthorized(podMembersQuery.error, "/people");
+      redirectToLoginIfUnauthorized(podMembersQuery.error);
     }
   }, [podMembersQuery.isError, podMembersQuery.error]);
   const isAuthRedirecting =
@@ -244,7 +244,7 @@ function UserDetailDrawer({
       });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/people")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Reset failed",
         description: err.message,
@@ -267,7 +267,7 @@ function UserDetailDrawer({
       onClose();
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/people")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Remove failed",
         description: err.message,
@@ -471,8 +471,7 @@ function PodAdminsSection({
   useEffect(() => {
     if (workspacesQuery.isError || membersQuery.isError) {
       redirectToLoginIfUnauthorized(
-        workspacesQuery.error ?? membersQuery.error,
-        "/people"
+        workspacesQuery.error ?? membersQuery.error
       );
     }
   }, [
@@ -645,7 +644,7 @@ function AgentUsersSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/people");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -724,7 +723,7 @@ function AgentUserActions({ userId }: { userId: string }) {
       setConfirm(null);
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/people")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Revoke failed",
         description: err.message,
@@ -747,7 +746,7 @@ function AgentUserActions({ userId }: { userId: string }) {
       setConfirm(null);
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/people")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Remove failed",
         description: err.message,
@@ -852,7 +851,7 @@ function PendingInvitesSection() {
 
   useEffect(() => {
     if (invitesQuery.isError) {
-      redirectToLoginIfUnauthorized(invitesQuery.error, "/people");
+      redirectToLoginIfUnauthorized(invitesQuery.error);
     }
   }, [invitesQuery.isError, invitesQuery.error]);
   const isAuthRedirecting = invitesQuery.error?.data?.code === "UNAUTHORIZED";
@@ -863,7 +862,7 @@ function PendingInvitesSection() {
       addToast({ title: "Invite revoked", color: "default" });
     },
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/people")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
         title: "Revoke failed",
         description: e.message,
@@ -1006,7 +1005,7 @@ function AddPeopleModal({
 
   useEffect(() => {
     if (wsQuery.isError) {
-      redirectToLoginIfUnauthorized(wsQuery.error, "/people");
+      redirectToLoginIfUnauthorized(wsQuery.error);
     }
   }, [wsQuery.isError, wsQuery.error]);
 

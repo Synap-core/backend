@@ -74,7 +74,7 @@ export default function MyConnectionsPage() {
 
   useEffect(() => {
     if (keys.isError) {
-      redirectToLoginIfUnauthorized(keys.error, "/my-connections");
+      redirectToLoginIfUnauthorized(keys.error);
     }
   }, [keys.isError, keys.error]);
   const isAuthRedirecting = keys.error?.data?.code === "UNAUTHORIZED";

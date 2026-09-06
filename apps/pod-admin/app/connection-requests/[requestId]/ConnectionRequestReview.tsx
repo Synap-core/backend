@@ -100,13 +100,7 @@ export function ConnectionRequestReview({
       }
     },
     onError: (error) => {
-      if (
-        redirectToLoginIfUnauthorized(
-          error,
-          `/connection-requests/${requestId}`
-        )
-      )
-        return;
+      if (redirectToLoginIfUnauthorized(error)) return;
       setActionError(
         error.message ||
           "We couldn’t approve this request. Refresh and try again."
@@ -126,13 +120,7 @@ export function ConnectionRequestReview({
       window.setTimeout(() => router.push("/connections"), 900);
     },
     onError: (error) => {
-      if (
-        redirectToLoginIfUnauthorized(
-          error,
-          `/connection-requests/${requestId}`
-        )
-      )
-        return;
+      if (redirectToLoginIfUnauthorized(error)) return;
       setActionError(
         error.message ||
           "We couldn’t decline this request. Refresh and try again."
@@ -144,10 +132,7 @@ export function ConnectionRequestReview({
   // "we couldn't open this request" error.
   useEffect(() => {
     if (request.isError) {
-      redirectToLoginIfUnauthorized(
-        request.error,
-        `/connection-requests/${requestId}`
-      );
+      redirectToLoginIfUnauthorized(request.error);
     }
   }, [request.isError, request.error, requestId]);
   const isAuthRedirecting = request.error?.data?.code === "UNAUTHORIZED";

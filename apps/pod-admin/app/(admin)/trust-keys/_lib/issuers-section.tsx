@@ -180,7 +180,7 @@ export function IssuersSection() {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (list.isError) {
-      redirectToLoginIfUnauthorized(list.error, "/trust-keys");
+      redirectToLoginIfUnauthorized(list.error);
     }
   }, [list.isError, list.error]);
   const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
@@ -197,7 +197,7 @@ export function IssuersSection() {
       addToast({ title: "Issuer approved", color: "success" });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Approval failed",
         description: err.message,
@@ -212,7 +212,7 @@ export function IssuersSection() {
       addToast({ title: "Issuer rejected", color: "default" });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Reject failed",
         description: err.message,
@@ -227,7 +227,7 @@ export function IssuersSection() {
       addToast({ title: "Access revoked", color: "default" });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Revoke failed",
         description: err.message,

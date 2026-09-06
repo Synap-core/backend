@@ -124,7 +124,7 @@ function EntitiesInner() {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (entitiesQuery.isError) {
-      redirectToLoginIfUnauthorized(entitiesQuery.error, "/entities");
+      redirectToLoginIfUnauthorized(entitiesQuery.error);
     }
   }, [entitiesQuery.isError, entitiesQuery.error]);
   const isAuthRedirecting = entitiesQuery.error?.data?.code === "UNAUTHORIZED";
@@ -178,7 +178,7 @@ function EntitiesInner() {
       });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/entities")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Bulk delete failed",
         description: err.message,
@@ -431,7 +431,7 @@ function EntityTableRow({
       onDeleted();
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/entities")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Delete failed",
         description: err.message,

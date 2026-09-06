@@ -162,14 +162,14 @@ function AIProvidersSection() {
   const enableMutation = trpc.aiProviders.enable.useMutation({
     onSuccess: () => void utils.aiProviders.list.invalidate(),
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({ title: "Failed", description: e.message, color: "danger" });
     },
   });
   const disableMutation = trpc.aiProviders.disable.useMutation({
     onSuccess: () => void utils.aiProviders.list.invalidate(),
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({ title: "Failed", description: e.message, color: "danger" });
     },
   });
@@ -180,7 +180,7 @@ function AIProvidersSection() {
       addToast({ title: "Provider removed", color: "default" });
     },
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
         title: "Remove failed",
         description: e.message,
@@ -205,7 +205,7 @@ function AIProvidersSection() {
       }
     },
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
         title: "Probe error",
         description: e.message,
@@ -220,7 +220,7 @@ function AIProvidersSection() {
         color: "default",
       }),
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
         title: "Sync failed",
         description: e.message,
@@ -231,7 +231,7 @@ function AIProvidersSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -494,7 +494,7 @@ function ProviderFormModal({
       onSaved();
     },
     onError: (e) => {
-      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(e)) return;
       addToast({
         title: "Save failed",
         description: e.message,
@@ -692,7 +692,7 @@ function ProviderHealthSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -958,7 +958,7 @@ function DefaultModelsSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -1053,7 +1053,7 @@ function DefaultModelsModal({
       onClose();
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Save failed",
         description: err.message,
@@ -1142,7 +1142,7 @@ function IntelligenceServicesSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -1232,7 +1232,7 @@ function ProactiveDefaultsSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -1255,7 +1255,7 @@ function ProactiveDefaultsSection() {
       });
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/intelligence")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Save failed",
         description: err.message,
@@ -1455,7 +1455,7 @@ function FailedAiTurnsSection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
@@ -1576,7 +1576,7 @@ function OpenClawSummarySection() {
 
   useEffect(() => {
     if (query.isError) {
-      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+      redirectToLoginIfUnauthorized(query.error);
     }
   }, [query.isError, query.error]);
   const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";

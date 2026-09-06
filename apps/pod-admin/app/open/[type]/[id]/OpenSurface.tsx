@@ -94,7 +94,7 @@ function OpenSurfaceBody({ parsed }: { parsed: ParsedOpen }) {
     if (parsed.status !== "host") return;
     const err = entityQuery.error ?? viewQuery.error;
     if (err) {
-      redirectToLoginIfUnauthorized(err, `/open/${parsed.type}/${parsed.id}`);
+      redirectToLoginIfUnauthorized(err);
     }
   }, [entityQuery.error, viewQuery.error, parsed]);
 

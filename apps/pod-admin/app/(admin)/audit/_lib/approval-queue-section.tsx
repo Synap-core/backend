@@ -62,7 +62,7 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (list.isError) {
-      redirectToLoginIfUnauthorized(list.error, "/audit");
+      redirectToLoginIfUnauthorized(list.error);
     }
   }, [list.isError, list.error]);
   const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
@@ -146,7 +146,7 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
       setSelectedIds(new Set());
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/audit")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Approve failed",
         description: err.message,
@@ -165,7 +165,7 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
       setSelectedIds(new Set());
     },
     onError: (err) => {
-      if (redirectToLoginIfUnauthorized(err, "/audit")) return;
+      if (redirectToLoginIfUnauthorized(err)) return;
       addToast({
         title: "Reject failed",
         description: err.message,

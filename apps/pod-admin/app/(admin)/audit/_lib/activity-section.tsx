@@ -139,7 +139,7 @@ export function ActivitySection({
   // Expired session → login, not a dead "couldn't load" error.
   useEffect(() => {
     if (auditQuery.isError) {
-      redirectToLoginIfUnauthorized(auditQuery.error, "/audit");
+      redirectToLoginIfUnauthorized(auditQuery.error);
     }
   }, [auditQuery.isError, auditQuery.error]);
   const isAuthRedirecting = auditQuery.error?.data?.code === "UNAUTHORIZED";
