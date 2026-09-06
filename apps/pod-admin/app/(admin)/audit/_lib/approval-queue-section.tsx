@@ -30,8 +30,9 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Check, Mailbox, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -57,6 +58,14 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
     { status: "pending", limit: 100 },
     { staleTime: 15_000, refetchInterval: 60_000 }
   );
+
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (list.isError) {
+      redirectToLoginIfUnauthorized(list.error, "/audit");
+    }
+  }, [list.isError, list.error]);
+  const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
 
   const utils = trpc.useUtils();
 
@@ -136,12 +145,14 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
       }
       setSelectedIds(new Set());
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/audit")) return;
       addToast({
         title: "Approve failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const batchReject = trpc.proposals.batchReject.useMutation({
@@ -153,12 +164,14 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
       });
       setSelectedIds(new Set());
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/audit")) return;
       addToast({
         title: "Reject failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -245,7 +258,7 @@ export function ApprovalQueueSection({ filters }: { filters: AuditFilters }) {
           </div>
         )}
 
-        {list.isLoading ? (
+        {list.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : list.isError ? (
           <ResourceRowError

@@ -52,9 +52,10 @@ import {
   Settings2,
   Trash2,
 } from "lucide-react";
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -173,6 +174,14 @@ function WorkspacesInner() {
     staleTime: 30_000,
   });
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/workspaces");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   // The api-types snapshot types `settings` as the structured
   // WorkspaceSettings interface; we treat it as a loose record here so
   // we can read optional keys (`archivedAt`, `systemSlug`) without
@@ -251,7 +260,7 @@ function WorkspacesInner() {
           ) : null
         }
       >
-        {query.isLoading ? (
+        {query.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : query.isError ? (
           <ResourceRowError message="Couldn't load workspaces." />
@@ -363,6 +372,7 @@ function WorkspaceRowActions({
       setConfirmDelete(false);
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/workspaces")) return;
       addToast({
         title: "Delete failed",
         description: err.message,
@@ -385,6 +395,7 @@ function WorkspaceRowActions({
       setConfirmArchive(false);
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/workspaces")) return;
       addToast({
         title: archived ? "Restore failed" : "Archive failed",
         description: err.message,
@@ -676,7 +687,10 @@ function CreateWorkspaceModal({
       void utils.workspaces.adminListAll.invalidate();
       handleClose();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/workspaces")) return;
+      setError(e.message);
+    },
   });
 
   function handleClose() {

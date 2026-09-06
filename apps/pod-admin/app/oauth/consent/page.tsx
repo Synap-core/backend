@@ -21,6 +21,7 @@
  */
 
 import { ConsentForm } from "./ConsentForm";
+import { headers } from "next/headers";
 
 interface OAuthConsentPageProps {
   searchParams: Promise<{
@@ -40,9 +41,16 @@ export default async function OAuthConsentPage({
   searchParams,
 }: OAuthConsentPageProps) {
   const sp = await searchParams;
+  // Which pod is granting, and who is granting it. A consent screen that does
+  // not name the pod is the classic OAuth phishing shape.
+  const h = await headers();
+  const podHost = h.get("host") ?? undefined;
+  const identity = h.get("x-pod-admin-email") ?? undefined;
 
   return (
     <ConsentForm
+      podHost={podHost}
+      identity={identity}
       params={{
         clientId: sp.client_id ?? "",
         redirectUri: sp.redirect_uri ?? "",

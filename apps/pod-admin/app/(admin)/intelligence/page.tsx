@@ -56,9 +56,10 @@ import {
   Trash2,
   type LucideIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { openIn, DESKTOP_FALLBACK } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { HandoffCard } from "../components/handoff-card";
 import {
   ResourceRow,
@@ -159,13 +160,17 @@ function AIProvidersSection() {
 
   const enableMutation = trpc.aiProviders.enable.useMutation({
     onSuccess: () => void utils.aiProviders.list.invalidate(),
-    onError: (e) =>
-      addToast({ title: "Failed", description: e.message, color: "danger" }),
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      addToast({ title: "Failed", description: e.message, color: "danger" });
+    },
   });
   const disableMutation = trpc.aiProviders.disable.useMutation({
     onSuccess: () => void utils.aiProviders.list.invalidate(),
-    onError: (e) =>
-      addToast({ title: "Failed", description: e.message, color: "danger" }),
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
+      addToast({ title: "Failed", description: e.message, color: "danger" });
+    },
   });
   const removeMutation = trpc.aiProviders.remove.useMutation({
     onSuccess: () => {
@@ -173,12 +178,14 @@ function AIProvidersSection() {
       setDeleteTarget(null);
       addToast({ title: "Provider removed", color: "default" });
     },
-    onError: (e) =>
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
       addToast({
         title: "Remove failed",
         description: e.message,
         color: "danger",
-      }),
+      });
+    },
   });
   const probeMutation = trpc.aiProviders.probe.useMutation({
     onSuccess: (r) => {
@@ -196,12 +203,14 @@ function AIProvidersSection() {
         });
       }
     },
-    onError: (e) =>
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
       addToast({
         title: "Probe error",
         description: e.message,
         color: "danger",
-      }),
+      });
+    },
   });
   const syncMutation = trpc.aiProviders.sync.useMutation({
     onSuccess: (r) =>
@@ -209,13 +218,22 @@ function AIProvidersSection() {
         title: `Synced ${r.count} providers to IS`,
         color: "default",
       }),
-    onError: (e) =>
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
       addToast({
         title: "Sync failed",
         description: e.message,
         color: "danger",
-      }),
+      });
+    },
   });
+
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
 
   const rows = query.data ?? [];
 
@@ -253,7 +271,7 @@ function AIProvidersSection() {
           </div>
         }
       >
-        {query.isLoading ? (
+        {query.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={2} />
         ) : query.isError ? (
           <ErrorBanner
@@ -474,12 +492,14 @@ function ProviderFormModal({
       });
       onSaved();
     },
-    onError: (e) =>
+    onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/intelligence")) return;
       addToast({
         title: "Save failed",
         description: e.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   function set(field: keyof ProviderFormDraft, value: string | boolean) {
@@ -669,6 +689,13 @@ function ProviderHealthSection() {
     },
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const cards: ProviderCardData[] = (
     query.data?.intelligenceServices ?? []
   ).map((s) => {
@@ -722,7 +749,7 @@ function ProviderHealthSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {query.isLoading || isAuthRedirecting ? (
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, i) => (
             <div
@@ -928,6 +955,13 @@ function DefaultModelsSection() {
     staleTime: 60_000,
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const defaults = query.data?.defaults;
 
   return (
@@ -942,7 +976,7 @@ function DefaultModelsSection() {
           color="primary"
           startContent={<Settings className="h-3 w-3" />}
           onPress={() => setEditing(true)}
-          isDisabled={query.isLoading || query.isError}
+          isDisabled={query.isLoading || query.isError || isAuthRedirecting}
         >
           Edit defaults
         </Button>
@@ -975,7 +1009,7 @@ function DefaultModelsSection() {
                   {slot.hint}
                 </span>
                 <span className="mt-1 text-[11.5px] text-foreground/45 tabular truncate">
-                  {query.isLoading
+                  {query.isLoading || isAuthRedirecting
                     ? "Loading…"
                     : value
                       ? value
@@ -1018,6 +1052,7 @@ function DefaultModelsModal({
       onClose();
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/intelligence")) return;
       addToast({
         title: "Save failed",
         description: err.message,
@@ -1104,6 +1139,13 @@ function IntelligenceServicesSection() {
     staleTime: 30_000,
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const rows = (query.data ?? []) as ISInstanceRow[];
 
   return (
@@ -1118,7 +1160,7 @@ function IntelligenceServicesSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {query.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={3} />
       ) : query.isError ? (
         <ErrorBanner
@@ -1187,6 +1229,13 @@ function ProactiveDefaultsSection() {
     staleTime: 60_000,
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const [draft, setDraft] = useState<ProactiveDraft | null>(null);
 
   // Seed local draft from server data on first load — afterwards local
@@ -1205,6 +1254,7 @@ function ProactiveDefaultsSection() {
       });
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/intelligence")) return;
       addToast({
         title: "Save failed",
         description: err.message,
@@ -1265,7 +1315,7 @@ function ProactiveDefaultsSection() {
         ) : null
       }
     >
-      {query.isLoading || !draft ? (
+      {query.isLoading || isAuthRedirecting || !draft ? (
         <div className="flex items-center gap-2 px-3 py-4 text-[12.5px] text-foreground/55">
           <Spinner size="sm" /> Loading proactive defaults…
         </div>
@@ -1401,6 +1451,14 @@ function FailedAiTurnsSection() {
     { flowType: "chat", status: "failed", limit: 15 },
     { staleTime: 15_000, refetchOnWindowFocus: true }
   );
+
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const runs = query.data?.runs ?? [];
 
   return (
@@ -1416,7 +1474,7 @@ function FailedAiTurnsSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {query.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={3} />
       ) : query.isError ? (
         <ErrorBanner
@@ -1523,6 +1581,13 @@ function OpenClawSummarySection() {
     { staleTime: 60_000, retry: false }
   );
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/intelligence");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const oc = query.data?.openclaw;
 
   let status: StatusKind = "unknown";
@@ -1544,7 +1609,7 @@ function OpenClawSummarySection() {
   return (
     <SectionCard
       title="OpenClaw"
-      hint="Pod-wide agent runtime — manage from Eve"
+      hint="Pod-wide agent runtime — configured outside Pod Admin"
       actions={<StatusPill kind={status} label={statusLabel} />}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1557,7 +1622,7 @@ function OpenClawSummarySection() {
           </span>
           <div className="flex flex-col gap-0.5 min-w-0">
             <span className="text-[14px] font-medium text-foreground">
-              {query.isLoading
+              {query.isLoading || isAuthRedirecting
                 ? "Loading…"
                 : oc?.provisioned
                   ? `1 agent provisioned · ${oc.activeHubKeys} active key${
@@ -1568,7 +1633,7 @@ function OpenClawSummarySection() {
             <span className="text-[11.5px] text-foreground/55">
               {query.data?.lifecycleDomains?.runtime
                 ? `Runtime managed by ${query.data.lifecycleDomains.runtime}`
-                : "Skills + agents managed in Eve"}
+                : "Skills and agents are configured outside Pod Admin"}
             </span>
           </div>
         </div>

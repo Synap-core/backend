@@ -34,6 +34,7 @@ import {
 import { Suspense, useEffect, useMemo, useState, type ReactNode } from "react";
 import { openIn } from "../../../lib/open-in";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { DetailDrawer } from "../components/detail-drawer";
 import { HandoffCard } from "../components/handoff-card";
 import {
@@ -135,6 +136,13 @@ function ProviderHealthGrid() {
     retry: false,
   });
 
+  useEffect(() => {
+    if (providersQuery.isError) {
+      redirectToLoginIfUnauthorized(providersQuery.error, "/connectors");
+    }
+  }, [providersQuery.isError, providersQuery.error]);
+  const isAuthRedirecting = providersQuery.error?.data?.code === "UNAUTHORIZED";
+
   const aggregates = useMemo<ProviderAggregate[]>(() => {
     if (!providersQuery.data) return [];
     const raw = (providersQuery.data.providers ?? []) as CpProviderRow[];
@@ -185,7 +193,7 @@ function ProviderHealthGrid() {
         ) : null
       }
     >
-      {providersQuery.isLoading ? (
+      {providersQuery.isLoading || isAuthRedirecting ? (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <ProviderCardSkeleton key={i} />
@@ -324,6 +332,13 @@ function PodLevelConnectorsSection() {
     retry: false,
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/connectors");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const rows = (query.data ?? []) as SourceConfigRow[];
 
   return (
@@ -338,7 +353,7 @@ function PodLevelConnectorsSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {query.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={3} />
       ) : query.isError ? (
         <ErrorBanner
@@ -414,6 +429,13 @@ function PerWorkspaceGridSection() {
     retry: false,
   });
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/connectors");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   const rows = (query.data ?? []) as ConnectionRow[];
 
   // ?focus=<connectionId> from ⌘K or Overview alerts (sync errors).
@@ -449,7 +471,7 @@ function PerWorkspaceGridSection() {
           </span>
         }
       >
-        {query.isLoading ? (
+        {query.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : query.isError ? (
           <ErrorBanner

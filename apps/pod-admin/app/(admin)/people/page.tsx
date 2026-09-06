@@ -46,8 +46,9 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import { Suspense, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import { useOperatorEmail } from "../components/admin-shell";
 import { DetailDrawer } from "../components/detail-drawer";
 import {
@@ -142,6 +143,14 @@ function PeopleInner() {
     staleTime: 60_000,
   });
 
+  useEffect(() => {
+    if (podMembersQuery.isError) {
+      redirectToLoginIfUnauthorized(podMembersQuery.error, "/people");
+    }
+  }, [podMembersQuery.isError, podMembersQuery.error]);
+  const isAuthRedirecting =
+    podMembersQuery.error?.data?.code === "UNAUTHORIZED";
+
   // Single shared drawer for all human user detail.
   const [selectedMember, setSelectedMember] = useState<PodMember | null>(null);
   const [selectedIsPodAdmin, setSelectedIsPodAdmin] = useState(false);
@@ -183,7 +192,7 @@ function PeopleInner() {
         />
         <WorkspaceMembersSection
           members={podMembersQuery.data ?? []}
-          isLoading={podMembersQuery.isLoading}
+          isLoading={podMembersQuery.isLoading || isAuthRedirecting}
           isError={podMembersQuery.isError}
           onOpenMember={(m) => openMember(m, false)}
         />
@@ -234,6 +243,7 @@ function UserDetailDrawer({
       });
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/people")) return;
       addToast({
         title: "Reset failed",
         description: err.message,
@@ -256,6 +266,7 @@ function UserDetailDrawer({
       onClose();
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/people")) return;
       addToast({
         title: "Remove failed",
         description: err.message,
@@ -475,9 +486,27 @@ function PodAdminsSection({
     { enabled: !!podAdminWorkspaceId, staleTime: 60_000 }
   );
 
+  useEffect(() => {
+    if (workspacesQuery.isError || membersQuery.isError) {
+      redirectToLoginIfUnauthorized(
+        workspacesQuery.error ?? membersQuery.error,
+        "/people"
+      );
+    }
+  }, [
+    workspacesQuery.isError,
+    workspacesQuery.error,
+    membersQuery.isError,
+    membersQuery.error,
+  ]);
+  const isAuthRedirecting =
+    workspacesQuery.error?.data?.code === "UNAUTHORIZED" ||
+    membersQuery.error?.data?.code === "UNAUTHORIZED";
+
   const isLoading =
     workspacesQuery.isLoading ||
-    (!!podAdminWorkspaceId && membersQuery.isLoading);
+    (!!podAdminWorkspaceId && membersQuery.isLoading) ||
+    isAuthRedirecting;
   const isError = workspacesQuery.isError || membersQuery.isError;
 
   const admins = useMemo(() => {
@@ -632,6 +661,13 @@ function AgentUsersSection() {
     { staleTime: 60_000 }
   );
 
+  useEffect(() => {
+    if (query.isError) {
+      redirectToLoginIfUnauthorized(query.error, "/people");
+    }
+  }, [query.isError, query.error]);
+  const isAuthRedirecting = query.error?.data?.code === "UNAUTHORIZED";
+
   return (
     <SectionCard
       title="Agent users"
@@ -645,7 +681,7 @@ function AgentUsersSection() {
         ) : null
       }
     >
-      {query.isLoading ? (
+      {query.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={2} />
       ) : query.isError ? (
         <ResourceRowError message="Couldn't load agent users." />
@@ -706,6 +742,7 @@ function AgentUserActions({ userId }: { userId: string }) {
       setConfirm(null);
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/people")) return;
       addToast({
         title: "Revoke failed",
         description: err.message,
@@ -728,6 +765,7 @@ function AgentUserActions({ userId }: { userId: string }) {
       setConfirm(null);
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/people")) return;
       addToast({
         title: "Remove failed",
         description: err.message,
@@ -862,12 +900,20 @@ function PendingInvitesSection() {
     { staleTime: 30_000 }
   );
 
+  useEffect(() => {
+    if (invitesQuery.isError) {
+      redirectToLoginIfUnauthorized(invitesQuery.error, "/people");
+    }
+  }, [invitesQuery.isError, invitesQuery.error]);
+  const isAuthRedirecting = invitesQuery.error?.data?.code === "UNAUTHORIZED";
+
   const revokeMutation = trpc.workspaces.revokeInvite.useMutation({
     onSuccess: () => {
       void invitesQuery.refetch();
       addToast({ title: "Invite revoked", color: "default" });
     },
     onError: (e) => {
+      if (redirectToLoginIfUnauthorized(e, "/people")) return;
       addToast({
         title: "Revoke failed",
         description: e.message,
@@ -896,7 +942,8 @@ function PendingInvitesSection() {
 
   const pending = invitesQuery.data ?? [];
 
-  if (!invitesQuery.isLoading && pending.length === 0) return null;
+  if (!invitesQuery.isLoading && !isAuthRedirecting && pending.length === 0)
+    return null;
 
   return (
     <SectionCard
@@ -910,7 +957,7 @@ function PendingInvitesSection() {
         ) : null
       }
     >
-      {invitesQuery.isLoading ? (
+      {invitesQuery.isLoading || isAuthRedirecting ? (
         <ResourceRowSkeleton count={1} />
       ) : invitesQuery.isError ? (
         <ResourceRowError message="Couldn't load pending invites." />
@@ -1006,6 +1053,13 @@ function AddPeopleModal({
     enabled: isOpen && scope === "workspaces",
     staleTime: 60_000,
   });
+
+  useEffect(() => {
+    if (wsQuery.isError) {
+      redirectToLoginIfUnauthorized(wsQuery.error, "/people");
+    }
+  }, [wsQuery.isError, wsQuery.error]);
+
   const userWorkspaces = useMemo(
     () =>
       (wsQuery.data ?? []).filter((ws) => {

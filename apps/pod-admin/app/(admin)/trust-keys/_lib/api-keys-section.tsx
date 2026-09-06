@@ -48,8 +48,9 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -159,6 +160,22 @@ export function ApiKeysSection() {
     staleTime: 60_000,
   });
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    const err = operatorKeys.error ?? systemKeys.error;
+    if (operatorKeys.isError || systemKeys.isError) {
+      redirectToLoginIfUnauthorized(err, "/trust-keys");
+    }
+  }, [
+    operatorKeys.isError,
+    operatorKeys.error,
+    systemKeys.isError,
+    systemKeys.error,
+  ]);
+  const isAuthRedirecting =
+    operatorKeys.error?.data?.code === "UNAUTHORIZED" ||
+    systemKeys.error?.data?.code === "UNAUTHORIZED";
+
   useFocusRow({
     ready: !operatorKeys.isLoading && !systemKeys.isLoading,
   });
@@ -193,12 +210,14 @@ export function ApiKeysSection() {
         });
       }
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Create failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const createSystem = trpc.apiKeys.createSystemKey.useMutation({
@@ -233,12 +252,14 @@ export function ApiKeysSection() {
       void utils.apiKeys.listSystemKeys.invalidate();
       addToast({ title: "Key revoked", color: "default" });
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Revoke failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const rotate = trpc.apiKeys.rotate.useMutation({
@@ -253,12 +274,14 @@ export function ApiKeysSection() {
         });
       }
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Rotate failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const deleteRevoked = trpc.apiKeys.adminDeleteRevoked.useMutation({
@@ -267,12 +290,14 @@ export function ApiKeysSection() {
       void utils.apiKeys.listSystemKeys.invalidate();
       addToast({ title: "Key deleted", color: "default" });
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Delete failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   // Merge both queries into a single de-duplicated list keyed by id.
@@ -295,7 +320,8 @@ export function ApiKeysSection() {
   const active = useMemo(() => allKeys.filter((k) => k.isActive), [allKeys]);
   const revoked = useMemo(() => allKeys.filter((k) => !k.isActive), [allKeys]);
 
-  const isLoading = operatorKeys.isLoading || systemKeys.isLoading;
+  const isLoading =
+    operatorKeys.isLoading || systemKeys.isLoading || isAuthRedirecting;
   const isError = operatorKeys.isError || systemKeys.isError;
   const shown = tab === "active" ? active : revoked;
 

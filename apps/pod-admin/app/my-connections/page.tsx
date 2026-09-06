@@ -50,6 +50,7 @@ export default function MyConnectionsPage() {
 
   const revoke = trpc.apiKeys.revoke.useMutation({
     onSuccess: async (res) => {
+      setPendingRevoke(null);
       await utils.apiKeys.list.invalidate();
       if ("proposalId" in res && res.proposalId) {
         addToast({
@@ -61,12 +62,14 @@ export default function MyConnectionsPage() {
         addToast({ title: "Connection revoked", color: "default" });
       }
     },
-    onError: (err) =>
+    onError: (err) => {
+      setPendingRevoke(null);
       addToast({
         title: "Couldn't revoke",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   useEffect(() => {
@@ -194,10 +197,14 @@ export default function MyConnectionsPage() {
       <ConfirmModal
         isOpen={pendingRevoke !== null}
         onClose={() => setPendingRevoke(null)}
+        /* Deliberately does NOT close here. Closing in onConfirm unmounted the
+           modal before the mutation resolved, so `isPending` could never
+           render and the user got no sign the click landed on a network
+           round-trip — on the one action the modal exists to slow down. The
+           mutation's own onSuccess/onError closes it. */
         onConfirm={() => {
           if (!pendingRevoke) return;
           revoke.mutate({ keyId: pendingRevoke.id });
-          setPendingRevoke(null);
         }}
         title={`Revoke "${pendingRevoke?.keyName ?? "this key"}"?`}
         consequence={

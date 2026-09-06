@@ -35,9 +35,10 @@ import {
   ShieldQuestion,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import {
   ResourceRow,
   ResourceRowEmpty,
@@ -176,6 +177,14 @@ export function IssuersSection() {
     staleTime: 60_000,
   });
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (list.isError) {
+      redirectToLoginIfUnauthorized(list.error, "/trust-keys");
+    }
+  }, [list.isError, list.error]);
+  const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
+
   // ?focus=<issuerId> from ⌘K or Overview's pending-issuer alert. Receiver
   // is `data-row-id` on the wrapping div around each IssuerRow.
   useFocusRow({ ready: !list.isLoading });
@@ -187,12 +196,14 @@ export function IssuersSection() {
       void utils.trustedIssuers.list.invalidate();
       addToast({ title: "Issuer approved", color: "success" });
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Approval failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const reject = trpc.trustedIssuers.reject.useMutation({
@@ -200,12 +211,14 @@ export function IssuersSection() {
       void utils.trustedIssuers.list.invalidate();
       addToast({ title: "Issuer rejected", color: "default" });
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Reject failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const revoke = trpc.trustedIssuers.revoke.useMutation({
@@ -213,12 +226,14 @@ export function IssuersSection() {
       void utils.trustedIssuers.list.invalidate();
       addToast({ title: "Access revoked", color: "default" });
     },
-    onError: (err) =>
+    onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/trust-keys")) return;
       addToast({
         title: "Revoke failed",
         description: err.message,
         color: "danger",
-      }),
+      });
+    },
   });
 
   const issuers = useMemo<IssuerLike[]>(
@@ -306,7 +321,7 @@ export function IssuersSection() {
 
       {/* List */}
       <div className="rounded-lg ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]">
-        {list.isLoading ? (
+        {list.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={3} />
         ) : list.isError ? (
           <ResourceRowError

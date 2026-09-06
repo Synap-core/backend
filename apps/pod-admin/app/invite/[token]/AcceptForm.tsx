@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Button, Card, CardBody, Input, Tab, Tabs } from "@heroui/react";
+import { ReceiverShell } from "../../_lib/receiver-shell";
+import { Button, CardBody, Input, Tab, Tabs } from "@heroui/react";
 import { AlertCircle, CheckCircle2, LogIn, UserPlus } from "lucide-react";
 import {
   collectErrorMessages,
@@ -40,7 +41,13 @@ type PageState =
     }
   | { status: "done" };
 
-export function AcceptForm({ token }: { token: string }) {
+export function AcceptForm({
+  token,
+  podHost,
+}: {
+  token: string;
+  podHost?: string;
+}) {
   const [state, setState] = useState<PageState>({ status: "loading" });
 
   const previewQuery = trpc.workspaces.previewInvite.useQuery(
@@ -104,13 +111,13 @@ export function AcceptForm({ token }: { token: string }) {
 
   if (state.status === "loading")
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <LoadingBody />
       </Shell>
     );
   if (state.status === "error")
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <ErrorBody
           message={state.message}
           onRetry={() => {
@@ -122,19 +129,19 @@ export function AcceptForm({ token }: { token: string }) {
     );
   if (state.status === "not-found")
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <NotFoundBody />
       </Shell>
     );
   if (state.status === "expired")
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <ExpiredBody />
       </Shell>
     );
   if (state.status === "done")
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <DoneBody />
       </Shell>
     );
@@ -148,7 +155,7 @@ export function AcceptForm({ token }: { token: string }) {
       preview.email.toLowerCase()
   ) {
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <WrongAccountBody inviteEmail={preview.email} />
       </Shell>
     );
@@ -157,7 +164,7 @@ export function AcceptForm({ token }: { token: string }) {
   // Logged-in + email matches → one-click accept
   if (session) {
     return (
-      <Shell>
+      <Shell podHost={podHost}>
         <InviteHeader preview={preview} />
         {acceptMutation.error ? (
           <ErrorBanner message={acceptMutation.error.message} />
@@ -177,7 +184,7 @@ export function AcceptForm({ token }: { token: string }) {
 
   // Not logged in → register or sign in
   return (
-    <Shell>
+    <Shell podHost={podHost}>
       <InviteHeader preview={preview} />
       <Tabs
         aria-label="Accept options"
@@ -503,17 +510,21 @@ function LoginPanel({
 
 // ─── Shared sub-components ───────────────────────────────────────────────────
 
-function Shell({ children }: { children: React.ReactNode }) {
+/* `podHost` is threaded rather than read from a context because this route is
+   UNAUTHENTICATED — the invitee has no session yet, so there is no identity to
+   show, only which pod is inviting them. That is the one fact that makes an
+   invite email distinguishable from a phishing one. */
+function Shell({
+  children,
+  podHost,
+}: {
+  children: React.ReactNode;
+  podHost?: string;
+}) {
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-16">
-      <Card
-        radius="lg"
-        shadow="none"
-        className="w-full max-w-md bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10"
-      >
-        <CardBody className="flex flex-col gap-5 p-8">{children}</CardBody>
-      </Card>
-    </main>
+    <ReceiverShell podHost={podHost} width="sm">
+      <CardBody className="flex flex-col gap-5 p-8">{children}</CardBody>
+    </ReceiverShell>
   );
 }
 

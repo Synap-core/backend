@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 import { trpc } from "../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
 import {
   ResourceRowEmpty,
   ResourceRowError,
@@ -124,6 +125,14 @@ function EntitiesInner() {
     setSelectedIds(new Set());
   }, [search, profileSlug, workspaceIdInput, podWideOnly]);
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (entitiesQuery.isError) {
+      redirectToLoginIfUnauthorized(entitiesQuery.error, "/entities");
+    }
+  }, [entitiesQuery.isError, entitiesQuery.error]);
+  const isAuthRedirecting = entitiesQuery.error?.data?.code === "UNAUTHORIZED";
+
   const items = (entitiesQuery.data?.items ?? []) as EntityRow[];
   const total = entitiesQuery.data?.total ?? 0;
   const pageCount = Math.ceil(total / LIMIT);
@@ -173,6 +182,7 @@ function EntitiesInner() {
       });
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/entities")) return;
       addToast({
         title: "Bulk delete failed",
         description: err.message,
@@ -326,7 +336,7 @@ function EntitiesInner() {
           ) : null
         }
       >
-        {entitiesQuery.isLoading ? (
+        {entitiesQuery.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={6} />
         ) : entitiesQuery.isError ? (
           <ResourceRowError message="Couldn't load entities." />
@@ -413,6 +423,7 @@ function EntityTableRow({
       onDeleted();
     },
     onError: (err) => {
+      if (redirectToLoginIfUnauthorized(err, "/entities")) return;
       addToast({
         title: "Delete failed",
         description: err.message,

@@ -54,25 +54,27 @@ export default function ApplicationConnectionsPage() {
   const utils = trpc.useUtils();
   const [revokeError, setRevokeError] = useState<string | null>(null);
   const [showArchive, setShowArchive] = useState(false);
+  const [pendingRevoke, setPendingRevoke] = useState<{
+    id: string;
+    displayName: string;
+  } | null>(null);
   const revoke = trpc.applicationConnections.revokeConnection.useMutation({
     onSuccess: async () => {
       setRevokeError(null);
+      setPendingRevoke(null);
       await utils.applicationConnections.list.invalidate();
     },
-    onError: () =>
+    onError: () => {
+      setPendingRevoke(null);
       setRevokeError(
-        "We couldn’t revoke this app connection. Refresh and try again."
-      ),
+        "We couldn't revoke this app connection. Refresh and try again."
+      );
+    },
   });
 
   /* Was a native `window.confirm`. The consequence copy below is the reason
      this needed a real modal: it has to say what revoking does AND what it
      pointedly does not, and an OS dialog renders that as one grey wall. */
-  const [pendingRevoke, setPendingRevoke] = useState<{
-    id: string;
-    displayName: string;
-  } | null>(null);
-
   function confirmRevoke(connection: { id: string; displayName: string }) {
     setPendingRevoke(connection);
   }
@@ -304,10 +306,14 @@ export default function ApplicationConnectionsPage() {
       <ConfirmModal
         isOpen={pendingRevoke !== null}
         onClose={() => setPendingRevoke(null)}
+        /* Deliberately does NOT close here. Closing in onConfirm unmounted the
+           modal before the mutation resolved, so `isPending` could never
+           render and the user got no sign the click landed on a network
+           round-trip — on the one action the modal exists to slow down. The
+           mutation's own onSuccess/onError closes it. */
         onConfirm={() => {
           if (!pendingRevoke) return;
           revoke.mutate({ id: pendingRevoke.id });
-          setPendingRevoke(null);
         }}
         title={`Revoke ${pendingRevoke?.displayName ?? "this app"}?`}
         consequence={

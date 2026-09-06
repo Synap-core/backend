@@ -152,9 +152,10 @@ export function SearchModal({ isOpen, onClose }: SearchModalProps) {
     staleTime: 30_000,
   });
 
-  // Pod-level (`workspaceId: null`) so the result set matches exactly what
-  // Audit → Proposals renders — the receiver's `?focus=` scroll-into-view
-  // only searches that same pod-level list.
+  // Pod-level (`workspaceId: null`) so this window matches the one Audit →
+  // Proposals queries. Both now filter server-side; when only this one did,
+  // a result ranked outside the other's unfiltered 100 would navigate to a
+  // page that silently focused nothing.
   const proposalsQuery = trpc.proposals.list.useQuery(
     { workspaceId: null, status: "all", limit: 100 },
     { enabled: isOpen, staleTime: 15_000 }

@@ -47,7 +47,18 @@ export function ConfirmModal({
   isPending = false,
 }: ConfirmModalProps) {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md" radius="lg">
+    /* Not dismissable while the mutation is in flight: the modal now stays up
+       until the request resolves, so letting it be closed mid-flight would put
+       the user back on a list that has not changed yet, with no idea whether
+       the revoke landed. */
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      size="md"
+      radius="lg"
+      isDismissable={!isPending}
+      hideCloseButton={isPending}
+    >
       <ModalContent>
         <ModalHeader className="flex flex-col gap-1 pb-2">
           <h2 className="text-[15px] font-medium text-foreground">{title}</h2>

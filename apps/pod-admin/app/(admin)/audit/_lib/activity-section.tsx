@@ -28,6 +28,7 @@ import {
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import {
   ResourceRowEmpty,
@@ -135,6 +136,14 @@ export function ActivitySection({
     refetchInterval: 60_000,
   });
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (auditQuery.isError) {
+      redirectToLoginIfUnauthorized(auditQuery.error, "/audit");
+    }
+  }, [auditQuery.isError, auditQuery.error]);
+  const isAuthRedirecting = auditQuery.error?.data?.code === "UNAUTHORIZED";
+
   const events = (auditQuery.data?.events ?? []) as AuditEvent[];
   const actors =
     (auditQuery.data?.actors as Record<string, ActorSummary>) ?? {};
@@ -192,7 +201,7 @@ export function ActivitySection({
   return (
     <>
       <div className="rounded-lg ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]">
-        {auditQuery.isLoading ? (
+        {auditQuery.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={6} />
         ) : auditQuery.isError ? (
           <ResourceRowError

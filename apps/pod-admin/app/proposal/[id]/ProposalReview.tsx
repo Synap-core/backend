@@ -169,11 +169,15 @@ export function ProposalReview({
     <ExitLink exit={appExit} label="Open in the Synap desktop app" />
   );
 
-  /* The frame is now shared with every other inbound route (invite, agent
-     approval, OAuth consent, /open) so a reader who lands on two of them
-     recognises the second. `openInApp` moves into the shell's footer slot. */
-  const shell = (children: ReactNode) => (
-    <ReceiverShell podHost={podHost} identity={identity} footer={openInApp}>
+  /* Shared with the other inbound routes — /open, invite, agent approval and
+     OAuth consent — so a reader who lands on two of them recognises the
+     second. `connection-requests` and `connect` still render their own. */
+  /* `footer` is opt-in per branch. Passing it unconditionally offered "Open in
+     the Synap desktop app" on the loading, not-found and unauthorized cards —
+     a link into nothing for a proposal that does not exist or that the reader
+     is not allowed to see. */
+  const shell = (children: ReactNode, footer?: ReactNode) => (
+    <ReceiverShell podHost={podHost} identity={identity} footer={footer}>
       {children}
     </ReceiverShell>
   );
@@ -353,9 +357,8 @@ export function ProposalReview({
             );
           })()
         )}
-
-        <div className="pt-1">{openInApp}</div>
       </CardBody>
-    </>
+    </>,
+    openInApp
   );
 }

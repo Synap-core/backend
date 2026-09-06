@@ -62,6 +62,11 @@ interface ReceiverShellProps {
   children: ReactNode;
   /** Exits and secondary affordances, rendered under the card. */
   footer?: ReactNode;
+  /**
+   * `sm` for a single decision (approve this agent, accept this invite, grant
+   * this scope); `md` when the card renders an object with fields to read.
+   */
+  width?: "sm" | "md";
 }
 
 export function ReceiverShell({
@@ -69,6 +74,7 @@ export function ReceiverShell({
   identity,
   children,
   footer,
+  width = "md",
 }: ReceiverShellProps) {
   // Explicit props win; otherwise fall back to the route-level provider.
   const inherited = useContext(ReceiverIdentityContext);

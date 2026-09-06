@@ -22,9 +22,17 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@heroui/react";
-import { LogOut, RefreshCw, Search } from "lucide-react";
+import { ExternalLink, LogOut, RefreshCw, Search } from "lucide-react";
 import { useEffect, useState } from "react";
 import { publicPodUrl } from "../../../lib/public-pod-url";
+import { openIn, type AccountPage } from "../../../lib/open-in";
+
+/** The account surfaces a pod cannot host itself. Order is most-reached-first. */
+const ACCOUNT_LINKS: { page: AccountPage; label: string }[] = [
+  { page: "pod", label: "Pod & plan" },
+  { page: "billing", label: "Billing" },
+  { page: "support", label: "Support" },
+];
 
 const POD_URL = publicPodUrl();
 
@@ -184,6 +192,35 @@ export function TopNav({
                   <p className="text-[11px] text-foreground/55">Pod admin</p>
                 </div>
               )}
+              <div className="h-px bg-foreground/[0.05]" />
+
+              {/* A pod owner sitting in their pod's console could not reach
+                  their plan, an invoice, support, or a single documentation
+                  page: `openIn` knew these destinations, and nothing linked to
+                  them. "Handed off" only counts if a door exists. These live on
+                  the landing site because a pod cannot host its own billing. */}
+              {ACCOUNT_LINKS.map(({ page, label }) => (
+                <a
+                  key={page}
+                  href={openIn({ kind: "account", page }).href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+                >
+                  {label}
+                  <ExternalLink className="h-3 w-3 text-foreground/40" />
+                </a>
+              ))}
+              <a
+                href={openIn({ kind: "guide", slug: "quickstart" }).href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-[12.5px] text-foreground/85 hover:bg-content2/60"
+              >
+                Documentation
+                <ExternalLink className="h-3 w-3 text-foreground/40" />
+              </a>
+
               <div className="h-px bg-foreground/[0.05]" />
               <button
                 type="button"

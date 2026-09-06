@@ -31,6 +31,7 @@ import {
   CircleAlert,
   Clock,
   Info,
+  Store,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -360,6 +361,47 @@ function BackLink() {
   );
 }
 
+/**
+ * Where a non-workspace package actually installs.
+ *
+ * `POST /api/marketplace/install` answers 501 for `capability | cell | view |
+ * automation | skill`; only `workspace` has a web install path. Before this,
+ * the page said "Not installable from here yet" — which reads as a defect in
+ * the product rather than what it is: a boundary. pod-admin is the pod's front
+ * desk, and installing a capability into a running workspace is desktop work.
+ *
+ * So: name the real destination first, and keep the CLI as a genuine second
+ * option rather than the apologetic only one. Operators who live in a terminal
+ * legitimately prefer it, and it is the one path that works for every kind.
+ *
+ * Module scope, not nested inside `InstallPanel`: a component declared in a
+ * render body gets a new identity every render, so React unmounts and remounts
+ * its subtree — harmless while the content is static, a real bug the moment
+ * anything in here holds state or focus.
+ */
+function KindHandoff({ category, slug }: { category: string; slug: string }) {
+  const noun = resolveObjectNoun(category);
+  return (
+    <div className="flex flex-col gap-3">
+      <HandoffCard
+        icon={Store}
+        title={`${noun} packages install in the desktop app`}
+        body={`Installing a ${noun.toLowerCase()} binds it to a live workspace, so it happens where that workspace is open. The pod's marketplace here is for browsing and for workspace packages.`}
+        exit={openIn({ kind: "app", appId: "marketplace" })}
+        cta="Open the marketplace in the app"
+      />
+      <div className="flex flex-col gap-1.5">
+        <p className="text-[11.5px] text-foreground/50">
+          Or install it from a terminal:
+        </p>
+        <code className="w-fit rounded-md bg-foreground/[0.06] px-2.5 py-1.5 font-mono text-[11.5px] text-foreground/80">
+          synap market install {slug}
+        </code>
+      </div>
+    </div>
+  );
+}
+
 function InstallPanel({
   stage,
   category,
@@ -514,41 +556,6 @@ function InstallPanel({
           </Button>
         </div>
       </SectionCard>
-    );
-  }
-
-  /**
-   * Where a non-workspace package actually installs.
-   *
-   * `POST /api/marketplace/install` answers 501 for `capability | cell | view |
-   * automation | skill`; only `workspace` has a web install path. Before this,
-   * the page said "Not installable from here yet" — which reads as a defect in
-   * the product rather than what it is: a boundary. pod-admin is the pod's front
-   * desk, and installing a capability into a running workspace is desktop work.
-   *
-   * So: name the real destination first, and keep the CLI as a genuine second
-   * option rather than the apologetic only one. Operators who live in a terminal
-   * legitimately prefer it, and it is the one path that works for every kind.
-   */
-  function KindHandoff({ category, slug }: { category: string; slug: string }) {
-    const noun = resolveObjectNoun(category);
-    return (
-      <div className="flex flex-col gap-3">
-        <HandoffCard
-          title={`${noun} packages install in the desktop app`}
-          body={`Installing a ${noun.toLowerCase()} binds it to a live workspace, so it happens where that workspace is open. The pod's marketplace here is for browsing and for workspace packages.`}
-          exit={openIn({ kind: "app", appId: "marketplace" })}
-          cta="Open the marketplace in the app"
-        />
-        <div className="flex flex-col gap-1.5">
-          <p className="text-[11.5px] text-foreground/50">
-            Or install it from a terminal:
-          </p>
-          <code className="w-fit rounded-md bg-foreground/[0.06] px-2.5 py-1.5 font-mono text-[11.5px] text-foreground/80">
-            synap market install {slug}
-          </code>
-        </div>
-      </div>
     );
   }
 

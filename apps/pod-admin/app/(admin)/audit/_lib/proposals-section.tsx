@@ -18,6 +18,7 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
 import { DetailDrawer } from "../../components/detail-drawer";
 import {
   ResourceRow,
@@ -86,14 +87,30 @@ function filterLabel(filter: string): string {
 export function ProposalsSection({ filters }: { filters: AuditFilters }) {
   const [statusFilter, setStatusFilter] = useState<ProposalStatusUI>("all");
 
+  /* `workspaceId: null` filters POD-LEVEL ON THE SERVER. This used to ask for
+     the newest 100 proposals across every workspace and then drop the
+     workspace-scoped ones in the browser, which had two consequences: pod-level
+     history was silently truncated by workspace noise, and the window stopped
+     matching the ⌘K palette's (which does filter server-side). A search result
+     ranked #150 overall would navigate here and quietly find nothing to focus. */
   const list = trpc.proposals.list.useQuery(
-    { status: statusFilter, limit: 100 },
+    { workspaceId: null, status: statusFilter, limit: 100 },
     { staleTime: 30_000 }
   );
 
+  // Expired session → login, not a dead "couldn't load" error.
+  useEffect(() => {
+    if (list.isError) {
+      redirectToLoginIfUnauthorized(list.error, "/audit");
+    }
+  }, [list.isError, list.error]);
+  const isAuthRedirecting = list.error?.data?.code === "UNAUTHORIZED";
+
   const items = (list.data?.items ?? []) as unknown as ProposalRow[];
 
-  // Filter to pod-level (workspaceId === null) + apply date range.
+  // Date range, plus a belt-and-braces repeat of the pod-level predicate the
+  // server now applies. Kept so this list can never render a workspace row if
+  // the server filter is ever relaxed.
   const podLevel = useMemo(() => {
     const fromMs = filters.fromDate ? new Date(filters.fromDate).getTime() : 0;
     const toMs = filters.toDate
@@ -152,7 +169,7 @@ export function ProposalsSection({ filters }: { filters: AuditFilters }) {
       </div>
 
       <div className="rounded-lg ring-1 ring-inset ring-foreground/10 bg-foreground/[0.02]">
-        {list.isLoading ? (
+        {list.isLoading || isAuthRedirecting ? (
           <ResourceRowSkeleton count={4} />
         ) : list.isError ? (
           <ResourceRowError

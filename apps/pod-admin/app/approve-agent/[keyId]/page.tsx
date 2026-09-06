@@ -23,6 +23,7 @@
  */
 
 import { ApproveForm } from "./ApproveForm";
+import { headers } from "next/headers";
 
 interface ApproveAgentPageProps {
   params: Promise<{ keyId: string }>;
@@ -39,5 +40,16 @@ export default async function ApproveAgentPage({
   const sp = await searchParams;
   const agentType = sp.agentType?.trim() || "agent";
 
-  return <ApproveForm keyId={keyId} agentType={agentType} />;
+  // Which pod is asking, and who the reader is signed in as. Without these a
+  // legitimate request reaching someone from an email is indistinguishable
+  // from a phishing page.
+  const h = await headers();
+  return (
+    <ApproveForm
+      keyId={keyId}
+      agentType={agentType}
+      podHost={h.get("host") ?? undefined}
+      identity={h.get("x-pod-admin-email") ?? undefined}
+    />
+  );
 }

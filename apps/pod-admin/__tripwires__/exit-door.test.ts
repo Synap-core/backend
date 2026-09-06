@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ACCOUNT_PAGES } from "../lib/open-in";
 
 /**
  * The exit-door invariants, enforced by scanning SOURCE.
@@ -170,6 +171,32 @@ describe("pod-admin exit door", () => {
  * So the guards are now pinned against their own evasions. A future
  * "simplification" of one of these regexes fails here.
  */
+/**
+ * Every destination `openIn` can emit must EXIST on the landing site.
+ *
+ * This is the rule the whole plan came from: four CTAs pointed at a receiver
+ * nobody had read, and one of them silently dropped the param it carried. A
+ * link is only worth emitting if its far end is real — so the far end is
+ * checked here rather than trusted.
+ *
+ * Skipped (not failed) when the landing repo is not checked out beside this
+ * one, so the suite still runs in a backend-only clone.
+ */
+describe("landing destinations exist", () => {
+  const LANDING = join(APP_ROOT, "../../../synap-landing/app");
+  const present = existsSync(LANDING);
+
+  const routes = [
+    ...ACCOUNT_PAGES.map((page) => `account/${page}`),
+    "download/browser",
+    "guides/quickstart",
+  ];
+
+  it.skipIf(!present).each(routes)("synap.live/%s is a real route", (route) => {
+    expect(existsSync(join(LANDING, route, "page.tsx"))).toBe(true);
+  });
+});
+
 describe("the guards catch their own evasions", () => {
   const STUDIO = /\/studio(?:\/|["'`])/;
   const CONFIRM = /(?:window\.|globalThis\.)?\bconfirm\s*\(/;
