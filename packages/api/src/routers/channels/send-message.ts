@@ -18,9 +18,15 @@ import { queryChannelMessages } from "../../utils/query-channel-messages.js";
 import { aiRateLimitMiddleware } from "../../middleware/ai-rate-limit.js";
 import {
   describeAiFailure,
+  describePartialTurnFailure,
   type AiFailureDescription,
+  type PartialTurnFailure,
 } from "../../utils/ai-failure.js";
 import { ChatTurnFailureError } from "../../utils/ai-failure-error.js";
+import {
+  narrowPartialFailure,
+  type ISPartialFailure,
+} from "@synap/intelligence-client";
 import {
   resolveAgentHandle,
   extractMentionAgentType,
@@ -819,6 +825,15 @@ export const sendMessageProcedure = protectedProcedure
     }> = [];
     const emittedProposalIds = new Set<string>();
     let hubResponse: Partial<HubResponse> = { content: "" };
+    /**
+     * A COMMITTED PARTIAL turn: the provider died mid-stream, the IS committed
+     * the text produced so far and ended the stream NORMALLY (no `error`
+     * frame). `fullContent` is real but TRUNCATED, so every terminal signal on
+     * this path — the SSE `complete` frame and the persisted assistant row —
+     * would otherwise report a complete success. This is the only thing that
+     * distinguishes the two.
+     */
+    let partialFailure: ISPartialFailure | null = null;
 
     // Effective agent type: @mention override → assignedAgentId (or legacy senderAgentId) → default
     let effectiveAgentType = "meta";
@@ -1222,6 +1237,14 @@ export const sendMessageProcedure = protectedProcedure
           if (chunk.data) {
             const data = chunk.data as Partial<HubResponse>;
             hubResponse = { ...hubResponse, ...data };
+            // ONE narrowing door, shared with the headless drain — see
+            // is-chat-stream.ts. First one wins; a later clean complete on the
+            // same turn must not erase a truncation we already observed.
+            partialFailure =
+              partialFailure ??
+              narrowPartialFailure(
+                (data as Record<string, unknown>).partialFailure
+              );
             // Collect proposals created by backend governance during this response
             const incoming = (data as Record<string, unknown>)
               .createdProposals as
@@ -1566,11 +1589,35 @@ export const sendMessageProcedure = protectedProcedure
     // (persistAssistantReply), the same one the a2ai worker uses.
     // Provenance metadata: IS + agent that produced this message. Surfaces
     // a "Synap · agent-name" badge in chat clients (Eve, Relay, Studio).
+    // Truncation verdict, translated ONCE from the IS's own code union into the
+    // client's (`describePartialTurnFailure` — the unions differ). Used twice
+    // below and both uses must agree: the live SSE `complete` frame, and the
+    // persisted assistant row's metadata. Live-only would flash the affordance
+    // and lose it on the first refetch — worse than never showing it.
+    const partialTurnFailure: PartialTurnFailure | null = partialFailure
+      ? describePartialTurnFailure(partialFailure)
+      : null;
+    if (partialFailure) {
+      logger.warn(
+        {
+          channelId,
+          userMessageId,
+          // Raw provider text: DIAGNOSTIC ONLY, never rendered.
+          isCode: partialFailure.code,
+          isMessage: partialFailure.message,
+          providerId: partialFailure.providerId,
+        },
+        "AI turn committed PARTIAL content after a mid-stream provider failure"
+      );
+    }
+
     const messageMetadata = {
       aiSteps,
       intelligenceServiceId: resolvedService.serviceId,
       agentId: resolvedAgentId,
       agentType: effectiveAgentType,
+      // Durable half: a reloaded turn still renders the truncation.
+      ...(partialTurnFailure ? { partialFailure: partialTurnFailure } : {}),
     };
 
     let persistedAssistantMessageId: string;
@@ -1880,6 +1927,9 @@ export const sendMessageProcedure = protectedProcedure
       branchThread: branchChannel,
       aiSteps,
       createdProposals,
+      // Live half: `chat-turn-sse.ts` spreads this result onto the `complete`
+      // frame, so the codec sees it on the same terminal event as the answer.
+      ...(partialTurnFailure ? { partialFailure: partialTurnFailure } : {}),
       ...(durableTurn
         ? {
             turnId: durableTurn.id,

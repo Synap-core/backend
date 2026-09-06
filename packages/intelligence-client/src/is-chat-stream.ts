@@ -108,7 +108,16 @@ export interface ISPartialFailure {
   retryAfterSeconds?: number;
 }
 
-function narrowPartialFailure(raw: unknown): ISPartialFailure | null {
+/**
+ * Narrow an untyped `complete.data.partialFailure` to `ISPartialFailure`.
+ *
+ * Exported because BOTH IS-stream consumers need it and neither may fork it:
+ * the headless drain below, and the INTERACTIVE path
+ * (`IntelligenceHubClient.sendMessageStream` → `channels.sendMessage`), which
+ * receives the same frame as `HubStreamEvent.data: unknown`. A second
+ * hand-rolled narrower is how the two paths would drift.
+ */
+export function narrowPartialFailure(raw: unknown): ISPartialFailure | null {
   if (typeof raw !== "object" || raw === null) return null;
   const obj = raw as Record<string, unknown>;
   if (typeof obj.code !== "string") return null;

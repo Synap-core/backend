@@ -42,6 +42,8 @@ import type { IsFailureEnvelope } from "@synap-core/types";
 export type AiFailureClass =
   | "quota"
   | "plan_quota"
+  | "context_length"
+  | "content_filter"
   | "cancelled"
   | "auth"
   | "rate_limit"
@@ -67,6 +69,8 @@ export type AiFailureClass =
 export type AiFailureCode =
   | "provider_no_credit"
   | "quota_exhausted"
+  | "context_length_exceeded"
+  | "content_filter"
   | "cancelled"
   | "provider_auth"
   | "rate_limited"
@@ -173,6 +177,8 @@ function extractCode(error: unknown): string {
 const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
   insufficient_credit: "quota",
   quota_exhausted: "plan_quota",
+  context_length_exceeded: "context_length",
+  content_filter: "content_filter",
   auth: "auth",
   rate_limit: "rate_limit",
   timeout: "timeout",
@@ -290,6 +296,24 @@ const COPY: Record<
     needsOperator: true,
     message:
       "The AI provider says this account's quota is used up. Retrying will not help — an operator has to raise the quota or wait for it to reset.",
+  },
+  // Neither of the next two is an operator problem: the OPERATOR cannot make a
+  // prompt shorter or make a safety filter accept it. `needsOperator: false`
+  // therefore, and `retryable: false` because resending the SAME request
+  // reproduces the same refusal — the user has to change the request itself.
+  context_length: {
+    code: "context_length_exceeded",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "This conversation is longer than the model can read in one go, so the answer was cut off. Sending the same request again will not help \u2014 start a new thread or shorten what you sent.",
+  },
+  content_filter: {
+    code: "content_filter",
+    retryable: false,
+    needsOperator: false,
+    message:
+      "The AI provider's safety filter refused this request. Sending the same request again will not help \u2014 rewording it may.",
   },
   cancelled: {
     code: "cancelled",
@@ -436,4 +460,47 @@ export function aiFailureMessage(
   options: { reference?: string | null } = {}
 ): string {
   return describeAiFailure(failure, options).message;
+}
+
+/**
+ * A COMMITTED PARTIAL turn — the client-shaped verdict.
+ *
+ * The IS commits the text produced before a mid-stream provider death and ends
+ * the stream NORMALLY (no `error` frame), so nothing on the terminal path can
+ * tell a truncated answer from a finished one. This is that missing signal.
+ *
+ * FIELD NAMES ARE THE CLIENT'S, not this module's: the streaming codec
+ * (`turn-decode.ts` → `resolveStreamingError` → `StreamError`) reads
+ * `code` / `message` / `recoverable` / `needsOperator`. Emitting `retryable`
+ * here instead would typecheck, ship, and render nothing — the same defect
+ * `chat-turn-sse.ts` documents for the error frame.
+ */
+export interface PartialTurnFailure {
+  readonly code: AiFailureCode;
+  readonly message: string;
+  /** Client spelling of `retryable`. Drives whether Retry may be offered. */
+  readonly recoverable: boolean;
+  readonly needsOperator: boolean;
+}
+
+/**
+ * Translate the IS's `ProviderFailure` (its OWN code union) into the client's
+ * `AiFailureCode` verdict for a truncated turn.
+ *
+ * The two unions are NOT the same: forwarding `insufficient_credit` raw would
+ * miss every `AiFailureCode` branch the surface switches on and fall through
+ * to printing `ProviderFailure.message` — raw provider text the IS documents
+ * as NOT user-facing copy. `describeAiFailure` is the existing translator; this
+ * only adds the one sentence that says the answer above is incomplete.
+ */
+export function describePartialTurnFailure(
+  failure: unknown
+): PartialTurnFailure {
+  const described = describeAiFailure(failure);
+  return {
+    code: described.code,
+    recoverable: described.retryable,
+    needsOperator: described.needsOperator,
+    message: `This answer stopped early — the AI provider dropped the response part-way through. ${described.message}`,
+  };
 }
