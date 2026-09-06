@@ -61,13 +61,15 @@ import { StatusPill, type StatusKind } from "../components/status-pill";
 import { useFocusRow } from "../components/use-focus-row";
 import { formatExpiresAt, formatRelative } from "./_lib/helpers";
 import { openIn } from "../../../lib/open-in";
+import { ExitFallback } from "../../../lib/exit-link";
 
 /**
- * The one exit from a membership row to that workspace in the desktop app.
+ * The exit from a membership row to that workspace in the desktop app.
  *
- * pod-admin cannot render a workspace, so this is a `synap://` link — which
- * does nothing at all, with no error, when the app is not installed. That is
- * why the download fallback is rendered beside it rather than left implicit.
+ * The row carries only the LINK. The "get the app" fallback is rendered once
+ * beneath the list instead of inside every row — `open-in.ts` says so in as
+ * many words, and someone in six workspaces should not be told to install the
+ * app six times. 40px target, because 24px was not a real one.
  */
 function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
   const exit = openIn({
@@ -76,30 +78,18 @@ function WorkspaceExit({ workspaceId }: { workspaceId: string }) {
     id: workspaceId,
   });
   return (
-    <div className="flex items-center gap-1.5">
-      <Button
-        as="a"
-        href={exit.href}
-        isIconOnly
-        size="sm"
-        radius="full"
-        variant="light"
-        aria-label="Open this workspace in the desktop app"
-        className="h-6 w-6 min-w-6 text-foreground/45 hover:text-foreground"
-      >
-        <ExternalLink className="h-3 w-3" />
-      </Button>
-      {exit.fallback && (
-        <a
-          href={exit.fallback.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[10.5px] text-foreground/35 underline-offset-2 hover:text-foreground/70 hover:underline"
-        >
-          {exit.fallback.label}
-        </a>
-      )}
-    </div>
+    <Button
+      as="a"
+      href={exit.href}
+      isIconOnly
+      size="sm"
+      radius="full"
+      variant="light"
+      aria-label="Open this workspace in the desktop app"
+      className="h-10 w-10 min-w-10 text-foreground/60 hover:text-foreground"
+    >
+      <ExternalLink className="h-3.5 w-3.5" />
+    </Button>
   );
 }
 
@@ -343,6 +333,18 @@ function UserDetailDrawer({
                 </div>
               ))}
             </div>
+            {member.workspaces.length > 0 && (
+              <p className="mt-2 text-[12px] text-foreground/70">
+                Workspaces open in the desktop app.{" "}
+                <ExitFallback
+                  exit={openIn({
+                    kind: "object",
+                    objectKind: "workspace",
+                    id: member.workspaces[0]!.id,
+                  })}
+                />
+              </p>
+            )}
           </div>
 
           {/* Actions */}

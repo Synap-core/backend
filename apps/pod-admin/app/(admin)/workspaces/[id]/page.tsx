@@ -15,6 +15,7 @@ import { trpc } from "../../../../lib/trpc";
 import { StatusPill } from "../../components/status-pill";
 import { formatRelative } from "../../people/_lib/helpers";
 import { openIn } from "../../../../lib/open-in";
+import { ExitLink } from "../../../../lib/exit-link";
 import { OverviewTab } from "./_lib/overview-tab";
 import { MembersTab } from "./_lib/members-tab";
 import { ApiKeysTab } from "./_lib/api-keys-tab";
@@ -48,32 +49,19 @@ const TABS: WorkspaceTab[] = [
   "governance",
 ];
 
+/* The workspace's contents live in the desktop app. `ExitLink` carries the
+   download fallback, because a `synap://` that does not resolve fails in
+   total silence. */
 function DesktopExit({ workspaceId }: { workspaceId: string }) {
-  const exit = openIn({
-    kind: "object",
-    objectKind: "workspace",
-    id: workspaceId,
-  });
   return (
-    <div className="flex items-center gap-2">
-      <a
-        href={exit.href}
-        className="flex items-center gap-1.5 rounded-md bg-foreground/[0.04] px-3 py-1.5 text-[12.5px] text-foreground/70 ring-1 ring-inset ring-foreground/10 hover:bg-foreground/[0.07] transition-colors"
-      >
-        Open in the desktop app
-        <ExternalLink className="h-3 w-3" />
-      </a>
-      {exit.fallback && (
-        <a
-          href={exit.fallback.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[11.5px] text-foreground/45 underline-offset-2 transition-colors hover:text-foreground/75 hover:underline"
-        >
-          {exit.fallback.label}
-        </a>
-      )}
-    </div>
+    <ExitLink
+      exit={openIn({
+        kind: "object",
+        objectKind: "workspace",
+        id: workspaceId,
+      })}
+      label="Open in the desktop app"
+    />
   );
 }
 

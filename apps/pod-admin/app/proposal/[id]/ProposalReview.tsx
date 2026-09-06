@@ -12,6 +12,11 @@ import {
 } from "@heroui/react";
 import { Check, X, ExternalLink, ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
+import {
+  buildObjectActionTitle,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
+import { ExitLink } from "../../../lib/exit-link";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -161,24 +166,7 @@ export function ProposalReview({
     id: proposalId,
   });
   const openInApp = (
-    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
-      <a
-        href={appExit.href}
-        className="inline-flex min-h-10 items-center gap-1.5 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75"
-      >
-        Open in the Synap desktop app <ExternalLink size={14} />
-      </a>
-      {appExit.fallback && (
-        <a
-          href={appExit.fallback.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[12px] text-foreground/40 underline-offset-2 transition-colors hover:text-foreground/70 hover:underline"
-        >
-          {appExit.fallback.label}
-        </a>
-      )}
-    </span>
+    <ExitLink exit={appExit} label="Open in the Synap desktop app" />
   );
 
   /* The frame is now shared with every other inbound route (invite, agent
@@ -213,7 +201,16 @@ export function ProposalReview({
 
   const status = String(p.status ?? "pending");
   const proposalType = String(p.proposalType ?? "change");
-  const targetLabel = String(p.targetName ?? p.targetType ?? "");
+  /* The heading names what APPROVING WILL DO, so the verb is imperative —
+     "Create workspace", not "Created workspace". Until 2026-09-06 this printed
+     `p.proposalType` verbatim, so the highest-stakes page in the product, the
+     one a stranger reaches from an email, greeted them with `entity.create`.
+     That exact leak is named in .claude/rules/vocabulary.md. */
+  const heading = buildObjectActionTitle({
+    action: proposalType,
+    objectKind: String(p.targetType ?? ""),
+    objectName: p.targetName ? String(p.targetName) : undefined,
+  });
   const reasoning =
     typeof p.review.reasoning === "string" && p.review.reasoning.trim()
       ? p.review.reasoning
@@ -237,10 +234,7 @@ export function ProposalReview({
               Proposal review
             </p>
             <h1 className="font-heading text-[22px] font-medium leading-tight tracking-tight text-foreground">
-              {proposalType}
-              {targetLabel ? (
-                <span className="text-foreground/60"> · {targetLabel}</span>
-              ) : null}
+              {heading}
             </h1>
           </div>
         </div>
@@ -249,7 +243,7 @@ export function ProposalReview({
           variant="flat"
           size="sm"
         >
-          {status.replace(/_/g, " ")}
+          {resolveStatusLabel(status)}
         </Chip>
       </CardHeader>
 

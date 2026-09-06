@@ -464,7 +464,7 @@ function ApprovalQueueCard() {
         podLevel.length > 0 ? (
           <Button
             as={Link}
-            href="/audit"
+            href="/audit?section=queue"
             size="sm"
             variant="flat"
             radius="md"

@@ -41,7 +41,16 @@ function sourceFiles(): string[] {
 
 /** Strip comments so an explanatory note about a banned pattern isn't a hit. */
 function code(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  // Block comments are stripped ONLY when `/*` opens a line. The naive form
+  // treats a `/*` inside a STRING LITERAL as a comment opener and erases
+  // everything to the next `*` + `/` — swallowing any real violation in
+  // between and turning this file green. Every doc comment in this app starts
+  // its own line (JSX comments as `{/* … */}`, hence the optional brace), so
+  // anchoring costs nothing. A string literal is always preceded by a quote,
+  // so it still cannot open a comment.
+  return text
+    .replace(/^[ \t]*\{?[ \t]*\/\*[\s\S]*?\*\//gm, "")
+    .replace(/^\s*\/\/.*$/gm, "");
 }
 
 const FILES = sourceFiles().map((path) => ({
@@ -67,7 +76,8 @@ describe("pod-admin exit door", () => {
   it("never links to a /studio route this app does not serve", () => {
     // `/studio/settings/vault` and `/studio/settings/integrations` were
     // relative hrefs on pod-admin's own origin: hard 404s.
-    const hits = FILES.filter((f) => /["'`]\/studio\//.test(f.body));
+    // No leading-quote requirement: `${base}/studio/x` is the same defect.
+    const hits = FILES.filter((f) => /\/studio(?:\/|["'`])/.test(f.body));
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
@@ -79,7 +89,11 @@ describe("pod-admin exit door", () => {
   it("mints synap:// links only inside the one door", () => {
     // A raw synap:// at a call site is a link whose receiver nobody checked,
     // and which carries no fallback when the app isn't installed.
-    const allowed = new Set(["lib/open-in.ts", "app/open/open-params.ts"]);
+    // Exactly ONE file may mint a synap:// link. `open-params.ts` was in this
+    // set until its `openInAppHref` was deleted — an allowlist entry that
+    // exempted a second minter from the rule the guard exists to enforce is a
+    // hole shaped like the defect.
+    const allowed = new Set(["lib/open-in.ts"]);
     const hits = FILES.filter(
       (f) => /synap:\/\//.test(f.body) && !allowed.has(f.path)
     );
@@ -93,8 +107,27 @@ describe("pod-admin exit door", () => {
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
+  it("renders an exit's fallback only through the shared component", () => {
+    // The rule "a desktop link always carries a web fallback" was enforced by
+    // SEVEN independent re-implementations, which is to say not enforced: four
+    // different opacities (two below 2.5:1 contrast), a focus ring on one of
+    // four, target="_blank" on pod-admin's own routes, and one list repeating
+    // it per row. `lib/exit-link.tsx` is now the only place that reads it.
+    const allowed = new Set(["lib/exit-link.tsx"]);
+    const hits = FILES.filter(
+      (f) =>
+        /\bexit\.fallback\b|\bfallback\.href\b/.test(f.body) &&
+        !allowed.has(f.path)
+    );
+    expect(hits.map((h) => h.path)).toEqual([]);
+  });
+
   it("uses the shared confirm modal, never the OS dialog", () => {
-    const hits = FILES.filter((f) => /window\.confirm/.test(f.body));
+    // `confirm(...)` is the MORE idiomatic spelling than `window.confirm`, so
+    // a guard that only knows the qualified form misses the likely regression.
+    const hits = FILES.filter((f) =>
+      /(?:window\.|globalThis\.)?\bconfirm\s*\(/.test(f.body)
+    );
     expect(hits.map((h) => h.path)).toEqual([]);
   });
 
@@ -111,11 +144,70 @@ describe("pod-admin exit door", () => {
     // Deliberately NOT an allowlist of exempt files: a file-scoped exemption
     // stops covering that file forever, including the next domain token
     // someone adds to it.
+    // `\s*` around EVERY link in the chain. Prettier wraps this expression at
+    // the ~80-col width this app uses, producing
+    //     row.status\n  .charAt(0)\n  .toUpperCase()
+    // which an unspaced pattern misses — the single most likely way the
+    // removed defect comes back. `[0]` indexing is the other spelling.
     const hits = FILES.filter((f) =>
-      /\b\w*(?:status|type|kind|action|state)\w*\s*\.charAt\(0\)\.toUpperCase\(\)/i.test(
+      /\b\w*(?:status|type|kind|action|state)\w*\s*(?:\.\s*charAt\s*\(\s*0\s*\)|\[\s*0\s*\])\s*\.\s*toUpperCase\s*\(\s*\)/i.test(
         f.body
       )
     );
     expect(hits.map((h) => h.path)).toEqual([]);
+  });
+});
+
+/**
+ * The guards, tested against the ways they were ACTUALLY defeated.
+ *
+ * A code review defeated the first version of every regex above with strings a
+ * normal contributor would write — not adversarial ones. The worst was
+ * Prettier's own wrap of `row.status.charAt(0).toUpperCase()` at this app's
+ * column width, which the unspaced pattern sailed straight past: the guard
+ * passed for the single most likely spelling of the defect it existed to stop.
+ *
+ * So the guards are now pinned against their own evasions. A future
+ * "simplification" of one of these regexes fails here.
+ */
+describe("the guards catch their own evasions", () => {
+  const STUDIO = /\/studio(?:\/|["'`])/;
+  const CONFIRM = /(?:window\.|globalThis\.)?\bconfirm\s*\(/;
+  const CHAR_AT =
+    /\b\w*(?:status|type|kind|action|state)\w*\s*(?:\.\s*charAt\s*\(\s*0\s*\)|\[\s*0\s*\])\s*\.\s*toUpperCase\s*\(\s*\)/i;
+
+  it.each([
+    [
+      "Prettier's line wrap",
+      "const l = row.status\n  .charAt(0)\n  .toUpperCase();",
+    ],
+    ["index-0 spelling", "const l = row.status[0].toUpperCase();"],
+    ["extra whitespace", "row.kind . charAt( 0 ) . toUpperCase ( )"],
+  ])("hand-cased domain token — %s", (_label, input) => {
+    expect(CHAR_AT.test(input)).toBe(true);
+  });
+
+  it.each([
+    ["bare confirm", 'if (!confirm("Revoke?")) return;'],
+    ["globalThis", 'globalThis.confirm("x")'],
+    ["window", 'window.confirm("x")'],
+  ])("OS confirm dialog — %s", (_label, input) => {
+    expect(CONFIRM.test(input)).toBe(true);
+  });
+
+  it.each([
+    ["template literal", "const h = `${base}/studio/x`;"],
+    ["no trailing slash", 'href="/studio"'],
+  ])("dead /studio route — %s", (_label, input) => {
+    expect(STUDIO.test(input)).toBe(true);
+  });
+
+  it("does not let a string literal containing /* blind the scanner", () => {
+    // The naive stripper treats `/*` in a string as a comment opener and
+    // erases everything to the next `*` + `/`, swallowing real violations.
+    const sneaky =
+      'const g = "/*"; const h = "https://hub.synap.live"; const e = "*' +
+      '/";';
+    expect(code(sneaky)).toContain("hub.synap.live");
   });
 });

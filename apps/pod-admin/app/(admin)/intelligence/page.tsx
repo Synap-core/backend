@@ -1403,10 +1403,6 @@ function FailedAiTurnsSection() {
   );
   const runs = query.data?.runs ?? [];
 
-  /* One shared "you need the app" escape hatch for every row exit below —
-     spelled once beneath the list rather than once per row. */
-  const desktopFallback = DESKTOP_FALLBACK;
-
   return (
     <SectionCard
       title="Failed AI turns"
@@ -1486,16 +1482,16 @@ function FailedAiTurnsSection() {
           it is spelled once here rather than fifteen times inside the list. A
           desktop link that does not resolve fails SILENTLY — without this the
           reader is left staring at a button that did nothing. */}
-      {runs.length > 0 && desktopFallback && (
+      {runs.length > 0 && (
         <p className="mt-3 px-3 text-[11.5px] text-foreground/50">
           Conversations open in the desktop app.{" "}
           <a
-            href={desktopFallback.href}
+            href={DESKTOP_FALLBACK.href}
             target="_blank"
             rel="noopener noreferrer"
             className="underline-offset-2 hover:text-foreground/80 hover:underline"
           >
-            {desktopFallback.label}
+            {DESKTOP_FALLBACK.label}
           </a>
         </p>
       )}

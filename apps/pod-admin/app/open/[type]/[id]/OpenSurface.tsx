@@ -11,6 +11,7 @@ import {
 } from "@heroui/react";
 import { Box, ExternalLink, LayoutGrid } from "lucide-react";
 import { openIn } from "../../../../lib/open-in";
+import { ExitLink } from "../../../../lib/exit-link";
 import {
   ReceiverIdentityProvider,
   ReceiverShell,
@@ -403,37 +404,17 @@ function emptyBody({
  * The only affordance on a bounce card — so it had better not be a dead end.
  *
  * Seven of the nine typed kinds (document, cell, channel, session, project,
- * workspace, capability) have no web renderer here, and until 2026-09-06 this
- * card offered a bare `synap://` link and nothing else. When the desktop app is
- * not installed that link does NOTHING — no navigation, no error, no feedback
- * of any kind — and the reader is stranded on a page whose single button
- * appears broken. These links arrive from email, Discord and CLI output, so
- * "not installed yet" is the common case, not the edge case.
- *
- * The exit is resolved through `openIn()` so the download fallback travels
- * with it automatically, the same as every other exit in the app.
+ * workspace, capability) have no web renderer here. A bare `synap://` link
+ * does NOTHING when the desktop app is not installed — no navigation, no
+ * error — and these links arrive by email and CLI, so "not installed" is the
+ * common case. `ExitLink` is what guarantees the way out travels with it.
  */
 function OpenInAppLink({ type, id }: { type: string; id: string }) {
-  const exit = openIn({ kind: "objectInApp", objectKind: type, id });
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-      <a
-        href={exit.href}
-        className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-1 text-[13px] text-foreground/50 transition-colors hover:text-foreground/75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-      >
-        Open in the Synap app <ExternalLink size={14} aria-hidden />
-      </a>
-      {exit.fallback && (
-        <a
-          href={exit.fallback.href}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-[12px] text-foreground/40 underline-offset-2 transition-colors hover:text-foreground/70 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-        >
-          {exit.fallback.label}
-        </a>
-      )}
-    </div>
+    <ExitLink
+      exit={openIn({ kind: "objectInApp", objectKind: type, id })}
+      label="Open in the Synap app"
+    />
   );
 }
 

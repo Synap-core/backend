@@ -65,6 +65,7 @@ import { SectionCard } from "../components/section-card";
 import { type StatusKind } from "../components/status-pill";
 import { formatRelative } from "../people/_lib/helpers";
 import { openIn } from "../../../lib/open-in";
+import { ExitFallback } from "../../../lib/exit-link";
 
 // Pull the workspace shape from the query response so we don't drift.
 // We declare it inline (rather than using `inferRouterOutputs`) because
@@ -424,16 +425,9 @@ function WorkspaceRowActions({
             >
               Open in the desktop app
             </Button>
-            {desktopExit.fallback && (
-              <a
-                href={desktopExit.fallback.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="px-3 pb-1 text-[11px] text-foreground/45 underline-offset-2 transition-colors hover:text-foreground/75 hover:underline"
-              >
-                {desktopExit.fallback.label}
-              </a>
-            )}
+            <span className="px-3 pb-1">
+              <ExitFallback exit={desktopExit} />
+            </span>
             {/* Members, API keys, connections and governance are pod-admin's
                 own surfaces — internal navigation, not an exit. */}
             <Button

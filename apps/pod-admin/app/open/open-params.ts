@@ -97,6 +97,8 @@ export function labelForOpenType(type: string): string {
   return resolveObjectNoun(type);
 }
 
-export function openInAppHref(type: string, id: string): string {
-  return `synap://open/${type}/${id}`;
-}
+/* `openInAppHref` lived here until 2026-09-06. It was a SECOND synap:// minter
+   — the exact thing `lib/open-in.ts` was created to be the one door for — and
+   it emitted a bare deep link with no download fallback. Its last caller moved
+   to `openIn({ kind: "objectInApp", ... })`; the tripwire no longer needs to
+   allowlist this file. */

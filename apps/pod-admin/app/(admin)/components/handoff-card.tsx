@@ -25,6 +25,7 @@
 import { Button } from "@heroui/react";
 import { ArrowUpRight, type LucideIcon } from "lucide-react";
 import type { Exit } from "../../../lib/open-in";
+import { ExitFallback } from "../../../lib/exit-link";
 
 interface HandoffCardProps {
   /** What lives elsewhere, phrased as a statement of fact. */
@@ -36,8 +37,6 @@ interface HandoffCardProps {
   /** Imperative label for the primary action, e.g. "Open Connectors settings". */
   cta: string;
   icon?: LucideIcon;
-  /** `inline` sits inside an existing SectionCard; `block` stands alone. */
-  variant?: "inline" | "block";
 }
 
 export function HandoffCard({
@@ -46,17 +45,9 @@ export function HandoffCard({
   exit,
   cta,
   icon: Icon,
-  variant = "inline",
 }: HandoffCardProps) {
   return (
-    <div
-      className={[
-        "flex flex-col gap-3 rounded-lg px-4 py-4",
-        variant === "block"
-          ? "bg-foreground/[0.04] ring-1 ring-inset ring-foreground/10"
-          : "bg-content2/40 ring-1 ring-inset ring-foreground/[0.06]",
-      ].join(" ")}
-    >
+    <div className="flex flex-col gap-3 rounded-lg bg-content2/40 px-4 py-4 ring-1 ring-inset ring-foreground/[0.06]">
       <div className="flex items-start gap-3">
         {Icon && (
           <Icon
@@ -74,15 +65,20 @@ export function HandoffCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0 sm:pl-7">
+        {/* radius="sm" (8px) matches the card's `rounded-lg`: a child more
+            rounded than its parent is the most common reason a surface reads
+            as slightly off. `min-h-10` because this is the primary door out of
+            a dead end, and `size="sm"` alone gives a 32px target. */}
         <Button
           as="a"
           href={exit.href}
-          {...(exit.isDesktopLink
-            ? {}
-            : { target: "_blank", rel: "noopener noreferrer" })}
+          {...(/^https?:/.test(exit.href)
+            ? { target: "_blank", rel: "noopener noreferrer" }
+            : {})}
           size="sm"
-          radius="md"
+          radius="sm"
           variant="flat"
+          className="min-h-10"
           endContent={<ArrowUpRight className="h-3.5 w-3.5" />}
         >
           {cta}
@@ -90,16 +86,7 @@ export function HandoffCard({
 
         {/* A `synap://` href does nothing at all when the app isn't installed —
             the browser shows no error. This is the way out of that silence. */}
-        {exit.fallback && (
-          <a
-            href={exit.fallback.href}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[12px] text-foreground/50 underline-offset-2 transition-colors hover:text-foreground/80 hover:underline"
-          >
-            {exit.fallback.label}
-          </a>
-        )}
+        <ExitFallback exit={exit} />
       </div>
     </div>
   );

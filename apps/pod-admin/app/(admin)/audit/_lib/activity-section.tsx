@@ -23,7 +23,10 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+import {
+  normalizeObjectKind,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { DetailDrawer } from "../../components/detail-drawer";
 import {
@@ -61,25 +64,13 @@ const PAGE_SIZE = 50;
  * An audit row's `subjectType` is the DB TABLE the row touched — plural
  * (`api_keys`), where the object registry is keyed singular (`api_key`).
  *
- * This was a hand-written label map, which is the exact shape the vocabulary
- * rule forbids: a second table that forks the moment someone adds a row to one
- * and not the other. It had already drifted — `intelligence_services` read
- * "IS", an abbreviation used in no other surface.
- *
- * So the only thing kept local is the mechanical plural→singular step, which
- * is grammar, not vocabulary. The WORD always comes from the registry, and
- * `resolveObjectNoun` falls back to `humanizeToken`, so a table added tomorrow
- * reads as words instead of leaking `trusted_issuers` at a user.
+ * Both halves come from the SSOT. `normalizeObjectKind` is the registry's own
+ * depluralizer AND alias resolver, so `workflows` lands on `automation` — which
+ * a hand-rolled `.slice(0, -1)` gets wrong. Writing that helper locally is the
+ * very thing this file was being fixed for.
  */
 function subjectTypeLabel(subjectType: string): string {
-  return resolveObjectNoun(singularizeTable(subjectType));
-}
-
-function singularizeTable(table: string): string {
-  if (table.endsWith("ies")) return `${table.slice(0, -3)}y`;
-  if (table.endsWith("sses")) return table.slice(0, -2);
-  if (table.endsWith("s") && !table.endsWith("ss")) return table.slice(0, -1);
-  return table;
+  return resolveObjectNoun(normalizeObjectKind(subjectType));
 }
 
 export function ActivitySection({

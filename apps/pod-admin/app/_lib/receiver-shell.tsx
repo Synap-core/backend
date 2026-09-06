@@ -62,8 +62,6 @@ interface ReceiverShellProps {
   children: ReactNode;
   /** Exits and secondary affordances, rendered under the card. */
   footer?: ReactNode;
-  /** Wider card for surfaces that render a real object rather than a decision. */
-  width?: "narrow" | "wide";
 }
 
 export function ReceiverShell({
@@ -71,7 +69,6 @@ export function ReceiverShell({
   identity,
   children,
   footer,
-  width = "narrow",
 }: ReceiverShellProps) {
   // Explicit props win; otherwise fall back to the route-level provider.
   const inherited = useContext(ReceiverIdentityContext);
@@ -79,12 +76,7 @@ export function ReceiverShell({
   const who = identity ?? inherited.identity;
   return (
     <main className="flex min-h-screen flex-col items-center px-6 py-12 sm:py-16">
-      <div
-        className={[
-          "flex w-full flex-col gap-4",
-          width === "wide" ? "max-w-3xl" : "max-w-2xl",
-        ].join(" ")}
-      >
+      <div className="flex w-full max-w-2xl flex-col gap-4">
         <ReceiverHeader podHost={host} identity={who} />
 
         <Card
@@ -124,8 +116,7 @@ function ReceiverHeader({
       <span className="flex items-center gap-2">
         <span
           aria-hidden
-          className="flex h-5 w-5 items-center justify-center rounded-md"
-          style={{ background: "linear-gradient(135deg, #10B981, #34D399)" }}
+          className="flex h-5 w-5 items-center justify-center rounded-md bg-primary"
         >
           <span className="text-[9px] font-semibold text-white/95">S</span>
         </span>
@@ -135,14 +126,14 @@ function ReceiverHeader({
       </span>
 
       {podHost && (
-        <span className="font-mono text-[11.5px] text-foreground/45">
+        <span className="font-mono text-[12px] text-foreground/75">
           {podHost}
         </span>
       )}
 
       {identity && (
-        <span className="ml-auto truncate text-[11.5px] text-foreground/45">
-          Signed in as <span className="text-foreground/70">{identity}</span>
+        <span className="ml-auto truncate text-[12px] text-foreground/60">
+          Signed in as <span className="text-foreground/80">{identity}</span>
         </span>
       )}
     </header>

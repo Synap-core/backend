@@ -27,13 +27,10 @@ import { Button, Chip, Spinner } from "@heroui/react";
 import {
   ArrowLeft,
   ArrowRight,
-  Check,
   CheckCircle2,
   CircleAlert,
   Clock,
-  Copy,
   Info,
-  Store,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";

@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   ShieldOff,
 } from "lucide-react";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { ConfirmModal } from "../components/confirm-modal";
 import { trpc } from "../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -23,26 +24,29 @@ function statusColor(
   return "default";
 }
 
-/** Human label for a raw request status — no `awaiting_local_auth` in the UI. */
+/**
+ * Human label for a connection-request status.
+ *
+ * The status WORD comes from the SSOT, because the other half of this same
+ * flow — `/connection-requests/[requestId]` — already resolves these through
+ * `resolveStatusLabel`. Until 2026-09-06 this switch spelled `pending` as
+ * "needs review" and `rejected` as "declined" while that page said "Pending"
+ * and "Rejected": two words for one status, in the two halves of one flow,
+ * which is exactly what `.claude/rules/vocabulary.md` exists to stop.
+ *
+ * Two entries keep local phrasing on purpose, because they carry information
+ * the status alone does not:
+ *   • `awaiting_local_auth` names WHAT is being waited on, not a lifecycle
+ *     state — the reader has to know the app must finish the handshake.
+ *   • `approved` here is approved-but-not-yet-complete. Flattening it to
+ *     "Approved" would tell the operator the flow finished when it has not.
+ * Both append to the SSOT word rather than replacing it, so the vocabulary
+ * still governs the status and only the nuance is local.
+ */
 function requestStateLabel(status: string): string {
-  switch (status) {
-    case "awaiting_local_auth":
-      return "waiting for app";
-    case "approved":
-      return "approved · finishing";
-    case "completing":
-      return "finishing";
-    case "pending":
-      return "needs review";
-    case "rejected":
-      return "declined";
-    case "completed":
-      return "done";
-    case "expired":
-      return "expired";
-    default:
-      return status;
-  }
+  if (status === "awaiting_local_auth") return "waiting for the app";
+  if (status === "approved") return `${resolveStatusLabel(status)} · finishing`;
+  return resolveStatusLabel(status);
 }
 
 export default function ApplicationConnectionsPage() {

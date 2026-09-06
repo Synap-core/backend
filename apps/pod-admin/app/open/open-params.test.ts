@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  openDocumentTitle,
-  openInAppHref,
-  parseOpenParams,
-} from "./open-params";
+import { openDocumentTitle, parseOpenParams } from "./open-params";
 
 const UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
 
@@ -64,9 +60,5 @@ describe("open helpers", () => {
     expect(openDocumentTitle(parseOpenParams("entity", UUID))).toBe("Entity");
     expect(openDocumentTitle(parseOpenParams("view", UUID))).toBe("View");
     expect(openDocumentTitle(parseOpenParams("nope", UUID))).toBe("Not found");
-  });
-
-  it("builds the desktop/phone deep link", () => {
-    expect(openInAppHref("entity", UUID)).toBe(`synap://open/entity/${UUID}`);
   });
 });
