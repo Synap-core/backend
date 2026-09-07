@@ -333,7 +333,23 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
 
       - name: Notify Control Plane
+        env:
+          CP_URL: ${{ secrets.CONTROL_PLANE_API_URL }}
+          CP_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
         run: |
+          # A MISSING SECRET IS A CONFIG ERROR AND MUST FAIL LOUDLY.
+          # Both were unset here too: the curl posted to a bare path with an
+          # empty HMAC key and the step went green anyway, because it ends in
+          # `|| echo "...(non-fatal)"`. No imageReleases row is ever recorded and
+          # no pod on `auto_latest` is ever told to update.
+          # A network blip staying non-fatal is fine. Absent config is not.
+          MISSING=""
+          [ -z "$CP_URL" ]    && MISSING="$MISSING CONTROL_PLANE_API_URL"
+          [ -z "$CP_SECRET" ] && MISSING="$MISSING GITHUB_WEBHOOK_SECRET"
+          if [ -n "$MISSING" ]; then
+            echo "::error::Control Plane notification is not configured. Missing secret(s):$MISSING"
+            exit 1
+          fi
           PAYLOAD=$(jq -n \
             --arg tag "${{ steps.tag.outputs.tag }}" \
             --arg gitSha "${{ needs.build-and-push-backend-api.outputs.resolved_sha }}" \
@@ -343,7 +359,7 @@ jobs:
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.CP_WEBHOOK_SECRET }}" | awk '{print $2}')
 
           curl -sf -X POST \
-            "${{ secrets.CONTROL_PLANE_API_URL }}/webhooks/github" \
+            "$CP_URL/webhooks/github" \
             -H "Content-Type: application/json" \
             -H "X-Hub-Signature-256: sha256=${SIGNATURE}" \
             -d "$PAYLOAD" \
