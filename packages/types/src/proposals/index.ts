@@ -192,6 +192,21 @@ export interface ProposalReviewGraph {
     propertyCount: number;
     hasContent: boolean;
     /**
+     * The real entity id when this node LINKS a pre-existing record; absent when
+     * the proposal will CREATE it.
+     *
+     * `ref` above is symbolic by construction (`entityOp.ref ?? $opN`) because it
+     * must address a node inside this proposal, never an entity. Without this
+     * field no review surface can distinguish a linked record from a
+     * to-be-created one, so every graph node had to render inert — relay could
+     * show "Acme Corp" in a proposal graph and not open it. `buildProposalGraph`
+     * already reads `entityOp.existingEntityId` for role lookup and ref
+     * aliasing; it simply never emitted it.
+     *
+     * Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+     */
+    existingEntityId?: string;
+    /**
      * Roles (facets) this KIND wears — the facet model made legible on the
      * entity itself. Includes the entity's EXISTING roles (`isNew:false`,
      * resolved from live `entity_facets` for ops that reference a pre-existing

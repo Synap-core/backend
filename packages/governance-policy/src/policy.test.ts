@@ -977,6 +977,34 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     });
   });
 
+  it("a rule can NEVER auto-approve projectMember.create (a SCOPE CHANGE)", () => {
+    // Granting project membership widens the grantee's read floor across every
+    // workspace the project exposes (`exposureMemberWhere`). It must sit under
+    // the ADMIN floor so no rung-2.8 rule — nor a rung-4 autoApproveFor entry —
+    // can lift it to auto-execute.
+    expect(ADMIN_ACTIONS_LIVE as readonly string[]).toContain(
+      "projectMember.create"
+    );
+    const viaRule = decideAgentPolicy({
+      subjectType: "projectMember",
+      action: "create",
+      governanceRuleVerdict: "auto",
+    });
+    expect(viaRule).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.ADMIN,
+      reasonCode: "ADMIN",
+    });
+    const viaOverride = decideAgentPolicy({
+      subjectType: "projectMember",
+      action: "create",
+      writesRequireProposal: false,
+      autoApproveFor: ["projectMember.create", "*"],
+    });
+    expect(viaOverride.verdict).toBe("propose");
+    expect(viaOverride.reasonCode).toBe("ADMIN");
+  });
+
   it("a rule can NEVER override a floor: forcePropose still proposes even with governanceRuleVerdict:'auto'", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",

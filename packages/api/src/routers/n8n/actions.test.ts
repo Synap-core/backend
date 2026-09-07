@@ -14,12 +14,24 @@ const { mockCreate, mockCreateCaller } = vi.hoisted(() => {
 // Mock dependencies. createEntity now routes through the governed entities.create
 // door (createHubProtocolCallerContext → entitiesRouter.createCaller().create)
 // instead of a raw event insert, so mock that door — not `db.insert`.
-vi.mock("@synap/database", () => ({
+// importOriginal, NOT a hand-written export list: a total-replacement factory
+// breaks the moment the router imports one more name from @synap/database
+// (that is how `workspaces`/`desc` broke it). Only `db` is stubbed.
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
+  // Chain shape mirrors the ambient-workspace query in actions.ts:
+  // select -> from -> innerJoin -> where -> orderBy -> limit. The innerJoin +
+  // orderBy(desc(workspaces.updatedAt)) links are what make the fallback
+  // deterministic; a stub missing them would let the two drift again.
   db: {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => ({
-          limit: vi.fn().mockResolvedValue([{ workspaceId: "ws-1" }]),
+        innerJoin: vi.fn(() => ({
+          where: vi.fn(() => ({
+            orderBy: vi.fn(() => ({
+              limit: vi.fn().mockResolvedValue([{ workspaceId: "ws-1" }]),
+            })),
+          })),
         })),
       })),
     })),

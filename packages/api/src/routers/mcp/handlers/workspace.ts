@@ -8,18 +8,8 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import {
-  db,
-  workspaces,
-  projects,
-  inArray,
-  and,
-  or,
-  eq,
-  isNull,
-  isNotNull,
-} from "@synap/database";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { db, workspaces, projects, inArray } from "@synap/database";
+import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
 import {
   setAgentFocusWorkspace,
@@ -201,13 +191,7 @@ export const workspaceHandlers: McpHandlerMap = {
       .select({ id: projects.id, name: projects.name })
       .from(projects)
       .where(
-        or(
-          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, userId)
-          )
-        )!
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
       );
     if (visibleProjects.length === 0) {
       return ok({ error: "You have no projects to focus on yet." });

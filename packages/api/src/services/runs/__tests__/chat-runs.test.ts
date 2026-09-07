@@ -48,8 +48,17 @@ vi.mock("../../../utils/project-scope.js", () => ({
   accessScopeWhere: vi.fn(() => ({ accessScope: true })),
 }));
 
-import { ChatTurnStatus } from "@synap/database";
+import { ChatTurnStatus, chatTurns } from "@synap/database";
 import { listRuns } from "../index.js";
+
+/**
+ * Every table handed to `.from()` across all select chains in the current test.
+ * Reset in beforeEach. Lets a test assert WHICH ledgers ran instead of counting
+ * how many `select()` calls happened — a count is a proxy that breaks whenever a
+ * ledger is added or a ledger issues a second query, without the invariant it
+ * guards having moved at all.
+ */
+const fromTables: unknown[] = [];
 
 /** Chainable select() builder resolving to `rows` at `.limit()`. */
 function selectChain(rows: unknown[]) {
@@ -61,7 +70,10 @@ function selectChain(rows: unknown[]) {
     orderBy: vi.fn(),
     limit: vi.fn().mockResolvedValue(rows),
   };
-  chain.from.mockReturnValue(chain);
+  chain.from.mockImplementation((table: unknown) => {
+    fromTables.push(table);
+    return chain;
+  });
   chain.innerJoin.mockReturnValue(chain);
   chain.leftJoin.mockReturnValue(chain);
   chain.where.mockReturnValue(chain);
@@ -76,6 +88,7 @@ const CHANNEL_ID = "channel-1";
 describe("listChatRuns (via listRuns) — chat_turns → UnifiedRun", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fromTables.length = 0;
     mockUserVisibleWhere.mockReturnValue({ __userVisible: USER });
   });
 
@@ -101,7 +114,11 @@ describe("listChatRuns (via listRuns) — chat_turns → UnifiedRun", () => {
       id: TURN_ID,
       flowType: "chat",
       flowId: null,
-      flowName: "Chat",
+      // Not a flat "Chat": listRuns labels a turn by its channel title, else
+      // `AI turn · <first 8 of id>` (index.ts:1156-1165, committed 94a543d7) so a
+      // Failed list is not a wall of identical rows. This fixture has no channel
+      // title, so it lands on the fallback.
+      flowName: `AI turn · ${TURN_ID.slice(0, 8)}`,
       status: "completed",
       channelId: CHANNEL_ID,
       workspaceId: "ws-1",
@@ -140,17 +157,22 @@ describe("listChatRuns (via listRuns) — chat_turns → UnifiedRun", () => {
   });
 
   it("does not call chat ledger on unfiltered merge (no successful Discord noise)", async () => {
-    // Unfiltered listRuns fires automation/playbook/capture/capability/session
-    // but NOT chat (includeChat requires flowType=chat or status running|failed).
-    // Each non-chat ledger issues one select(); if chat were included we'd get one more.
+    // Unfiltered listRuns fires the non-chat ledgers but NOT chat (includeChat
+    // requires flowType=chat or status running|failed).
     // Return empty for every select so the merge is empty.
     mockDb.select.mockImplementation(() => selectChain([]));
 
     const runs = await listRuns({ userId: USER, limit: 10 });
     expect(runs).toEqual([]);
 
-    // 5 ledgers: automation, playbook, capture, capability, session — no chat.
-    expect(mockDb.select).toHaveBeenCalledTimes(5);
+    // The invariant is "the chat ledger did not run", asserted DIRECTLY on the
+    // table it would have queried. The previous form asserted
+    // `select` was called exactly 5 times; that broke the day a sixth ledger
+    // (listAgentWriteRuns) was added and again when ledgers grew a second query
+    // — neither of which touches chat. Assert what the test is named after.
+    expect(fromTables).not.toContain(chatTurns);
+    // ...and the guard is only meaningful if the other ledgers DID run.
+    expect(mockDb.select).toHaveBeenCalled();
   });
 
   it("includes chat ledger when status=running (diagnose stuck path)", async () => {

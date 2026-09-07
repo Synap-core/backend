@@ -24,9 +24,11 @@ export function registerArtifactExecutors(): void {
   // already resolved `placement`, so the `?? "desk"` here is only a floor for
   // an older proposal stored before that default existed.
   //
-  // WORKSPACE: `artifacts.workspaceId` is NOT NULL and the gate stored the
-  // CONFINED value, so a missing lens is a hard refusal, never a pod-wide
-  // fallback.
+  // WORKSPACE: `artifacts.workspaceId` is NULLABLE since 0245, but the REST
+  // create door this mirrors REQUIRES one (CreateBodySchema: z.string().min(1))
+  // and the gate stored the CONFINED value. So a missing lens stays a hard
+  // refusal here — a DOOR policy kept in parity with the direct path, not a
+  // column constraint, and never a pod-wide fallback.
   registerProposalExecutor({
     key: "artifact/create",
     async execute({ proposal, userId, input, deps }) {
@@ -50,7 +52,7 @@ export function registerArtifactExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Artifact proposal has no workspace scope — artifacts are workspace-scoped (NOT NULL).",
+            "Artifact proposal has no workspace scope — this door requires one (parity with POST /artifacts).",
         });
       }
 

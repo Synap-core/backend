@@ -592,6 +592,27 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   property_def: "property",
   property_defs: "property",
   /**
+   * Operational EVENT domains are table names, not object kinds — they arrive
+   * pluralized/underscored (`entities`, `api_keys`, `focus_sessions`) straight
+   * off the DB. Without these rows `resolveObjectNoun("api_keys")` fell to
+   * `humanizeToken` and rendered "Api keys" — plural, wrong case, exactly the
+   * hand-rolled-map failure this file exists to prevent (`event-renderer`'s
+   * local `DOMAIN_NAMES` map used to carry this normalization on its own; it
+   * belongs here so every consumer, not just the event feed, gets it right).
+   */
+  entities: "entity",
+  proposals: "proposal",
+  documents: "document",
+  notifications: "notification",
+  users: "user",
+  artifacts: "artifact",
+  webhooks: "webhook",
+  tasks: "task",
+  notes: "note",
+  apikey: "api_key",
+  api_keys: "api_key",
+  apikeys: "api_key",
+  /**
    * The Control Plane's PUBLISH vocabulary calls this kind `workflow`; the pod's
    * install/runtime vocabulary calls the same thing `automation`. Without this
    * row `resolveObjectNoun("workflow")` fell through to `humanizeToken` and the

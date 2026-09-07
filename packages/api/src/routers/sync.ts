@@ -941,6 +941,10 @@ const SUPPLEMENTARY_TABLES: Record<
           status:
             (row.status as typeof proposals.$inferInsert.status) ?? "pending",
           createdBy: (row.createdBy as string) ?? null,
+          // OWNER FLOOR (0248): carried verbatim from the source pod. NOT
+          // derived here — a replicated row's owner is whatever the origin
+          // stamped, and inventing one would fabricate a floor.
+          subjectUserId: (row.subjectUserId as string) ?? null,
           // FK columns: carry the value but accept null if referenced row absent
           threadId: (row.threadId as string) ?? null,
           commandRunId: (row.commandRunId as string) ?? null,

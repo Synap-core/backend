@@ -24,7 +24,6 @@ import {
   eq,
   desc,
   isNull,
-  isNotNull,
   drizzleSql,
   proposals,
   focusSessions,
@@ -42,7 +41,10 @@ import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-con
 import { authoredByUser } from "../agent-identity-service.js";
 import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  ownerPrivateVisibleWhere,
+} from "../../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
@@ -301,10 +303,17 @@ async function diagnoseObject(
         .where(
           and(
             eq(focusSessions.id, id),
-            drizzleSql`(${focusSessions.userId} = ${userId} OR ${userVisibleWhere(
+            // An OR against a bare `userVisibleWhere` WIDENS, it does not
+            // gate: that helper's `isNull(workspaceId)` branch is owner-BLIND,
+            // so it already returned true for ANOTHER user's pod-personal
+            // session. `focus_sessions` is `ownerPrivate` in the access
+            // registry — own the NULL branch, keep the workspace branch on the
+            // shared user floor.
+            ownerPrivateVisibleWhere(
               focusSessions.workspaceId,
+              focusSessions.userId,
               userId
-            )})`
+            )
           )
         )
         .limit(1);
@@ -439,7 +448,11 @@ async function diagnoseObject(
           and(
             eq(entities.id, id),
             isNull(entities.deletedAt),
-            userVisibleWhere(entities.workspaceId, userId)
+            ownerPrivateVisibleWhere(
+              entities.workspaceId,
+              entities.userId,
+              userId
+            )
           )
         )
         .limit(1);
@@ -474,13 +487,7 @@ async function diagnoseObject(
         .where(
           and(
             eq(views.id, id),
-            or(
-              and(isNull(views.workspaceId), eq(views.userId, userId)),
-              and(
-                isNotNull(views.workspaceId),
-                userVisibleWhere(views.workspaceId, userId)
-              )
-            )
+            ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)
           )
         )
         .limit(1);

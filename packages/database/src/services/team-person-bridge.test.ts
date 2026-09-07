@@ -46,11 +46,16 @@ vi.mock("../repositories/facet-repository.js", () => ({
   },
 }));
 
-// `userVisibleWhere` runs real drizzle query builders against `db` at call time;
-// stub it to an opaque predicate so the weak-scope construction doesn't need a
-// live connection.
+// `ownerPrivateVisibleWhere` runs real drizzle query builders against `db` at
+// call time; stub it to an opaque predicate so the weak-scope construction
+// doesn't need a live connection.
+// ⚠️ TOTAL mock (no `importOriginal`): exporting only `ownerPrivateVisibleWhere`
+// makes this double as an IMPORT ALLOWLIST — a swap back to the owner-blind
+// `userVisibleWhere` fails to resolve at import time and kills the file. See the
+// longer note in `utils/entity-project-membership.test.ts`. Converting this to
+// the partial form removes that second mechanism; do it knowingly.
 vi.mock("../utils/user-visible-where.js", () => ({
-  userVisibleWhere: vi.fn(() => ({ __sql: "user-visible" })),
+  ownerPrivateVisibleWhere: vi.fn(() => ({ __sql: "owner-private-visible" })),
 }));
 
 import {

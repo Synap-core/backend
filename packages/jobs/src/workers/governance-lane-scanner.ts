@@ -427,6 +427,8 @@ async function scanAgent(agent: AgentRow): Promise<void> {
     data: data as unknown as Record<string, unknown>,
     createdBy: agent.createdByUserId,
     proposedByUserId: null,
+    // OWNER FLOOR (0248): the human who owns this agent decides its lane.
+    subjectUserId: agent.createdByUserId,
   });
 
   void emitSideEffects({

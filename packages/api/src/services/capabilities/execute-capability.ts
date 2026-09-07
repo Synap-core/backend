@@ -43,6 +43,39 @@ import {
   getWorkspaceMembership,
 } from "@synap/database";
 import { randomUUID } from "crypto";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
+
+/**
+ * A one-line, human-readable description of a proposed capability run.
+ *
+ * Reads only what the payload already carries. `market.install` gets the
+ * package named because that is the row a reviewer most needs to read at a
+ * glance — the marketplace's whole promise is that an install proposes and the
+ * human approves, which is meaningless if the queue row does not say WHICH
+ * package. Every other verb degrades to its own id rather than to nothing.
+ *
+ * The kind noun comes from the vocabulary SSOT (`cell` renders as **Card**,
+ * `workflow` as **Automation**) — never a hand-written label map.
+ */
+export function describeCapabilityRun(
+  verbId: string | null,
+  parameters: Record<string, unknown>
+): string {
+  if (!verbId) return "Run capability";
+
+  if (verbId === "market.install") {
+    const slug = typeof parameters.slug === "string" ? parameters.slug : null;
+    const kind = typeof parameters.kind === "string" ? parameters.kind : null;
+    // `resolveObjectNoun` falls back to `humanizeToken`, so an unknown kind
+    // still reads as words rather than leaking a raw token.
+    const noun = kind ? resolveObjectNoun(kind) : null;
+    if (slug && noun) return `Install ${noun} "${slug}"`;
+    if (slug) return `Install package "${slug}"`;
+  }
+
+  return `Run ${verbId}`;
+}
+
 import { createLogger } from "@synap-core/core";
 
 import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.js";
@@ -508,6 +541,21 @@ export async function executeCapability(input: {
         verbId: verbId ?? null,
         parameters: parameters ?? {},
         workspaceId,
+        // WHAT this run will do, in the reviewer's words.
+        //
+        // Every OTHER proposal type carries a `data.summary` and the review
+        // queue renders it; a capability run carried none, so an agent's
+        // marketplace install arrived as a bare row reading only
+        // "capability.run proposal on capability is pending" — the reviewer
+        // could see that SOMETHING was proposed but not WHAT, and had to open
+        // the payload to find `parameters.slug`. That is the review-theatre
+        // failure this repo has already logged for rules (approving what you
+        // cannot read), and it lands squarely on the marketplace's central
+        // promise: an installed package proposes, and you approve.
+        //
+        // Built from the payload that is already here — nothing new is stored
+        // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
+        summary: describeCapabilityRun(verbId ?? null, parameters ?? {}),
         // Carry the 1-of-N connection selector so an APPROVED run resolves the
         // same connection the original call intended (see runResolvedSkill).
         connectionSelector: input.connectionSelector ?? null,

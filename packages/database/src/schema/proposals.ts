@@ -118,6 +118,27 @@ export const proposals = pgTable(
     // proposer-only `withdraw` gate and the review UI's "mine to approve" vs
     // "mine I proposed" split.
     proposedByUserId: text("proposed_by_user_id"),
+    /**
+     * The HUMAN this proposal is FOR — the operator/owner whose review it
+     * awaits and whose data it would change. THE OWNER FLOOR (0248).
+     *
+     * The fourth, distinct "who" on this row, and the only one answerable at
+     * every door:
+     *   - `createdBy` is OVERLOADED (userId OR agentUserId, per door) — it has
+     *     already caused ~5 bugs and is NOT an owner.
+     *   - `proposedByUserId` is the human PROPOSER (human-member path only).
+     *   - `agentUserId` is the AGENT actor, never a human.
+     *
+     * Why it exists: `userVisibleWhere`'s first branch is `isNull(workspaceId)`
+     * — owner-BLIND — so a NULL-workspace proposal is visible to every user of
+     * the pod. Measured 2026-09-06: 28/40 most recent proposals (70%) carry a
+     * NULL workspace. There was no column to floor on.
+     *
+     * NOT YET A FLOOR. Nothing reads it while the existing population is NULL;
+     * flooring a mostly-NULL column would HIDE rows. See the backfill note in
+     * migration 0248.
+     */
+    subjectUserId: text("subject_user_id"),
     threadId: uuid("thread_id").references(() => channels.id, {
       onDelete: "set null",
     }),

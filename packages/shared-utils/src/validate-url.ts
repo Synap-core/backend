@@ -61,6 +61,28 @@ export type ValidateUrlResult =
   { valid: true; url: URL } | { valid: false; reason: string };
 
 /**
+ * Scheme-only check: true when `raw` parses as an `http:`/`https:` URL.
+ *
+ * Unlike `validateExternalUrl`, this does NOT block loopback, private, or
+ * link-local hosts — it exists for callers that store a URL for later
+ * display/click-through (never a server-side fetch), where a developer must
+ * be able to record `http://localhost:3000/thing`. It still rejects
+ * script-capable / non-network schemes (`javascript:`, `data:`, `file:`, …).
+ *
+ * Never use this to guard an outbound `fetch()` — that is what
+ * `validateExternalUrl`/`safeExternalFetch` are for.
+ */
+export function isHttpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  return url.protocol === "http:" || url.protocol === "https:";
+}
+
+/**
  * Validate that `raw` is a safe URL to fetch from server-side code.
  *
  * Returns `{ valid: true, url }` if safe, `{ valid: false, reason }` otherwise.

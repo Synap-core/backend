@@ -33,6 +33,7 @@ import {
 } from "../../../utils/permission-check.js";
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
+import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
@@ -1091,6 +1092,26 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         workspaceId: session.workspaceId ?? undefined,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      // MEMBERSHIP FLOOR on the FALLBACK lens. `resolveActingContext` above
+      // membership-checks the SESSION's workspace, but the body's
+      // `workspaceId` is bare request input and was never checked: a caller
+      // could file the row into a workspace they do not belong to, and the
+      // `artifacts` visibility rule (workspace rows follow membership) would
+      // hand it to that workspace's members. Gated on the ACTING user.
+      if (!session.workspaceId && fallbackWorkspaceId) {
+        try {
+          await assertWorkspaceWrite(db, acting.userId, {
+            workspaceId: fallbackWorkspaceId,
+          });
+        } catch {
+          return c.json(
+            { error: "You are not a member of this resource's workspace." },
+            403
+          );
+        }
+      }
+
       // The object the output POINTS AT must already be visible to the SESSION
       // OWNER — otherwise attaching it and re-reading the room leaks its live
       // title. Same floor, same reason, as the tRPC door.

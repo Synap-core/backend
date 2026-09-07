@@ -284,6 +284,9 @@ export async function recommendTightenPostureForAllChannels(): Promise<{
         data: data as unknown as Record<string, unknown>,
         createdBy: podOwnerUserId,
         proposedByUserId: null,
+        // OWNER FLOOR (0248): posture is agent-independent — the pod owner is
+        // the subject. NULL when no owner resolved, never a guess.
+        subjectUserId: podOwnerUserId ?? null,
       });
 
       if (!deduped) {

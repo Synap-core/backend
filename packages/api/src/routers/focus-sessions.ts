@@ -1230,6 +1230,18 @@ export const focusSessionsRouter = router({
       // is only a fallback for a session that has no lens of its own.
       const workspaceId = session.workspaceId ?? input.workspaceId ?? null;
 
+      // MEMBERSHIP FLOOR on the FALLBACK lens. The session's own workspace is
+      // already gated by the owner floor above, but `input.workspaceId` is bare
+      // request input: without this, a caller could file an artifact row into a
+      // workspace they do not belong to, and the `artifacts` visibility rule
+      // (workspace rows follow membership) would then show that row to THAT
+      // workspace's members — a write-side leak into someone else's lens.
+      if (!session.workspaceId && input.workspaceId) {
+        await assertWorkspaceWrite(db, ctx.userId, {
+          workspaceId: input.workspaceId,
+        });
+      }
+
       // The object the output POINTS AT must already be visible to the caller —
       // otherwise attaching it and re-reading the room returns its live title.
       const refVisible = await isOutputRefVisible({

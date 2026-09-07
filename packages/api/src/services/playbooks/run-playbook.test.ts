@@ -59,6 +59,8 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
       forceProposeWrites: false,
     });
     expect(meta).toEqual({
+      automationId: "auto-1",
+      automationRunId: "run-1",
       automationChainContext: {
         automationRunId: "run-1",
         automationId: "auto-1",
@@ -67,6 +69,20 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
         chainAutomationIds: ["auto-1"],
       },
     });
+  });
+
+  it("ALSO stamps automationId/automationRunId TOP-LEVEL — the filter `session-kind.ts` reads", () => {
+    // `sessionAutomationWhere`/`AUTOMATION_KEYS` read only the top-level keys,
+    // not `automationChainContext` (a different consumer's shape). Without
+    // this, a playbook_run session opened from a scheduled automation was
+    // invisible to that automation's "run sessions" filter even though its
+    // kind still correctly derived as `run` via origin/playbookId.
+    const meta = buildRunSessionMetadata({
+      chainContext: chain,
+      forceProposeWrites: false,
+    });
+    expect(meta.automationId).toBe("auto-1");
+    expect(meta.automationRunId).toBe("run-1");
   });
 
   it("defaults chainDepth/rootRunId/chainAutomationIds like the old jobs stamp", () => {
@@ -78,6 +94,8 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
       forceProposeWrites: false,
     });
     expect(meta).toEqual({
+      automationId: "auto-9",
+      automationRunId: "run-9",
       automationChainContext: {
         automationRunId: "run-9",
         automationId: "auto-9",
@@ -92,6 +110,8 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
     expect(
       buildRunSessionMetadata({ chainContext: chain, forceProposeWrites: true })
     ).toEqual({
+      automationId: "auto-1",
+      automationRunId: "run-1",
       automationChainContext: {
         automationRunId: "run-1",
         automationId: "auto-1",

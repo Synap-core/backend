@@ -118,9 +118,18 @@ describe("create-from-definition applier uses the ONE shared rule", () => {
     "how kind/code/providerSpec drifted apart from the router's six-field rule and " +
     "left parameters/executionMode/timeoutSeconds swappable under an approval.";
 
-  const callIdx = applierSrc.indexOf(
-    "const execContentChanged = skillExecFieldsChanged("
-  );
+  // WHITESPACE-INSENSITIVE on purpose. This was a single-line `indexOf` of
+  // "const execContentChanged = skillExecFieldsChanged(" until 2026-09-06, when
+  // the formatter wrapped the assignment across two lines and BOTH tests below
+  // went red against an applier that was, and still is, correct. A guard that
+  // fails on reformatting is not measuring the invariant it names — and the
+  // false red is the dangerous half, because the cheap way to clear it is to
+  // "fix" correct source. Match the CALL, not its line breaks.
+  const callMatch =
+    /const\s+execContentChanged\s*=\s*skillExecFieldsChanged\s*\(/.exec(
+      applierSrc
+    );
+  const callIdx = callMatch ? callMatch.index : -1;
 
   it("computes execContentChanged through skillExecFieldsChanged", () => {
     expect(callIdx, WHY).toBeGreaterThan(-1);

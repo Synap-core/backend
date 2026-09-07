@@ -45,6 +45,7 @@ import {
   or,
   drizzleSql,
   focusSessions,
+  automationRuns,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 
@@ -179,12 +180,29 @@ export function projectSessionKind(row: SessionKindProjectable): SessionKind {
  * SQL: sessions belonging to one automation DEFINITION.
  *
  * `metadata.automationId` is the definition id (`openRunSession` stamps it, and
- * mirrors it onto the legacy `templateId` column). `automationRunId` is a
- * different id — one execution — so a definition filter must never key on it.
- * Lives here because it reads the same metadata bag the kind predicate does.
+ * mirrors it onto the legacy `templateId` column) — the primary match.
+ *
+ * But `openRunSession`'s channel-reuse path (`utils/open-run-session.ts`)
+ * merges ONLY `automationRunId` onto a reused session's metadata, never
+ * `automationId` — a session opened for one source (or a stale automation) and
+ * later reused by a DIFFERENT automation's run ends up carrying the new run's
+ * `automationRunId` with no `automationId` naming the new definition at all. A
+ * plain `metadata.automationId = X` filter is blind to exactly that row, even
+ * though it is unambiguously a run of automation X. So this also matches via
+ * the `automation_runs` ledger, which always carries the definition id
+ * (`automation_runs.automation_id`) keyed by the run id
+ * (`metadata.automationRunId`) — the same lookup the run reaper already does
+ * by `automationRunId`. Lives here because it reads the same metadata bag the
+ * kind predicate does.
  */
 export function sessionAutomationWhere(automationId: string): SQL {
-  return drizzleSql`${focusSessions.metadata} #>> '{automationId}' = ${automationId}` as SQL;
+  return or(
+    drizzleSql`${focusSessions.metadata} #>> '{automationId}' = ${automationId}`,
+    drizzleSql`(${focusSessions.metadata} #>> '{automationRunId}') IN (
+      SELECT ${automationRuns.id}::text FROM ${automationRuns}
+      WHERE ${automationRuns.automationId} = ${automationId}
+    )`
+  ) as SQL;
 }
 
 /** Attach the projection to a page of rows (no extra query — pure). */

@@ -51,7 +51,7 @@ import { completeFocusSession } from "../services/focus-sessions/complete-sessio
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { entitiesRouter } from "./entities.js";
 import { skillsRouter } from "./skills.js";
 import {
@@ -1365,7 +1365,11 @@ export const capabilitiesRouter = router({
         userId,
         kindSlug: "person",
         signals: signalsFromExplicit({ url: normalizedUrl }),
-        userScope: userVisibleWhere(entities.workspaceId, userId),
+        userScope: ownerPrivateVisibleWhere(
+          entities.workspaceId,
+          entities.userId,
+          userId
+        ),
         limit: 5,
       });
 
@@ -1380,7 +1384,11 @@ export const capabilitiesRouter = router({
               where: and(
                 eq(entities.id, identity.entity.id),
                 isNull(entities.deletedAt),
-                userVisibleWhere(entities.workspaceId, userId)
+                ownerPrivateVisibleWhere(
+                  entities.workspaceId,
+                  entities.userId,
+                  userId
+                )
               ),
               columns: { id: true, title: true, workspaceId: true },
             })

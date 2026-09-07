@@ -15,7 +15,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, and, desc, artifacts } from "@synap/database";
+import { db, eq, artifacts } from "@synap/database";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -30,12 +30,17 @@ import {
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { SESSION_ARTIFACT_KINDS } from "../../../services/focus-sessions/record-session-artifact.js";
+import { queryArtifacts } from "../../artifacts.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
 const ArtifactWireSchema = z.object({
   id: z.string(),
-  workspaceId: z.string(),
+  // NULLABLE since 0245 — a pod-personal session records pod-personal outputs.
+  // The wire contract said `z.string()` while the column said otherwise, so the
+  // documented shape was a lie for every artifact a workspace-less session made.
+  workspaceId: z.string().nullable(),
   userId: z.string(),
   kind: z.string(),
   refId: z.string().nullable(),
@@ -56,7 +61,10 @@ const ArtifactWireSchema = z.object({
 const CreateBodySchema = z.object({
   workspaceId: z.string().min(1),
   userId: z.string().min(1),
-  kind: z.enum(["view", "cell", "document", "entity", "url"]),
+  // DERIVED from the ledger column (`SESSION_ARTIFACT_KINDS` = artifacts.kind
+  // .enumValues), never re-typed here. This hand-mirrored list had already
+  // drifted: `automation` and `playbook` have been real kinds since 0246.
+  kind: z.enum(SESSION_ARTIFACT_KINDS),
   refId: z.string().optional(),
   cellKey: z.string().optional(),
   props: z.unknown().optional(),
@@ -92,10 +100,12 @@ export function registerArtifactsRoutes(app: HubHono): void {
     method: "get",
     path: "/artifacts",
     tags: ["Artifacts"],
-    summary: "List artifacts for a workspace",
+    summary: "List artifacts visible to the caller",
+    description:
+      "Workspace rows follow membership; NULL-workspace (pod-personal) rows keep the caller's owner floor. `workspaceId` NARROWS the lens — omit it to list every artifact the caller can see, which is the only way to reach a pod-personal session's outputs.",
     request: {
       query: z.object({
-        workspaceId: z.string(),
+        workspaceId: z.string().optional(),
         state: z.enum(["working", "kept", "swept", "all"]).optional(),
         placement: z
           .enum(["desk", "home", "sidebar", "library", "all"])
@@ -159,15 +169,35 @@ export function registerArtifactsRoutes(app: HubHono): void {
 
   /**
    * GET /artifacts?workspaceId=...&state=...&placement=...&sessionId=...&limit=...
+   *
+   * `workspaceId` is OPTIONAL. It used to be required and the handler filtered
+   * on `eq(artifacts.workspaceId, workspaceId)` with NO visibility floor at all
+   * — which both leaked another workspace's ledger to any hub key and made the
+   * pod-personal rows 0245 introduced unreachable through this door: a
+   * `sessionId`-scoped list of a workspace-less session's outputs could only
+   * ever come back empty.
+   *
+   * Both are fixed by reading through the SAME `queryArtifacts` the tRPC door
+   * uses — the registered `artifacts` visibility rule (workspace rows follow
+   * membership, NULL-workspace rows keep the caller's owner floor), narrowed by
+   * the workspace lens when one is asked for.
    */
   app.get("/artifacts", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     }
 
-    const workspaceId = c.req.query("workspaceId");
-    if (!workspaceId) {
-      return c.json({ error: "workspaceId is required" }, 400);
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+
+    // A workspace-bound service key may not widen its lens past its own
+    // workspace, and an absent query param leaves the lens user-wide.
+    let workspaceLens: string | null | undefined;
+    try {
+      workspaceLens = getConfinedWorkspace(c, c.req.query("workspaceId")) as
+        string | null | undefined;
+    } catch {
+      return c.json({ error: "Access denied to workspace" }, 403);
     }
 
     const stateRaw = c.req.query("state") ?? "all";
@@ -197,23 +227,20 @@ export function registerArtifactsRoutes(app: HubHono): void {
       : "all";
 
     try {
-      const conditions = [eq(artifacts.workspaceId, workspaceId)];
-      if (state !== "all") {
-        conditions.push(eq(artifacts.state, state));
-      }
-      if (placement !== "all") {
-        conditions.push(eq(artifacts.placement, placement));
-      }
-      if (sessionId) {
-        conditions.push(eq(artifacts.sessionId, sessionId));
-      }
-
-      const rows = await db
-        .select()
-        .from(artifacts)
-        .where(and(...conditions))
-        .orderBy(desc(artifacts.createdAt))
-        .limit(limit);
+      const rows = await queryArtifacts(
+        {
+          userId,
+          agentUserId: c.get("agentUserId") as string | undefined,
+          isHubProtocol: true,
+        },
+        {
+          state: state === "all" ? undefined : state,
+          placement: placement === "all" ? undefined : placement,
+          sessionId: sessionId || undefined,
+          limit,
+        },
+        workspaceLens
+      );
 
       return c.json(rows);
     } catch (err) {
@@ -331,8 +358,11 @@ export function registerArtifactsRoutes(app: HubHono): void {
       const [created] = await db
         .insert(artifacts)
         .values({
-          // CreateBodySchema requires workspaceId (z.string().min(1)); artifacts
-          // are workspace-scoped (artifacts.workspaceId is NOT NULL). Confined value.
+          // `artifacts.workspaceId` is NULLABLE since 0245 (a pod-personal
+          // session records pod-personal outputs). THIS door still requires one
+          // — CreateBodySchema takes `z.string().min(1)` — because an agent
+          // creating a desk artifact is always acting inside a lens; that is a
+          // door policy, not a column constraint. Confined value.
           workspaceId,
           userId,
           kind: body.kind,

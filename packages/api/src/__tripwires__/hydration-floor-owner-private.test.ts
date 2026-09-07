@@ -26,10 +26,12 @@ import { join } from "path";
  *      workspaceLensWhere(...)` is exactly the bug wearing a case label, so the
  *      case BODY must name an approved owner-aware predicate.
  *   2. It does not trust `access/registry.ts` alone to enumerate owner-private
- *      tables. `projects` and `views` have NO registered rule yet are
- *      owner-private in behaviour — unclassified is not the same as safe.
- *      (`focus_sessions` was a third such table until 0241's temporal fold made
- *      sessions graph neighbours and forced it to be declared.)
+ *      tables — unclassified is not the same as safe. `projects` and `views`
+ *      were owner-private in BEHAVIOUR with NO registered rule for a long time
+ *      (they are declared now, as of the ownerPrivate floor-adoption wave), and
+ *      `focus_sessions` was a third such table until 0241's temporal fold made
+ *      sessions graph neighbours and forced it to be declared. The shape
+ *      fallback is what covered them in the meantime, and covers the next one.
  *      Candidates are therefore derived from the SCHEMA shape (nullable
  *      `workspace_id` + a NOT NULL owner column), so a new table is caught on
  *      arrival rather than when someone remembers to register it.

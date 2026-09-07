@@ -29,8 +29,8 @@ import {
 import type { RoutingMemory } from "../services/routing-memory.js";
 import type { ImportItem } from "./import-items.js";
 import {
-  userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../utils/user-visible-where.js";
 
 /** Minimal shape of the intelligence client's structure() we depend on. */
@@ -339,7 +339,11 @@ export function makeGraphResolver(
     ? workspaceLensWhere(entities.workspaceId, ctx.userId, ctx.workspaceId, {
         includeGlobals: true,
       })
-    : userVisibleWhere(entities.workspaceId, ctx.userId);
+    : ownerPrivateVisibleWhere(
+        entities.workspaceId,
+        entities.userId,
+        ctx.userId
+      );
 
   return async (profileSlug, title) => {
     // 1. SSOT: exact title / handle / alias, same kind, visible rows.

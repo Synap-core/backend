@@ -170,6 +170,9 @@ export async function createAutoApprovedProposal(
       data,
       status: ProposalStatus.AUTO_APPROVED,
       createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
+      // OWNER FLOOR (0248): this row RECORDS an already-done first-party human
+      // write, so `input.userId` — the human who performed it — is the subject.
+      subjectUserId: input.userId,
       reviewedBy: input.reviewedBy,
       reviewedAt,
       // C2 lifecycle-hygiene fix: no default TTL — this row is already

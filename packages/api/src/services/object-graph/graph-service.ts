@@ -329,11 +329,12 @@ function hydrationScopeWhere(
         ),
         lensNarrowing((t as typeof focusSessions).workspaceId, workspaceId)
       );
-    // `projects` and `views` are ownerPrivate BY BEHAVIOUR but have no registered
-    // VisibilityRule — their own routers hand-inline the owner-gate
-    // (routers/projects.ts:87, routers/views.ts:72), which is what proves the
-    // semantics. Both have a nullable `workspace_id` and a NOT NULL `user_id`, so
-    // the plain lens would expose every user's personal projects/views by name.
+    // `projects` and `views` were ownerPrivate BY BEHAVIOUR long before they were
+    // declared: their own routers hand-inlined the owner-gate, which is what
+    // proved the semantics. Both now carry a `VisibilityRule` in
+    // `access/registry.ts`. Both have a nullable `workspace_id` and a NOT NULL
+    // `user_id`, so the plain lens would expose every user's personal
+    // projects/views by name.
     case "project":
       return and(
         ownerPrivateVisibleWhere(
@@ -1198,13 +1199,12 @@ export async function getObjectGraph(
  * Name-addressing — resolve an object by its NAME (a handle), not its uuid.
  * Names aren't unique pod-wide, so this returns ALL matches (the caller / agent
  * disambiguates by subtype or count). Reuses the same KIND_TABLE registry as
- * hydration — one source of truth for "what column is this kind's name". Scoped
- * via `userVisibleWhere` so you can only resolve names you may see.
+ * hydration — one source of truth for "what column is this kind's name" — and
+ * the same per-kind READ FLOOR (`hydrationScopeWhere`), so you can only resolve
+ * names you may already see.
  *
  * `subtype` narrows further (entity profileSlug, view type, tool/skill kind).
  * Case-insensitive exact match on the name column. Stub kinds (no table) → [].
- * The `entity` kind is ownerPrivate, so it floors on the entity READ scope
- * (`accessScopeWhere`) — config kinds stay on the pod-wide `userVisibleWhere`.
  */
 export async function resolveByName(
   userId: string,
@@ -1219,21 +1219,15 @@ export async function resolveByName(
   const db = await getDb();
 
   const conds = [
-    // `entities` is ownerPrivate — a bare `userVisibleWhere` here admits pod-wide
-    // NULL-workspace rows to ALL users, leaking another tenant's entity NAME by a
-    // name guess. Floor the entity kind on the canonical entity READ scope
-    // (owner-gated NULL + membership + exposure + role-lens), like entities.list.
-    // Config kinds (tools/playbooks/relationDefs…) stay podGlobalConfig, so their
-    // NULL rows correctly remain pod-wide visible via `userVisibleWhere`.
-    kind === "entity"
-      ? accessScopeWhere({
-          workspaceIdColumn: entities.workspaceId,
-          entityIdColumn: entities.id,
-          ownerColumn: entities.userId,
-          userId,
-          facetLens: true,
-        })
-      : userVisibleWhere(t.workspaceId, userId),
+    // ONE per-kind read floor, shared with `hydrateNodes` — name-addressing must
+    // never be a wider door than hydration. The previous ternary floored only
+    // `entity` and sent every OTHER kind to a bare `userVisibleWhere`, whose
+    // `isNull(workspaceId)` branch is owner-BLIND: `KIND_TABLE` also carries
+    // project / view / session / document / channel — all ownerPrivate — so a
+    // pod-personal project or session leaked its NAME to every pod user on a
+    // name guess. `hydrationScopeWhere` owner-gates each of those and keeps the
+    // podGlobalConfig kinds (tools/playbooks/…) pod-wide, as they must be.
+    hydrationScopeWhere(kind, t, userId),
     ilike(t[spec.name], name),
   ];
   if (subtype && spec.subtype) conds.push(eq(t[spec.subtype], subtype));

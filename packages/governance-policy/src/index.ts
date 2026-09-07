@@ -305,6 +305,19 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   "workspaceMember.add",
   "workspaceMember.remove",
   "workspaceMember.updateRole",
+  // Project membership. Real gate: `routers/relations.ts` —
+  // `grantAnchorMembership` passes `subjectType: "projectMember"` +
+  // `action: "create"` (door `projectMember/create` in GATE_WRITE_DOORS).
+  // Granting a person membership on a project is a SCOPE CHANGE: it widens
+  // that user's read floor across every workspace the project exposes
+  // (`exposureMemberWhere`). LATENT FLOOR GAP, not a live leak — the action
+  // already defaults to `propose` at rung 9 today; the defect is that without
+  // this floor a rung-2.8 governance rule or a rung-4 `autoApproveFor` entry
+  // could widen it to auto-execute, which this file's own invariant forbids
+  // for a scope change. No `.remove` / `.updateRole` gate exists (the
+  // repository methods have zero gate call sites) — those spellings are in
+  // ADMIN_ACTIONS_RESERVED below.
+  "projectMember.create",
   // Agent capability grants — `routers/agent-users.ts`.
   "agent.updateCapabilities",
   // API keys. `apiKey.create` was already correct; the DELETE door is spelled
@@ -331,6 +344,12 @@ export const ADMIN_ACTIONS_RESERVED: readonly string[] = [
   "member.updateRole",
   "member.remove",
   "member.invite",
+  // Project membership removal / role change. `ProjectMemberRepository` has
+  // `.remove()` and `.update()`, but NO gate call site passes
+  // `subjectType: "projectMember"` with either action today — so these cannot
+  // be typed and are reserved, inheriting the floor the day such a door ships.
+  "projectMember.remove",
+  "projectMember.updateRole",
   // No agent lifecycle door goes through the gate today (only
   // `agent.updateCapabilities`, which IS live above).
   "agent.create",

@@ -22,17 +22,20 @@
  * EXISTS and is VISIBLE to `userId` before writing — otherwise a caller passing
  * a stale/foreign/invisible project id would stamp a ghost membership edge the
  * project-lens read never resolves (a silent drop reported as success upstream).
- * Reuses `userVisibleWhere` — the SAME pod-wide-owner / workspace-member
- * predicate every other visibility check in this codebase composes — rather
- * than re-deriving it, so this can never become a second, drifting mirror.
+ * Reuses `ownerPrivateVisibleWhere` — the SAME owner-gated pod-wide / workspace-
+ * member predicate every other ownerPrivate visibility check in this codebase
+ * composes — rather than re-deriving it, so this can never become a second,
+ * drifting mirror. (It WAS hand-inlined here until the helper moved down into
+ * `@synap/database`; the inline and the canonical definition were identical by
+ * luck, not by construction.)
  */
-import { and, eq, isNull, isNotNull, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { relations } from "../schema/relations.js";
 import { createLogger } from "@synap-core/core";
 import { projects } from "../schema/projects.js";
 
 const logger = createLogger({ module: "entity-project-membership" });
-import { userVisibleWhere } from "./user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "./user-visible-where.js";
 import type { getDb } from "../client-pg.js";
 
 /** Relation slug for entity→project membership. */
@@ -47,7 +50,7 @@ export type LinkEntityToProjectResult =
  * dedupes.
  *
  * Verifies the project exists and is visible to `userId` first (pod-wide
- * owner, or workspace-member via `userVisibleWhere`) — a project id that
+ * owner, or workspace-member via `ownerPrivateVisibleWhere`) — a project id that
  * doesn't resolve is refused (`{linked: false}`) rather than written as a
  * ghost edge. Callers that need to report a distinct "explicit pin missing"
  * outcome can check `reason === "project_not_found"`.
@@ -73,12 +76,10 @@ export async function linkEntityToProject(
     .where(
       and(
         eq(projects.id, args.projectId),
-        or(
-          and(isNull(projects.workspaceId), eq(projects.userId, args.userId)),
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, args.userId)
-          )
+        ownerPrivateVisibleWhere(
+          projects.workspaceId,
+          projects.userId,
+          args.userId
         )
       )
     )

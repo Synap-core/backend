@@ -7,14 +7,12 @@ import {
   entities,
   eq,
   inArray,
-  isNotNull,
   isNull,
-  or,
   views,
 } from "@synap/database";
 import { protectedProcedure, router } from "../trpc.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 
 const resourceTypeSchema = z.enum(["entity", "view"]);
 const semanticSizeSchema = z.enum(["small", "medium", "large"]);
@@ -34,13 +32,7 @@ function entityVisibleWhere(userId: string) {
 }
 
 function viewVisibleWhere(userId: string) {
-  return or(
-    and(isNull(views.workspaceId), eq(views.userId, userId)),
-    and(
-      isNotNull(views.workspaceId),
-      userVisibleWhere(views.workspaceId, userId)
-    )
-  )!;
+  return ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)!;
 }
 
 async function assertResourceVisible(

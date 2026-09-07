@@ -31,9 +31,7 @@ import type { StructuredFollowUp } from "@synap/intelligence-client";
 import {
   eq,
   and,
-  or,
   isNull,
-  isNotNull,
   inArray,
   desc,
   getDb,
@@ -69,8 +67,8 @@ import {
   type ResolutionRung,
 } from "@synap/database";
 import {
-  userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../utils/user-visible-where.js";
 import {
   embedQuery,
@@ -714,7 +712,11 @@ export const captureRouter = router({
         kindSlug: profileSlug,
         name: title,
         signals: extractIdentitySignals(properties),
-        userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+        userScope: ownerPrivateVisibleWhere(
+          entitiesTable.workspaceId,
+          entitiesTable.userId,
+          userId
+        ),
         limit: 5,
       });
 
@@ -1013,7 +1015,11 @@ export const captureRouter = router({
             and(
               eq(entitiesTable.id, input.anchorEntityId),
               isNull(entitiesTable.deletedAt),
-              userVisibleWhere(entitiesTable.workspaceId, userId)
+              ownerPrivateVisibleWhere(
+                entitiesTable.workspaceId,
+                entitiesTable.userId,
+                userId
+              )
             )
           )
           .limit(1);
@@ -1100,12 +1106,10 @@ export const captureRouter = router({
         .from(projects)
         .where(
           and(
-            or(
-              and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-              and(
-                isNotNull(projects.workspaceId),
-                userVisibleWhere(projects.workspaceId, userId)
-              )
+            ownerPrivateVisibleWhere(
+              projects.workspaceId,
+              projects.userId,
+              userId
             ),
             eq(projects.status, "active")
           )
@@ -2056,7 +2060,11 @@ export const captureRouter = router({
             userId,
             name: e.title,
             signals: extractIdentitySignals(e.properties),
-            userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+            userScope: ownerPrivateVisibleWhere(
+              entitiesTable.workspaceId,
+              entitiesTable.userId,
+              userId
+            ),
             limit: 5,
           });
           if (identity.match === "strong" && identity.entity) {
@@ -2091,7 +2099,11 @@ export const captureRouter = router({
               and(
                 eq(entitiesTable.id, input.anchorEntityId),
                 isNull(entitiesTable.deletedAt),
-                userVisibleWhere(entitiesTable.workspaceId, userId)
+                ownerPrivateVisibleWhere(
+                  entitiesTable.workspaceId,
+                  entitiesTable.userId,
+                  userId
+                )
               )
             )
             .limit(1);
@@ -2277,12 +2289,10 @@ export const captureRouter = router({
           .where(
             and(
               eq(projects.id, resolvedProjectId),
-              or(
-                and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-                and(
-                  isNotNull(projects.workspaceId),
-                  userVisibleWhere(projects.workspaceId, userId)
-                )
+              ownerPrivateVisibleWhere(
+                projects.workspaceId,
+                projects.userId,
+                userId
               )
             )
           )
@@ -2561,7 +2571,11 @@ export const captureRouter = router({
           kindSlug: e.profileSlug,
           name: e.title,
           signals: extractIdentitySignals(e.properties),
-          userScope: userVisibleWhere(entitiesTable.workspaceId, userId),
+          userScope: ownerPrivateVisibleWhere(
+            entitiesTable.workspaceId,
+            entitiesTable.userId,
+            userId
+          ),
           limit: 5,
         });
         if (identity.match !== "strong" || !identity.entity) continue;

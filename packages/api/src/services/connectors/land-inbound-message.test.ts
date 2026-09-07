@@ -174,6 +174,16 @@ describe("landInboundMessage — Discord parity (byte-identical record args)", (
       senderKeyId: callerKeyId,
       messageId,
       attachments,
+      // Added to the forwarded literal AFTER this test was written, both
+      // deliberate and both committed: `projectId` is the `args.projectId ?? null`
+      // normalization (b50e6352, 2026-08-03) and the three email-threading keys
+      // are straight pass-throughs (44c7a8e0, 2026-08-04) that Discord never
+      // supplies. Pinned here so "EXACTLY the prior literal" stays a real
+      // deep-equal instead of quietly drifting.
+      projectId: null,
+      headerMessageId: undefined,
+      inReplyTo: undefined,
+      references: undefined,
     };
 
     await landInboundMessage({

@@ -36,13 +36,15 @@ import {
   resolveDailyWriteCeiling,
 } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
+import type { Lens } from "../access/context.js";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
 
 type GovernanceCeilingRow = typeof governanceCeilings.$inferSelect;
 
 /**
- * Map raw ceiling rows to the wire DTO used by `list` / `listAll`, resolving
+ * Map raw ceiling rows to the wire DTO used by `list`, resolving
  * each agent-principal ceiling's display label in ONE batched lookup. Shared so
  * the two listing doors never drift on shape.
  */
@@ -215,58 +217,90 @@ const CreateInputSchema = z
     path: ["workspaceId"],
   });
 
+/**
+ * Translate a resolved workspace `Lens` into an ADDITIONAL narrowing predicate
+ * for a ceiling read. Returns `undefined` (no narrow) for the floor states, so
+ * the caller's `userVisibleWhere` floor stands alone.
+ *
+ * Pod-scope ceilings are global, so they ride along with every workspace lens —
+ * except `null`, which means "pod-scope only" and therefore excludes the
+ * workspace half entirely.
+ */
+function ceilingScopeLens(lens: Lens) {
+  const podOnly = eq(governanceCeilings.scopeKind, "pod");
+
+  if (lens === null) return podOnly;
+
+  if (Array.isArray(lens)) {
+    // Empty array = no narrow (the floor) — never silently match zero rows.
+    if (lens.length === 0) return undefined;
+    return or(
+      podOnly,
+      and(
+        eq(governanceCeilings.scopeKind, "workspace"),
+        inArray(governanceCeilings.workspaceId, lens)
+      )
+    );
+  }
+
+  if (typeof lens === "string") {
+    return or(
+      podOnly,
+      and(
+        eq(governanceCeilings.scopeKind, "workspace"),
+        eq(governanceCeilings.workspaceId, lens)
+      )
+    );
+  }
+
+  return undefined;
+}
+
 export const governanceCeilingsRouter = router({
   /**
    * List active ceilings (not revoked, not expired) visible to the caller:
    * pod-scope ceilings (global) plus workspace-scope ceilings for the workspace
    * the caller passes (defaults to ctx.workspaceId). Newest first.
    */
+  /**
+   * List active ceilings (not revoked, not expired) visible to the caller.
+   *
+   * ONE floor-first door — the `.list`/`.listAll` split was collapsed (tripwire
+   * `read-scoping.tripwire.test.ts`: "the two-door split may only collapse,
+   * never re-expand"). The FLOOR is `userVisibleWhere` on `workspace_id`, which
+   * admits pod-scope ceilings (NULL workspace = global) plus ceilings in every
+   * workspace the caller can see. The `workspaceId` lens only ever NARROWS it.
+   *
+   * This also closes a widening the old two-door shape carried: the previous
+   * `.list` filtered on the caller-supplied `input.workspaceId` with NO
+   * `userVisibleWhere` floor, so a caller passing a workspace id they cannot see
+   * read its ceilings. A lens applied INSIDE the floor cannot do that.
+   *
+   * Lens semantics (the canonical ScopeFilter contract):
+   *   - absent      -> defaults to the active-workspace header, else the floor
+   *   - `null`      -> pod-scope ceilings only
+   *   - `"<id>"`    -> pod-scope + that workspace's ceilings
+   *   - `["a","b"]` -> pod-scope + those workspaces' ceilings
+   *   - `[]`        -> no narrow (the full floor — the old `listAll`)
+   * Newest first.
+   */
   list: protectedProcedure
-    .input(
-      z.object({
-        workspaceId: z.string().uuid().optional(),
-      })
-    )
+    .input(z.object({ workspaceId: ScopeFilterShape.workspaceId }))
     .query(async ({ ctx, input }) => {
-      const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
-
-      const scopePredicate = workspaceId
-        ? or(
-            eq(governanceCeilings.scopeKind, "pod"),
-            and(
-              eq(governanceCeilings.scopeKind, "workspace"),
-              eq(governanceCeilings.workspaceId, workspaceId)
-            )
-          )
-        : eq(governanceCeilings.scopeKind, "pod");
+      const { workspaceLens } = resolveScope(ctx, input);
 
       const rows = await db.query.governanceCeilings.findMany({
-        where: and(activeCeilingPredicate(), scopePredicate),
+        where: and(
+          activeCeilingPredicate(),
+          // The security boundary — never widened by the lens below.
+          userVisibleWhere(governanceCeilings.workspaceId, ctx.userId),
+          ceilingScopeLens(workspaceLens)
+        ),
         orderBy: [desc(governanceCeilings.createdAt)],
       });
 
       return { ceilings: await mapCeilingsWithAgentLabels(rows) };
     }),
-
-  /**
-   * List active ceilings across EVERY workspace the caller can see (pod ∪ all
-   * visible workspaces). Mirrors the `.list`/`.listAll` convention: floored by
-   * `userVisibleWhere` on `workspace_id` so pod-scope ceilings (NULL workspace →
-   * global) and workspace-scope ceilings for the caller's workspaces are
-   * returned, and no ceiling outside the caller's visibility ever leaks. Newest
-   * first.
-   */
-  listAll: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await db.query.governanceCeilings.findMany({
-      where: and(
-        activeCeilingPredicate(),
-        userVisibleWhere(governanceCeilings.workspaceId, ctx.userId)
-      ),
-      orderBy: [desc(governanceCeilings.createdAt)],
-    });
-
-    return { ceilings: await mapCeilingsWithAgentLabels(rows) };
-  }),
 
   /**
    * The acting agent's current daily-write usage against its resolved ceiling —

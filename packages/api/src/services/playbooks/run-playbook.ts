@@ -170,9 +170,24 @@ export function deriveForceProposeWrites(metadata: unknown): boolean {
 
 /**
  * Build the session metadata stamped at creation: the automation chain context
- * (F2 depth floor, keyed by the agent's X-Session-Id in the trigger matcher) and
- * the propose-only governance flag. Empty object when neither applies (session
- * metadata column default). Pure so it is unit-testable.
+ * (F2 depth floor, keyed by the agent's X-Session-Id in the trigger matcher),
+ * the TOP-LEVEL `automationId`/`automationRunId` pair, and the propose-only
+ * governance flag. Empty object when neither applies (session metadata column
+ * default). Pure so it is unit-testable.
+ *
+ * The top-level pair duplicates `chainContext.automationId`/`automationRunId`
+ * deliberately: `session-kind.ts` (`sessionAutomationWhere`,
+ * `AUTOMATION_KEYS`/`projectSessionKind`) reads ONLY the top-level keys — it
+ * has no reason to know about `automationChainContext`, which exists for the
+ * trigger matcher's depth floor, a different consumer. Before this, a
+ * playbook_run session opened from a scheduled automation carried the
+ * automation ONLY nested under `automationChainContext`, so
+ * `sessionAutomationWhere(automationId)` — the automation detail page's
+ * "this automation's run sessions" filter — silently returned nothing for
+ * every such run. `projectSessionKind`/`runSignalWhere` still classified the
+ * row as `kind: "run"` correctly regardless (via `origin`/`playbookId`), so
+ * the row never disappeared from the run POPULATION — only from the
+ * automation-scoped FILTER.
  */
 export function buildRunSessionMetadata(opts: {
   chainContext?: RunChainContext;
@@ -181,6 +196,8 @@ export function buildRunSessionMetadata(opts: {
   return {
     ...(opts.chainContext
       ? {
+          automationId: opts.chainContext.automationId,
+          automationRunId: opts.chainContext.automationRunId,
           automationChainContext: {
             automationRunId: opts.chainContext.automationRunId,
             automationId: opts.chainContext.automationId,

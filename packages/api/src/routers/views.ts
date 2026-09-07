@@ -28,7 +28,6 @@ import {
   inArray,
   or,
   isNull,
-  isNotNull,
   getTableColumns,
   asc,
   type SQL,
@@ -67,19 +66,13 @@ import { randomUUID } from "crypto";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { resolveFacetVisibilityScope } from "../utils/workspace-membership.js";
 import {
-  userVisibleWhere,
   workspaceLensWhere,
+  ownerPrivateVisibleWhere,
 } from "../utils/user-visible-where.js";
 import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
 
 function viewVisibleWhere(userId: string) {
-  return or(
-    and(isNull(views.workspaceId), eq(views.userId, userId)),
-    and(
-      isNotNull(views.workspaceId),
-      userVisibleWhere(views.workspaceId, userId)
-    )
-  )!;
+  return ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)!;
 }
 
 /**

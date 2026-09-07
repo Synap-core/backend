@@ -40,7 +40,7 @@ import { dirname, join, relative } from "node:path";
  * real module here is safe. Confirmed empirically, not just by reading — run
  * the converted file with Postgres down and check it doesn't hang.).
  *
- * WHY A RATCHET, NOT A HARD BAN: 66 files (measured 2026-09-03) still use the
+ * WHY A RATCHET, NOT A HARD BAN: 65 files (measured 2026-09-06) still use the
  * total-mock form. Converting all of them in one pass is large, per-file-risky
  * churn nobody asked for — each mock fakes a different slice of the module,
  * and `importOriginal` safety has to be checked per file, not assumed. A
@@ -53,7 +53,14 @@ import { dirname, join, relative } from "node:path";
  * there is no separate list to forget to update.
  */
 
-const BASELINE = 66;
+// 66 -> 65 on 2026-09-06: `routers/n8n/actions.test.ts` converted to
+// `importOriginal` (it was dying on a missing `workspaces` export). Locking the
+// improvement in is part of that fix — a ratchet left stale-HIGH is a guard
+// quietly losing its teeth, tolerating a file's worth of new debt in silence.
+// NOT lowered further in anticipation: a scan found ~35 more test files whose
+// total mocks are latently missing a name, but they pass today and the baseline
+// must describe what is true now, not what anyone intends.
+const BASELINE = 65;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

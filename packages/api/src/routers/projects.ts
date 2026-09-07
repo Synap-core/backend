@@ -13,9 +13,7 @@ import {
   eq,
   desc,
   and,
-  or,
   isNull,
-  isNotNull,
   inArray,
   getDb,
   EventRepository,
@@ -40,7 +38,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import {
   isSubjectEntityVisible,
@@ -118,13 +116,7 @@ async function loadVisibleProject(
     },
     where: and(
       eq(projects.id, projectId),
-      or(
-        and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-        and(
-          isNotNull(projects.workspaceId),
-          userVisibleWhere(projects.workspaceId, userId)
-        )
-      )!
+      ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
     ),
   });
 }
@@ -254,14 +246,10 @@ export const projectsRouter = router({
       const offset = input?.offset ?? 0;
 
       const conditions: ReturnType<typeof eq>[] = [
-        or(
-          // Pod-wide projects (NULL workspace): only visible to their owner
-          and(isNull(projects.workspaceId), eq(projects.userId, ctx.userId)),
-          // Workspace-scoped projects: visible to all workspace members
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, ctx.userId)
-          )
+        ownerPrivateVisibleWhere(
+          projects.workspaceId,
+          projects.userId,
+          ctx.userId
         )!,
       ];
 
@@ -323,12 +311,10 @@ export const projectsRouter = router({
       const project = await db.query.projects.findFirst({
         where: and(
           eq(projects.id, input.id),
-          or(
-            and(isNull(projects.workspaceId), eq(projects.userId, ctx.userId)),
-            and(
-              isNotNull(projects.workspaceId),
-              userVisibleWhere(projects.workspaceId, ctx.userId)
-            )
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            ctx.userId
           )!
         ),
       });

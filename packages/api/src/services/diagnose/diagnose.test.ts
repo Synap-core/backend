@@ -296,6 +296,36 @@ describe("summarizeGlobalHealth", () => {
     expect(report.status).toBe("ok");
   });
 
+  it("maps a zero-reviewed queue to ok, not a fault, and never widens the status union", () => {
+    // `HealthStatus` has no neutral member — an "unknown" verdict (nobody has
+    // reviewed anything yet) must land on an EXISTING status, and "ok" is the
+    // deliberate, documented choice: nothing here is actionable, so
+    // "attention" would be a false alarm about a queue nobody has used.
+    const report = summarizeGlobalHealth(
+      {
+        ...clean,
+        reviewQueue: {
+          reviewed: 0,
+          approvedInFull: 0,
+          approvedWithItemsDenied: 0,
+          rejected: 0,
+          approveRateOfReviewed: null,
+          lowSample: true,
+          autoApprovedNeverReviewed: 0,
+          truncated: false,
+        },
+      },
+      { workspaceId: null }
+    );
+    const section = report.sections.find((s) => s.key === "review_queue");
+    expect(section?.status).toBe("ok");
+    expect(section?.detail.verdict).toBe("unknown");
+    expect(section?.headline).toBe(
+      "No proposal has been reviewed yet — no approval rate to report"
+    );
+    expect(report.status).toBe("ok");
+  });
+
   it("flags an agent over the daily cap as degraded", () => {
     const report = summarizeGlobalHealth(
       { ...clean, agentActivity: [{ agentId: "a", todayCount: 10, cap: 10 }] },

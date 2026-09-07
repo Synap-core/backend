@@ -75,6 +75,15 @@ const SCOPING_HELPERS = [
   // scoping (the entities/views routers self-scope through these).
   "entityVisibleWhere",
   "entityLensWhere",
+  // `assertViewAccess` (routers/views.ts) is the views router's ONE access
+  // predicate: it floors a pod-wide view (NULL workspaceId) on
+  // `view.userId === callerUserId` and otherwise delegates to `verifyPermission`
+  // (already listed below), throwing FORBIDDEN on failure. It is a thin wrapper
+  // over a recognized helper, exactly like the two above — the scanner matches
+  // literal call text and cannot see through the wrapper, so a door that IS
+  // floored read as unfloored. All seven view doors are separately pinned to
+  // call it by `views.podwide-access.test.ts`.
+  "assertViewAccess",
   "workspaceLensWhere",
   "validateWorkspaceAccess",
   "verifyPermission",

@@ -678,6 +678,13 @@ export function buildProposalGraph(
       title,
       propertyCount: Object.keys(entityOp.properties ?? {}).length,
       hasContent: !!entityOp.content,
+      // The real id of a LINKED pre-existing record. `ref` above is symbolic by
+      // construction, so this is the only thing that lets a review surface open
+      // the entity. We already read this value for roles and ref-aliasing above;
+      // not emitting it is what made every graph node unopenable on relay.
+      ...(entityOp.existingEntityId
+        ? { existingEntityId: entityOp.existingEntityId }
+        : {}),
       ...(roles.length > 0 ? { roles } : {}),
     });
   });

@@ -19,14 +19,12 @@ import {
   profiles,
   eq,
   and,
-  or,
   isNull,
-  isNotNull,
   getEffectiveFacets,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../../utils/workspace-membership.js";
 
@@ -741,13 +739,11 @@ export function registerEntitiesRoutes(app: HubHono): void {
     //   pod-personal rows → gated by userId;
     //   workspace rows    → gated by workspace membership (userVisibleWhere).
     try {
-      const floor = or(
-        and(isNull(entities.workspaceId), eq(entities.userId, userId)),
-        and(
-          isNotNull(entities.workspaceId),
-          userVisibleWhere(entities.workspaceId, userId)
-        )
-      )!;
+      const floor = ownerPrivateVisibleWhere(
+        entities.workspaceId,
+        entities.userId,
+        userId
+      );
       const rows = await db
         .select()
         .from(entities)

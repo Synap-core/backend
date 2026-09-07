@@ -195,6 +195,11 @@ export const OBJECT_NOUNS: Readonly<Record<string, string>> = {
   ssh_key: "SSH key",
   env_variable: "Environment variable",
   url: "Page",
+  // Humanizing this event domain to "Proactive" loses its subject — the AI is
+  // what's proactive here (an unprompted post/action), not a generic quality.
+  // Ported from event-renderer's local `DOMAIN_NAMES` map, which the vocabulary
+  // consolidation narrowed to grouping-only (see `renderers.tsx`).
+  proactive: "Proactive AI",
 };
 
 /**
@@ -211,7 +216,11 @@ export function resolveObjectNoun(kind: string | null | undefined): string {
   const backendOnly = OBJECT_NOUNS[key];
   if (backendOnly) return backendOnly;
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
-  return OBJECT_KINDS[canonical]?.label ?? humanizeToken(canonical);
+  return (
+    OBJECT_KINDS[canonical]?.label ??
+    OBJECT_NOUNS[canonical] ??
+    humanizeToken(canonical)
+  );
 }
 
 /**
@@ -239,6 +248,8 @@ export function resolveObjectNounPlural(
   const canonical = OBJECT_KIND_ALIASES[key] ?? key;
   const entry = OBJECT_KINDS[canonical];
   if (entry?.labelPlural) return entry.labelPlural;
+  const canonicalNoun = OBJECT_NOUNS[canonical];
+  if (canonicalNoun) return `${canonicalNoun}s`;
   return `${humanizeToken(canonical)}s`;
 }
 

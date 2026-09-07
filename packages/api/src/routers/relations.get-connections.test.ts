@@ -37,8 +37,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("../utils/project-scope.js", () => ({
-  VISIBLE_TO: "visible_to",
+// importOriginal, NOT a hand-written export list. This factory named only
+// VISIBLE_TO + accessScopeWhere while relations.ts also imports
+// BELONGS_TO_PROJECT (present at HEAD) — hence the
+// `No "BELONGS_TO_PROJECT" export is defined` death. Naming the one missing
+// export would have reopened the identical failure within the hour:
+// relations.ts is concurrently gaining an `EXPOSURE_RELATION_TYPES` import from
+// this same module. Spreading the original absorbs both, and every future one.
+vi.mock("../utils/project-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/project-scope.js")>()),
   accessScopeWhere: mockAccessScopeWhere,
 }));
 vi.mock("../utils/channel-visibility.js", () => ({

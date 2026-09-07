@@ -119,6 +119,27 @@ describe("resolveObjectNoun", () => {
     expect(resolveObjectNoun("env_variable")).toBe("Environment variable");
   });
 
+  it("re-checks OBJECT_NOUNS after aliasing, not just the raw key", () => {
+    // The bug: `apikey` aliases to the canonical `api_key`, but the registry
+    // has no `api_key` KIND (only OBJECT_NOUNS does) — so the resolver fell
+    // straight to humanizeToken("api_key") = "Api key", even though
+    // OBJECT_NOUNS["api_key"] === "API key" was sitting right there. This is
+    // the exact failure `.claude/rules/vocabulary.md` cites as the reason
+    // this SSOT exists.
+    expect(resolveObjectNoun("apikey")).toBe("API key");
+    expect(resolveObjectNoun("api_keys")).toBe("API key");
+    expect(resolveObjectNoun("apikeys")).toBe("API key");
+    expect(resolveObjectNounPlural("apikey")).toBe("API keys");
+    expect(resolveObjectNounPlural("api_keys")).toBe("API keys");
+    expect(resolveObjectNounPlural("apikeys")).toBe("API keys");
+  });
+
+  it("names the proactive-AI event domain, not the bare quality", () => {
+    // humanizeToken("proactive") = "Proactive" loses the subject (the AI is
+    // what's proactive) — curated rather than left to humanize.
+    expect(resolveObjectNoun("proactive")).toBe("Proactive AI");
+  });
+
   /**
    * PORTED from the deleted `vocabulary-noun-drift.test.ts` (synap-app). The
    * drift assertion itself is vacuous now that there is one table, but the

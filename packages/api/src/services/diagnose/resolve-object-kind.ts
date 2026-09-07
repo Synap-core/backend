@@ -29,7 +29,6 @@ import {
   or,
   eq,
   isNull,
-  isNotNull,
   drizzleSql,
   proposals,
   focusSessions,
@@ -46,7 +45,10 @@ import {
   workspaces,
 } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  userVisibleWhere,
+  ownerPrivateVisibleWhere,
+} from "../../utils/user-visible-where.js";
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
@@ -181,10 +183,15 @@ export async function resolveObjectKind(
               eq(focusSessions.id, id),
               // Sessions carry an owner (userId) AND a workspace lens — a user
               // sees their own sessions and those in workspaces they can read.
-              drizzleSql`(${focusSessions.userId} = ${userId} OR ${userVisibleWhere(
+              // NOT `eq(userId) OR userVisibleWhere(...)`: that OR widens rather
+              // than gates, because `userVisibleWhere`'s `isNull(workspaceId)`
+              // branch is owner-blind and already admitted every other user's
+              // pod-personal session.
+              ownerPrivateVisibleWhere(
                 focusSessions.workspaceId,
+                focusSessions.userId,
                 userId
-              )})`
+              )
             )
           )
           .limit(1);
@@ -336,13 +343,7 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(views.id, id),
-              or(
-                and(isNull(views.workspaceId), eq(views.userId, userId)),
-                and(
-                  isNotNull(views.workspaceId),
-                  userVisibleWhere(views.workspaceId, userId)
-                )
-              )
+              ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)
             )
           )
           .limit(1);
@@ -394,7 +395,11 @@ export async function resolveObjectKind(
             and(
               eq(entities.id, id),
               isNull(entities.deletedAt),
-              userVisibleWhere(entities.workspaceId, userId)
+              ownerPrivateVisibleWhere(
+                entities.workspaceId,
+                entities.userId,
+                userId
+              )
             )
           )
           .limit(1);

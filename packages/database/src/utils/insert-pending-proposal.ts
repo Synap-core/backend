@@ -2,12 +2,11 @@ import { createHash, randomUUID } from "crypto";
 import { and, eq } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
-import { focusSessions } from "../schema/focus-sessions.js";
-import { channels } from "../schema/channels.js";
-
-/** Postgres `uuid` accepts only this shape; anything else is a 22P02 statement error. */
-const UUID_SHAPE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// The ONE project ladder. The hand-rolled duplicate that used to live in this
+// file (explicit → session → channel, no rung 3.5) is gone; `deriveProposalProjectId`
+// below is now a thin adapter over this. The `UUID_SHAPE` guard that used to live
+// here moved WITH it, so no caller loses the 22P02 protection.
+import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
 
 /**
@@ -48,6 +47,18 @@ export interface InsertPendingProposalInput {
   createdBy: string | null;
   /** The HUMAN userId that filed this proposal (NULL for agent-authored rows). */
   proposedByUserId?: string | null;
+  /**
+   * The HUMAN this proposal is FOR — the operator/owner whose review it awaits.
+   * THE OWNER FLOOR (0248). Distinct from `createdBy` (overloaded: userId OR
+   * agentUserId), from `proposedByUserId` (the human PROPOSER, human-member path
+   * only) and from `agentUserId` (the agent actor).
+   *
+   * Callers MUST pass the human they already hold, never an agent id and never a
+   * guess: a wrong owner is worse than a NULL one, because the floor this column
+   * is being built for would then admit the wrong person. A door that genuinely
+   * cannot determine a human leaves it NULL.
+   */
+  subjectUserId?: string | null;
   agentUserId?: string | null;
   threadId?: string | null;
   commandRunId?: string | null;
@@ -79,6 +90,13 @@ export interface InsertPendingProposalInput {
   requestedEventId?: string | null;
   sessionId?: string | null;
   projectId?: string | null;
+  /**
+   * Rung 3.5 of the project ladder — the acting agent's DECLARED sticky project
+   * focus (`agentMetadata.focusProjectId`), read by the CALLER. Forwarded to
+   * `deriveProposalProjectId`; NOT a column. Omit it and the ladder simply falls
+   * through, exactly as before.
+   */
+  focusProjectId?: string | null;
   /** Workflow attribution: the automation step run + flow node that
    *  produced this proposal. Both optional — non-automation proposals omit them. */
   stepRunId?: string | null;
@@ -257,6 +275,13 @@ export async function findExistingPendingDuplicate(
  * below, so adding a provenance column here forces both doors to carry it.
  */
 export const PROPOSAL_PROVENANCE_KEYS = [
+  // NOT provenance in the "where did this come from" sense — `subjectUserId` is
+  // the OWNER floor (0248). It is listed here because this list is the only
+  // mechanism that forces BOTH inserts to name a column, and an owner column
+  // written by one door and not the other is exactly the drift that made
+  // `stepRunId` a measured 0%: a floor that half the rows cannot satisfy is a
+  // floor that can never be turned on.
+  "subjectUserId",
   "agentUserId",
   "threadId",
   "commandRunId",
@@ -271,25 +296,38 @@ export const PROPOSAL_PROVENANCE_KEYS = [
 ] as const;
 
 /**
- * PROJECT LENS derivation — a proposal that belongs to a session belongs to that
- * session's project.
+ * PROJECT LENS derivation for a proposal — now a THIN ADAPTER over the ONE
+ * shared ladder, `resolveProjectPlacement` (services/project-resolution-service).
  *
- * Extracted from the PENDING insert below so the AUTO_APPROVED receipt door can
- * REUSE it rather than re-implement it. Doing it at each door is what produced
- * the measured 0-of-670 `projectId` coverage: the column, the forwarding and the
- * API field all existed; only the derivation was missing at every door.
+ * IT USED TO BE A SECOND, HAND-ROLLED LADDER. It implemented explicit → session
+ * → channel and stopped there, while the shared ladder ran explicit → session →
+ * channel → 3.5 DECLARED FOCUS → relational gravity → NONE. The missing rung was
+ * not cosmetic: a project focus set through `synap_set_project_focus` could not
+ * reach ANY proposal raised outside a session or a channel — and structurally
+ * EVERY `focus_session.create` proposal is raised outside one.
  *
- * An explicit `projectId` always wins — this only fills a gap, and a session
- * with no project leaves it null rather than inventing one.
+ * WHY IT COULD NOT SIMPLY BE SWAPPED BEFORE: this copy carried a `UUID_SHAPE`
+ * guard on the body-supplied ids and the shared ladder carried none. A malformed
+ * uuid raises Postgres 22P02, which ABORTS THE ENCLOSING TRANSACTION — so a
+ * straight swap would have turned "a bad id costs the lens" into "a bad id costs
+ * the proposal". The guard was therefore MOVED INTO the shared ladder first
+ * (purely additive: it can only skip a lookup guaranteed to throw), and only
+ * then did this become a delegation.
  *
- * Runs on the caller's `executor` so a session minted earlier in the SAME
- * transaction is visible. Not wrapped in a try/catch: inside a transaction a
- * failed statement aborts the whole tx, so a swallowed error would only
- * resurface at the insert with a worse message. The one failure that IS
- * reachable on a healthy connection — a malformed `sessionId` (several doors
- * accept it from the request body unvalidated; Postgres raises 22P02 on a
- * non-uuid) — is excluded BEFORE the query instead of caught after, so a bad id
- * costs the lens, never the proposal.
+ * THE ADAPTER'S ONLY REAL JOB is the vocabulary: a proposal's channel is
+ * `threadId` (`proposals.thread_id` FKs `channels.id`), which the ladder calls
+ * `channelId`.
+ *
+ * EXECUTOR: runs on the caller's `executor`, so a session minted earlier in the
+ * SAME transaction is visible — a read on another connection would miss it and
+ * silently derive null. Still NOT wrapped in a try/catch: inside a transaction a
+ * failed statement has already aborted the tx by the time a catch could run, so
+ * the guard is a shape check BEFORE the query, never a catch after it.
+ *
+ * NO AI RUNG, NO DEFAULT — inherited from the shared ladder and non-negotiable.
+ * `belongs_to_project` WIDENS cross-workspace access, so an AI-guessed project is
+ * NEVER auto-linked and the ladder ending in NONE is a SAFETY PROPERTY, not a
+ * gap to be filled.
  */
 export async function deriveProposalProjectId(
   input: {
@@ -298,32 +336,28 @@ export async function deriveProposalProjectId(
     /** The CHANNEL this proposal was raised in (`proposals.thread_id` FKs
      *  `channels.id`) — rung 3 of the deterministic ladder. */
     threadId?: string | null;
+    /**
+     * Rung 3.5 — the acting agent's DECLARED sticky project focus, read by the
+     * CALLER off `agentMetadata.focusProjectId` (the shared ladder never reaches
+     * for an ambient identity of its own; that is its contract). This is the rung
+     * the hand-rolled duplicate lacked.
+     *
+     * A DECLARATION, never an inference: it can only have been written by an
+     * explicit `synap_set_project_focus` whose target was verified to exist and
+     * be visible at set time.
+     */
+    focusProjectId?: string | null;
   },
   executor: typeof db | DbTx = db
 ): Promise<string | null> {
-  if (input.projectId) return input.projectId;
-  if (input.sessionId && UUID_SHAPE.test(input.sessionId)) {
-    const [session] = await executor
-      .select({ projectId: focusSessions.projectId })
-      .from(focusSessions)
-      .where(eq(focusSessions.id, input.sessionId))
-      .limit(1);
-    if (session?.projectId) return session.projectId;
-  }
-  // Rung 3 — the bound channel. EXTENSION, not a rewrite: the session rung above
-  // is untouched and still wins. Proposals carry `sessionId` on roughly half the
-  // population but `threadId` on a different (chat-originated) slice, and a
-  // proposal raised in a project-bound room belongs to that project just as
-  // deterministically as one raised in a project-bound session. Same shape-guard
-  // as the session lookup: a body-supplied non-uuid costs the lens, never the
-  // proposal.
-  if (!input.threadId || !UUID_SHAPE.test(input.threadId)) return null;
-  const [channel] = await executor
-    .select({ projectId: channels.projectId })
-    .from(channels)
-    .where(eq(channels.id, input.threadId))
-    .limit(1);
-  return channel?.projectId ?? null;
+  const placement = await resolveProjectPlacement(executor, {
+    explicitProjectId: input.projectId,
+    sessionId: input.sessionId,
+    // Vocabulary bridge: a proposal's `threadId` IS the ladder's `channelId`.
+    channelId: input.threadId,
+    focusProjectId: input.focusProjectId,
+  });
+  return placement.projectId;
 }
 
 /**
@@ -383,6 +417,7 @@ export async function insertPendingProposal(
       projectId: input.projectId,
       sessionId: input.sessionId,
       threadId: input.threadId,
+      focusProjectId: input.focusProjectId,
     },
     executor
   );
@@ -411,6 +446,7 @@ export async function insertPendingProposal(
         ...(input.proposedByUserId
           ? { proposedByUserId: input.proposedByUserId }
           : {}),
+        ...(input.subjectUserId ? { subjectUserId: input.subjectUserId } : {}),
         ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.commandRunId ? { commandRunId: input.commandRunId } : {}),

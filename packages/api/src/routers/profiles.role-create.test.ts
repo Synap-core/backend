@@ -21,9 +21,18 @@ vi.mock("../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn(async () => false),
 }));
 
+// FALLBACK, deliberately NOT `importOriginal`: loading the real
+// `permission-check.js` here transitively pulls `@synap/jobs`
+// (automation-run-reaper -> post-run-summary), which reads `isNull` off this
+// file's intentional `@synap/database` class-stub and dies with
+// `No "isNull" export is defined on the "@synap/database" mock`. So the export
+// list is named by hand. `proposedMessageFor` is stubbed to IDENTITY, which
+// matches the real function on every non-join-gate path; do NOT assert
+// join-gate prose through this mock — it would assert the stub, not the source.
 vi.mock("../utils/permission-check.js", () => ({
   // Auto-approved: no `denied`, no `proposalId` → materialize inline.
   checkPermissionOrPropose: vi.fn(async () => ({})),
+  proposedMessageFor: (_type: unknown, message: string) => message,
 }));
 
 vi.mock("../utils/audit-log.js", () => ({

@@ -118,6 +118,24 @@ const FIXTURES: Array<{
     kind: "run",
   },
   {
+    name: "automation origin, chain-context-only metadata (no top-level automationId/automationRunId) — still run, via origin, never work",
+    // `buildRunSessionMetadata` (run-playbook.ts) now ALSO stamps the
+    // top-level keys, but classification must not depend on that: `origin`
+    // alone (RUN_ORIGINS) already carries this, so a producer that regresses
+    // to chain-context-only metadata must not silently reclassify as `work`.
+    row: {
+      origin: "automation",
+      playbookId: null,
+      metadata: {
+        automationChainContext: {
+          automationId: "au-9",
+          automationRunId: "ar-9",
+        },
+      },
+    },
+    kind: "run",
+  },
+  {
     name: "receipt — the agent-write container",
     row: {
       origin: "agent",
@@ -239,11 +257,22 @@ describe("BOTH automation keys, in BOTH halves", () => {
   }
 });
 
-describe("sessionAutomationWhere — a DEFINITION filter, not a run filter", () => {
-  it("keys on metadata.automationId and never on automationRunId", () => {
+describe("sessionAutomationWhere — a DEFINITION filter, matched via two routes", () => {
+  it("keys on metadata.automationId directly", () => {
     const { sql, params } = compile(sessionAutomationWhere("au-9"));
     expect(sql).toContain("#>> '{automationId}'");
-    expect(sql).not.toContain("automationRunId");
+    expect(params).toContain("au-9");
+  });
+
+  it("ALSO matches via automation_runs, for a session reuse-stamped with only automationRunId", () => {
+    // `openRunSession`'s channel-reuse path merges ONLY `automationRunId` onto
+    // a reused session — never `automationId` — so a plain `automationId`
+    // filter is blind to that row. This subselect closes the gap by resolving
+    // the run id to its definition through the ledger, the same way the run
+    // reaper already keys on `automationRunId`.
+    const { sql, params } = compile(sessionAutomationWhere("au-9"));
+    expect(sql).toContain("#>> '{automationRunId}'");
+    expect(sql).toContain("automation_runs");
     expect(params).toContain("au-9");
   });
 });

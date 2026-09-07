@@ -338,9 +338,15 @@ export async function applyMarketInstall(
           message: `Cell "${input.slug}" is missing its renderer source in the catalog cache — wait for the next sync and retry.`,
         });
       }
+      // Identity, same rule the other kinds use: the PACKAGE being installed
+      // is `input.slug`. A payload that names its own owner wins; otherwise the
+      // installed package IS the owner. The old `?? "unknown"` fallback made
+      // every source-less cell share one namespace, so two unrelated cells with
+      // the same `key` minted the SAME `cell:unknown:<key>` and the second
+      // install died on `widget_def_type_key_workspace_uniq`.
       const [slugPackage, slugCellKey] = input.slug.includes("/")
         ? input.slug.split("/")
-        : [def.packageSlug ?? "unknown", def.key ?? input.slug];
+        : [def.packageSlug ?? input.slug, def.key ?? input.slug];
       // Shared with the packages/apply inline-`cells[]` applier so the typeKey
       // derivation and the view-renderer affinity threading cannot drift
       // between the two install doors. See `install-cell-from-definition.ts`.

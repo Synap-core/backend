@@ -8,7 +8,7 @@
  * Best-effort: never throws to membership callers; agents are skipped.
  */
 
-import { and, eq, isNull, isNotNull, or, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -23,7 +23,7 @@ import { EntityRepository } from "../repositories/entity-repository.js";
 import { FacetRepository } from "../repositories/facet-repository.js";
 import type { EventRepository } from "../repositories/event-repository.js";
 import { ProfileNotFoundError } from "../errors/index.js";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import {
   resolveIdentity,
   registerIdentitySignals,
@@ -166,15 +166,15 @@ async function ensureTeamPersonForMemberInner(
     // branch is gated by owner — a same-name person in ANOTHER owner's graph is
     // never a weak-link candidate. Built here (not injected from the api caller)
     // because the scope must key on the RESOLVED ownerUserId that only this
-    // function knows; `userVisibleWhere` lives in @synap/database so no upward
-    // import is required.
-    const weakScope = or(
-      and(isNull(entities.workspaceId), eq(entities.userId, ownerUserId)),
-      and(
-        isNotNull(entities.workspaceId),
-        userVisibleWhere(entities.workspaceId, ownerUserId)
-      )
-    )!;
+    // function knows; the owner-gated floor lives in @synap/database
+    // (`ownerPrivateVisibleWhere`) so no upward import is required and this is
+    // the SAME predicate the api's ownerPrivate reads apply — it used to be
+    // hand-inlined here, which is exactly how two copies drift.
+    const weakScope = ownerPrivateVisibleWhere(
+      entities.workspaceId,
+      entities.userId,
+      ownerUserId
+    );
 
     const resolution = await resolveIdentity(tx, {
       userId: ownerUserId,

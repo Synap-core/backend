@@ -211,6 +211,41 @@ describe("two-user floor — relations share only across a workspace boundary", 
   });
 });
 
+describe("two-user floor — artifacts keep an OWNER floor on pod-personal rows", () => {
+  // The twin of the relations case above, and the ONLY coverage the artifacts
+  // rule has: reverting it to a flat `{kind:"workspace", nullWorkspaceMeans:
+  // "podGlobalConfig"}` left the whole `src/access` suite green while handing
+  // every user every other user's pod-personal outputs. Since 0245
+  // `artifacts.workspace_id` is NULLABLE, so those rows exist for real.
+  it("keeps a pod-personal artifact on the author floor", () => {
+    const qA = compile(scopedDb(accessA.withLens(null)).predicate(artifacts)!);
+    const qB = compile(scopedDb(accessB.withLens(null)).predicate(artifacts)!);
+
+    // A NULL-workspace artifact can satisfy only the author branch, so each
+    // caller's predicate binds THEIR id — and never the other user's — against
+    // artifacts.user_id. The ledger is private data, not shared substrate.
+    expect(qA.sql).toContain('"artifacts"."workspace_id" is null');
+    expect(qA.sql).toContain('"artifacts"."user_id"');
+    expect(qB.sql).toContain('"artifacts"."user_id"');
+    expect(qA.params).toContain(A);
+    expect(qA.params).not.toContain(B);
+    expect(qB.params).toContain(B);
+    expect(qB.params).not.toContain(A);
+  });
+
+  it("still shares a WORKSPACE artifact between members (not owner-only)", () => {
+    // The other half of the same rule: narrowing to owner-only on ALL rows
+    // (`workspaceOwned`) would hide a teammate's outputs inside a shared
+    // workspace. The workspace branch must stay membership-gated.
+    const qA = compile(
+      scopedDb(accessA.withLens("ws-shared")).predicate(artifacts)!
+    );
+    expect(qA.sql).toContain('"artifacts"."workspace_id" is not null');
+    expect(qA.sql).toContain("workspace_members");
+    expect(qA.params).toContain("ws-shared");
+  });
+});
+
 describe("two-user floor — role-as-lens (facet) share grant on entities", () => {
   // Membership → Visibility: a pod-wide entity becomes visible to a workspace's
   // members once it carries a facet there. The `entities` floor opts into

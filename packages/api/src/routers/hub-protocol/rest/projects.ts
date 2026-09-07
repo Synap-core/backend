@@ -19,7 +19,6 @@ import {
   and,
   or,
   isNull,
-  isNotNull,
   inArray,
   desc,
   drizzleSql,
@@ -41,7 +40,7 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   accessScopeWhere,
   projectLensWhere,
@@ -108,13 +107,7 @@ export function registerProjectsRoutes(app: HubHono): void {
       // Dual-mode scoping (parity with tRPC projectsRouter):
       // Pod-wide projects (NULL workspace): only visible to their owner
       // Workspace-scoped projects: visible to all workspace members
-      or(
-        and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-        and(
-          isNotNull(projects.workspaceId),
-          userVisibleWhere(projects.workspaceId, userId)
-        )
-      )!,
+      ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!,
     ];
     if (status) conditions.push(eq(projects.status, status as any));
 
@@ -151,13 +144,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     const project = await db.query.projects.findFirst({
       where: and(
         eq(projects.id, projectId),
-        or(
-          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, userId)
-          )
-        )!
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
       ),
       columns: { id: true, name: true },
     });
@@ -306,13 +293,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     const owned = await db.query.projects.findFirst({
       where: and(
         eq(projects.id, id),
-        or(
-          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, userId)
-          )
-        )!
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
       ),
       columns: { id: true },
     });
@@ -530,13 +511,7 @@ export function registerProjectsRoutes(app: HubHono): void {
     const row = await db.query.projects.findFirst({
       where: and(
         eq(projects.id, id),
-        or(
-          and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-          and(
-            isNotNull(projects.workspaceId),
-            userVisibleWhere(projects.workspaceId, userId)
-          )
-        )!
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
       ),
     });
 

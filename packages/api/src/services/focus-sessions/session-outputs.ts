@@ -388,8 +388,9 @@ export async function listSessionOutputs(
 /**
  * Read the declared-output label an artifact was attached against.
  * `artifacts.props` is free-form JSONB, so this narrows rather than trusts.
+ * Module-local: the join below is its only consumer (it was exported with none).
  */
-export function readExpectedLabel(props: unknown): string | null {
+function readExpectedLabel(props: unknown): string | null {
   if (!props || typeof props !== "object") return null;
   const value = (props as { expectedLabel?: unknown }).expectedLabel;
   return typeof value === "string" && value.length > 0 ? value : null;

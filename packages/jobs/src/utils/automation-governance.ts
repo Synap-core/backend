@@ -50,6 +50,7 @@ import {
   eq,
   and,
 } from "@synap/database";
+import { users } from "@synap/database/schema";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { randomUUID } from "crypto";
 import { emitSideEffects } from "@synap/events";
@@ -289,6 +290,9 @@ export async function checkAutomationWriteOrPropose(
           data,
           reasoning: reasoning ?? producerGov.reason,
           governanceReason: producerGov.reasonCode,
+          // OWNER FLOOR (0248): this branch is reached only when the automation's
+          // owning principal resolved `not-agent` — i.e. `ownerId` is the HUMAN.
+          subjectUserId: ownerId,
           automationRunId,
           correlationId,
           sessionId,
@@ -636,6 +640,13 @@ async function proposeAutomationWrite(opts: {
   /** Workflow attribution (D3a): the executing step run + flow node id. */
   stepRunId?: string;
   nodeId?: string;
+  /**
+   * OWNER FLOOR (0248) — the HUMAN this proposal is for. Passed by the
+   * confused-deputy branch, where the automation's owning principal IS a human.
+   * Omitted on the owner-is-an-agent branch, where this door resolves the
+   * agent's owning human below (there is no human anywhere in that call chain).
+   */
+  subjectUserId?: string | null;
 }): Promise<{ proposed: true; proposalId: string; deduped?: boolean }> {
   const {
     agentUserId,
@@ -695,6 +706,40 @@ async function proposeAutomationWrite(opts: {
   // at the top level, so every existing reader of those keys is unaffected — the
   // only keys that moved are the write payload's own, which is exactly what the
   // approve side was already looking for one level down.
+  // OWNER FLOOR (0248) — the HUMAN this proposal awaits. An automation run has
+  // no human in the loop, so unlike every other door there is nothing to read
+  // off a request context. The agent's OWNER is the answer, and it is the SAME
+  // derivation the governance recommenders already use (`agent.createdByUserId`).
+  // Resolved here, once, rather than at both call sites. Never guessed: an
+  // unresolvable owner leaves the column NULL.
+  //
+  // The SAME row also carries rung 3.5 of the project ladder — the agent's
+  // DECLARED sticky project focus (`agentMetadata.focusProjectId`, set only by
+  // `synap_set_project_focus`). Read here rather than through @synap/api's
+  // `getAgentFocusProjectId` because jobs cannot import api (api → jobs); it is
+  // the same field, fetched in the same single query, so this adds no round trip.
+  // Without it an automation proposal — which frequently has no session and no
+  // channel — could never reach the declared focus, which is precisely the rung
+  // the hand-rolled proposal ladder was missing.
+  let subjectUserId = opts.subjectUserId ?? null;
+  let focusProjectId: string | null = null;
+  const [ownerRow] = await db
+    .select({
+      createdByUserId: users.createdByUserId,
+      agentMetadata: users.agentMetadata,
+    })
+    .from(users)
+    .where(eq(users.id, agentUserId))
+    .limit(1);
+  if (!subjectUserId) {
+    subjectUserId = ownerRow?.createdByUserId ?? null;
+  }
+  {
+    const meta = ownerRow?.agentMetadata as
+      { focusProjectId?: string } | null | undefined;
+    focusProjectId = meta?.focusProjectId ?? null;
+  }
+
   const { proposal, deduped } = await insertPendingProposal({
     workspaceId,
     targetType: singularType,
@@ -718,6 +763,8 @@ async function proposeAutomationWrite(opts: {
     },
     createdBy: agentUserId,
     agentUserId,
+    subjectUserId,
+    focusProjectId,
     correlationId: resolvedCorrelationId,
     sessionId: sessionId ?? null,
     stepRunId: stepRunId ?? null,

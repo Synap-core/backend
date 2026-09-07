@@ -276,6 +276,16 @@ export function summarizeGlobalHealth(
       rq.approveRateOfReviewed === null
         ? null
         : Math.round(rq.approveRateOfReviewed * 100);
+    // `HealthStatus` has no neutral/"unknown" member (`"ok" | "attention" |
+    // "degraded"`, `types.ts`) — widening it is a contract change every other
+    // reader of this union would have to absorb. So `verdict === "unknown"`
+    // (no reviewed proposals, or `lowSample`) is deliberately mapped to `"ok"`,
+    // NOT `"attention"`: there is nothing here for the user to act on, and
+    // `"attention"` in the rollup below would flag the whole pod for a queue
+    // that simply hasn't been used yet — the false-alarm failure mode this
+    // file already avoids for `agent_activity`. The headline still carries the
+    // caveat ("no approval rate to report" / "sample under N"), so the
+    // uncertainty is visible without being reported as a fault.
     sections.push({
       key: "review_queue",
       status: verdict === "approval_fatigue" ? "attention" : "ok",
@@ -577,19 +587,22 @@ export async function diagnoseGlobal(params: {
   // from the same numbers. A health door raising a FALSE alarm is worse than
   // the silent drop this section previously had: it sends the user to
   // investigate a block that is not happening. One resolver, both surfaces.
-  const agentActivity = await Promise.all(
-    agentActivityCounts.map(async (a) => ({
-      ...a,
-      cap: await agentDailyProposalCap(a.agentId),
-    }))
-  );
-
   // The queue's own effectiveness. Its own read (two small aggregates) rather
   // than a term in the big Promise.all above: it is floored by
   // `proposalUserFloor`, the queue's OWN builder, not by the bare workspace
   // lens the backlog counts use — mixing the two floors into one query is how
-  // this file's counts disagreed with `orient` before.
-  const reviewQueue = await reviewQueueApproval({ userId, workspaceId });
+  // this file's counts disagreed with `orient` before. Still independent of
+  // `agentActivity` (which depends on `agentRows` from the big Promise.all),
+  // so the two awaits run concurrently rather than round-tripping serially.
+  const [agentActivity, reviewQueue] = await Promise.all([
+    Promise.all(
+      agentActivityCounts.map(async (a) => ({
+        ...a,
+        cap: await agentDailyProposalCap(a.agentId),
+      }))
+    ),
+    reviewQueueApproval({ userId, workspaceId }),
+  ]);
 
   return summarizeGlobalHealth(
     {

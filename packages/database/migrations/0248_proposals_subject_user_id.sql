@@ -1,0 +1,52 @@
+-- 0248_proposals_subject_user_id.sql
+--
+-- THE OWNER FLOOR THAT DID NOT EXIST.
+--
+-- `access/registry.ts` has stated the gap in prose for months: "NO human-owner
+-- column yet … a `subjectUserId` column (D7) is the real owner floor." Because
+-- the column was missing, `userVisibleWhere`'s FIRST branch is
+-- `isNull(workspace_id)` — owner-BLIND. A NULL-workspace proposal is therefore
+-- admitted to EVERY user of the pod, by construction.
+--
+-- Measured on the live pod 2026-09-06: 28 of the 40 most recent proposals (70%)
+-- carry `workspace_id: NULL`. This pod already has 2 non-agent users, so ~70%
+-- of the proposal stream is readable pod-wide today. That is not a leak the
+-- lens can be tightened out of — there is no column to floor ON.
+--
+-- WHAT THIS COLUMN MEANS: the HUMAN the proposal is FOR — the operator/owner
+-- whose review it awaits and whose data it would change. NOT the author.
+--
+--   * `created_by` is OVERLOADED — depending on the door it holds a userId OR
+--     an agentUserId (it is written as `createdBy ?? agentUserId ?? userId`).
+--     It has already caused ~5 bugs and must NOT be read as an owner.
+--   * `proposed_by_user_id` (0181) is the human PROPOSER, set only on the
+--     human-member propose path and NULL for every agent-authored row.
+--   * `agent_user_id` is the AGENT actor, never a human.
+--
+-- `subject_user_id` is the fourth, distinct question — "whose is this?" — and
+-- it is the only one of the four that is answerable for every door.
+--
+-- NULLABLE, NO DEFAULT. A default would rewrite the table and, worse, would
+-- assert an owner for 2961 existing rows that nobody verified. Existing rows
+-- stay NULL and are BACKFILLED SEPARATELY (see the migration's companion note
+-- in the wave report) — a naive `subject_user_id = created_by` is WRONG for
+-- every agent-authored row.
+--
+-- NO FK: `users.id` is text (Kratos identity ids), and the sibling owner-ish
+-- columns on this table (`created_by`, `proposed_by_user_id`, `reviewed_by`)
+-- are all un-referenced text for the same reason. A soft ref keeps the proposal
+-- row durable as a trace if the user row is ever removed.
+--
+-- STRICTLY ADDITIVE / NO-OP FOR EVERY EXISTING READ. Nothing selects this
+-- column and no floor consults it in this wave. It CANNOT be floored on until
+-- it is populated: flooring a mostly-NULL column would HIDE rows, which is a
+-- worse failure than the one it fixes.
+
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "subject_user_id" text;
+
+-- The read this column exists to serve is "the pending proposals that are MINE"
+-- — an owner+status lookup, mirroring `idx_proposals_workspace_status`. Created
+-- now (while the column is empty and the index is free) rather than in the
+-- later flooring wave, so the floor move is a pure predicate change.
+CREATE INDEX IF NOT EXISTS "idx_proposals_subject_user_status"
+  ON "proposals" ("subject_user_id", "status");

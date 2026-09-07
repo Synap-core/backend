@@ -10,24 +10,18 @@
  * (`runs_query`, `proposals_query`) must apply EXACTLY the predicate the api
  * listings apply (`listAutomationRuns`, `proposals.list`) or a generated report
  * and the browser would tell different stories. `@synap/database` is the one
- * package both already depend on. This file keeps the api-side names so every
- * existing import is unchanged, and still OWNS `ownerPrivateVisibleWhere`
- * (api-only — no non-api consumer today).
+ * package both already depend on. This file OWNS NOTHING: it keeps the api-side
+ * names so every existing import is unchanged.
+ *
+ * `ownerPrivateVisibleWhere` moved down for the same reason and the same proof —
+ * its old "api-only, no non-api consumer today" note was false: two files inside
+ * `@synap/database` (`services/team-person-bridge.ts`,
+ * `utils/entity-project-membership.ts`) hand-inlined the identical predicate
+ * because they cannot import upward. They now call the moved helper.
  *
  * Background and the ONE-DOOR (`.list` / no `.listAll`) contract: see the header
  * of the implementation file in `@synap/database`.
  */
-
-import {
-  and,
-  eq,
-  isNull,
-  isNotNull,
-  or,
-  userVisibleWhere,
-} from "@synap/database";
-import type { SQL } from "drizzle-orm";
-import type { AnyPgColumn } from "drizzle-orm/pg-core";
 
 export { userVisibleWhere, workspaceLensWhere } from "@synap/database";
 export type { WorkspaceLens } from "@synap/database";
@@ -60,17 +54,9 @@ export { podMemberWhere } from "@synap/database";
  * For the entity graph prefer `accessScopeWhere` (it also carries exposure +
  * role-lens); this is the minimal owner-gate for hand-built join queries over
  * ownerPrivate tables that are NOT part of the entity-facet substrate.
+ *
+ * The IMPLEMENTATION moved to `@synap/database` (utils/user-visible-where.ts),
+ * beside `userVisibleWhere` whose owner-blind NULL branch it exists to gate;
+ * this stays as the api-side name so existing imports are unchanged.
  */
-export function ownerPrivateVisibleWhere(
-  workspaceIdColumn: AnyPgColumn,
-  ownerColumn: AnyPgColumn,
-  userId: string
-): SQL {
-  return or(
-    and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
-    and(
-      isNotNull(workspaceIdColumn),
-      userVisibleWhere(workspaceIdColumn, userId)
-    )
-  )!;
-}
+export { ownerPrivateVisibleWhere } from "@synap/database";

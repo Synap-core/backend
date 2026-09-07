@@ -33,7 +33,15 @@ vi.mock("@synap/database", () => ({
   or: (...c: unknown[]) => ({ op: "or", c }),
 }));
 
-vi.mock("@synap/database/schema", () => ({
+// PARTIAL mock: the route also reads `CONTENT_KINDS` (it builds its
+// `contentKind` zod enum from that runtime SSOT). A TOTAL replacement dropped
+// it, so every test in this file died at the first request with
+// "No CONTENT_KINDS export is defined on the mock" — a governance guard that
+// cannot run is not a guard. Spread the real module so a NEW export added to
+// the schema can never silently blind this file again, and keep the
+// column-stub override the query assertions rely on.
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   widgetDefinitions: {
     typeKey: "typeKey",
     workspaceId: "workspaceId",
@@ -63,11 +71,21 @@ vi.mock("./_shared.js", () => ({
   verifyWorkspaceReadAccess: async () => h.workspaceAccess,
 }));
 
+// The route destructures BOTH `checkPermissionOrPropose` AND
+// `proposedMessageFor` from this module; a total replacement that listed only
+// the first turned every agent-path request into a 500 (swallowed by the
+// mocked logger) — the governed branch these tests exist to prove never ran.
+// This module cannot be partially mocked here (importOriginal pulls the real
+// db-bound module and the mock factory fails to resolve), so both exports are
+// declared. `proposedMessageFor` mirrors the real one: passthrough unless the
+// gate filed a workspace-JOIN instead of the requested write.
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: async (opts: Record<string, unknown>) => {
     h.gateCalls.push(opts);
     return h.gateResult;
   },
+  proposedMessageFor: (proposalType: string | undefined, msg: string) =>
+    proposalType === "join" ? "join gate" : msg,
 }));
 
 import { registerCellsRoutes } from "./cells.js";

@@ -772,6 +772,8 @@ async function scanUser(userId: string): Promise<number> {
       // Entity owner is the human who should review; system is the producer.
       createdBy: userId,
       proposedByUserId: null,
+      // OWNER FLOOR (0248): the entity owner IS the subject here.
+      subjectUserId: userId,
     });
 
     // Mirror createPendingProposal's proposal.created side-effects so inbox /

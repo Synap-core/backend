@@ -60,7 +60,7 @@ import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
 import { syncPropertyToRelations } from "../../utils/property-relation-sync.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { idempotencyWindowSeconds } from "../../utils/write-door-idempotency.js";
 import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
@@ -398,7 +398,11 @@ export const createProcs = {
             kindSlug: profileSlug,
             name: input.title ?? null,
             signals: dedupSignals,
-            userScope: userVisibleWhere(entities.workspaceId, ctx.userId),
+            userScope: ownerPrivateVisibleWhere(
+              entities.workspaceId,
+              entities.userId,
+              ctx.userId
+            ),
             limit: 5,
           });
           // SECURITY GATE — the strong identity index is deliberately GLOBAL

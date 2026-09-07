@@ -1850,6 +1850,7 @@ CREATE TABLE IF NOT EXISTS "proposals" (
   "status"            text  NOT NULL DEFAULT 'pending',
   "created_by"        text,
   "proposed_by_user_id" text,
+  "subject_user_id"   text,
   "thread_id"         uuid  REFERENCES "channels"("id") ON DELETE SET NULL,
   "command_run_id"    uuid  REFERENCES "command_runs"("id") ON DELETE SET NULL,
   "source_message_id" uuid  REFERENCES "messages"("id") ON DELETE SET NULL,
@@ -1874,6 +1875,7 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "data" jsonb;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'pending';
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "proposed_by_user_id" text;  -- 0181 (human proposer identity)
+ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "subject_user_id" text;  -- 0248 (the HUMAN this proposal is FOR — the owner floor; distinct from the overloaded created_by and from proposed_by_user_id)
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "thread_id" uuid REFERENCES "channels"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "command_run_id" uuid REFERENCES "command_runs"("id") ON DELETE SET NULL;
 ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "source_message_id" uuid REFERENCES "messages"("id") ON DELETE SET NULL;
@@ -1900,6 +1902,8 @@ ALTER TABLE "proposals" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with tim
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_workspace_status"
   ON "proposals" ("workspace_id", "status");
+CREATE INDEX IF NOT EXISTS "idx_proposals_subject_user_status"
+  ON "proposals" ("subject_user_id", "status");  -- 0248
 
 CREATE INDEX IF NOT EXISTS "idx_proposals_target"
   ON "proposals" ("target_type", "target_id");

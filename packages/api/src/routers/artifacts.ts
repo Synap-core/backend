@@ -18,18 +18,16 @@ import type { Lens } from "../access/context.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { emitHubRealtimeEvent } from "../utils/domain-event-bridge.js";
 import type { Artifact } from "@synap/database/schema";
+import { SESSION_ARTIFACT_KINDS } from "../services/focus-sessions/record-session-artifact.js";
 
 // ── Shared input schemas ────────────────────────────────────────────────────
 
 const artifactStateSchema = z.enum(["working", "kept", "swept"]);
 const artifactPlacementSchema = z.enum(["desk", "home", "sidebar", "library"]);
-const artifactKindSchema = z.enum([
-  "view",
-  "cell",
-  "document",
-  "entity",
-  "url",
-]);
+// DERIVED from the ledger column, never re-typed beside it. The hand-written
+// literal here listed five kinds while `artifacts.kind` has carried `automation`
+// and `playbook` since 0246 — a mirrored enum that had already drifted.
+const artifactKindSchema = z.enum(SESSION_ARTIFACT_KINDS);
 const artifactOriginKindSchema = z.enum([
   "user",
   "agent",
@@ -57,7 +55,7 @@ type ArtifactListInput = z.infer<typeof artifactListInputSchema>;
  * matches zero. Goes through scopedDb's registered predicate so every door
  * gets the same structural floor.
  */
-async function queryArtifacts(
+export async function queryArtifacts(
   ctx: {
     userId?: string | null;
     agentUserId?: string | null;
@@ -100,12 +98,14 @@ export const artifactsRouter = router({
   /**
    * THE one door for artifacts (collapses the old list/listAll split).
    *
-   * Artifacts are workspace-scoped (the visibility rule's user floor = every
-   * workspace the user belongs to + pod-wide globals). The workspace lens then
-   * NARROWS within that floor:
+   * The visibility rule's user floor = every workspace the user belongs to,
+   * PLUS the caller's OWN pod-personal (NULL-workspace) rows. A NULL-workspace
+   * artifact is NOT a pod-wide global: the ledger is private data, so the rule
+   * keeps an owner floor on those rows (`access/registry.ts`). The workspace
+   * lens then NARROWS within that floor:
    *   - no `workspaceId` (and no active-ws header) → ALL my artifacts
    *   - active-ws header / a `workspaceId` → that workspace's artifacts
-   *   - `workspaceId: null` → pod-personal/globals only
+   *   - `workspaceId: null` → my pod-personal rows only
    *   - `workspaceId: [a, b]` → those workspaces (union)
    * No project axis (the artifacts table has no project/anchor column).
    */
@@ -231,9 +231,15 @@ export const artifactsRouter = router({
         });
       }
 
-      // Gate write on the loaded row's workspaceId (not a caller-supplied value)
+      // Gate write on the loaded row's workspaceId (not a caller-supplied value).
+      // `ownerId` is REQUIRED, not decorative: since 0245 `workspaceId` may be
+      // NULL (a pod-personal artifact), and without an owner to fall back on
+      // `assertWorkspaceWrite` treats a NULL-workspace row as system-managed and
+      // throws FORBIDDEN — so every pod-personal artifact was un-keepable,
+      // un-sweepable and un-re-placeable by the very user who owns it.
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: existing.workspaceId,
+        ownerId: existing.userId,
       });
 
       const now = new Date();

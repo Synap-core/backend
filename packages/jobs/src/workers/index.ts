@@ -210,6 +210,13 @@ const ALL_QUEUES = [
   "side-effects",
   "search-reindex",
   A2AI_TRIGGER_QUEUE,
+  // The daily trust-widening scanner. It was imported, `work()`ed AND
+  // `schedule()`d but never createQueue()'d, so pg-boss v10's FK rejected the
+  // schedule on EVERY boot ("Queue governance.lane-scan not found") and the
+  // scanner never ran once — no agent could ever earn a widened lane. Same
+  // class as cal-backfill-cron (2026-07-12); `queues-are-created.tripwire.test.ts`
+  // now pins it so a third recurrence is a red gate, not a log line nobody reads.
+  GOVERNANCE_LANE_SCANNER_QUEUE,
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",

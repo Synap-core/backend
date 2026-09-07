@@ -79,6 +79,7 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 import { relationsRouter } from "./relations.js";
 import { projects, entities } from "@synap/database/schema";
+import { EXPOSURE_RELATION_TYPES } from "../utils/project-scope.js";
 
 const ADMIN = "00000000-0000-4000-8000-0000000000aa";
 const GRANTEE = "00000000-0000-4000-8000-0000000000bb";
@@ -168,5 +169,105 @@ describe("grantAnchorMembership — anchor resolves from the PROJECTS id space",
 
     expect(res).toEqual({ status: "exists", memberId: "member-existing" });
     expect(mockAddMember).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * TRIPWIRE — the generic relation doors reject EVERY exposure edge, DERIVED.
+ *
+ * `EXPOSURE_RELATION_TYPES` has two members (`belongs_to_project`, `visible_to`)
+ * and BOTH widen the access floor identically through `exposureMemberWhere` —
+ * minting either GRANTS access. The `relations.create` / `relations.batchCreate`
+ * guards used to check `visible_to` ONLY, and `relation.create` is in
+ * `DEFAULT_AUTO_APPROVE`, so an agent's `belongs_to_project` edge would have
+ * auto-executed. It did not leak only because `resolveVisibleRelationEndpoints`
+ * resolves endpoints against `entities` and post-0151 projects are TABLE ROWS —
+ * an id-space accident, not a guard, and one that evaporates silently the moment
+ * projects are mirrored into `entities`.
+ *
+ * The cases below are GENERATED from the exported constant, so a third exposure
+ * type is covered the day it is added — there is no second list to drift.
+ * NON-VACUITY is asserted: a set that shrank below two members (or lost the
+ * member this test was written for) fails loudly instead of reading green over
+ * an empty loop.
+ */
+describe("TRIPWIRE: generic relation doors reject the whole exposure set", () => {
+  const SRC = "00000000-0000-4000-8000-0000000000c1";
+  const DST = "00000000-0000-4000-8000-0000000000c2";
+
+  it("derives a non-vacuous exposure set to test", () => {
+    expect(EXPOSURE_RELATION_TYPES.length).toBeGreaterThanOrEqual(2);
+    // The member the old guards missed. If it is ever removed from the
+    // whitelist, this test must be re-read, not silently satisfied.
+    expect(EXPOSURE_RELATION_TYPES).toContain("belongs_to_project");
+    expect(EXPOSURE_RELATION_TYPES).toContain("visible_to");
+  });
+
+  for (const type of EXPOSURE_RELATION_TYPES) {
+    it(`relations.create refuses \`${type}\` before any DB work`, async () => {
+      await expect(
+        caller.create({
+          sourceEntityId: SRC,
+          targetEntityId: DST,
+          type,
+        })
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("is an exposure edge"),
+      });
+      // Refused on TYPE alone — no endpoint resolution, no permission ladder.
+      expect(mockCheckPermission).not.toHaveBeenCalled();
+    });
+
+    it(`relations.batchCreate refuses \`${type}\` before any DB work`, async () => {
+      await expect(
+        caller.batchCreate({
+          relations: [{ sourceEntityId: SRC, targetEntityId: DST, type }],
+        })
+      ).rejects.toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("is an exposure edge"),
+      });
+      // The guard runs BEFORE the workspace-header check, so this cannot pass
+      // by accidentally hitting the `workspaceId is required` BAD_REQUEST.
+      expect(mockCheckPermission).not.toHaveBeenCalled();
+    });
+  }
+
+  it("names the sanctioned writer for each refused edge", async () => {
+    await expect(
+      caller.create({
+        sourceEntityId: SRC,
+        targetEntityId: DST,
+        type: "visible_to",
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("relations.exposeToAnchor"),
+    });
+    await expect(
+      caller.create({
+        sourceEntityId: SRC,
+        targetEntityId: DST,
+        type: "belongs_to_project",
+      })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("linkEntityToProject"),
+    });
+  });
+
+  it("a NON-exposure relation type is not caught by the widened guard", async () => {
+    // The widening must reject the exposure SET, not "every relation type".
+    // `mentions` gets past the guard and fails later on real DB work — any
+    // failure that is NOT the FORBIDDEN exposure refusal proves the guard let
+    // it through.
+    await expect(
+      caller.create({
+        sourceEntityId: SRC,
+        targetEntityId: DST,
+        type: "mentions",
+      })
+    ).rejects.not.toMatchObject({
+      message: expect.stringContaining("is an exposure edge"),
+    });
   });
 });

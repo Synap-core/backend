@@ -42,6 +42,8 @@ import {
   agentConfigs,
   focusSessions,
   rendererBindings,
+  projects,
+  views,
 } from "@synap/database/schema";
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
@@ -547,6 +549,59 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: focusSessions.workspaceId,
     userColumn: focusSessions.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// `projects` and `views` were ownerPrivate BY BEHAVIOUR long before they were
+// DECLARED: both carry a nullable `workspace_id` and a NOT NULL `user_id`, and
+// every read hand-inlined the owner-gate (routers/projects.ts, routers/views.ts,
+// the Hub REST project doors, discover, the MCP workspace handler…). An
+// UNDECLARED table is not a safe table — `hydrationScopeWhere` in the object
+// graph had to reason about them from the routers' shape, and `resolveByName`
+// got it wrong and leaked their NAMES pod-wide. Declaring them states the
+// semantics once.
+//
+// NOT `workspaceOwned` (which floors `eq(userId)` on ALL rows) — that would hide
+// a teammate's project/view inside a SHARED workspace, a regression. Same shape
+// as `relations` / `artifacts` above: workspace rows follow membership, NULL
+// rows keep an owner floor.
+registerVisibility({
+  table: projects,
+  query: () => db.query.projects,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(projects.workspaceId),
+          workspaceLensWhere(
+            projects.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(isNull(projects.workspaceId), eq(projects.userId, access.userId))
+      ),
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+registerVisibility({
+  table: views,
+  query: () => db.query.views,
+  rule: {
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(views.workspaceId),
+          workspaceLensWhere(
+            views.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(isNull(views.workspaceId), eq(views.userId, access.userId))
+      ),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });

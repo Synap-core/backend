@@ -34,7 +34,6 @@ import {
   and,
   or,
   isNull,
-  isNotNull,
   entities,
   projects,
   getWorkspaceMembership,
@@ -42,7 +41,7 @@ import {
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
 } from "@synap/database";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
@@ -299,12 +298,10 @@ export async function submitCaptureGraph(
       .where(
         and(
           eq(projects.id, resolvedProjectId),
-          or(
-            and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-            and(
-              isNotNull(projects.workspaceId),
-              userVisibleWhere(projects.workspaceId, userId)
-            )
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            userId
           )
         )
       )

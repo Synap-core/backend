@@ -297,6 +297,24 @@ describe("buildProposalSummary", () => {
     );
   });
 
+  // The verb comes from the vocabulary SSOT, not a call-site
+  // `charAt(0).toUpperCase()` (forbidden by `.claude/rules/vocabulary.md`).
+  // `plan_approval` is the falsifier: capitalising the token spells
+  // "Plan_approval", the raw domain token leaking to a reviewer.
+  it("resolves the verb through the vocabulary, not call-site capitalisation", () => {
+    expect(
+      buildProposalSummary("focus_session", "plan_approval", { name: "Wave 2" })
+    ).toBe('Approve plan focus_session "Wave 2"');
+  });
+
+  // A PENDING proposal titles what approving it WILL do — imperative mood.
+  // The past form ("Rejected") would describe something that already happened.
+  it("titles a pending proposal in the imperative mood", () => {
+    expect(buildProposalSummary("proposal", "reject", { name: "P1" })).toBe(
+      'Reject proposal "P1"'
+    );
+  });
+
   it("uses slug as label of last resort", () => {
     const summary = buildProposalSummary("profile", "create", { slug: "crm" });
     expect(summary).toBe('Create profile "crm"');

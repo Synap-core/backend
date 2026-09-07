@@ -49,6 +49,7 @@ import {
 } from "../../utils/agent-wake.js";
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
+import { resolveSingleReferenceParam } from "./reference-param.js";
 import { dispatchOutputVerb } from "../capability-dispatch.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
@@ -418,7 +419,16 @@ export async function executeOutputStep(
     }
 
     case "entity_update": {
-      const entityId = config.entityId as string;
+      // REFERENCE-AWARE. Was `config.entityId as string` — a cast, not a parse,
+      // so a `type:"reference"` value (`{mode:"bound",value:[{id}]}`) became the
+      // string "[object Object]" and `eq(entities.id, ...)` matched nothing: the
+      // rule fired and wrote nothing, silently. `resolveSingleReferenceParam`
+      // leaves a bare id string byte-identical and throws on a reference it
+      // cannot read (see reference-param.ts).
+      const entityId = resolveSingleReferenceParam(
+        config.entityId,
+        "entity_update.entityId"
+      );
       const properties = (config.properties ?? {}) as Record<string, unknown>;
       // `title` / `description` are first-class COLUMNS, not properties, so an
       // automation that only passes `properties` can never rename an entity.
@@ -681,7 +691,16 @@ export async function executeOutputStep(
         );
       }
 
-      let channelId = config.channelId as string | undefined;
+      // REFERENCE-AWARE (same fix as `entity_update.entityId` above). Absent
+      // still means absent — the destination falls through to (b)/(c)/(d) and
+      // the "targetless channel_message NEVER errors" contract is untouched —
+      // but a PRESENT reference that cannot be read throws rather than casting
+      // to "[object Object]", which the scope check below would have reported as
+      // an unreachable channel uuid.
+      let channelId = resolveSingleReferenceParam(
+        config.channelId,
+        "channel_message.channelId"
+      );
       const content = config.content as string;
       const metadata = (config.metadata ?? {}) as Record<string, unknown>;
 

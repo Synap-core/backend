@@ -194,7 +194,13 @@ export function buildProposalChanges(
   if (promotesAllowedHosts) {
     changes.push({
       path: "metadata.allowedHosts",
-      label: "External hosts",
+      // Say what the row IS, not just what it holds. Rendered with the generic
+      // "~" badge among description edits, "External hosts" reads as one more
+      // field; naming the sandbox allowlist is what tells the reviewer they are
+      // approving an EGRESS widen. This is a builder literal describing a FIELD
+      // (not an object kind / action / status), so `@synap-core/types/vocabulary`
+      // does not apply — there is no domain token here to resolve.
+      label: "External hosts (sandbox allowlist)",
       operation,
       before: undefined,
       after: allowedHosts,

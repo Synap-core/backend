@@ -26,8 +26,8 @@
  *
  * The ladder (first definitive rung wins; no AI rung):
  *   1. Explicit    — the caller passed a project (a pinned lens / surface override).
- *   2. Session     — the active focus session's `projectId`.
- *   3. Channel     — the bound channel's `projectId`.
+ *   2. Session     — the active focus session's `projectId`. (uuid-shape guarded)
+ *   3. Channel     — the bound channel's `projectId`. (uuid-shape guarded)
  * 3.5. Focus       — the acting agent's DECLARED sticky project focus
  *                    (`agentMetadata.focusProjectId`, set by
  *                    `synap_set_project_focus`). See the rung's own comment for
@@ -44,7 +44,30 @@ import { channels, focusSessions, relations } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BELONGS_TO_PROJECT } from "../utils/entity-project-membership.js";
 
-type Db = PostgresJsDatabase<typeof schema>;
+/**
+ * The resolver runs on the CALLER'S executor so that a row minted earlier in the
+ * SAME transaction (a focus session, a channel) is visible to its lookups. A
+ * read on a different connection would miss it and silently resolve NONE. So
+ * this accepts a `db` handle OR a transaction handle — the same surface.
+ */
+type BaseDb = PostgresJsDatabase<typeof schema>;
+type Db = BaseDb | Parameters<Parameters<BaseDb["transaction"]>[0]>[0];
+
+/**
+ * Postgres `uuid` accepts only this shape; anything else raises a 22P02 STATEMENT
+ * error — and inside a transaction a failed statement ABORTS THE ENCLOSING
+ * TRANSACTION. Several doors take `sessionId` / `channelId` straight off a
+ * request body without validating them, so a malformed id must cost the project
+ * LENS, never the write it was being resolved for.
+ *
+ * Moved here from `deriveProposalProjectId` (@synap/database's proposal insert
+ * door), which had this guard while this shared ladder had none — the single
+ * blocker to those two ladders being one. Purely ADDITIVE: it can only skip a
+ * lookup that was guaranteed to throw, so no input that previously resolved a
+ * project stops resolving one.
+ */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * 3.5 is deliberately fractional: the declared-focus rung was inserted BETWEEN
@@ -64,7 +87,14 @@ export interface ProjectPlacement {
 }
 
 export interface ResolveProjectPlacementInput {
-  userId: string;
+  /**
+   * The acting human. OPTIONAL: no rung reads it today (verified — the resolver
+   * body never references it), and the proposal-insert door that now delegates
+   * here has no userId to hand. Kept in the shape for call-site symmetry with
+   * `resolveWorkspacePlacement` and because a future rung would need it; making
+   * it optional is additive and changes nothing for the three callers that pass it.
+   */
+  userId?: string;
   /** Rung 1 — a deliberate project pin (active lens / surface override). */
   explicitProjectId?: string | null;
   /** Rung 2 — the active focus session; its `projectId` is consulted. */
@@ -120,7 +150,10 @@ export async function resolveProjectPlacement(
   }
 
   // ── Rung 2 — the active focus session's project. ──
-  if (input.sessionId) {
+  // SHAPE-GUARDED (see UUID_SHAPE above): a body-supplied non-uuid is excluded
+  // BEFORE the query, not caught after it — inside a transaction a 22P02 has
+  // already aborted the tx by the time a catch could run.
+  if (input.sessionId && UUID_SHAPE.test(input.sessionId)) {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, input.sessionId),
       columns: { projectId: true },
@@ -135,7 +168,8 @@ export async function resolveProjectPlacement(
   }
 
   // ── Rung 3 — the bound channel's project. ──
-  if (input.channelId) {
+  // Same shape guard as rung 2, and for the same reason.
+  if (input.channelId && UUID_SHAPE.test(input.channelId)) {
     const channel = await db.query.channels.findFirst({
       where: eq(channels.id, input.channelId),
       columns: { projectId: true },

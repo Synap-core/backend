@@ -26,12 +26,27 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * left every test in the repo green.
  */
 
-const { userVisibleWhereMock } = vi.hoisted(() => ({
-  userVisibleWhereMock: vi.fn(() => ({ __wsFloor: true })),
+const { ownerPrivateVisibleWhereMock } = vi.hoisted(() => ({
+  ownerPrivateVisibleWhereMock: vi.fn(() => ({ __wsFloor: true })),
 }));
 
+/**
+ * ⚠️ This is a TOTAL mock (no `importOriginal`), and that is load-bearing HERE
+ * in a way it usually is not. Because the factory exports ONLY
+ * `ownerPrivateVisibleWhere`, it doubles as an IMPORT ALLOWLIST: if someone
+ * swaps the door back to the owner-blind `userVisibleWhere` — the exact defect
+ * the assertion below exists to catch — the module fails to resolve that name at
+ * IMPORT time and every test in this file dies before a single assertion runs.
+ *
+ * So the guard has TWO independent mechanisms: the specific 3-arg assertion
+ * below, and this incidental allowlist. Converting this to the partial
+ * `importOriginal` form (the general direction of travel in this repo, and
+ * usually the right one) silently REMOVES the second and leaves only the
+ * assertion. That trade is fine — the assertion is the real guard — but make it
+ * knowingly, not as a drive-by cleanup.
+ */
 vi.mock("./user-visible-where.js", () => ({
-  userVisibleWhere: userVisibleWhereMock,
+  ownerPrivateVisibleWhere: ownerPrivateVisibleWhereMock,
 }));
 
 const { linkEntityToProject } = await import("./entity-project-membership.js");
@@ -69,7 +84,7 @@ const ARGS = {
   workspaceId: null,
 };
 
-beforeEach(() => userVisibleWhereMock.mockClear());
+beforeEach(() => ownerPrivateVisibleWhereMock.mockClear());
 
 describe("linkEntityToProject — the ghost-edge guard", () => {
   it("REFUSES and writes NOTHING when the project does not resolve", async () => {
@@ -112,11 +127,15 @@ describe("linkEntityToProject — the ghost-edge guard", () => {
     // Filing into a project GRANTS its members access, so the door must decide
     // visibility rather than existence alone. If this stops being called, the
     // door has quietly become a tidiness check.
+    //
+    // It must be the OWNER-GATED helper specifically: `projects` is an
+    // ownerPrivate table, so the bare `userVisibleWhere` would admit every
+    // user's pod-personal projects through its owner-blind `IS NULL` branch.
     expect(
-      userVisibleWhereMock,
-      "the door no longer consults `userVisibleWhere`, so it can link a " +
-        "project the caller cannot see — which WIDENS access via the " +
+      ownerPrivateVisibleWhereMock,
+      "the door no longer consults `ownerPrivateVisibleWhere`, so it can link " +
+        "a project the caller cannot see — which WIDENS access via the " +
         "`belongs_to_project` exposure relation."
-    ).toHaveBeenCalledWith(expect.anything(), ARGS.userId);
+    ).toHaveBeenCalledWith(expect.anything(), expect.anything(), ARGS.userId);
   });
 });

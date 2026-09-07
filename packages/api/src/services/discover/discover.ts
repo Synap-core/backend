@@ -36,12 +36,11 @@ import {
   and,
   or,
   isNull,
-  isNotNull,
   inArray,
   drizzleSql,
   profileSlugScopeCondition,
 } from "@synap/database";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
   getUserAccessibleWorkspaceIds,
@@ -597,13 +596,7 @@ export async function discover(
   let projectsOut: DiscoverProject[] = [];
   if (want("projects")) {
     const conditions: ReturnType<typeof eq>[] = [
-      or(
-        and(isNull(projects.workspaceId), eq(projects.userId, userId)),
-        and(
-          isNotNull(projects.workspaceId),
-          userVisibleWhere(projects.workspaceId, userId)
-        )
-      )!,
+      ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!,
     ];
     if (projectId) conditions.push(eq(projects.id, projectId));
     if (workspaceId) conditions.push(eq(projects.workspaceId, workspaceId));

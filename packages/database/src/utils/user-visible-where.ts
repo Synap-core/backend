@@ -42,6 +42,7 @@ import {
   and,
   eq,
   inArray,
+  isNotNull,
   isNull,
   or,
   sql as drizzleSql,
@@ -73,10 +74,17 @@ export type WorkspaceLens = string | string[] | null | undefined;
  * Compose with other conditions via `and(...)`:
  *
  *   const conditions = [
- *     isNull(entities.deletedAt),
- *     userVisibleWhere(entities.workspaceId, ctx.userId),
+ *     isNull(table.deletedAt),
+ *     userVisibleWhere(table.workspaceId, ctx.userId),
  *   ];
- *   const rows = await db.query.entities.findMany({ where: and(...conditions) });
+ *   const rows = await db.query.table.findMany({ where: and(...conditions) });
+ *
+ * NOT for an `ownerPrivate` table (entities, views, projects, focus_sessions,
+ * documents, …): the `isNull(workspaceId)` branch below carries NO owner term,
+ * so on those it admits every user's pod-personal rows. Use
+ * `ownerPrivateVisibleWhere` (bottom of this file) there. The example above
+ * deliberately no longer names a real ownerPrivate table — a doc that spells out
+ * the leaky call is how the leaky call spreads.
  */
 /**
  * The THREE branches of the workspace floor, each as a reusable id subquery.
@@ -189,4 +197,40 @@ export function workspaceLensWhere(
   return opts?.includeGlobals
     ? and(or(isNull(workspaceIdColumn), lensMatch), floor)!
     : and(lensMatch, floor)!;
+}
+
+/**
+ * OWNER-PRIVATE floor for tables that have BOTH a `workspace_id` and a per-user
+ * owner column, where a NULL workspace means "personal to the owner" — the
+ * `ownerPrivate` shape in the access registry (focus_sessions, entities,
+ * documents, …). Plain `userVisibleWhere` admits EVERY NULL-workspace row to ALL
+ * users (its `isNull(workspaceId)` branch is owner-blind), so on such a table it
+ * leaks another user's private sessions/rows. This gates the NULL branch by
+ * owner and keeps the workspace-scoped branch on the shared user floor.
+ *
+ * For the entity graph prefer `accessScopeWhere` (it also carries exposure +
+ * role-lens); this is the minimal owner-gate for hand-built join queries over
+ * ownerPrivate tables that are NOT part of the entity-facet substrate.
+ *
+ * LIVES HERE for the same reason `userVisibleWhere` above does: it was born in
+ * `@synap/api` and justified staying there by "api-only — no non-api consumer
+ * today", which was FALSE — `services/team-person-bridge.ts` and
+ * `utils/entity-project-membership.ts` inside `@synap/database` each hand-inlined
+ * this exact predicate, and `@synap/database` cannot import upward. Two
+ * hand-copies of a predicate with a canonical definition elsewhere is the drift
+ * this package exists to prevent. `@synap/api`'s utils/user-visible-where.ts
+ * re-exports it under the same name, so every existing api import is unchanged.
+ */
+export function ownerPrivateVisibleWhere(
+  workspaceIdColumn: AnyPgColumn,
+  ownerColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  return or(
+    and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
+    and(
+      isNotNull(workspaceIdColumn),
+      userVisibleWhere(workspaceIdColumn, userId)
+    )
+  )!;
 }

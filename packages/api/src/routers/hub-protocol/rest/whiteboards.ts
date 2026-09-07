@@ -8,8 +8,8 @@
 
 import { z } from "zod";
 import { getConfinedWorkspace } from "../confine-workspace.js";
-import { db, views, eq, and, or, isNull, isNotNull } from "@synap/database";
-import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { db, views, eq, and } from "@synap/database";
+import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { emitBoardPlace } from "../../../services/capabilities/place-artboard-deck.js";
 import {
   hasScope,
@@ -296,13 +296,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       const view = await db.query.views.findFirst({
         where: and(
           eq(views.id, viewId),
-          or(
-            and(isNull(views.workspaceId), eq(views.userId, userId)),
-            and(
-              isNotNull(views.workspaceId),
-              userVisibleWhere(views.workspaceId, userId)
-            )
-          )
+          ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)
         ),
       });
 

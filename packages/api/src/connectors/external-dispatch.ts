@@ -41,7 +41,7 @@ import {
   links,
   entities,
 } from "@synap/database/schema";
-import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { getMessagingConnector } from "./index.js";
 import { resolveNangoConnector } from "./index.js";
 import type { NangoConnector } from "./NangoConnector.js";
@@ -498,7 +498,11 @@ async function resolveBoundCredentialRef(
       .where(
         and(
           eq(entities.id, principalId),
-          userVisibleWhere(entities.workspaceId, ctx.userId)
+          ownerPrivateVisibleWhere(
+            entities.workspaceId,
+            entities.userId,
+            ctx.userId
+          )
         )
       )
       .limit(1);

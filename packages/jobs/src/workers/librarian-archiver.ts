@@ -211,6 +211,8 @@ export async function handleLibrarianArchiver(): Promise<void> {
         // The project owner is who should review; system is the producer.
         createdBy: project.userId,
         proposedByUserId: null,
+        // OWNER FLOOR (0248): the project owner IS the subject here.
+        subjectUserId: project.userId,
       });
 
       // Mirror createPendingProposal's proposal.created side-effect so the inbox

@@ -537,6 +537,8 @@ async function recommendTightenForAgent(
       data: data as unknown as Record<string, unknown>,
       createdBy: agent.createdByUserId,
       proposedByUserId: null,
+      // OWNER FLOOR (0248): the human who owns this agent decides its lane.
+      subjectUserId: agent.createdByUserId,
     });
 
     // TELL A HUMAN. `insertPendingProposal` is the durable one-door but it fires

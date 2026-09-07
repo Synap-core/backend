@@ -50,6 +50,7 @@ import {
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import {
   isLikelyUUID,
   isCompositeProposalData,
@@ -69,7 +70,10 @@ import {
   makeWriteEnvelope,
   type WriteEnvelope,
 } from "../access/context.js";
-import { deriveAuthorshipMode } from "../services/agent-identity-service.js";
+import {
+  deriveAuthorshipMode,
+  getAgentFocusProjectId,
+} from "../services/agent-identity-service.js";
 import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expected-output.js";
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
@@ -1415,6 +1419,12 @@ async function evaluatePermission(
           projectId,
           sessionId: governedSessionId,
           threadId,
+          // Rung 3.5 parity with the PENDING door — an auto-approved write must
+          // land in the same project a proposed one would have.
+          focusProjectId:
+            !projectId && agentUserId
+              ? await getAgentFocusProjectId(agentUserId)
+              : null,
         });
         try {
           const [receipt] = await db
@@ -1451,6 +1461,9 @@ async function evaluatePermission(
               },
               status: ProposalStatus.AUTO_APPROVED,
               createdBy: agentUserId,
+              // OWNER FLOOR (0248): the human the agent acted for, never the
+              // agent. `userId` here is the envelope's AccessContext user.
+              subjectUserId: userId,
               ...(agentUserId ? { agentUserId } : {}),
               threadId: threadId ?? undefined,
               commandRunId: commandRunId ?? undefined,
@@ -1696,6 +1709,9 @@ async function evaluatePermission(
               // receipt must never be counted as AGENT conduct by the trust
               // scorecard, which floors on `createdBy`/`agentUserId`.
               createdBy: userId,
+              // OWNER FLOOR (0248): the authenticated bearer IS the subject on
+              // this path — there is no agent to distinguish from.
+              subjectUserId: userId,
               threadId: threadId ?? undefined,
               commandRunId: commandRunId ?? undefined,
               correlationId: correlationId ?? undefined,
@@ -1811,7 +1827,11 @@ export function buildProposalSummary(
     }
   }
 
-  const actionVerb = action.charAt(0).toUpperCase() + action.slice(1);
+  // Vocabulary SSOT — NOT a call-site capitalisation (`.claude/rules/vocabulary.md`
+  // forbids `charAt(0).toUpperCase()` on a domain token by name). A proposal is
+  // PENDING here — the title says what approving it WILL do — so the mood is
+  // imperative, matching the special cases above ("Start session", "Add rule").
+  const actionVerb = resolveActionLabel(action, "imperative");
   // goal is a first-class label for focus_session (and harmless elsewhere)
   const label = (data.targetName ||
     data.title ||
@@ -2086,6 +2106,16 @@ async function createPendingProposalRow(
     }
   }
 
+  // Rung 3.5 of the project ladder — the acting agent's DECLARED sticky focus.
+  // Read ONLY when nothing more specific could pin a project, so the extra
+  // lookup costs nothing on the common path. Same lazy shape `entities/create.ts`
+  // uses, and the SAME reader (`getAgentFocusProjectId`) — this is a DECLARATION
+  // made through `synap_set_project_focus`, never anything derived from content.
+  const focusProjectId =
+    !input.projectId && input.agentUserId
+      ? await getAgentFocusProjectId(input.agentUserId)
+      : null;
+
   // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
   // shape the automation write path uses via proposeAutomationWrite. createdBy
   // keeps this path's fallback (explicit → agent → requesting user).
@@ -2098,6 +2128,13 @@ async function createPendingProposalRow(
       data: input.data,
       createdBy: input.createdBy ?? input.agentUserId ?? input.userId,
       proposedByUserId: input.proposedByUserId,
+      // OWNER FLOOR (0248): `input.userId` is the HUMAN this door already treats
+      // as the subject — it is who `notifyProposalCreated` tells, and on the
+      // agent path it is `AccessContext.userId` ("the human whose data is in
+      // scope; attribution owner on AI actions"), never the agent. So the owner
+      // is read from the field that already carries that meaning rather than
+      // from the overloaded `createdBy`.
+      subjectUserId: input.userId,
       agentUserId: input.agentUserId,
       threadId: input.threadId,
       commandRunId: input.commandRunId,
@@ -2106,6 +2143,7 @@ async function createPendingProposalRow(
       requestedEventId: input.requestedEventId,
       sessionId,
       projectId: input.projectId,
+      focusProjectId,
       stepRunId: input.stepRunId,
       nodeId: input.nodeId,
       expiresAt: input.expiresAt,

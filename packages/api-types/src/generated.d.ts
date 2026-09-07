@@ -4856,6 +4856,21 @@ export interface ProposalReviewGraph {
 		propertyCount: number;
 		hasContent: boolean;
 		/**
+		 * The real entity id when this node LINKS a pre-existing record; absent when
+		 * the proposal will CREATE it.
+		 *
+		 * `ref` above is symbolic by construction (`entityOp.ref ?? $opN`) because it
+		 * must address a node inside this proposal, never an entity. Without this
+		 * field no review surface can distinguish a linked record from a
+		 * to-be-created one, so every graph node had to render inert — relay could
+		 * show "Acme Corp" in a proposal graph and not open it. `buildProposalGraph`
+		 * already reads `entityOp.existingEntityId` for role lookup and ref
+		 * aliasing; it simply never emitted it.
+		 *
+		 * Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+		 */
+		existingEntityId?: string;
+		/**
 		 * Roles (facets) this KIND wears — the facet model made legible on the
 		 * entity itself. Includes the entity's EXISTING roles (`isNew:false`,
 		 * resolved from live `entity_facets` for ops that reference a pre-existing
@@ -12356,6 +12371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetId: string;
 					proposalType: string;
 					proposedByUserId: string | null;
+					subjectUserId: string | null;
 					commandRunId: string | null;
 					requestedEventId: string | null;
 					stepRunId: string | null;
@@ -12404,6 +12420,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetId: string;
 					proposalType: string;
 					proposedByUserId: string | null;
+					subjectUserId: string | null;
 					commandRunId: string | null;
 					requestedEventId: string | null;
 					stepRunId: string | null;
@@ -12507,6 +12524,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetId: string;
 				proposalType: string;
 				proposedByUserId: string | null;
+				subjectUserId: string | null;
 				commandRunId: string | null;
 				requestedEventId: string | null;
 				stepRunId: string | null;
@@ -21623,28 +21641,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		list: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				workspaceId?: string | undefined;
+				workspaceId?: string | string[] | null | undefined;
 			};
-			output: {
-				ceilings: {
-					id: string;
-					axis: "daily_write_count";
-					principalKind: "agent" | "any";
-					agentUserId: string | null;
-					agentLabel: string | null;
-					scopeKind: "workspace" | "pod";
-					workspaceId: string | null;
-					limitValue: number;
-					createdAt: Date;
-					createdBy: string;
-					sourceProposalId: string | null;
-					expiresAt: Date | null;
-				}[];
-			};
-			meta: object;
-		}>;
-		listAll: import("@trpc/server").TRPCQueryProcedure<{
-			input: void;
 			output: {
 				ceilings: {
 					id: string;
@@ -26883,7 +26881,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				kind: "url" | "entity" | "cell" | "document" | "view";
+				kind: "automation" | "playbook" | "url" | "entity" | "cell" | "document" | "view";
 				title: string;
 				refId?: string | undefined;
 				cellKey?: string | undefined;

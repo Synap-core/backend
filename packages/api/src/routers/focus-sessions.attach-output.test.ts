@@ -27,6 +27,13 @@ const WS = "33333333-3333-4333-8333-333333333333";
 
 const findFirstSpy = vi.fn();
 const insertValuesSpy = vi.fn();
+/** Captures the re-select the conflict path builds (its `where` is asserted). */
+const artifactFindFirstSpy = vi.fn();
+/**
+ * The caller's role in the workspace `assertWorkspaceWrite` is asked about.
+ * `null` ⇒ not a member — the case the fallback-lens gate must refuse.
+ */
+let membership: { role: string } | null = { role: "editor" };
 /**
  * The REFERENCED object's row (`isOutputRefVisible` reads it through `scopedDb`,
  * which goes to `db.query.documents.findFirst`). `undefined` ⇒ the caller cannot
@@ -45,6 +52,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    // `assertWorkspaceWrite` (the fallback-lens gate) resolves membership through
+    // this — the real one would open a connection.
+    getWorkspaceMembership: async () => membership,
     db: {
       // `accessScopeWhere` (the entity/document visibility floor the ref check
       // reads through) BUILDS `exists(db.select()…)` subqueries — it never runs
@@ -59,7 +69,12 @@ vi.mock("@synap/database", async (importOriginal) => {
         get: (_t, table) => {
           if (table === "focusSessions") return { findFirst: findFirstSpy };
           if (table === "artifacts")
-            return { findFirst: async () => existingArtifact };
+            return {
+              findFirst: async (args: unknown) => {
+                artifactFindFirstSpy(args);
+                return existingArtifact;
+              },
+            };
           // Every table the refId floor resolves through — one list, so a new
           // artifact kind that forgets its floor fails here loudly.
           if (
@@ -111,6 +126,7 @@ beforeEach(() => {
   insertConflicts = false;
   existingArtifact = { id: "artifact-existing" };
   refRow = { id: DOC };
+  membership = { role: "editor" };
   findFirstSpy.mockResolvedValue({
     id: SESSION,
     userId: "user-1",
@@ -171,18 +187,56 @@ describe("focusSessions.attachOutput — pod-personal sessions", () => {
     expect(insertedRow().workspaceId).toBeNull();
   });
 
-  it("uses input.workspaceId ONLY when the session has none", async () => {
+  it("uses input.workspaceId ONLY when the session has none — and only for a MEMBER", async () => {
     findFirstSpy.mockResolvedValue({
       id: SESSION,
       userId: "user-1",
       workspaceId: null,
     });
+    membership = { role: "editor" };
     await caller().attachOutput({
       sessionId: SESSION,
       kind: "document",
       refId: DOC,
       workspaceId: WS,
     });
+    expect(insertedRow().workspaceId).toBe(WS);
+  });
+
+  it("refuses an input.workspaceId the caller is not a member of", async () => {
+    // The session owner floor says NOTHING about the FALLBACK lens: this field
+    // is bare request input. Ungated, a caller could file a provenance row into
+    // a stranger's workspace, and the `artifacts` visibility rule (workspace
+    // rows follow membership) would then show that row — title included — to
+    // that workspace's members. A write-side leak into someone else's lens.
+    findFirstSpy.mockResolvedValue({
+      id: SESSION,
+      userId: "user-1",
+      workspaceId: null,
+    });
+    membership = null;
+    await expect(
+      caller().attachOutput({
+        sessionId: SESSION,
+        kind: "document",
+        refId: DOC,
+        workspaceId: WS,
+      })
+    ).rejects.toThrow(/not a member/i);
+    expect(insertValuesSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not consult membership when the SESSION supplies the lens", async () => {
+    // The session's own workspace is already covered by the owner floor; adding
+    // an editor+ check there would break a viewer-role member recording their
+    // own session's output. Non-membership must not refuse this path.
+    membership = null;
+    const result = await caller().attachOutput({
+      sessionId: SESSION,
+      kind: "document",
+      refId: DOC,
+    });
+    expect(result.ok).toBe(true);
     expect(insertedRow().workspaceId).toBe(WS);
   });
 
@@ -324,6 +378,12 @@ describe("focusSessions.attachOutput — idempotency (0246)", () => {
     // `expectedLabel` is in the unique key on purpose: the same document may
     // satisfy two different declared outputs, so a re-select that ignored the
     // label would hand back the wrong row and collapse two real claims.
+    //
+    // This reads the PREDICATE the re-select actually built. Asserting the
+    // inserted row's props and the returned id instead was a TAUTOLOGY: with
+    // the `COALESCE(props->>'expectedLabel','') = …` clause DELETED from
+    // `findExistingArtifact`, the mock still answers with the same row and the
+    // test stayed green while the key it exists to pin was gone.
     insertConflicts = true;
     const result = await caller().attachOutput({
       sessionId: SESSION,
@@ -331,9 +391,15 @@ describe("focusSessions.attachOutput — idempotency (0246)", () => {
       refId: DOC,
       expectedLabel: "Spec",
     });
-    // The row that WOULD have been inserted still carries the slot claim, which
-    // is the value the re-select keys on — and the caller gets the winner.
-    expect(insertedRow().props).toEqual({ expectedLabel: "Spec" });
+    const where = (artifactFindFirstSpy.mock.calls[0]![0] as { where: never })
+      .where;
+    const compiled = dialect.sqlToQuery(where);
+    expect(compiled.sql).toMatch(/expectedLabel/);
+    // The label is a BOUND PARAM of that predicate — not merely a string that
+    // happened to reach the insert.
+    expect(compiled.params).toContain("Spec");
+    expect(compiled.params).toContain(SESSION);
+    expect(compiled.params).toContain(DOC);
     expect(result).toEqual({ ok: true, outputId: "artifact-existing" });
   });
 });

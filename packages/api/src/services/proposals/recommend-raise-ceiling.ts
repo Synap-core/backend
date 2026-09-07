@@ -244,6 +244,8 @@ async function recommendRaiseCeilingForAgent(
     data: data as unknown as Record<string, unknown>,
     createdBy: agent.createdByUserId,
     proposedByUserId: null,
+    // OWNER FLOOR (0248): the human who owns this agent decides its ceiling.
+    subjectUserId: agent.createdByUserId,
   });
 
   // TELL A HUMAN — same rationale as recommend-tighten: insertPendingProposal is

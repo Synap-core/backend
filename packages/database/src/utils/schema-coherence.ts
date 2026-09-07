@@ -129,6 +129,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "reason_code",
     addedBy: "0232_proposals_reason_code.sql",
   },
+  // proposals — the HUMAN this proposal is FOR (0248). The owner floor: the
+  // access layer's `userVisibleWhere` admits a NULL-workspace proposal to every
+  // pod user because there was no owner column to floor on (~70% of rows).
+  // Every proposal-writing door now stamps it; if the column is missing every
+  // one of those inserts throws.
+  {
+    table: "proposals",
+    column: "subject_user_id",
+    addedBy: "0248_proposals_subject_user_id.sql",
+  },
   // proposals — structured GOVERNANCE cause stamped at creation (0238). The
   // PROPOSE_REASON key the pure engine returned; the review UI branches on it.
   // App-level enum (@synap/governance-policy), distinct from `reason_code`

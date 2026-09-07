@@ -85,7 +85,11 @@ vi.mock("../utils/split-brain-service.js", () => ({
   invalidateSyncGenerationCache: vi.fn(),
 }));
 
-vi.mock("../utils/permission-check.js", () => ({
+// importOriginal, NOT a hand-written export list: a total-replacement factory
+// breaks every test in this file the moment the router imports one more name
+// from this module (that is how `proposedMessageFor` broke it).
+vi.mock("../utils/permission-check.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
   checkPermissionOrPropose: mockCheckPermission,
   previewPermissionDecision: mockPreviewDecision,
 }));

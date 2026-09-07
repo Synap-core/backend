@@ -78,7 +78,9 @@ import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   VISIBLE_TO,
   BELONGS_TO_PROJECT,
+  EXPOSURE_RELATION_TYPES,
   accessScopeWhere,
+  type ExposureRelationType,
 } from "../utils/project-scope.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
 import { AI_KIND } from "../lib/ai-events.js";
@@ -315,6 +317,43 @@ function buildRelationTitle(
   type: string
 ): string {
   return `${sourceId.slice(0, 8)} --${type}--> ${targetId.slice(0, 8)}`;
+}
+
+/**
+ * EVERY member of `EXPOSURE_RELATION_TYPES` is rejected by the generic relation
+ * doors — not just `visible_to`. Both members widen the access floor IDENTICALLY
+ * through `exposureMemberWhere`, so minting either edge GRANTS access, and
+ * `relation.create` is in `DEFAULT_AUTO_APPROVE` — an agent's exposure edge would
+ * auto-execute. `belongs_to_project` was rejected by neither guard; it did not
+ * leak only because `resolveVisibleRelationEndpoints` resolves both endpoints
+ * against `entities` and post-0151 projects are TABLE ROWS, so a project id
+ * fails endpoint resolution. That is an ID-SPACE ACCIDENT, not a guard: mirror
+ * projects back into `entities` (or pass a project that also has an entity row)
+ * and it evaporates with no test failing.
+ *
+ * The set is IMPORTED, never re-listed here, and the door map is keyed by
+ * `ExposureRelationType` so adding a third exposure type fails TYPECHECK until
+ * its sanctioned writer is named.
+ */
+/** Throw the FORBIDDEN rejection when `type` is an exposure edge. `refusedDoor`
+ * names the generic door being refused, so each call site keeps its own message. */
+function rejectExposureEdge(type: string, refusedDoor: string): void {
+  if (!(EXPOSURE_RELATION_TYPES as readonly string[]).includes(type)) return;
+  // The door map is built HERE, on the rejection path — NOT at module scope. A
+  // module-level computed-key record reads VISIBLE_TO / BELONGS_TO_PROJECT at
+  // IMPORT time, which crashes every suite that totally mocks
+  // `utils/project-scope.js` (relations.get-connections.test.ts does exactly
+  // that). It is still typed `Record<ExposureRelationType, string>`, so a third
+  // exposure type FAILS TYPECHECK until its sanctioned writer is named here.
+  const doors: Record<ExposureRelationType, string> = {
+    [VISIBLE_TO]: "relations.exposeToAnchor (anchor-admin gated)",
+    [BELONGS_TO_PROJECT]:
+      "linkEntityToProject (@synap/database — the project-membership door, which verifies the project exists and is visible)",
+  };
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: `${type} is an exposure edge — use ${doors[type as ExposureRelationType]}, not ${refusedDoor}.`,
+  });
 }
 
 export const relationsRouter = router({
@@ -847,15 +886,11 @@ export const relationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Exposure edges are NOT freely creatable — `visible_to` grants cross-anchor
-      // visibility and MUST go through the anchor-admin-gated sanctioned writer.
-      if (input.type === VISIBLE_TO) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "visible_to is an exposure edge — use relations.exposeToAnchor (anchor-admin gated), not relations.create.",
-        });
-      }
+      // Exposure edges are NOT freely creatable — an exposure edge grants
+      // cross-anchor visibility and MUST go through its sanctioned writer. The
+      // rejected set is the WHOLE `EXPOSURE_RELATION_TYPES` whitelist, imported,
+      // not `visible_to` alone (see `rejectExposureEdge` above).
+      rejectExposureEdge(input.type, "relations.create");
       const id = randomUUID();
       // Resolve the GOVERNANCE workspace: prefer explicit input, then the context
       // header. When neither is supplied, DERIVE it from the two endpoints via the
@@ -1713,6 +1748,15 @@ export const relationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Exposure edges are NOT freely creatable here either — reject the WHOLE
+      // `EXPOSURE_RELATION_TYPES` set on TYPE ALONE, before any workspace gate,
+      // endpoint resolution or relation-def auto-create. It used to sit lower
+      // (after endpoint resolution), which made the refusal depend on the
+      // post-0151 id-space accident that keeps project ids out of `entities`.
+      for (const rel of input.relations) {
+        rejectExposureEdge(rel.type, "relations.batchCreate");
+      }
+
       const effectiveWorkspaceId = ctx.workspaceId;
       if (!effectiveWorkspaceId) {
         throw new TRPCError({
@@ -1755,18 +1799,6 @@ export const relationsRouter = router({
       const existingDefSlugs = new Set(existingDefs.map((d) => d.slug));
       const systemTypes = new Set(SYSTEM_RELATION_TYPES as readonly string[]);
       let relationDefsCreated = 0;
-
-      // Exposure edges are NOT freely creatable here either — reject visible_to
-      // BEFORE any relation-def is auto-created; use relations.exposeToAnchor.
-      for (const rel of input.relations) {
-        if (rel.type === VISIBLE_TO) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "visible_to is an exposure edge — use relations.exposeToAnchor, not relations.batchCreate.",
-          });
-        }
-      }
 
       for (const rel of input.relations) {
         if (systemTypes.has(rel.type)) continue;

@@ -296,8 +296,12 @@ export function signalsFromExplicit(
  * @param name      The name/title to weak-match (=== title). Blank → no weak.
  * @param signals   Strong identity atoms to look up (email/phone/url/…).
  * @param userScope A Drizzle predicate limiting the weak search to rows the
- *                  caller may see (e.g. `userVisibleWhere(entities.workspaceId,
- *                  userId)`). REQUIRED for the weak path — omit it and only the
+ *                  caller may see. Use `ownerPrivateVisibleWhere(
+ *                  entities.workspaceId, entities.userId, userId)` — `entities`
+ *                  is an ownerPrivate table, so the bare owner-blind
+ *                  `userVisibleWhere` (which this line used to recommend) would
+ *                  admit every user's pod-personal rows as weak-match
+ *                  candidates. REQUIRED for the weak path — omit it and only the
  *                  strong (globally-unique) path runs, so no scoped read leaks.
  * @param limit     Cap on candidate/handle rows scanned (default 25).
  *
