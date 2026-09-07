@@ -78,6 +78,14 @@ export const documentsRouter = router({
         // stable content (title + type + content/url + workspace). A retry with
         // the same content returns the prior document instead of a second row.
         idempotencyKey: z.string().optional(),
+        /**
+         * The declared session-output slot this document fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `recordSessionArtifact` — see `session-outputs.ts` for how it joins.
+         * Never guessed when absent; governance's claim resolver still handles
+         * name matches on the proposal path.
+         */
+        expectedLabel: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -270,6 +278,7 @@ export const documentsRouter = router({
           refId: created.id,
           title: created.title,
           agentUserId: input.agentUserId,
+          expectedLabel: input.expectedLabel,
         });
 
         return {
@@ -339,6 +348,7 @@ export const documentsRouter = router({
         refId: created.id,
         title: created.title,
         agentUserId: input.agentUserId,
+        expectedLabel: input.expectedLabel,
       });
 
       return {

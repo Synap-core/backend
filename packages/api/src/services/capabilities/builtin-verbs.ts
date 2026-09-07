@@ -21,6 +21,10 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+// Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
+// pure helper, and tests that `vi.mock` that module would otherwise stub the
+// honesty derivation away along with the door.
+import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
   db,
   eq,
@@ -69,6 +73,7 @@ import { resolveTool } from "../tools/resolve-tool.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
 import { recommendRaiseCeilingForAllAgents } from "../proposals/recommend-raise-ceiling.js";
 import { recommendTightenPostureForAllChannels } from "../proposals/recommend-tighten-posture.js";
+import { scanAutomationHealth } from "../proposals/automation-health.js";
 import { assertPodAdmin } from "../../trpc.js";
 // catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
 // via capability-registry.ts's scoreTextMatch dependency) and marketplace-
@@ -716,11 +721,21 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
   });
 
   return {
-    status: result.applied ? "applied" : "proposed",
+    // Read off the receipt, not off `result.applied` — see
+    // `captureStatusForReceiptState`. `applied` is the routing flag ("did this
+    // terminal materialize?"), which stays true for a graph whose edges failed;
+    // the honest outcome word is `writeReceipt.state`, so a `partial` graph
+    // cannot report here as a clean success either. The failed edges are named
+    // in `result.relationsFailed`, forwarded below.
+    status: captureStatusForReceiptState(result.writeReceipt.state),
     ...(result.proposalId ? { proposalId: result.proposalId } : {}),
     ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
     entityCount: result.entityCount,
     relationCount: result.relationCount,
+    // Named, not left as a silent shortfall against the submitted count.
+    ...(result.relationsFailed?.length
+      ? { relationsFailed: result.relationsFailed }
+      : {}),
   };
 };
 
@@ -2624,6 +2639,38 @@ const governanceRecommendTightenPostureHandler: BuiltinVerbHandler = async (
 };
 
 /**
+ * automation.recommend_health — the automation-health WARDEN.
+ *
+ * Scans every ENABLED, producer-backed automation older than the grace period
+ * and files ONE grouped `automation.health_advisory` per OWNING HUMAN listing
+ * the ones that have NEVER produced a run row.
+ *
+ * EFFECT-BASED, deliberately: the evidence is the ABSENCE of rows in the
+ * `automation_runs` ledger, never a run's reported terminal status. The sibling
+ * findings ("runs but always fails", "runs but does nothing") were left unbuilt
+ * for exactly that reason — see the header of `automation-health-predicate.ts`.
+ *
+ * Same shape as the three governance recommenders: NO params (pod-wide scan),
+ * pod-admin gated, and READ-ONLY w.r.t. graph data (its only side effect is
+ * filing PENDING review items through the one door `insertPendingProposal`), so
+ * it auto-runs inside the daily calibration cron.
+ */
+const automationRecommendHealthParams = z.object({});
+
+const automationRecommendHealthHandler: BuiltinVerbHandler = async (
+  _params,
+  ctx
+) => {
+  // POD-ADMIN GATE — the same reasoning as the three recommenders above. This
+  // verb reads EVERY user's automations pod-wide and files proposals attributed
+  // to other people; read-only w.r.t. graph data is not the same as
+  // unauthorized. (The findings themselves are then partitioned by owner, so no
+  // proposal ever shows one person another person's automations.)
+  await assertPodAdmin(ctx.userId);
+  return scanAutomationHealth();
+};
+
+/**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
  * write + read).
@@ -2682,6 +2729,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // governance.tighten_posture review items for consistently-rejected channels.
   "governance.recommend_tighten_posture":
     governanceRecommendTightenPostureHandler,
+  // Automation-health warden — the zero-run finding.
+  "automation.recommend_health": automationRecommendHealthHandler,
 };
 
 /**
@@ -2730,6 +2779,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingParams,
   "governance.recommend_tighten_posture":
     governanceRecommendTightenPostureParams,
+  "automation.recommend_health": automationRecommendHealthParams,
 };
 
 /**
@@ -2785,4 +2835,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // the daily calibration cron" rationale as governance.recommend_tighten.
   "governance.recommend_raise_ceiling",
   "governance.recommend_tighten_posture",
+  // automation.recommend_health — the automation-health warden. Same rationale
+  // again: it mutates NO graph data (it files PENDING automation.health_advisory
+  // review items, and their approval is acknowledgement-only), so the daily
+  // calibration cron must be able to auto-run it. A propose verdict on the verb
+  // ITSELF would stall the flow that exists to surface dead automations.
+  "automation.recommend_health",
 ]);

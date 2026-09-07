@@ -62,6 +62,14 @@ export interface PackageCellDefinition {
   packageSlug?: string;
   /** View types this cell can render — see the header. */
   viewTypes?: string[];
+  /**
+   * Origins this cell's sandboxed frame may reach. The PACKAGE is the only
+   * producer of this list (a human sees it in `EgressDisclosure` before
+   * approving the install); it is persisted to
+   * `widget_definitions.external_hosts` and composed into the frame CSP by
+   * `buildFrameCsp`. Absent ⇒ the frame is network-contained.
+   */
+  externalHosts?: string[];
   /** Renderer slot this cell fills — see `resolveCellContentKind`. */
   contentKind?: string;
 }
@@ -144,6 +152,13 @@ export async function installCellFromDefinition(
     // contract `DefineCellInput.viewTypes` documents.
     viewTypes: Array.isArray(definition.viewTypes)
       ? definition.viewTypes
+      : undefined,
+    // Undefined (not `[]`) when the payload says nothing about egress, so a
+    // re-install from a source-only payload cannot silently REVOKE a declared
+    // grant — the same omit-is-silence contract as `viewTypes`. An explicit
+    // `[]` in the package DOES clear it.
+    externalHosts: Array.isArray(definition.externalHosts)
+      ? definition.externalHosts
       : undefined,
     contentKind: resolveCellContentKind(
       definition.contentKind,

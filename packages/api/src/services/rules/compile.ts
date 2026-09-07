@@ -70,6 +70,7 @@ import {
   type RuleFlowDefinition,
   isActionConfigured,
   UNEVALUABLE_CONDITION_OPERATORS,
+  unevaluableConditionMessage,
   VALUELESS_CONDITION_OPERATORS,
   type RuleSentenceValue,
 } from "@synap-core/types/automations";
@@ -158,10 +159,12 @@ export function compileRuleSentence(
       )
   );
   if (unevaluable) {
-    return fail(
-      "WHERE",
-      `The WHERE condition on "${unevaluable.key}" uses "${unevaluable.operator.replace(/_/g, " ")}", which this trigger cannot evaluate — the automation matcher only understands is, is not, greater than, less than, is true and is false. Rewrite the condition with one of those.`
-    );
+    // The SHARED wording. `toBackendTrigger` now throws on the same operators
+    // with the same sentence, and two hand-written messages for one refusal is
+    // a fork the moment either is reworded. This door still REFUSES rather than
+    // letting the converter throw, because its contract is a returned verdict
+    // naming the clause — but the words are the grammar's, not this file's.
+    return fail("WHERE", unevaluableConditionMessage(unevaluable));
   }
 
   // `is_true` / `is_false` are complete WITHOUT a value — the operator IS the

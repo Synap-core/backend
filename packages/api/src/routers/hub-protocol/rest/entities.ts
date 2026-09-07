@@ -1069,6 +1069,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         // door that exposes external_id over Hub REST; the weak email/phone/url
         // auto-extraction can't express an opaque connector id.
         ...(body.externalId ? { externalId: body.externalId } : {}),
+        ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
 
       // ── Impact-aware writes (SHALLOW, exact-name) ─────────────────────────

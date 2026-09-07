@@ -36,6 +36,7 @@ import {
   db,
   and,
   eq,
+  ne,
   inArray,
   ProfileRepository,
   ProfileResolutionService,
@@ -51,7 +52,9 @@ import {
   tools as toolsTable,
   skills as skillsTable,
   workspaces as workspacesTable,
+  widgetDefinitions as widgetDefinitionsTable,
   type PackageDefinition,
+  type PackageCellDef,
   type WorkspaceSettings,
 } from "@synap/database";
 
@@ -462,6 +465,75 @@ export async function workspaceToPackageDefinition(opts: {
     capabilities.push({ templateKey });
   }
   if (capabilities.length > 0) def.capabilities = capabilities;
+
+  // ── Cells (Cards authored in this workspace's Cell Studio) ──────────────
+  //
+  // AUTHORED vs INSTALLED — the boundary, made explicit:
+  //   - A Card AUTHORED here (`widgetDefinitions.upsert`, Cell Studio) belongs
+  //     in the export: it is this workspace's own code, and the whole point of
+  //     `--from-workspace` is that "your running workspace IS the package".
+  //   - A cell INSTALLED from another package (`defineCell`'s package-install
+  //     path — `market.install({kind:"cell"})` or a package's inline
+  //     `cells[]` applied through `installCellFromDefinition`) is NOT
+  //     re-emitted here. Doing so would copy another author's code into THIS
+  //     package under a new slug — silently forking it out of its own
+  //     lifecycle (updates, licensing, attribution) and, per `defineCell`,
+  //     stamping it with a NEW `cell:<thisPackageSlug>:<key>` typeKey that no
+  //     longer round-trips to the original. There is no dependency mechanism
+  //     to fall back on either: `dependencies` is itself one of the keys this
+  //     serializer cannot emit (`EXPORTER_UNEMITTED_KEYS` in
+  //     `synap-cli/src/lib/exporter-coverage.ts`) — so an installed cell is
+  //     simply excluded, and the author keeps the marketplace's normal
+  //     "depend on / install" relationship with it instead of an implicit
+  //     copy that pretends to be original work.
+  //
+  // The AUTHORITATIVE signal for "authored, not installed" is
+  // `category !== "installed"`: `defineCell` (the ONE door every
+  // package-install path funnels through) always writes `category:
+  // "installed"` on the row it upserts (see `services/cells/define-cell.ts`),
+  // while the authoring door (`widgetDefinitions.upsert`) defaults to
+  // `"app-specific"` or whatever the author picked — never `"installed"`. The
+  // `typeKey` prefix (`cell:<pkg>:<key>`, minted by `packageCellTypeKey`) is
+  // checked too, belt-and-suspenders, in case a row's category was ever
+  // hand-edited out of band.
+  //
+  // `code` (the CP/pod schema's required field) is `rendererSource` — the raw
+  // ESM source for both `iframe` and `frame` renderer types (there is no
+  // executable `native` renderer any more; see `NATIVE_RENDERER_REJECTED`).
+  // Only `isActive` rows are emitted — a soft-deleted Card should not be
+  // resurrected by a re-export.
+  const cellRows = await db
+    .select()
+    .from(widgetDefinitionsTable)
+    .where(
+      and(
+        eq(widgetDefinitionsTable.workspaceId, workspaceId),
+        eq(widgetDefinitionsTable.isActive, true),
+        ne(widgetDefinitionsTable.category, "installed")
+      )
+    );
+  const emittedCells: PackageCellDef[] = [];
+  for (const c of cellRows) {
+    if (c.typeKey.startsWith("cell:")) continue; // belt-and-suspenders — see above
+    if (!c.rendererSource) continue; // nothing to emit as `code` (required)
+    const cell: PackageCellDef = {
+      key: c.typeKey,
+      name: c.name,
+      code: c.rendererSource,
+    };
+    if (c.deps && Object.keys(c.deps).length > 0) cell.deps = c.deps;
+    if (c.defaultSize) cell.defaultSize = c.defaultSize;
+    if (c.configSchema && Object.keys(c.configSchema).length > 0)
+      cell.configSchema = c.configSchema;
+    if (c.viewRendererViewTypes && c.viewRendererViewTypes.length > 0)
+      cell.viewTypes = c.viewRendererViewTypes;
+    if (c.externalHosts && c.externalHosts.length > 0)
+      cell.externalHosts = c.externalHosts;
+    if (c.contentKind && c.contentKind !== "widget")
+      cell.contentKind = c.contentKind;
+    emittedCells.push(cell);
+  }
+  if (emittedCells.length > 0) def.cells = emittedCells;
 
   // ── Workspace layout ────────────────────────────────────────────────────
   // Serialize every persisted layout field, not only workspaces that happen to

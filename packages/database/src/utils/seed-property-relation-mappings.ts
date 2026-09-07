@@ -19,8 +19,11 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { getDb } from "../client-pg.js";
 import { propertyDefs, PropertyValueType } from "../schema/property-defs.js";
-import { relationDefs } from "../schema/relation-defs.js";
 import { profiles } from "../schema/profiles.js";
+import {
+  RelationDefRepository,
+  pickDefForWorkspace,
+} from "../repositories/relation-def-repository.js";
 
 export interface SeedMappingsResult {
   status: "updated" | "skipped" | "error";
@@ -61,6 +64,10 @@ export async function seedPropertyRelationMappings(
 ): Promise<SeedMappingsResult> {
   try {
     const db = await getDb();
+    const relDefRepo = new RelationDefRepository(db);
+    // ONE read of everything visible from this workspace — its own rows PLUS the
+    // pod-wide base rows — then resolve precedence in JS via the shared SSOT.
+    const visibleDefs = await relDefRepo.list(workspaceId);
     let mappingsUpdated = 0;
 
     for (const mapping of PROPERTY_RELATION_MAPPINGS) {
@@ -77,19 +84,24 @@ export async function seedPropertyRelationMappings(
       // Skip if already mapped
       if (propDef.relationDefId) continue;
 
-      // Find the relation_def in this workspace
-      const relDef = await db.query.relationDefs.findFirst({
-        where: and(
-          eq(relationDefs.slug, mapping.relationDefSlug),
-          eq(relationDefs.workspaceId, workspaceId)
-        ),
-      });
+      // Resolve the relation_def through the ONE door: workspace row first,
+      // pod-wide (workspace_id IS NULL) base row second. A strictly
+      // workspace-scoped lookup here was a silent-skip cascade: once the 22
+      // defaults exist pod-wide, ensureDefaultRelationDefs creates ZERO
+      // workspace rows for a new workspace (correctly — the base layer covers
+      // it), and this lookup would then find nothing and leave
+      // property_defs.relation_def_id unset FOREVER, with no error anywhere,
+      // because relations still resolve via the same fallback at the capture door.
+      const relDef = pickDefForWorkspace(
+        visibleDefs,
+        mapping.relationDefSlug,
+        workspaceId
+      );
       if (!relDef) {
-        // Relation def missing — likely ensureDefaultRelationDefs() hasn't run yet for this workspace.
-        // Log a warning so callers know why mappings are skipped, rather than silently continuing.
+        // Neither a workspace row nor a pod-wide base row exists.
         console.warn(
-          `[seed-property-relation-mappings] relation_def "${mapping.relationDefSlug}" not found in workspace ${workspaceId}. ` +
-            "Run ensureDefaultRelationDefs() first."
+          `[seed-property-relation-mappings] relation_def "${mapping.relationDefSlug}" not found for workspace ${workspaceId} ` +
+            "or pod-wide. Run ensureDefaultRelationDefs() first."
         );
         continue;
       }

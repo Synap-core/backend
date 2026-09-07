@@ -35,6 +35,8 @@ export const CreateDocumentRequestSchema = z
     agentUserId: z.string().optional(),
     sourceMessageId: z.string().optional(),
     sessionId: z.string().optional(),
+    /** The declared session-output slot this document fulfils, by label. */
+    expectedLabel: z.string().optional(),
   })
   .openapi("CreateDocumentRequest");
 

@@ -77,10 +77,17 @@ export async function assertProposalVisibleTo(
   const proposalData = proposal.data as Record<string, unknown> | null;
   if (proposalData?.sourceId === userId) return;
 
-  // An agent-authored proposal's `sourceId` is the AGENT's user row, never the
-  // human's — so the direct match above can never admit the human who OWNS
-  // that agent. Resolve the agent's creator (`users.createdByUserId`) and
-  // admit ONLY that one human — the sole widening here, never any other user.
+  // CORRECTED 2026-09-07 — previously asserted `sourceId` "is the AGENT's user
+  // row, never the human's". FALSE: `utils/permission-check.ts:2750` (canonical
+  // `createProposal`) writes the HUMAN, while `services/proposals/dev-approval.ts:222`
+  // and `services/playbooks/stage-gate.ts:232` write the AGENT. See the
+  // `data.sourceId` contract on `RequestShapedProposalData`.
+  // The `agentUserId` resolution is still required: on the dev-approval paths
+  // the owning human appears in NEITHER field, so resolve the agent's creator
+  // (`users.createdByUserId`) and admit ONLY that one human. This is a
+  // VISIBILITY gate, not an authority gate — an agent seeing its own pending
+  // proposal is intended (it must be able to revise it), so unlike
+  // `computeCanReviewApproval` this deliberately carries NO agent-class floor.
   if (proposal.agentUserId) {
     const agent = await database.query.users.findFirst({
       where: eq(users.id, proposal.agentUserId),

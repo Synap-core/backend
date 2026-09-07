@@ -658,6 +658,17 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "automation.recommend_health",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Automation health warden: scan every ENABLED, producer-backed automation (trigger event/cron/webhook) older than the grace period and file ONE grouped automation.health_advisory proposal per owning human listing the automations that have NEVER produced a run row. EFFECT-BASED — the evidence is the ABSENCE of rows in the automation_runs ledger, never a run's reported status, so a status field that lies cannot make it certify a dead automation healthy. Catches the 'built with zero producers' class: a trigger the authoring grammar advertises that nothing downstream ever emits. Approval is acknowledgement-only — it pauses and archives NOTHING. Takes NO params (scans pod-wide). Read-only w.r.t. graph data (files review items only): auto-runs inside the daily calibration cron. Returns { proposalsFiled, proposalIds, findings }.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
       name: "governance.recommend_tighten_posture",
       kind: "builtin",
       scope: "pod",

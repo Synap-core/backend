@@ -1498,6 +1498,191 @@ function buildEventCatalog(): EventOption[] {
   return out;
 }
 
+/**
+ * The WHEN menu — every event pattern this caller can build a trigger on.
+ *
+ * Extracted from the `availableTriggerEvents` procedure so `generateFlow` can
+ * consume the SAME catalog, with the same scoping and the same floors, instead
+ * of the IS prompting a model from a frozen list baked into its own source.
+ * One catalog, one set of floors, for the human picker and the AI door alike.
+ */
+async function resolveAvailableTriggerEvents(
+  access: AccessContext,
+  scope: RuleScope
+): Promise<EventOption[]> {
+  const database = await getDb();
+
+  // Merge map keyed by pattern; higher-precedence source overwrites but
+  // preserves any observedCount already discovered.
+  const byPattern = new Map<string, EventOption>();
+  for (const opt of buildEventCatalog()) byPattern.set(opt.pattern, opt);
+
+  // ── observed ────────────────────────────────────────────────────────────
+  const userId = access.userId;
+  if (userId) {
+    const wsExpr = drizzleSql`COALESCE(${events.workspaceId}, ${events.data}->>'workspaceId')`;
+    const observedRows = await database
+      .select({ type: events.type, n: count() })
+      .from(events)
+      .where(
+        and(
+          eq(events.userId, userId),
+          scope.workspaceId
+            ? drizzleSql`${wsExpr} = ${scope.workspaceId}`
+            : undefined,
+          scope.entityId ? eq(events.subjectId, scope.entityId) : undefined,
+          scope.projectId
+            ? drizzleSql`${events.data}->>'projectId' = ${scope.projectId}`
+            : undefined,
+          scope.capabilityId
+            ? drizzleSql`${events.data}->>'capabilityId' = ${scope.capabilityId}`
+            : undefined,
+          scope.channelId
+            ? drizzleSql`${events.data}->>'channelId' = ${scope.channelId}`
+            : undefined
+        )
+      )
+      .groupBy(events.type);
+
+    for (const row of observedRows) {
+      if (!row.type) continue;
+      // The audit spine is not a trigger menu — see `isFireableTriggerPattern`.
+      if (!isFireableTriggerPattern(row.type)) continue;
+      const subject = row.type.split(".")[0]!;
+      const existing = byPattern.get(row.type);
+      byPattern.set(row.type, {
+        pattern: row.type,
+        label: existing?.label ?? eventLabelFor(row.type, subject),
+        profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
+        source: "observed",
+        observedCount: Number(row.n) || 0,
+      });
+    }
+  }
+
+  // ── declared ──────────────────────────────────────────────────────────────
+  // A capability DECLARES the event patterns it can emit in
+  // `metadata.emits: string[]`. Floor: `userVisibleWhere` (capabilities has no
+  // access-registry VisibilityRule — same floor resolveCapabilityMode uses).
+  // The `jsonb_typeof = 'array'` guard skips capabilities that never declared.
+  if (userId) {
+    const declaredRows = await database
+      .select({
+        emits: drizzleSql<unknown>`${capabilities.metadata}->'emits'`,
+      })
+      .from(capabilities)
+      .where(
+        and(
+          userVisibleWhere(capabilities.workspaceId, userId),
+          drizzleSql`jsonb_typeof(${capabilities.metadata}->'emits') = 'array'`,
+          scope.capabilityId
+            ? eq(capabilities.id, scope.capabilityId)
+            : undefined,
+          scope.workspaceId
+            ? or(
+                isNull(capabilities.workspaceId),
+                eq(capabilities.workspaceId, scope.workspaceId)
+              )
+            : undefined
+        )
+      );
+
+    for (const row of declaredRows) {
+      if (Array.isArray(row.emits)) foldDeclaredEmits(byPattern, row.emits);
+    }
+  }
+
+  // Stable order: declared, then observed (busiest first), then catalog.
+  const rank = { declared: 0, observed: 1, catalog: 2 } as const;
+  const eventsOut = Array.from(byPattern.values()).sort(
+    (a, b) =>
+      rank[a.source] - rank[b.source] ||
+      (b.observedCount ?? 0) - (a.observedCount ?? 0) ||
+      a.pattern.localeCompare(b.pattern)
+  );
+
+  return eventOptionSchema.array().parse(eventsOut);
+}
+
+/**
+ * The THEN menu — every action this caller can put in a rule. Extracted for the
+ * same reason as `resolveAvailableTriggerEvents` above: `generateFlow` forwards
+ * it to the IS so the flow prompt advertises only actions this pod can run.
+ */
+async function resolveAvailableActions(
+  access: AccessContext,
+  scope: RuleScope
+): Promise<ActionOption[]> {
+  // The SENTENCE-CONFIGURABLE outputs: those with a config branch in
+  // OutputSettings (see SENTENCE_ACTION_PARAMS). The advanced graph-only types
+  // (facet_*/relation_create/session_update/set_state) have no sentence config
+  // UI, so surfacing them would let a user activate a rule whose required
+  // config the "activate" gate cannot check — they remain on the canvas
+  // editor. `params` carries each output's required (+ key optional) fields so
+  // the create modal's required-config check is real, not vacuous.
+  const actions: ActionOption[] = SENTENCE_OUTPUT_TYPES.map((outputType) => ({
+    key: outputType,
+    label: actionLabelFor(outputType),
+    nodeType: "output" as const,
+    outputType,
+    params: SENTENCE_ACTION_PARAMS[outputType],
+  }));
+
+  // Capability-verb THEN (rules-slice2): when a rule is scoped to a capability,
+  // also offer THAT capability's RUNNABLE verbs. A capability action compiles
+  // to a `type:"capability"` flow node (executor: automation-executor.ts `case
+  // "capability"` → the shared governed `executeCapability` door), NOT an
+  // `output` node — the sentence path now emits that node. Honest twice over:
+  // `projectRunnableActions` yields only verbs that WILL fire unattended
+  // (governance:auto + connected + executable), so a verb that would fail
+  // closed mid-flow (unapproved → suppressProposal → deny) is never offered.
+  // `scope.workspaceId ?? null` = pod altitude when the lens is absent (still
+  // resolves pod-wide capabilities honestly).
+  const userId = access.userId;
+  if (scope.capabilityId && userId) {
+    const caps = await listCapabilities({
+      workspaceId: scope.workspaceId ?? null,
+      userId,
+    });
+    const target = caps.find((c) => c.id === scope.capabilityId);
+    if (target) {
+      actions.push(
+        ...capabilityActionOptions(
+          projectRunnableActions([target]),
+          scope.capabilityId
+        )
+      );
+    }
+  }
+
+  // Playbook-run THEN: every playbook visible at this lens. A `playbook_run`
+  // node has been EXECUTABLE since the playbook wave (automation-executor.ts
+  // `case "playbook_run"` → `executePlaybookRun`, shape-checked by
+  // `validate-flow.ts`) but no authoring door offered it, so the runtime had
+  // zero producers. `scopedDb` applies the playbooks VisibilityRule
+  // (workspace + pod-wide), so this can only ever list rows the caller may
+  // already see. Unlike a capability verb, a playbook is not gated on a
+  // connection: it spawns a session, which the session runtime governs.
+  const playbookRows = await scopedDb(access).findMany<{
+    id: string;
+    name: string;
+    params: unknown;
+  }>(playbooks, {
+    columns: { id: true, name: true, params: true },
+    where: scope.workspaceId
+      ? or(
+          isNull(playbooks.workspaceId),
+          eq(playbooks.workspaceId, scope.workspaceId)
+        )
+      : undefined,
+    orderBy: asc(playbooks.name),
+    limit: 200,
+  });
+  actions.push(...playbookActionOptions(playbookRows));
+
+  return actionOptionSchema.array().parse(actions);
+}
+
 export const automationsRouter = router({
   // ── List automations ────────────────────────────────────────────────────────
 
@@ -1855,103 +2040,12 @@ export const automationsRouter = router({
    */
   availableTriggerEvents: protectedProcedure
     .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
-    .query(async ({ input, ctx }) => {
-      const scope = input?.scope ?? {};
-      const database = await getDb();
-      const access = AccessContext.from(ctx);
-
-      // Merge map keyed by pattern; higher-precedence source overwrites but
-      // preserves any observedCount already discovered.
-      const byPattern = new Map<string, EventOption>();
-      for (const opt of buildEventCatalog()) byPattern.set(opt.pattern, opt);
-
-      // ── observed ────────────────────────────────────────────────────────────
-      const userId = access.userId;
-      if (userId) {
-        const wsExpr = drizzleSql`COALESCE(${events.workspaceId}, ${events.data}->>'workspaceId')`;
-        const observedRows = await database
-          .select({ type: events.type, n: count() })
-          .from(events)
-          .where(
-            and(
-              eq(events.userId, userId),
-              scope.workspaceId
-                ? drizzleSql`${wsExpr} = ${scope.workspaceId}`
-                : undefined,
-              scope.entityId ? eq(events.subjectId, scope.entityId) : undefined,
-              scope.projectId
-                ? drizzleSql`${events.data}->>'projectId' = ${scope.projectId}`
-                : undefined,
-              scope.capabilityId
-                ? drizzleSql`${events.data}->>'capabilityId' = ${scope.capabilityId}`
-                : undefined,
-              scope.channelId
-                ? drizzleSql`${events.data}->>'channelId' = ${scope.channelId}`
-                : undefined
-            )
-          )
-          .groupBy(events.type);
-
-        for (const row of observedRows) {
-          if (!row.type) continue;
-          // The audit spine is not a trigger menu — see `isFireableTriggerPattern`.
-          if (!isFireableTriggerPattern(row.type)) continue;
-          const subject = row.type.split(".")[0]!;
-          const existing = byPattern.get(row.type);
-          byPattern.set(row.type, {
-            pattern: row.type,
-            label: existing?.label ?? eventLabelFor(row.type, subject),
-            profileSlug:
-              existing?.profileSlug ?? profileSlugForSubject(subject),
-            source: "observed",
-            observedCount: Number(row.n) || 0,
-          });
-        }
-      }
-
-      // ── declared ──────────────────────────────────────────────────────────────
-      // A capability DECLARES the event patterns it can emit in
-      // `metadata.emits: string[]`. Floor: `userVisibleWhere` (capabilities has no
-      // access-registry VisibilityRule — same floor resolveCapabilityMode uses).
-      // The `jsonb_typeof = 'array'` guard skips capabilities that never declared.
-      if (userId) {
-        const declaredRows = await database
-          .select({
-            emits: drizzleSql<unknown>`${capabilities.metadata}->'emits'`,
-          })
-          .from(capabilities)
-          .where(
-            and(
-              userVisibleWhere(capabilities.workspaceId, userId),
-              drizzleSql`jsonb_typeof(${capabilities.metadata}->'emits') = 'array'`,
-              scope.capabilityId
-                ? eq(capabilities.id, scope.capabilityId)
-                : undefined,
-              scope.workspaceId
-                ? or(
-                    isNull(capabilities.workspaceId),
-                    eq(capabilities.workspaceId, scope.workspaceId)
-                  )
-                : undefined
-            )
-          );
-
-        for (const row of declaredRows) {
-          if (Array.isArray(row.emits)) foldDeclaredEmits(byPattern, row.emits);
-        }
-      }
-
-      // Stable order: declared, then observed (busiest first), then catalog.
-      const rank = { declared: 0, observed: 1, catalog: 2 } as const;
-      const eventsOut = Array.from(byPattern.values()).sort(
-        (a, b) =>
-          rank[a.source] - rank[b.source] ||
-          (b.observedCount ?? 0) - (a.observedCount ?? 0) ||
-          a.pattern.localeCompare(b.pattern)
-      );
-
-      return { events: eventOptionSchema.array().parse(eventsOut) };
-    }),
+    .query(async ({ input, ctx }) => ({
+      events: await resolveAvailableTriggerEvents(
+        AccessContext.from(ctx),
+        input?.scope ?? {}
+      ),
+    })),
 
   // ── Rules ecosystem: THEN menu ───────────────────────────────────────────────
 
@@ -1964,80 +2058,12 @@ export const automationsRouter = router({
    */
   availableActions: protectedProcedure
     .input(z.object({ scope: ruleScopeSchema.optional() }).optional())
-    .query(async ({ input, ctx }) => {
-      const scope = input?.scope ?? {};
-
-      // The SENTENCE-CONFIGURABLE outputs: those with a config branch in
-      // OutputSettings (see SENTENCE_ACTION_PARAMS). The advanced graph-only types
-      // (facet_*/relation_create/session_update/set_state) have no sentence config
-      // UI, so surfacing them would let a user activate a rule whose required
-      // config the "activate" gate cannot check — they remain on the canvas
-      // editor. `params` carries each output's required (+ key optional) fields so
-      // the create modal's required-config check is real, not vacuous.
-      const actions: ActionOption[] = SENTENCE_OUTPUT_TYPES.map(
-        (outputType) => ({
-          key: outputType,
-          label: actionLabelFor(outputType),
-          nodeType: "output" as const,
-          outputType,
-          params: SENTENCE_ACTION_PARAMS[outputType],
-        })
-      );
-
-      // Capability-verb THEN (rules-slice2): when a rule is scoped to a capability,
-      // also offer THAT capability's RUNNABLE verbs. A capability action compiles
-      // to a `type:"capability"` flow node (executor: automation-executor.ts `case
-      // "capability"` → the shared governed `executeCapability` door), NOT an
-      // `output` node — the sentence path now emits that node. Honest twice over:
-      // `projectRunnableActions` yields only verbs that WILL fire unattended
-      // (governance:auto + connected + executable), so a verb that would fail
-      // closed mid-flow (unapproved → suppressProposal → deny) is never offered.
-      // `scope.workspaceId ?? null` = pod altitude when the lens is absent (still
-      // resolves pod-wide capabilities honestly).
-      const userId = AccessContext.from(ctx).userId;
-      if (scope.capabilityId && userId) {
-        const caps = await listCapabilities({
-          workspaceId: scope.workspaceId ?? null,
-          userId,
-        });
-        const target = caps.find((c) => c.id === scope.capabilityId);
-        if (target) {
-          actions.push(
-            ...capabilityActionOptions(
-              projectRunnableActions([target]),
-              scope.capabilityId
-            )
-          );
-        }
-      }
-
-      // Playbook-run THEN: every playbook visible at this lens. A `playbook_run`
-      // node has been EXECUTABLE since the playbook wave (automation-executor.ts
-      // `case "playbook_run"` → `executePlaybookRun`, shape-checked by
-      // `validate-flow.ts`) but no authoring door offered it, so the runtime had
-      // zero producers. `scopedDb` applies the playbooks VisibilityRule
-      // (workspace + pod-wide), so this can only ever list rows the caller may
-      // already see. Unlike a capability verb, a playbook is not gated on a
-      // connection: it spawns a session, which the session runtime governs.
-      const playbookRows = await scopedDb(AccessContext.from(ctx)).findMany<{
-        id: string;
-        name: string;
-        params: unknown;
-      }>(playbooks, {
-        columns: { id: true, name: true, params: true },
-        where: scope.workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, scope.workspaceId)
-            )
-          : undefined,
-        orderBy: asc(playbooks.name),
-        limit: 200,
-      });
-      actions.push(...playbookActionOptions(playbookRows));
-
-      return { actions: actionOptionSchema.array().parse(actions) };
-    }),
+    .query(async ({ input, ctx }) => ({
+      actions: await resolveAvailableActions(
+        AccessContext.from(ctx),
+        input?.scope ?? {}
+      ),
+    })),
 
   // ── Get single automation ───────────────────────────────────────────────────
 
@@ -2669,13 +2695,51 @@ export const automationsRouter = router({
           workspaceId: ctx.workspaceId ?? null,
           userId: ctx.userId,
           ...input,
+          // The pod's LIVE menus. Without them the IS prompted the model from a
+          // frozen list baked into its source, which had drifted from this
+          // repo two ways (four unstorable trigger types; a worked example in
+          // the documentation event form no emitter produces). Reusing the two
+          // procedures rather than re-deriving keeps the AI door and the human
+          // pickers on ONE catalog — including their scoping and their floors
+          // (`isFireableTriggerPattern`, `userVisibleWhere`,
+          // `projectRunnableActions`).
+          catalog: await (async () => {
+            const access = AccessContext.from(ctx);
+            const scope: RuleScope = ctx.workspaceId
+              ? { workspaceId: ctx.workspaceId }
+              : {};
+            const [triggerEvents, actions] = await Promise.all([
+              resolveAvailableTriggerEvents(access, scope),
+              resolveAvailableActions(access, scope),
+            ]);
+            return { triggerEvents, actions };
+          })(),
         }),
       });
 
       if (!response.ok) {
+        // 422 = the IS generated a flow referencing triggers or actions THIS
+        // pod cannot run, checked against the catalog sent above. Surface the
+        // reasons: collapsing it into "IS call failed" hides the one thing the
+        // user can act on, and this door's failure mode used to be worse than
+        // opaque — an unstorable flow returned as a success.
+        const detail =
+          response.status === 422
+            ? await response
+                .json()
+                .then((b: unknown) =>
+                  Array.isArray((b as { problems?: unknown }).problems)
+                    ? (b as { problems: string[] }).problems.join(" ")
+                    : ""
+                )
+                .catch(() => "")
+            : "";
         throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "IS call failed",
+          code:
+            response.status === 422 ? "BAD_REQUEST" : "INTERNAL_SERVER_ERROR",
+          message: detail
+            ? `Generated flow references unavailable triggers or actions. ${detail}`
+            : "IS call failed",
         });
       }
 

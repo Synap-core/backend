@@ -111,6 +111,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       agentUserId?: string;
       sourceMessageId?: string;
       sessionId?: string;
+      expectedLabel?: string;
     };
     try {
       const acting = await resolveActingContext(c, {
@@ -144,6 +145,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         type: body.type ?? "markdown",
         reasoning: body.reasoning,
         ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
       return c.json(result);
     } catch (err) {

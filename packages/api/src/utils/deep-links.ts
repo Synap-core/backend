@@ -54,7 +54,7 @@ export function openLink(
 
 /**
  * Pod-relative path into the app: `/open/<id>`.
- * Lock-step with `@synap/hub-rest-client` `openPath` (same encoding).
+ * Lock-step with `@synap-core/hub-rest-client` `openPath` (same encoding).
  */
 export function openPath(id: string): string {
   return `/open/${encodeURIComponent(id)}`;

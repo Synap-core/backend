@@ -188,6 +188,13 @@ export const entitiesRouter = router({
          * had no home in this wrapper). Forwarded to `caller.create` below.
          */
         externalId: z.string().optional(),
+        /**
+         * The declared session-output slot this entity fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `entities.create`, which passes it to `recordSessionArtifact`. Never
+         * guessed when absent.
+         */
+        expectedLabel: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -257,6 +264,7 @@ export const entitiesRouter = router({
         // Strong external_id anchor → real entities.create registers it as an
         // identity signal so a repeat create with the same provider id dedups.
         ...(input.externalId ? { externalId: input.externalId } : {}),
+        ...(input.expectedLabel ? { expectedLabel: input.expectedLabel } : {}),
       });
       // Emit session event so whiteboards in ambient mode can mirror new entities.
       if (result.status === "created" && result.id) {

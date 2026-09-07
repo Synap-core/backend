@@ -52,7 +52,21 @@ import { assertEveryOperationRendered } from "./renderable-ops.js";
 type ProposalRow = typeof proposals.$inferSelect;
 type DisplayEnrichedProposal = ProposalRow & {
   request: UpdateRequest;
+  /**
+   * LEGACY, and a COALESCE: `agentUserId ?? createdBy ?? sourceId`. It answers
+   * "a name to show" and deliberately cannot say WHICH role that name plays.
+   * Prefer the three below for anything that attributes an action to a person.
+   */
   authorName?: string;
+  /** ACTOR — the agent that authored this proposal. Absent for human authors. */
+  agentActorName?: string;
+  /**
+   * ON-BEHALF-OF — the human the acting agent belongs to (`users.createdByUserId`
+   * on the agent's row). Absent when there is no agent actor.
+   */
+  onBehalfOfName?: string;
+  /** APPROVER — the human who reviewed it. Absent while the proposal is pending. */
+  approverName?: string;
   targetName?: string;
   /**
    * The GOAL of the focus session that produced this proposal, when there is one
@@ -130,6 +144,10 @@ export async function enrichProposalsForDisplay(
       row.agentUserId ?? undefined,
       row.createdBy ?? undefined,
       requests[idx]?.sourceId || undefined,
+      // The APPROVER. `reviewedBy` has been persisted since the review spine
+      // shipped but was never resolved to a name here, so every surface over
+      // this projection could say WHO PROPOSED and never WHO APPROVED.
+      row.reviewedBy ?? undefined,
     ])
   );
   // correlation_id is a uuid column — clamp to valid uuids so the batch query's
@@ -175,6 +193,11 @@ export async function enrichProposalsForDisplay(
             email: users.email,
             userType: users.userType,
             agentMetadata: users.agentMetadata,
+            // The agent's OWNER — the human it acts FOR (RFC 8693 `may_act`).
+            // Read here so the three delegation roles can be projected without a
+            // second shape: actor (this row, when userType='agent'), on-behalf-of
+            // (this column), approver (`proposals.reviewedBy`).
+            createdByUserId: users.createdByUserId,
           })
           .from(users)
           .where(inArray(users.id, userIds))
@@ -287,6 +310,41 @@ export async function enrichProposalsForDisplay(
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
+
+  /**
+   * DELEGATION NAMES (RFC 8693) — the second, small batched lookup that resolves
+   * the humans the acting AGENTS act for.
+   *
+   * It cannot be folded into the query above: an agent's owner id is
+   * `users.createdByUserId` on the AGENT's own row, so it is unknown until that
+   * row has been read. One extra round-trip for the whole page (not per row),
+   * skipped entirely when no proposal on the page has an agent actor — which is
+   * every human-authored page.
+   */
+  const ownerIds = uniqueStrings(
+    rows.map((row) => {
+      if (!row.agentUserId) return undefined;
+      const agentRow = userById.get(row.agentUserId);
+      if (!agentRow || userById.has(agentRow.createdByUserId ?? "")) {
+        return undefined;
+      }
+      return agentRow.createdByUserId ?? undefined;
+    })
+  );
+  if (ownerIds.length > 0) {
+    const ownerRows = await db
+      .select({
+        id: users.id,
+        name: users.name,
+        email: users.email,
+        userType: users.userType,
+        agentMetadata: users.agentMetadata,
+        createdByUserId: users.createdByUserId,
+      })
+      .from(users)
+      .where(inArray(users.id, ownerIds));
+    for (const row of ownerRows) userById.set(row.id, row);
+  }
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
   const sessionGoalById = new Map(sessionRows.map((row) => [row.id, row.goal]));
@@ -349,6 +407,45 @@ export async function enrichProposalsForDisplay(
       row.agentUserId ?? row.createdBy ?? request.sourceId
     );
     const authorName = authorRow ? displayNameForUser(authorRow) : undefined;
+
+    // ── THE THREE DELEGATION ROLES, projected separately ────────────────────
+    // `authorName` above is a COALESCE — `agentUserId ?? createdBy ?? sourceId`
+    // — so it renders ONE name for what are three different people, and a
+    // surface reading it cannot tell which one it got. That is the collapse the
+    // founder objected to: "an agent never does something under my identity —
+    // it should be an agent, possibly linked to me."
+    //
+    // RFC 8693 names them, and Synap already persists all three:
+    //   actor        — the agent (`proposals.agent_user_id`)
+    //   on-behalf-of — the human it acts FOR (`users.created_by_user_id` on the
+    //                  agent's own row; the same human the agent KEY links to)
+    //   approver     — the human who authorized it (`proposals.reviewed_by`)
+    //
+    // `authorName` is left exactly as it was: it has existing consumers, and
+    // narrowing it would be a behaviour change disguised as a rename. These
+    // three are ADDITIVE and each is `undefined` when the role does not apply —
+    // a human-authored proposal has no actor and no on-behalf-of; a pending
+    // proposal has no approver. Absent means ABSENT; nothing falls back to
+    // another role's name, because a fallback here is how one name came to
+    // stand for three in the first place.
+    const agentActorRow = row.agentUserId
+      ? userById.get(row.agentUserId)
+      : undefined;
+    const agentActorName = agentActorRow
+      ? displayNameForUser(agentActorRow)
+      : undefined;
+    const onBehalfOfRow = agentActorRow?.createdByUserId
+      ? userById.get(agentActorRow.createdByUserId)
+      : undefined;
+    const onBehalfOfName = onBehalfOfRow
+      ? displayNameForUser(onBehalfOfRow)
+      : undefined;
+    const approverRow = row.reviewedBy
+      ? userById.get(row.reviewedBy)
+      : undefined;
+    const approverName = approverRow
+      ? displayNameForUser(approverRow)
+      : undefined;
     const summary =
       request.summary ??
       buildFallbackTitle({
@@ -457,6 +554,10 @@ export async function enrichProposalsForDisplay(
       // lifetime table. ONE door: `proposalClassFields`.
       ...proposalClassFields(row.proposalType, row.targetType),
       authorName,
+      // The three roles, each absent when it does not apply (see above).
+      ...(agentActorName ? { agentActorName } : {}),
+      ...(onBehalfOfName ? { onBehalfOfName } : {}),
+      ...(approverName ? { approverName } : {}),
       targetName,
       ...(row.sessionId && sessionGoalById.has(row.sessionId)
         ? { sessionGoal: sessionGoalById.get(row.sessionId)! }

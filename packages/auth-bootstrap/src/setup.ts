@@ -3,7 +3,7 @@
  *
  * Canonical home for `setupAgent` / `checkPodHealth`.
  *
- * ⚠️ `@synap/hub-rest-client` does NOT import from this package — it keeps its
+ * ⚠️ `@synap-core/hub-rest-client` does NOT import from this package — it keeps its
  * own copy of `setupAgent`/`checkPodHealth` and of the `assertValidPodUrl` SSRF
  * guard (`hub-rest-client/src/setup.ts`), because that package is deliberately
  * zero-dependency. The two copies must be kept in sync — change one, change the

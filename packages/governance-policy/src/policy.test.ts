@@ -342,6 +342,29 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     }
   });
 
+  it("2. RESERVED: marketplace publish is floored before a publish door exists", () => {
+    // Publishing is outward-facing and effectively irreversible (public
+    // catalog, content-derived version, and a soft-delist does not
+    // un-distribute what was already fetched). No pod-side publish door exists
+    // today — the browser and CLI both POST to `{CP}/api/packages` with the
+    // USER'S OWN credential and never traverse pod governance — so this cannot
+    // be typed into ADMIN_ACTIONS_LIVE.
+    //
+    // It is reserved so that the day an agent-facing publish door lands, it
+    // inherits the floor instead of arriving ungoverned and widenable by a
+    // rung-2.8 governance rule. Both spellings, per this file's own
+    // both-spellings precedent.
+    for (const k of ["package.publish", "packages.publish"]) {
+      expect(ADMIN_ACTIONS_RESERVED).toContain(k);
+      // Still reserved, NOT live: the day it becomes typeable it must MOVE, and
+      // this assertion is what forces that move to be deliberate.
+      expect(ADMIN_ACTIONS_LIVE as readonly string[]).not.toContain(k);
+      // The concatenation is what `permission-check` actually consults, so pin
+      // that the reserved entry really does reach the floor consumers read.
+      expect(ADMIN_ACTIONS).toContain(k);
+    }
+  });
+
   it("3. isAgentOwnedWorkspace: non-destructive → execute (beats writesRequireProposal)", () => {
     expect(
       decideAgentPolicy({

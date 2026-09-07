@@ -11,7 +11,7 @@
  *   1. @synap-core/api-types  → npm publish      (consumed by synap-app + synap-cli)
  *   2. @synap-core/types      → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
  *   3. @synap-core/hub-protocol → pnpm pack → tgz (consumed by synap-intelligence-service via file:)
- *   4. @synap/hub-rest-client → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
+ *   4. @synap-core/hub-rest-client → pnpm pack → tgz  (consumed by synap-intelligence-service via file:)
  *
  * DRY-RUN by default. Nothing is written, published, or copied without --yes.
  *
@@ -222,7 +222,7 @@ const TGZ_ARTIFACTS = [
   // copies only IS manifests + packages/*.tgz, so a sibling path resolves to
   // an absent `/synap-backend/...` and the image build dies at pnpm install.
   {
-    name: "@synap/hub-rest-client",
+    name: "@synap-core/hub-rest-client",
     dir: "packages/hub-rest-client",
     tgzPrefix: "synap-hub-rest-client-",
   },

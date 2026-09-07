@@ -56,7 +56,7 @@ const TTL_MS = 24 * 60 * 60 * 1000; // 24h
  * reclaimed.
  *
  * That was survivable while the header was rare. It stopped being survivable
- * when `@synap/hub-rest-client` began minting a fresh `crypto.randomUUID()`
+ * when `@synap-core/hub-rest-client` began minting a fresh `crypto.randomUUID()`
  * key on every mutating request: a unique key per call means near-zero hit
  * rate outside a within-call retry, so essentially every write now ALLOCATES a
  * 24h entry that will never be read. The retry-safety that change bought is

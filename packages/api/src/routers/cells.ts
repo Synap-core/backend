@@ -76,6 +76,8 @@ export const cellsRouter = router({
             contentKind?: string;
             /** View-renderer affinity — see CP `PackageCellDef.viewTypes`. */
             viewTypes?: string[];
+            /** Declared frame egress — see CP `PackageCellDef.externalHosts`. */
+            externalHosts?: string[];
           }
         | undefined;
 
@@ -141,6 +143,10 @@ export const cellsRouter = router({
           deps: cell.deps,
           defaultSize: cell.defaultSize,
           viewTypes: cell.viewTypes,
+          // The declared egress grant. Dropped here it would reach the pod as
+          // "no external access": installed, network-contained, and broken in a
+          // way only a CSP violation inside an opaque frame reports.
+          externalHosts: cell.externalHosts,
           contentKind: cell.contentKind,
         },
         name: cell.name,

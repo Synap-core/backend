@@ -21,10 +21,13 @@
  * build, the frontend's own cached workspace settings) does not regress the
  * moment this lands. The mirror is gated on ONE named flag,
  * {@link MIRROR_LEGACY_RENDERER_STORES}, so retiring it is a one-line change
- * and not an archaeology exercise. It is deliberately NOT written for the two
- * shapes the legacy stores cannot express — `scope: 'user'` and ANY
- * `subjectId` (per-object) binding — because there is no legacy key for them,
- * and inventing one would fork the store this table exists to unify.
+ * and not an archaeology exercise. It is deliberately NOT written for
+ * `scope: 'user'`, the one shape the legacy stores cannot express — there is
+ * no legacy key for it, and inventing one would fork the store this table
+ * exists to unify. A per-object (`subjectId`) binding is a second such shape
+ * in principle, but is moot in practice: this door REFUSES any non-null
+ * `subjectId` outright (decision 2026-09-07, whole-kind only — see
+ * `renderer-bindings.ts`), so it never reaches the mirror question.
  *
  * Mirrors the two pre-existing tRPC write paths it subsumes:
  *   - workspace overlay → `profiles.setProfileRendererOverride`
@@ -98,9 +101,13 @@ export interface SetProfileRendererInput {
   ref: RendererRef | null;
   scope: RendererScope;
   /**
-   * Bind for ONE object rather than the whole kind. A GOVERNED EXCEPTION: the
-   * default is kind-level, and a per-object binding reaches the store through
-   * the same gate as any other write.
+   * REFUSED. Renderer bindings are whole-kind only (decision 2026-09-07, see
+   * the header of `renderer-bindings.ts`) — a non-null value is rejected at
+   * this door with `BAD_REQUEST` before any write. The field stays on the
+   * input shape only because the three callers upstream (tRPC
+   * `profiles.setProfileRendererOverride`, Hub Protocol `profiles.setRenderer`,
+   * and the `profile/renderer.set` proposal executor) still parse and forward
+   * it; removing it there is a separate, larger cleanup than this refusal.
    */
   subjectId?: string | null;
   /** Set when a proposal approval materialized this write — kept as lineage. */
@@ -128,6 +135,23 @@ export async function setProfileRenderer(
     subjectId = null,
     sourceProposalId = null,
   } = input;
+
+  // WHOLE-KIND ONLY (decision 2026-09-07). Every prior-art system checked —
+  // Salesforce Lightning page assignment, ServiceNow view rules, Dynamics
+  // forms, VS Code editor associations, Notion, Backstage — stops layout
+  // assignment at the class/kind and refuses a per-instance override; no
+  // Synap caller needs one, and the legacy mirror this table replaces already
+  // cannot express one. Refused here, at the one write door — before any DB
+  // round trip — so a new caller can never reopen it by omission.
+  if (subjectId !== null) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Renderer bindings are whole-kind only — a per-object binding " +
+        "(subjectId) is not supported. See renderer-bindings.ts.",
+    });
+  }
+
   const db = await getDb();
   const contentKind = SLOT_TO_CONTENT_KIND[slot] as
     "collection" | "entity-detail" | "entity-card" | "entity-profile";

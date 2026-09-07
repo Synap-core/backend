@@ -56,6 +56,8 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { auditLog } from "../utils/audit-log.js";
 import { discardProposalSourceBlob } from "../utils/store-entity-source-blob.js";
 import { emitAiCorrection } from "../utils/ai-feedback-events.js";
+import { returnDelegatedSlot } from "../services/focus-sessions/return-delegated-slot.js";
+import { readProposalExpectedLabel } from "../services/focus-sessions/satisfy-expected-output.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import {
@@ -179,6 +181,39 @@ async function assertProposalWorkspaceRead(
       code: "FORBIDDEN",
       message: "Editor or higher role required to view proposals",
     });
+  }
+}
+
+/**
+ * A rejected proposal hands its claimed deliverable back to the session board.
+ *
+ * ONE helper, called by BOTH reject doors (`reject` and `batchReject`). They
+ * have drifted before — `reasonCode` reached the durable column on one and not
+ * the other, so a reviewer who rejected twelve proposals in a batch produced
+ * twelve NULLs — and a slot that comes back on a single reject but stays stuck
+ * "in progress" on a batch would be the same defect wearing a new hat.
+ *
+ * Best-effort in the strongest sense: the rejection has ALREADY been written
+ * when this runs, and nothing here may undo or fail it (the service swallows its
+ * own errors; this wrapper catches whatever escapes).
+ */
+async function returnRejectedSlot(
+  proposal: { sessionId?: string | null; data?: unknown },
+  reason: string | undefined
+): Promise<void> {
+  const expectedLabel = readProposalExpectedLabel(proposal.data);
+  if (!proposal.sessionId || !expectedLabel) return;
+  try {
+    await returnDelegatedSlot({
+      sessionId: proposal.sessionId,
+      expectedLabel,
+      reason,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: proposal.sessionId, expectedLabel },
+      "slot return failed after a rejection — the rejection stands"
+    );
   }
 }
 
@@ -1151,6 +1186,8 @@ export const proposalsRouter = router({
       const { allowed: canApprove } = await computeCanReviewApproval({
         proposal,
         userId,
+        // This IS the approve door — the class floor applies.
+        purpose: "approve",
       });
       if (!canApprove) {
         throw new TRPCError({
@@ -1214,6 +1251,10 @@ export const proposalsRouter = router({
       const { allowed: canReview } = await computeCanReviewApproval({
         proposal,
         userId,
+        // `revise` is an EDIT, not a decision — today's behaviour preserved.
+        // An agent's own amendment is authorized by the separate author rung
+        // in `mergeProposalRevision`, never by this reviewer ladder.
+        purpose: "reject",
       });
       if (!canReview) {
         throw new TRPCError({
@@ -1280,6 +1321,10 @@ export const proposalsRouter = router({
           proposalType: true,
           correlationId: true,
           data: true,
+          // The session this write belonged to — the other half of the slot
+          // return below. Without it a rejection cannot find the board it
+          // should hand the deliverable back to.
+          sessionId: true,
         },
       });
 
@@ -1373,6 +1418,15 @@ export const proposalsRouter = router({
             },
           });
         }
+
+        // RETURN THE SLOT. The mirror of the approval path's
+        // `satisfyExpectedOutputs` call: a rejected proposal that CLAIMED a
+        // declared deliverable hands it back to the session board with the
+        // reviewer's reason, and un-delegates it. Same shape as its sibling —
+        // outside the rejection's control flow, best-effort, and reading the
+        // claim through the ONE reader (`readProposalExpectedLabel`) so the
+        // approve and reject halves can never disagree about where it lives.
+        await returnRejectedSlot(proposal, input.reason);
       }
 
       return { success: true };
@@ -1621,9 +1675,44 @@ export const proposalsRouter = router({
 
       const isHumanProposer =
         !!proposal.proposedByUserId && proposal.proposedByUserId === userId;
-      const isAgentOwner =
+      // RENAMED 2026-09-07 (was `isAgentOwner`) — BEHAVIOUR UNCHANGED, the name
+      // was lying. It reads "the human who OWNS the agent", but the predicate
+      // tests `proposal.createdBy === userId`, and on every agent-authored path
+      // `createdBy` IS the agent's own user row
+      // (`services/proposals/dev-approval.ts:210`,
+      // `services/playbooks/stage-gate.ts:223` both write
+      // `createdBy: input.agentUserId ?? input.userId`). So this rung fires for
+      // the ACTING AGENT itself, not for its owner.
+      //
+      // ⚠️ Do not confuse it with `isAgentOwner` in
+      // `routers/proposals/review-authority.ts:163` — that one resolves
+      // `users.createdByUserId` off the acting agent and genuinely DOES mean
+      // "the human who owns the agent". Two different principals, one name,
+      // until this rename. See the `data.sourceId` contract note in
+      // `@synap-core/types` for the full actor table.
+      //
+      // The predicate is CORRECT as-is, but it does NOT have the same REACH as
+      // the revise author rung, and the two must not be conflated:
+      //   · here      — matches `proposal.createdBy === ctx.userId`. For the
+      //     ORDINARY agent key `ctx.userId` is the HUMAN (the key's
+      //     `linkedUserId`), so this rung fires ONLY for an UNLINKED agent
+      //     principal acting as itself.
+      //   · revise    — matches `ctx.agentUserId === proposals.agentUserId`,
+      //     which DOES fire for the ordinary agent key.
+      // So today an ordinary agent key can amend its own proposal but cannot
+      // withdraw it. That divergence is KNOWN and deliberately left in place:
+      // withdraw is TERMINAL and revise is not. A revise leaves the proposal
+      // pending with `revisionHistory` appended, so the human still decides on
+      // a request they can see changed; a withdraw removes it from the queue
+      // outright, and a human about to approve simply loses it with no
+      // equivalent trace. "Still asking, not deciding" justifies the revise
+      // rung and does not transfer to a terminal state change.
+      // Aligning them would WIDEN withdraw — a separate decision needing its
+      // own evidence (how many pending proposals are agent-authored, and
+      // whether any surface treats `withdrawn` differently from `rejected`).
+      const isActingAgent =
         !!proposal.agentUserId && proposal.createdBy === userId;
-      if (!isHumanProposer && !isAgentOwner) {
+      if (!isHumanProposer && !isActingAgent) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Only the proposer can withdraw this proposal.",
@@ -1720,39 +1809,42 @@ export const proposalsRouter = router({
         });
       }
 
-      // Authority — SAME policy as approve (owner_and_admins | admins_only |
-      // any_editor). Pod-wide proposals (no workspace) skip the workspace check,
-      // mirroring approve.
-      if (proposal.workspaceId) {
-        const [ws] = await db
-          .select({ settings: workspaces.settings })
-          .from(workspaces)
-          .where(eq(workspaces.id, proposal.workspaceId))
-          .limit(1);
-
-        const settings = ws?.settings as WorkspaceSettings | undefined;
-        const policy =
-          settings?.aiGovernance?.proposalApprovalPolicy ?? "owner_and_admins";
-
-        const membership = await getWorkspaceMembership(
-          db,
-          proposal.workspaceId,
-          userId
-        );
-        const proposalData = proposal.data as Record<string, unknown> | null;
-
-        const canRevert = canReviewProposal({
-          policy: policy as ProposalApprovalPolicy,
-          memberRole: membership?.role,
-          isOwner: proposalData?.sourceId === userId,
+      // Authority — the SHARED ladder, not a fourth inline copy.
+      //
+      // ⚠️ CORRECTED 2026-09-07. This block used to inline
+      // `canReviewProposal({..., isOwner: proposalData?.sourceId === userId})`
+      // and wrap the WHOLE check in `if (proposal.workspaceId)`. Its comment
+      // claimed "SAME policy as approve", which had become false twice over:
+      //
+      //  1. NO AGENT-CLASS FLOOR. `data.sourceId` is the ACTING AGENT on the
+      //     dev-approval and stage-gate doors, and a pod-wide agent key arrives
+      //     with `ctx.userId` = its own user row (`access/key-identity.ts`:
+      //     `effectiveUserId = linkedUserId ?? keyRecord.userId`). So `isOwner`
+      //     was true for the agent, with no membership, and it could revert its
+      //     own approved proposal. `revert({reopen:true})` returns it to
+      //     PENDING — which, with the author-amend rung and `patch`, is a full
+      //     un-approve → re-patch → await-reapproval loop.
+      //  2. POD-WIDE PROPOSALS GOT NO CHECK AT ALL. The skip was described as
+      //     "mirroring approve", but approve does NOT skip: its pod-wide branch
+      //     narrows to owner-or-pod-admin inside `computeCanReviewApproval`.
+      //
+      // Door parity settles that this was a miss, not a decision: Hub REST has
+      // blocked agent credentials on revert all along
+      // (`hub-protocol/rest/_shared.ts` → `rejectAgentReviewer(c, "revert")`,
+      // 403). tRPC did not. One rule, two doors, one of them open.
+      //
+      // `purpose: "approve"` because a revert IS a decision — it un-does an
+      // approved write — not an edit.
+      const { allowed: canRevert } = await computeCanReviewApproval({
+        proposal,
+        userId,
+        purpose: "approve",
+      });
+      if (!canRevert) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Not authorized to revert this proposal",
         });
-
-        if (!canRevert) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Not authorized to revert this proposal",
-          });
-        }
       }
 
       // Reverted → re-propose: the entities are ALREADY un-materialized (this
@@ -2217,6 +2309,8 @@ export const proposalsRouter = router({
           const { allowed: canApprove } = await computeCanReviewApproval({
             proposal,
             userId,
+            // batchApprove — same door as single approve, same floor.
+            purpose: "approve",
           });
           if (!canApprove) {
             results.push({
@@ -2314,6 +2408,8 @@ export const proposalsRouter = router({
             // query into N.
             targetType: true,
             sourceMessageId: true,
+            // Slot-return input — parity with the single `reject` door.
+            sessionId: true,
           },
         });
         if (!target) continue;
@@ -2408,6 +2504,11 @@ export const proposalsRouter = router({
               },
             });
           }
+
+          // Slot return — the SAME helper the single door calls, inside the
+          // `updated` guard so a row this batch did not actually reject never
+          // hands anything back.
+          await returnRejectedSlot(target, input.reason);
         }
       }
 

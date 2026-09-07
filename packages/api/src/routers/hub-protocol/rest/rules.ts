@@ -384,7 +384,11 @@ export function registerRulesRoutes(app: HubHono): void {
                 workspaceId: row.workspaceId,
                 createdAt: row.createdAt,
                 rule,
-                status: "active" as const,
+                // Same literal, same lie, third door — see the note in
+                // `skills.listRules`. A draft rule compiles nothing and has no
+                // automation, so reporting it as active tells the CLI and every
+                // Hub consumer the opposite of the truth.
+                status: rule.draft ? ("draft" as const) : ("active" as const),
               },
             ]
           : [];

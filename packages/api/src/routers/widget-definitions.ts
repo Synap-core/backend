@@ -23,6 +23,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 // unused); the function itself is kept on disk at `../utils/widget-compiler.ts`
 // with its own DO-NOT-REVIVE-AS-IS header. See NATIVE_RENDERER_REJECTED.
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
+import { defineCell } from "../services/cells/define-cell.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -96,13 +97,52 @@ function requireAdminRole(role: string | undefined | null) {
   }
 }
 
+/**
+ * typeKey NAMESPACES — the three shapes a `widget_definitions.type_key` may
+ * take, and what each one CLAIMS about where the row came from.
+ *
+ *   bare kebab        `win-rate-gauge`  — authored here (Cell Studio) or seeded builtin
+ *   `generated:<slug>`                  — minted by `defineCell` for an AI-defined cell
+ *   `cell:<pkg>:<key>`                  — minted by the package installer
+ *                                         (`packageCellTypeKey`)
+ *
+ * The old `^[a-z][a-z0-9-]+$` here accepted ONLY the first, which meant Cell
+ * Studio could not re-save a cell it had loaded through "Browse cells" if that
+ * cell had been installed or AI-defined — the colon failed validation and
+ * "install then tweak" was impossible.
+ *
+ * What the old regex was genuinely guarding is NOT character safety: `typeKey`
+ * is interpolated into `/open/cell/<key>` hrefs, and `OPEN_ID_RE`
+ * (`apps/api/src/open-dispatch.ts`) already permits `[A-Za-z0-9_.:-]` precisely
+ * because `generated:` keys are load-bearing there. Every alternative below
+ * stays strictly inside that class and stays lowercase, so nothing about href
+ * safety changes.
+ *
+ * What it WAS guarding, by accident, is PROVENANCE: two shipped surfaces read
+ * the prefix as a claim of origin — the browser's "Made for you" lane treats
+ * `generated:` as AI-authored (`apps/made-for-you.ts`), and the installed list
+ * parses `cell:<pkg>:` back to a package slug
+ * (`hub-protocol/rest/installed.ts`). That guarantee is real and is kept
+ * separately, by `assertMayWriteNamespacedTypeKey` below: this door may UPDATE a
+ * namespaced row that already exists, but may never MINT one.
+ */
+const TYPE_KEY_RE =
+  /^(?:[a-z][a-z0-9-]+|generated:[a-z0-9][a-z0-9._-]*|cell:[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*)$/;
+
+/** True for the two namespaces this door may edit but never mint. */
+function isNamespacedTypeKey(typeKey: string): boolean {
+  return typeKey.startsWith("generated:") || typeKey.startsWith("cell:");
+}
+
 const WidgetUpsertSchema = z.object({
   typeKey: z
     .string()
     .min(1)
     .max(100)
-    .regex(/^[a-z][a-z0-9-]+$/, {
-      message: "typeKey must be kebab-case (e.g. 'win-rate-gauge')",
+    .regex(TYPE_KEY_RE, {
+      message:
+        "typeKey must be kebab-case (e.g. 'win-rate-gauge'), or an existing " +
+        "'generated:<slug>' / 'cell:<package>:<key>' cell key",
     }),
   name: z.string().min(1).max(128),
   description: z.string().max(500).optional(),
@@ -137,9 +177,22 @@ const WidgetUpsertSchema = z.object({
    *  author (Cell Studio) / AI generator; defaults to the content-agnostic `widget`. */
   contentKind: z.enum(CONTENT_KINDS).optional(),
   rendererSource: z.string().optional(),
-  /** Original JSX/TSX source for native widgets (compiled server-side) */
-  source: z.string().optional(),
-  /** npm package version pins for frame widgets, e.g. { 'recharts': '2.12.0' } */
+  // `source` (original JSX/TSX for a native widget) is REMOVED, not left
+  // accepted-and-ignored. Its only purpose was to be compiled into
+  // `bundleSource` for `rendererType: "native"`, which this schema now refuses
+  // outright — so the field could never carry meaning again, and a field a door
+  // accepts but never writes is a declarable-but-ignored slot. No caller passes
+  // it (verified across every repo). DO-NOT-REVIVE-AS-IS.
+  /**
+   * npm package version pins for frame widgets, e.g. { 'recharts': '2.12.0' }.
+   *
+   * NOT validated here: `defineCell` (the one write door this mutation
+   * delegates to) runs `validateDeps` on every path, so the npm-name/version
+   * regexes and the 30-entry cap live in exactly one place. This door used to
+   * accept `z.record(string, string)` and write it straight to the column,
+   * which put an unvalidated string into an `esm.sh` import-map URL inside the
+   * sandboxed frame.
+   */
   deps: z.record(z.string(), z.string()).optional(),
   /**
    * View types this cell can RENDER, e.g. ["list","table"] (migration 0221).
@@ -159,22 +212,43 @@ const WidgetUpsertSchema = z.object({
 });
 
 /**
- * Mirror of `normalizeViewTypes` in `services/cells/define-cell.ts` — trim,
- * drop empties, dedupe, and map "nothing left" to NULL. Kept in step with that
- * function deliberately: this router is a SECOND write door into the same
- * column, and two doors disagreeing on how "no affinity" is encoded is how a
- * column ends up with both `[]` and `null` meaning the same thing.
+ * A namespaced typeKey (`generated:*` / `cell:*`) may be UPDATED through this
+ * door but never MINTED by it.
+ *
+ * The prefix is a provenance CLAIM that two shipped surfaces read back — the
+ * browser's "Made for you" lane treats `generated:` as AI-authored, and the
+ * installed list parses `cell:<pkg>:` into a package slug it reports as
+ * installed. Cell Studio needs to re-save such a row (that is the whole
+ * "install then tweak" flow), but it must not be able to CREATE a row that
+ * claims an origin it does not have. Editing an existing row claims nothing new.
  */
-function normalizeViewTypesForUpsert(raw: string[]): string[] | null {
-  const cleaned = [
-    ...new Set(
-      raw
-        .filter((t): t is string => typeof t === "string")
-        .map((t) => t.trim())
-        .filter((t) => t !== "")
-    ),
-  ];
-  return cleaned.length > 0 ? cleaned : null;
+async function assertMayWriteNamespacedTypeKey(
+  typeKey: string,
+  workspaceId: string
+): Promise<void> {
+  if (!isNamespacedTypeKey(typeKey)) return;
+  const db = await getDb();
+  const [existing] = await db
+    .select({ id: widgetDefinitions.id })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(widgetDefinitions.typeKey, typeKey),
+        eq(widgetDefinitions.workspaceId, workspaceId)
+      )
+    )
+    .limit(1);
+  if (!existing) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        `typeKey "${typeKey}" is namespaced, and no such cell exists in this ` +
+        "workspace. `generated:` keys are minted by the cell-define door " +
+        "(synap_create_cell / POST /cells/define) and `cell:` keys by the " +
+        "package installer — this door may edit them, not create them. Use a " +
+        "kebab-case typeKey for a new cell.",
+    });
+  }
 }
 
 export const widgetDefinitionsRouter = router({
@@ -360,121 +434,109 @@ export const widgetDefinitionsRouter = router({
    * Create or update a workspace-specific widget definition.
    * Requires owner or admin role.
    * Built-in widgets (workspaceId = null) cannot be managed here.
+   *
+   * TRANSPORT ONLY — the WRITE is `defineCell`.
+   *
+   * This mutation used to carry its own `insert(...).onConflictDoUpdate(...)`
+   * into `widget_definitions`, which made it a SECOND write door into the same
+   * rows as `services/cells/define-cell.ts`, with weaker rules: it never ran
+   * `validateDeps` (so an unvalidated dep string reached an `esm.sh` import-map
+   * URL inside the sandboxed frame), it never emitted the realtime
+   * `widget_definition.*` event (so a Cell Studio save notified nothing), and it
+   * rejected every namespaced typeKey (so an installed cell could not be
+   * edited). Two doors, one table, forked rules.
+   *
+   * What stays HERE is the part that is genuinely this door's: tRPC transport,
+   * the owner/admin gate, the `native` refusal, the arity checks, and the
+   * namespace-mint guard. Everything about the ROW is decided by `defineCell`.
+   *
+   * What the two doors did DIFFERENTLY and that survived as explicit parameters
+   * of the one door (rather than being flattened): `rendererType` (this door
+   * authors `iframe`/`builtin` too, `defineCell` hardcoded `frame`) and
+   * `category` (a Cell Studio cell is AUTHORED — `app-specific` — where a
+   * package cell is `installed`).
    */
   upsert: workspaceProcedure
     .input(WidgetUpsertSchema)
     .mutation(async ({ ctx, input }) => {
-      requireUserId(ctx.userId);
+      const userId = requireUserId(ctx.userId);
       requireAdminRole(ctx.workspaceRole);
+      const workspaceId = ctx.workspaceId!;
 
-      if (input.rendererType === "iframe" && !input.rendererSource) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "rendererSource is required for iframe widgets",
-        });
-      }
-
-      // UN-ROUTED (security): the `native` arity check below is unreachable —
-      // `rendererType: "native"` now fails schema validation with
+      // UN-ROUTED (security): the `native` arity check is unreachable —
+      // `rendererType: "native"` fails schema validation with
       // NATIVE_RENDERER_REJECTED and is stripped from the parsed type.
-      // DO-NOT-REVIVE-AS-IS.
+      // DO-NOT-REVIVE-AS-IS. `bundleSource` therefore has no producer on this
+      // path at all any more, and `defineCell` has no slot for one.
       //
-      //   if (input.rendererType === "native" && !input.source) {
-      //     throw new TRPCError({
-      //       code: "BAD_REQUEST",
-      //       message: "source (JSX/TSX) is required for native widgets",
-      //     });
-      //   }
-
-      if (input.rendererType === "frame" && !input.rendererSource) {
+      // Every remaining mechanism this door writes carries its own renderer, so
+      // the arity check is now one rule instead of a per-type ladder.
+      if (!input.rendererSource) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "rendererSource (raw ESM code) is required for frame widgets",
+          message: `rendererSource is required for ${input.rendererType} widgets`,
         });
       }
 
-      // UN-ROUTED (security) — the native compile step. `bundleSource` is now
-      // always undefined from this door, so the row it writes below can never
-      // carry an executable bundle. DO-NOT-REVIVE-AS-IS: compiling the source is
-      // harmless, but the ONLY consumer of `bundleSource` was the browser's
-      // top-level-document `<script>` loader. See NATIVE_RENDERER_REJECTED.
-      // `compileWidgetSource` itself is kept on disk (utils/widget-compiler.ts).
-      //
-      //   if (input.rendererType === "native" && input.source) {
-      //     try {
-      //       bundleSource = await compileWidgetSource(input.source);
-      //     } catch (err) {
-      //       throw new TRPCError({
-      //         code: "BAD_REQUEST",
-      //         message: `Widget compilation failed: ${...}`,
-      //       });
-      //     }
-      //   }
-      //
-      // Frame widgets store rendererSource as-is (raw ESM) — no compile step.
-      const bundleSource: string | undefined = undefined;
+      // Provenance floor — see `assertMayWriteNamespacedTypeKey`. Runs BEFORE
+      // the write so a forged `cell:`/`generated:` key never reaches the row.
+      await assertMayWriteNamespacedTypeKey(input.typeKey, workspaceId);
 
+      try {
+        await defineCell({
+          typeKey: input.typeKey,
+          workspaceId,
+          name: input.name,
+          description: input.description ?? null,
+          icon: input.icon,
+          // The two REAL differences, now explicit parameters rather than a
+          // reason to keep a second door.
+          rendererType: input.rendererType,
+          category: input.category ?? "app-specific",
+          rendererSource: input.rendererSource,
+          contentKind: input.contentKind,
+          // Validated inside `defineCell` (`validateDeps`) — the whole point of
+          // the consolidation.
+          deps: input.deps,
+          // `undefined` here is SILENCE, not "clear": `defineCell` leaves a
+          // stored affinity untouched, and normalises `[]` → null, so the two
+          // encodings this router used to maintain its own copy of are now
+          // decided in exactly one place.
+          viewTypes: input.viewTypes,
+          configSchema: input.configSchema,
+          defaultConfig: input.defaultConfig,
+          defaultSize: input.defaultSize,
+          minSize: input.minSize,
+          userId,
+        });
+      } catch (err) {
+        // `defineCell` throws a plain Error for a rejected dep. Surface it as
+        // BAD_REQUEST — it is the caller's payload that is wrong, and Cell
+        // Studio renders the message directly.
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.startsWith("defineCell: ")) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: message.slice("defineCell: ".length),
+          });
+        }
+        throw err;
+      }
+
+      // Re-read so the mutation keeps returning the full row it always has
+      // (its tRPC output type is unchanged). `defineCell` returns only
+      // `{ typeKey, changeType }` because that is all its other callers need.
       const db = await getDb();
       const [row] = await db
-        .insert(widgetDefinitions)
-        .values({
-          typeKey: input.typeKey,
-          workspaceId: ctx.workspaceId!,
-          name: input.name,
-          description: input.description,
-          icon: input.icon,
-          category: input.category ?? "app-specific",
-          rendererType: input.rendererType,
-          ...(input.contentKind && { contentKind: input.contentKind }),
-          rendererSource: input.rendererSource,
-          source: input.source,
-          bundleSource,
-          deps: input.deps ?? {},
-          configSchema: input.configSchema,
-          defaultConfig: input.defaultConfig ?? {},
-          defaultSize: input.defaultSize ?? { w: 6, h: 4 },
-          minSize: input.minSize,
-          ...(input.viewTypes !== undefined && {
-            // `!== undefined`, not truthiness: `[]` is truthy in JS, so the old
-            // guard wrote `[]` where `defineCell`'s `normalizeViewTypes` maps
-            // `[]` → null — two encodings of "no affinity" in one column.
-            // Normalised here the same way so both write doors agree.
-            viewRendererViewTypes: normalizeViewTypesForUpsert(input.viewTypes),
-          }),
-          isActive: true,
-        })
-        .onConflictDoUpdate({
-          target: [widgetDefinitions.typeKey, widgetDefinitions.workspaceId],
-          set: {
-            name: input.name,
-            description: input.description ?? null,
-            icon: input.icon ?? null,
-            category: input.category ?? "app-specific",
-            rendererType: input.rendererType,
-            ...(input.contentKind && { contentKind: input.contentKind }),
-            rendererSource: input.rendererSource ?? null,
-            source: input.source ?? null,
-            bundleSource: bundleSource ?? null,
-            deps: input.deps ?? {},
-            configSchema: input.configSchema,
-            defaultConfig: input.defaultConfig ?? {},
-            ...(input.defaultSize && { defaultSize: input.defaultSize }),
-            ...(input.minSize && { minSize: input.minSize }),
-            ...(input.viewTypes !== undefined && {
-              // `!== undefined`, not truthiness: `[]` is truthy in JS, so the old
-              // guard wrote `[]` where `defineCell`'s `normalizeViewTypes` maps
-              // `[]` → null — two encodings of "no affinity" in one column.
-              // Normalised here the same way so both write doors agree.
-              viewRendererViewTypes: normalizeViewTypesForUpsert(
-                input.viewTypes
-              ),
-            }),
-            isActive: true,
-            updatedAt: new Date(),
-          },
-        })
-        .returning();
+        .select()
+        .from(widgetDefinitions)
+        .where(
+          and(
+            eq(widgetDefinitions.typeKey, input.typeKey),
+            eq(widgetDefinitions.workspaceId, workspaceId)
+          )
+        )
+        .limit(1);
 
       return row;
     }),

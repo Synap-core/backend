@@ -41,6 +41,11 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
+import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
+import {
+  expectedOutputWireSchema,
+  mergeExpectedOutputs,
+} from "../services/focus-sessions/update-session.js";
 import {
   addSessionBlocker,
   removeSessionBlocker,
@@ -90,12 +95,11 @@ import { displayNameForUser } from "./proposals/display.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
-const expectedOutputItemSchema = z.object({
-  kind: z.string(),
-  label: z.string(),
-  icon: z.string().optional(),
-  status: z.enum(["pending", "done"]).optional(),
-});
+// The ONE wire shape for a declared deliverable, imported rather than
+// re-declared: a narrower local copy STRIPS the server-owned slot fields
+// (`delegatedTo`, `returnedReason`, `satisfiedByProposalId`, …) out of any
+// array a client echoes back, before `mergeExpectedOutputs` can carry them.
+const expectedOutputItemSchema = expectedOutputWireSchema;
 
 // DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
 // never hand-mirrored: a new `focus_sessions.status` value reaches this filter
@@ -891,8 +895,17 @@ export const focusSessionsRouter = router({
         set.correlationId = patch.correlationId;
       if (patch.goal !== undefined) set.goal = patch.goal;
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
+      // Merge, never assign: the surfaces that patch this list read it, edit
+      // one slot, and send the whole array back — so a wholesale assignment
+      // erased every server-owned field (`delegatedTo`, `returnedReason`, the
+      // `satisfiedByProposalId` lineage) the client did not echo. ONE merge,
+      // shared with the MCP + Hub REST doors (`mergeExpectedOutputs`), so the
+      // three cannot disagree about what a patch destroys.
       if (patch.expectedOutputs !== undefined)
-        set.expectedOutputs = patch.expectedOutputs;
+        set.expectedOutputs = mergeExpectedOutputs(
+          (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
+          patch.expectedOutputs
+        );
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
 
@@ -924,7 +937,10 @@ export const focusSessionsRouter = router({
           if (patch.progress !== undefined) extra.progress = patch.progress;
           if (patch.goal !== undefined) extra.goal = patch.goal;
           if (patch.expectedOutputs !== undefined)
-            extra.expectedOutputs = patch.expectedOutputs;
+            extra.expectedOutputs = mergeExpectedOutputs(
+              (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
+              patch.expectedOutputs
+            );
           if (Object.keys(extra).length > 1) {
             const [merged] = await db
               .update(focusSessions)
@@ -1274,6 +1290,74 @@ export const focusSessionsRouter = router({
         });
       }
       return { ok: true as const, outputId };
+    }),
+
+  /**
+   * DELEGATE one declared deliverable to an agent — the verb a slot never had.
+   *
+   * Composed entirely from existing doors (see
+   * `services/focus-sessions/delegate-output.ts` for the order and the reasons):
+   * the roster append, the ONE message door, the ONE turn starter, and the
+   * row-locked `expectedOutputs` write. It stamps `delegatedTo`/`delegatedAt`
+   * and NEVER `status` — a delegation is the moment the work has not been done.
+   *
+   * Ungoverned on purpose, exactly like `update` and `attachOutput` above:
+   * `protectedProcedure` IS the person, asking on their own session.
+   */
+  delegateOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        /** The declared `expectedOutputs[].label` to hand over. */
+        expectedLabel: z.string().min(1).max(500),
+        /**
+         * Specialist agent type for the turn. Omitted ⇒ the orchestrator
+         * ("meta"), which is `triggerAutoRespond`'s own default — not a second
+         * one declared here.
+         */
+        agentType: z.string().min(1).max(100).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await delegateExpectedOutput({
+        sessionId: input.sessionId,
+        userId: ctx.userId,
+        expectedLabel: input.expectedLabel,
+        agentType: input.agentType,
+      });
+      switch (result.status) {
+        case "not_found":
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.sessionId} not found`,
+          });
+        case "unknown_label":
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `This session declares no output labelled "${input.expectedLabel}"`,
+          });
+        case "already_done":
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `"${input.expectedLabel}" is already delivered`,
+          });
+        case "no_channel":
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Could not open a room for this session",
+          });
+        default:
+          return {
+            ok: true as const,
+            expectedLabel: result.expectedLabel,
+            kind: result.kind,
+            agentType: result.agentType,
+            channelId: result.channelId,
+            messageId: result.messageId,
+            triggered: result.triggered,
+            agentAttached: result.agentAttached,
+          };
+      }
     }),
 
   /**

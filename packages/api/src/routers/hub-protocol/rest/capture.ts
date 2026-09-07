@@ -20,6 +20,7 @@ import { db } from "@synap/database";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
+import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
 import {
   submitCaptureGraph,
   CaptureGraphValidationError,
@@ -659,10 +660,33 @@ export function registerCaptureRoutes(app: HubHono): void {
         // `status: "awaiting_confirmation"` alone is not the full answer.
         // Optional fields stay spread-if-present so an absent one keeps
         // meaning "nothing to report" rather than an explicit null.
+        //
+        // …and the literal was the remaining half of that same defect: this
+        // door hardcoded `awaiting_confirmation` on a path whose OWN comment
+        // says the outcome is not constant. Confirm mode PERSISTS the plan and
+        // usually leaves it pending — but the same call can come back already
+        // materialized (idempotent replay of a prior applied graph, or a
+        // governance auto-approve), and it can materialize PARTIALLY: entities
+        // land, edges are a non-atomic follow-up and an unresolvable relation
+        // type fails alone. `awaiting_confirmation` in either of those cases
+        // tells the caller to go confirm something that already happened, and
+        // hides the failed edges entirely.
+        //
+        // So the word is DERIVED from the receipt, through the one door
+        // (`captureStatusForReceiptState`) — never from `graph.applied`, which
+        // is the routing flag ("did this terminal materialize?") and stays true
+        // for a graph whose every edge failed. `pending` keeps THIS door's
+        // existing word, `awaiting_confirmation` (confirm mode's contract: the
+        // server holds the plan and the human's `proposals.approve` is the
+        // confirmation); a materialized receipt reports `applied` / `partial`.
+        const structureStatus =
+          graph.writeReceipt.state === "pending"
+            ? "awaiting_confirmation"
+            : captureStatusForReceiptState(graph.writeReceipt.state);
         return c.json({
           proposalId: graph.proposalId,
           reviewUrl: graph.reviewUrl,
-          status: "awaiting_confirmation",
+          status: structureStatus,
           summary: graph.summary,
           entityCount: graph.entityCount,
           relationCount: graph.relationCount,

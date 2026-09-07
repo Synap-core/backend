@@ -1,0 +1,43 @@
+-- Migration: 0249_widget_definitions_external_hosts.sql
+--
+-- Give a PACKAGE-BORNE cell somewhere to declare the origins its sandboxed
+-- frame may reach.
+--
+-- The runtime half of this has been built and correct for a long time:
+-- `buildFrameCsp` (`@synap-core/cell-runtime`) composes the per-frame CSP and
+-- adds declared origins to `connect-src` / `img-src` and to nothing else, so a
+-- cell with an empty list is physically unable to open a fetch/XHR/WebSocket to
+-- any origin. What was missing was the SUPPLY CHAIN: nothing between a
+-- published package and that composer could carry a declaration. The browser's
+-- only live producer read the list off the BENTO BLOCK'S STORED CONFIG, which
+-- meant anything able to write a block config could widen a frame's
+-- `connect-src` — two sources for one CSP, and the wrong one authoritative.
+--
+-- This column is the one authoritative source. It is written ONLY by the
+-- package-install path (`installCellFromDefinition` → `defineCell`), never by
+-- the AI cell-define door: an agent must not be able to grant its own frame
+-- egress, and a human approving an install is shown the list first
+-- (`EgressDisclosure` in the install dialog).
+--
+-- jsonb (not text[]): every other structured column on this table is jsonb
+-- (`deps`, `config_schema`, `default_config`, `default_size`, `min_size`,
+-- `view_renderer_view_types`), and the value crosses the same three JSON seams
+-- verbatim — the CP package definition, the sync ingest body, and the tRPC row
+-- the browser reads. Drizzle hands it back as a plain JS array.
+--
+-- NULLABLE with no default, and NULL is MEANINGFUL: "declares no egress" ⇒ the
+-- frame stays fully network-contained (the pre-existing, safe behaviour). Every
+-- existing row is untouched, and an upsert that says nothing about egress
+-- leaves a stored list alone (omit-is-silence, the same rule
+-- `view_renderer_view_types` / `content_kind` / `version` follow) so a
+-- source-only re-push cannot silently erase a declared grant.
+--
+-- NOT accompanied by a reconciler or a drift marker. Cells have neither, by
+-- design (see the `packageVersion` docstring in `install-cell-from-definition.ts`),
+-- so a re-published change to this list will NOT converge onto an installed
+-- row until the cell reconciler exists. That is honest under-convergence and it
+-- is stamped nowhere: no marker in this change claims a convergence that never
+-- runs.
+
+ALTER TABLE "widget_definitions"
+  ADD COLUMN IF NOT EXISTS "external_hosts" jsonb;

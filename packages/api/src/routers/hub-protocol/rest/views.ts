@@ -159,6 +159,7 @@ export function registerViewsRoutes(app: HubHono): void {
       agentUserId?: string;
       reasoning?: string;
       sourceMessageId?: string;
+      expectedLabel?: string;
     };
     // Service-key workspace confinement (Item 3): pin/clamp before the workspace
     // reaches resolveActingContext (and thus the re-supplied createView input).
@@ -198,6 +199,7 @@ export function registerViewsRoutes(app: HubHono): void {
         metadata: body.metadata,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
+        ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
       return c.json(result);
     } catch (err) {

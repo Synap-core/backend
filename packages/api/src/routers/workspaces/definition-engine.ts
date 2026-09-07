@@ -1578,6 +1578,14 @@ export const definitionEngineProcedures = {
             postBody.automations?.length ||
             postBody.actionPlacements?.length
           );
+          // A1 parity: the reconcile-existing and compose-overlay branches
+          // above both summarize `applyPackagePostWorkspace`'s per-item result
+          // bag into `InstallLayerReport[]` through the ONE shared derivation
+          // (`summarizePostWorkspaceLayers`) so a partial failure is REPORTED,
+          // not just logged. This — the fresh-create branch, the most-travelled
+          // path — discarded the bag entirely and always returned `layers`
+          // undefined. Same shape, same derivation, now reported here too.
+          const layers: InstallLayerReport[] = [];
           if (hasPostWork) {
             try {
               const post = await applyPackagePostWorkspace({
@@ -1587,6 +1595,7 @@ export const definitionEngineProcedures = {
                 agentUserId: (ctx as { agentUserId?: string }).agentUserId,
                 scopes: [],
               });
+              layers.push(...summarizePostWorkspaceLayers(post));
               logger.info(
                 { workspaceId: result.workspaceId, layers: Object.keys(post) },
                 "createFromDefinition: post-workspace layers applied (shared door)"
@@ -1670,6 +1679,9 @@ export const definitionEngineProcedures = {
             // Surface any resolved `require`/non-workspace deps so the browser
             // post-install confirmation can show what was installed alongside.
             dependencies: resolvedDependencies,
+            // A1 parity — uniform key, never a conditional spread. See the
+            // sibling branches above (`reconcileExisting`, compose-overlay).
+            layers: layers.length > 0 ? layers : undefined,
           };
         }
       ); // close withWorkspaceProposalIdLock

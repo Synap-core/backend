@@ -80,6 +80,22 @@ export interface CreateRuleGovernedInput {
    * which is legitimate and unchanged.
    */
   sentence?: unknown;
+  /**
+   * DRAFT — save the rule WITH ITS HOLES and compile nothing.
+   *
+   * The founder's decision (Zapier's model, unanimous across the prior art):
+   * an incomplete rule must be able to EXIST with visible holes and must not be
+   * able to FIRE. Ours is not symmetrical with Zapier's, though: an unresolved
+   * WHERE predicate here does not narrow-and-wait, it is DROPPED by
+   * `toBackendTrigger` and WIDENS the rule. So a draft may not be "compiled but
+   * switched off" — it must produce no automation at all. See the `draft` note
+   * on `RuleMetadata` for why the absence of the artifact is the interlock.
+   *
+   * The sentence is still SHAPE-checked (an unreadable blob is refused, because
+   * a stored sentence nobody can parse is a rule that can never be activated) —
+   * it is only the COMPILER that is not run.
+   */
+  draft?: boolean;
   /** Automations this rule produced. */
   automationIds?: string[];
   /** Folded into the gate payload for observability. */
@@ -152,8 +168,16 @@ function isBehaviouralShape(shape: RuleShape): boolean {
  * Snapshot each behaviour automation's flowDefinition AT CREATION so a reader
  * can later detect that a directly-edited automation no longer matches its
  * rule. Detection only — nothing reconciles.
+ *
+ * EXPORTED for `./update.ts`, which must re-snapshot after it has recompiled.
+ * That is the ONLY honest way for an update to clear `diverged`: the snapshot is
+ * re-earned by hashing an automation this call actually rewrote from the rule's
+ * own sentence. Stamping the automation's CURRENT hash without recompiling would
+ * be the durable-lie shape this repo names in `.claude/rules/backend-rules.md` —
+ * a marker asserting a convergence that never ran, which then short-circuits the
+ * divergence reader forever.
  */
-async function snapshotBehaviours(
+export async function snapshotBehaviours(
   automationIds: string[]
 ): Promise<RuleBehaviourRecord[]> {
   if (automationIds.length === 0) return [];
@@ -197,6 +221,7 @@ export async function createRuleGoverned(
   // ── BEHAVIOUR: compile the sentence, or REFUSE ──────────────────────────
   // Before the gate, because compiling is PURE and a rule that cannot run must
   // not cost the owner a proposal to review. A refusal names the clause.
+  const draft = input.draft === true;
   let compiled: ReturnType<typeof compileRuleSentence> | null = null;
   if (input.sentence !== undefined && input.sentence !== null) {
     const sentence = readRuleSentence(input.sentence);
@@ -211,16 +236,27 @@ export async function createRuleGoverned(
         },
       };
     }
-    compiled = compileRuleSentence(sentence);
-    if (!compiled.ok) {
-      // The whole point of this wave: an intent that describes something
-      // running is never persisted as prose that cannot run. Nine automation
-      // products were surveyed and not one stores an enabled-but-inert rule.
-      return {
-        status: "denied",
-        reason: compiled.failure.reason,
-        failure: compiled.failure,
-      };
+    // ── THE DRAFT INTERLOCK ────────────────────────────────────────────
+    // A draft is NOT compiled. Not "compiled and left inactive" — not compiled
+    // at all, so no `triggerConfig.filters` is ever built from a sentence whose
+    // WHERE may contain an operator the runtime cannot evaluate, and no
+    // `automations` row exists for a later status flip to arm. Activation
+    // (`updateRuleGoverned` with `draft: false`) is what runs the compiler, and
+    // it refuses by clause exactly as a direct create does.
+    if (draft) {
+      compiled = null;
+    } else {
+      compiled = compileRuleSentence(sentence);
+      if (!compiled.ok) {
+        // The whole point of this wave: an intent that describes something
+        // running is never persisted as prose that cannot run. Nine automation
+        // products were surveyed and not one stores an enabled-but-inert rule.
+        return {
+          status: "denied",
+          reason: compiled.failure.reason,
+          failure: compiled.failure,
+        };
+      }
     }
   }
 
@@ -241,6 +277,11 @@ export async function createRuleGoverned(
   const needsBehaviour: RuleBehaviourGap | undefined =
     isBehaviouralShape(routing.shape) &&
     !routing.oneShot &&
+    // A DRAFT is deliberately incomplete — that is the whole point of it.
+    // Reporting "this describes something that should run but nothing will" for
+    // a rule the author explicitly saved as unfinished is noise that trains
+    // people to ignore the signal where it is real.
+    !draft &&
     automationIds.length === 0 &&
     // A compiled sentence IS the behaviour — it becomes an automation below.
     compiled === null
@@ -265,6 +306,11 @@ export async function createRuleGoverned(
       intent,
       scope: input.scope,
       ...(expiresAt ? { expiresAt } : {}),
+      // Replay sufficiency: a proposal filed for a DRAFT must approve INTO a
+      // draft. Dropping this from the payload would make the approval replay
+      // compile a sentence the author had explicitly not finished — an approver
+      // clicking "approve" on an unfinished rule would arm it.
+      ...(draft ? { draft: true } : {}),
       ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
       automationIds,
       routing,
@@ -272,7 +318,7 @@ export async function createRuleGoverned(
       // create, and the automation is built from the SENTENCE, not from the
       // prose. Storing only `intent` would approve a rule whose behaviour the
       // reviewer saw and the replay could not reproduce.
-      ...(compiled ? { sentence: input.sentence } : {}),
+      ...(compiled || draft ? { sentence: input.sentence } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
     },
   });
@@ -395,6 +441,7 @@ export async function createRuleGoverned(
     intent,
     scope: input.scope,
     ...(expiresAt ? { expiresAt } : {}),
+    ...(draft ? { draft: true } : {}),
     ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
     behaviours,
     routing,

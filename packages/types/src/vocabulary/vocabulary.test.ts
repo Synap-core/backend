@@ -573,3 +573,21 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural(null)).toBe("");
   });
 });
+
+describe("withdraw — the mood trap", () => {
+  it("resolves BOTH moods, so a receipt never reads present-imperative", () => {
+    // `STATUS_LABELS.withdrawn` existed but `ACTION_VERBS.withdraw` did not, so
+    // `resolveActionLabel` fell through to `humanizeToken`, which ignores the
+    // mood argument entirely and returned "Withdraw" for a PAST-tense receipt.
+    // The browser's delegation sentence ("… withdrawn by Scout") had to
+    // hand-write the literal to avoid it — which the vocabulary rule forbids.
+    expect(resolveActionLabel("withdraw", "imperative")).toBe("Withdraw");
+    expect(resolveActionLabel("withdraw", "past")).toBe("Withdrawn");
+  });
+
+  it("the two moods are DIFFERENT — the bug was them collapsing to one", () => {
+    expect(resolveActionLabel("withdraw", "past")).not.toBe(
+      resolveActionLabel("withdraw", "imperative")
+    );
+  });
+});

@@ -226,6 +226,29 @@ export const widgetDefinitions = pgTable(
      */
     viewRendererViewTypes: jsonb("view_renderer_view_types").$type<string[]>(),
 
+    /**
+     * Origins this cell's SANDBOXED FRAME is allowed to reach, e.g.
+     * `["https://api.vendor.com"]`. Declared by the PACKAGE that ships the cell
+     * (`PackageCellDef.externalHosts`) and carried verbatim to
+     * `buildFrameCsp` in `@synap-core/cell-runtime`, which adds them to the
+     * per-frame `connect-src` / `img-src` and to NOTHING else.
+     *
+     * NULL / empty = the frame is network-contained: `connect-src` names no
+     * external origin, so fetch/XHR/WebSocket/EventSource out of the cell are
+     * all refused and its only data path is the governed host bridge. That is
+     * the default and the safe state; this column only ever WIDENS it.
+     *
+     * Written by the package-install path only (`installCellFromDefinition` →
+     * `defineCell`). Deliberately NOT accepted by the AI cell-define door
+     * (`POST /cells/define`, `synap_create_cell`): egress is a grant a human
+     * approves at install time, after `EgressDisclosure` has shown them the
+     * list — an agent authoring a cell must not be able to widen its own frame.
+     *
+     * Changing the list on an existing row DEMOTES `trust_level` back to
+     * `generated`, mirroring `allowedHostsChanged` for skills. See migration 0249.
+     */
+    externalHosts: jsonb("external_hosts").$type<string[]>(),
+
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
       .notNull(),

@@ -88,6 +88,13 @@ export function registerCellsRoutes(app: HubHono): void {
           // `contentKind` without advertising it. Found by dogfooding the
           // approved probe cell on 2026-09-05.
           contentKind: r.contentKind ?? null,
+          // The frame's declared egress (0249). Projected for the same
+          // "accepting is not producing" reason `contentKind` is: the pod
+          // PERSISTS this list, and a read door that omits it leaves an
+          // operator unable to tell a connected cell from a contained one —
+          // which is the whole question this column exists to answer. Null =
+          // declares none = the frame reaches no external origin.
+          externalHosts: r.externalHosts ?? null,
         }))
       );
     } catch (err) {

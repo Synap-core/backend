@@ -57,6 +57,8 @@ export const CreateViewRequestSchema = z
     agentUserId: z.string().optional(),
     reasoning: z.string().optional(),
     sourceMessageId: z.string().optional(),
+    /** The declared session-output slot this view fulfils, by label. */
+    expectedLabel: z.string().optional(),
   })
   .openapi("CreateViewRequest");
 

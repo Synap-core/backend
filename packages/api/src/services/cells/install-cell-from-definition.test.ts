@@ -139,6 +139,45 @@ describe("installCellFromDefinition", () => {
     expect(callArg(1).contentKind).toBeUndefined();
   });
 
+  it("threads externalHosts through — the frame's declared egress grant", async () => {
+    // The list the browser composes into the frame's `connect-src`. Dropped
+    // here, a cell a human approved WITH a disclosed host list installs
+    // network-contained: every request it exists to make fails as a CSP
+    // violation inside an opaque frame that reports to no surface.
+    await installCellFromDefinition({
+      definition: { ...BASE, externalHosts: ["https://api.vendor.com"] },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().externalHosts).toEqual(["https://api.vendor.com"]);
+  });
+
+  it("passes externalHosts as UNDEFINED when unstated, never []", async () => {
+    // Same omit-is-silence rule as viewTypes, and it matters MORE here: `[]`
+    // means "revoke", so a source-only re-push that said nothing about egress
+    // would silently break an installed connected cell.
+    await installCellFromDefinition({
+      definition: BASE,
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().externalHosts).toBeUndefined();
+
+    // An EXPLICIT empty array is a real revocation and must reach the door.
+    await installCellFromDefinition({
+      definition: { ...BASE, externalHosts: [] },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg(1).externalHosts).toEqual([]);
+  });
+
   it("an explicit cellKey overrides the definition's own key", async () => {
     await installCellFromDefinition({
       definition: BASE,

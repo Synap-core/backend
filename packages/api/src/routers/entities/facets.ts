@@ -244,6 +244,24 @@ export const facetProcs = {
         // workspace-aware resolution on the granted path.
       }
 
+      // The ACTOR, resolved once for this door.
+      //
+      // `input.agentUserId` is the agent's own inline door (hub/MCP).
+      // `ctx.agentUserId` is the DELEGATED door: `applyProposalApproval` wires
+      // `facetCaller: entityCaller`, i.e. the composite caller whose `userId`
+      // is the APPROVER and whose `agentUserId` is the agent that authored the
+      // proposal. Reading `input` alone made the two AUDIT EVENTS attribute an
+      // agent's facet attach to the approving human — while the facet ROW below
+      // named the agent. A row and its own events disagreeing about who acted
+      // is exactly the fork this wave exists to close: fixed for relations,
+      // missed here.
+      //
+      // ATTRIBUTION ONLY — deliberately NOT substituted into the permission
+      // gate, where a re-gate would re-propose an already-approved write (the
+      // same split `entities/create.ts` documents).
+      const actingAgentUserId =
+        input.agentUserId ?? ctx.agentUserId ?? undefined;
+
       // 1. .requested
       const requestedEvent = await auditLog({
         subjectType: "entity_facet",
@@ -251,7 +269,7 @@ export const facetProcs = {
         phase: "requested",
         subjectId: input.entityId,
         userId: ctx.userId,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgentUserId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         data: {
@@ -329,7 +347,17 @@ export const facetProcs = {
           contextEntityId: input.contextEntityId ?? null,
           status: input.status,
           properties: input.properties,
-          agentUserId: input.agentUserId,
+          // Provenance (Wave B3) — the ACTOR, resolved from the input (the
+          // agent's own inline door, which names itself) OR the context (the
+          // DELEGATED door: `applyProposalApproval`'s composite caller, whose
+          // `userId` is the APPROVER and whose `agentUserId` is the agent that
+          // authored the proposal). Reading `input` alone stamped every
+          // approved facet attach `created_by_kind = 'human'`, which is the
+          // approver impersonating the agent. Attribution only — the governance
+          // gate above deliberately keeps reading `input.agentUserId`, since
+          // re-gating an already-approved write would re-propose it.
+          agentUserId: actingAgentUserId,
+          sourceProposalId: ctx.governanceProposalId,
           correlationId,
         },
         ctx.userId
@@ -342,7 +370,7 @@ export const facetProcs = {
         phase: "completed",
         subjectId: facet.id,
         userId: ctx.userId,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgentUserId,
         // Governance linkage (0231): auto-approve receipt (perm is granted here).
         proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
         workspaceId: governanceWorkspaceId,

@@ -24,8 +24,10 @@ const {
   mockGov,
   mockVerifyPermission,
   sessionRow,
+  governanceRow,
   updatedSets,
   mockTxUpdate,
+  mockFindFirst,
 } = vi.hoisted(() => ({
   mockDbInsert: vi.fn(),
   mockDbSelect: vi.fn(),
@@ -35,6 +37,11 @@ const {
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
   // The session row `satisfyExpectedOutputs` locks FOR UPDATE.
   sessionRow: { current: [] as unknown[] },
+  // The session row the GATE reads (`loadSessionGovernanceContext`) to derive
+  // force-propose governance and the slot claim. A different read from the
+  // locked one above, so it is mocked separately on purpose.
+  governanceRow: { current: undefined as unknown },
+  mockFindFirst: vi.fn(),
   // Everything the door writes back, in order.
   updatedSets: [] as Record<string, unknown>[],
   mockTxUpdate: vi.fn(),
@@ -88,7 +95,7 @@ vi.mock("@synap/database", async (importOriginal) => {
       select: mockDbSelect,
       transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(tx)),
       query: {
-        focusSessions: { findFirst: vi.fn().mockResolvedValue(undefined) },
+        focusSessions: { findFirst: mockFindFirst },
       },
     },
     insertPendingProposal: vi.fn(),
@@ -146,11 +153,26 @@ const openSessionWith = (outputs: unknown[]) => [
   { expectedOutputs: outputs, status: "active", closedAt: null },
 ];
 
+/** What the gate's own session read returns — metadata + the declared slots. */
+const declares = (outputs: unknown[]) => ({
+  metadata: null,
+  expectedOutputs: outputs,
+});
+
+/** The receipt row the gate inserted, as the mock captured it. */
+const receiptData = () =>
+  (
+    mockValues.mock.calls[0]?.[0] as
+      { data: Record<string, unknown> } | undefined
+  )?.data;
+
 describe("auto-approve satisfies the session's expected outputs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     updatedSets.length = 0;
     sessionRow.current = [];
+    governanceRow.current = undefined;
+    mockFindFirst.mockImplementation(async () => governanceRow.current);
     mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
     mockValues.mockReturnValue({ returning: mockReturning });
     mockDbInsert.mockImplementation(() => ({ values: mockValues }));
@@ -191,6 +213,159 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     });
     // One approval is evidence for exactly one deliverable.
     expect(written[1]).not.toHaveProperty("status");
+  });
+
+  it("a claimed slot is stamped over the first of its kind, and stored on the receipt", async () => {
+    // THE LIVE DEFECT: two owed documents. `data.title` names the SECOND one
+    // exactly, so that is the deliverable this approval is evidence for.
+    const slots = [
+      { kind: "document", label: "Spec" },
+      { kind: "document", label: "Summary" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: { id: "doc-xyz", title: "Summary" },
+    });
+
+    // The claim is durable on the receipt, not merely a local.
+    expect(receiptData()).toMatchObject({ expectedLabel: "Summary" });
+
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[1]).toMatchObject({
+      label: "Summary",
+      status: "done",
+      satisfiedByProposalId: "receipt-1",
+    });
+    expect(written[0]).not.toHaveProperty("status");
+  });
+
+  it("stores the DECLARED casing, matching case-insensitively", async () => {
+    const slots = [{ kind: "document", label: "Summary" }];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: { id: "doc-xyz", title: "  summary " },
+    });
+
+    expect(receiptData()).toMatchObject({ expectedLabel: "Summary" });
+  });
+
+  it("writes NO claim when the change names no declared slot — a claim is never invented", async () => {
+    const slots = [
+      { kind: "document", label: "Spec" },
+      { kind: "document", label: "Summary" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: { id: "doc-xyz", title: "Untitled draft" },
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    // …and the kind guess still applies, unchanged.
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[0]).toMatchObject({ label: "Spec", status: "done" });
+  });
+
+  it("writes no claim when a PARTIAL name overlaps a slot — exact match only", async () => {
+    const slots = [{ kind: "document", label: "Summary" }];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: { id: "doc-xyz", title: "Summary of the call" },
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+  });
+
+  it("IGNORES a caller-supplied data.expectedLabel — only governance may claim a slot", async () => {
+    // The receipt spreads the gate `data` FLAT, so an agent that put
+    // `expectedLabel` in its own payload would land it on exactly the key
+    // `readProposalExpectedLabel` reads back at approval — naming its own
+    // deliverable. The claim is resolved from the SESSION ROW or not at all.
+    const slots = [
+      { kind: "document", label: "Spec" },
+      { kind: "document", label: "Summary" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: {
+        id: "doc-xyz",
+        title: "Untitled draft",
+        expectedLabel: "Summary",
+      },
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    // …and the stamp fell to the kind rung, not to the agent's own claim.
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[0]).toMatchObject({ label: "Spec", status: "done" });
+    expect(written[1]).not.toHaveProperty("status");
+  });
+
+  it("a RESOLVED claim still wins over a caller-supplied one", async () => {
+    const slots = [
+      { kind: "document", label: "Spec" },
+      { kind: "document", label: "Summary" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      // The name resolves "Summary"; the caller asks for "Spec" and is ignored.
+      data: { id: "doc-xyz", title: "Summary", expectedLabel: "Spec" },
+    });
+
+    expect(receiptData()).toMatchObject({ expectedLabel: "Summary" });
+  });
+
+  it("writes NO claim when the named slot is of another KIND", async () => {
+    // A document write whose title happens to equal a declared ENTITY slot's
+    // label. Claiming it would assert this change is that deliverable, and the
+    // selector would then refuse it anyway — a claim the approval cannot honour
+    // is worse than none.
+    const slots = [
+      { kind: "entity", label: "Client record" },
+      { kind: "document", label: "Spec" },
+    ];
+    sessionRow.current = openSessionWith(slots);
+    governanceRow.current = declares(slots);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      data: { id: "doc-xyz", title: "Client record" },
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    // Falls to the kind rung: the document slot, untouched by the label.
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[1]).toMatchObject({ label: "Spec", status: "done" });
+    expect(written[0]).not.toHaveProperty("status");
   });
 
   it("leaves outputs of another kind alone", async () => {

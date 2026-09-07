@@ -265,3 +265,98 @@ describe("handleCpCatalogSync — pagination + prune-on-complete-only", () => {
     expect(statuses).not.toContain("partial");
   });
 });
+
+/**
+ * The cell hop is the LAST place a package's install payload can lose a field
+ * before `installCellFromDefinition` reads it, and it has lost three:
+ * `viewTypes` (renderer unselectable), `contentKind` (defaulted to the `widget`
+ * slot), `externalHosts` (declared egress arrived contained). All three were
+ * the same defect — a field-by-field rebuild that dropped anything unnamed.
+ *
+ * These tests pin the STRUCTURAL fix (wholesale forward), not the three names:
+ * the third case carries a field this repo has never heard of, so re-narrowing
+ * the rebuild to any finite list fails here even for a field added later.
+ */
+describe("handleCpCatalogSync — cell definitions are forwarded WHOLESALE", () => {
+  /** Serve exactly one cell; every other kind empty so cells own the insert. */
+  function serveOneCell(cell: Record<string, unknown>) {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [cell], total: 1 });
+      if (url.includes("/api/marketplace/capabilities"))
+        return jsonRes({ capabilities: [] });
+      return jsonRes({ packages: [], total: 0 });
+    });
+  }
+
+  const BASE = {
+    key: "chart",
+    name: "Chart",
+    packageSlug: "acme",
+    code: "export default () => null",
+  };
+
+  async function syncedCellDefinition(
+    cell: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    serveOneCell(cell);
+    await handleCpCatalogSync();
+    const rows = upsertedRows() as Array<{
+      slug: string;
+      definition: Record<string, unknown>;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0].slug).toBe("acme/chart");
+    return rows[0].definition;
+  }
+
+  it("carries `contentKind` — dropped, it silently defaults the renderer slot to `widget`", async () => {
+    const def = await syncedCellDefinition({
+      ...BASE,
+      contentKind: "entity-detail",
+    });
+    expect(def.contentKind).toBe("entity-detail");
+  });
+
+  it("carries `externalHosts` — dropped, a cell's declared egress arrives contained", async () => {
+    const def = await syncedCellDefinition({
+      ...BASE,
+      externalHosts: ["https://api.example.test"],
+    });
+    expect(def.externalHosts).toEqual(["https://api.example.test"]);
+  });
+
+  it("carries `viewTypes` and the ALREADY-NAMED payload fields", async () => {
+    const def = await syncedCellDefinition({
+      ...BASE,
+      deps: { d3: "7.0.0" },
+      previewCode: "preview",
+      defaultSize: { w: 4, h: 3 },
+      configSchema: { type: "object" },
+      viewTypes: ["gallery"],
+    });
+    expect(def).toMatchObject({
+      key: "chart",
+      code: BASE.code,
+      packageSlug: "acme",
+      deps: { d3: "7.0.0" },
+      previewCode: "preview",
+      defaultSize: { w: 4, h: 3 },
+      configSchema: { type: "object" },
+      viewTypes: ["gallery"],
+    });
+  });
+
+  it("carries a field NO code in this repo names — the structural guarantee", async () => {
+    // If someone reintroduces a field-by-field rebuild, they cannot possibly
+    // name this key, so this case fails while the three above might not.
+    const def = await syncedCellDefinition({
+      ...BASE,
+      aFieldTheControlPlaneAddsTomorrow: { nested: [1, 2, 3] },
+    });
+    expect(def.aFieldTheControlPlaneAddsTomorrow).toEqual({
+      nested: [1, 2, 3],
+    });
+  });
+});

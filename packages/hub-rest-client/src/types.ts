@@ -1,5 +1,5 @@
 /**
- * @synap/hub-rest-client — Hub Protocol REST API Types
+ * @synap-core/hub-rest-client — Hub Protocol REST API Types
  *
  * Canonical TypeScript interfaces for all objects returned by the
  * Synap Hub Protocol REST API (`/api/hub/*`).
@@ -708,6 +708,14 @@ export interface FocusSessionExpectedOutput {
   claimedDone?: boolean;
   /** Lineage: the approved proposal whose apply satisfied this output. */
   satisfiedByProposalId?: string;
+  /** Agent TYPE this slot was delegated to. A delegation, never a delivery. */
+  delegatedTo?: string;
+  /** ISO timestamp of the delegation. */
+  delegatedAt?: string;
+  /** Reviewer's reason, set when a proposal claiming this slot was rejected. */
+  returnedReason?: string;
+  /** ISO timestamp of the return. */
+  returnedAt?: string;
 }
 
 /**

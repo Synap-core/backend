@@ -86,6 +86,9 @@ export const entityHandlers: McpHandlerMap = {
       // agent-key remap: the write is OWNED by the operator (userId) but
       // AUTHORED by the agent — pass agentUserId so governance proposes.
       ...(agentUserId ? { agentUserId } : {}),
+      ...(typeof args.expectedLabel === "string"
+        ? { expectedLabel: args.expectedLabel }
+        : {}),
       aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
     });
 
@@ -263,6 +266,9 @@ export const entityHandlers: McpHandlerMap = {
       ...(args.url ? { url: args.url as string } : {}),
       reasoning: "Created via MCP",
       ...(agentUserId ? { agentUserId } : {}),
+      ...(typeof args.expectedLabel === "string"
+        ? { expectedLabel: args.expectedLabel }
+        : {}),
     });
     // ATTACHMENT (the description used to claim it without doing it). The
     // link lives on `entities.documentId` — `documents.entityId` was removed —
@@ -435,6 +441,10 @@ export const entityHandlers: McpHandlerMap = {
         refId: attached.documentId,
         title: title ?? filename,
         agentUserId,
+        expectedLabel:
+          typeof args.expectedLabel === "string"
+            ? args.expectedLabel
+            : undefined,
       });
       return ok({
         entityId: attachToEntityId,
@@ -482,6 +492,8 @@ export const entityHandlers: McpHandlerMap = {
       refId: stored.fileEntityId,
       title: title ?? filename,
       agentUserId,
+      expectedLabel:
+        typeof args.expectedLabel === "string" ? args.expectedLabel : undefined,
     });
     return ok({
       fileEntityId: stored.fileEntityId,

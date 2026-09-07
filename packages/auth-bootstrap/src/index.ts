@@ -3,7 +3,7 @@
  *
  * Zero-dependency auth bootstrap for Synap data pods. The single home of the
  * two credential flows, imported by BOTH the tRPC SDK (`@synap-core/sdk`) and
- * the REST client (`@synap/hub-rest-client`):
+ * the REST client (`@synap-core/hub-rest-client`):
  *
  *   - `exchangeIssuerAssertion()` → a Kratos session token (the tRPC SDK's
  *     `sessionToken`)

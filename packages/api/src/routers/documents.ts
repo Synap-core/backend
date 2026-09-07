@@ -42,6 +42,7 @@ import {
 
 import { requireUserId } from "../utils/user-scoped.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { recordSessionArtifact } from "../services/focus-sessions/record-session-artifact.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { randomUUID } from "crypto";
@@ -105,6 +106,19 @@ const CreateDocumentSchema = z.object({
   projectId: z.string().uuid().optional(),
   /** Optional: when omitted, uses X-Workspace-Id header (workspaceLink). */
   workspaceId: z.string().uuid().optional(),
+  /**
+   * The declared session-output slot this document fulfils, exactly as declared
+   * on `focus_sessions.expectedOutputs[].label`. Forwarded to
+   * `recordSessionArtifact` below, never guessed when absent.
+   *
+   * DOOR PARITY with the Hub twin (`hub-protocol/documents.ts createDocument`),
+   * which has carried it since the Output-Loop W5 wave. Until now the HUMAN
+   * door could not claim a slot at all: a person working in a session and
+   * writing the document they were asked for produced an object the session
+   * could not join to the deliverable — the exact gap `expectedLabel` exists to
+   * close, left open on the door people actually use.
+   */
+  expectedLabel: z.string().min(1).max(500).optional(),
 });
 
 // ============================================================================
@@ -190,6 +204,21 @@ export const documentsRouter = router({
         });
 
         return [doc];
+      });
+
+      // OUTPUT LEDGER — the same writer the Hub twin and `entities.create` use.
+      // `ctx.sessionId` is the VERIFIED header handle (`resolveHubSessionHeader`
+      // rejects a session that is not the caller's), so this can only ever
+      // attribute to the caller's own session; absent ⇒ the recorder no-ops on
+      // its first line and nothing is written.
+      await recordSessionArtifact({
+        sessionId: ctx.sessionId,
+        workspaceId,
+        userId,
+        kind: "document",
+        refId: document.id,
+        title: document.title,
+        expectedLabel: input.expectedLabel,
       });
 
       return {

@@ -1,6 +1,6 @@
 {
-  "name": "@synap/hub-rest-client",
-  "version": "1.0.9",
+  "name": "@synap-core/hub-rest-client",
+  "version": "1.1.0",
   "description": "Zero-dependency TypeScript client for the Synap Hub Protocol REST API",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -16,7 +16,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "!src/**/*.test.ts"
   ],
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",

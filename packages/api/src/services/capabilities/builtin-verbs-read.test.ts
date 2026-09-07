@@ -129,6 +129,16 @@ describe("W6 read/resolve verbs — registry", () => {
     expect([...READ_ONLY_BUILTIN_VERBS].sort()).toEqual([
       // ai.generate is pure compute (no mutation) → auto-runs like the reads.
       "ai.generate",
+      // automation.recommend_health — the automation-health WARDEN. Same
+      // rationale as the three governance recommenders below: it mutates NO
+      // graph data (it files pending `automation.health_advisory` review items
+      // through the `insertPendingProposal` one door, and approving one of
+      // those writes nothing at all — it pauses and archives no automation), so
+      // the daily calibration cron must be able to auto-run it. Read-only here
+      // is a "no graph mutation, safe to auto-run" claim and NOT an
+      // authorization claim: the handler gates on `assertPodAdmin(ctx.userId)`
+      // because it scans every user's automations pod-wide.
+      "automation.recommend_health",
       "channel.resolve",
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.

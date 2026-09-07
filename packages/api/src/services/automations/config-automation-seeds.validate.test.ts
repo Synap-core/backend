@@ -15,6 +15,15 @@ import { validateFlowDefinition } from "./validate-flow.js";
  *
  * Also asserts each seeded cron automation is `status:"active"` — a `draft` cron
  * gets a null nextRunAt and NEVER fires (the exact gotcha these seeds must avoid).
+ *
+ * ...UNLESS the draft is DOCUMENTED. A cron can be deliberately quiet: seeding it
+ * `active` starts that cron in EVERY pod that installs the template, so a job
+ * nobody is doing (the Stellar grant seeds, 2026-09-07) is correctly left draft.
+ * The defect the assertion exists to catch is an UNDECLARED draft — a cron that
+ * silently never fires and nothing says why. So the rule is: a cron seed may be
+ * draft ONLY when it carries a `_note` stating that it is deliberate and what
+ * would have to be true to activate it. An undocumented draft cron still FAILS,
+ * and `active` is always fine.
  */
 
 // From this dir (packages/api/src/services/automations) up to the monorepo root
@@ -28,6 +37,8 @@ interface SeededAutomation {
   name: string;
   status?: string;
   triggerType?: string;
+  /** Author-time justification for a deliberately-quiet seed. */
+  _note?: string;
   flowDefinition: unknown;
 }
 interface SeededCapability {
@@ -75,9 +86,19 @@ describe("config automation seeds — author-valid flows", () => {
           // assertion is scoped to the trigger type it is actually about —
           // globbing the directory brought both kinds into view.
           it.skipIf(automation.triggerType !== "cron")(
-            'cron automation is seeded status:"active" (a draft never fires)',
+            'cron automation is seeded status:"active", or "draft" WITH a `_note` saying why',
             () => {
-              expect(automation.status).toBe("active");
+              if (automation.status === "active") return;
+              // Not active — the only other acceptable state is a DOCUMENTED
+              // draft. Anything else (or a draft with no `_note`) is the
+              // never-fires gotcha with nothing declaring it.
+              expect(automation.status).toBe("draft");
+              expect(
+                (automation._note ?? "").trim().length,
+                `"${automation.name}" is a DRAFT cron, so it gets a null nextRunAt and will NEVER fire. ` +
+                  `That can be deliberate — but it must be written down: add a "_note" to this automation ` +
+                  `saying it is deliberately draft, why, and what would have to be true to activate it.`
+              ).toBeGreaterThan(0);
             }
           );
         });

@@ -12,6 +12,7 @@
  *   POST   /focus-sessions/:id/complete — lifecycle close + proposal pack
  *   POST   /focus-sessions/:id/used — record capability usage link
  *   POST   /focus-sessions/:id/outputs — record an existing object as an output
+ *   POST   /focus-sessions/:id/outputs/delegate — hand a declared slot to an agent
  *   POST   /focus-sessions/:sessionId/complete-run — close running playbook_run
  *
  * Uses Drizzle directly — focusSessions lives on coreRouter, not hubProtocolRouter,
@@ -60,6 +61,11 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
+import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
+import {
+  expectedOutputWireSchema,
+  mergeExpectedOutputs,
+} from "../../../services/focus-sessions/update-session.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -73,13 +79,12 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
-const ExpectedOutputItemSchema = z.object({
-  kind: z.string(),
-  label: z.string(),
-  icon: z.string().optional(),
-  // Per-item lifecycle (defaults to "pending" when omitted). Shape-within-jsonb.
-  status: z.enum(["pending", "done"]).optional(),
-});
+// The ONE wire shape for a declared deliverable, shared verbatim with the tRPC
+// door rather than re-declared here. A narrower local copy STRIPS the
+// server-owned slot fields (`delegatedTo`, `returnedReason`,
+// `satisfiedByProposalId`, …) out of any array an agent echoes back, at the
+// PARSE — before `mergeExpectedOutputs` could carry them forward.
+const ExpectedOutputItemSchema = expectedOutputWireSchema;
 
 const FocusSessionWireSchema = z.object({
   id: z.string(),
@@ -185,6 +190,24 @@ const AttachOutputBodySchema = z.object({
    * `artifacts.workspace_id` has allowed since 0245.
    */
   workspaceId: z.string().uuid().optional(),
+});
+
+/**
+ * Delegation body. The label rides in the BODY, not the path.
+ *
+ * The obvious REST shape — `/outputs/:label/delegate` — puts a free-text human
+ * label ("Q3 board memo (draft)") into a path segment, where a slash or a `%`
+ * in a perfectly legal label becomes a routing bug and every client owes the
+ * same encoding dance. The sibling route one line up
+ * (`POST /focus-sessions/:id/outputs`) already carries `expectedLabel` in the
+ * body for exactly that reason, so this keeps ONE place a slot label is spelled
+ * on this surface. The path stays static (`/outputs/delegate`), which is also
+ * what Hono's first-match ordering wants.
+ */
+const DelegateOutputBodySchema = z.object({
+  expectedLabel: z.string().min(1).max(500),
+  /** Absent ⇒ the orchestrator, `triggerAutoRespond`'s own default. */
+  agentType: z.string().min(1).max(100).optional(),
 });
 
 const UsedCapabilityBodySchema = z.object({
@@ -343,6 +366,40 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       200: {
         description: "Recorded",
         schema: z.object({ ok: z.boolean(), outputId: z.string() }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/delegate",
+    tags: ["FocusSessions"],
+    summary: "Hand a declared deliverable to an agent",
+    description:
+      "Posts one ask in the session room, starts an agent turn for it, and " +
+      "stamps `delegatedTo`/`delegatedAt` on the named slot. Never stamps " +
+      "`status` — only an approval may do that.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: DelegateOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Delegated",
+        schema: z.object({
+          ok: z.boolean(),
+          expectedLabel: z.string(),
+          kind: z.string(),
+          agentType: z.string(),
+          channelId: z.string(),
+          messageId: z.string(),
+          triggered: z.boolean(),
+          agentAttached: z.boolean(),
+        }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -758,8 +815,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         set.correlationId = patch.correlationId;
       if (patch.goal !== undefined) set.goal = patch.goal;
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
+      // Merge, never assign — the SAME merge the tRPC and MCP doors use, so a
+      // caller that echoes back only the fields it knows about cannot erase a
+      // delegation, a reviewer's return note, or an approval's lineage.
       if (patch.expectedOutputs !== undefined)
-        set.expectedOutputs = patch.expectedOutputs;
+        set.expectedOutputs = mergeExpectedOutputs(
+          (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
+          patch.expectedOutputs
+        );
       // Shallow-merge, exactly like the `metadata` bag below — `verificationReport`
       // is the SAME shape of thing: an open JSONB bag written by SEVERAL
       // independent producers at different moments in a session's life.
@@ -1059,6 +1122,92 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * worse than an honest ungoverned ledger write. Scope + workspace membership
    * are the floor, and the row records WHO produced it either way.
    */
+  /**
+   * POST /focus-sessions/:id/outputs/delegate
+   *
+   * The Hub twin of `focusSessions.delegateOutput`. Registered BEFORE the
+   * 3-segment `/outputs` route — Hono is first-match, and keeping the more
+   * specific path first is the house rule even where the segment counts differ.
+   *
+   * OWNER-FLOORED, identically to the tRPC door: the service takes the acting
+   * user as the floor, so a caller who is not the session's owner gets 404 (the
+   * "missing" and "not yours" cases stay indistinguishable). Deliberately
+   * TIGHTER than the sibling `/outputs` route's membership floor — delegating
+   * spends an agent turn and speaks in someone's room, which is not a thing a
+   * co-member of the workspace should be able to do to another person's session.
+   */
+  app.post("/focus-sessions/:id/outputs/delegate", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = DelegateOutputBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const acting = await resolveActingContext(c, {
+        workspaceId: session.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const result = await delegateExpectedOutput({
+        sessionId: session.id,
+        userId: acting.userId,
+        expectedLabel: parsed.data.expectedLabel,
+        agentType: parsed.data.agentType,
+      });
+      switch (result.status) {
+        case "not_found":
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        case "unknown_label":
+          return c.json(
+            {
+              error: `This session declares no output labelled "${parsed.data.expectedLabel}"`,
+            },
+            404
+          );
+        case "already_done":
+          return c.json(
+            { error: `"${parsed.data.expectedLabel}" is already delivered` },
+            400
+          );
+        case "no_channel":
+          return c.json(
+            { error: "Could not open a room for this session" },
+            500
+          );
+        default:
+          return c.json({
+            ok: true as const,
+            expectedLabel: result.expectedLabel,
+            kind: result.kind,
+            agentType: result.agentType,
+            channelId: result.channelId,
+            messageId: result.messageId,
+            triggered: result.triggered,
+            agentAttached: result.agentAttached,
+          });
+      }
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.delegateOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
   app.post("/focus-sessions/:id/outputs", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);

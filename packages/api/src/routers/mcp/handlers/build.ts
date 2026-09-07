@@ -26,6 +26,21 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
+
+/**
+ * Shape of `synap_revise_proposal`'s optional `patch` — mirrors
+ * `ProposalRevisionPatch`, the type the shared revise core consumes.
+ *
+ * `kind: "inner"` edits the entity-level fields the executor reads;
+ * `kind: "envelope"` edits the top-level envelope. Both are already supported by
+ * `mergeProposalRevision`; this door simply had no way to express either, so an
+ * agent could only ever rewrite the narrative and never the payload it described.
+ */
+const REVISE_PATCH_SCHEMA = z.object({
+  kind: z.enum(["inner", "envelope"]),
+  fields: z.record(z.string(), z.unknown()),
+});
 
 export const buildHandlers: McpHandlerMap = {
   synap_create_cell: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -314,6 +329,9 @@ export const buildHandlers: McpHandlerMap = {
       profileId: args.profileId as string | undefined,
       config: args.config as Record<string, unknown> | undefined,
       ...(agentUserId ? { agentUserId } : {}),
+      ...(typeof args.expectedLabel === "string"
+        ? { expectedLabel: args.expectedLabel }
+        : {}),
     });
     return ok(result);
   },
@@ -401,10 +419,37 @@ export const buildHandlers: McpHandlerMap = {
   synap_revise_proposal: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    // `agentUserId` is the ACTING AGENT principal (RFC 8693 `act`) — the same
+    // field every other `synap_*` write handler destructures, and the ONE this
+    // one was missing. Without it the door could only ever present the HUMAN as
+    // the actor, so an agent amending its own pending proposal was gated by the
+    // human REVIEWER ladder it has no business satisfying. Enables the author
+    // rung in `mergeProposalRevision`; never fed to the reviewer ladder.
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    if (args.summary === undefined && args.reasoning === undefined) {
-      return ok({ error: "Provide at least one of: summary, reasoning" });
+    if (
+      args.summary === undefined &&
+      args.reasoning === undefined &&
+      args.patch === undefined
+    ) {
+      return ok({
+        error: "Provide at least one of: summary, reasoning, patch",
+      });
+    }
+    // `patch` lets an agent amend WHAT WILL BE CREATED, not just the narrative a
+    // human reads. Validated rather than cast: a malformed patch must be a clear
+    // error, never a silently-dropped field that leaves the summary describing a
+    // payload nobody changed.
+    let patch: ProposalRevisionPatch | undefined;
+    if (args.patch !== undefined) {
+      const parsed = REVISE_PATCH_SCHEMA.safeParse(args.patch);
+      if (!parsed.success) {
+        return ok({
+          error:
+            'Invalid patch. Expected { kind: "inner" | "envelope", fields: object }.',
+        });
+      }
+      patch = parsed.data;
     }
     // Short-id parity with the sibling `synap_reject_proposal`: accepts the
     // 8-char id `synap_list_proposals` / the CLI prints, not just a full uuid
@@ -428,7 +473,10 @@ export const buildHandlers: McpHandlerMap = {
       proposalId,
       summary: args.summary as string | undefined,
       reasoning: args.reasoning as string | undefined,
+      patch,
       actorId: userId,
+      // The author rung: authorizes an agent amending the proposal IT authored.
+      ...(agentUserId ? { actingAgentUserId: agentUserId } : {}),
     });
     return ok({ success: true, proposalId });
   },

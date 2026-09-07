@@ -24,6 +24,7 @@ const { sentinel, rowsByTable, workspaceRow } = vi.hoisted(() => ({
     links: { fromType: "f", linkType: "lt", fromId: "fid" },
     tools: {},
     skills: {},
+    widgetDefinitions: {},
   },
   rowsByTable: new Map<unknown, unknown[]>(),
   workspaceRow: {
@@ -55,6 +56,7 @@ vi.mock("@synap/database", () => {
     db: { select: () => chainFor() },
     and: (...a: unknown[]) => a,
     eq: (...a: unknown[]) => a,
+    ne: (...a: unknown[]) => a,
     inArray: (...a: unknown[]) => a,
     ProfileRepository: class {
       async getAccessibleProfiles() {
@@ -91,6 +93,7 @@ vi.mock("@synap/database", () => {
     tools: sentinel.tools,
     skills: sentinel.skills,
     workspaces: sentinel.workspaces,
+    widgetDefinitions: sentinel.widgetDefinitions,
   };
 });
 
@@ -137,6 +140,7 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
     rowsByTable.set(sentinel.links, []);
     rowsByTable.set(sentinel.capabilities, []);
     rowsByTable.set(sentinel.entityTemplates, []);
+    rowsByTable.set(sentinel.widgetDefinitions, []);
   });
 
   it("round-trips automations + playbooks into the PackageDefinition", async () => {
@@ -255,6 +259,69 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       viewSlug: "pipeline",
       title: "Pipeline",
     });
+  });
+
+  it("captures an authored Card into def.cells with its renderer fields intact", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "win-rate-gauge",
+        name: "Win Rate Gauge",
+        category: "app-specific",
+        isActive: true,
+        rendererSource: "export default function Cell() { return null; }",
+        deps: { recharts: "2.12.0" },
+        defaultSize: { w: 4, h: 3 },
+        configSchema: { type: "object" },
+        viewRendererViewTypes: ["kanban"],
+        externalHosts: null,
+        contentKind: "collection",
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells).toHaveLength(1);
+    expect(def.cells?.[0]).toEqual({
+      key: "win-rate-gauge",
+      name: "Win Rate Gauge",
+      code: "export default function Cell() { return null; }",
+      deps: { recharts: "2.12.0" },
+      defaultSize: { w: 4, h: 3 },
+      configSchema: { type: "object" },
+      viewTypes: ["kanban"],
+      contentKind: "collection",
+    });
+  });
+
+  it("excludes a cell whose typeKey is package-namespaced (cell:<pkg>:<key> = installed, not authored)", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "cell:some-package:widget",
+        name: "Someone Else's Cell",
+        category: "installed",
+        isActive: true,
+        rendererSource: "export default function Cell() { return null; }",
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells).toBeUndefined();
+  });
+
+  it("omits def.cells entirely when the workspace authored none", async () => {
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells).toBeUndefined();
   });
 
   it("fails export rather than emitting a stale primary viewId", async () => {

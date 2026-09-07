@@ -22,6 +22,16 @@
  * created object, and drops the lineage edge — refusing once the object has been
  * touched or the window has passed.
  *
+ * ONE TRANSACTION FOR THE UNDO. The archive write, the lineage-edge delete, and
+ * the goal restore are a single `db.transaction`: this is one tRPC mutation in
+ * one layer doing three writes, and a half-revert (goal restored but the created
+ * object still live, or the object archived but the lineage link still present)
+ * is worse than a revert that fails outright and can be retried. This does NOT
+ * extend to session spawn on the promote/spawn side — that stays best-effort by
+ * design (see `recordSessionSpawn` call sites): a lineage-edge failure there must
+ * never fail the whole create, and one producer runs inside pg-boss where a throw
+ * fails the entire job run.
+ *
  * RETIRE, NOT DELETE. Revert ARCHIVES the created playbook/project rather than
  * hard-deleting it. Both kinds already have an `archived` status, archiving frees
  * the name (the playbooks unique index is on non-archived rows), and an undo that
@@ -282,44 +292,50 @@ export async function revertConversion(params: {
   );
   if (!untouched) return { ok: false, reason: "object_in_use" };
 
-  // Archive the created object.
-  if (conversion.kind === "playbook") {
-    await db
-      .update(playbooks)
-      .set({ status: "archived", updatedAt: new Date() })
-      .where(eq(playbooks.id, conversion.id));
-  } else {
-    await db
-      .update(projects)
-      .set({ status: "archived", updatedAt: new Date() })
-      .where(eq(projects.id, conversion.id));
-  }
-
-  // Drop the lineage edge — the conversion did not happen.
-  await db
-    .delete(links)
-    .where(
-      and(
-        eq(links.fromType, "session"),
-        eq(links.fromId, session.id),
-        eq(links.toType, conversion.kind),
-        eq(links.toId, conversion.id),
-        eq(links.linkType, "promoted_to")
-      )
-    );
-
+  // The archive, the lineage-edge drop, and the goal restore are one
+  // transaction: a half-revert (goal restored but the created object still
+  // live, or the object archived but the lineage link still present) is
+  // worse than a revert that fails outright and can be retried.
   const restoredGoal = conversion.renamedFrom ?? session.goal;
   const revertedAt = new Date();
-  await db
-    .update(focusSessions)
-    .set({
-      goal: restoredGoal,
-      metadata: mergeSessionMetadata({
-        conversion: { ...conversion, revertedAt: revertedAt.toISOString() },
-      }),
-      updatedAt: revertedAt,
-    })
-    .where(eq(focusSessions.id, session.id));
+  await db.transaction(async (tx) => {
+    // Archive the created object.
+    if (conversion.kind === "playbook") {
+      await tx
+        .update(playbooks)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(eq(playbooks.id, conversion.id));
+    } else {
+      await tx
+        .update(projects)
+        .set({ status: "archived", updatedAt: new Date() })
+        .where(eq(projects.id, conversion.id));
+    }
+
+    // Drop the lineage edge — the conversion did not happen.
+    await tx
+      .delete(links)
+      .where(
+        and(
+          eq(links.fromType, "session"),
+          eq(links.fromId, session.id),
+          eq(links.toType, conversion.kind),
+          eq(links.toId, conversion.id),
+          eq(links.linkType, "promoted_to")
+        )
+      );
+
+    await tx
+      .update(focusSessions)
+      .set({
+        goal: restoredGoal,
+        metadata: mergeSessionMetadata({
+          conversion: { ...conversion, revertedAt: revertedAt.toISOString() },
+        }),
+        updatedAt: revertedAt,
+      })
+      .where(eq(focusSessions.id, session.id));
+  });
 
   const data = {
     sessionId: session.id,

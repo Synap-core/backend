@@ -94,6 +94,42 @@ export interface Context {
    */
   agentUserId?: string | null;
   /**
+   * INTERNAL CHANNEL — never from a request. No context factory populates it
+   * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+   * ever read this from a header or input would hand any caller an "assume my
+   * write is already approved" primitive.
+   *
+   * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+   * `applyProposalApproval`'s composite caller … it arrives solely from that
+   * internal object literal." That was FALSE on the day it was written. There
+   * are TWO producers, and the omission mattered because the field is read as a
+   * security carve-out (below), so the comment understated where that carve-out
+   * applies:
+   *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+   *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+   *     auto-apply composite caller (its existence is asserted by
+   *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+   *
+   * THE INVARIANT, stated so a third producer knows what it is signing up to:
+   * set this ONLY from an internal caller that has ALREADY obtained a
+   * governance decision for the write it is about to make. It means "a decision
+   * exists for this", not merely "an internal caller made this".
+   *
+   * Two load-bearing meanings:
+   *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+   *    APPROVER via `proposals.reviewedBy`.
+   *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+   *    re-entering the governance membrane. Without that skip the ladder falls
+   *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+   *    edge is silently never created while the receipt reports it linked.
+   *
+   * Declared here rather than cast at each reader: it was read through
+   * `(ctx as { governanceProposalId?: string })` in seven places across three
+   * files, one of which now guards the security fix above — so renaming the
+   * field would have broken all seven with ZERO typecheck signal.
+   */
+  governanceProposalId?: string;
+  /**
    * The message ID that triggered this hub-protocol request.
    * When set, proposals created during this request are linked to this message.
    */

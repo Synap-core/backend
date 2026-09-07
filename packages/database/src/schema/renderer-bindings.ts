@@ -4,11 +4,19 @@
  * `workspaces.settings.profileRenderers`, `profiles.defaultRenderers`, and the
  * deprecated `profiles.default_(list|detail|dashboard)_renderer` columns.
  *
- * INERT ON ARRIVAL. This wave lands the table and the READ rung only — there is
- * no writer, so the table is empty on every pod and
- * `ProfileResolutionService.getEffectiveRendererWithSource` resolves
- * byte-identically to before (every new rung misses; the legacy chain answers
- * unchanged). The write doors are a separate wave.
+ * ⚠️ STALENESS CORRECTED 2026-09-07. This header previously read "INERT ON
+ * ARRIVAL … there is no writer", which was true only for the wave that landed
+ * the table. **The writer now exists** and is a single door:
+ * `packages/api/src/services/profiles/set-profile-renderer.ts` — shared by the
+ * Hub REST route, the `profile/renderer.set` proposal executor, tRPC, and MCP
+ * `synap_promote_cell_to_renderer`. The table is NO LONGER empty on a pod where
+ * anyone has promoted a cell, and the new rungs below DO answer.
+ *
+ * The correction is recorded rather than silently deleted because the stale
+ * sentence actively misled a reader into believing the feature was unbuilt.
+ * (Migration `0243_renderer_bindings.sql` carries the same stale sentence and is
+ * deliberately NOT edited — an applied migration is a historical record of what
+ * ran, and it was accurate when written. This file is the live documentation.)
  *
  * A binding says: for this scope (one user, one workspace, or the whole pod),
  * for this subject (a whole KIND, or one object), for this content kind — use
@@ -27,6 +35,20 @@
  * rows a specificity-ranking resolver reads, `revoked_at` as a tombstone rather
  * than a DELETE (so a revocation is history, not an erasure), and
  * `source_proposal_id` lineage for a row minted by a proposal approval.
+ *
+ * WHOLE-KIND ONLY (decision 2026-09-07, founder). `subject_id` above can in
+ * principle pin one OBJECT rather than a whole kind — the `·object` rungs in
+ * the resolution ladder exist and stay read-side — but the write door
+ * (`setProfileRenderer` in `packages/api/src/services/profiles/
+ * set-profile-renderer.ts`) REFUSES any non-null `subject_id`, unconditionally,
+ * for every scope. Six prior-art systems were checked before deciding this:
+ * Salesforce Lightning page assignment, ServiceNow view rules, Dynamics forms,
+ * VS Code editor associations, Notion, and Backstage — every one of them stops
+ * layout/renderer assignment at the class (kind) and refuses a per-instance
+ * override. No Synap caller needs one today, and the three legacy stores this
+ * table replaces already cannot express one. The column and the read rungs
+ * stay in place — a future revisit only has to lift the write-door refusal,
+ * not re-add a column or a resolver rung.
  */
 
 import {

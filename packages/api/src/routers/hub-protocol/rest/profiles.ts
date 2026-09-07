@@ -353,6 +353,13 @@ export function registerProfilesRoutes(app: HubHono): void {
           { error: err instanceof Error ? err.message : "Forbidden" },
           403
         );
+      // BAD_REQUEST → 400 (e.g. the `subjectId` write-door refusal — renderer
+      // bindings are whole-kind only, see `set-profile-renderer.ts`).
+      if ((err as { code?: unknown })?.code === "BAD_REQUEST")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Bad request" },
+          400
+        );
       logger.error({ err }, "profiles.setRenderer failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

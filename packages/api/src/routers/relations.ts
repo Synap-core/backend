@@ -735,6 +735,10 @@ export const relationsRouter = router({
           workspaceId: anchorRow.workspaceId,
           userId: ctx.userId,
           metadata: input.metadata,
+          // Provenance (Wave B3) — same contract as `relations.create`: the
+          // agent stays the ACTOR, `ctx.userId` is the human who authorized it.
+          agentUserId: ctx.agentUserId ?? undefined,
+          sourceProposalId: ctx.governanceProposalId,
         },
         ctx.userId
       );
@@ -960,7 +964,23 @@ export const relationsRouter = router({
         // operator. Without this the caller context carries agentUserId but the
         // gate never sees it — which silently made agent-created relations
         // (e.g. the same_subject auto-connect on capture) operator-owned.
-        agentUserId: ctx.agentUserId ?? undefined,
+        //
+        // ⚠️ EXCEPT on the APPROVAL path. `applyProposalApproval` builds a
+        // composite caller that now carries `agentUserId` (the agent that
+        // authored the proposal) so the row and event can be stamped with the
+        // real actor. Feeding that same id to THIS gate would re-gate a write
+        // the human already approved: `relation.create` is not in
+        // DEFAULT_AUTO_APPROVE, so the ladder falls to `propose` and the door
+        // returns `{ status: "proposed" }` instead of creating the edge —
+        // silently, because `createRelationsFromRefs` does not throw on it.
+        // `governanceProposalId` is the internal channel only that caller sets
+        // (declared on `Context`, never wire-supplied — see its docblock).
+        // `entities/create.ts` and `facets.ts` reach the same outcome by
+        // keeping their gate on `input.agentUserId`, which the composite caller
+        // never sets; this door has no such input, so it reads the channel.
+        agentUserId: ctx.governanceProposalId
+          ? undefined
+          : (ctx.agentUserId ?? undefined),
         // Group a link/relation proposal under the agent's active run session.
         sessionId: ctx.sessionId ?? undefined,
         data: {
@@ -1011,6 +1031,21 @@ export const relationsRouter = router({
             workspaceId: relationWorkspaceId,
             userId: ctx.userId,
             metadata: input.metadata,
+            // Provenance (Wave B3) — the ACTOR survives into the edge, exactly
+            // as it does for the entity rows this edge connects. The repository
+            // has stamped all five columns since B3
+            // (repositories/relation-repository.ts:81-87) and this router has
+            // held `ctx.agentUserId` since the governance-gate fix above, but
+            // never forwarded it: EVERY agent-authored relation was written
+            // `created_by_kind = 'human'`, `agent_user_id = NULL`. An approved
+            // capture graph therefore landed with the approver's name on the
+            // edges even once the nodes named the agent.
+            // `governanceProposalId` is the internal composite-caller channel
+            // `applyProposalApproval` sets (same narrow typed read as
+            // entities/create.ts) — it recovers the approver via
+            // `proposals.reviewedBy`.
+            agentUserId: ctx.agentUserId ?? undefined,
+            sourceProposalId: ctx.governanceProposalId,
           },
           ctx.userId
         );
@@ -1069,6 +1104,11 @@ export const relationsRouter = router({
         action: "create",
         subjectId: relation.id,
         userId: ctx.userId,
+        // Actor attribution on the event spine — the sibling of the row-level
+        // provenance stamped above, and the same field `entities.create`'s
+        // `recordDomainMutation` already passes. Omitting it here made the two
+        // doors disagree about who created a graph the agent wrote in one pass.
+        agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: effectiveWorkspaceId,
         // Temporal spine (0241) — which session produced this edge. The value
         // is the SAME verified handle this router already passes to the graph
@@ -1520,6 +1560,11 @@ export const relationsRouter = router({
         action: "update",
         subjectId: relationId,
         userId: ctx.userId,
+        // Actor attribution — the sibling of the `create` stamp below. Found by
+        // the tripwire that loops EVERY `recordDomainMutation(` by name: the
+        // original fix carried the actor onto relation CREATE only, so an agent
+        // editing an edge still wrote a human-attributed event.
+        agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: effectiveWorkspaceId,
         sessionId: ctx.sessionId ?? undefined,
         logData: { metadata: input.metadata, type: input.type },
@@ -1661,6 +1706,9 @@ export const relationsRouter = router({
         action: "delete",
         subjectId: input.id,
         userId: ctx.userId,
+        // Actor attribution — see the `update` sibling above. A delete is the
+        // one an audit most needs to attribute correctly.
+        agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: effectiveWorkspaceId,
         sessionId: ctx.sessionId ?? undefined,
         logData: { id: input.id },
@@ -1887,6 +1935,11 @@ export const relationsRouter = router({
               workspaceId: relationWorkspaceId,
               userId: ctx.userId,
               metadata: rel.metadata,
+              // Provenance (Wave B3) — bulk import is the door an agent is most
+              // likely to come through, so it is the LAST place the actor may
+              // be dropped.
+              agentUserId: ctx.agentUserId ?? undefined,
+              sourceProposalId: ctx.governanceProposalId,
             },
             ctx.userId
           );

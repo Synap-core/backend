@@ -368,6 +368,31 @@ export const ADMIN_ACTIONS_RESERVED: readonly string[] = [
   "trustedIssuer.delete",
   "connector.connect",
   "connector.disconnect",
+  // Marketplace publish. NO pod-side publish door exists today: both live
+  // publishers hold the USER'S OWN Control Plane credential in the client and
+  // POST straight to `{CP}/api/packages` — the browser via `cpFetch`
+  // (browser/…/PublishWizard.tsx:721) and the CLI via its `synap login` session
+  // token (synap-cli/src/lib/cp-packages.ts:626). Neither traverses pod
+  // governance at all, and the pod holds no CP user credential to publish with
+  // (the `TODO(identity-seam)` at
+  // services/capabilities/marketplace-install.ts:144).
+  //
+  // Reserved rather than live BECAUSE of that absence — it can name no gate
+  // door, so it cannot be typed into ADMIN_ACTIONS_LIVE. It is reserved rather
+  // than omitted because publishing is OUTWARD-FACING and effectively
+  // irreversible: the catalog is public, the version is content-derived, and
+  // the soft-delist (`PATCH /api/packages/:slug` → `isPublic:false`) does not
+  // un-distribute what was already fetched. Nothing is exploitable today, but
+  // the floor becomes LOAD-BEARING the moment an agent-facing publish door
+  // lands — without it a rung-2.8 `governance_rules` row or a rung-4
+  // `autoApproveFor` entry could auto-execute a public, permanent write. That
+  // is the same LATENT FLOOR GAP reasoning as `projectMember.create` above.
+  //
+  // BOTH SPELLINGS, per this file's own precedent: the composed event key takes
+  // the RAW subjectType, and listing one spelling is how `workspace.delete`
+  // came to miss a door that had existed all along.
+  "package.publish",
+  "packages.publish",
 ];
 
 /**
@@ -1382,6 +1407,12 @@ export const GATE_WRITE_DOORS = {
   // approving one materializes the rule row AND its lineage edges to the
   // fact/behaviour halves, which `skill/create` knows nothing about.
   "rule/create": "gate",
+  // Editing a rule is its OWN door, not `skill/update`: approving one
+  // RECOMPILES the sentence, rewrites the automation the rule produced and
+  // re-earns the divergence snapshot — work no skill door knows about. It is
+  // also the door that ACTIVATES a draft, which is a recompile-and-refuse, not
+  // a status flip.
+  "rule/update": "gate",
   "role/create": "gate",
   "role/delete": "gate",
   "role/update": "gate",
@@ -1433,6 +1464,13 @@ export const DIRECT_PROPOSAL_DOORS = {
   // as the two dev gates above.
   "focus_session/playbook.stage_gate": "direct",
   "focus_session/dev.plan_approval": "direct",
+  // The automation-health WARDEN's finding (`services/proposals/automation-health.ts`).
+  // Filed under `governance` — same targetType as its three recommender siblings,
+  // with the OWNING HUMAN as targetId, because it is a calibration finding about
+  // a person's automations rather than a change to any one automation row.
+  // Approval is acknowledgement-only (the no-op branch in apply-approval.ts): it
+  // writes NO automation row, so it can never pause or archive anything.
+  "governance/automation.health_advisory": "direct",
   "entity/capture.graph": "direct",
   "entity/import.graph": "direct",
   "entity/merge": "direct",

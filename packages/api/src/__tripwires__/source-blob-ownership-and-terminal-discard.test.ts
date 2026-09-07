@@ -489,3 +489,90 @@ describe("TRIPWIRE: every terminal proposal state discards the staged blob", () 
     ).toEqual([]);
   });
 });
+
+/**
+ * `data.sourceId` is the SECOND protected envelope field, and it is protected
+ * for a different reason than `sourceFile`: it is an AUTHORITY INPUT, not a
+ * resource reference.
+ *
+ * `computeCanReviewApproval` derives `isOwner` from it, and under the default
+ * `owner_and_admins` policy `isOwner` ALONE admits a caller with NO workspace
+ * membership. The author rung added in this wave lets the authoring agent apply
+ * a `patch` to its own pending proposal — so without this pin, an agent could
+ * send `fields: { sourceId: "<any user id>" }` and hand that user approval
+ * authority over its own proposal, turning "needs an admin" into "this viewer
+ * can approve".
+ *
+ * The agent-class floor in `review-authority.ts` covers the READ (an agent
+ * naming ITSELF). It cannot cover the WRITE. This is the write half.
+ */
+describe("tripwire: a revision can never rewrite the sourceId authority input", () => {
+  const victim = "user-low-privilege";
+  const base = {
+    envelope: {
+      targetType: "entity",
+      changeType: "update",
+      data: { id: "e-1", sourceId: "user-original-author", title: "Original" },
+    },
+    actorId: "agent-1",
+  } as const;
+
+  it("rejects an envelope patch that sets sourceId INSIDE data", () => {
+    expect(() =>
+      computeRevisedEnvelope({
+        ...base,
+        patch: {
+          kind: "envelope",
+          fields: { data: { id: "e-1", sourceId: victim } },
+        },
+      })
+    ).toThrow(/sourceId/);
+  });
+
+  it("rejects an INNER patch that sets sourceId", () => {
+    expect(() =>
+      computeRevisedEnvelope({
+        ...base,
+        patch: { kind: "inner", fields: { sourceId: victim } },
+      })
+    ).toThrow(/sourceId/);
+  });
+
+  it("rejects a top-level envelope patch that sets sourceId", () => {
+    expect(() =>
+      computeRevisedEnvelope({
+        ...base,
+        patch: { kind: "envelope", fields: { sourceId: victim } },
+      })
+    ).toThrow(/sourceId/);
+  });
+
+  it("a wholesale `data` replacement cannot DROP or CHANGE sourceId", () => {
+    // The Studio's "Save & Approve" sends the whole edited inner. Dropping the
+    // field must restore the original, never leave it undefined — an undefined
+    // `sourceId` makes `isOwner` false for everyone, which fails safe but
+    // silently strips the real author's own rung.
+    const { merged } = computeRevisedEnvelope({
+      ...base,
+      patch: {
+        kind: "envelope",
+        fields: { data: { id: "e-1", title: "Edited" } },
+      },
+    });
+    const inner = merged.data as Record<string, unknown>;
+    expect(inner.title).toBe("Edited");
+    expect(inner.sourceId).toBe("user-original-author");
+  });
+
+  it("POSITIVE ANCHOR: an ordinary field still merges (the guard is not a blanket refusal)", () => {
+    // Without this, every assertion above could pass because the function
+    // throws on ALL patches — a vacuous guard that reads as a working one.
+    const { merged } = computeRevisedEnvelope({
+      ...base,
+      patch: { kind: "inner", fields: { title: "Corrected" } },
+    });
+    const inner = merged.data as Record<string, unknown>;
+    expect(inner.title).toBe("Corrected");
+    expect(inner.sourceId).toBe("user-original-author");
+  });
+});

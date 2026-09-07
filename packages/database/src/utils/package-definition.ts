@@ -285,4 +285,44 @@ export interface PackageDefinition {
    * dependency's workspace. See {@link TemplateDependency}.
    */
   dependencies?: TemplateDependency[];
+  /**
+   * Inline Cards (view-renderer / frame cells) authored in this workspace's
+   * Cell Studio. Shape mirrors the CP `packageDefinitionSchema.cells[]` slot
+   * (`synap-control-plane-api/src/routes/packages.ts`) and the pod's own
+   * `PackageApplySchema.cells[]` (`routers/hub-protocol/rest/packages.ts`)
+   * field-for-field, so a round-tripped export validates against both without
+   * a translation step. Applied by `applyPackagePostWorkspace` through the
+   * shared `installCellFromDefinition` → `defineCell` door.
+   */
+  cells?: PackageCellDef[];
+}
+
+// ─── Card (frame-cell) definitions ────────────────────────────────────────
+
+/**
+ * A Card authored in Cell Studio, as carried inline on a `PackageDefinition`.
+ * Field-for-field parity with the CP/pod `cells[]` zod slots — see the
+ * `cells` field doc above for why this must not drift from them.
+ */
+export interface PackageCellDef {
+  key: string;
+  name: string;
+  /** Raw ESM source (`widget_definitions.renderer_source`). */
+  code: string;
+  deps?: Record<string, string>;
+  defaultSize?: { w: number; h: number };
+  configSchema?: Record<string, unknown>;
+  /** View types this cell can render — see `widget_definitions.view_renderer_view_types`. */
+  viewTypes?: string[];
+  /**
+   * Sandboxed-frame egress allowlist. A LIVE workspace's authoring door
+   * (`widgetDefinitions.upsert`) never lets an author set this — egress is a
+   * grant a human approves at INSTALL time, not something a Card's own author
+   * can widen — so an export of an authored Card carries this only if some
+   * other path (e.g. re-exporting an already-installed cell — see the
+   * exporter's authored-vs-installed note) ever populated it.
+   */
+  externalHosts?: string[];
+  /** Renderer slot (`ContentKind`) this cell fills. */
+  contentKind?: string;
 }

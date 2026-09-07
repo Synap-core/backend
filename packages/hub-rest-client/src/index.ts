@@ -1,5 +1,5 @@
 /**
- * @synap/hub-rest-client
+ * @synap-core/hub-rest-client
  *
  * Zero-dependency TypeScript client for the Synap Hub Protocol REST API.
  *
@@ -7,7 +7,7 @@
  *
  * @example Basic usage
  * ```ts
- * import { HubRestClient } from "@synap/hub-rest-client";
+ * import { HubRestClient } from "@synap-core/hub-rest-client";
  *
  * const client = new HubRestClient({
  *   podUrl: "https://my-pod.synap.live",
@@ -20,7 +20,7 @@
  *
  * @example Setup flow (new agent)
  * ```ts
- * import { setupAgent, checkPodHealth } from "@synap/hub-rest-client";
+ * import { setupAgent, checkPodHealth } from "@synap-core/hub-rest-client";
  *
  * const status = await checkPodHealth("https://my-pod.synap.live");
  * if (status.healthy) {

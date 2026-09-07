@@ -23,6 +23,21 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         proposals: { findFirst: vi.fn() },
         entities: { findFirst: vi.fn() },
+        // `revert` now routes through the SHARED `computeCanReviewApproval`
+        // ladder rather than a fourth inline copy, so it reaches `isPodAdmin`
+        // (utils/workspace-role.ts), which reads both of these. Without them the
+        // door dies with "Cannot read properties of undefined (reading
+        // 'findFirst')" — a total `vi.mock` that stops covering what the module
+        // under test actually calls.
+        //
+        // `undefined` from the workspaces lookup makes `isPodAdmin` return
+        // false, which is the correct default for these fixtures: they assert
+        // revert BEHAVIOUR for an authorized workspace member, not pod-admin
+        // escalation. Authority itself is covered by
+        // `routers/proposals/__tests__/agent-self-approval-floor.test.ts`.
+        workspaces: { findFirst: vi.fn().mockResolvedValue(undefined) },
+        workspaceMembers: { findFirst: vi.fn().mockResolvedValue(undefined) },
+        users: { findFirst: vi.fn().mockResolvedValue(undefined) },
       },
       select: vi.fn(),
       update: vi.fn(),
@@ -38,7 +53,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         })
       ),
     },
-    getWorkspaceMembership: vi.fn(),
+    getWorkspaceMembership: vi.fn().mockResolvedValue({ role: "admin" }),
     mergeEntities: vi.fn(),
     unmergeEntities: vi.fn(),
     // Keep real assertUnmergeable so planProposalRevert full-unmerge gate works.
@@ -376,8 +391,12 @@ describe("proposalsRouter.revert — restoring an approved delete proposal", () 
       targetType: "entity",
       targetId: entityId,
       proposalType: "delete",
+      // Pod-wide; `sourceId` authorizes the caller as the proposal's owner —
+      // the shared ladder's pod-wide branch (owner or pod-admin). Revert no
+      // longer skips the check for pod-wide proposals.
       workspaceId: null,
       data: {
+        sourceId: "user-1",
         requestId: "r-revert-1",
         targetType: "entity",
         changeType: "delete",
@@ -485,8 +504,15 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
       targetType: "entity",
       targetId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       proposalType: "create_composite",
-      workspaceId: null, // pod-wide → skips the workspace policy check
+      // Pod-wide. This used to SKIP the authority check entirely — the comment
+      // here read "pod-wide → skips the workspace policy check", which recorded
+      // the hole as if it were the design. `revert` now runs the shared ladder,
+      // whose pod-wide branch narrows to owner-or-pod-admin, so the fixture
+      // authorizes the caller HONESTLY: `sourceId` is the caller, i.e. they own
+      // the proposal they are reverting.
+      workspaceId: null,
       data: {
+        sourceId: "user-1",
         operations: [{ op: "create_entity", profileSlug: "note", title: "N" }],
         materialized: { entityIds: [entityId] },
       },
@@ -544,8 +570,15 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
       targetType: "entity",
       targetId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       proposalType: "create_composite",
-      workspaceId: null, // pod-wide → skips the workspace policy check
+      // Pod-wide. This used to SKIP the authority check entirely — the comment
+      // here read "pod-wide → skips the workspace policy check", which recorded
+      // the hole as if it were the design. `revert` now runs the shared ladder,
+      // whose pod-wide branch narrows to owner-or-pod-admin, so the fixture
+      // authorizes the caller HONESTLY: `sourceId` is the caller, i.e. they own
+      // the proposal they are reverting.
+      workspaceId: null,
       data: {
+        sourceId: "user-1",
         operations: [{ op: "create_entity", profileSlug: "note", title: "N" }],
         materialized: { entityIds: [entityId] },
         revertedBy: "user-1",

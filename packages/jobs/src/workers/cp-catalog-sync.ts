@@ -307,18 +307,18 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
     );
     if (!result.ok) return result;
     const body = result.data as {
-      cells?: Array<{
-        key: string;
-        name: string;
-        packageSlug: string;
-        code: string;
-        deps?: Record<string, string>;
-        previewCode?: string;
-        defaultSize?: { w: number; h: number };
-        configSchema?: Record<string, unknown>;
-        viewTypes?: string[];
-        author?: string;
-      }>;
+      // Only the four fields the CACHE ROW itself is built from are named here.
+      // Everything else a cell carries is INSTALL PAYLOAD and is forwarded
+      // verbatim (see the spread below), so this type can never again decide
+      // which payload fields survive the hop.
+      cells?: Array<
+        Record<string, unknown> & {
+          key: string;
+          name: string;
+          packageSlug: string;
+          author?: string;
+        }
+      >;
       total?: number;
     } | null;
     const list = Array.isArray(body?.cells) ? body.cells : [];
@@ -333,20 +333,25 @@ async function fetchCells(source: string): Promise<SourceFetch<CatalogFetch>> {
           slug: `${cell.packageSlug}/${cell.key}`,
           name: cell.name,
           vendor: cell.author ?? null,
-          definition: {
-            key: cell.key,
-            code: cell.code,
-            deps: cell.deps,
-            previewCode: cell.previewCode,
-            defaultSize: cell.defaultSize,
-            configSchema: cell.configSchema,
-            // Field-by-field rebuild: anything not named here is DROPPED, and
-            // this is the last hop before `applyMarketInstall` reads
-            // `def.viewTypes`. Omitting it made every marketplace-installed
-            // renderer unselectable, silently.
-            viewTypes: cell.viewTypes,
-            packageSlug: cell.packageSlug,
-          },
+          // WHOLESALE forward — NEVER a field-by-field rebuild.
+          //
+          // This is the last hop before `installCellFromDefinition` reads the
+          // payload, and it used to name each field it copied. Anything not
+          // named was silently dropped, which is not a hypothetical: `viewTypes`
+          // was dropped and made every marketplace-installed renderer
+          // unselectable; `contentKind` was dropped and defaulted every cached
+          // install to the `widget` slot; `externalHosts` was dropped and made a
+          // cell's declared egress arrive contained. A comment warning about the
+          // rebuild sat in this very block while the second and third drops
+          // shipped — so the rebuild itself is gone, not annotated.
+          //
+          // The cache `definition` is an OPAQUE install payload (jsonb, read by
+          // cast-and-pick consumers), exactly like the wholesale
+          // `c.definition ?? null` every other kind above forwards. Unknown CP
+          // keys landing here are inert by construction and are the point: a
+          // field the Control Plane adds reaches the installer with no change
+          // required on this side.
+          definition: { ...cell },
         })),
         total,
       },

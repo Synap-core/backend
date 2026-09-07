@@ -42,7 +42,10 @@
  * saw), the same by-slug endpoint is used with the configured CP base URL
  * (`resolveDefinitionByKey`) — the uniform analog of the capability by-key
  * fallback — so a cache miss re-resolves instead of dead-ending in NOT_FOUND.
- * Only `cell` still requires a cache row (its renderer source is inline-only).
+ * `cell` gets the same treatment via `resolveCellDefinitionByKey`: its renderer
+ * source has no by-slug packages-endpoint analogue, but the CP serves it at
+ * `GET {source}/api/marketplace/cells?q=<key>` (the same live endpoint
+ * `routers/cells.ts`'s `install` mutation already fetches from).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -215,6 +218,115 @@ async function resolveDefinitionByKey(
   return fetchFullPackageDefinition(source, slug, version);
 }
 
+/** The renderer-source shape a cell install needs, whether it came from the
+ *  cache row's inline `definition`, an RC4-supplied payload, or the by-key CP
+ *  fallback below — ONE shape so the `case "cell"` install body downstream
+ *  never has to branch on where the definition came from. */
+interface CellCatalogDef {
+  key?: string;
+  code?: string;
+  deps?: Record<string, string>;
+  defaultSize?: { w: number; h: number };
+  packageSlug?: string;
+  /** View types this cell can render (0221) — optional in the payload. */
+  viewTypes?: string[];
+  /**
+   * Declared frame egress (0249) — see CP `PackageCellDef.externalHosts`.
+   * A CAST like `contentKind`, so the value already survives at runtime;
+   * declaring it stops the local type claiming a thinner payload than
+   * `installCellFromDefinition` actually reads.
+   */
+  externalHosts?: string[];
+  /**
+   * Renderer slot. Read by `installCellFromDefinition` via
+   * `resolveCellContentKind`; this is a CAST, not a zod parse, so the
+   * value already survived at runtime — declaring it keeps the local type
+   * from claiming a narrower payload than the applier actually reads.
+   */
+  contentKind?: string;
+}
+
+/**
+ * BY-KEY re-resolve for `cell` when the `cp_catalog_cache` row is MISSING —
+ * the cell analog of `resolveDefinitionByKey` (automation/template) and
+ * `fetchCPCapabilityTemplate` (capability). Cells have no by-slug
+ * `/api/packages/:slug` analogue (that endpoint never serves cell source —
+ * see the module docblock), but the CP DOES serve full cell source at `GET
+ * {CP}/api/marketplace/cells?q=<key>` — the SAME live, uncached endpoint
+ * `routers/cells.ts`'s `install` mutation already fetches for the
+ * `POST /api/hub/cells/install` path. So a just-published cell the
+ * background sync hasn't picked up yet still installs here instead of
+ * dead-ending in NOT_FOUND — closing the one kind the module docblock still
+ * called out as cache-row-only.
+ *
+ * `slug` is the catalog key, always `${packageSlug}/${cellKey}` (see
+ * cp-catalog-sync's `slug: \`${cell.packageSlug}/${cell.key}\``); a bare key
+ * with no package segment is matched on cellKey alone, same fallback
+ * `cells.ts` uses.
+ *
+ * Throws NOT_FOUND when no CP is configured, or when the CP is reachable but
+ * genuinely has no matching cell — an absent cell must never resolve to a
+ * silent skip. A reachable-but-failing CP surfaces
+ * `fetchFullPackageDefinition`-style retryable INTERNAL_SERVER_ERROR.
+ */
+async function resolveCellDefinitionByKey(slug: string): Promise<{
+  packageSlug: string;
+  cellKey: string;
+  name: string;
+  def: CellCatalogDef;
+}> {
+  const source = cpBaseUrl();
+  if (!source) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Marketplace entry "${slug}" (cell) isn't in the catalog cache and no Control Plane is configured to re-resolve it — search first with market.search({query, kind:"cell"}).`,
+    });
+  }
+  const [packageSlug, cellKey] = slug.includes("/")
+    ? slug.split("/")
+    : [undefined, slug];
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${source}/api/marketplace/cells?q=${encodeURIComponent(cellKey!)}`,
+      { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) }
+    );
+  } catch {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Marketplace source unreachable fetching cell "${slug}" — retry the install later (nothing was provisioned).`,
+    });
+  }
+  if (!res.ok) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `Marketplace source returned ${res.status} fetching cell "${slug}" — retry the install later (nothing was provisioned).`,
+    });
+  }
+  const body = (await res.json().catch(() => null)) as {
+    cells?: Array<
+      CellCatalogDef & { key: string; name: string; packageSlug: string }
+    >;
+  } | null;
+  const list = body?.cells ?? [];
+  const match = list.find(
+    (c) => c.key === cellKey && (!packageSlug || c.packageSlug === packageSlug)
+  );
+  if (!match) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Cell "${slug}" is not published on the marketplace — the catalog was queried directly and has no such cell. Check the slug, or that its package is public.`,
+    });
+  }
+  return {
+    packageSlug: match.packageSlug,
+    cellKey: match.key,
+    name: match.name,
+    def: match,
+  };
+}
+
 export interface ApplyMarketInstallInput {
   kind: CatalogKind;
   slug: string;
@@ -298,40 +410,24 @@ export async function applyMarketInstall(
     };
   }
 
-  // CELL is the only remaining kind that REQUIRES a cache row: its renderer
-  // source lives ONLY in the inline `definition` (the by-slug packages endpoint
-  // doesn't serve cells). automation/template re-resolve by key below when the
-  // row is missing — mirroring the capability by-key fallback above — so an
-  // opt-in / just-authored package that never entered cp_catalog_cache installs
-  // instead of dead-ending in NOT_FOUND.
-  if (!entry && !supplied && input.kind === "cell") {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Marketplace entry "${input.slug}" (cell) is no longer in the catalog cache — search again with market.search({query, kind:"cell"}).`,
-    });
-  }
+  // CELL used to REQUIRE a cache row (its renderer source is inline-only — the
+  // by-slug packages endpoint never serves cell source). It now re-resolves by
+  // key below when the row is missing, mirroring the capability/automation/
+  // template by-key fallbacks above — so an opt-in / just-authored cell the
+  // background sync hasn't picked up yet installs instead of dead-ending in
+  // NOT_FOUND. `resolveCellDefinitionByKey` itself throws NOT_FOUND when the CP
+  // is unconfigured or genuinely has no matching cell.
+  const cellByKey =
+    !entry && !supplied && input.kind === "cell"
+      ? await resolveCellDefinitionByKey(input.slug)
+      : null;
 
   switch (input.kind) {
     case "cell": {
-      // RC4: a supplied payload carries the renderer source inline (its `code`);
-      // otherwise the cache row is required (narrowed non-null by the guard
-      // above — the by-slug packages endpoint doesn't serve cell source).
-      const def = (supplied ?? entry?.definition) as {
-        key?: string;
-        code?: string;
-        deps?: Record<string, string>;
-        defaultSize?: { w: number; h: number };
-        packageSlug?: string;
-        /** View types this cell can render (0221) — optional in the payload. */
-        viewTypes?: string[];
-        /**
-         * Renderer slot. Read by `installCellFromDefinition` via
-         * `resolveCellContentKind`; this is a CAST, not a zod parse, so the
-         * value already survived at runtime — declaring it keeps the local type
-         * from claiming a narrower payload than the applier actually reads.
-         */
-        contentKind?: string;
-      } | null;
+      // RC4 payload → cache row's inline definition → by-key CP fallback.
+      const def = (supplied ??
+        entry?.definition ??
+        cellByKey?.def) as CellCatalogDef | null;
       if (!def?.code) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -346,20 +442,25 @@ export async function applyMarketInstall(
       // install died on `widget_def_type_key_workspace_uniq`.
       const [slugPackage, slugCellKey] = input.slug.includes("/")
         ? input.slug.split("/")
-        : [def.packageSlug ?? input.slug, def.key ?? input.slug];
+        : [
+            def.packageSlug ?? cellByKey?.packageSlug ?? input.slug,
+            def.key ?? cellByKey?.cellKey ?? input.slug,
+          ];
       // Shared with the packages/apply inline-`cells[]` applier so the typeKey
       // derivation and the view-renderer affinity threading cannot drift
       // between the two install doors. See `install-cell-from-definition.ts`.
       const result = await installCellFromDefinition({
         definition: def,
-        name: entry?.name ?? input.slug,
+        name: entry?.name ?? cellByKey?.name ?? input.slug,
         packageSlug: slugPackage as string,
         cellKey: slugCellKey as string,
         workspaceId: input.workspaceId,
         // B3 — the version was resolved here and DISCARDED. Cells were the only
         // kind with no version at all, so `market installed` could never say a
         // cell was behind its package. Same precedence the other five kinds use
-        // (catalog row → explicit request → unknown).
+        // (catalog row → explicit request → unknown). The by-key CP fallback
+        // carries no version either (the marketplace/cells endpoint has none),
+        // same as the cache row's own `entry.version`.
         packageVersion: entry?.version ?? input.version ?? null,
         userId: input.userId,
       });
@@ -1014,18 +1115,13 @@ export async function runMarketInstall(
   // Capability resolves by key even without a cache row — opt-in caps
   // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
   // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same
-  // now holds for automation/template: an opt-in / just-authored package the
-  // cache never saw re-resolves by slug from the CP (resolveDefinitionByKey)
-  // instead of dead-ending here. Only `cell` still REQUIRES the row (its renderer
-  // source is inline-only). Requiring a row for automation/template was the
-  // cache-miss dead-end this wave removes. RC4: a supplied `definition` carries
-  // the cell's renderer source inline, so it too satisfies the cell requirement.
-  if (!entry && !input.definition && input.kind === "cell") {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: `Marketplace entry "${input.slug}" (cell) not found in the catalog cache. Search first with market.search({query, kind:"cell"}).`,
-    });
-  }
+  // now holds for automation/template (resolveDefinitionByKey) AND cell
+  // (resolveCellDefinitionByKey, `GET {CP}/api/marketplace/cells?q=`) — an
+  // opt-in / just-authored package the cache never saw re-resolves by key from
+  // the CP instead of dead-ending here. No early gate is needed for any kind:
+  // `applyMarketInstall` (called below, or by the approve-executor after a
+  // proposal) does its own by-key resolve and throws its own clear NOT_FOUND
+  // when the CP is unreachable/unconfigured or genuinely has no match.
 
   // Tier pre-check (P2.5) — fail early, before any proposal or provisioning.
   await assertPackageTierAccess(input.userId, input.slug);

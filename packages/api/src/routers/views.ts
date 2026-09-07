@@ -70,6 +70,7 @@ import {
   ownerPrivateVisibleWhere,
 } from "../utils/user-visible-where.js";
 import { projectLensWhere, accessScopeWhere } from "../utils/project-scope.js";
+import { recordSessionArtifact } from "../services/focus-sessions/record-session-artifact.js";
 
 function viewVisibleWhere(userId: string) {
   return ownerPrivateVisibleWhere(views.workspaceId, views.userId, userId)!;
@@ -327,6 +328,20 @@ export const viewsRouter = router({
         // Approve executor re-runs this door with the reserved proposal.targetId
         // so /open/view/<targetId> is the same row the reviewer approved.
         id: z.string().uuid().optional(),
+        /**
+         * The declared session-output slot this view fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `recordSessionArtifact` below, never guessed when absent.
+         *
+         * DOOR PARITY with the Hub twin (`hub-protocol/views.ts createView`),
+         * which has carried it since the Output-Loop W5 wave. That twin
+         * DELEGATES to this procedure and then records the artifact itself — on
+         * a caller context built without a session handle — so the recording
+         * added here fires only for a DIRECT tRPC call and the two cannot
+         * double-write. (The recorder is idempotent on
+         * `session+kind+refId+expectedLabel` regardless.)
+         */
+        expectedLabel: z.string().min(1).max(500).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -613,6 +628,21 @@ export const viewsRouter = router({
           type: input.type,
           name: input.name,
         },
+      });
+
+      // OUTPUT LEDGER — the same writer the Hub twin and `entities.create` use.
+      // `ctx.sessionId` is the VERIFIED header handle (`resolveHubSessionHeader`
+      // rejects a session that is not the caller's); absent ⇒ the recorder
+      // no-ops on its first line and nothing is written.
+      await recordSessionArtifact({
+        sessionId: ctx.sessionId,
+        workspaceId: effectiveWorkspaceId,
+        userId: ctx.userId,
+        kind: "view",
+        refId: createdView.id,
+        title: createdView.name ?? input.name,
+        agentUserId: input.agentUserId,
+        expectedLabel: input.expectedLabel,
       });
 
       return { view: createdView, documentId: docId, status: "created" };

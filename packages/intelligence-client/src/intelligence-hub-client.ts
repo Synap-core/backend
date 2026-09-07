@@ -23,7 +23,7 @@ import { iterateISChatStream } from "./is-chat-stream.js";
 
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
- * string question. Mirrors `@synap/hub-rest-client` and the frontend
+ * string question. Mirrors `@synap-core/hub-rest-client` and the frontend
  * capture-pipeline contract EXACTLY — defined locally to keep this internal
  * service client free of a dependency on the published Hub REST SDK.
  */

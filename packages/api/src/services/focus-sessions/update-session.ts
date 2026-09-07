@@ -14,7 +14,10 @@
  * output RMW lock — they are intentionally distinct doors, not unified here.
  */
 
+import { z } from "zod";
 import { db, focusSessions, eq, and } from "@synap/database";
+import type { ExpectedOutput } from "@synap/playbooks";
+import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 
 export interface UpdateFocusSessionParams {
   sessionId: string;
@@ -34,12 +37,7 @@ export interface UpdateFocusSessionParams {
    * `attachSessionAgent` — never by assigning `set.agentIds` here.
    */
   addAgentId?: string;
-  expectedOutputs?: Array<{
-    kind: string;
-    label: string;
-    icon?: string;
-    status?: "pending" | "done";
-  }>;
+  expectedOutputs?: ExpectedOutput[];
 }
 
 export type UpdateFocusSessionResult =
@@ -61,12 +59,109 @@ export type UpdateFocusSessionResult =
     }
   | { status: "updated"; session: typeof focusSessions.$inferSelect };
 
-type OutputItem = {
-  kind: string;
-  label: string;
-  icon?: string;
-  status?: "pending" | "done";
-};
+type OutputItem = ExpectedOutput;
+
+/**
+ * The WIRE shape of one declared deliverable — the ONE input schema, imported by
+ * every door that accepts an `expectedOutputs` array (tRPC `focusSessions`
+ * create/update, Hub REST POST/PATCH /focus-sessions, this service via the MCP
+ * handler).
+ *
+ * It exists because zod STRIPS what it does not declare. The narrow
+ * `{kind,label,icon,status}` shape each door used to declare separately meant a
+ * client echoing a slot back lost `delegatedTo`, `returnedReason` and
+ * `satisfiedByProposalId` at the PARSE, before any merge could see them — the
+ * fields were erased by the schema, not by the write. Declaring them here lets a
+ * caller that genuinely holds the current slot round-trip it, and
+ * {@link mergeExpectedOutputs} covers the caller that does not.
+ *
+ * Kept in lock-step with `ExpectedOutput` (@synap/playbooks) by the
+ * `satisfies` below: a new field on the type is a compile error here until it is
+ * either declared or deliberately left off the wire.
+ */
+export const expectedOutputWireSchema = z.object({
+  kind: z.string(),
+  label: z.string(),
+  icon: z.string().optional(),
+  // Per-item lifecycle (defaults to "pending" when omitted). Shape-within-jsonb.
+  status: z.enum(["pending", "done"]).optional(),
+  claimedDone: z.boolean().optional(),
+  satisfiedByProposalId: z.string().optional(),
+  delegatedTo: z.string().optional(),
+  delegatedAt: z.string().optional(),
+  returnedReason: z.string().optional(),
+  returnedAt: z.string().optional(),
+}) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
+
+/**
+ * The slot fields the SERVER owns — written by governance, delegation and
+ * approval, never by whoever is patching the list.
+ *
+ * WHY A MERGE AT ALL. `expectedOutputs` is patched WHOLESALE by three doors
+ * (this service, the tRPC `focusSessions.update`, the Hub REST PATCH), and the
+ * surfaces that patch it — the browser session board above all — read the list,
+ * edit one label, and send the whole array back. Every field they did not know
+ * about was therefore ERASED on the next edit: a slot's delegation, its
+ * reviewer's return note, and the approval lineage behind its `done` all
+ * vanished because someone renamed a sibling. Widening the wire schema alone
+ * does not fix that (a client written before the field still omits it); the
+ * write has to CARRY FORWARD what it was not told about.
+ *
+ * The rule is: an incoming item that is SILENT about a server-owned field keeps
+ * the stored value; one that carries the field explicitly wins. Silence is not
+ * an instruction to delete.
+ */
+const SERVER_OWNED_OUTPUT_FIELDS = [
+  "status",
+  "claimedDone",
+  "satisfiedByProposalId",
+  "delegatedTo",
+  "delegatedAt",
+  "returnedReason",
+  "returnedAt",
+] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
+
+/**
+ * Merge an incoming `expectedOutputs` array onto the stored one BY LABEL — the
+ * ONE merge, called by all three wholesale-update doors so they cannot drift
+ * into three answers about what a patch destroys.
+ *
+ * Matching uses `normalizeExpectedLabel`, the same trim+casefold every other
+ * slot lookup uses (delegation, return, satisfy). A label the stored array does
+ * not carry is a NEW slot and lands verbatim; a stored slot the incoming array
+ * omits is DELETED — that is the existing, deliberate semantic of a wholesale
+ * assignment, and the merge does not change it.
+ */
+export function mergeExpectedOutputs(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): OutputItem[] {
+  const stored = new Map<string, OutputItem>();
+  for (const o of current) {
+    const key = normalizeExpectedLabel(o?.label);
+    // First wins: two slots sharing a label are already ambiguous everywhere
+    // else (the delegation and satisfy doors both take the first match), so
+    // this resolves it the same way rather than inventing a second answer.
+    if (key && !stored.has(key)) stored.set(key, o);
+  }
+
+  return incoming.map((item) => {
+    const key = normalizeExpectedLabel(item?.label);
+    const prior = key ? stored.get(key) : undefined;
+    if (!prior) return item;
+    // Only the fields the incoming item is SILENT about are carried; an
+    // explicit value (including one the caller genuinely round-tripped) wins.
+    const carried: Partial<ExpectedOutput> = {};
+    for (const field of SERVER_OWNED_OUTPUT_FIELDS) {
+      if (item[field] !== undefined) continue;
+      const value = prior[field];
+      if (value !== undefined) {
+        Object.assign(carried, { [field]: value });
+      }
+    }
+    return { ...item, ...carried };
+  });
+}
 
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
@@ -186,7 +281,12 @@ export async function updateFocusSession(
       const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
         ? (locked.expectedOutputs as OutputItem[])
         : [];
-      let next: OutputItem[] = params.expectedOutputs ?? current;
+      // Wholesale replace goes through the ONE merge, so a client that sends
+      // back the four fields it knows about cannot erase a delegation, a return
+      // note or an approval's lineage.
+      let next: OutputItem[] = params.expectedOutputs
+        ? mergeExpectedOutputs(current, params.expectedOutputs)
+        : current;
       if (params.addOutput) {
         const add = params.addOutput;
         next = [

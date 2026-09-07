@@ -186,25 +186,61 @@ describe("TRIPWIRE: proposal revise goes through the authority path", () => {
     // the TRUE branch is the awaited ladder, the FALSE branch denies.
     expect(
       flat(coreBody),
-      "the authority result must come from `params.actorId ? await " +
+      "the authority result must come from `!isAuthor && params.actorId ? await " +
         "computeCanReviewApproval({…}) : { allowed: false }`. Any other shape — a " +
         "constant condition, a literal true branch, an unawaited call — is a gate " +
         "that does not run."
     ).toMatch(
-      /const \{ allowed \} = params\.actorId \? await computeCanReviewApproval\(\{[\s\S]{0,600}?\}\) : \{ allowed: false \};/
+      /const \{ allowed: canReview \} = !isAuthor && params\.actorId \? await computeCanReviewApproval\(\{[\s\S]{0,600}?\}\) : \{ allowed: false \};/
     );
     // …and the ladder is asked about THIS actor, not some other id.
     expect(flat(coreBody)).toMatch(/userId: params\.actorId,?\s*\}\)/);
+  });
+
+  /**
+   * THE TRAP (added with the author rung). The author rung authorizes an AGENT
+   * to amend the proposal it wrote. Feeding that agent id into the REVIEWER
+   * ladder instead would be a self-approval hole: `data.sourceId` holds the
+   * AGENT on the dev-approval / stage-gate doors, so `isOwner` would be true and
+   * the default `owner_and_admins` policy would grant the agent full reviewer
+   * authority over its own proposal. Author authority and reviewer authority are
+   * different rungs and must never be wired together.
+   */
+  it("the acting AGENT id is never fed to the reviewer ladder", () => {
+    const body = flat(coreBody);
+
+    // The author rung matches the AGENT PRINCIPAL column, never `data.sourceId`
+    // (which holds a different principal per door and is not a reliable agent id).
+    expect(
+      body,
+      "the author rung must compare proposals.agentUserId to the acting agent"
+    ).toMatch(
+      /const isAuthor = !!params\.actingAgentUserId && existing\.agentUserId === params\.actingAgentUserId;/
+    );
+
+    // The ladder call must ask about the HUMAN actor and nothing else.
+    const ladder = body.match(
+      /await computeCanReviewApproval\(\{[\s\S]{0,600}?\}\)/
+    );
+    expect(ladder, "the ladder call vanished — scan is blind").not.toBeNull();
+    expect(
+      ladder![0],
+      "computeCanReviewApproval must NEVER receive the acting agent id as its " +
+        "userId — that is the self-approval trap this rung exists to avoid."
+    ).not.toContain("actingAgentUserId");
+
+    // And the author rung must not smuggle itself in as a proposal field either.
+    expect(body).not.toMatch(/userId: params\.actingAgentUserId/);
   });
 
   it("the core fails CLOSED when the gate says no", () => {
     // The deny branch must actually stop the write, inside this function.
     expect(
       flat(coreBody),
-      "`!allowed` must throw before the update — a logged-and-continue here is an " +
-        "ungated revise door"
-    ).toMatch(/if \(!allowed\) \{ throw new TRPCError\(/);
-    const denyAt = coreBody.indexOf("if (!allowed)");
+      "`!isAuthor && !canReview` must throw before the update — a " +
+        "logged-and-continue here is an ungated revise door"
+    ).toMatch(/if \(!isAuthor && !canReview\) \{ throw new TRPCError\(/);
+    const denyAt = coreBody.indexOf("if (!isAuthor && !canReview)");
     expect(denyAt).toBeGreaterThan(-1);
     expect(denyAt, "the deny must precede the update").toBeLessThan(
       coreBody.indexOf(".update(proposals)")

@@ -50,7 +50,11 @@ import {
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 import type { RequestShapedProposalData } from "@synap-core/types";
-import { resolveActionLabel } from "@synap-core/types/vocabulary";
+import type { ExpectedOutput } from "@synap/playbooks";
+import {
+  normalizeObjectKind,
+  buildObjectActionTitle,
+} from "@synap-core/types/vocabulary";
 import {
   isLikelyUUID,
   isCompositeProposalData,
@@ -137,24 +141,155 @@ function isFocusSessionLifecycleClose(
  * than blocking the write — the caller's own `forcePropose` and the rest of the
  * ladder are unaffected.
  */
-async function deriveSessionForceProposeGovernance(
+async function loadSessionGovernanceContext(
   sessionId: string
-): Promise<boolean> {
+): Promise<SessionGovernanceContext> {
   try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, sessionId),
-      columns: { metadata: true },
+      columns: { metadata: true, expectedOutputs: true },
     });
     const governance = (
       session?.metadata as Record<string, unknown> | undefined
     )?.governance as { forceProposeWrites?: unknown } | undefined;
-    return governance?.forceProposeWrites === true;
+    return {
+      forceProposeWrites: governance?.forceProposeWrites === true,
+      expectedOutputs: Array.isArray(session?.expectedOutputs)
+        ? (session.expectedOutputs as ExpectedOutput[])
+        : [],
+    };
   } catch (err) {
     logger.warn(
       { err, sessionId },
-      "Failed to derive session force-propose governance — proceeding without it"
+      "Failed to load session governance context — proceeding without it"
     );
-    return false;
+    return { forceProposeWrites: false, expectedOutputs: [] };
+  }
+}
+
+/** What the ONE session read above yields: a governance flag and the slots. */
+interface SessionGovernanceContext {
+  forceProposeWrites: boolean;
+  expectedOutputs: ExpectedOutput[];
+}
+
+/**
+ * The SLOT CLAIM — which declared deliverable of the ambient session this change
+ * is for, resolved by GOVERNANCE reading the session rather than trusted from the
+ * caller (founder decision, 2026-09-07). No create door carries an
+ * `expectedLabel` today, and a caller-supplied one would be an agent naming its
+ * own slot; the session row is the only place the declared labels actually live.
+ *
+ * The rule is deliberately narrow: the change's OWN name (`goal` / `title` /
+ * `name` / `displayName` / `label` — the same inline fields
+ * `resolveProposalTargetName` reads, no DB lookup) must equal a declared slot
+ * label EXACTLY, trimmed and case-insensitive. Anything looser would be a guess
+ * dressed as evidence.
+ *
+ * KIND IS A FLOOR ON BOTH RUNGS. A slot may only be claimed by a change of the
+ * slot's own kind (`normalizeObjectKind`, the vocabulary's ONE normalization —
+ * the same one `selectOutputToSatisfy` applies when the approval later reads
+ * this claim back). Writing a claim the selector would then refuse is worse than
+ * writing none: the claim would ride the receipt as a durable assertion that the
+ * change was that deliverable, while the stamp silently fell to the first slot
+ * of the produced kind. An entity titled like a declared DOCUMENT slot claims
+ * nothing.
+ *
+ * It is a CLAIM, never a stamp — the same semantics `artifacts.props.expectedLabel`
+ * already has in `services/focus-sessions/session-outputs.ts`. `done` still hangs
+ * off approval, and `selectOutputToSatisfy` falls back to the kind guess when the
+ * claim matches no open slot. Returns the DECLARED label (the slot's own casing),
+ * not the change's, so the stored claim joins the ledger verbatim.
+ */
+function resolveSessionSlotClaim(
+  expectedOutputs: ExpectedOutput[],
+  data: Record<string, unknown> | undefined,
+  targetType: string | null | undefined,
+  actingAgentType?: string
+): string | undefined {
+  if (expectedOutputs.length === 0) return undefined;
+
+  // The kind floor, applied to BOTH rungs below.
+  const targetKind = normalizeObjectKind(targetType);
+  const ofKind = (o: ExpectedOutput) =>
+    normalizeObjectKind(o.kind) === targetKind;
+
+  // RUNG 1 — the change NAMES the slot (and is of its kind).
+  const candidate = data
+    ? (
+        stringField(data, "goal") ??
+        stringField(data, "title") ??
+        stringField(data, "name") ??
+        stringField(data, "displayName") ??
+        stringField(data, "label") ??
+        ""
+      )
+        .trim()
+        .toLowerCase()
+    : "";
+  if (candidate) {
+    const named = expectedOutputs.find(
+      (o) =>
+        typeof o.label === "string" &&
+        o.label.trim().toLowerCase() === candidate &&
+        ofKind(o)
+    )?.label;
+    if (named) return named;
+  }
+
+  // RUNG 2 — the DELEGATION already named it. A slot handed to an agent type
+  // (`focusSessions.delegateOutput`) is claimed by that agent's session writes
+  // even when the artefact's own name does not match the label, because the
+  // naming happened AHEAD OF TIME, by a human, and is on the row.
+  //
+  // This is the whole reason rung 1 can stay as narrow as it is. Requiring an
+  // agent to title its draft exactly "Q3 board memo" to claim the slot called
+  // "Q3 board memo" is a spelling test, and losing it means the approval falls
+  // back to the first-of-kind guess — which on a session owing two documents is
+  // a coin flip that stamps the wrong deliverable. A non-delegated write gets no
+  // such help and still needs the exact name: for it, nothing on the row says
+  // which slot it was for, and a guess dressed as evidence is what this whole
+  // mechanism exists to avoid.
+  //
+  // Narrow on purpose: FIRST not-yet-done slot delegated to THIS agent type, in
+  // THIS session (the outputs array is the ambient session's), AND of the kind
+  // being written. One delegation is evidence for one deliverable, exactly as
+  // one approval is — and an agent delegated a document slot does not claim it
+  // by creating an entity.
+  const delegateType = actingAgentType?.trim().toLowerCase();
+  if (delegateType) {
+    return expectedOutputs.find(
+      (o) =>
+        o.status !== "done" &&
+        typeof o.delegatedTo === "string" &&
+        o.delegatedTo.trim().toLowerCase() === delegateType &&
+        ofKind(o)
+    )?.label;
+  }
+
+  return undefined;
+}
+
+/**
+ * The acting agent's `agentType`, read from its user row. Best-effort and
+ * lazily called — only when a name match already failed AND the session
+ * actually has a delegated slot, so the common write pays no extra query.
+ */
+async function loadActingAgentType(
+  agentUserId: string
+): Promise<string | undefined> {
+  try {
+    const row = await db.query.users.findFirst({
+      where: eq(users.id, agentUserId),
+      columns: { agentType: true },
+    });
+    return row?.agentType ?? undefined;
+  } catch (err) {
+    logger.warn(
+      { err, agentUserId },
+      "Failed to read acting agent type — slot claim falls back to the name match"
+    );
+    return undefined;
   }
 }
 
@@ -1216,12 +1351,52 @@ async function evaluatePermission(
     // already forced a proposal (the short-circuit avoids the lookup otherwise).
     const isAiWrite =
       Boolean(agentUserId) || source === "ai" || source === "intelligence";
+    // ONE read of the session row, reused for TWO things: the force-propose
+    // stamp above, and the SLOT CLAIM below. The read now happens whenever an AI
+    // write carries a session — including the two flag cases that used to
+    // short-circuit it (`opts.forcePropose`, `ignoreSessionForcePropose`) — so
+    // the claim is resolvable on every governed session write, not only the ones
+    // that needed the governance flag.
+    const sessionGovernance =
+      isAiWrite && sessionId
+        ? await loadSessionGovernanceContext(sessionId)
+        : null;
     const effectiveForcePropose =
       opts.forcePropose === true
         ? true
-        : isAiWrite && sessionId && !opts.ignoreSessionForcePropose
-          ? await deriveSessionForceProposeGovernance(sessionId)
+        : sessionGovernance && !opts.ignoreSessionForcePropose
+          ? sessionGovernance.forceProposeWrites
           : false;
+
+    // The slot this change claims, if its own name names a declared deliverable
+    // exactly. Written onto the proposal (pending row AND auto-approve receipt)
+    // as `data.expectedLabel`, so the approval that later stamps `done` knows
+    // WHICH slot it satisfied instead of guessing the first of the kind.
+    let sessionSlotClaim = sessionGovernance
+      ? resolveSessionSlotClaim(
+          sessionGovernance.expectedOutputs,
+          data,
+          subjectType
+        )
+      : undefined;
+    // DELEGATED claim (rung 2). Second read, and only on the narrow path that
+    // needs it: an attributed agent write, no name match, and a slot on this
+    // session that was actually handed to someone.
+    if (
+      !sessionSlotClaim &&
+      sessionGovernance &&
+      agentUserId &&
+      sessionGovernance.expectedOutputs.some(
+        (o) => o.status !== "done" && o.delegatedTo
+      )
+    ) {
+      sessionSlotClaim = resolveSessionSlotClaim(
+        sessionGovernance.expectedOutputs,
+        data,
+        subjectType,
+        await loadActingAgentType(agentUserId)
+      );
+    }
 
     // 5. AI policy check
     //
@@ -1374,6 +1549,9 @@ async function evaluatePermission(
           // for the plain default-propose case, preserving the prior behavior of
           // passing the caller's reasoning through unchanged.
           reasoning: opts.reasoning ?? gov.reason,
+          // The slot this draft claims — carried so the human's approval stamps
+          // the deliverable the agent was actually working on.
+          expectedLabel: sessionSlotClaim,
           // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key,
           // e.g. "UNTRUSTED_ORIGIN") — persisted so the review UI can render a
           // distinct "why this needs you" treatment for a force-propose rung.
@@ -1426,6 +1604,14 @@ async function evaluatePermission(
               ? await getAgentFocusProjectId(agentUserId)
               : null,
         });
+        // The receipt spreads the caller's gate `data` FLAT (unlike the pending
+        // door, which nests it inside the request-shaped envelope), so a
+        // caller-supplied `expectedLabel` would land at exactly the top-level
+        // key `readProposalExpectedLabel` reads — an agent naming its own
+        // deliverable slot, which is the one thing this claim is designed not
+        // to be. Strip it: ONLY the claim governance resolved from the session
+        // row may occupy that key.
+        const { expectedLabel: _callerSlotClaim, ...receiptData } = data ?? {};
         try {
           const [receipt] = await db
             .insert(proposals)
@@ -1435,9 +1621,13 @@ async function evaluatePermission(
               targetId: String(data?.id ?? randomUUID()),
               proposalType: `${subjectType}.${action}`,
               data: {
-                ...data,
+                ...receiptData,
                 agentUserId,
                 ...(authorshipMode ? { authorshipMode } : {}),
+                // Slot claim, same top-level key the pending door writes.
+                ...(sessionSlotClaim
+                  ? { expectedLabel: sessionSlotClaim }
+                  : {}),
                 ...(correlationId ? { correlationId } : {}),
                 ...(requestedEventId ? { requestedEventId } : {}),
                 // The model sometimes VOLUNTEERS a rationale for a write that
@@ -1518,6 +1708,9 @@ async function evaluatePermission(
               sessionId: governedSessionId,
               targetType: subjectType,
               proposalId: autoApprovedProposalId,
+              // The claim resolved above, so a session owing TWO documents
+              // stamps the one this write was for — not the first of the kind.
+              expectedLabel: sessionSlotClaim,
             });
           } catch (err) {
             logger.warn(
@@ -1760,6 +1953,9 @@ async function evaluatePermission(
         // default-propose case, preserving the prior behaviour of passing the
         // caller's reasoning through unchanged.
         reasoning: opts.reasoning ?? proposeReason,
+        // Parity with the agent path: the anonymous principal's proposal claims
+        // the same slot when its own name names one.
+        expectedLabel: sessionSlotClaim,
         governanceReason:
           proposeReasonCode ?? opts.governanceReason ?? undefined,
       });
@@ -1828,19 +2024,30 @@ export function buildProposalSummary(
   }
 
   // Vocabulary SSOT — NOT a call-site capitalisation (`.claude/rules/vocabulary.md`
-  // forbids `charAt(0).toUpperCase()` on a domain token by name). A proposal is
+  // forbids `charAt(0).toUpperCase()` on a domain token by name), and NOT the
+  // raw `subjectType` interpolated into prose either (a reviewer would see
+  // `Update focus_session "…"` — a DB token, not a word). `buildObjectActionTitle`
+  // is the ONE door that composes "<verb> <noun> "<name>"". A proposal is
   // PENDING here — the title says what approving it WILL do — so the mood is
   // imperative, matching the special cases above ("Start session", "Add rule").
-  const actionVerb = resolveActionLabel(action, "imperative");
+  //
+  // `entity` is the generic base kind (see `buildObjectActionTitle`'s own
+  // suppression of it): when the payload carries a concrete `profileSlug`
+  // ("task", "person", …) that is the true kind of the thing being acted on,
+  // so it wins over the generic `subjectType`. Without a profileSlug, passing
+  // `subjectType` straight through lets `entity` fall into that same
+  // suppression rather than rendering "Create Entity".
+  const objectKind =
+    typeof data.profileSlug === "string" && data.profileSlug
+      ? data.profileSlug
+      : subjectType;
   // goal is a first-class label for focus_session (and harmless elsewhere)
-  const label = (data.targetName ||
+  const objectName = (data.targetName ||
     data.title ||
     data.name ||
     data.goal ||
     data.slug) as string | undefined;
-  if (label) return `${actionVerb} ${subjectType} "${label}"`;
-  if (action === "delete" && data.id) return `${actionVerb} ${subjectType}`;
-  return `${actionVerb} ${subjectType}`;
+  return buildObjectActionTitle({ action, objectKind, objectName });
 }
 
 /**
@@ -2349,6 +2556,14 @@ async function createProposal(args: {
   data: Record<string, unknown>;
   reasoning?: string;
   /**
+   * SLOT CLAIM — which declared expected output of the ambient session this
+   * change is for, resolved by `resolveSessionSlotClaim`. Stored at the TOP
+   * LEVEL of `proposals.data` (never inside the nested gate payload, which the
+   * executors parse), and read back by `readProposalExpectedLabel` when the
+   * approval stamps `done`. A claim, never a stamp.
+   */
+  expectedLabel?: string;
+  /**
    * Structured governance reason — the PROPOSE_REASON KEY the pure engine
    * stamped (from `gov.reasonCode`). Persisted to `governance_reason` so the
    * review UI can branch on WHY the write needs a human. Omitted for the
@@ -2369,6 +2584,7 @@ async function createProposal(args: {
     action,
     data,
     reasoning,
+    expectedLabel,
     governanceReason,
     stepRunId,
     nodeId,
@@ -2567,6 +2783,9 @@ async function createProposal(args: {
     ...(proposalData as unknown as Record<string, unknown>),
     ...(authorshipMode ? { authorshipMode } : {}),
     ...(compositeOperations ? { operations: compositeOperations } : {}),
+    // The slot claim rides at the TOP LEVEL, beside the request-shaped envelope
+    // — `readProposalExpectedLabel` is the ONE reader.
+    ...(expectedLabel ? { expectedLabel } : {}),
   };
 
   // G1 PEEK-BEFORE-EVENT: for an agent-authored write that exactly matches an

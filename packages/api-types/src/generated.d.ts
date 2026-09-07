@@ -93,6 +93,42 @@ export interface Context {
 	 */
 	agentUserId?: string | null;
 	/**
+	 * INTERNAL CHANNEL — never from a request. No context factory populates it
+	 * and there is no wire passthrough. **Keep it that way** — a ctx factory that
+	 * ever read this from a header or input would hand any caller an "assume my
+	 * write is already approved" primitive.
+	 *
+	 * ⚠️ CORRECTED 2026-09-07. This docblock previously said "set ONLY by
+	 * `applyProposalApproval`'s composite caller … it arrives solely from that
+	 * internal object literal." That was FALSE on the day it was written. There
+	 * are TWO producers, and the omission mattered because the field is read as a
+	 * security carve-out (below), so the comment understated where that carve-out
+	 * applies:
+	 *   · `routers/proposals/apply-approval.ts` — the approval composite caller.
+	 *   · `services/capture-agent/submit-capture-graph.ts` — the capture
+	 *     auto-apply composite caller (its existence is asserted by
+	 *     `__tripwires__/capture-graph-governance-linkage.test.ts`).
+	 *
+	 * THE INVARIANT, stated so a third producer knows what it is signing up to:
+	 * set this ONLY from an internal caller that has ALREADY obtained a
+	 * governance decision for the write it is about to make. It means "a decision
+	 * exists for this", not merely "an internal caller made this".
+	 *
+	 * Two load-bearing meanings:
+	 *  · PROVENANCE — stamped as `source_proposal_id`, the JOIN that recovers the
+	 *    APPROVER via `proposals.reviewedBy`.
+	 *  · "this write is ALREADY APPROVED" — `relations.create` reads it to skip
+	 *    re-entering the governance membrane. Without that skip the ladder falls
+	 *    to `propose` (relation.create is not in DEFAULT_AUTO_APPROVE) and the
+	 *    edge is silently never created while the receipt reports it linked.
+	 *
+	 * Declared here rather than cast at each reader: it was read through
+	 * `(ctx as { governanceProposalId?: string })` in seven places across three
+	 * files, one of which now guards the security fix above — so renaming the
+	 * field would have broken all seven with ZERO typecheck signal.
+	 */
+	governanceProposalId?: string;
+	/**
 	 * The message ID that triggered this hub-protocol request.
 	 * When set, proposals created during this request are linked to this message.
 	 */
@@ -4777,6 +4813,60 @@ export interface UpdateRequest {
 	requestId: string;
 	/** Who initiated the change? */
 	source: "user" | "ai" | "system" | "intelligence" | "agent" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast";
+	/**
+	 * THE FIFTH "WHO" — and the only one whose principal DEPENDS ON THE DOOR.
+	 *
+	 * A proposal carries five distinct actor fields. Four live on the `proposals`
+	 * ROW; this one lives inside the JSONB `data` envelope, which is why it drifts
+	 * unnoticed. Read this table before gating anything on it:
+	 *
+	 * | field                       | where      | who it holds                                    |
+	 * |-----------------------------|------------|-------------------------------------------------|
+	 * | `proposals.proposedByUserId`| row        | the HUMAN member who filed it; null for agents   |
+	 * | `proposals.agentUserId`     | row        | the ACTING AGENT's user row (RFC 8693 `act`)     |
+	 * | `proposals.createdBy`       | row        | OVERLOADED: human on the canonical path, agent on dev-approval/stage-gate |
+	 * | `proposals.subjectUserId`   | row        | the user the proposal is ABOUT (not an actor)    |
+	 * | `data.sourceId`  (this)     | JSONB      | **HUMAN or AGENT — depends on the writer**       |
+	 *
+	 * The two writers, verbatim:
+	 *   - `packages/api/src/utils/permission-check.ts:2750` — the canonical
+	 *     `createProposal`, which almost every agent write flows through:
+	 *     `sourceId: userId` ⇒ **the HUMAN operator**, even for an agent write.
+	 *   - `packages/api/src/services/proposals/dev-approval.ts:222` and its twin
+	 *     `packages/api/src/services/playbooks/stage-gate.ts:232`:
+	 *     `sourceId: input.agentUserId ?? input.userId` ⇒ **the AGENT** whenever
+	 *     one is acting.
+	 *
+	 * ⚠️ CONSEQUENCES, both of which have been live defects:
+	 *   1. `sourceId === userId` is NOT "the caller is the human proposer". On the
+	 *      dev-approval paths it is true for the AGENT ITSELF, which is why
+	 *      `routers/proposals/review-authority.ts` carries an explicit agent-class
+	 *      floor before admitting an `isOwner` rung. Never gate authority on this
+	 *      field without that floor.
+	 *   2. It is NOT a reliable agent id either — so it must never be fed to
+	 *      `computeCanReviewApproval` as an actor, and an agent-attribution reader
+	 *      wants `agentUserId`, not this.
+	 *
+	 * ── A SIXTH overloaded "who": the name `isAgentOwner` ───────────────────
+	 * Not a field, but the same failure in variable form — two live rungs share
+	 * the name and mean DIFFERENT principals:
+	 *   - `packages/api/src/routers/proposals/review-authority.ts:163` resolves
+	 *     `users.createdByUserId` off the acting agent ⇒ genuinely **the HUMAN
+	 *     who owns the agent**. This is what the `"agent-owner"`
+	 *     `ReviewAuthorityReason` means.
+	 *   - `packages/api/src/routers/proposals.ts` (`withdraw`) tested
+	 *     `proposal.createdBy === userId` ⇒ **the ACTING AGENT itself**, because
+	 *     `createdBy` is the agent on every agent-authored path. Renamed to
+	 *     `isActingAgent` on 2026-09-07; behaviour unchanged, only the lying name.
+	 *
+	 * `createdBy` is itself overloaded three ways and is why that name drifted:
+	 * `utils/permission-check.ts:2856` writes the HUMAN, `:1649`/`:3025` write the
+	 * AGENT, and `:2332` writes `input.createdBy ?? input.agentUserId ?? input.userId`.
+	 * Resolve which principal you mean before comparing it to a caller id.
+	 *
+	 * A tripwire (`packages/api/src/__tripwires__/proposal-source-id-principal.test.ts`)
+	 * pins both writers to the meanings documented above.
+	 */
 	sourceId: string;
 	/** Context */
 	workspaceId: string | null;
@@ -4867,7 +4957,6 @@ export interface ProposalReviewGraph {
 		 * already reads `entityOp.existingEntityId` for role lookup and ref
 		 * aliasing; it simply never emitted it.
 		 *
-		 * Mirrors the frontend `@synap-core/proposal-types` shape exactly.
 		 */
 		existingEntityId?: string;
 		/**
@@ -4876,7 +4965,8 @@ export interface ProposalReviewGraph {
 		 * resolved from live `entity_facets` for ops that reference a pre-existing
 		 * entity) and the roles this proposal ATTACHES (`isNew:true`, from the op's
 		 * inline `facets`). A new role is emphasized in the UI ("Grimkujow becomes a
-		 * Lead"). Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+		 * Lead"). SSOT. `@synap-core/proposal-types` re-exports this interface rather than
+		 * carrying a copy — the copy drifted once and cost a navigable graph node.
 		 */
 		roles?: Array<{
 			profileSlug: string;
@@ -5247,7 +5337,7 @@ export interface ImportModelingSuggestion {
 }
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
- * string question. Mirrors `@synap/hub-rest-client` and the frontend
+ * string question. Mirrors `@synap-core/hub-rest-client` and the frontend
  * capture-pipeline contract EXACTLY — defined locally to keep this internal
  * service client free of a dependency on the published Hub REST SDK.
  */
@@ -6403,6 +6493,30 @@ export interface ExpectedOutput {
 	claimedDone?: boolean;
 	/** Lineage: the approved proposal whose apply satisfied this output. */
 	satisfiedByProposalId?: string;
+	/**
+	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
+	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
+	 * delivery: it says who was asked, and the slot stays `pending` until an
+	 * approval stamps it through `satisfyExpectedOutputs`.
+	 *
+	 * It is also the SLOT CLAIM key for the delegate's own writes: governance
+	 * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
+	 * to this slot even when the change's name does not match the label — the
+	 * delegation IS the naming, made ahead of time by a human.
+	 */
+	delegatedTo?: string;
+	/** ISO timestamp of the delegation above. */
+	delegatedAt?: string;
+	/**
+	 * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
+	 * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
+	 * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
+	 * an explicit new delegation). No new status value: the slot was, and remains,
+	 * `pending`.
+	 */
+	returnedReason?: string;
+	/** ISO timestamp of the return above. */
+	returnedAt?: string;
 }
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
@@ -9940,6 +10054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
 				externalId?: string | undefined;
+				expectedLabel?: string | undefined;
 			};
 			output: {
 				status: string;
@@ -12384,6 +12499,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
 					authorName?: string;
+					agentActorName?: string;
+					onBehalfOfName?: string;
+					approverName?: string;
 					targetName?: string;
 					sessionGoal?: string;
 					review: ProposalReviewModel;
@@ -12433,6 +12551,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					revisionHistory: ProposalRevision[];
 					request: UpdateRequest;
 					authorName?: string;
+					agentActorName?: string;
+					onBehalfOfName?: string;
+					approverName?: string;
 					targetName?: string;
 					sessionGoal?: string;
 					review: ProposalReviewModel;
@@ -12537,6 +12658,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				revisionHistory: ProposalRevision[];
 				request: UpdateRequest;
 				authorName?: string;
+				agentActorName?: string;
+				onBehalfOfName?: string;
+				approverName?: string;
 				targetName?: string;
 				sessionGoal?: string;
 				review: ProposalReviewModel;
@@ -14062,6 +14186,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				type?: "code" | "text" | "markdown" | "html" | "pdf" | "docx" | undefined;
 				projectId?: string | undefined;
 				workspaceId?: string | undefined;
+				expectedLabel?: string | undefined;
 			};
 			output: {
 				status: string;
@@ -17130,8 +17255,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewIds: string[];
 				entityIds: string[];
 				dependencies: ResolvedPackageDependency[];
+				layers: InstallLayerReport[] | undefined;
 				reconciled?: undefined;
-				layers?: undefined;
 				composed?: undefined;
 			};
 			meta: object;
@@ -17952,8 +18077,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				viewIds: string[];
 				entityIds: string[];
 				dependencies: ResolvedPackageDependency[];
+				layers: InstallLayerReport[] | undefined;
 				reconciled?: undefined;
-				layers?: undefined;
 				composed?: undefined;
 			};
 			meta: object;
@@ -18324,6 +18449,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoning?: string | undefined;
 				agentUserId?: string | undefined;
 				id?: string | undefined;
+				expectedLabel?: string | undefined;
 			};
 			output: {
 				view: {
@@ -19739,6 +19865,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				factSkillId?: string | undefined;
 				automationIds?: string[] | undefined;
 				sentence?: unknown;
+				draft?: boolean | undefined;
 			};
 			output: CreateRuleGovernedResult;
 			meta: object;
@@ -19784,6 +19911,36 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		updateRule: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				id: string;
+				intent: string;
+				scope: {
+					kind: "user" | "workspace" | "pod";
+					workspaceId?: string | undefined;
+					projectId?: string | undefined;
+				};
+				expiresAt?: string | null | undefined;
+				factSkillId?: string | undefined;
+				automationIds?: string[] | undefined;
+				sentence?: unknown;
+				draft?: boolean | undefined;
+			};
+			output: {
+				status: "updated";
+				ruleId: string;
+				automationIds: string[];
+				draft: boolean;
+			} | {
+				status: "proposed";
+				proposalId: string;
+			} | {
+				status: "denied";
+				reason: string;
+				failure?: RuleCompileFailure;
+			};
+			meta: object;
+		}>;
 		getRule: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -19802,6 +19959,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						intent: string;
 						scope: RuleScope;
 						expiresAt?: string;
+						draft?: boolean;
 						behaviours: RuleBehaviourRecord[];
 						routing?: RuleRouting;
 						sentence?: unknown;
@@ -22268,6 +22426,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				trustLevel: WidgetTrustLevel;
 				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
+				externalHosts: string[] | null;
 			}[];
 			meta: object;
 		}>;
@@ -22304,6 +22463,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				trustLevel: WidgetTrustLevel;
 				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
+				externalHosts: string[] | null;
 			}, "name" | "workspaceId" | "createdAt" | "updatedAt" | "description" | "isActive" | "category" | "typeKey" | "rendererType">[];
 			meta: object;
 		}>;
@@ -22342,6 +22502,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				trustLevel: WidgetTrustLevel;
 				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
+				externalHosts: string[] | null;
 			};
 			meta: object;
 		}>;
@@ -22367,7 +22528,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rendererType?: "builtin" | "iframe" | "native" | "frame" | undefined;
 				contentKind?: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget" | undefined;
 				rendererSource?: string | undefined;
-				source?: string | undefined;
 				deps?: Record<string, string> | undefined;
 				viewTypes?: string[] | undefined;
 				configSchema?: Record<string, unknown> | undefined;
@@ -22382,21 +22542,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 			};
 			output: {
-				name: string;
 				id: string;
+				typeKey: string;
 				workspaceId: string | null;
-				createdAt: Date;
-				updatedAt: Date;
+				name: string;
 				description: string | null;
-				source: string | null;
-				role: WidgetRole;
-				version: string | null;
-				isActive: boolean;
 				icon: string | null;
 				category: string | null;
-				typeKey: string;
 				rendererType: WidgetRendererType;
 				rendererSource: string | null;
+				source: string | null;
 				bundleSource: string | null;
 				configSchema: Record<string, unknown>;
 				defaultConfig: Record<string, unknown> | null;
@@ -22409,9 +22564,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					h: number;
 				} | null;
 				deps: Record<string, string> | null;
+				isActive: boolean;
+				version: string | null;
 				trustLevel: WidgetTrustLevel;
+				role: WidgetRole;
 				contentKind: "entity-detail" | "entity-card" | "entity-profile" | "collection" | "widget";
 				viewRendererViewTypes: string[] | null;
+				externalHosts: string[] | null;
+				createdAt: Date;
+				updatedAt: Date;
 			};
 			meta: object;
 		}>;
@@ -25718,6 +25879,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					icon?: string | undefined;
 					status?: "pending" | "done" | undefined;
+					claimedDone?: boolean | undefined;
+					satisfiedByProposalId?: string | undefined;
+					delegatedTo?: string | undefined;
+					delegatedAt?: string | undefined;
+					returnedReason?: string | undefined;
+					returnedAt?: string | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -25774,6 +25941,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					label: string;
 					icon?: string | undefined;
 					status?: "pending" | "done" | undefined;
+					claimedDone?: boolean | undefined;
+					satisfiedByProposalId?: string | undefined;
+					delegatedTo?: string | undefined;
+					delegatedAt?: string | undefined;
+					returnedReason?: string | undefined;
+					returnedAt?: string | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 			};
@@ -25866,6 +26039,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ok: true;
 				outputId: string;
+			};
+			meta: object;
+		}>;
+		delegateOutput: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+				agentType?: string | undefined;
+			};
+			output: {
+				ok: true;
+				expectedLabel: string;
+				kind: string;
+				agentType: string;
+				channelId: string;
+				messageId: string;
+				triggered: boolean;
+				agentAttached: boolean;
 			};
 			meta: object;
 		}>;

@@ -158,4 +158,150 @@ export function registerRuleExecutors(): void {
       return { success: true };
     },
   });
+  // ── rule/update — the EDIT half, and the one that ACTIVATES a draft ────────
+  //
+  // Registered for exactly the reason `rule/create` is: without it, approval
+  // falls to the `*​/*` catch-all, which for a gate-made proposal does NOT
+  // throw — it emits `.validated`, flips the row APPROVED and returns success
+  // while NOTHING is written. That silent-success defect has shipped three
+  // times in this repo, and an edit that reports success while leaving the old
+  // sentence running is the worst-shaped version of it: the reviewer believes
+  // they changed what fires, and what fires is unchanged.
+  //
+  // Replays through the SAME `updateRuleGoverned` door the direct path uses, as
+  // the APPROVER, so the rewritten automation, the re-earned divergence
+  // snapshot and the lineage edges are byte-identical to a direct edit. Crucially
+  // the replay RECOMPILES: approving an edit whose THEN has since become
+  // unrunnable is REFUSED (FORBIDDEN) rather than applied half-way, and
+  // approving a DRAFT approves into a draft rather than arming it.
+  registerProposalExecutor({
+    key: "rule/update",
+    async execute({ proposal, payload, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const ruleId = innerData.id as string | undefined;
+      const intent = innerData.intent as string | undefined;
+      if (!ruleId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Rule update proposal is missing the rule id",
+        });
+      }
+      if (!intent || !intent.trim()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Rule update proposal is missing intent",
+        });
+      }
+
+      // Idempotency, same contract as `rule/create`: approve is not
+      // status-guarded before dispatch. An update is closer to idempotent than
+      // a create, but a second replay would still re-archive and re-materialize
+      // the automation — a new id, and the run history this door exists to
+      // preserve lost on the retry.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { readRuleScope } =
+        await import("../../../services/rules/index.js");
+      const { readExpiresAt } =
+        await import("../../../services/rules/expiry.js");
+      const scope = readRuleScope(innerData.scope);
+      const expiresAt = readExpiresAt(innerData.expiresAt);
+
+      const { updateRuleGoverned } =
+        await import("../../../services/rules/update.js");
+      const result = await updateRuleGoverned({
+        userId,
+        agentUserId: undefined,
+        // The behaviour's draft floor keys on WHO AUTHORED it, never on who
+        // approved it — the same split `rule/create` documents at length.
+        ...(proposal.agentUserId
+          ? { behaviourAuthorAgentUserId: proposal.agentUserId }
+          : {}),
+        ruleId,
+        workspaceId: proposal.workspaceId ?? null,
+        intent,
+        scope,
+        // THREE states, and they must stay three: a date, an explicit CLEAR,
+        // and "not part of this edit". Collapsing the last two would make every
+        // approved edit silently strip the rule's review date.
+        ...(innerData.clearExpiresAt === true
+          ? { expiresAt: null }
+          : expiresAt
+            ? { expiresAt }
+            : {}),
+        ...(typeof innerData.factSkillId === "string"
+          ? { factSkillId: innerData.factSkillId }
+          : {}),
+        // Same three states as on the direct path. `clearSentence` is what
+        // keeps "the author removed the behaviour" distinguishable from "the
+        // author did not mention it" across the approval hop — without it the
+        // replay would carry the stored sentence forward and quietly restore a
+        // behaviour the reviewer had approved the deletion of.
+        ...(innerData.clearSentence === true
+          ? { sentence: null }
+          : innerData.sentence !== undefined
+            ? { sentence: innerData.sentence }
+            : {}),
+        ...(innerData.draft === true ? { draft: true } : {}),
+        automationIds: Array.isArray(innerData.automationIds)
+          ? (innerData.automationIds as string[]).filter(
+              (id): id is string => typeof id === "string"
+            )
+          : [],
+        auditSource: "proposal_approval",
+      });
+
+      if (result.status === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            "The rule this proposal edits no longer exists, so the edit cannot be applied.",
+        });
+      }
+      if (result.status === "denied") {
+        throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+      }
+      // The approver IS the authority — a nested proposal means the replay filed
+      // a SECOND proposal instead of applying the first.
+      assertApplied(result);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+          data: {
+            ...((proposal.data as Record<string, unknown>) ?? {}),
+            materialized: {
+              ruleId,
+              // From the RESULT: the automation the approval rewrote or created
+              // is the thing a revert has to reach.
+              automationIds:
+                result.status === "updated" ? result.automationIds : [],
+              draft: result.status === "updated" ? result.draft : undefined,
+            },
+          },
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      void payload;
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
 }

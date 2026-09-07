@@ -294,6 +294,13 @@ export const PackageApplySchema = z.object({
         configSchema: z.record(z.string(), z.unknown()).optional(),
         viewTypes: z.array(z.string().min(1).max(64)).max(32).optional(),
         /**
+         * Declared frame egress. Same nested-strip class as `contentKind`
+         * below, and the CP declares it too: without a slot here zod drops the
+         * list one hop after publish, so a cell that a human approved WITH a
+         * disclosed host list installs with none. Bounds mirror the CP slot.
+         */
+        externalHosts: z.array(z.string().min(1).max(253)).max(32).optional(),
+        /**
          * Renderer SLOT. The CP's own `cells[]` slot declares this
          * (`synap-control-plane-api/src/routes/packages.ts`), and the pod
          * stripped it one hop later — the exact `relationDefs` shape of loss

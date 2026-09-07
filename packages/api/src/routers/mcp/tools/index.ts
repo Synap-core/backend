@@ -651,6 +651,11 @@ export const tools = {
                 required: ["slug"],
               },
             },
+            expectedLabel: {
+              type: "string",
+              description:
+                "The declared output slot this fulfils, exactly as declared on the session.",
+            },
           },
           required: ["profileSlug", "title"],
         },
@@ -726,6 +731,11 @@ export const tools = {
               description:
                 "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. A session that isn't yours is ignored, not an error.",
             },
+            expectedLabel: {
+              type: "string",
+              description:
+                "The declared output slot this fulfils, exactly as declared on the session.",
+            },
           },
           required: ["title"],
         },
@@ -772,6 +782,11 @@ export const tools = {
               type: "string",
               description:
                 "Optional UUID of an EXISTING entity — attach the stored blob to it as provenance instead of creating a new `file` entity.",
+            },
+            expectedLabel: {
+              type: "string",
+              description:
+                "The declared output slot this fulfils, exactly as declared on the session.",
             },
           },
           required: ["filename", "mimeType"],
@@ -832,7 +847,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a typed relation between two entities. Type is a free string — use conventions: 'related_to', 'parent_of', 'child_of', 'belongs_to', 'authored_by', 'depends_on', 'references', 'mentions'. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
+          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at', 'belongs_to_project'. Relation defs are WORKSPACE-scoped, so pass `workspaceId` (or call with a workspace focus): without one, no def resolves and the call is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1791,7 +1806,7 @@ export const tools = {
           "\n" +
           'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
           "\n" +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n' +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is that relation defs are WORKSPACE-scoped and the capture was placed pod-wide (a project focus alone is not a workspace) — re-send with `workspaceId` if the graph matters.\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
           type: "object",
@@ -1880,8 +1895,18 @@ export const tools = {
                   targetRef: { type: "string" },
                   type: {
                     type: "string",
+                    // NOT a free string, despite what this description said
+                    // until 2026-09-07: every edge is created through
+                    // `relations.create`, which rejects any slug that is not a
+                    // relation_def of the effective workspace. The old examples
+                    // 'related_to' and 'contact_for' are not defs anywhere —
+                    // a model that followed this schema got its edges dropped
+                    // into `relationsFailed[]`. Only real slugs may be named
+                    // here; the tripwire in
+                    // `__tripwires__/relation-types-in-tool-schemas.test.ts`
+                    // holds every one of them to DEFAULT_RELATION_DEFS.
                     description:
-                      "Relation type — free string, e.g. 'works_at', 'related_to', 'contact_for', 'references'.",
+                      "Relation type — an existing relation-def slug, e.g. 'works_at', 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on'. Relation defs are WORKSPACE-scoped: a capture placed pod-wide (no workspace lens — e.g. under a project focus alone) resolves NO def, and its edges come back in `relationsFailed[]` with the graph's status set to `partial`. Pass `workspaceId` when you need the edges to land.",
                   },
                 },
                 required: ["sourceRef", "targetRef", "type"],
@@ -2081,6 +2106,11 @@ export const tools = {
               description:
                 "View configuration (groupBy, sortBy, filters, etc.)",
             },
+            expectedLabel: {
+              type: "string",
+              description:
+                "The declared output slot this fulfils, exactly as declared on the session.",
+            },
           },
           required: ["name", "type", "workspaceId"],
         },
@@ -2216,7 +2246,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update the summary or reasoning of a pending proposal (e.g. after user feedback). Does not re-run the event pipeline.",
+          "Amend a pending proposal you authored (e.g. after user feedback): its summary, its reasoning, and/or the payload it will actually apply. Does not re-run the event pipeline, and does NOT approve it — a human still decides.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2229,8 +2259,39 @@ export const tools = {
                 "A leading fragment of one also resolves, but pass the full id " +
                 "you were given — do not shorten it yourself.",
             },
-            summary: { type: "string" },
-            reasoning: { type: "string" },
+            summary: {
+              type: "string",
+              description:
+                "The human-readable summary a reviewer reads when deciding.",
+            },
+            reasoning: {
+              type: "string",
+              description: "Why this change is being requested.",
+            },
+            patch: {
+              type: "object",
+              description:
+                "Amend WHAT WILL BE APPLIED, not just the narrative. Use this " +
+                "whenever you change the summary to describe different content " +
+                "\u2014 a summary that no longer matches the payload is worse " +
+                "than no revision, because the human reads the summary.",
+              properties: {
+                kind: {
+                  type: "string",
+                  enum: ["inner", "envelope"],
+                  description:
+                    "'inner' edits the entity-level fields the executor applies " +
+                    "(the usual choice). 'envelope' edits the top-level proposal " +
+                    "envelope.",
+                },
+                fields: {
+                  type: "object",
+                  description:
+                    "The field edits to merge. Only the keys you pass change.",
+                },
+              },
+              required: ["kind", "fields"],
+            },
           },
           required: ["proposalId"],
         },

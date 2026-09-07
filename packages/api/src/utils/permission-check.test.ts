@@ -251,23 +251,36 @@ const BASE_OPTS = {
 // ---------------------------------------------------------------------------
 
 describe("buildProposalSummary", () => {
-  it("capitalises action and includes quoted label when title is present", () => {
+  // Generic `entity` is suppressed as a noun (see `buildObjectActionTitle`),
+  // so a bare entity with no profileSlug titles as verb + quoted name only —
+  // no raw "entity" token reaches the reviewer.
+  it("suppresses the generic entity noun when no profileSlug is present", () => {
     const summary = buildProposalSummary("entity", "create", {
       title: "Task A",
     });
-    expect(summary).toBe('Create entity "Task A"');
+    expect(summary).toBe('Create "Task A"');
+  });
+
+  // A profileSlug on the payload is the true kind of the thing being acted
+  // on and wins over the generic `entity` subjectType.
+  it("uses profileSlug as the object kind when present", () => {
+    const summary = buildProposalSummary("entity", "create", {
+      title: "Task A",
+      profileSlug: "task",
+    });
+    expect(summary).toBe('Create Task "Task A"');
   });
 
   it("uses name field when title is absent", () => {
     const summary = buildProposalSummary("view", "update", {
       name: "Sprint Board",
     });
-    expect(summary).toBe('Update view "Sprint Board"');
+    expect(summary).toBe('Update View "Sprint Board"');
   });
 
-  it("falls back to plain action + subjectType when no label fields are present", () => {
+  it("falls back to plain action + noun when no label fields are present", () => {
     const summary = buildProposalSummary("workspace", "delete", {});
-    expect(summary).toBe("Delete workspace");
+    expect(summary).toBe("Delete Workspace");
   });
 
   // A rule carries none of the generic label fields, so without its own case it
@@ -293,7 +306,7 @@ describe("buildProposalSummary", () => {
 
   it("falls back cleanly when a rule payload carries no intent", () => {
     expect(buildProposalSummary("rule", "create", { id: "r1" })).toBe(
-      "Create rule"
+      "Create Rule"
     );
   });
 
@@ -301,23 +314,23 @@ describe("buildProposalSummary", () => {
   // `charAt(0).toUpperCase()` (forbidden by `.claude/rules/vocabulary.md`).
   // `plan_approval` is the falsifier: capitalising the token spells
   // "Plan_approval", the raw domain token leaking to a reviewer.
-  it("resolves the verb through the vocabulary, not call-site capitalisation", () => {
+  it("resolves the verb AND noun through the vocabulary, not call-site capitalisation", () => {
     expect(
       buildProposalSummary("focus_session", "plan_approval", { name: "Wave 2" })
-    ).toBe('Approve plan focus_session "Wave 2"');
+    ).toBe('Approve plan Session "Wave 2"');
   });
 
   // A PENDING proposal titles what approving it WILL do — imperative mood.
   // The past form ("Rejected") would describe something that already happened.
   it("titles a pending proposal in the imperative mood", () => {
     expect(buildProposalSummary("proposal", "reject", { name: "P1" })).toBe(
-      'Reject proposal "P1"'
+      'Reject Proposal "P1"'
     );
   });
 
   it("uses slug as label of last resort", () => {
     const summary = buildProposalSummary("profile", "create", { slug: "crm" });
-    expect(summary).toBe('Create profile "crm"');
+    expect(summary).toBe('Create Profile "crm"');
   });
 
   it("uses goal as label on the generic path", () => {
@@ -325,7 +338,18 @@ describe("buildProposalSummary", () => {
       goal: "Ship phase A",
       progress: 50,
     });
-    expect(summary).toBe('Update focus_session "Ship phase A"');
+    expect(summary).toBe('Update Session "Ship phase A"');
+  });
+
+  // No raw subjectType (a DB token, often snake_case) may reach a reviewer
+  // through the generic branch — it must always resolve through the noun
+  // vocabulary, never interpolate verbatim.
+  it("never leaks a raw underscored subjectType through the generic branch", () => {
+    const summary = buildProposalSummary("relation_def", "update", {
+      name: "Owns",
+    });
+    expect(summary).not.toContain("relation_def");
+    expect(summary).toBe('Update Relation type "Owns"');
   });
 
   it("focus_session create with goal → Start session", () => {
@@ -365,7 +389,8 @@ describe("buildProposalResponseFields", () => {
     });
     expect(result.reviewPath).toBe("/open/prop-001");
     expect(result.reviewUrl).toContain("/open/prop-001");
-    expect(result.summary).toBe('Delete entity "Q2 Plan"');
+    // Generic `entity` noun is suppressed (no profileSlug on the payload).
+    expect(result.summary).toBe('Delete "Q2 Plan"');
   });
 
   it("uses explicit reasoning when provided", () => {

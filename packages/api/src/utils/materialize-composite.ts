@@ -81,7 +81,26 @@ export async function createRelationsFromRefs(
       ) {
         continue;
       }
-      await relationCaller.create({ sourceEntityId, targetEntityId, type });
+      // A door that can answer "proposed" must never be counted as "linked".
+      // `relations.create` returns `{ status: "proposed" }` rather than
+      // throwing when the governance ladder routes the write to a proposal —
+      // so an ignored return value would report N edges linked while creating
+      // ZERO and queueing N new proposals. The approval path suppresses that
+      // re-gate at its source (see the `governanceProposalId` carve-out in
+      // `relations.create`); this is the defence in depth for every other
+      // caller of the shared materializer.
+      const created = await relationCaller.create({
+        sourceEntityId,
+        targetEntityId,
+        type,
+      });
+      if ((created as { status?: string } | undefined)?.status === "proposed") {
+        throw new Error(
+          `relation ${type} was routed to a proposal instead of being created; ` +
+            `it was NOT linked. This path materializes an already-approved ` +
+            `proposal and must not re-enter the governance membrane.`
+        );
+      }
       relations.push({ sourceEntityId, targetEntityId, type });
     } catch (err) {
       opts?.onError?.(err, op.type, {

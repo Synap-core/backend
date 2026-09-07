@@ -213,22 +213,62 @@ export type ProposalRevisionPatch = {
  * proposals) OR off `.data` (entity/update proposals), so both levels are
  * protected — checking only the top level would leave the nested door open.
  */
-export const PROTECTED_ENVELOPE_FIELDS = ["sourceFile"] as const;
+/**
+ * Fields a revision may never SET, and which are restored if a wholesale `data`
+ * replacement drops them.
+ *
+ * `sourceFile` — staged bytes; dropping it orphans them (no terminal door would
+ * ever see a reference to discard).
+ *
+ * `sourceId` — an AUTHORITY INPUT, not descriptive data. `computeCanReviewApproval`
+ * derives `isOwner` from it (`review-authority.ts:153`, `:202`), and under the
+ * default `owner_and_admins` policy `isOwner` ALONE grants approval to a caller
+ * with no workspace membership at all. Left patchable, an agent authorised by the
+ * author rung could `patch: {fields:{sourceId:"<any user id>"}}` on its own pending
+ * proposal and hand that user approval authority over it — converting "needs an
+ * admin" into "this viewer can approve". The agent-class floor added alongside this
+ * covers the READ (an agent naming ITSELF); it cannot cover the WRITE, which is why
+ * the field is pinned here. Nothing a reviser legitimately expresses requires
+ * changing it: it is stamped once, by the door that created the proposal.
+ */
+export const PROTECTED_ENVELOPE_FIELDS = ["sourceFile", "sourceId"] as const;
 
-/** True when a patch would SET or ALTER a protected field at either level. */
-function patchTouchesProtectedField(fields: Record<string, unknown>): boolean {
+/**
+ * The protected field a patch would SET or ALTER at either level, or null.
+ *
+ * Returns the offending KEY rather than a boolean so the error can name the
+ * field the caller actually touched. The message used to hardcode `sourceFile`,
+ * which was correct while that was the only entry and became a lie the moment a
+ * second one was added — telling a caller to stop sending a field they never
+ * sent. Prose in this codebase is executable; the message is derived, not typed.
+ */
+function patchTouchesProtectedField(
+  fields: Record<string, unknown>
+): (typeof PROTECTED_ENVELOPE_FIELDS)[number] | null {
   const nested =
     fields.data &&
     typeof fields.data === "object" &&
     !Array.isArray(fields.data)
       ? (fields.data as Record<string, unknown>)
       : undefined;
-  return PROTECTED_ENVELOPE_FIELDS.some(
-    (key) =>
-      Object.hasOwn(fields, key) ||
-      (nested ? Object.hasOwn(nested, key) : false)
+  return (
+    PROTECTED_ENVELOPE_FIELDS.find(
+      (key) =>
+        Object.hasOwn(fields, key) ||
+        (nested ? Object.hasOwn(nested, key) : false)
+    ) ?? null
   );
 }
+
+/** Why each protected field is refused — shown to the caller that touched it. */
+const PROTECTED_FIELD_REASON: Record<
+  (typeof PROTECTED_ENVELOPE_FIELDS)[number],
+  string
+> = {
+  sourceFile: "it is system-authored file provenance, not reviewable content",
+  sourceId:
+    "it is the authority input reviewer eligibility is derived from, not reviewable content",
+};
 
 export interface ComputeRevisedEnvelopeParams {
   /** The stored `proposals.data` envelope (never mutated). */
@@ -266,11 +306,15 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   // — the column the presigned-URL door trusts — hands you their bytes.
   // Enforced HERE, in the shared core, so all three revise doors (tRPC
   // `revise`, MCP `synap_revise_proposal`, Hub `updateProposal`) inherit it.
-  if (patch && patchTouchesProtectedField(patch.fields)) {
+  const protectedField = patch
+    ? patchTouchesProtectedField(patch.fields)
+    : null;
+  if (protectedField) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        "A revision cannot set or alter `sourceFile` — it is system-authored file provenance, not reviewable content.",
+        `A revision cannot set or alter \`${protectedField}\` — ` +
+        `${PROTECTED_FIELD_REASON[protectedField]}.`,
     });
   }
   const before: Record<string, unknown> = {};
@@ -356,6 +400,21 @@ export interface MergeProposalRevisionParams {
   /** The actor filing the revision — recorded as `by` on the history entry. */
   actorId?: string | null;
   /**
+   * AUTHOR RUNG (A). The AGENT principal filing this revision, when the caller
+   * is an agent key — i.e. RFC 8693's `act`: the agent acting FOR the human in
+   * `actorId`, with its own identity, never indistinguishable from them.
+   *
+   * Used ONLY to authorize an agent amending ITS OWN pending proposal
+   * (`proposals.agentUserId === actingAgentUserId`). It is deliberately NOT
+   * passed to `computeCanReviewApproval` — feeding an agent id into the
+   * reviewer ladder is a self-approval hole, because `data.sourceId` holds the
+   * AGENT on the dev-approval/stage-gate doors, which would make `isOwner` true
+   * and hand the agent full reviewer authority over its own proposal under the
+   * default `owner_and_admins` policy. Author authority and reviewer authority
+   * are separate rungs and must stay separate.
+   */
+  actingAgentUserId?: string | null;
+  /**
    * Re-target this pending proposal's destination workspace — the TOP-LEVEL
    * `proposals.workspace_id` column, not `data.workspaceId`. Every visibility/
    * approval gate and the approve materializer key off this column, so a
@@ -412,19 +471,45 @@ export async function mergeProposalRevision(
     // passes the authenticated user id.
     // NOT_FOUND (not FORBIDDEN) so an unauthorized caller cannot use this door
     // as an existence/status oracle for another user's proposals.
+    // AUTHOR RUNG (A) — checked FIRST, and entirely separately from the
+    // reviewer ladder. An agent may amend the proposal IT ITSELF authored: it is
+    // still asking, not deciding, so amending its own pending request needs no
+    // reviewer authority. This is the same author/owner-vs-reviewer split
+    // `proposals.withdraw` already draws (routers/proposals.ts:1670 — a
+    // proposer-only gate that explicitly refuses the reviewer ladder).
+    //
+    // Matched on the AGENT principal (`proposals.agentUserId`, already selected
+    // in this transaction above), never on `data.sourceId` — which holds a
+    // different principal per door and is not a reliable agent id.
+    //
+    // ⛔ The agent id is NOT forwarded into `computeCanReviewApproval` below.
+    // Author authority lets an agent change WHAT IT IS ASKING FOR; it never
+    // lets the agent decide the request. A human still approves.
+    const isAuthor =
+      !!params.actingAgentUserId &&
+      existing.agentUserId === params.actingAgentUserId;
+
     const { computeCanReviewApproval } =
       await import("../../routers/proposals/review-authority.js");
-    const { allowed } = params.actorId
-      ? await computeCanReviewApproval({
-          proposal: {
-            workspaceId: existing.workspaceId,
-            data: existing.data,
-            agentUserId: existing.agentUserId,
-          },
-          userId: params.actorId,
-        })
-      : { allowed: false };
-    if (!allowed) {
+    const { allowed: canReview } =
+      !isAuthor && params.actorId
+        ? await computeCanReviewApproval({
+            // Reviewer-revise bar, unchanged. The AUTHOR path never reaches
+            // here (`!isAuthor` guards it), so this cannot gate an agent
+            // amending its own proposal.
+            purpose: "reject" as const,
+            proposal: {
+              workspaceId: existing.workspaceId,
+              data: existing.data,
+              agentUserId: existing.agentUserId,
+            },
+            userId: params.actorId,
+          })
+        : { allowed: false };
+    if (!isAuthor && !canReview) {
+      // NOT_FOUND (not FORBIDDEN) so an unauthorized caller cannot use this door
+      // as an existence/status oracle for another user's proposals — the
+      // pre-existing semantics of this gate, preserved deliberately.
       throw new TRPCError({ code: "NOT_FOUND", message: "Proposal not found" });
     }
 
@@ -480,13 +565,24 @@ export async function reviseProposal(params: {
   proposalId: string;
   summary?: string;
   reasoning?: string;
+  /**
+   * Amend WHAT WILL BE CREATED, not just the narrative a human reads. Without
+   * it an agent could rewrite its summary while the payload it described stayed
+   * unchanged — narrative and payload silently diverging is worse than no
+   * amendment at all, because the human reads the narrative.
+   */
+  patch?: ProposalRevisionPatch;
   /** The actor filing the revision — recorded as `by` on the history entry. */
   actorId?: string | null;
+  /** The acting AGENT principal, enabling the author rung (see the core). */
+  actingAgentUserId?: string | null;
 }): Promise<void> {
   await mergeProposalRevision({
     proposalId: params.proposalId,
     summary: params.summary,
     reasoning: params.reasoning,
+    patch: params.patch,
     actorId: params.actorId,
+    actingAgentUserId: params.actingAgentUserId,
   });
 }

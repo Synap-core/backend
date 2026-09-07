@@ -299,6 +299,57 @@ export const VALUELESS_CONDITION_OPERATORS: readonly ConditionOperator[] = [
   "is_false",
 ];
 
+/**
+ * THE refusal sentence for an unevaluable WHERE operator — ONE string, shared.
+ *
+ * `services/rules/compile.ts` refuses these by name and this converter now
+ * throws on them, and those are two doors answering the same question. Two
+ * hand-written messages for one refusal is a fork the moment either is
+ * reworded, so the wording lives here and both doors import it.
+ */
+export function unevaluableConditionMessage(row: {
+  key: string;
+  operator: string;
+}): string {
+  return `The WHERE condition on "${row.key}" uses "${row.operator.replace(/_/g, " ")}", which this trigger cannot evaluate — the automation matcher only understands is, is not, greater than, less than, is true and is false. Rewrite the condition with one of those.`;
+}
+
+/**
+ * Thrown by {@link toBackendTrigger} when a WHERE row names an operator the
+ * runtime cannot evaluate.
+ *
+ * ── WHY A THROW AND NOT A DROP ──────────────────────────────────────────────
+ * The drop was SILENT and it WIDENED the rule. `conditionToFilterValue` returns
+ * `undefined` for `contains` / `starts_with` / `changed_to`, this function
+ * folded with `if (compiled !== undefined)`, and the row simply vanished — so a
+ * rule fired on exactly the events its author had just excluded. Worse, the
+ * loss is UNRECOVERABLE downstream: `automations.create` receives an
+ * already-compiled `triggerConfig`, so the server sees two filter keys where the
+ * author wrote three and there is NO ABSENCE FOR IT TO VALIDATE.
+ * `validateTriggerFilters` (the create-door gate) can only judge the operators
+ * that are PRESENT; it is structurally incapable of catching this, and the two
+ * WHERE editors were the only thing standing between a user and a widened rule.
+ *
+ * A throw is the only refusal shape available to a pure converter with this
+ * signature, and refusing loudly beats widening silently: the worst case is an
+ * error a caller must handle, against a rule that quietly does the opposite of
+ * what it says.
+ *
+ * `clause` is `"WHERE"` so a caller can point at the failing row in the author's
+ * own sentence vocabulary, exactly as `RuleCompileFailure` does.
+ */
+export class UnevaluableConditionError extends Error {
+  readonly clause = "WHERE" as const;
+  readonly key: string;
+  readonly operator: string;
+  constructor(row: { key: string; operator: string }) {
+    super(unevaluableConditionMessage(row));
+    this.name = "UnevaluableConditionError";
+    this.key = row.key;
+    this.operator = row.operator;
+  }
+}
+
 export function toBackendTrigger(
   trigger: SentenceTrigger,
   conditions: ConditionRow[]
@@ -352,7 +403,26 @@ export function toBackendTrigger(
     const filters: Record<string, unknown> = {};
     for (const row of conditions) {
       if (!row.key) continue;
+      // REFUSE, never drop. See `UnevaluableConditionError` for why this is a
+      // throw: the row's disappearance WIDENS the rule, and it is gone before
+      // any server-side validator could see it. Checked ahead of
+      // `conditionToFilterValue` so the refusal names the OPERATOR rather than
+      // reporting the generic "emits nothing" that an incomplete row also
+      // produces — those are different problems and only one of them is a lie.
+      if (
+        (UNEVALUABLE_CONDITION_OPERATORS as readonly string[]).includes(
+          row.operator
+        )
+      ) {
+        throw new UnevaluableConditionError(row);
+      }
       const compiled = conditionToFilterValue(row);
+      // A row that still emits nothing here is INCOMPLETE (a missing value),
+      // not unevaluable. It also widens, and `services/rules/compile.ts` refuses
+      // it on the rule lane — but a half-typed row is a normal intermediate
+      // state in a live editor, so throwing on it would make the converter
+      // unusable for the surfaces that call it while the author is still
+      // typing. Named here so the asymmetry is a decision, not an oversight.
       if (compiled !== undefined) filters[row.key] = compiled;
     }
     // WHERE the chosen kind goes, and why it is NOT one key.

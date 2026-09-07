@@ -405,6 +405,21 @@ describe("the pod-wide authority gate runs BEFORE any executor dispatch", () => 
 
   it("BOTH approve doors dispatch only through applyProposalApproval", () => {
     expect(ROUTER.match(/await applyProposalApproval\(/g)?.length).toBe(2);
-    expect(ROUTER.match(/await computeCanReviewApproval\(/g)?.length).toBe(3);
+    // FOUR shared-ladder call sites, raised from 3 on 2026-09-07 when `revert`
+    // was converted. It had inlined its OWN copy —
+    // `canReviewProposal({..., isOwner: proposalData?.sourceId === userId})`
+    // wrapped in `if (proposal.workspaceId)` — which meant no agent-class floor
+    // (data.sourceId IS the acting agent on the dev-approval / stage-gate doors)
+    // and NO authority check at all for pod-wide proposals. Hub REST had blocked
+    // agents on revert all along; tRPC had not.
+    //
+    // ⚠️ This number may only go UP by CONVERSION, never by a new inline ladder.
+    // If it rises, confirm the new call site replaced a hand-rolled copy; if it
+    // falls, a door has stopped using the shared gate — investigate, do not
+    // simply re-pin. The four are: approve, revise, batchApprove, revert.
+    expect(ROUTER.match(/await computeCanReviewApproval\(/g)?.length).toBe(4);
+    // Non-vacuity: a renamed helper would make BOTH counts zero and the
+    // assertions above trivially unsatisfiable rather than silently true.
+    expect(ROUTER.length).toBeGreaterThan(1000);
   });
 });

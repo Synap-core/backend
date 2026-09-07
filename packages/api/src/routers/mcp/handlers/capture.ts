@@ -51,6 +51,10 @@ import {
   McpHandlerMap,
   McpToolHandler,
 } from "./shared.js";
+// Static, NOT part of the dynamic `submit-capture-graph` import in the graph
+// branch: a pure helper there would be stubbed away by any `vi.mock` of that
+// module, exactly where a test believes it is exercising the door.
+import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
 
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
@@ -473,10 +477,18 @@ const captureHandler: McpToolHandler = async (
         : {}),
     });
     // The terminal is policy-derived: `applied` (materialized now, whitelisted
-    // graph) or `proposed` (pending review). `graphResult.writeReceipt`
-    // already conforms to the uniform receipt (state applied|pending).
+    // graph), `partial` (entities landed, at least one submitted relation did
+    // NOT) or `proposed` (pending review).
+    //
+    // READ OFF `writeReceipt.state`, never re-derived from `graphResult.applied`.
+    // `applied` is the ROUTING flag ("did this terminal materialize?") and stays
+    // true for a graph whose edges failed; the honest outcome word lives on the
+    // receipt. Deriving `status` here from the boolean is what produced the
+    // reported defect: `status: "applied"` alongside `relationCount: 0` and
+    // every edge sitting in `relationsFailed[]` — a caller that did not read
+    // that array believed the graph landed.
     return ok({
-      status: graphResult.applied ? "applied" : "proposed",
+      status: captureStatusForReceiptState(graphResult.writeReceipt.state),
       scope: graphScope,
       ...graphResult,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),

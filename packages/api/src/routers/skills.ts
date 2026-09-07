@@ -484,6 +484,16 @@ export const skillsRouter = router({
          * would be a second copy of the grammar.
          */
         sentence: ruleSentenceSchema.optional(),
+        /**
+         * Save the rule WITH ITS HOLES. The sentence is stored verbatim and
+         * NOTHING is compiled — no automation row is created, so the rule
+         * cannot fire because the artifact does not exist, not because a flag
+         * says so. Activation goes through `updateRule({ draft: false })`,
+         * which RECOMPILES and refuses by clause. See the `draft` note on
+         * `RuleMetadata` for why a compiled-but-inactive draft would be unsafe
+         * here in a way it is not in Zapier.
+         */
+        draft: z.boolean().default(false),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -500,6 +510,7 @@ export const skillsRouter = router({
         ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
         automationIds: input.automationIds,
         ...(input.sentence ? { sentence: input.sentence } : {}),
+        ...(input.draft ? { draft: true } : {}),
         auditSource: "rules.createRule",
       });
       // CONTRACT, deliberate and different from the Hub REST door (which maps
@@ -708,7 +719,16 @@ export const skillsRouter = router({
                 lastRunAt: health.get(row.id)?.lastRunAt ?? null,
                 /** Lifetime RUNS — never a match count. */
                 runCount: health.get(row.id)?.runCount ?? 0,
-                status: "active" as const,
+                /**
+                 * ⚠️ This was `"active" as const` — a LITERAL, for every
+                 * materialized row. Every rule in the list therefore claimed to
+                 * be active whatever it actually was, which is exactly the kind
+                 * of projection that makes a new lifecycle state invisible the
+                 * day it ships. A DRAFT rule has no automation at all and
+                 * cannot fire; saying "active" about it is not a cosmetic slip,
+                 * it is the list telling the owner the opposite of the truth.
+                 */
+                status: rule.draft ? ("draft" as const) : ("active" as const),
                 proposalId: undefined as string | undefined,
               },
             ]
@@ -815,6 +835,99 @@ export const skillsRouter = router({
         .where(eq(skills.id, input.id));
 
       return { id: input.id, expiresAt: next.expiresAt ?? null };
+    }),
+
+  /**
+   * EDIT a rule — the same shape `createRule` takes, applied to an existing one.
+   *
+   * ── WHY THIS EXISTS ─────────────────────────────────────────────────────
+   * There was no update path at all. `skills.update` is not a substitute:
+   * `intent` and `expiresAt` never reach it, and `scope` is an OBJECT here and
+   * a BARE ENUM there — the fork class this codebase repeatedly pays for. So
+   * editing a rule meant delete-and-recreate (new id, lost run history, lost
+   * lineage), and the only alternative was editing the compiled automation
+   * directly, which the system already reports as DAMAGE (`getRule`'s
+   * `divergence`). This door makes the edit properly and re-earns the snapshot,
+   * so `diverged` clears because a recompile actually happened.
+   *
+   * It is ALSO the activation door: `draft: false` recompiles the stored
+   * sentence and refuses by clause if it still has a hole. Activation is never
+   * a status flip — see `services/rules/update.ts`.
+   *
+   * Same three-way verdict contract as `createRule`: a refusal is RETURNED,
+   * naming the failing clause, not thrown — the editor needs the clause to
+   * point at the row that failed. Only "not found" throws, because there is no
+   * rule to report a clause about.
+   */
+  updateRule: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        intent: z.string().min(1),
+        scope: z.object({
+          kind: z.enum(["pod", "workspace", "user"]),
+          workspaceId: z.string().uuid().optional(),
+          projectId: z.string().uuid().optional(),
+        }),
+        /**
+         * THREE states, deliberately: an ISO instant SETS the review date,
+         * `null` CLEARS it, and ABSENT leaves it alone. `renewRule` already
+         * distinguishes set-from-clear for the same reason — they are different
+         * acts and must be spelled differently — and this door adds the third
+         * because an edit that only changes the sentence must not silently
+         * strip an expiry the author never mentioned.
+         */
+        expiresAt: z.string().datetime({ offset: true }).nullish(),
+        factSkillId: z.string().uuid().optional(),
+        automationIds: z.array(z.string().uuid()).default([]),
+        /**
+         * THREE states again: a sentence REPLACES the behaviour, `null` REMOVES
+         * it, ABSENT leaves the stored one alone (and it is recompiled). The
+         * middle state has to be spellable — without it, "make this rule
+         * prose-only" would be unexpressible; without the third, editing the
+         * prose alone would retire the automation.
+         */
+        sentence: ruleSentenceSchema.nullish(),
+        /** `true` keeps/returns the rule to draft; `false` ACTIVATES it. */
+        draft: z.boolean().default(false),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { updateRuleGoverned } =
+        await import("../services/rules/update.js");
+      const result = await updateRuleGoverned({
+        userId,
+        ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+        ruleId: input.id,
+        // The CALLER'S AMBIENT lens first, not the edit's DESTINATION scope.
+        // `visibleSkillsWhere` matches a workspace-scoped row on its STORED
+        // workspace, so passing the destination would 404 every legitimate MOVE
+        // (edit a rule out of workspace A into B and the read floor would be
+        // checked against B, where the row does not live yet). Ordering it this
+        // way keeps a move working WITHOUT widening anything: the floor is still
+        // the stored row's own workspace membership, so naming a workspace you
+        // can see never grants a rule you cannot.
+        workspaceId: ctx.workspaceId ?? input.scope.workspaceId ?? null,
+        intent: input.intent,
+        scope: input.scope,
+        // `undefined` (absent) and `null` (clear) must both survive the hop —
+        // a `?? undefined` here would turn "clear the date" into "leave it".
+        ...(input.expiresAt !== undefined
+          ? { expiresAt: input.expiresAt }
+          : {}),
+        ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
+        automationIds: input.automationIds,
+        // `undefined` (leave alone) and `null` (remove) must BOTH survive the
+        // hop — a truthiness check here would collapse them into one.
+        ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
+        ...(input.draft ? { draft: true } : {}),
+        auditSource: "rules.updateRule",
+      });
+      if (result.status === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
+      }
+      return result;
     }),
 
   getRule: protectedProcedure

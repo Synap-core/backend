@@ -131,6 +131,12 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // "Reject" is the canonical pair — it matches the API verb and the
   // `PROPOSAL_REJECTION_REASONS` taxonomy.
   reject: { imperative: "Reject", past: "Rejected" },
+  // A proposer retracting their own pending ask — NOT a review outcome.
+  // Added 2026-09-07: `STATUS_LABELS.withdrawn` existed but there was no
+  // ACTION verb, so `resolveActionLabel("withdraw", "past")` fell through to
+  // `humanizeToken`, which IGNORES the mood argument and returned the
+  // present-imperative "Withdraw" into past-tense receipts.
+  withdraw: { imperative: "Withdraw", past: "Withdrawn" },
   set: { imperative: "Set", past: "Set" },
   request: { imperative: "Request", past: "Requested" },
   revise: { imperative: "Revise", past: "Revised" },

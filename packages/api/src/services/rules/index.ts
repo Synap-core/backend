@@ -39,7 +39,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { db, automations, inArray } from "@synap/database";
+import { db, automations, links, and, eq, inArray } from "@synap/database";
 import { createLinks } from "../links/links-service.js";
 import type { RuleShape } from "../knowledge/classify-intent.js";
 import { normalizeExpiresAt, readExpiresAt } from "./expiry.js";
@@ -119,6 +119,34 @@ export interface RuleMetadata {
    * "expired" (mirrors `governance_rules.expires_at`). See `./expiry.ts`.
    */
   expiresAt?: string;
+  /**
+   * DRAFT — this rule EXISTS, with visible holes, and CANNOT FIRE.
+   *
+   * ── WHY THE DRAFT STATE IS AN ABSENCE, NOT A FLAG ──────────────────────
+   * The obvious shape — compile the sentence and leave the automation
+   * `status: "draft"` — is the WRONG one here, and dangerously so. Three of the
+   * nine WHERE operators (`UNEVALUABLE_CONDITION_OPERATORS`:
+   * `contains` / `starts_with` / `changed_to`) have no runtime equivalent, and
+   * `toBackendTrigger` folds with `if (compiled !== undefined)` — so an
+   * unresolved predicate is DROPPED, which WIDENS the rule rather than
+   * narrowing it. A draft automation carrying a widened filter is one
+   * `status → active` flip away from firing on everything its author had just
+   * excluded, and that flip is reachable from `automations.update` and from any
+   * UI toggle, none of which recompile.
+   *
+   * So a draft rule compiles NOTHING and materializes NO automation. Its
+   * inertness is the ABSENCE OF THE ARTIFACT, not a flag on one — there is no
+   * row for `automation-trigger-matcher.ts` to select (every candidate query
+   * there ANDs `status = 'active'`), and no status a later edit could flip.
+   * Activation is therefore not a flip either: it RE-READS the stored sentence
+   * and RE-RUNS `compileRuleSentence`, so a hole is refused by clause at the
+   * moment someone tries to make the rule real. See `services/rules/update.ts`.
+   *
+   * Stored as `true` or ABSENT, never `false` — same convention as
+   * `expiresAt`, so a rule written before drafts existed reads as
+   * "not a draft" with no backfill.
+   */
+  draft?: boolean;
   /** Set only when the fact half is a SEPARATE skill row. */
   factSkillId?: string;
   behaviours: RuleBehaviourRecord[];
@@ -197,6 +225,11 @@ export function readRuleMetadata(
     intent: candidate.intent,
     scope: readRuleScope(candidate.scope),
     ...(expiresAt ? { expiresAt } : {}),
+    // Only a literal `true` is a draft. A stored blob is DATA, so a truthy
+    // non-boolean (`"yes"`, `1`) must NOT quietly make a live rule inert — and
+    // the reverse (a draft read as live) is impossible because it would take a
+    // stored `true` to be ignored.
+    ...(candidate.draft === true ? { draft: true } : {}),
     ...(candidate.factSkillId ? { factSkillId: candidate.factSkillId } : {}),
     behaviours: Array.isArray(candidate.behaviours) ? candidate.behaviours : [],
     ...(routing ? { routing } : {}),
@@ -259,6 +292,8 @@ export function buildRuleMetadata(input: {
   scope: RuleScope;
   /** Normalised to canonical ISO-8601 UTC; throws on a non-instant. */
   expiresAt?: string | Date;
+  /** True ⇒ the rule is stored with holes and compiles nothing. */
+  draft?: boolean;
   factSkillId?: string;
   behaviours: RuleBehaviourRecord[];
   routing?: RuleRouting;
@@ -272,6 +307,9 @@ export function buildRuleMetadata(input: {
     intent: input.intent,
     scope: input.scope,
     ...(expiresAt ? { expiresAt } : {}),
+    // `true` or absent — never a stored `false`, so "not a draft" is ONE state
+    // whether the rule predates drafts or was activated out of one.
+    ...(input.draft ? { draft: true } : {}),
     ...(input.factSkillId ? { factSkillId: input.factSkillId } : {}),
     behaviours: input.behaviours,
     ...(input.routing ? { routing: input.routing } : {}),
@@ -422,4 +460,37 @@ export async function linkRuleHalves(input: {
   ];
   if (edges.length === 0) return;
   await createLinks(edges);
+}
+
+/**
+ * Remove the `skill(rule) --activates--> automation` edges this rule holds for
+ * the given automations. The mirror of {@link linkRuleHalves}'s behaviour half.
+ *
+ * ⚠️ The edge IS the membership store (`./lineage.ts` is the reader), so this is
+ * how a rule STOPS owning a behaviour. Leaving the edge behind while archiving
+ * the automation would make `getRule` report the behaviour as `"missing"`
+ * forever — a permanent phantom divergence on a rule that is actually fine.
+ *
+ * CALLER-GATED, exactly like `linkRuleHalves`: it authorizes nothing of its own.
+ * Its only caller (`./update.ts`) has already resolved the rule row through
+ * `visibleSkillsWhere` and passed the governance gate.
+ */
+export async function unlinkRuleBehaviours(input: {
+  ruleSkillId: string;
+  automationIds: string[];
+  database?: typeof db;
+}): Promise<void> {
+  if (input.automationIds.length === 0) return;
+  const database = input.database ?? db;
+  await database
+    .delete(links)
+    .where(
+      and(
+        eq(links.fromType, "skill"),
+        eq(links.fromId, input.ruleSkillId),
+        eq(links.toType, "automation"),
+        eq(links.linkType, "activates"),
+        inArray(links.toId, input.automationIds)
+      )
+    );
 }

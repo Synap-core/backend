@@ -6,7 +6,12 @@
 
 import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
-import { getDb, RelationDefRepository, asc } from "@synap/database";
+import {
+  getDb,
+  RelationDefRepository,
+  dedupeDefsForLens,
+  asc,
+} from "@synap/database";
 import { relationDefs } from "@synap/database/schema";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
@@ -36,7 +41,15 @@ export const relationDefsRouter = router({
     ).findMany<typeof relationDefs.$inferSelect>(relationDefs, {
       orderBy: [asc(relationDefs.slug)],
     });
-    return { relationDefs: defs };
+    // Under an ACTIVE lens, a slug resolves to exactly one def — the workspace
+    // row if there is one, else the pod-wide base row (RelationDefRepository
+    // .getBySlug). Project the same precedence so a picker never shows
+    // "Relates To" twice once the base layer is seeded. Only in-lens: with no
+    // workspace the result spans several workspaces, where two rows sharing a
+    // slug are genuinely distinct and must both survive.
+    return {
+      relationDefs: ctx.workspaceId ? dedupeDefsForLens(defs) : defs,
+    };
   }),
 
   /**
@@ -185,7 +198,10 @@ export const relationDefsRouter = router({
 
       const db = await getDb();
       const repo = new RelationDefRepository(db);
-      await repo.delete(input.id);
+      // Workspace floor: a workspace admin may delete their OWN workspace's
+      // def, never a pod-wide base def (visible under the lens, but shared by
+      // every workspace on the pod) and never another workspace's.
+      await repo.delete(input.id, ctx.workspaceId);
 
       auditLog({
         subjectType: "relation_def",

@@ -86,7 +86,10 @@ import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 import { messages } from "@synap/database/schema";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
-import { satisfyExpectedOutputs } from "../../services/focus-sessions/satisfy-expected-output.js";
+import {
+  satisfyExpectedOutputs,
+  readProposalExpectedLabel,
+} from "../../services/focus-sessions/satisfy-expected-output.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -480,6 +483,10 @@ export async function applyProposalApproval(args: {
         sessionId: args.proposal.sessionId,
         targetType: args.proposal.targetType,
         proposalId: args.proposal.id,
+        // The SLOT CLAIM the proposal carried (`data.expectedLabel`, written by
+        // `checkPermissionOrPropose`). Without it a session owing two documents
+        // stamps the FIRST one whatever this draft was actually for.
+        expectedLabel: readProposalExpectedLabel(args.proposal.data),
       });
     } catch (err) {
       logger.warn(
@@ -527,6 +534,17 @@ async function applyProposalApprovalInner(
       // door gets from its own auto-approve receipt, and what the object graph's
       // `via: "governed"` fold reads.
       governanceProposalId: string;
+      // DELEGATION, not impersonation (RFC 8693): the AGENT that authored this
+      // proposal remains the ACTOR of every row the approval materializes; the
+      // approving human is the AUTHORIZER, and lands on `createdByUserId` +
+      // `proposals.reviewedBy`. Without this the sync approve path stamped
+      // `createdByKind: 'human'` / `agent_user_id: NULL` on entities an agent
+      // wrote — while the ASYNC materializer path (jobs/workers/materializer.ts
+      // :398/:435/:528, same envelope) stamped `ai_agent`. Provenance forked on
+      // governance state, which is exactly what a governance system must not do.
+      // `Context.agentUserId` already exists (types/context.ts:95) and
+      // `entities.create` already reads it — this only stops dropping it.
+      agentUserId: string | null;
     };
     if (proposal.workspaceId) {
       const membership = await getWorkspaceMembership(
@@ -548,6 +566,7 @@ async function applyProposalApprovalInner(
         workspaceRole: membership.role,
         sessionId: proposal.sessionId ?? null,
         governanceProposalId: proposal.id,
+        agentUserId: proposal.agentUserId ?? null,
       };
     } else {
       compositeCtx = {
@@ -558,6 +577,7 @@ async function applyProposalApprovalInner(
         workspaceRole: "owner",
         sessionId: proposal.sessionId ?? null,
         governanceProposalId: proposal.id,
+        agentUserId: proposal.agentUserId ?? null,
       };
     }
 
@@ -1331,6 +1351,87 @@ async function applyProposalApprovalInner(
           "governance_rules row, no ceiling and no config_setting. The finding " +
           "reports a malformed agent write, whose remedy is code (existence " +
           "check / tool schema), not a policy row.",
+      },
+    };
+  }
+
+  // B4b'': automation.health_advisory — the automation-health WARDEN's finding,
+  // and the second acknowledgement-only branch, modelled on B4b' above.
+  //
+  // Approving it writes NOTHING: no automation row is paused, archived or
+  // touched. That is deliberate, not an unfinished door. The finding is "this
+  // automation is enabled and has NEVER run", and the overwhelmingly common
+  // cause is that NOTHING PRODUCES ITS TRIGGER — a `.requested` rule where only
+  // `.completed` is emitted downstream, a cron whose queue was never registered,
+  // a webhook nobody wired. Pausing the listener is the wrong remedy for a
+  // missing producer, and an approval that silently disabled a user's
+  // automations would be a destructive write filed by a scanner. The warden
+  // proposes; the human disposes, in the automation itself.
+  //
+  // Per-item dispositions still work through the generic `proposals.rejectItem`
+  // door (items are keyed by `zeroRunItemRef(automationId)`), so a reviewer can
+  // dismiss individual findings — and the warden's re-nag guard reads the SAME
+  // `data.findings[]` array, so it will not re-file what was decided here for
+  // RENAG_COOLDOWN_DAYS.
+  //
+  // Explicit branch, not a fall-through: without it this would drop into the
+  // execution registry's catch-all and emit a generic `.validated` for a
+  // proposal that has nothing to materialize.
+  if (proposal.proposalType === "automation.health_advisory") {
+    const wardenData = payload as {
+      ownerUserId?: string;
+      findings?: unknown[];
+    } | null;
+    if (
+      !wardenData ||
+      typeof wardenData !== "object" ||
+      !wardenData.ownerUserId ||
+      !Array.isArray(wardenData.findings)
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed automation.health_advisory proposal data.",
+      });
+    }
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+
+    return {
+      success: true,
+      effect: {
+        applied: "none",
+        reason:
+          "automation.health_advisory is acknowledgement-only by design: it " +
+          "pauses, archives and edits NOTHING. The finding reports automations " +
+          "that are enabled but have never run, whose remedy is wiring the " +
+          "missing trigger producer (or retiring the automation), not a write " +
+          "made on the reviewer's behalf.",
       },
     };
   }

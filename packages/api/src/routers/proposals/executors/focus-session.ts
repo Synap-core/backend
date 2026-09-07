@@ -7,6 +7,7 @@ import {
   recordSessionSpawn,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import {
   registerProposalExecutor,
@@ -17,6 +18,10 @@ import {
   isTerminalSessionStatus,
   type TerminalSessionStatus,
 } from "../../../services/focus-sessions/session-statuses.js";
+
+const logger = createLogger({
+  module: "proposal-approve-executors-focus-session",
+});
 
 /** Register the focus_session/* approve executors. */
 export function registerFocusSessionExecutors(): void {
@@ -114,17 +119,35 @@ export function registerFocusSessionExecutors(): void {
       // Detour lineage carried through the proposal (parity with
       // createFocusSession's post-insert step). Owner-floored by the producer
       // against the APPROVER's userId — which is the session's own owner here.
+      // Best-effort by CONTRACT (founder decision, 2026-09-07): this runs AFTER
+      // the session row is already committed above, so a lineage-edge failure
+      // must never fail the approval — the session exists either way. Without
+      // this catch, an unexpected `recordSessionSpawn` throw (a transport blip,
+      // a malformed handle) would propagate to `dispatchProposalApproval`,
+      // which records the whole approval as a TERMINAL FAILURE and re-throws,
+      // even though the session was successfully created.
       if (created && typeof innerData.parentSessionId === "string") {
-        await recordSessionSpawn({
-          childSessionId: created.id,
-          parentSessionId: innerData.parentSessionId,
-          userId,
-          workspaceId: created.workspaceId,
-          suspendedIntent:
-            typeof innerData.suspendedIntent === "string"
-              ? innerData.suspendedIntent
-              : null,
-        });
+        try {
+          await recordSessionSpawn({
+            childSessionId: created.id,
+            parentSessionId: innerData.parentSessionId,
+            userId,
+            workspaceId: created.workspaceId,
+            suspendedIntent:
+              typeof innerData.suspendedIntent === "string"
+                ? innerData.suspendedIntent
+                : null,
+          });
+        } catch (err) {
+          logger.warn(
+            {
+              err,
+              sessionId: created.id,
+              parentSessionId: innerData.parentSessionId,
+            },
+            "recordSessionSpawn failed — session kept, spawned_from edge dropped"
+          );
+        }
       }
 
       // Gate 2: mint work channel if none (parity with createFocusSession).

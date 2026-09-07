@@ -25,6 +25,10 @@
 
 import { randomUUID } from "crypto";
 import { boundRawSourceText } from "./capture-narrative.js";
+import {
+  materializedReceiptState,
+  type CaptureReceiptState,
+} from "./capture-receipt-state.js";
 
 import {
   db,
@@ -234,7 +238,22 @@ export interface SubmitCaptureGraphResult {
    */
   relationsFailed?: MaterializeRelationFailure[];
   writeReceipt: {
-    state: "pending" | "applied";
+    /**
+     * `partial` is the Hub Protocol receipt word for exactly this shape (see
+     * `CreateWriteReceipt` in routers/hub-protocol/write-receipt.ts): "storage
+     * changed for SOME sub-writes and failed for others — the primary write
+     * landed and a non-atomic follow-up errored. Never a claim of rollback."
+     *
+     * A capture graph's relations ARE that non-atomic follow-up: pass 1 creates
+     * the entities, pass 2 creates each edge independently, and a relation whose
+     * TYPE does not resolve fails alone. Before this, such a graph returned
+     * `applied` with `relationCount: 0` and the failures buried in
+     * `relationsFailed[]` — a caller that did not read that array believed the
+     * whole graph landed. Same class as `status ?? "installed"`: a partial
+     * success reported as a clean success, and the reader has to opt IN to the
+     * bad news. The word is reused, not invented — no new enum, no label map.
+     */
+    state: CaptureReceiptState;
     proposalId?: string;
     reviewUrl?: string;
     effectiveWorkspaceId: string | null;
@@ -883,7 +902,13 @@ export async function submitCaptureGraph(
             ? { relationsFailed: materialized.relationsFailed }
             : {}),
           writeReceipt: {
-            state: "applied",
+            // The entities landed; if any submitted edge did NOT, this graph is
+            // `partial`, not `applied`. Derived from the SAME array the response
+            // carries (`materialized.relationsFailed`), so the state and the
+            // detail can never disagree — the state is not a second opinion.
+            state: materializedReceiptState(
+              materialized.relationsFailed.length
+            ),
             ...(recordId ? { proposalId: recordId } : {}),
             effectiveWorkspaceId: workspaceId,
             ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),

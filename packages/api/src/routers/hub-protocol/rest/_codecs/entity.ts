@@ -179,6 +179,14 @@ export const CreateEntityRequestSchema = z
           "opaque connector ids. Opaque and case-sensitive; the provider prefix " +
           "namespaces the id."
       ),
+    expectedLabel: z
+      .string()
+      .optional()
+      .describe(
+        "The declared session-output slot this entity fulfils, exactly as " +
+          "declared on the session's expected outputs. Left unset when the " +
+          "create doesn't fulfil a specific declared slot."
+      ),
   })
   .openapi("CreateEntityRequest");
 

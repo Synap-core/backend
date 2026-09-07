@@ -493,6 +493,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "view_renderer_view_types",
     addedBy: "0221_widget_definitions_view_renderer_view_types.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "external_hosts",
+    addedBy: "0249_widget_definitions_external_hosts.sql",
+  },
 
   // knowledge_facts — Ebbinghaus decay columns (0113)
   {

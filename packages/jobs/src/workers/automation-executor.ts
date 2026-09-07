@@ -71,6 +71,7 @@ import {
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
+import { tripNeverWorkedBreaker } from "./automation-breaker.js";
 import {
   beginAiUsageCapture,
   type AiUsageCollector,
@@ -580,6 +581,23 @@ async function executeAutomationFlow(params: {
     // failures were policy-blocks finalizes as `blocked_by_policy` (calm ochre),
     // while any real error present keeps it `failed` (red).
     let stepsBlockedByPolicy = 0;
+    /**
+     * The FIRST failed step's human reason — the run row's `errorMessage`.
+     *
+     * The ordinary terminal close below used to omit `errorMessage` entirely, so
+     * 270 of 271 failures on the founder's pod stored NULL and every failure
+     * surface fell back to the boilerplate "This run failed." while the actual
+     * sentence sat one table over on the step row.
+     *
+     * FIRST cause, not a roll-up: `runLedgerDetail` (`@synap/run-detail`) renders
+     * this whole string as the row's one-line summary, and the counts it would
+     * restate (`stepsCompleted` / `stepsFailed`) are already structured columns
+     * rendered beside it by `runStepSummary`. Prefixing "2 of 5 steps failed"
+     * would duplicate a fact the row already carries and push the cause — the
+     * only thing the field can say that nothing else does — off the end.
+     * With fail-fast (the default) the first failure is also the only one.
+     */
+    let firstFailureMessage: string | null = null;
 
     /**
      * Persist WHICH PATH this run took (D3d) — the one write of the branch
@@ -1768,6 +1786,7 @@ async function executeAutomationFlow(params: {
         // All attempts failed
         stepsFailed++;
         const errorMessage = describeLedgerError(lastError);
+        firstFailureMessage ??= errorMessage;
 
         // A governance policy-block (or the older workflow-guard precondition
         // halt) is a deliberate NON-PROCEED verdict, not a broken step — record it
@@ -1847,13 +1866,15 @@ async function executeAutomationFlow(params: {
         : "completed";
     await db
       .update(automationRuns)
-      .set({
-        status: finalStatus,
-        stepsCompleted,
-        stepsFailed,
-        completedAt: new Date(),
-        ...(outputSummary ? { outputSummary } : {}),
-      })
+      .set(
+        buildRunTerminalUpdate({
+          finalStatus,
+          stepsCompleted,
+          stepsFailed,
+          firstFailureMessage,
+          outputSummary,
+        })
+      )
       .where(
         and(eq(automationRuns.id, runId), eq(automationRuns.status, "running"))
       );
@@ -1868,8 +1889,9 @@ async function executeAutomationFlow(params: {
         .where(eq(automationClaims.ownerRunId, runId));
     }
 
-    // Update automation stats
-    await db
+    // Update automation stats. RETURNING the fresh counters so the never-worked
+    // breaker below reads the post-increment truth in the same round trip.
+    const [statsAfter] = await db
       .update(automations)
       .set({
         lastRunAt: new Date(),
@@ -1883,7 +1905,22 @@ async function executeAutomationFlow(params: {
             }),
         updatedAt: new Date(),
       })
-      .where(eq(automations.id, automationId));
+      .where(eq(automations.id, automationId))
+      .returning({
+        status: automations.status,
+        successCount: automations.successCount,
+        failureCount: automations.failureCount,
+      });
+
+    if (finalStatus !== "completed" && statsAfter) {
+      await tripNeverWorkedBreaker({
+        automationId,
+        status: statsAfter.status,
+        successCount: statsAfter.successCount,
+        failureCount: statsAfter.failureCount,
+        reason: firstFailureMessage,
+      });
+    }
 
     logger.info(
       { runId, automationId, stepsCompleted, stepsFailed, status: finalStatus },
@@ -1920,6 +1957,48 @@ async function executeAutomationFlow(params: {
  * column.
  */
 const LEDGER_ERROR_MAX = 2000;
+
+/**
+ * The ORDINARY terminal close of a run row — the `.set()` payload for the write
+ * that every non-throwing run lands on (success, failure, policy-block alike).
+ *
+ * Extracted so the projection is testable directly: it used to omit
+ * `errorMessage` entirely, so 270 of 271 real failures on the founder's pod
+ * stored NULL while the sentence that named the cause sat on the step row. The
+ * only consumer, `runLedgerDetail` (@synap/run-detail), then fell back to the
+ * boilerplate "This run failed." — a failure ledger that could not say why.
+ *
+ * `errorMessage` is the FIRST failed step's message, verbatim, not a
+ * "N of M steps failed" roll-up: the consumer renders this whole string as the
+ * row's one-line summary, and the counts a roll-up would restate are already
+ * structured columns rendered beside it by `runStepSummary`.
+ */
+export function buildRunTerminalUpdate(input: {
+  finalStatus: "completed" | "failed" | "blocked_by_policy";
+  stepsCompleted: number;
+  stepsFailed: number;
+  firstFailureMessage: string | null;
+  outputSummary: Record<string, unknown> | null;
+}): {
+  status: "completed" | "failed" | "blocked_by_policy";
+  stepsCompleted: number;
+  stepsFailed: number;
+  completedAt: Date;
+  errorMessage?: string;
+  outputSummary?: Record<string, unknown>;
+} {
+  return {
+    status: input.finalStatus,
+    stepsCompleted: input.stepsCompleted,
+    stepsFailed: input.stepsFailed,
+    completedAt: new Date(),
+    // A completed run has no reason to give; a non-completed one must.
+    ...(input.finalStatus !== "completed" && input.firstFailureMessage
+      ? { errorMessage: input.firstFailureMessage }
+      : {}),
+    ...(input.outputSummary ? { outputSummary: input.outputSummary } : {}),
+  };
+}
 
 function describeLedgerError(err: unknown): string {
   const base =

@@ -3083,6 +3083,10 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_kind" text NO
 -- Declared view-type affinity when this cell acts as a VIEW RENDERER (0221).
 -- NULL = declares none → the view falls through to the first-party adapter.
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "view_renderer_view_types" jsonb;
+-- Declared frame egress allowlist for a package-borne cell (0249). NULL = the
+-- frame reaches no external origin at all; the CSP composer adds these origins
+-- to connect-src / img-src and to nothing else.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "external_hosts" jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");

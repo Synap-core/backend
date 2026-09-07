@@ -191,6 +191,30 @@ export interface ExpectedOutput {
   claimedDone?: boolean;
   /** Lineage: the approved proposal whose apply satisfied this output. */
   satisfiedByProposalId?: string;
+  /**
+   * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
+   * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
+   * delivery: it says who was asked, and the slot stays `pending` until an
+   * approval stamps it through `satisfyExpectedOutputs`.
+   *
+   * It is also the SLOT CLAIM key for the delegate's own writes: governance
+   * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
+   * to this slot even when the change's name does not match the label — the
+   * delegation IS the naming, made ahead of time by a human.
+   */
+  delegatedTo?: string;
+  /** ISO timestamp of the delegation above. */
+  delegatedAt?: string;
+  /**
+   * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
+   * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
+   * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
+   * an explicit new delegation). No new status value: the slot was, and remains,
+   * `pending`.
+   */
+  returnedReason?: string;
+  /** ISO timestamp of the return above. */
+  returnedAt?: string;
 }
 
 /**

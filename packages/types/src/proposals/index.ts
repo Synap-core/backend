@@ -103,6 +103,60 @@ export interface UpdateRequest {
     | "cli"
     | "n8n"
     | "raycast";
+  /**
+   * THE FIFTH "WHO" — and the only one whose principal DEPENDS ON THE DOOR.
+   *
+   * A proposal carries five distinct actor fields. Four live on the `proposals`
+   * ROW; this one lives inside the JSONB `data` envelope, which is why it drifts
+   * unnoticed. Read this table before gating anything on it:
+   *
+   * | field                       | where      | who it holds                                    |
+   * |-----------------------------|------------|-------------------------------------------------|
+   * | `proposals.proposedByUserId`| row        | the HUMAN member who filed it; null for agents   |
+   * | `proposals.agentUserId`     | row        | the ACTING AGENT's user row (RFC 8693 `act`)     |
+   * | `proposals.createdBy`       | row        | OVERLOADED: human on the canonical path, agent on dev-approval/stage-gate |
+   * | `proposals.subjectUserId`   | row        | the user the proposal is ABOUT (not an actor)    |
+   * | `data.sourceId`  (this)     | JSONB      | **HUMAN or AGENT — depends on the writer**       |
+   *
+   * The two writers, verbatim:
+   *   - `packages/api/src/utils/permission-check.ts:2750` — the canonical
+   *     `createProposal`, which almost every agent write flows through:
+   *     `sourceId: userId` ⇒ **the HUMAN operator**, even for an agent write.
+   *   - `packages/api/src/services/proposals/dev-approval.ts:222` and its twin
+   *     `packages/api/src/services/playbooks/stage-gate.ts:232`:
+   *     `sourceId: input.agentUserId ?? input.userId` ⇒ **the AGENT** whenever
+   *     one is acting.
+   *
+   * ⚠️ CONSEQUENCES, both of which have been live defects:
+   *   1. `sourceId === userId` is NOT "the caller is the human proposer". On the
+   *      dev-approval paths it is true for the AGENT ITSELF, which is why
+   *      `routers/proposals/review-authority.ts` carries an explicit agent-class
+   *      floor before admitting an `isOwner` rung. Never gate authority on this
+   *      field without that floor.
+   *   2. It is NOT a reliable agent id either — so it must never be fed to
+   *      `computeCanReviewApproval` as an actor, and an agent-attribution reader
+   *      wants `agentUserId`, not this.
+   *
+   * ── A SIXTH overloaded "who": the name `isAgentOwner` ───────────────────
+   * Not a field, but the same failure in variable form — two live rungs share
+   * the name and mean DIFFERENT principals:
+   *   - `packages/api/src/routers/proposals/review-authority.ts:163` resolves
+   *     `users.createdByUserId` off the acting agent ⇒ genuinely **the HUMAN
+   *     who owns the agent**. This is what the `"agent-owner"`
+   *     `ReviewAuthorityReason` means.
+   *   - `packages/api/src/routers/proposals.ts` (`withdraw`) tested
+   *     `proposal.createdBy === userId` ⇒ **the ACTING AGENT itself**, because
+   *     `createdBy` is the agent on every agent-authored path. Renamed to
+   *     `isActingAgent` on 2026-09-07; behaviour unchanged, only the lying name.
+   *
+   * `createdBy` is itself overloaded three ways and is why that name drifted:
+   * `utils/permission-check.ts:2856` writes the HUMAN, `:1649`/`:3025` write the
+   * AGENT, and `:2332` writes `input.createdBy ?? input.agentUserId ?? input.userId`.
+   * Resolve which principal you mean before comparing it to a caller id.
+   *
+   * A tripwire (`packages/api/src/__tripwires__/proposal-source-id-principal.test.ts`)
+   * pins both writers to the meanings documented above.
+   */
   sourceId: string;
 
   /** Context */
@@ -203,7 +257,6 @@ export interface ProposalReviewGraph {
      * already reads `entityOp.existingEntityId` for role lookup and ref
      * aliasing; it simply never emitted it.
      *
-     * Mirrors the frontend `@synap-core/proposal-types` shape exactly.
      */
     existingEntityId?: string;
     /**
@@ -212,7 +265,8 @@ export interface ProposalReviewGraph {
      * resolved from live `entity_facets` for ops that reference a pre-existing
      * entity) and the roles this proposal ATTACHES (`isNew:true`, from the op's
      * inline `facets`). A new role is emphasized in the UI ("Grimkujow becomes a
-     * Lead"). Mirrors the frontend `@synap-core/proposal-types` shape exactly.
+     * Lead"). SSOT. `@synap-core/proposal-types` re-exports this interface rather than
+     * carrying a copy — the copy drifted once and cost a navigable graph node.
      */
     roles?: Array<{ profileSlug: string; isNew: boolean; status?: string }>;
   }>;

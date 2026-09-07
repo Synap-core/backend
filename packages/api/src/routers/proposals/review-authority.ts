@@ -89,6 +89,35 @@ export function reviewAuthorityRequirement(
 }
 
 /**
+ * AGENT-CLASS FLOOR (B). Is this principal an AGENT user row rather than a human?
+ *
+ * The two owner rungs below admit a caller as "the proposer" — and under the
+ * default `owner_and_admins` policy the proposer alone satisfies the policy.
+ * Neither rung ever checked that the caller is a HUMAN, so an agent whose own
+ * user id sits in `data.sourceId` (which is exactly what
+ * `services/proposals/dev-approval.ts:222` and `services/playbooks/stage-gate.ts:232`
+ * write: `sourceId: input.agentUserId ?? input.userId`) would be admitted as
+ * reviewer of ITS OWN proposal. That is self-approval, and it defeats the whole
+ * point of a proposal.
+ *
+ * Floor it on the CLASS, not on a specific id: a per-id denylist is defeated by
+ * minting a second agent. This mirrors the industry precedent — OpenSSF's
+ * "Workflows Should Not Be Allowed To Approve Pull Requests", which GitHub
+ * resolved by changing the DEFAULT rather than trusting convention.
+ *
+ * `users.userType === 'agent'` is the canonical is-agent signal in this codebase
+ * (see `access/key-identity.ts:7`); reused here rather than re-derived.
+ */
+async function isAgentPrincipal(userId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ userType: users.userType })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  return row?.userType === "agent";
+}
+
+/**
  * "May this user APPROVE this proposal?" — the shared, byte-identical
  * authorization COMPUTATION that `approve` and `batchApprove` used to inline
  * verbatim (settings → policy → membership → `canReviewProposal`). Returns
@@ -110,8 +139,38 @@ export async function computeCanReviewApproval(args: {
     agentUserId?: string | null;
   };
   userId: string;
+  /**
+   * WHICH authority is being asked for. **Required — deliberately no default.**
+   *
+   * The owner-rung floor below only ever sets `isOwner = false`, but
+   * `canReviewProposal` grants on the ROLE ladder independently: measured
+   * against the real ladder with `isOwner` forced false, 4 of 5 policy
+   * configurations still grant (`owner_and_admins`+admin, +owner;
+   * `any_editor`+editor; `admins_only`+admin). Agent users DO hold workspace
+   * memberships — `routers/agent-users.ts:244-247,281-287` copies the role from
+   * their creator, so an agent created by an admin IS a workspace admin. The
+   * owner floor alone therefore did NOT floor the class, despite saying so.
+   *
+   *  · `"approve"` — an agent principal is refused BEFORE the policy ladder.
+   *    "Approval is the human step, by design" (CLAUDE.md); the agent key can
+   *    reject but never approve.
+   *  · `"reject"` — EXACTLY today's behaviour (owner rungs floored, role ladder
+   *    untouched). Strictly monotone: approve's grants ⊆ reject's grants.
+   *
+   * Required rather than defaulted so a NEW call site is a compile error rather
+   * than a silent grant. A default would make this a convention; the absence of
+   * one makes it a floor.
+   */
+  purpose: "approve" | "reject";
 }): Promise<{ allowed: boolean; reason: ReviewAuthorityReason }> {
-  const { proposal, userId } = args;
+  const { proposal, userId, purpose } = args;
+
+  // CLASS FLOOR — before any ladder, and only for `approve`. This is the rung
+  // the owner-only floor below could not reach: it denies an agent principal
+  // even when it holds an admin/editor membership of its own.
+  if (purpose === "approve" && (await isAgentPrincipal(userId))) {
+    return { allowed: false, reason: "not-authorized" };
+  }
   if (!proposal.workspaceId) {
     // Pod-wide proposals have no workspace membership ladder to fall back on,
     // so "any pod member" used to be treated as authorized — a stranger could
@@ -132,6 +191,15 @@ export async function computeCanReviewApproval(args: {
         .limit(1);
       isOwner = agent?.createdByUserId === userId;
       isAgentOwner = isOwner;
+    }
+
+    // AGENT-CLASS FLOOR (B): only ever NARROWS. `isOwner` is true here because
+    // the caller matched `data.sourceId` or owns the acting agent — but neither
+    // rung asserted the caller is a human. One query, and only on the path where
+    // an owner rung actually fired, so the common reviewer path is unchanged.
+    if (isOwner && (await isAgentPrincipal(userId))) {
+      isOwner = false;
+      isAgentOwner = false;
     }
 
     if (isOwner) {
@@ -164,12 +232,23 @@ export async function computeCanReviewApproval(args: {
   let isOwner = proposalData?.sourceId === userId;
   let isAgentOwner = false;
 
-  // An agent-authored proposal carries `sourceId` = the acting agent's user
-  // row, never the human's — so the direct match above can never admit the
-  // human who OWNS that agent. Resolve the agent's creator (`users.createdByUserId`)
-  // and admit ONLY that one human as owner too — this is the sole widening;
-  // it never touches the role ladder or any other user. One extra query, only
-  // when the direct sourceId match already failed.
+  // CORRECTED 2026-09-07 — this comment previously asserted "an agent-authored
+  // proposal carries `sourceId` = the acting agent's user row, never the
+  // human's." THAT IS FALSE, and it sat directly above an authority gate.
+  // `data.sourceId` holds a DIFFERENT principal depending on which door wrote
+  // the proposal (see the `data.sourceId` contract on `RequestShapedProposalData`
+  // in `@synap/database` schema/proposals.ts):
+  //   - `utils/permission-check.ts:2750` (canonical `createProposal`, the path
+  //     almost every agent write takes) writes `sourceId: userId` = the HUMAN.
+  //   - `services/proposals/dev-approval.ts:222` and
+  //     `services/playbooks/stage-gate.ts:232` write
+  //     `sourceId: agentUserId ?? userId` = the AGENT when one is acting.
+  // So the direct match above admits the human on the canonical path, and would
+  // admit the AGENT ITSELF on the dev-approval/stage-gate paths — which is why
+  // the agent-class floor below exists. The `agentUserId` resolution here is
+  // still needed: on the dev-approval paths the human is in NEITHER field, so
+  // resolve the agent's creator (`users.createdByUserId`) and admit ONLY that
+  // one human as owner too. One extra query, only when the direct match failed.
   if (!isOwner && proposal.agentUserId) {
     const [agent] = await db
       .select({ createdByUserId: users.createdByUserId })
@@ -178,6 +257,15 @@ export async function computeCanReviewApproval(args: {
       .limit(1);
     isOwner = agent?.createdByUserId === userId;
     isAgentOwner = isOwner;
+  }
+
+  // AGENT-CLASS FLOOR (B): only ever NARROWS. `isOwner` is true here because
+  // the caller matched `data.sourceId` or owns the acting agent — but neither
+  // rung asserted the caller is a human. One query, and only on the path where
+  // an owner rung actually fired, so the common reviewer path is unchanged.
+  if (isOwner && (await isAgentPrincipal(userId))) {
+    isOwner = false;
+    isAgentOwner = false;
   }
 
   const resolvedPolicy = policy as ProposalApprovalPolicy;
@@ -232,6 +320,12 @@ export async function assertCanRetargetProposalDestination(args: {
   }
 
   const { allowed: canReviewDest } = await computeCanReviewApproval({
+    // Re-target is reached from `revise`, so it keeps revise's bar (today's
+    // behaviour). ⚠️ FOLLOW-UP, deliberately NOT bundled: a re-target is a
+    // scope-escalation primitive, so an agent principal arguably should be
+    // refused here too. That is a NARROWING with its own evidence to gather;
+    // this wave does not change it in either direction.
+    purpose: "reject" as const,
     proposal: {
       workspaceId: destWorkspaceId,
       data: proposal.data,
@@ -292,7 +386,13 @@ export async function assertCanReviewProposal(args: {
 }): Promise<void> {
   const { proposal, userId, action } = args;
 
-  const { allowed } = await computeCanReviewApproval({ proposal, userId });
+  // reject / reopen — the documented agent capability ("can reject but never
+  // approve"). EXACTLY today's behaviour; the class floor applies to approve only.
+  const { allowed } = await computeCanReviewApproval({
+    proposal,
+    userId,
+    purpose: "reject",
+  });
 
   if (!allowed) {
     throw new TRPCError({

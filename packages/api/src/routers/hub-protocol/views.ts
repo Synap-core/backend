@@ -25,6 +25,7 @@ import {
 import { getDb, and, eq, or, isNull } from "@synap/database";
 import { views, widgetDefinitions } from "@synap/database/schema";
 import { composeWidgetError } from "../../services/cells/compose-widget-catalog.js";
+import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 
 /** A single widget placement in the bento grid */
 const BentoWidgetInputSchema = z.object({
@@ -109,6 +110,12 @@ export const hubViewsRouter = router({
         metadata: z.record(z.string(), z.any()).optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
+        /**
+         * The declared session-output slot this view fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `recordSessionArtifact` below, never guessed when absent.
+         */
+        expectedLabel: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -132,6 +139,35 @@ export const hubViewsRouter = router({
         agentUserId: input.agentUserId,
         reasoning: input.reasoning,
       });
+
+      // OUTPUT LEDGER — a view an agent creates for a session never appeared
+      // as an output before this: `views.create` records nothing on any
+      // ledger. `ctx.sessionId` is populated whenever the caller carries a
+      // verified `X-Session-Id` (MCP: threaded through `createHubProtocolCaller`;
+      // Hub REST: the pod-wide `sessionMiddleware` + `getCaller`'s fallback).
+      // Never recorded on the proposal-gated path (`result.view` is `null`
+      // there) — nothing has been created yet for the session to have produced.
+      if (
+        ctx.sessionId &&
+        result &&
+        typeof result === "object" &&
+        "view" in result &&
+        result.view &&
+        typeof result.view === "object" &&
+        "id" in result.view
+      ) {
+        const createdView = result.view as { id: string; name?: string };
+        await recordSessionArtifact({
+          sessionId: ctx.sessionId,
+          workspaceId: input.workspaceId ?? null,
+          userId,
+          kind: "view",
+          refId: createdView.id,
+          title: createdView.name ?? input.name,
+          agentUserId: input.agentUserId,
+          expectedLabel: input.expectedLabel,
+        });
+      }
 
       return result;
     }),

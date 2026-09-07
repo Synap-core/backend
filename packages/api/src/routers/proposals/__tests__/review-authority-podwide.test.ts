@@ -122,6 +122,7 @@ describe("pod-wide reject/reopen is gated (was an unconditional allow)", () => {
     const { allowed } = await computeCanReviewApproval({
       proposal,
       userId: STRANGER,
+      purpose: "approve",
     });
     expect(allowed).toBe(false);
     await expect(

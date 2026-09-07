@@ -154,6 +154,7 @@ import {
 } from "./cp-project-sync.js";
 import {
   ensureSystemProfiles,
+  ensureDefaultRelationDefs,
   registerCpProjectSyncTrigger,
 } from "@synap/database";
 import {
@@ -373,6 +374,25 @@ export async function registerAllWorkers(): Promise<void> {
     logger.warn(
       { err },
       "System profile reconciliation failed at worker boot; workspace init will retry"
+    );
+  }
+
+  // Seed the POD-WIDE relation-def base layer (workspace_id IS NULL) — one row
+  // per slug, guarded by migration 0118's `UNIQUE (slug) WHERE workspace_id IS
+  // NULL`. Without it, a pod-scoped write (a capture under a project focus,
+  // `link_entities` with no workspaceId) has no relation type to resolve against
+  // and fails. Find-or-create, so this is idempotent on redeploy; the unique
+  // index is a safety net, not the control flow.
+  try {
+    const relDefResult = await ensureDefaultRelationDefs(null, "system");
+    logger.info(
+      { ...relDefResult },
+      "Pod-wide relation definitions reconciled at worker boot"
+    );
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Pod-wide relation definition seeding failed at worker boot; pod-scoped relations will fall back to workspace defs"
     );
   }
 

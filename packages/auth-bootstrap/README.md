@@ -1,7 +1,7 @@
 # @synap-core/auth-bootstrap
 
 Zero-dependency auth bootstrap for [Synap](https://synap.live) data pods. The shared home of the two
-credential flows, used by both `@synap-core/sdk` (tRPC) and `@synap/hub-rest-client` (REST).
+credential flows, used by both `@synap-core/sdk` (tRPC) and `@synap-core/hub-rest-client` (REST).
 
 - **`exchangeIssuerAssertion()`** → a Kratos **session token** — the credential the tRPC SDK consumes as `sessionToken`.
 - **`setupAgent()`** → a Hub Protocol **API key** — the credential the REST client consumes as `apiKey`.

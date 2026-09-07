@@ -126,6 +126,8 @@ export {
   isActionConfigured,
   conditionToFilterValue,
   UNEVALUABLE_CONDITION_OPERATORS,
+  UnevaluableConditionError,
+  unevaluableConditionMessage,
   VALUELESS_CONDITION_OPERATORS,
   BOOKKEEPING_KEYS,
   flowToConditions,

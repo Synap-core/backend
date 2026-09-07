@@ -42,13 +42,17 @@ const read = (...seg: string[]) => readFileSync(join(API_SRC, ...seg), "utf8");
 describe("tripwire: every approval path satisfies expected outputs", () => {
   it("the DEFERRED approval path (apply-approval) calls the door", () => {
     const applier = read("routers", "proposals", "apply-approval.ts");
-    expect(applier).toMatch(/import\s*\{\s*satisfyExpectedOutputs\s*\}\s*from/);
+    expect(applier).toMatch(
+      /import\s*\{[^}]*satisfyExpectedOutputs[^}]*\}\s*from/
+    );
     expect(applier).toMatch(/await satisfyExpectedOutputs\(\{/);
   });
 
   it("the AUTO-APPROVE path (permission-check) calls the door", () => {
     const check = read("utils", "permission-check.ts");
-    expect(check).toMatch(/import\s*\{\s*satisfyExpectedOutputs\s*\}\s*from/);
+    expect(check).toMatch(
+      /import\s*\{[^}]*satisfyExpectedOutputs[^}]*\}\s*from/
+    );
     expect(check).toMatch(/await satisfyExpectedOutputs\(\{/);
   });
 
@@ -82,6 +86,53 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     // lineage would dangle.
     expect(check).toMatch(
       /if \(governedSessionId && autoApprovedProposalId\) \{/
+    );
+  });
+
+  it("BOTH call sites forward the SLOT CLAIM — the label, not just the kind", () => {
+    // WHY: `selectOutputToSatisfy` falls back to the FIRST not-done output of
+    // the matching kind. A session owing two documents therefore stamps the
+    // WRONG deliverable unless the approval carries the label the proposal
+    // claimed. Dropping the argument at either call site restores that bug
+    // silently — every existing assertion above stays green — so it is pinned
+    // by source scan, the only thing that can see an absent argument.
+    const applier = read("routers", "proposals", "apply-approval.ts");
+    const applierCall = applier.slice(
+      applier.indexOf("await satisfyExpectedOutputs({"),
+      applier.indexOf("await satisfyExpectedOutputs({") + 600
+    );
+    // The DEFERRED path reads the claim off the proposal row it is applying,
+    // through the ONE reader (never a hand-rolled `data.expectedLabel` cast).
+    expect(applierCall).toMatch(
+      /expectedLabel: readProposalExpectedLabel\(args\.proposal\.data\)/
+    );
+    expect(applier).toMatch(
+      /import\s*\{[^}]*readProposalExpectedLabel[^}]*\}\s*from/
+    );
+
+    const check = read("utils", "permission-check.ts");
+    const checkCall = check.slice(
+      check.indexOf("await satisfyExpectedOutputs({"),
+      check.indexOf("await satisfyExpectedOutputs({") + 600
+    );
+    // The AUTO path resolved the claim itself (governance reading the session),
+    // so it forwards that local rather than re-reading the receipt.
+    expect(checkCall).toMatch(/expectedLabel: sessionSlotClaim/);
+    // …and the same local must be STORED on the receipt, so the claim survives
+    // even when the stamp is re-derived later from the row.
+    expect(check).toMatch(/expectedLabel: sessionSlotClaim \} : \{\}\)/);
+    // The PENDING door stores it too — otherwise the deferred path above has
+    // nothing to read. Asserted INSIDE the propose branch, so the satisfy call's
+    // own forwarding above cannot stand in for it.
+    const proposeBranch = check.indexOf(
+      'if (gov.decision === "propose" && !lifecycleCloseEscape) {'
+    );
+    const executeBranch = check.indexOf(
+      'if (gov.decision === "execute" || lifecycleCloseEscape) {'
+    );
+    expect(proposeBranch).toBeGreaterThan(-1);
+    expect(check.slice(proposeBranch, executeBranch)).toMatch(
+      /expectedLabel: sessionSlotClaim,/
     );
   });
 

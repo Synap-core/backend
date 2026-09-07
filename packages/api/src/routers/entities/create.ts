@@ -66,6 +66,7 @@ import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
+import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 
 const logger = createLogger({ module: "entities-router" });
 
@@ -188,6 +189,13 @@ export const createProcs = {
          * repeat create with the same anchor auto-resolves (link, don't create).
          */
         externalId: z.string().optional(),
+        /**
+         * The declared session-output slot this entity fulfils, exactly as
+         * declared on `focus_sessions.expectedOutputs[].label`. Forwarded to
+         * `recordSessionArtifact` alongside the `session --produced--> entity`
+         * link below. Never guessed when absent.
+         */
+        expectedLabel: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -200,6 +208,30 @@ export const createProcs = {
         : [];
       const entityId = input.proposedEntityId ?? randomUUID();
       const correlationId = randomUUID();
+      /**
+       * The ACTOR — the agent whose work this write is, as distinct from
+       * `ctx.userId`, the human who AUTHORIZED it (RFC 8693 delegation, never
+       * impersonation).
+       *
+       * Two ways it arrives, and both must be honoured:
+       *  · `input.agentUserId` — the agent's own inline door (hub/MCP), where
+       *    the caller names itself explicitly.
+       *  · `ctx.agentUserId`   — the DELEGATED door: `applyProposalApproval`
+       *    builds an internal composite caller whose `userId` is the APPROVER
+       *    and whose `agentUserId` is `proposal.agentUserId` (the agent that
+       *    authored the proposal). It cannot use `input.agentUserId`, because
+       *    `materializeCompositeGraph` builds the create input from the
+       *    proposal's ops, not from the caller.
+       *
+       * Used for ATTRIBUTION ONLY. Deliberately NOT substituted into
+       * `checkPermissionOrPropose` (a re-gate would re-propose an already-
+       * approved write), nor into the retry-safe agent dedup below (whose
+       * idempotency window is a property of the inline door), nor into the
+       * declared-focus project lookup (an approved proposal already resolved
+       * its project). Those three keep reading `input.agentUserId`.
+       */
+      const actingAgentUserId =
+        input.agentUserId ?? ctx.agentUserId ?? undefined;
       const governanceWorkspaceId =
         input.targetWorkspaceId ?? ctx.workspaceId ?? null;
 
@@ -838,7 +870,7 @@ export const createProcs = {
         phase: "requested",
         subjectId: entityId,
         userId: ctx.userId,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgentUserId,
         workspaceId: permWorkspaceId,
         correlationId,
         data: {
@@ -1127,11 +1159,24 @@ export const createProcs = {
             documentId,
             properties: propertiesWithContent,
             profileSlug,
-            // Provenance (Wave B3): inline (granted) write. source_proposal_id
-            // stays null on the inline path per decision.
+            // Provenance (Wave B3). `createdByUserId` = ctx.userId is the human
+            // who authorized this write (the caller inline; the APPROVER on the
+            // proposal-approve path); `agentUserId` is the actor.
+            //
+            // source_proposal_id stays null on the genuinely INLINE path per the
+            // original decision, but is stamped when the write is materializing
+            // an approved proposal (`ctx.governanceProposalId`) — that is the
+            // same "materialized-from-proposal" case the async materializer
+            // stamps (jobs/workers/materializer.ts:435, the C2 decision), and it
+            // is the JOIN that recovers the APPROVER (`proposals.reviewedBy`)
+            // from the applied row. Before this, an entity created by approving
+            // an agent's proposal was stamped `createdByKind: 'human'` with a
+            // NULL agent and a NULL proposal — the agent's work recorded under
+            // the human's name.
             ...stampProvenance({
               userId: ctx.userId,
-              agentUserId: input.agentUserId,
+              agentUserId: actingAgentUserId,
+              sourceProposalId: ctx.governanceProposalId,
               correlationId,
             }),
           },
@@ -1218,6 +1263,25 @@ export const createProcs = {
             metadata: {},
           })
           .onConflictDoNothing();
+
+        // ALSO record an artifact — the produced edge alone carries no
+        // `expectedLabel`, so a human-declared output slot (e.g. "the lead
+        // list") could never be claimed by an entity create. `session-outputs.ts`
+        // joins by `coordinate(kind, refId)` — an artifact `kind: "entity"` +
+        // `refId: createdEntity.id` lands on the SAME coordinate the produced
+        // edge above resolves to (`entity:<id>`), so the two ledgers merge into
+        // ONE output entry (the edge only adds "produced_edge" to `source`),
+        // never a duplicate row.
+        await recordSessionArtifact({
+          sessionId: ctx.sessionId,
+          workspaceId: entityWorkspaceId ?? null,
+          userId: ctx.userId,
+          kind: "entity",
+          refId: createdEntity.id,
+          title: createdEntity.title || input.title || "",
+          agentUserId: actingAgentUserId,
+          expectedLabel: input.expectedLabel,
+        });
       }
 
       // Membership: file the entity into the DETERMINISTICALLY resolved project
@@ -1282,7 +1346,7 @@ export const createProcs = {
         action: "create",
         subjectId: createdEntity.id,
         userId: ctx.userId,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgentUserId,
         // Governance linkage (0231): stamp the auto-approve receipt so this agent
         // write reads as GOVERNED, not an "ungoverned AI write". `perm` is the
         // granted result here (denied + proposed already returned above).
@@ -1298,7 +1362,7 @@ export const createProcs = {
         // (createContext builds no such field), so it is not on the public ctx.
         proposalId:
           ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
-          (ctx as { governanceProposalId?: string }).governanceProposalId,
+          ctx.governanceProposalId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
