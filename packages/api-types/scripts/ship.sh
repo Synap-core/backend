@@ -47,6 +47,7 @@ NPM_TAG="latest"
 # Prefer:  ./dev ship api-types publish --otp=123456
 # Or:      NPM_OTP=123456 ./dev ship api-types publish
 NPM_OTP="${NPM_OTP:-}"
+LEGACY_AUTH="${LEGACY_AUTH:-}"   # opt-in: force npm auth-type=legacy (see do_npm_publish)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -67,6 +68,7 @@ while [[ $# -gt 0 ]]; do
     --otp=*)
       NPM_OTP="${1#--otp=}"
       ;;
+    --legacy-auth) LEGACY_AUTH=1 ;;
     --version)
       EXPLICIT_VERSION="${2:-}"
       [[ -n "$EXPLICIT_VERSION" ]] || { echo "✗ --version needs a semver" >&2; exit 1; }
@@ -158,16 +160,21 @@ print_npm_auth_help() {
 You are already logged in (npm whoami works). Publish still needs a 2FA step
 because your account is two-factor auth = "auth-and-writes".
 
-When YOU run interactively, this script uses your existing login and asks for
-the authenticator OTP in the terminal (legacy auth — no browser).
+WHICH SECOND FACTOR DO YOU HAVE? This decides everything below.
 
-  ./dev ship api-types publish
-  # → "This operation requires a one-time password:"
-  # → type the 6 digits from your authenticator app
+  • SECURITY KEY / PASSKEY (WebAuthn) → the WEB flow is required. npm opens
+    https://www.npmjs.com/login/<id> and you approve there. A security key
+    cannot produce a 6-digit code, so an "Enter OTP:" prompt means the flow
+    fell back to legacy and is unanswerable.
+      Fix:  npm config delete auth-type    (npm 10 defaults to `web`)
+    Do not pass --legacy-auth or --otp with a security key.
 
-If you still see a browser URL + done?authId 404, npm is stuck on auth-type=web.
-This script forces legacy auth for the publish process only — re-run the same
-command in a real terminal (not piped).
+  • AUTHENTICATOR APP (TOTP) → either flow works; type the 6 digits, or pass
+    --otp=123456 to skip the prompt.
+
+This script does NOT force an auth type — it inherits your npm config.
+`--legacy-auth` is an opt-in escape hatch for one historical failure: a web
+flow that 404'd on /-/v1/done?authId=… . Use it only with a TOTP app.
 
 Optional shortcuts:
   ./dev ship api-types publish --otp=123456     # skip the prompt
@@ -217,11 +224,22 @@ do_npm_publish() {
   set +e
   (
     cd "$BACKEND_ROOT"
-    # Force legacy auth for this child (and prefer global auth-type=legacy).
-    # auth-type=web opens browser + /-/v1/done?authId=… → 404 on this account.
-    export NPM_CONFIG_AUTH_TYPE=legacy
-    export npm_config_auth_type=legacy
-    # If 2FA prompts are still broken, user can pass --otp= from authenticator.
+    # AUTH TYPE IS NOT FORCED — inherit the user's npm config.
+    #
+    # This used to export auth-type=legacy unconditionally, to route around a
+    # web flow that once 404'd on `/-/v1/done?authId=…`. That is the WRONG
+    # default for a SECURITY KEY / passkey account: legacy prints the
+    # "Open https://www.npmjs.com/login/… to use your security key" URL and then
+    # blocks on `Enter OTP:` — which a security key can never produce, because it
+    # is not a TOTP authenticator. The publish hangs on an unanswerable prompt.
+    # (Hit for real on 2026-09-07.)
+    #
+    # npm 10 defaults to `web`, which is what a security key needs. Legacy is now
+    # opt-in via --legacy-auth, for the historical 404 case only.
+    if [[ -n "${LEGACY_AUTH:-}" ]]; then
+      export NPM_CONFIG_AUTH_TYPE=legacy
+      export npm_config_auth_type=legacy
+    fi
     "${cmd[@]}"
   )
   local rc=$?
@@ -659,13 +677,28 @@ cmd_publish() {
   fi
 
   log "Post-publish verify"
-  sleep 2
-  live="$(npm_published)"
-  info "npm latest: ${live:-unknown}"
+  # npm's WRITE path and its CDN-backed READ path are different systems: a fresh
+  # publish can be invisible to `npm view` for minutes while `npm access list`
+  # already shows it. A 2s sleep + soft "propagation lag?" read exactly like a
+  # FAILED publish for one that had succeeded (hit for real on hub-rest-client's
+  # first publish, 2026-09-07). Poll, then fall back to the ownership signal.
+  local waited=0
+  live=""
+  while (( waited < 90 )); do
+    live="$(npm_published)"
+    [[ -n "$live" ]] && break
+    sleep 5; waited=$(( waited + 5 ))
+  done
+
   if [[ "$live" == "$ver" ]]; then
-    ok "$PKG_NAME@$ver is live"
+    ok "$PKG_NAME@$ver is live (visible after ${waited}s)"
+  elif npm access list packages "${PKG_NAME%%/*}" 2>/dev/null | grep -q "^${PKG_NAME}:"; then
+    ok "$PKG_NAME@$ver PUBLISHED — the registry lists it under the scope"
+    info "The public read path has not propagated yet; that is normal. Nothing is wrong."
+    info "Confirm later with:  npm view $PKG_NAME version"
   else
-    warn "npm reports '$live' (propagation lag?).  npm view $PKG_NAME version"
+    warn "could not confirm $PKG_NAME@$ver on the registry"
+    info "Check for an npm publish receipt email, then: npm view $PKG_NAME version"
   fi
   cat <<EOF
 

@@ -60,7 +60,11 @@ import { dirname, join, relative } from "node:path";
 // NOT lowered further in anticipation: a scan found ~35 more test files whose
 // total mocks are latently missing a name, but they pass today and the baseline
 // must describe what is true now, not what anyone intends.
-const BASELINE = 65;
+// 65 → 64 on 2026-09-07: `routers/proposals/__tests__/review-authority-podwide.test.ts`
+// was converted to `importOriginal` + spread when the review-authority ladder was
+// merged onto one path and started importing `and` / `inArray` / `workspaceMembers`
+// (a total factory would have gone stale exactly there).
+const BASELINE = 64;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

@@ -36,8 +36,7 @@ import {
   unmergeEntities,
   type MergeMaterializedStamp,
 } from "@synap/database";
-import { ProposalStatus, workspaces } from "@synap/database/schema";
-import type { WorkspaceSettings } from "@synap/database/schema";
+import { ProposalStatus } from "@synap/database/schema";
 import type {
   StoredProposalData,
   ProposalMaterializedRecord,
@@ -84,10 +83,10 @@ import {
 } from "@synap/database";
 
 import {
-  canReviewProposal,
-  formatReviewAuthorityReason,
   reviewAuthorityRequirement,
   computeCanReviewApproval,
+  computeCanReviewApprovalFromFacts,
+  resolveBatchedReviewAuthorityFacts,
   assertCanRetargetProposalDestination,
   assertCanReviewProposal,
   type ProposalApprovalPolicy,
@@ -387,81 +386,65 @@ export const proposalsRouter = router({
 
       const { items, pagination } = buildPaginatedResponse(enriched, input);
 
-      // viewerCanReview — per proposal, "can this user approve / reject / revert
-      // it?" computed from the SAME ladder the mutations enforce, so the UI shows
-      // review actions (Approve, Revert) iff the call would succeed. Batched:
-      // one workspace-settings query + one membership query across all distinct
-      // workspaces in the page. Pod-wide proposals (no workspace) are reviewable.
-      const wsIds = [
-        ...new Set(
-          rows.map((r) => r.workspaceId).filter((w): w is string => Boolean(w))
-        ),
-      ];
-      const policyByWs = new Map<string, ProposalApprovalPolicy>();
-      const roleByWs = new Map<string, string>();
-      if (wsIds.length > 0) {
-        const { workspaceMembers } = await import("@synap/database/schema");
-        const wsRows = await db
-          .select({ id: workspaces.id, settings: workspaces.settings })
-          .from(workspaces)
-          .where(inArray(workspaces.id, wsIds));
-        for (const w of wsRows) {
-          const s = w.settings as WorkspaceSettings | undefined;
-          policyByWs.set(
-            w.id,
-            (s?.aiGovernance?.proposalApprovalPolicy ??
-              "owner_and_admins") as ProposalApprovalPolicy
-          );
-        }
-        const memberRows = await db.query.workspaceMembers.findMany({
-          where: and(
-            eq(workspaceMembers.userId, reviewerId),
-            inArray(workspaceMembers.workspaceId, wsIds)
-          ),
-        });
-        for (const m of memberRows) roleByWs.set(m.workspaceId, m.role);
-      }
+      // viewerCanReview — per proposal, "may this viewer APPROVE this row?",
+      // decided by the SHARED ladder (`computeCanReviewApprovalFromFacts`) that
+      // `approve` / `batchApprove` / `revert` / `revise` also reach, so the
+      // Approve button shows iff the mutation would succeed. This block USED to
+      // inline its own copy of the rungs, which meant it never applied the
+      // agent-class floor and could promise an approval the mutation refuses.
+      //
+      // ONE boolean, and it is the APPROVE bar — that is the button it gates,
+      // and approve is the strictly narrower of the two purposes (approve's
+      // grants ⊆ reject's). An agent principal therefore now sees `false` here
+      // even for a reject it could still perform; surfacing the looser reject
+      // bar would need a SECOND field, not a looser single flag.
+      //
+      // The merge fixes the "iff" in BOTH directions. Too PERMISSIVE before:
+      // pod-wide rows were `!hasWorkspace ? true`, an unconditional review
+      // affordance for every authenticated pod user on someone else's proposal.
+      // Too RESTRICTIVE before: the agent-owner rung was never resolved, so the
+      // human who owns the acting agent — whom the mutation admits — saw no
+      // Approve button at all, with no error to explain it.
+      //
+      // Query budget is fixed per request, NOT per row — see
+      // `resolveBatchedReviewAuthorityFacts`: the two batched queries this block
+      // already did (workspace settings + memberships, `inArray` over the page's
+      // distinct workspaces), plus one `users` select for the viewer's agent
+      // class, plus one `inArray` over the page's distinct `agentUserId`s, plus
+      // `isPodAdmin` only when the page carries a pod-wide row.
+      const reviewFactsFor = await resolveBatchedReviewAuthorityFacts({
+        userId: reviewerId,
+        rows,
+      });
       // Compute over the typed `rows` (not the casted enriched items) so the
       // workspaceId/data reads are compiler-checked and can't silently break if
       // enrichment ever reshapes the display payload.
       const viewerCanReviewById = new Map<string, boolean>();
       // viewerCanReviewReason — WHY, alongside the boolean above: a short enum
       // string (see `ReviewAuthorityReason`) an AuthorityRow can render as
-      // "You can approve because…" / "Requires a workspace admin". Derived from
-      // the EXACT SAME inputs `viewerCanReviewById` already computed per row (no
-      // extra query), via the shared `formatReviewAuthorityReason` helper the
-      // mutation-side `computeCanReviewApproval` also uses — so the reason can
-      // never disagree with the boolean. NOTE: unlike `computeCanReviewApproval`,
-      // this batched per-row pass does not resolve agent-ownership (would need an
-      // extra query per distinct `agentUserId`), so an agent-authored proposal's
-      // human owner sees "admin"/"editor" here rather than "agent-owner" — a
-      // known, additive-only gap (display never disagrees with the `viewerCanReview`
-      // boolean, which has the same limitation today).
+      // "You can approve because…" / "Requires a workspace admin". It comes out
+      // of the SAME single ladder evaluation as the boolean, so the two can
+      // never disagree.
       const viewerCanReviewReasonById = new Map<
         string,
         ReviewAuthorityReason
       >();
+      const reviewPolicyById = new Map<string, ProposalApprovalPolicy>();
       for (const r of rows) {
-        const data = r.data as Record<string, unknown> | null;
-        const hasWorkspace = !!r.workspaceId;
-        const policy =
-          policyByWs.get(r.workspaceId ?? "") ?? "owner_and_admins";
-        const memberRole = roleByWs.get(r.workspaceId ?? "");
-        const isOwner = data?.sourceId === reviewerId;
-        const allowed = !hasWorkspace
-          ? true
-          : canReviewProposal({ policy, memberRole, isOwner });
+        const facts = reviewFactsFor(r);
+        const { allowed, reason } = computeCanReviewApprovalFromFacts({
+          proposal: {
+            workspaceId: r.workspaceId,
+            data: r.data,
+            agentUserId: r.agentUserId,
+          },
+          userId: reviewerId,
+          purpose: "approve",
+          facts,
+        });
         viewerCanReviewById.set(r.id, allowed);
-        viewerCanReviewReasonById.set(
-          r.id,
-          formatReviewAuthorityReason({
-            hasWorkspace,
-            policy,
-            memberRole,
-            isOwner,
-            allowed,
-          })
-        );
+        viewerCanReviewReasonById.set(r.id, reason);
+        reviewPolicyById.set(r.id, facts.policy);
       }
       // revertable — per proposal, "would `revert` succeed for this row?"
       // computed from the SAME planner the revert mutation uses (:1903), so the
@@ -500,7 +483,7 @@ export const proposalsRouter = router({
         const viewerCanReviewReason =
           reasonCode === "not-authorized"
             ? `not-authorized: requires ${reviewAuthorityRequirement(
-                policyByWs.get(it.workspaceId ?? "") ?? "owner_and_admins"
+                reviewPolicyById.get(it.id) ?? "owner_and_admins"
               )}`
             : reasonCode;
         return { ...it, viewerCanReview, viewerCanReviewReason, revertable };

@@ -51,6 +51,7 @@ BUMP_KIND="patch"
 EXPLICIT_VERSION=""
 NPM_TAG="latest"
 NPM_OTP="${NPM_OTP:-}"
+LEGACY_AUTH="${LEGACY_AUTH:-}"   # opt-in: force npm auth-type=legacy (see do_npm_publish)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -62,6 +63,7 @@ while [[ $# -gt 0 ]]; do
     --tag) NPM_TAG="${2:-latest}"; shift ;;
     --otp) NPM_OTP="${2:-}"; [[ -n "$NPM_OTP" ]] || { echo "✗ --otp needs a 6-digit code" >&2; exit 1; }; shift ;;
     --otp=*) NPM_OTP="${1#--otp=}" ;;
+    --legacy-auth) LEGACY_AUTH=1 ;;
     --version) EXPLICIT_VERSION="${2:-}"; [[ -n "$EXPLICIT_VERSION" ]] || { echo "✗ --version needs a semver" >&2; exit 1; }; shift ;;
     -*) echo "✗ unknown flag: $1" >&2; exit 1 ;;
     *)
@@ -151,19 +153,29 @@ print_npm_auth_help() {
 ── npm publish auth ──────────────────────────────────────────────────────────
 Publishing needs a 2FA step when your npm account is "auth-and-writes".
 
-Interactive (normal):
-  ./dev ship hub-rest-client publish
-  # → "This operation requires a one-time password:"
-  # → type the 6 digits from your authenticator app
+WHICH SECOND FACTOR DO YOU HAVE?  This decides everything below.
 
-This script forces legacy auth for the publish process only, because a global
-auth-type=web opens a browser and polls /-/v1/done?authId=… which 404s on this
-account. Re-run in a real terminal (not piped) if you see that.
+  • SECURITY KEY / PASSKEY (WebAuthn)  → you MUST use the web flow.
+      npm opens https://www.npmjs.com/login/<id> and you approve there.
+      A security key CANNOT produce a 6-digit code, so if you ever see
+      "Enter OTP:" the flow has fallen back to legacy and is unanswerable.
+      Fix:  npm config delete auth-type      (npm 10 defaults to `web`)
+      Never pass --legacy-auth or --otp with a security key.
 
-Shortcuts:
-  ./dev ship hub-rest-client publish --otp=123456
-  Automation token (CI, no OTP): npmjs.com → Access Tokens → Classic → Automation
-    npm config set //registry.npmjs.org/:_authToken=npm_…
+  • AUTHENTICATOR APP (TOTP)           → either flow works.
+      Terminal prompt: type the 6 digits.
+      Or skip the prompt:  publish --otp=123456
+
+This script does NOT force an auth type — it inherits your npm config, so a
+security key works out of the box. `--legacy-auth` is an opt-in escape hatch
+for one historical failure: a web flow that 404'd on /-/v1/done?authId=… .
+Use it only if you hit that, and only with a TOTP authenticator.
+
+BEST PRACTICE for publishing — a granular token, no 2FA prompt at all:
+  npmjs.com → Access Tokens → Granular Access Token
+    scope: @synap-core, permission: read+write
+  npm config set //registry.npmjs.org/:_authToken=npm_…
+  This also unblocks moving the release to CI, which an interactive OTP cannot.
 
 Diagnose: ./dev ship hub-rest-client auth
 EOF
@@ -183,15 +195,30 @@ do_npm_publish() {
     warn "non-interactive — pass --otp=XXXXXX or use an Automation token"
   fi
 
-  log "pnpm publish $PKG_NAME@$ver (auth-type=legacy for this process)"
+  log "pnpm publish $PKG_NAME@$ver${LEGACY_AUTH:+ (auth-type=legacy, forced)}"
   local -a cmd=(pnpm --filter "$PKG_NAME" publish --access public --no-git-checks --tag "$NPM_TAG")
   [[ -n "$NPM_OTP" ]] && cmd+=(--otp "$NPM_OTP")
 
   set +e
   (
     cd "$BACKEND_ROOT"
-    export NPM_CONFIG_AUTH_TYPE=legacy
-    export npm_config_auth_type=legacy
+    # AUTH TYPE IS NOT FORCED HERE — deliberately.
+    #
+    # An earlier version of this script (copied from api-types') exported
+    # auth-type=legacy unconditionally, to route around an npm web-auth flow
+    # that once 404'd on `/-/v1/done?authId=…`. That is the WRONG default for a
+    # security-key (WebAuthn/passkey) account: legacy mode prints the
+    # "Open https://www.npmjs.com/login/… to use your security key" URL and then
+    # blocks on `Enter OTP:` — a prompt a security key can never satisfy, because
+    # it is not a TOTP authenticator. The publish is unanswerable and hangs.
+    #
+    # So: inherit whatever the user's npm config says (npm 10 defaults to `web`,
+    # which is what a security key needs), and keep legacy as an explicit opt-in
+    # for the 404 case via --legacy-auth.
+    if [[ -n "${LEGACY_AUTH:-}" ]]; then
+      export NPM_CONFIG_AUTH_TYPE=legacy
+      export npm_config_auth_type=legacy
+    fi
     "${cmd[@]}"
   )
   local rc=$?
@@ -348,10 +375,19 @@ NODE
 
   echo
   ok "package.json files rewritten"
-  info "Next: run an install in each touched repo so lockfiles pick up the registry version:"
-  info "  (cd $MONOREPO_ROOT/synap-cli && pnpm install)"
-  info "  (cd $MONOREPO_ROOT/synap-raycast && pnpm install)"
-  info "  (cd $MONOREPO_ROOT/synap-intelligence-service && pnpm install)"
+  info "Next: install in each touched repo so lockfiles pick up the registry version."
+  info "USE THE INSTALLER THAT REPO ACTUALLY USES — running pnpm in an npm-managed"
+  info "repo 'succeeds' in seconds, links nothing, and leaves a stale symlink behind"
+  info "(synap-raycast has package-lock.json and no packageManager field):"
+  for repo in synap-cli synap-raycast synap-intelligence-service; do
+    local dir="$MONOREPO_ROOT/$repo"
+    [[ -d "$dir" ]] || continue
+    if [[ -f "$dir/package-lock.json" && ! -f "$dir/pnpm-lock.yaml" ]]; then
+      info "  (cd $dir && npm install)      # npm-managed"
+    else
+      info "  (cd $dir && pnpm install)"
+    fi
+  done
   info "Then rebuild/verify each before committing."
 }
 
@@ -445,11 +481,36 @@ cmd_publish() {
   fi
 
   log "Post-publish verify"
-  sleep 2
-  live="$(npm_published)"
-  info "npm latest: ${live:-unknown}"
-  if [[ "$live" == "$ver" ]]; then ok "$PKG_NAME@$ver is live"
-  else warn "npm reports '$live' (propagation lag?) — npm view $PKG_NAME version"; fi
+  # npm's WRITE path and its CDN-backed READ path are not the same system. A
+  # first-ever publish of a new name can take minutes to appear via `npm view`,
+  # while `npm access list` (ownership metadata) shows it immediately. A single
+  # 2s sleep then a soft "propagation lag?" line was actively misleading: it read
+  # exactly like a failed publish for a publish that had in fact succeeded.
+  # (Hit for real on the first publish of this package, 2026-09-07.)
+  #
+  # So: poll the read path, and if it is still cold, check the AUTHORITATIVE
+  # signal — whether the registry now lists the package under the scope — before
+  # saying anything. Never report a successful upload as a failure.
+  local waited=0 live=""
+  while (( waited < 90 )); do
+    live="$(npm_published)"
+    [[ -n "$live" ]] && break
+    sleep 5; waited=$(( waited + 5 ))
+  done
+
+  if [[ "$live" == "$ver" ]]; then
+    ok "$PKG_NAME@$ver is live (visible after ${waited}s)"
+  elif npm access list packages "${PKG_NAME%%/*}" 2>/dev/null | grep -q "^${PKG_NAME}:"; then
+    ok "$PKG_NAME@$ver PUBLISHED — the registry lists it under the scope"
+    info "The public read path (npm view) has not propagated yet; that is normal"
+    info "for a first publish and can take several minutes. Nothing is wrong."
+    info "Confirm later with:  npm view $PKG_NAME version"
+  else
+    warn "could not confirm $PKG_NAME@$ver on the registry"
+    info "Check your email for an npm publish receipt, then:"
+    info "  npm view $PKG_NAME version"
+    info "  npm access list packages ${PKG_NAME%%/*}"
+  fi
 
   cat <<EOF
 

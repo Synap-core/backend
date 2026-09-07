@@ -24,25 +24,30 @@ const workspacesRow: { settings: unknown }[] = [];
 let membership: { role: string } | undefined;
 let podAdmin = false;
 
-const USERS = { __table: "users" } as const;
-const WORKSPACES = { __table: "workspaces" } as const;
-
-vi.mock("@synap/database", () => ({
-  db: {
-    select: () => ({
-      from: (table: unknown) => ({
-        where: () => ({
-          limit: async () => (table === USERS ? usersRow : workspacesRow),
+// `importOriginal` + spread, NOT a total replacement: a total factory silently
+// stops covering the module the moment the code under test imports a NEW name
+// from it (the suite then dies at COLLECTION — zero tests, which reads as a
+// pass in a summary). That happened here when the ladder was merged and
+// review-authority.ts started importing `and` / `inArray` / `workspaceMembers`.
+// Only `db` and `getWorkspaceMembership` are overridden; the real table objects
+// are kept so the `from(table)` branch below can match on identity.
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: {
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: async () =>
+              table === actual.users ? usersRow : workspacesRow,
+          }),
         }),
       }),
-    }),
-  },
-  eq: () => ({}),
-  users: USERS,
-  getWorkspaceMembership: async () => membership,
-}));
-
-vi.mock("@synap/database/schema", () => ({ workspaces: WORKSPACES }));
+    },
+    getWorkspaceMembership: async () => membership,
+  };
+});
 
 vi.mock("../../../utils/workspace-role.js", () => ({
   isPodAdmin: async () => podAdmin,
