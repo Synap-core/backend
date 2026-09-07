@@ -335,7 +335,7 @@ jobs:
       - name: Notify Control Plane
         env:
           CP_URL: ${{ secrets.CONTROL_PLANE_API_URL }}
-          CP_SECRET: ${{ secrets.GITHUB_WEBHOOK_SECRET }}
+          CP_SECRET: ${{ secrets.CP_WEBHOOK_SECRET }}
         run: |
           # A MISSING SECRET IS A CONFIG ERROR AND MUST FAIL LOUDLY.
           # Both were unset here too: the curl posted to a bare path with an
@@ -345,7 +345,7 @@ jobs:
           # A network blip staying non-fatal is fine. Absent config is not.
           MISSING=""
           [ -z "$CP_URL" ]    && MISSING="$MISSING CONTROL_PLANE_API_URL"
-          [ -z "$CP_SECRET" ] && MISSING="$MISSING GITHUB_WEBHOOK_SECRET"
+          [ -z "$CP_SECRET" ] && MISSING="$MISSING CP_WEBHOOK_SECRET"
           if [ -n "$MISSING" ]; then
             echo "::error::Control Plane notification is not configured. Missing secret(s):$MISSING"
             exit 1
@@ -356,7 +356,7 @@ jobs:
             --arg gitRef "${{ needs.build-and-push-backend-api.outputs.resolved_ref }}" \
             '{tag: $tag, gitSha: $gitSha, gitRef: $gitRef}')
 
-          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "${{ secrets.CP_WEBHOOK_SECRET }}" | awk '{print $2}')
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$CP_SECRET" | awk '{print $2}')
 
           curl -sf -X POST \
             "$CP_URL/webhooks/github" \
