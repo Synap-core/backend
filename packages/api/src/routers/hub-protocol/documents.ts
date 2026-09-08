@@ -30,6 +30,7 @@ import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   resolveWriteIdempotencyKey,
   idempotencyWindowSeconds,
@@ -469,7 +470,29 @@ export const documentsRouter = router({
         proposalType: input.proposalType,
         action: "update",
         source: "intelligence",
-        summary: "AI document edit proposal",
+        // NAME THE DOCUMENT. This hardcoded literal was the founder's own
+        // example of the defect ("instead of saying AI edit documents, we can
+        // just say … the name of the document"): it described the PRODUCER of
+        // the change and never the thing being changed, so every AI document
+        // edit sitting in the queue was indistinguishable from every other one.
+        //
+        // `doc` is already loaded and access-checked above (owner floor at
+        // `doc.userId !== userId`), so the title costs nothing extra here.
+        //
+        // Composed through the vocabulary SSOT — never a hand-written label
+        // (`.claude/rules/vocabulary.md`). The ACTION is `update`, matching the
+        // `action` this same call passes to `createEventBackedProposal`: the
+        // proposal updates a document. `input.proposalType` (`ai_edit` /
+        // `user_suggestion` / `review_comment`) is the KIND of proposal, which
+        // every card already renders as its own chip and which has no curated
+        // verb — passing it here would render "Ai edit Document …". The mood is
+        // imperative (the default) because a pending proposal's title says what
+        // approving it WILL do.
+        summary: buildObjectActionTitle({
+          action: "update",
+          objectKind: "document",
+          objectName: doc.title,
+        }),
         agentUserId: input.agentUserId ?? null,
         createdBy,
         threadId: threadId ?? null,

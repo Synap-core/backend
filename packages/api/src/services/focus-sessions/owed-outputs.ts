@@ -273,7 +273,9 @@ export async function listOwedSlots(
 
   return rows
     .flatMap((r) => projectOwedSlots(r as OwedRow))
-    .sort((a, b) => (a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0))
+    .sort((a, b) =>
+      a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
+    )
     .slice(0, limit);
 }
 

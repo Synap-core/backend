@@ -1200,8 +1200,25 @@ export const captureRouter = router({
         routingMemory = undefined;
       }
 
-      // Degraded fallback proposal — a single item carrying the raw text, so a
-      // capture is never lost when the IS can't structure it. `degraded` +
+      // Degraded fallback proposal — a single item carrying the raw text.
+      //
+      // ⚠️ CORRECTION (2026-09-08). This comment used to end "…so a capture is
+      // never lost when the IS can't structure it." That was FALSE, and stated
+      // as settled fact. Nothing here writes: `shouldPersistCapturePlan`
+      // (capture-structure-to-graph.ts:36) returns false on `degraded`, so one
+      // hop later this fallback is deliberately NOT persisted — and that refusal
+      // is correct, pinned by `capture-structure-to-graph.test.ts` ("does NOT
+      // persist a degraded plan"), because persisting every transient failure
+      // would turn an outage into permanent queue debt.
+      //
+      // What is actually true: the raw text is RETURNED to the caller, intact,
+      // in the response. Whether it survives is then entirely a property of the
+      // caller. Relay, the CLI and Raycast render it, so they survive; the agent
+      // doors dropped it until they were taught to forward it (see
+      // `capture-degraded-guidance.ts`). "Returned, so the caller CAN save it"
+      // — never "saved".
+      //
+      // `degraded` +
       // `degradedReason` are ADDITIVE response fields (published api-types
       // clients that don't read them are unaffected) that tell the caller this
       // came from the fallback path, and WHY:

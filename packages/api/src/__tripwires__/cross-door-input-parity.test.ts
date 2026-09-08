@@ -126,6 +126,25 @@ interface ServiceSpec {
   fn: string;
   /** Minimum parameters a healthy extraction must find (non-vacuity). */
   paramFloor: number;
+  /**
+   * A parameter EVERY door of this service must declare — the self-guard that
+   * proves each door's contract resolver found the RIGHT declaration rather
+   * than a response schema, a neighbouring procedure's `.input(`, or another
+   * tool's `inputSchema`. Per-service because it names the service's own
+   * subject; hard-coding one service's key would make the guard vacuous for
+   * every other.
+   */
+  selfGuardParam: string;
+  /**
+   * Minimum doors a healthy import-walk must DISCOVER (non-vacuity).
+   *
+   * Per-service because "how many doors reach this service" is a fact about the
+   * service, not a universal. `executeCapability` has three and a collapse to
+   * one means the resolver broke. `updateFocusSession` genuinely has ONE
+   * (measured below), so a floor of 2 there would be a permanent red that says
+   * nothing about drift.
+   */
+  doorFloor: number;
 }
 
 const SERVICES: ServiceSpec[] = [
@@ -134,6 +153,35 @@ const SERVICES: ServiceSpec[] = [
     file: join(API_SRC, "services/capabilities/execute-capability.ts"),
     fn: "executeCapability",
     paramFloor: 10,
+    selfGuardParam: "verbId",
+    doorFloor: 2,
+  },
+  /**
+   * The session-update service — the door family this file's own review said it
+   * SHOULD have been auditing. `subjectEntityId` was added to the tRPC and Hub
+   * REST doors and not to MCP `synap_update_session`, and nothing said so: the
+   * audit's `SERVICES` array held exactly one entry, so the whole focus-session
+   * surface was outside every derived matrix. That is the "derive the set, never
+   * hand-maintain it" rule failing one level above where the rest of this file
+   * applies it — the door list and the parameter list are both derived, and then
+   * gated behind a hand-picked service.
+   */
+  {
+    key: "update-focus-session",
+    file: join(API_SRC, "services/focus-sessions/update-session.ts"),
+    fn: "updateFocusSession",
+    paramFloor: 8,
+    selfGuardParam: "sessionId",
+    // ONE door, and that is a fact about the code rather than a broken walk:
+    // `rg updateFocusSession src/routers` finds exactly one call site (the MCP
+    // handler). The tRPC `focusSessions.update` and the Hub REST PATCH import
+    // this module for its SCHEMAS and merge helpers and then write the row
+    // inline, so there is no shared service for a cross-door comparison to
+    // stand on. What this entry audits is therefore SERVICE→DOOR reachability,
+    // not cross-door symmetry: every parameter the service accepts must be
+    // sayable at the one door that calls it. That is precisely the check that
+    // reads red on `subjectEntityId` today.
+    doorFloor: 1,
   },
 ];
 
@@ -246,18 +294,40 @@ function topLevelKeys(body: string): string[] {
 // ── Parameter extraction (derived from the service's own signature) ──────────
 
 /**
- * The `{ … }` of `export async function fn(input: { … })`.
+ * The `{ … }` of `export async function fn(input: { … })`, or of the NAMED
+ * interface that inline object was extracted into.
  *
  * WORD-BOUNDED on the function name for T4's reason: a prefix match would
  * extract a DIFFERENT function's parameters with every non-vacuity assertion
  * still green — confident nonsense, which is worse than an empty audit.
+ *
+ * The named-interface branch is not a convenience. `updateFocusSession` takes
+ * `params: UpdateFocusSessionParams`, declared as an `export interface` above
+ * it — the ordinary shape for a parameter object with doc comments on its
+ * fields. An inline-only extractor reads ZERO parameters there, and "zero
+ * parameters" is the state in which every reachability assertion below passes
+ * over an empty set. The floor catches that, but the right answer is to resolve
+ * the type, not to leave the service out.
  */
 function extractParamBody(source: string, fn: string): string {
-  const m = new RegExp(
+  const inline = new RegExp(
     `export\\s+(?:async\\s+)?function\\s+${fn}\\s*\\(\\s*\\w+\\s*:\\s*\\{`
   ).exec(source);
-  if (!m) return "";
-  return sliceBalanced(source, m.index + m[0].length - 1);
+  if (inline) return sliceBalanced(source, inline.index + inline[0].length - 1);
+
+  const named = new RegExp(
+    `export\\s+(?:async\\s+)?function\\s+${fn}\\s*\\(\\s*\\w+\\s*:\\s*([A-Z][\\w$]*)`
+  ).exec(source);
+  if (!named) return "";
+  // SAME-MODULE only, deliberately: following an imported type would start
+  // resolving generics and intersections, and every service audited here
+  // declares its own parameter object beside itself. A cross-module parameter
+  // type reads as zero and trips the floor, which is the honest failure.
+  const decl = new RegExp(
+    `(?:export\\s+)?(?:interface|type)\\s+${named[1]}\\s*(?:=\\s*)?\\{`
+  ).exec(source);
+  if (!decl) return "";
+  return sliceBalanced(source, decl.index + decl[0].length - 1);
 }
 
 function paramsOf(spec: ServiceSpec): string[] {
@@ -744,7 +814,7 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
   );
 
   it.each(AUDITS)(
-    "$spec.key: at least two doors were DISCOVERED by import-walk",
+    "$spec.key: at least $spec.doorFloor door(s) were DISCOVERED by import-walk",
     ({ spec, discovery }) => {
       expect(
         discovery.doors.map((d) => d.id),
@@ -753,7 +823,7 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
           `check — if that is now true, say so; if not, the import resolver ` +
           `broke (check the DYNAMIC import branch: the MCP handler uses one).`
       ).not.toHaveLength(0);
-      expect(discovery.doors.length).toBeGreaterThanOrEqual(2);
+      expect(discovery.doors.length).toBeGreaterThanOrEqual(spec.doorFloor);
     }
   );
 
@@ -775,13 +845,13 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
     // silently pointed at the wrong schema (a RESPONSE schema, another
     // procedure's `.input(`, another tool's `inputSchema`) this reads red
     // instead of the matrix filling with plausible nonsense.
-    for (const { discovery } of AUDITS) {
+    for (const { spec, discovery } of AUDITS) {
       for (const door of discovery.doors) {
         expect(
-          isDeclared(door.contract, "verbId"),
+          isDeclared(door.contract, spec.selfGuardParam),
           `${door.role}:${door.id} resolved a contract that does not declare ` +
-            `\`verbId\` — the resolver found the WRONG declaration. Every ` +
-            `verdict for this door is untrustworthy.`
+            `\`${spec.selfGuardParam}\` — the resolver found the WRONG ` +
+            `declaration. Every verdict for this door is untrustworthy.`
         ).toBe(true);
       }
     }
@@ -842,6 +912,26 @@ describe("tripwire (T5): every service parameter is reachable at every door, or 
       "execute-capability",
       "agentUserId",
       "routers/mcp/handlers/capability.ts:synap_run_capability",
+    ],
+    // The second service, so a parameter extractor or door walk that works
+    // only for the first reads red here. HONEST LIMITATION, measured: neither
+    // cell discriminates between the two reachability RULES for this service.
+    // `goal` is declared in the MCP inputSchema AND forwarded at the call site
+    // (`goal: args.goal as string | undefined`), so renaming it in the manifest
+    // alone leaves this green — verified. Every one of this tool's nine
+    // declared properties is forwarded the same way, so no discriminating
+    // positive exists. The cell that discriminates is `subjectEntityId`:
+    // neither declared nor forwarded, and it reads RED the moment its
+    // ACKNOWLEDGED_GAPS entry is removed — verified.
+    [
+      "update-focus-session",
+      "goal",
+      "routers/mcp/handlers/session.ts:synap_update_session",
+    ],
+    [
+      "update-focus-session",
+      "userId",
+      "routers/mcp/handlers/session.ts:synap_update_session",
     ],
   ];
   it.each(KNOWN_POSITIVES)(

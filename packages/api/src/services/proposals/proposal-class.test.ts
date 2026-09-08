@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
+import { diesWithSession } from "./expire-lapsed-proposals.js";
 import {
   classifyProposal,
   proposalLifetimeHours,
@@ -254,18 +255,11 @@ describe("classifyProposal — access", () => {
     expect(
       proposalLifetimeHours("grant_capability", "focus_session")
     ).toBeNull();
-    // A null lifetime IS the negation of `diesWithSession`'s first arm ("a
-    // class WITH a lifetime"), so closing the session an agent asked from
-    // cannot retire the question of whether it may join at all.
-    //
-    // The end-to-end assertion on `diesWithSession` itself deliberately does
-    // NOT live here. Importing it drags `expire-lapsed-proposals.ts` →
-    // `@synap-core/core` → `loadConfig`, which throws on a missing
-    // `database.url` — so a single import turns this pure, DB-free file into
-    // one that cannot even LOAD without a database, and a test that cannot load
-    // is a test that does not run. `expire-lapsed-proposals.test.ts` is where
-    // that arm belongs; note that it currently requires a DB env to load at
-    // all, which is a pre-existing gap in this area, not a new one.
+    // And therefore `diesWithSession`'s first arm ("a class WITH a lifetime")
+    // can never select it: closing the session an agent asked from must not
+    // retire the question of whether it may join at all.
+    expect(diesWithSession("join", "workspace")).toBe(false);
+    expect(diesWithSession("grant_capability", "focus_session")).toBe(false);
   });
 
   it("still reads ONLY the two columns — an agent cannot nominate the lane", () => {

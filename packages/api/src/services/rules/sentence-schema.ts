@@ -62,12 +62,41 @@ const actionVerbSchema = z.enum([
   "rejected",
 ]);
 
+// The WIRE half of `TriggerSubjectCategory`. Kept as its own literal list —
+// NOT `z.enum(TRIGGER_SUBJECT_CATEGORIES)` — because the `AssertExact` at the
+// bottom of this file is the whole point: it fails `tsc` when the two halves
+// disagree in EITHER direction, and deriving one from the other would make that
+// guard trivially true and delete the protection it exists to give.
+//
+// Every member is producer-backed and workspace-scoped; the rule and the census
+// behind it live on `TRIGGER_SUBJECT_CATEGORIES` in
+// `@synap-core/types/automations`, and are pinned by
+// `__tripwires__/trigger-subject-has-producer.test.ts`.
 const subjectCategorySchema = z.enum([
   "entity",
-  "external_message",
+  "document",
+  "proposal",
+  "relation",
+  "role",
+  "project",
+  "workspace",
+  "view",
+  "skill",
+  "template",
+  "tool",
+  "apiKey",
+  "focus_session",
+  "command",
   "capture",
   "notification",
-  "feed_item",
+  "proactive",
+  "feed",
+  "hydration",
+  "connector_sync",
+  "channel_message",
+  "external_message",
+  "external_webhook",
+  "messaging_account",
   "inbox_item",
 ]);
 

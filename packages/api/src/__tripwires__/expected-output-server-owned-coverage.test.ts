@@ -55,6 +55,7 @@ const SAMPLE: Required<
   owner: "human",
   blockedReason: "credential",
   why: "The Stripe restricted key for the live account",
+  ref: { kind: "entity", id: "33333333-3333-3333-3333-333333333333" },
   owedSince: "2026-09-08T09:00:00.000Z",
   attestedBy: "22222222-2222-2222-2222-222222222222",
   attestedAt: "2026-09-08T12:00:00.000Z",

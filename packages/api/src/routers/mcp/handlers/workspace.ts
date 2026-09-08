@@ -21,6 +21,7 @@ import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
   ok,
   requireScope,
+  readReasoning,
   rejectMissingWriteWorkspace,
   McpToolContext,
   CallToolResult,
@@ -241,6 +242,7 @@ export const workspaceHandlers: McpHandlerMap = {
       subjectType: "workspace",
       action: "create",
       source: "api",
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       data: {
         name,
         definition,
@@ -346,6 +348,7 @@ export const workspaceHandlers: McpHandlerMap = {
       subjectType: "workspace",
       action: "declare_source",
       source: "api",
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       data: {
         sourceRoles: parsed.data.sourceRoles,
         defaultSources: parsed.data.defaultSources,

@@ -40,6 +40,69 @@ const UUID_RE =
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
 const SUSPENDED_INTENT_MAX = 400;
 
+/**
+ * PARSE the slot shapes at the MCP door, with the SAME schemas every other door
+ * applies — never a cast.
+ *
+ * `expectedOutputs` and `addOutput` used to arrive here as `as ExpectedOutput[]`
+ * / `as UpdateFocusSessionParams["addOutput"]`. A TypeScript cast asserts a
+ * shape; it does not check one, and MCP arguments come off the wire from a
+ * language model. So `outputRefWireSchema` — strict, both arms, `isHttpUrl`-
+ * gated — ran on the tRPC and Hub REST doors and on NOTHING that arrived here:
+ * a seventh `ref.kind` outside `OUTPUT_REF_KINDS` was stored verbatim, and the
+ * union three other packages mirror was broken by the door that never looked.
+ *
+ * WHAT IS PARSED, exactly: the whole `expectedOutputs` array through
+ * `expectedOutputWireSchema` (the ONE wire shape, which carries
+ * `outputRefWireSchema` on `ref`), and `addOutput.ref` through
+ * `outputRefWireSchema`. `addOutput`'s other fields keep their cast — they are
+ * cast at every door, this one included, and inventing a second `addOutput`
+ * shape here is the per-door drift the shared schema exists to prevent.
+ *
+ * Returns the zod message as MCP ERROR TEXT rather than throwing: an MCP tool's
+ * refusal is a result the model reads and can act on, and a message naming the
+ * offending path is what lets it fix the call rather than retry it.
+ */
+function parseSlotInputs(
+  args: Record<string, unknown>,
+  schemas: {
+    expectedOutputWireSchema: { parse: (v: unknown) => ExpectedOutput };
+    outputRefWireSchema: { parse: (v: unknown) => unknown };
+  }
+):
+  | { error: string }
+  | {
+      expectedOutputs?: ExpectedOutput[];
+      addOutput?: UpdateFocusSessionParams["addOutput"];
+    } {
+  const out: {
+    expectedOutputs?: ExpectedOutput[];
+    addOutput?: UpdateFocusSessionParams["addOutput"];
+  } = {};
+  try {
+    if (args.expectedOutputs !== undefined) {
+      if (!Array.isArray(args.expectedOutputs)) {
+        return { error: "expectedOutputs must be an array of declared slots." };
+      }
+      out.expectedOutputs = args.expectedOutputs.map((item) =>
+        schemas.expectedOutputWireSchema.parse(item)
+      );
+    }
+    if (args.addOutput !== undefined) {
+      const add = args.addOutput as UpdateFocusSessionParams["addOutput"];
+      if (add && add.ref !== undefined && add.ref !== null) {
+        schemas.outputRefWireSchema.parse(add.ref);
+      }
+      out.addOutput = add;
+    }
+  } catch (err) {
+    return {
+      error: `Invalid output slot: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return out;
+}
+
 export const sessionHandlers: McpHandlerMap = {
   synap_start_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
@@ -74,6 +137,13 @@ export const sessionHandlers: McpHandlerMap = {
     }
     const { createFocusSession } =
       await import("../../../services/focus-sessions/create-session.js");
+    const { expectedOutputWireSchema, outputRefWireSchema } =
+      await import("../../../services/focus-sessions/update-session.js");
+    const slots = parseSlotInputs(args, {
+      expectedOutputWireSchema,
+      outputRefWireSchema,
+    });
+    if ("error" in slots) return ok(slots);
     const result = await createFocusSession({
       userId,
       workspaceId: args.workspaceId as string | undefined,
@@ -85,10 +155,11 @@ export const sessionHandlers: McpHandlerMap = {
       channelId: args.channelId as string | undefined,
       agentIds: args.agentIds as string[] | undefined,
       templateId: args.templateId as string | undefined,
-      // Cast to the SHARED type, never a re-typed inline shape: an inline copy
-      // silently narrows what this door believes a slot is, which is how the
-      // per-door shapes drifted in the first place.
-      expectedOutputs: args.expectedOutputs as ExpectedOutput[] | undefined,
+      // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
+      // re-typed inline shape: an inline copy silently narrows what this door
+      // believes a slot is, which is how the per-door shapes drifted in the
+      // first place — and a cast narrows nothing while checking nothing.
+      expectedOutputs: slots.expectedOutputs,
       parentSessionId: args.parentSessionId as string | undefined,
       suspendedIntent: args.suspendedIntent as string | undefined,
     });
@@ -290,8 +361,16 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const { updateFocusSession } =
-      await import("../../../services/focus-sessions/update-session.js");
+    const {
+      updateFocusSession,
+      expectedOutputWireSchema,
+      outputRefWireSchema,
+    } = await import("../../../services/focus-sessions/update-session.js");
+    const slots = parseSlotInputs(args, {
+      expectedOutputWireSchema,
+      outputRefWireSchema,
+    });
+    if ("error" in slots) return ok(slots);
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -300,14 +379,27 @@ export const sessionHandlers: McpHandlerMap = {
       status: args.status as "active" | "paused" | undefined,
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
-      addOutput: args.addOutput as
-        UpdateFocusSessionParams["addOutput"] | undefined,
+      addOutput: slots.addOutput,
       completeOutput: args.completeOutput as string | undefined,
       addAgentId: args.addAgentId as string | undefined,
-      // Cast to the SHARED type, never a re-typed inline shape: an inline copy
-      // silently narrows what this door believes a slot is, which is how the
-      // per-door shapes drifted in the first place.
-      expectedOutputs: args.expectedOutputs as ExpectedOutput[] | undefined,
+      // NARROWED, not cast: this field has THREE meanings on the wire and a
+      // blanket cast collapses two of them. `undefined` leaves the anchor,
+      // `null` is the CLEAR, a string re-points it. `as string | null |
+      // undefined` would let a number or an object through to the column.
+      // The visibility floor is NOT re-applied here — it lives in
+      // `updateFocusSession`, which is the one door every caller of this
+      // service passes through; a second copy at this handler is exactly the
+      // fork that made the output-ref check drift across doors.
+      ...(args.subjectEntityId === null
+        ? { subjectEntityId: null }
+        : typeof args.subjectEntityId === "string"
+          ? { subjectEntityId: args.subjectEntityId }
+          : {}),
+      // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
+      // re-typed inline shape: an inline copy silently narrows what this door
+      // believes a slot is, which is how the per-door shapes drifted in the
+      // first place — and a cast narrows nothing while checking nothing.
+      expectedOutputs: slots.expectedOutputs,
     });
     switch (result.status) {
       case "not_found":

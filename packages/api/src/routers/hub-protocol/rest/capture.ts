@@ -22,6 +22,11 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
 import {
+  buildDegradedNextStep,
+  describeDegradedForAgent,
+  isDegradedReasonRetryable,
+} from "../../../services/capture-agent/capture-degraded-guidance.js";
+import {
   submitCaptureGraph,
   CaptureGraphValidationError,
 } from "../../../services/capture-agent/submit-capture-graph.js";
@@ -747,6 +752,46 @@ export function registerCaptureRoutes(app: HubHono): void {
             "`previousEntities`) so the structurer refines rather than restarts. " +
             "If the user cannot answer, POST the draft `proposals` to /capture/execute as `entities` " +
             "to write what is already known.",
+        });
+      }
+
+      // ── THE STRUCTURER DEGRADED — the salvage exists, SAY SO ────────────
+      //
+      // Same shape, same reason, as the `followUp` branch three lines above.
+      // `shouldPersistCapturePlan` refuses to persist a degraded plan (correct
+      // — a transient failure must not become permanent queue debt), so this
+      // door fell through to a bare `c.json(result)`: the salvaged note WAS in
+      // `proposals`, and `degraded`/`degradedReason` WERE on the payload, but
+      // nothing carried a `status` or told the caller what to do. A live agent
+      // read the absence as "nothing was written" and stopped. It behaved
+      // correctly given what it was told.
+      //
+      // ADDITIVE by construction: the whole original result is spread first, so
+      // every existing field reads exactly as before and no consumer breaks.
+      // Nothing is written on this branch — the write remains the caller
+      // re-entering through the governed door with an explicit plan.
+      if ((result as { degraded?: unknown }).degraded === true) {
+        const degradedReason = (result as { degradedReason?: unknown })
+          .degradedReason;
+        const reason =
+          typeof degradedReason === "string" ? degradedReason : undefined;
+        const salvage = (result as { proposals?: unknown }).proposals;
+        return c.json({
+          ...(result as Record<string, unknown>),
+          // NOT a receipt status: no graph was submitted, so there is no
+          // `writeReceipt.state` to derive from and forcing this through
+          // `captureStatusForReceiptState` would be a claim about a write that
+          // never happened. Mirrors the sibling `needs_input` literal, which is
+          // a caller-state word for the same reason.
+          status: "not_structured",
+          degradedMessage: describeDegradedForAgent(reason),
+          degradedRetryable: isDegradedReasonRetryable(reason),
+          // Echoed under an explicit name so the agent does not have to know
+          // that a degraded `proposals` is a fallback rather than a real plan.
+          // Already `/capture/execute`-shaped (tempId/profileSlug/title/…) —
+          // pass it straight back as `entities`.
+          ...(Array.isArray(salvage) ? { salvagedEntities: salvage } : {}),
+          nextStep: buildDegradedNextStep("salvagedEntities"),
         });
       }
 

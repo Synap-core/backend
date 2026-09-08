@@ -65,9 +65,9 @@ describe("selectSlotToAttest — a RETIRED slot is not dischargeable", () => {
 
   it("refuses on `retiredAt` alone, not on the reason", () => {
     const { retiredReason: _drop, ...noReason } = RETIRED;
-    expect(selectSlotToAttest([noReason as ExpectedOutput], OWED.label)).toEqual(
-      { refused: "retired" }
-    );
+    expect(
+      selectSlotToAttest([noReason as ExpectedOutput], OWED.label)
+    ).toEqual({ refused: "retired" });
   });
 });
 
@@ -114,7 +114,12 @@ describe("selectSlotToAttest — the three floors", () => {
 
 describe("stampAttested — the receipt", () => {
   it("stamps done + WHO and WHEN, and never a fake proposal id", () => {
-    const [slot] = stampAttested([OWED], 0, USER, new Date("2026-09-08T12:00:00Z"));
+    const [slot] = stampAttested(
+      [OWED],
+      0,
+      USER,
+      new Date("2026-09-08T12:00:00Z")
+    );
     expect(slot).toMatchObject({
       status: "done",
       attestedBy: USER,

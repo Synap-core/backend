@@ -74,6 +74,8 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   instantiateSession,
+  buildRunSessionTitle,
+  RUN_PROMPT_METADATA_KEY,
   promoteSessionToPlaybook,
   resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
@@ -1848,6 +1850,17 @@ export const playbooksRouter = router({
         ctx.workspaceId
       );
 
+      // The subject's own title, for the run title on the PROPOSE path (the
+      // direct path resolves it inside instantiateSession).
+      let subjectTitle: string | null = null;
+      if (subjectId) {
+        const subject = await database.query.entities.findFirst({
+          columns: { title: true },
+          where: eq(entities.id, subjectId),
+        });
+        subjectTitle = subject?.title ?? null;
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1858,13 +1871,18 @@ export const playbooksRouter = router({
         reasoning: input.reasoning,
         // The focus_session/create executor requires `goal` — without it an
         // approved instantiate proposal throws "Focus session proposal is
-        // missing goal". Resolve the playbook's goalTemplate against params NOW
-        // (propose time), matching the direct instantiateSession path so the
-        // materialized session's goal is identical whether approved or direct.
+        // missing goal". Build BOTH halves NOW (propose time), matching the
+        // direct instantiateSession path so the materialized session is
+        // identical whether approved or direct: `goal` is the TITLE
+        // (buildRunSessionTitle — the same pure builder the direct path uses),
+        // and the rendered goalTemplate rides `prompt`, which the executor
+        // stamps onto metadata. Resolving only the template here would have
+        // re-introduced the paragraph-as-title on the approved path alone.
         data: {
           playbookId: input.playbookId,
           name: playbook.name,
-          goal: resolveGoal(
+          goal: buildRunSessionTitle(playbook.name, subjectTitle),
+          [RUN_PROMPT_METADATA_KEY]: resolveGoal(
             playbook.goalTemplate,
             (input.params ?? {}) as Record<string, unknown>,
             input.playbookId

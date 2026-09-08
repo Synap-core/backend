@@ -765,6 +765,29 @@ export interface FocusSessionExpectedOutput {
   retiredAt?: string;
   /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
   retiredReason?: "session_cancelled";
+  /**
+   * WHERE to go for this deliverable — an in-pod object or an external link.
+   * ONE union, two arms; nothing else (free text is `why`).
+   *
+   * This package is dependency-free by design, so the union is duplicated from
+   * `OutputRef` (@synap/playbooks) rather than imported — the pod's
+   * `outputRefWireSchema` is the enforcing copy and will reject anything else,
+   * including a `{kind}` outside the six the visibility floor can adjudicate
+   * and a `{url}` that is not http(s).
+   *
+   * `null` is a WIRE value only and means CLEAR: silence on a wholesale patch
+   * means KEEP, so removing a pointer needs a way to say itself. A slot READ
+   * back never carries `null` — the pod deletes the key — so a reader may test
+   * it for truthiness alone.
+   */
+  ref?:
+    | {
+        kind:
+          "view" | "cell" | "document" | "entity" | "automation" | "playbook";
+        id: string;
+      }
+    | { url: string }
+    | null;
 }
 
 /**

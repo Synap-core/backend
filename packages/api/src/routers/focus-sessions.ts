@@ -55,6 +55,7 @@ import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
 import { sessionScopeConditions } from "../services/focus-sessions/session-scope.js";
 import {
   expectedOutputWireSchema,
+  outputRefWireSchema,
   mergeExpectedOutputs,
 } from "../services/focus-sessions/update-session.js";
 import {
@@ -138,6 +139,10 @@ function slotOwnershipResult(
         code: "BAD_REQUEST",
         message: `"${input.expectedLabel}" is already delivered`,
       });
+    case "ref_unreachable":
+      // Block only. The `default` below returns SUCCESS, so a refusal with no
+      // case here would report `ok: true` while the pointer was dropped.
+      throw new TRPCError({ code: "BAD_REQUEST", message: result.reason });
     case "not_owed_by_you":
       // Attestation only. A slot an AGENT still owes is not the human's to
       // close — and saying so out loud is the point: a bare 200 on an unchanged
@@ -835,9 +840,34 @@ export const focusSessionsRouter = router({
         // Optional project association. The active work context stays
         // independent from this persisted association.
         projectId: z.string().uuid().nullish(),
+        /**
+         * The entity this session is ABOUT — the subject-spine anchor. The
+         * service has always accepted it; this door did not declare it, so
+         * every browser-started session landed subject-less and the room's
+         * Subject row could only ever read "No subject". Floored below through
+         * the SAME predicate the output doors use.
+         */
+        subjectEntityId: z.string().uuid().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // The subject must be an entity the caller can ALREADY see. Same floor,
+      // same door (`isOutputRefVisible`) as an output's ref, and for the same
+      // reason: the room resolves the subject's live title by bare id, so an
+      // unfloored write would be a read oracle over every entity in the pod.
+      if (input.subjectEntityId) {
+        const visible = await isOutputRefVisible({
+          userId: ctx.userId,
+          kind: "entity",
+          refId: input.subjectEntityId,
+        });
+        if (!visible) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `No entity ${input.subjectEntityId} you can access`,
+          });
+        }
+      }
       // ONE create door (`createFocusSession`): the bare insert this replaced
       // stamped every human-started session `origin: "agent"`, which is the
       // exact mislabel the triage lens keys on. The service derives origin
@@ -847,6 +877,7 @@ export const focusSessionsRouter = router({
         userId: ctx.userId,
         workspaceId: input.workspaceId ?? null,
         projectId: input.projectId ?? null,
+        subjectEntityId: input.subjectEntityId ?? null,
         goal: input.goal,
         templateId: input.templateId ?? null,
         expectedOutputs: input.expectedOutputs,
@@ -910,9 +941,30 @@ export const focusSessionsRouter = router({
         expectedOutputs: z.array(expectedOutputItemSchema).optional(),
         // First-class stages: advance the active playbook stage (PlaybookStage.key).
         currentStage: z.string().min(1).optional(),
+        /**
+         * Re-point (or CLEAR, with an explicit `null`) the entity this session
+         * is about. Omitted leaves the anchor alone; `null` is the un-set.
+         */
+        subjectEntityId: z.string().uuid().nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // VISIBILITY FLOOR before the load, same predicate and same refusal as
+      // the create door above. `null` clears and names nothing, so it skips.
+      if (input.subjectEntityId) {
+        const visible = await isOutputRefVisible({
+          userId: ctx.userId,
+          kind: "entity",
+          refId: input.subjectEntityId,
+        });
+        if (!visible) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `No entity ${input.subjectEntityId} you can access`,
+          });
+        }
+      }
+
       // Load first to verify ownership
       const existing = await db.query.focusSessions.findFirst({
         where: and(
@@ -955,6 +1007,10 @@ export const focusSessionsRouter = router({
         );
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
+      // `undefined` leaves the anchor; `null` is the CLEAR. Assigned rather
+      // than `?? existing` so "no subject" is expressible at all.
+      if (patch.subjectEntityId !== undefined)
+        set.subjectEntityId = patch.subjectEntityId;
 
       // Any terminal status via update funnels through completeFocusSession —
       // the ONE close door (pack + run close + ephemeral expiry + close event).
@@ -983,6 +1039,8 @@ export const focusSessionsRouter = router({
           };
           if (patch.progress !== undefined) extra.progress = patch.progress;
           if (patch.goal !== undefined) extra.goal = patch.goal;
+          if (patch.subjectEntityId !== undefined)
+            extra.subjectEntityId = patch.subjectEntityId;
           if (patch.expectedOutputs !== undefined)
             extra.expectedOutputs = mergeExpectedOutputs(
               (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],
@@ -1239,6 +1297,57 @@ export const focusSessionsRouter = router({
     }),
 
   /**
+   * MINT the session's room, if it has none — the browser-reachable half of the
+   * one channel writer.
+   *
+   * `ensureSessionChannel` has existed since the session spine landed, but only
+   * the CREATE paths called it, so an ad-hoc session that started channel-less
+   * stayed channel-less forever and its room rendered a permanently disabled
+   * composer. This door lets the composer mint the room on first send.
+   *
+   * NEVER a second channel writer: the insert, the title derivation and the
+   * `focus_sessions.channel_id` write all stay inside that service. This is the
+   * owner floor plus a call.
+   *
+   * Idempotent by construction — the service returns the existing `channelId`
+   * when one is already set, so a double-send cannot mint two rooms.
+   */
+  ensureChannel: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      // Owner floor — the same predicate `get`/`update`/`attachOutput` use.
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, ctx.userId)
+        ),
+        columns: { id: true, workspaceId: true, goal: true, channelId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+
+      const { ensureSessionChannel } =
+        await import("../services/focus-sessions/ensure-session-channel.js");
+      const channelId = await ensureSessionChannel({
+        sessionId: session.id,
+        userId: ctx.userId,
+        workspaceId: session.workspaceId,
+        goal: session.goal,
+      });
+      if (!channelId) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Could not create a room for this session",
+        });
+      }
+      return { channelId };
+    }),
+
+  /**
    * Record an EXISTING object as something this session produced — the human
    * counterpart to the agent write doors, which reach `recordSessionArtifact`
    * only as a side effect of creating the object themselves. A person looking
@@ -1431,6 +1540,12 @@ export const focusSessionsRouter = router({
         blockedReason: z.enum(BLOCKED_REASONS),
         /** ONE line naming WHICH thing is missing, not its class. */
         why: z.string().max(500).optional(),
+        /**
+         * WHERE to go — the card's title becomes a door. `null` clears a stored
+         * pointer; omitted leaves it alone. Refused when it names an object the
+         * caller cannot already see (`isOutputRefVisible`, the one floor).
+         */
+        ref: outputRefWireSchema.nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1440,6 +1555,7 @@ export const focusSessionsRouter = router({
         expectedLabel: input.expectedLabel,
         blockedReason: input.blockedReason,
         why: input.why,
+        ref: input.ref,
       });
       return slotOwnershipResult(result, input);
     }),

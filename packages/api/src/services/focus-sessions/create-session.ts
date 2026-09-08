@@ -23,6 +23,13 @@ import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { reconcileOwedSince } from "./update-session.js";
+// STATIC — see the note on the same import in `update-session.ts`: there is no
+// cycle here, the `await import()` this replaces stated no reason, and
+// `block-output.ts` has always imported this module statically.
+import {
+  findUnreachableOutputRefs,
+  unreachableOutputRefError,
+} from "./assert-output-ref-visible.js";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
 
@@ -160,6 +167,25 @@ export async function createFocusSession(
       subjectEntityId,
     })
   ).projectId;
+
+  // VISIBILITY FLOOR for any `ref` a declared slot carries — the SAME
+  // `isOutputRefVisible` the attach-output and update doors apply, and BEFORE
+  // the membrane so a ref the caller cannot see is refused to the caller who
+  // wrote it rather than laundered into the human's proposal queue.
+  //
+  // Thrown as FORBIDDEN rather than returned: this result type has no refusal
+  // member, and the door beside it (`perm.denied`) already refuses this way.
+  if (expectedOutputs.length > 0) {
+    const unreachable = await findUnreachableOutputRefs({
+      userId,
+      outputs: expectedOutputs,
+    });
+    if (unreachable.length > 0) {
+      throw Object.assign(new Error(unreachableOutputRefError(unreachable)), {
+        code: "FORBIDDEN",
+      });
+    }
+  }
 
   // Governance membrane — AI callers route through proposals. A session with no
   // workspace is a personal resource and auto-grants via checkPermissionOrPropose.

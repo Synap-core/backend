@@ -150,6 +150,43 @@ beforeEach(() => {
   ];
 });
 
+describe("focus_session/update — the SUBJECT anchor half of an approval", () => {
+  /**
+   * The same defect class as the deliverables above, one field over: the
+   * executor's `set` is HAND-LISTED, so a field added to the gate payload by
+   * both proposing doors and not added here approves as SUCCESS and changes
+   * nothing. `subjectEntityId` was added to both doors on 2026-09-08 and is
+   * pinned here in the same wave rather than discovered months later.
+   */
+  const sessionSet = () =>
+    [...updates].reverse().find((u) => u.table === "focus_sessions")?.values;
+
+  it("APPLIES an approved subject re-point", async () => {
+    const result = await approve({
+      goal: "Ship the ownership pair",
+      subjectEntityId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    });
+    expect(result.success).toBe(true);
+    expect(sessionSet()).toMatchObject({
+      subjectEntityId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+    });
+  });
+
+  it("APPLIES an approved CLEAR — null must survive the executor too", async () => {
+    // The discriminating case: a `typeof === "string"` test (the shape every
+    // sibling field in this `set` uses) passes the re-point test above and
+    // silently drops the clear, so an approved "remove the subject" would be a
+    // success receipt for nothing. This row is the only one that rules it out.
+    await approve({ goal: "g", subjectEntityId: null });
+    expect(sessionSet()).toHaveProperty("subjectEntityId", null);
+  });
+
+  it("leaves the anchor alone when the proposal carried none", async () => {
+    await approve({ goal: "g", progress: 60 });
+    expect(sessionSet()).not.toHaveProperty("subjectEntityId");
+  });
+});
+
 describe("focus_session/update — the deliverables half of an approval", () => {
   it("applies a wholesale expectedOutputs patch instead of dropping it", async () => {
     const result = await approve({

@@ -3,7 +3,31 @@
  *
  * - instantiateSession: turn a Playbook (template) into a runtime focus_session.
  *   Resolves the goalTemplate against caller params, copies expectedOutputs, and
- *   writes the `session → instantiated_from → playbook` edge. The channel is left
+ *   writes the `session → instantiated_from → playbook` edge.
+ *
+ *   TITLE vs PROMPT (they are two different strings and always were).
+ *   `focus_sessions.goal` is read as a TITLE by essentially every consumer —
+ *   the runs list (`services/runs/index.ts` → `flowName`), the unblock reactor
+ *   (`notifications/session-unblock-reactor.ts` → `title`), diagnose
+ *   (`resolve-object-kind.ts` → `displayName`), the channel namer
+ *   (`ensure-session-channel.ts`), spawn-project (→ `project.name`) and the
+ *   workflow place. Exactly ONE consumer read it as an INSTRUCTION: the
+ *   executor dispatch in `run-playbook.ts`, which handed the rendered
+ *   `goalTemplate` to the agent as its kickoff prompt. Because both roles were
+ *   served by one column, every run row in every list rendered as a paragraph
+ *   ("You are the CRM hygiene maintenance agent, running unattended…").
+ *   Automation runs never had the problem: `automation-executor.ts` passes
+ *   `automation.name` to `openRunSession`.
+ *
+ *   So the two strings are now stored separately:
+ *     - `goal`             = the run's TITLE — `<playbook name>`, plus
+ *                            ` for <subject entity title>` when a subject is
+ *                            bound (`buildRunSessionTitle`).
+ *     - `metadata.prompt`  = the RENDERED goalTemplate, i.e. the agent's
+ *                            instruction (`RUN_PROMPT_METADATA_KEY`). Read it
+ *                            with `runPromptFor(session)`, which falls back to
+ *                            `goal` so sessions created before this change
+ *                            still dispatch their paragraph as the prompt. The channel is left
  *   null (wired on run start by the executor, P3), matching focus_sessions
  *   semantics. The run's granted capabilities are read from the playbook's
  *   `grants` links at run time — not copied here.
@@ -29,6 +53,7 @@ import {
   ne,
   asc,
   drizzleSql,
+  entities,
   focusSessions,
   playbooks,
 } from "@synap/database";
@@ -98,6 +123,49 @@ export function resolveGoal(
   return text;
 }
 
+/**
+ * The `focus_sessions.metadata` key holding a run session's rendered agent
+ * prompt. The column is a free-form bag (schema/focus-sessions.ts:192); this is
+ * the only key this module writes.
+ */
+export const RUN_PROMPT_METADATA_KEY = "prompt";
+
+/** Max length of a generated run title (the column allows far more; a title should not need it). */
+const RUN_TITLE_MAX = 300;
+
+/**
+ * The run session's TITLE. `<playbook name>`, plus ` for <subject title>` when
+ * the run is bound to a subject entity. Pure so it is unit-testable and so the
+ * propose-time path in `routers/playbooks.ts` can build the identical string
+ * (its proposal `data.goal` must match what the direct path writes).
+ *
+ * The subject is named by its TITLE, never its id — a uuid in a list is the
+ * same unreadable row this change exists to fix.
+ */
+export function buildRunSessionTitle(
+  playbookName: string,
+  subjectTitle?: string | null
+): string {
+  const base = playbookName.trim() || "Playbook run";
+  const subject = subjectTitle?.trim();
+  return (subject ? `${base} for ${subject}` : base).slice(0, RUN_TITLE_MAX);
+}
+
+/**
+ * The instruction to hand an agent for this session: the rendered prompt when
+ * one was stored, else the goal. The fallback is what keeps every session
+ * created BEFORE this change dispatching exactly as it did — their paragraph
+ * lives in `goal` and nowhere else, so there is nothing to back-fill.
+ */
+export function runPromptFor(session: {
+  goal: string;
+  metadata?: unknown;
+}): string {
+  const bag = (session.metadata ?? {}) as Record<string, unknown>;
+  const stored = bag[RUN_PROMPT_METADATA_KEY];
+  return typeof stored === "string" && stored.trim() ? stored : session.goal;
+}
+
 export interface InstantiateInput {
   playbookId: string;
   /** The workspace the session runs in (verified membership upstream). */
@@ -122,16 +190,19 @@ export interface InstantiateInput {
    */
   subjectId?: string | null;
   /**
-   * Pre-resolved goal. When set, it OVERRIDES the goalTemplate substitution —
-   * used by the scheduled path, which resolves the goal against the automation
-   * StepContext (trigger payload + prior step outputs) before this runs. Absent
-   * ⇒ the goalTemplate is substituted against `params` as before.
+   * Pre-resolved PROMPT. When set, it OVERRIDES the goalTemplate substitution —
+   * used by the scheduled path, which resolves the template against the
+   * automation StepContext (trigger payload + prior step outputs) before this
+   * runs. Absent ⇒ the goalTemplate is substituted against `params` as before.
+   * Either way the result lands on `metadata.prompt`, never on the title: this
+   * is the agent's instruction, and the name is historical.
    */
   goalOverride?: string;
   /**
    * Extra session metadata to stamp at creation (merged into focus_sessions.metadata).
    * Carries the automation chain context (F2 depth floor) and the propose-only
-   * governance stamp for scheduled/maintenance runs. Absent ⇒ the column default ({}).
+   * governance stamp for scheduled/maintenance runs. `metadata.prompt` is always
+   * added on top of whatever the caller passes and cannot be overridden here.
    */
   metadata?: Record<string, unknown>;
 }
@@ -150,13 +221,30 @@ export async function instantiateSession(
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
 
-  const goal =
+  // The rendered goalTemplate is the agent's PROMPT, not the row's title. The
+  // scheduled path's `goalOverride` (resolved against the automation
+  // StepContext) is the same thing — an instruction — so it overrides the
+  // prompt, never the title.
+  const prompt =
     input.goalOverride ??
     resolveGoal(
       playbook.goalTemplate,
       (input.params ?? {}) as Record<string, unknown>,
       playbook.id
     );
+
+  // Title = playbook name + the bound subject's own title. Read the entity here
+  // rather than trusting a caller-passed name: `instantiateSession` has three
+  // callers and only one of them resolves the subject.
+  let subjectTitle: string | null = null;
+  if (input.subjectId) {
+    const subject = await db.query.entities.findFirst({
+      columns: { title: true },
+      where: eq(entities.id, input.subjectId),
+    });
+    subjectTitle = subject?.title ?? null;
+  }
+  const goal = buildRunSessionTitle(playbook.name, subjectTitle);
   const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
   // Seed the active stage from the playbook's first stage (null when stageless,
   // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
@@ -181,9 +269,10 @@ export async function instantiateSession(
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
       status: "active",
-      ...(input.metadata && Object.keys(input.metadata).length > 0
-        ? { metadata: input.metadata }
-        : {}),
+      metadata: {
+        ...(input.metadata ?? {}),
+        [RUN_PROMPT_METADATA_KEY]: prompt,
+      },
     })
     .returning();
 
@@ -315,6 +404,10 @@ export async function promoteSessionToPlaybook(
   }
 
   const name = input.name ?? session.goal.slice(0, 200);
+  // The new playbook's TEMPLATE is the session's instruction, not its title —
+  // promoting a run session whose goal is now "<playbook> for Acme Corp" must
+  // not hand the next agent that label as its whole prompt.
+  const goalTemplate = runPromptFor(session);
   let playbook: Playbook;
   let reused = false;
   try {
@@ -325,7 +418,7 @@ export async function promoteSessionToPlaybook(
         createdBy: input.userId,
         name,
         description: input.description ?? null,
-        goalTemplate: session.goal,
+        goalTemplate,
         expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
         executor: "is-agent",
         status: "draft",

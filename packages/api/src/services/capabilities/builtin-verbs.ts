@@ -26,6 +26,11 @@ import { TRPCError } from "@trpc/server";
 // honesty derivation away along with the door.
 import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
+  buildDegradedNextStep,
+  describeDegradedForAgent,
+  isDegradedReasonRetryable,
+} from "../capture-agent/capture-degraded-guidance.js";
+import {
   db,
   eq,
   and,
@@ -669,16 +674,50 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
   // or found nothing durable — there is no graph to propose. Report it plainly
   // rather than filing an empty proposal.
   if (!shouldPersistCapturePlan(plan)) {
+    const reason = !structured
+      ? "structuring-unavailable"
+      : structured.degraded
+        ? "degraded"
+        : structured.followUp != null
+          ? "needs-clarification"
+          : "nothing-durable";
+
+    // `entityCount: 0` is and stays HONEST — this verb created nothing. What was
+    // dishonest by omission is stopping there on the degraded branch: the IS
+    // returns the user's raw text back as a single note entity, so
+    // `structured.entities` was in hand and thrown away. An agent reading only
+    // `{ no_proposal, entityCount: 0 }` concluded "nothing was written" and gave
+    // up — correct, given what it was told. Report the salvage and what can be
+    // done with it, WITHOUT claiming a write: filing it stays the caller's
+    // explicit trip back through the governed door.
+    const degradedReason =
+      typeof (structured as { degradedReason?: unknown } | undefined)
+        ?.degradedReason === "string"
+        ? ((structured as { degradedReason?: string }).degradedReason as string)
+        : undefined;
+    const salvagedEntities =
+      reason === "degraded" && Array.isArray(structured?.entities)
+        ? (structured.entities as Array<Record<string, unknown>>)
+        : undefined;
+
     return {
       status: "no_proposal",
-      reason: !structured
-        ? "structuring-unavailable"
-        : structured.degraded
-          ? "degraded"
-          : structured.followUp != null
-            ? "needs-clarification"
-            : "nothing-durable",
+      reason,
       entityCount: 0,
+      ...(reason === "degraded" || reason === "structuring-unavailable"
+        ? {
+            degraded: true as const,
+            ...(degradedReason ? { degradedReason } : {}),
+            degradedMessage: describeDegradedForAgent(degradedReason),
+            degradedRetryable: isDegradedReasonRetryable(degradedReason),
+          }
+        : {}),
+      ...(salvagedEntities?.length
+        ? {
+            salvagedEntities,
+            nextStep: buildDegradedNextStep("salvagedEntities"),
+          }
+        : {}),
     };
   }
 

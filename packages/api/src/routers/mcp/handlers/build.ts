@@ -19,6 +19,7 @@ import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import {
   ok,
   requireScope,
+  readReasoning,
   rejectMissingWriteWorkspace,
   resolveEntityWorkspaceId,
   type McpToolContext,
@@ -87,6 +88,10 @@ export const buildHandlers: McpHandlerMap = {
       subjectType: "cell",
       action: "define",
       source: "api",
+      // The agent's own WHY, verbatim. Without it the gate stores the
+      // placeholder "<action> <type> requires your approval", which the review
+      // UI suppresses — the reviewer then reads "No reason was given".
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       data: {
         name: parsed.data.name,
         rendererSource: parsed.data.rendererSource,
@@ -155,6 +160,9 @@ export const buildHandlers: McpHandlerMap = {
       props: args.props as Record<string, unknown> | undefined,
       scope: args.scope as "workspace" | "pod" | undefined,
       ...(agentUserId ? { agentUserId } : {}),
+      // `profiles.setRenderer` has declared `reasoning` since it was written
+      // and forwards it into the gate; this door never sent one.
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -169,6 +177,7 @@ export const buildHandlers: McpHandlerMap = {
       userId,
       sessionId: args.sessionId as string,
       ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -332,6 +341,7 @@ export const buildHandlers: McpHandlerMap = {
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }
         : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },

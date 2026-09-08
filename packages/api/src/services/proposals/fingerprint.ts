@@ -143,6 +143,28 @@ const SEP = "\x00";
  * needs NO change — it groups on whatever this returns. Kept out of v1
  * deliberately: structural grouping is safe and needs no semantic model.
  */
+/**
+ * The proposal's ONE human sentence, read off the stored payload.
+ *
+ * It lives at `data.summary` — the top level of the request-shaped envelope
+ * `createProposal` stores — NOT in a `proposals.summary` column (there is none).
+ *
+ * Read here rather than threaded in as a new `ClusterInputRow` field so the pack
+ * row and the detail surface cannot drift: both take the same string off the
+ * same key, and a caller cannot forget to select it.
+ *
+ * DELIBERATELY NOT used by {@link computeProposalFingerprint}: the fingerprint
+ * keys on STRUCTURE, and folding a sentence into it would split a cluster the
+ * moment its wording changed.
+ */
+export function extractProposalSummary(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const raw = (data as Record<string, unknown>).summary;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 export function computeProposalFingerprint(
   p: ProposalFingerprintInput
 ): string {
@@ -277,10 +299,27 @@ export interface ProposalCluster {
 
 const DEFAULT_SAMPLE_CAP = 20;
 
-/** The target label for a cluster: proposed name, else `<type> · <shortId>`. */
+/**
+ * The target label for a cluster: proposed name, else the proposal's own
+ * SUMMARY, else `<type> · <shortId>`.
+ *
+ * The last arm is a machine token beside eight hex characters of a UUID — and
+ * for a payload with no id at all, that UUID is one `createProposal` MINTED
+ * (`permission-check.ts`, `data.documentId || data.entityId || data.id ||
+ * randomUUID()`), so the pack row showed a reviewer a random number that
+ * identifies nothing. `profile/renderer.set` read `Set Profile "profile ·
+ * 26f94b78"` while the SAME proposal's detail read "Set Task" — two surfaces,
+ * two names, one write.
+ *
+ * The summary sits BELOW the proposed name deliberately: for a create, the
+ * object's own name ("Acme Corp") is the sharper label, and the summary is the
+ * sentence that already contains it.
+ */
 function resolveTargetLabel(row: ProposalFingerprintInput): string {
   const name = extractProposalName(row.data);
   if (name) return name;
+  const summary = extractProposalSummary(row.data);
+  if (summary) return summary;
   const type = row.targetType || "entity";
   const id = row.targetId ? row.targetId.slice(0, 8) : "";
   return id ? `${type} · ${id}` : type;

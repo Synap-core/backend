@@ -26,6 +26,7 @@ import { buildIdentityResolveResponse } from "../../../utils/identity-resolve-re
 import {
   ok,
   requireScope,
+  readReasoning,
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
@@ -90,6 +91,10 @@ export const entityHandlers: McpHandlerMap = {
         ? { expectedLabel: args.expectedLabel }
         : {}),
       aiMetadata: { model: "mcp", reasoning: `MCP tool: ${toolName}` },
+      // The GOVERNANCE reason, distinct from `aiMetadata.reasoning` above:
+      // only this one reaches `checkPermissionOrPropose` and the reviewer.
+      // `aiMetadata` is provenance ("which tool wrote this"), never a why.
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
 
     // ── The write receipt (the thing MCP callers never got) ────────────────
@@ -231,6 +236,7 @@ export const entityHandlers: McpHandlerMap = {
       metadata: (args.properties ?? args.metadata) as
         Record<string, unknown> | undefined,
       ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     // Two governed writes, two independent outcomes — the entity fields may
     // auto-approve while the body edit is still `proposed`. Report both rather
@@ -264,7 +270,8 @@ export const entityHandlers: McpHandlerMap = {
       // to upload). Creates a reference document (storageKey NULL) — the
       // agent-appropriate "here's a file" path when there's no local binary.
       ...(args.url ? { url: args.url as string } : {}),
-      reasoning: "Created via MCP",
+      // The agent's own words win over the machine string.
+      reasoning: readReasoning(args) ?? "Created via MCP",
       ...(agentUserId ? { agentUserId } : {}),
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }
@@ -568,6 +575,7 @@ export const entityHandlers: McpHandlerMap = {
       // link call used to 400, silently blocking agent-authored graph edges.
       type: (args.type as string) || "relates_to",
       ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -600,6 +608,7 @@ export const entityHandlers: McpHandlerMap = {
         ? { contextEntityId: args.contextEntityId as string }
         : {}),
       ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -672,6 +681,7 @@ export const entityHandlers: McpHandlerMap = {
       userId,
       facetId,
       ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },

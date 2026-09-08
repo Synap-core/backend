@@ -15,6 +15,7 @@ import { requireUserId } from "../utils/user-scoped.js";
 // import { subjectTypeSchema, EventSourceSchema } from '@synap/domain';
 import { createSynapEvent } from "@synap-core/core";
 import { db, getEventRepository } from "@synap/database";
+import { resolveSubjectNames, subjectKey } from "./subscriptions.js";
 import type { EventType } from "@synap/events";
 import { randomUUID } from "crypto";
 
@@ -365,7 +366,34 @@ export const eventsRouter = router({
         offset: input.offset,
       });
 
-      return events;
+      // ── NAME THE SUBJECT ────────────────────────────────────────────────
+      // This is the door relay's activity feed reads, and it returned only the
+      // raw `subjectType`/`subjectId`. Relay could do nothing but guess a name
+      // out of `data.name ?? data.title` — which most event payloads do not
+      // carry — so a row rendered as a bare "Created" with nothing to say WHAT
+      // was created.
+      //
+      // `resolveSubjectNames` is the SAME resolver `subscriptions.ts` already
+      // uses for its own feed (imported, never copied): one batched, visibility-
+      // floored query per DISTINCT subject type present. That makes the cost a
+      // function of the number of subject types (≤8), not of the page — and
+      // this page is hard-capped at `limit.max(100)`, a quarter of the 500-event
+      // window the resolver already serves in `subscriptions`.
+      //
+      // FAIL-OPEN by construction: an id whose row the CALLER cannot see is
+      // simply absent from the map, so `subjectName` is omitted rather than
+      // fabricated — including on the system-admin branch above, where the
+      // resolver still floors on `ctx.userId` and never on the widened filter.
+      const subjectNameByKey = await resolveSubjectNames(events, ctx.userId);
+      return events.map((event) => {
+        const name =
+          event.subjectType && event.subjectId
+            ? subjectNameByKey.get(
+                subjectKey(event.subjectType, event.subjectId)
+              )
+            : undefined;
+        return name ? { ...event, subjectName: name } : event;
+      });
     }),
 
   /**

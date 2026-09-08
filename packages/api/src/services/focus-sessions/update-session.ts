@@ -20,9 +20,23 @@ import { db, focusSessions, eq, and } from "@synap/database";
 import {
   BLOCKED_REASONS,
   OUTPUT_RETIRED_REASONS,
+  OUTPUT_REF_KINDS,
   type ExpectedOutput,
 } from "@synap/playbooks";
+import { isHttpUrl } from "@synap/shared-utils";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+// STATIC, like `block-output.ts` beside it. These three call sites used
+// `await import()` with no stated reason, which reads as circular-dependency
+// avoidance and is not: the static import graph rooted at
+// `assert-output-ref-visible.ts` reaches 49 modules (`routers/views.ts`
+// included) and NEITHER this module nor `create-session.ts` is among them, so
+// there is no cycle to dodge. A dynamic import with no reason hides the edge
+// from every module-graph check for nothing.
+import {
+  findUnreachableOutputRefs,
+  isOutputRefVisible,
+  unreachableOutputRefError,
+} from "./assert-output-ref-visible.js";
 
 export interface UpdateFocusSessionParams {
   sessionId: string;
@@ -47,6 +61,13 @@ export interface UpdateFocusSessionParams {
     owner?: ExpectedOutput["owner"];
     blockedReason?: ExpectedOutput["blockedReason"];
     why?: ExpectedOutput["why"];
+    /**
+     * WHERE the deliverable lives / where the person must go. Accepted HERE and
+     * not only on the wholesale array because this is the door an agent uses to
+     * declare a blocked slot in ONE call — without it, "block this on the human
+     * AND point them at the page" would need a second, wholesale patch.
+     */
+    ref?: ExpectedOutput["ref"];
   };
   completeOutput?: string;
   /**
@@ -57,6 +78,12 @@ export interface UpdateFocusSessionParams {
    */
   addAgentId?: string;
   expectedOutputs?: ExpectedOutput[];
+  /**
+   * Re-point the entity this session is ABOUT (the subject-spine anchor), or
+   * CLEAR it with an explicit `null`. Omitted leaves it alone. Floored through
+   * the same `isOutputRefVisible` predicate an output's ref goes through.
+   */
+  subjectEntityId?: string | null;
 }
 
 export type UpdateFocusSessionResult =
@@ -109,6 +136,30 @@ type OutputItem = ExpectedOutput;
  * `satisfies` below: a new field on the type is a compile error here until it is
  * either declared or deliberately left off the wire.
  */
+/**
+ * The WIRE shape of {@link OutputRef} — ONE union, two arms, both `.strict()`.
+ *
+ * STRICT ON PURPOSE. Without it zod strips unknown keys, so `{kind, id, url}`
+ * would silently parse as the FIRST arm and drop the url (or the reverse,
+ * depending on member order) — a caller confused about which arm it wants would
+ * be told it succeeded. Strict makes the ambiguity an error the caller can read.
+ *
+ * The `{url}` arm is scheme-gated HERE, at the parse, through the SAME
+ * `isHttpUrl` the visibility floor calls for a `url` artifact ref — the same
+ * function, not a second copy of the rule. `javascript:` / `data:` / `file:`
+ * never reach storage, which matters because this string IS rendered as a link.
+ *
+ * The `{kind, id}` arm CANNOT be floored at the parse: visibility needs the
+ * caller's identity and a database. That is `findUnreachableOutputRefs`
+ * (`assert-output-ref-visible.ts`), called by every door that writes a slot.
+ */
+export const outputRefWireSchema = z.union([
+  z.object({ kind: z.enum(OUTPUT_REF_KINDS), id: z.string().min(1) }).strict(),
+  z
+    .object({ url: z.string().refine(isHttpUrl, "Must be an http(s) URL") })
+    .strict(),
+]);
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -146,6 +197,10 @@ export const expectedOutputWireSchema = z.object({
   // Retirement receipt — stamped when the declaring session is CANCELLED.
   retiredAt: z.string().optional(),
   retiredReason: z.enum(OUTPUT_RETIRED_REASONS).optional(),
+  // WHERE to go for this deliverable. AGENT/HUMAN-authored, never stamped —
+  // `.nullable()` because silence means KEEP (see `SERVER_OWNED_OUTPUT_FIELDS`)
+  // and so "clear this pointer" needs an explicit way to say itself.
+  ref: outputRefWireSchema.nullable().optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -215,6 +270,9 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // The pointer the declarer supplies. Declaring WHERE something lives is not a
+  // claim that it landed, so it closes nothing — same footing as `why`.
+  "ref",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 export const SERVER_STAMPED_OUTPUT_FIELDS = [
@@ -243,6 +301,10 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "owner",
   "blockedReason",
   "why",
+  // Listed for ERASURE, not authority (see the docblock above): a browser that
+  // has never heard of `ref` reads the array, renames a sibling, sends it back —
+  // and must not silently drop the door the agent put on the card.
+  "ref",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -320,7 +382,8 @@ export function mergeExpectedOutputs(
     // the array, change one label, send it back), which arrives as exactly this
     // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
     // under an unmatched label lands it pending, like any other declaration.
-    if (!prior) return reconcileOwedSince(stripServerStamped(item));
+    if (!prior)
+      return dropClearedRef(reconcileOwedSince(stripServerStamped(item)));
     // Only the fields the incoming item is SILENT about are carried; a
     // client-declarable field it states explicitly wins. Server-stamped fields
     // are always carried from storage — an incoming one either equalled the
@@ -341,8 +404,26 @@ export function mergeExpectedOutputs(
     // Stripped first so a server-stamped field the STORED slot does not carry
     // cannot survive as the incoming value — `carried` can only overwrite keys
     // it has, and an absent stored receipt has none.
-    return reconcileOwedSince({ ...stripServerStamped(item), ...carried });
+    return dropClearedRef(
+      reconcileOwedSince({ ...stripServerStamped(item), ...carried })
+    );
   });
+}
+
+/**
+ * `ref: null` is the WIRE's way of saying CLEAR; storage must not keep the null.
+ *
+ * Silence on a wholesale patch means KEEP for every server-owned field, so
+ * "remove the pointer" has no way to say itself except explicitly — and the
+ * explicit value has to be erased here or `ref` becomes a tri-state
+ * (`present` / `absent` / `null`) that every reader downstream has to know
+ * about. One targeted normalizer, exactly the shape of {@link reconcileOwedSince}
+ * beside it, keeps the stored slot two-state: a `ref` or no key at all.
+ */
+export function dropClearedRef(item: OutputItem): OutputItem {
+  if (item.ref !== null) return item;
+  const { ref: _cleared, ...rest } = item;
+  return rest;
 }
 
 const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
@@ -579,6 +660,9 @@ export function applyOutputMutations(
           ? { blockedReason: add.blockedReason }
           : {}),
         ...(add.why !== undefined ? { why: add.why } : {}),
+        // `null` here is the same CLEAR the wire uses; a brand-new slot has
+        // nothing to clear, so it simply carries no key.
+        ...(add.ref ? { ref: add.ref } : {}),
       }),
     ];
   }
@@ -657,6 +741,49 @@ export async function updateFocusSession(
     }
   }
 
+  // VISIBILITY FLOOR for the refs this patch declares, and BEFORE the membrane
+  // for the same reason as the authority floor above: a ref the caller cannot
+  // see must be refused to the caller who wrote it, not laundered into a
+  // proposal that explodes on the human at approval time.
+  //
+  // ONE door: `isOutputRefVisible`, the same predicate the attach-output doors
+  // apply to a produced artifact's ref.
+  {
+    const declared = [
+      ...(params.expectedOutputs ?? []),
+      ...(params.addOutput ? [params.addOutput] : []),
+    ];
+    if (declared.length > 0) {
+      const unreachable = await findUnreachableOutputRefs({
+        userId,
+        outputs: declared,
+      });
+      if (unreachable.length > 0) {
+        return {
+          status: "denied",
+          reason: unreachableOutputRefError(unreachable),
+        };
+      }
+    }
+  }
+
+  // THE SAME FLOOR for the SUBJECT anchor. The room resolves the subject's
+  // live title by bare id, so an unfloored re-point is the identical read
+  // oracle one field over. `null` clears and names nothing, so it skips.
+  if (params.subjectEntityId) {
+    const visible = await isOutputRefVisible({
+      userId,
+      kind: "entity",
+      refId: params.subjectEntityId,
+    });
+    if (!visible) {
+      return {
+        status: "denied",
+        reason: `Cannot reference an object you cannot see, on: subject ${params.subjectEntityId}`,
+      };
+    }
+  }
+
   // Governance membrane — AI callers route through proposals (same gate the
   // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
   // goal (for proposal summary / targetName) plus every intended mutation so
@@ -694,6 +821,12 @@ export async function updateFocusSession(
       ...(params.addAgentId !== undefined
         ? { addAgentId: params.addAgentId }
         : {}),
+      // Carried for the same reason as `addAgentId`: without it on the proposal
+      // the PROPOSED path is a silent no-op — the human approves "re-point the
+      // subject" and the executor has no subject to point at.
+      ...(params.subjectEntityId !== undefined
+        ? { subjectEntityId: params.subjectEntityId }
+        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -725,6 +858,9 @@ export async function updateFocusSession(
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;
   if (params.currentStage !== undefined) set.currentStage = params.currentStage;
+  // `undefined` leaves the anchor; `null` is the CLEAR.
+  if (params.subjectEntityId !== undefined)
+    set.subjectEntityId = params.subjectEntityId;
 
   // Roster append goes through the ONE append door, which owns its own row lock
   // and its own idempotency. Deliberately NOT folded into `set` below: assigning

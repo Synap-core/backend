@@ -13,6 +13,10 @@
     "./realtime-schemas": {
       "types": "./dist/realtime-schemas.d.ts",
       "import": "./dist/realtime-schemas.js"
+    },
+    "./event-types": {
+      "types": "./dist/event-types.d.ts",
+      "import": "./dist/event-types.js"
     }
   },
   "scripts": {

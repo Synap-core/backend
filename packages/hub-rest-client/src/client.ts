@@ -36,6 +36,89 @@ const MAX_RETRY_AFTER_MS = 30_000;
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
+ * Combine a caller's `AbortSignal` with this attempt's timeout signal.
+ *
+ * SAME PORTABILITY CLASS AS `newIdempotencyKey` ABOVE, found while fixing it —
+ * but NOT, unlike that one, a live bug. Stated precisely so nobody cites this
+ * as a fixed outage: `AbortSignal.any` is Node **20.3+** / Chrome 116+ /
+ * Safari 17.4+, while this package's header claims "Node.js >= 18, browsers,
+ * Deno, Bun, and Raycast extensions". So it WOULD throw
+ * `TypeError: AbortSignal.any is not a function` on those hosts — but only for
+ * a caller that passes `signal`, and today NO PUBLIC METHOD accepts one: the
+ * parameter exists on `private fetchWithRetry` and the three `protected
+ * request*` helpers only. The path is reachable by a SUBCLASS, not by a
+ * consumer.
+ *
+ * Guarded anyway because it is three lines, the baseline claim is real, and the
+ * moment a public method grows a `signal` option this becomes the crypto bug
+ * again — on a host we already know exists.
+ *
+ * The fallback wires both sources into one controller by hand, which is what
+ * `AbortSignal.any` does. Listeners are `once` and the controller is discarded
+ * with the attempt, so nothing accumulates across retries.
+ */
+function combineAbortSignals(
+  caller: AbortSignal | undefined,
+  timeout: AbortSignal
+): AbortSignal {
+  if (!caller) return timeout;
+  const anyFn = (
+    AbortSignal as unknown as {
+      any?: (signals: AbortSignal[]) => AbortSignal;
+    }
+  ).any;
+  if (typeof anyFn === "function") return anyFn([caller, timeout]);
+
+  const controller = new AbortController();
+  for (const src of [caller, timeout]) {
+    if (src.aborted) {
+      controller.abort(src.reason);
+      return controller.signal;
+    }
+    src.addEventListener("abort", () => controller.abort(src.reason), {
+      once: true,
+    });
+  }
+  return controller.signal;
+}
+
+/**
+ * Mint an `Idempotency-Key`.
+ *
+ * `crypto` is a global on Node >= 19, browsers, Deno and Bun — but NOT on
+ * Node 18, and not in every embedded JS host: Raycast's extension runtime
+ * threw `crypto is not defined` here, taking down every mutating call in the
+ * extension. This package is zero-dependency and must stay bundler-safe for
+ * browsers, so `node:crypto` is not an option; probe the global instead and
+ * degrade. The key only has to be UNIQUE per request (the server dedupes on
+ * it) — it is never a secret and never authenticates anything, so the
+ * non-cryptographic last resort is correct rather than merely tolerable.
+ */
+function newIdempotencyKey(): string {
+  const webCrypto = (globalThis as { crypto?: Partial<Crypto> }).crypto;
+  if (typeof webCrypto?.randomUUID === "function") {
+    return webCrypto.randomUUID();
+  }
+  if (typeof webCrypto?.getRandomValues === "function") {
+    const bytes = webCrypto.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+    bytes[8] = (bytes[8] & 0x3f) | 0x80; // RFC 4122 variant
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(
+      ""
+    );
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(
+      12,
+      16
+    )}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  const rand = () =>
+    Math.floor(Math.random() * 0xffffffff)
+      .toString(16)
+      .padStart(8, "0");
+  return `${Date.now().toString(16).padStart(12, "0")}-${rand()}-${rand()}`;
+}
+
+/**
  * Same 4xx-is-terminal rule as `isRetryableHubError` in
  * @synap/intelligence-client (408/429 are 4xx by number but temporal by
  * meaning — the request can succeed later with the same payload). Not
@@ -319,7 +402,7 @@ export class HubRestClient {
       !headers["Idempotency-Key"] &&
       !headers["idempotency-key"]
     ) {
-      headers["Idempotency-Key"] = crypto.randomUUID();
+      headers["Idempotency-Key"] = newIdempotencyKey();
     }
 
     let lastError: unknown;
@@ -331,7 +414,7 @@ export class HubRestClient {
         retryAfterMs = null;
       }
       const timeout = AbortSignal.timeout(perAttemptTimeout);
-      const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      const combined = combineAbortSignals(signal, timeout);
       try {
         const res = await fetch(url, {
           method,

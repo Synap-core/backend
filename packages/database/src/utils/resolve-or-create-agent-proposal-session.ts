@@ -100,6 +100,18 @@ export function deriveAgentProposalSessionGoal(input: {
   proposalType?: string;
   targetType?: string;
   notificationDescription?: string | null;
+  /**
+   * The proposal's OWN summary — the one sentence the reviewer reads on the
+   * detail and the pack row. Ranked directly ABOVE the `Agent <type> · <target>`
+   * fallback, so a caller that has it never files a receipt session titled with
+   * two raw DB tokens ("Agent renderer.set · profile"), and every caller that
+   * does not is byte-identical to before.
+   *
+   * Deliberately BELOW `data.summary` / `notificationDescription` / `data.goal`
+   * / `data.reasoning`: those are the author's own words about this write, and
+   * a synthesized sentence must never displace them.
+   */
+  summary?: string | null;
 }): string {
   const data = input.data ?? {};
   const fromSummary =
@@ -112,6 +124,8 @@ export function deriveAgentProposalSessionGoal(input: {
   const fromReasoning =
     typeof data.reasoning === "string" ? data.reasoning.trim() : "";
   if (fromReasoning) return normalizeGoal(fromReasoning.slice(0, 160));
+  const fromSummaryArg = input.summary?.trim();
+  if (fromSummaryArg) return normalizeGoal(fromSummaryArg);
   const type = input.proposalType?.trim() || "write";
   const target = input.targetType?.trim() || "entity";
   return normalizeGoal(`Agent ${type} · ${target}`);

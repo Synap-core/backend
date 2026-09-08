@@ -44,13 +44,97 @@ export interface SentenceAction {
   config: Record<string, unknown>;
 }
 
+/**
+ * The subjects a rule's WHEN may name — PRODUCER-BACKED, never aspirational.
+ *
+ * ── The rule this list obeys ────────────────────────────────────────────────
+ * A subject may appear here only if a REAL emit can reach the automation
+ * matcher with it. That is THREE conditions, and only the first is obvious:
+ *
+ *   1. A producer exists — an `emitSideEffects()` / `recordDomainMutation()`
+ *      call site carrying that `subjectType`. (`BaseRepository.emitCompleted`
+ *      does NOT count: it appends to the fact bus for realtime/SSE/sync and
+ *      never enqueues `automation-trigger-match`.)
+ *   2. That producer passes a WORKSPACE. `side-effects.ts`'s
+ *      `automation-trigger-match` reactor matches on
+ *      `Boolean(payload.workspaceId) || subjectType === "external_message"`, so
+ *      a workspace-less emit reaches search-indexing and webhooks and NEVER the
+ *      matcher. This is what kept `sharing` and `user` off the list: both have
+ *      live producers that pass no workspace, so a rule on them would install
+ *      `active` and never fire.
+ *   3. `validateEventPattern` accepts the compiled pattern. The rule compiler
+ *      (`services/rules/compile.ts:201`) runs it, so a subject outside
+ *      `SUBJECT_TYPES` / `DOMAIN_SUBJECT_TYPES` / `CONNECTOR_SUBJECT_TYPES` is
+ *      refused at the door. This is what keeps `entity_facet` off the list —
+ *      it has a workspace-scoped producer (`routers/entities/helpers.ts:441`)
+ *      but is in none of the three subject vocabularies. It is excluded on
+ *      condition 3 ALONE — so the remedy is one line (add `entity_facet` to
+ *      `DOMAIN_SUBJECT_TYPES` in `types/src/events/unified.ts`), not a new
+ *      producer. Kept out here because widening the event grammar is a
+ *      decision with its own blast radius, not a side effect of this change.
+ *
+ * Pinned by `packages/api/src/__tripwires__/trigger-subject-has-producer.test.ts`,
+ * which re-derives all three from source rather than from this comment.
+ *
+ * ── Deliberately absent ─────────────────────────────────────────────────────
+ * `external_channel` — ZERO producers. Its only textual match anywhere is
+ *   inside `events/event-types.ts:235` — the catalog file's own note recording
+ *   that it removed the entry for exactly this reason. A match in a catalog is
+ *   not a call site. `user`, `sharing` — producers exist
+ *   but pass no workspace (condition 2). `entity_facet` — condition 3.
+ *   `projectMember` — reachable, but only through ONE narrow path, and the
+ *   emit is GENERIC. `jobs/workers/materializer.ts:313` is the producer: a
+ *   post-write `emitSideEffects({ subjectType, … })` over the variable it read
+ *   off an approved proposal, which carries a workspace. `:236` is only the
+ *   `case "projectMember":` that lets execution reach it — it emits nothing
+ *   itself, and citing it as the producer (as an earlier version of this
+ *   comment did) hides the fact that a NAME-based grep finds no `projectMember`
+ *   emit anywhere. So the honest statement is: it fires for an agent grant that
+ *   went through a proposal, and never for a direct human grant, because
+ *   `routers/relations.ts:866` uses `auditLog` alone. A rule here would miss
+ *   most real grants. Give that door a `recordDomainMutation` and the subject
+ *   becomes eligible.
+ *   `tag`, `message`, `agent`, `agentRun`, `chatThread`, `workspaceMember`,
+ *   `inboxItem` (camel), `feed_item` — no producer at all, on either root.
+ *
+ * ── `feed_item` was REMOVED, not renamed ────────────────────────────────────
+ * It compiled to `feed.new_item.completed`, and the ONLY `feed` producer
+ * (`jobs/workers/entity-extract-worker.ts:809`) emits action `entity_extract`.
+ * So `feed_item` was a shipped trigger that could never fire — the exact defect
+ * this list exists to prevent. `feed` (which CAN fire, as `feed.*`) replaces it.
+ * Nothing round-tripped to `feed_item` anyway: `triggerToSentence` reads the
+ * pattern's FIRST segment, which is `feed`.
+ */
+export const TRIGGER_SUBJECT_CATEGORIES = [
+  "entity",
+  "document",
+  "proposal",
+  "relation",
+  "role",
+  "project",
+  "workspace",
+  "view",
+  "skill",
+  "template",
+  "tool",
+  "apiKey",
+  "focus_session",
+  "command",
+  "capture",
+  "notification",
+  "proactive",
+  "feed",
+  "hydration",
+  "connector_sync",
+  "channel_message",
+  "external_message",
+  "external_webhook",
+  "messaging_account",
+  "inbox_item",
+] as const;
+
 export type TriggerSubjectCategory =
-  | "entity"
-  | "external_message"
-  | "capture"
-  | "notification"
-  | "feed_item"
-  | "inbox_item";
+  (typeof TRIGGER_SUBJECT_CATEGORIES)[number];
 
 export type ActionVerb =
   | "created"
@@ -200,24 +284,49 @@ export function buildEventPattern(trigger: SentenceTrigger): string {
   if (!trigger.subjectCategory) return "";
   const { subjectCategory, actionVerb } = trigger;
 
-  const entityAction = actionVerb
-    ? (VERB_TO_EVENT_ACTION[actionVerb] ?? actionVerb)
-    : "create";
+  // ── ABSENT VERB IS A WILDCARD, NOT A MISSING "created" ──────────────────
+  //
+  // 🔴 This used to default an absent verb to `"create"`, so "any activity on a
+  // notification" compiled to a create-only pattern and the author was never
+  // told. The catalog OFFERS `X.*` on purpose (`buildEventCatalog` pushes a
+  // subject-level wildcard for every connector / observation / domain subject,
+  // to fix the cold-start severance where a rule cannot be written against an
+  // event nobody has fired yet), `matchPattern` really returns true on the
+  // first `*` segment, and `validateEventPattern` really accepts `X.*` — so the
+  // wildcard was authorable everywhere EXCEPT through this function, which is
+  // the one door the sentence grammar has.
+  //
+  // `triggerToSentence` is the other half: it must read `*` back as an ABSENT
+  // verb, not cast it into `actionVerb`. Both halves move together or the
+  // wildcard survives one save and is silently narrowed on the next.
+  if (!actionVerb) return `${subjectCategory}.*`;
 
+  const entityAction = VERB_TO_EVENT_ACTION[actionVerb] ?? actionVerb;
+
+  // Subjects whose real emit spells its action OUTSIDE the CRUD vocabulary, so
+  // the generic `${subject}.${entityAction}.completed` below would name a
+  // pattern nothing emits.
+  //
+  // ⚠️ These entries apply ONLY when the author picked a verb. Until this
+  // change they also swallowed the wildcard case — `notification` with no verb
+  // returned `notification.created.completed`, i.e. the menu said "Any
+  // notification activity" and the compiler stored created-only. The label was
+  // not wrong; the pattern was. Narrowing a choice the author made, invisibly,
+  // is the same class as the dropped WHERE operator above.
+  //
+  // RESIDUAL, stated rather than hidden: for the four non-`entity` entries the
+  // chosen verb is still IGNORED — `notification` + "updated" compiles to
+  // `notification.created.completed`, because that is the only notification
+  // event with a producer and `notification.update.completed` would be inert.
+  // The honest fix is at the PICKER (offer no verb for a subject whose pattern
+  // does not vary with one), not here: mapping the verb through would trade a
+  // narrowed rule for a dead one. Until a picker does that, an absent verb is
+  // the only fully-truthful choice for these four.
   const PATTERN_MAP: Record<string, string> = {
     entity: `entity.${entityAction}.completed`,
     external_message: "external_message.received.completed",
     capture: "capture.complete.completed",
-    // ⚠️ `notification` and `inbox_item` are REAL event types in
-    // `packages/events/src/event-types.ts` (`notification.created.completed`,
-    // `inbox_item.received.completed`) that `validateEventPattern` still
-    // rejects — its `SUBJECT_TYPES` list is narrower than the event catalog
-    // (it carries `inboxItem`, not `inbox_item`, and no `notification` at all).
-    // These two subject categories therefore cannot be authored through any
-    // door today. That is a vocabulary-parity gap in `events/unified.ts`, not
-    // something to paper over here with a third spelling.
     notification: "notification.created.completed",
-    feed_item: "feed.new_item.completed",
     inbox_item: "inbox_item.received.completed",
   };
 
@@ -817,9 +926,17 @@ export function triggerToSentence(
       // sentence is past. Without this the editor loads `entity.create.completed`
       // as the verb "create", which is not an `ActionVerb`, so the WHEN row
       // renders empty and re-saving would drop it.
-      actionVerb: action
-        ? (EVENT_ACTION_TO_VERB[action] ?? (action as ActionVerb))
-        : undefined,
+      // `*` is the WILDCARD the author picked ("any activity on this
+      // subject"), not a verb. Casting it into `actionVerb` — which is what
+      // this did — put the string "*" into a union that has no such member, so
+      // the WHEN row rendered blank and the next save re-ran
+      // `buildEventPattern` with a truthy verb, narrowing `notification.*` to
+      // `notification.created.completed`. An absent verb round-trips back to
+      // `X.*`, which is the pattern that was stored.
+      actionVerb:
+        action && action !== "*"
+          ? (EVENT_ACTION_TO_VERB[action] ?? (action as ActionVerb))
+          : undefined,
       profileSlug,
     };
   }

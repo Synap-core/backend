@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import {
+  TRIGGER_SUBJECT_CATEGORIES,
   buildEventPattern,
   flowToSentenceAction,
   flowToSentenceActions,
@@ -215,7 +216,9 @@ describe("buildEventPattern emits patterns the runtime accepts", () => {
     for (const subjectCategory of [
       "external_message",
       "capture",
-      "feed_item",
+      // `feed` replaced `feed_item`: the latter compiled to
+      // `feed.new_item.completed`, which no producer emits.
+      "feed",
     ] as const) {
       const pattern = buildEventPattern({
         triggerType: "event",
@@ -724,14 +727,11 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
  * adding a subject category without teaching the reader fails here.
  */
 describe("event pattern round trip", () => {
-  const SUBJECTS: TriggerSubjectCategory[] = [
-    "entity",
-    "external_message",
-    "capture",
-    "notification",
-    "feed_item",
-    "inbox_item",
-  ];
+  // DERIVED, never hand-listed. The previous version pinned six subjects and a
+  // `toHaveLength(6)` — so widening the union meant editing the guard, which is
+  // exactly when a guard gets narrowed by accident.
+  const SUBJECTS: readonly TriggerSubjectCategory[] =
+    TRIGGER_SUBJECT_CATEGORIES;
 
   const ACTION_VERBS = new Set<ActionVerb>([
     "created",
@@ -743,39 +743,51 @@ describe("event pattern round trip", () => {
     "rejected",
   ]);
 
-  /**
-   * `feed_item` emits `feed.new_item.completed`. `new_item` is not an
-   * `ActionVerb` and there is no honest one to map it to — the gap is in
-   * `events/unified.ts`'s vocabulary, named in `buildEventPattern`'s own
-   * comment. Listed here so it is a KNOWN hole, not an invisible one.
-   */
-  const KNOWN_UNREADABLE = new Set<TriggerSubjectCategory>(["feed_item"]);
-
   it("covers every subject category the union declares", () => {
-    // If the union grows, this list must too — otherwise the sweep below
-    // silently stops testing the new one.
-    expect(SUBJECTS).toHaveLength(6);
+    expect(SUBJECTS.length).toBeGreaterThan(0);
+    expect(new Set(SUBJECTS).size, "duplicate subject category").toBe(
+      SUBJECTS.length
+    );
   });
 
   for (const subjectCategory of SUBJECTS) {
-    it(`\`${subjectCategory}\` survives emit → read`, () => {
+    it(`\`${subjectCategory}\` with NO verb round-trips as a wildcard`, () => {
+      // An absent verb means "any activity on this subject" and compiles to
+      // `X.*`. It used to default to `"create"`, so the author's wildcard was
+      // silently narrowed — and for the four PATTERN_MAP subjects it was
+      // narrowed to a single hardcoded action regardless of what they picked.
       const pattern = buildEventPattern({
         triggerType: "event",
         subjectCategory,
-      } as never);
-      expect(pattern).not.toBe("");
+      });
+      expect(pattern).toBe(`${subjectCategory}.*`);
 
       const back = triggerToSentence("event", { eventPattern: pattern });
+      expect(back.subjectCategory).toBe(subjectCategory);
+      // `*` must come back as an ABSENT verb, not be cast into the union — a
+      // cast survives one save and is narrowed on the next.
+      expect(back.actionVerb).toBeUndefined();
 
-      if (KNOWN_UNREADABLE.has(subjectCategory)) {
-        expect(ACTION_VERBS.has(back.actionVerb as ActionVerb)).toBe(false);
-        return;
-      }
+      // And re-emitting what we read must reproduce the stored pattern.
+      expect(buildEventPattern(back)).toBe(pattern);
+    });
 
-      // The verb must be a REAL member of the union, not a raw middle segment
-      // that a cast made look like one.
-      expect(ACTION_VERBS.has(back.actionVerb as ActionVerb)).toBe(true);
+    it(`\`${subjectCategory}\` with a verb round-trips to a REAL ActionVerb`, () => {
+      // The property the old sweep actually protected: every middle segment
+      // this module can EMIT, it must be able to READ back into the union. A
+      // raw cast (`"complete"`, `"new_item"`) looked like a member and was not,
+      // so the WHEN row loaded blank and re-saving dropped the trigger.
+      const pattern = buildEventPattern({
+        triggerType: "event",
+        subjectCategory,
+        actionVerb: "created",
+      });
+      const back = triggerToSentence("event", { eventPattern: pattern });
       expect(back.subjectCategory).toBe(pattern.split(".")[0]);
+      expect(
+        ACTION_VERBS.has(back.actionVerb as ActionVerb),
+        `"${pattern}" reads back as ${String(back.actionVerb)}, which is not an ActionVerb`
+      ).toBe(true);
     });
   }
 });

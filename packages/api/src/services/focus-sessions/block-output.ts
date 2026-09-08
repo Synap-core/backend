@@ -37,7 +37,15 @@
  */
 
 import { db, focusSessions, and, eq } from "@synap/database";
-import type { BlockedReason, ExpectedOutput } from "@synap/playbooks";
+import type {
+  BlockedReason,
+  ExpectedOutput,
+  OutputRef,
+} from "@synap/playbooks";
+import {
+  findUnreachableOutputRefs,
+  unreachableOutputRefError,
+} from "./assert-output-ref-visible.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { reconcileOwedSince } from "./update-session.js";
@@ -52,6 +60,20 @@ export interface BlockExpectedOutputParams {
   blockedReason: BlockedReason;
   /** ONE line naming WHICH thing is missing, not its class. */
   why?: string;
+  /**
+   * WHERE the person must go — an in-pod object or an external link. Optional,
+   * and it is what turns "the Stripe restricted key for the live account" from
+   * a sentence into a door.
+   *
+   * `null` CLEARS a stored pointer, matching the wire's meaning everywhere else;
+   * `undefined` leaves whatever the slot already carried, because handing a slot
+   * over says nothing about a pointer somebody already declared on it.
+   *
+   * NOT cleared by `unblockExpectedOutput`. `ref` describes the DELIVERABLE
+   * ("this is the thing"), not the blocker — the four ownership fields are what
+   * go together, and a pointer stays true after the agent reclaims the slot.
+   */
+  ref?: OutputRef | null;
 }
 
 export interface UnblockExpectedOutputParams {
@@ -66,6 +88,12 @@ export type BlockExpectedOutputResult =
   | { status: "unknown_label" }
   /** The slot is already satisfied — handing a delivered thing over is a no-op. */
   | { status: "already_done" }
+  /**
+   * The `ref` names an object the caller cannot see. A distinct member rather
+   * than a silent drop: a caller told "blocked" while its pointer was discarded
+   * would put an undoorable card on the board and believe otherwise.
+   */
+  | { status: "ref_unreachable"; reason: string }
   | {
       status: "blocked" | "unblocked";
       /** The DECLARED label (the slot's own casing), never the caller's. */
@@ -119,12 +147,34 @@ export async function blockExpectedOutput(
   if (!loaded.ok) return loaded.result;
   const { slot } = loaded;
 
+  // ONE door for the ref floor — the same `isOutputRefVisible` the attach-output
+  // doors apply. Checked BEFORE the lock: a refusal must change nothing.
+  if (params.ref) {
+    const unreachable = await findUnreachableOutputRefs({
+      userId: params.userId,
+      outputs: [{ label: slot.label, ref: params.ref }],
+    });
+    if (unreachable.length > 0) {
+      return {
+        status: "ref_unreachable",
+        reason: unreachableOutputRefError(unreachable),
+      };
+    }
+  }
+
   // Re-derived INSIDE the lock from the REQUESTED label, never from the array
   // this call read before it — the TOCTOU the delegation door documents.
   const stamped = await updateExpectedOutputsLocked(
     params.sessionId,
     (current) =>
-      stampBlocked(current, slot.label, params.blockedReason, params.why)
+      stampBlocked(
+        current,
+        slot.label,
+        params.blockedReason,
+        params.why,
+        undefined,
+        params.ref
+      )
   );
   if (!stamped) return { status: "not_found" };
 
@@ -160,7 +210,13 @@ export function stampBlocked(
   label: string,
   blockedReason: BlockedReason,
   why?: string | null,
-  now: Date = new Date()
+  now: Date = new Date(),
+  /**
+   * `undefined` leaves a stored pointer alone; `null` clears it — the same
+   * three-state contract the wire uses, so the targeted door and the wholesale
+   * patch cannot mean two different things by the same value.
+   */
+  ref?: OutputRef | null
 ): ExpectedOutput[] {
   const wanted = normalizeExpectedLabel(label);
   const trimmed = (why ?? "").trim();
@@ -168,9 +224,12 @@ export function stampBlocked(
     if (normalizeExpectedLabel(o.label) !== wanted) return o;
     // Spread, never re-list: a field added to `ExpectedOutput` tomorrow rides
     // through here untouched instead of being silently dropped.
+    const withRef: ExpectedOutput = { ...o };
+    if (ref === null) delete withRef.ref;
+    else if (ref !== undefined) withRef.ref = ref;
     return reconcileOwedSince(
       {
-        ...o,
+        ...withRef,
         owner: "human",
         blockedReason,
         ...(trimmed ? { why: trimmed } : {}),

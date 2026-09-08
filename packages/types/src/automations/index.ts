@@ -115,6 +115,11 @@ export const MAX_AUTOMATION_CHAIN_DEPTH = 3;
 // (not in synap-app) so the backend's server-side rule doors can reach it;
 // `@synap-core/automation-intent` re-exports it, so its consumers are unchanged.
 export {
+  // Runtime list of the producer-backed WHEN subjects. A VALUE (not just the
+  // type) so the tripwire that proves every one of them has a live,
+  // workspace-scoped producer can iterate it instead of re-typing it — a
+  // hand-copied list in a guard is the guard's own blind spot.
+  TRIGGER_SUBJECT_CATEGORIES,
   buildEventPattern,
   buildCronExpression,
   toBackendTrigger,

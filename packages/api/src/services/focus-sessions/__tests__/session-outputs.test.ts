@@ -434,6 +434,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     owner: "human",
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",
+    ref: { kind: "document", id: "44444444-4444-4444-4444-444444444444" },
     owedSince: "2026-09-08T09:00:00.000Z",
     status: "done",
     claimedDone: true,
@@ -465,5 +466,49 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
       expectedOutputs: [fullSlot],
     });
     expect(pendingExpected[0]).toEqual(fullSlot);
+  });
+});
+
+/**
+ * A slot's `ref` is a POINTER THE DECLARER SUPPLIED — where to go for a thing
+ * that may not exist yet. The produced object, once it lands, is the thing
+ * ITSELF. So the two must not compete for the card, and the slot must not
+ * become a second row beside the object it was declared for.
+ */
+describe("joinSessionOutputs — a declared `ref` never forks the card", () => {
+  const declared: ExpectedOutput = {
+    kind: "entity",
+    label: "The dossier",
+    owner: "human",
+    blockedReason: "credential",
+    why: "The Stripe restricted key for the live account",
+    // Deliberately a DIFFERENT object from the artifact below: if the join ever
+    // keyed on `ref`, this would split into two rows.
+    ref: { kind: "document", id: DOC_B },
+  };
+
+  it("lists ONCE when nothing was produced — the ref is not an output", () => {
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      expectedOutputs: [declared],
+    });
+    expect(outputs).toEqual([]);
+    expect(pendingExpected).toEqual([declared]);
+  });
+
+  it("lists ONCE when an artifact matches the slot, and the ARTIFACT is what the card opens", () => {
+    const { outputs, pendingExpected } = joinSessionOutputs({
+      ...empty,
+      artifacts: [artifact({ refId: ENTITY_A, expectedLabel: "The dossier" })],
+      expectedOutputs: [declared],
+    });
+    expect(outputs).toHaveLength(1);
+    expect(pendingExpected).toEqual([]);
+    // The produced object wins the card's identity — `kind`/`refId` are what
+    // navigation uses, and they are the artifact's, not the declared pointer's.
+    expect(outputs[0]!.kind).toBe("entity");
+    expect(outputs[0]!.refId).toBe(ENTITY_A);
+    // The declared pointer is still readable underneath, whole.
+    expect(outputs[0]!.expected).toEqual(declared);
   });
 });

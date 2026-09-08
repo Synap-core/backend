@@ -276,34 +276,34 @@ export async function completeFocusSession(
     }
 
     return await tx
-    .update(focusSessions)
-    .set({
-      status: terminalStatus,
-      closedAt: new Date(),
-      ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
-      ...(verificationReport != null
-        ? {
-            verificationReport: {
-              ...(summary !== undefined ? { summary } : {}),
-              ...(verificationReport as Record<string, unknown>),
-              ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
-            },
-          }
-        : summary !== undefined
+      .update(focusSessions)
+      .set({
+        status: terminalStatus,
+        closedAt: new Date(),
+        ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
+        ...(verificationReport != null
           ? {
               verificationReport: {
-                summary,
+                ...(summary !== undefined ? { summary } : {}),
+                ...(verificationReport as Record<string, unknown>),
                 ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
               },
             }
-          : verificationReport === null
-            ? { verificationReport: null }
-            : unfinishedOutputs > 0
-              ? { verificationReport: { unfinishedOutputs } }
-              : {}),
-    })
-    .where(eq(focusSessions.id, sessionId))
-    .returning();
+          : summary !== undefined
+            ? {
+                verificationReport: {
+                  summary,
+                  ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
+                },
+              }
+            : verificationReport === null
+              ? { verificationReport: null }
+              : unfinishedOutputs > 0
+                ? { verificationReport: { unfinishedOutputs } }
+                : {}),
+      })
+      .where(eq(focusSessions.id, sessionId))
+      .returning();
   });
 
   // The session is closed, so its EPHEMERAL proposals are no longer answerable.

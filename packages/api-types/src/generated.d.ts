@@ -6554,6 +6554,38 @@ declare const OUTPUT_RETIRED_REASONS: readonly [
 	"session_cancelled"
 ];
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+declare const OUTPUT_REF_KINDS: readonly [
+	"view",
+	"cell",
+	"document",
+	"entity",
+	"automation",
+	"playbook"
+];
+export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
+/**
+ * WHERE the person should go for this deliverable — ONE union, two arms.
+ *
+ * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
+ * free text already has a home in `why`, and a third arm would be a second
+ * answer to "what does this card open".
+ *
+ * AUTHORED by the agent or the human, never stamped by the server — it is a
+ * pointer the declarer supplies, not a receipt of anything that happened. It
+ * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
+ * and survives a wholesale patch that is silent about it.
+ *
+ * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
+ * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
+ * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
+ * legitimate; the pod never fetches it.
+ */
+export type OutputRef = {
+	kind: OutputRefKind;
+	id: string;
+} | {
+	url: string;
+};
 export interface ExpectedOutput {
 	kind: string;
 	label: string;
@@ -6670,6 +6702,22 @@ export interface ExpectedOutput {
 	retiredAt?: string;
 	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
 	retiredReason?: OutputRetiredReason;
+	/**
+	 * WHERE to go for this deliverable — see {@link OutputRef}.
+	 *
+	 * The reason it exists: an agent that declares an owed slot, or blocks one on
+	 * the person, could previously only hand over PROSE. "The Stripe restricted
+	 * key for the live account" tells you what is missing and leaves you to find
+	 * the page yourself. A `ref` makes the card's title a DOOR.
+	 *
+	 * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
+	 * patch means KEEP (the field is server-owned for erasure purposes), so
+	 * "remove this pointer" needs a way to say itself — that is the explicit
+	 * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
+	 * so a STORED slot never carries `ref: null` and every reader may test it for
+	 * truthiness alone.
+	 */
+	ref?: OutputRef | null;
 }
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
@@ -9327,6 +9375,23 @@ export interface Signal {
 	 * `lifetimeHours` already carries the only thing a surface needs to know —
 	 * that it never expires.
 	 */
+	/**
+	 * The CLASS of thing that would unblock an `owed-slot` — one of the closed
+	 * six (`credential | permission | capability | policy | decision | physical`).
+	 * Absent on every other kind, the same way `class` is cluster-only.
+	 *
+	 * Carried on the SIGNAL rather than re-fetched, deliberately. The owed door
+	 * is reached through `floorLens`, which maps an ABSENT workspace to `[]`
+	 * because `resolveScope` would otherwise fall back to the request header —
+	 * a rule whose own comment records that it "has shipped broken twice". A
+	 * surface that fetched the reason itself would have to reproduce that
+	 * mapping, which is the fork the lens helper exists to prevent.
+	 */
+	blockedReason?: ExpectedOutput["blockedReason"];
+	/** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
+	why?: string;
+	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
+	claimedDone?: boolean;
 	class?: ProposalClass;
 	/**
 	 * Hours this class stays answerable; `null` when it never expires. Carried
@@ -24725,6 +24790,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					source: "declared" | "observed" | "catalog";
 					profileSlug?: string | undefined;
 					observedCount?: number | undefined;
+					filterKeys?: string[] | undefined;
 				}[];
 			};
 			meta: object;
@@ -26113,10 +26179,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					attestedAt?: string | undefined;
 					retiredAt?: string | undefined;
 					retiredReason?: "session_cancelled" | undefined;
+					ref?: {
+						kind: "automation" | "playbook" | "entity" | "cell" | "document" | "view";
+						id: string;
+					} | {
+						url: string;
+					} | null | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
 				projectId?: string | null | undefined;
+				subjectEntityId?: string | null | undefined;
 			};
 			output: {
 				id: string;
@@ -26183,8 +26256,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					attestedAt?: string | undefined;
 					retiredAt?: string | undefined;
 					retiredReason?: "session_cancelled" | undefined;
+					ref?: {
+						kind: "automation" | "playbook" | "entity" | "cell" | "document" | "view";
+						id: string;
+					} | {
+						url: string;
+					} | null | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
+				subjectEntityId?: string | null | undefined;
 			};
 			output: {
 				id: string;
@@ -26263,6 +26343,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		ensureChannel: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				channelId: string;
+			};
+			meta: object;
+		}>;
 		attachOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -26302,6 +26391,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedLabel: string;
 				blockedReason: "credential" | "permission" | "capability" | "policy" | "decision" | "physical";
 				why?: string | undefined;
+				ref?: {
+					kind: "automation" | "playbook" | "entity" | "cell" | "document" | "view";
+					id: string;
+				} | {
+					url: string;
+				} | null | undefined;
 			};
 			output: {
 				ok: true;

@@ -211,6 +211,56 @@ export const OUTPUT_RETIRED_REASONS = ["session_cancelled"] as const;
 
 export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 
+/**
+ * The object kinds a declared output may POINT AT.
+ *
+ * MIRRORS `SESSION_ARTIFACT_KINDS` (api `services/focus-sessions/record-session-artifact.ts`,
+ * itself derived from the `artifacts.kind` column enum) MINUS `url`, which is
+ * the OTHER arm of {@link OutputRef} rather than a kind. Duplicated rather than
+ * imported because this package is dependency-free by design — and the
+ * duplication is not left to trust: `api/src/__tripwires__/output-ref-kinds-parity.test.ts`
+ * derives the column's own list and compares it against this constant, against
+ * the hub-rest-client's second copy of the union, and against every `ref` enum
+ * (and prose kind list) the MCP tools emit and the committed manifest ships.
+ * The MCP tool schemas no longer hold a copy at all — they spread THIS constant.
+ *
+ * The set is exactly what the visibility floor `isOutputRefVisible`
+ * (api `services/focus-sessions/assert-output-ref-visible.ts`) can actually
+ * ADJUDICATE. It is deliberately NOT the 37-kind `OBJECT_KINDS` vocabulary: a
+ * schema that accepts a kind whose ref the floor can only ever refuse is a
+ * contract nobody can satisfy — the "declared on the wire, populated by nobody"
+ * defect. Widening this list means teaching the floor that kind first.
+ */
+export const OUTPUT_REF_KINDS = [
+  "view",
+  "cell",
+  "document",
+  "entity",
+  "automation",
+  "playbook",
+] as const;
+
+export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
+
+/**
+ * WHERE the person should go for this deliverable — ONE union, two arms.
+ *
+ * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
+ * free text already has a home in `why`, and a third arm would be a second
+ * answer to "what does this card open".
+ *
+ * AUTHORED by the agent or the human, never stamped by the server — it is a
+ * pointer the declarer supplies, not a receipt of anything that happened. It
+ * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
+ * and survives a wholesale patch that is silent about it.
+ *
+ * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
+ * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
+ * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
+ * legitimate; the pod never fetches it.
+ */
+export type OutputRef = { kind: OutputRefKind; id: string } | { url: string };
+
 export interface ExpectedOutput {
   kind: string;
   label: string;
@@ -327,6 +377,22 @@ export interface ExpectedOutput {
   retiredAt?: string;
   /** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
   retiredReason?: OutputRetiredReason;
+  /**
+   * WHERE to go for this deliverable — see {@link OutputRef}.
+   *
+   * The reason it exists: an agent that declares an owed slot, or blocks one on
+   * the person, could previously only hand over PROSE. "The Stripe restricted
+   * key for the live account" tells you what is missing and leaves you to find
+   * the page yourself. A `ref` makes the card's title a DOOR.
+   *
+   * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
+   * patch means KEEP (the field is server-owned for erasure purposes), so
+   * "remove this pointer" needs a way to say itself — that is the explicit
+   * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
+   * so a STORED slot never carries `ref: null` and every reader may test it for
+   * truthiness alone.
+   */
+  ref?: OutputRef | null;
 }
 
 /**

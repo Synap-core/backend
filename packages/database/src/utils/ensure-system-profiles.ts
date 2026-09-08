@@ -1328,6 +1328,20 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           props: {},
         },
       },
+      // A task is the one kind where the generic property GRID is actively
+      // wrong: status and priority are the fields a person changes daily, and a
+      // grid renders them as two rows among ten, indistinguishable from
+      // `projectId`. Both surfaces have a task-shaped detail waiting on this
+      // binding — `browser/`'s `TaskDetailRenderer` and relay's native
+      // `entity-detail-task` — and neither could ever resolve, for the reason
+      // this whole pass documents: the naming convention cannot fire.
+      task: {
+        "entity-detail": {
+          kind: "cell",
+          cellKey: "entity-detail-task",
+          props: {},
+        },
+      },
       // NOTE: the `event` kind intentionally has NO seeded collection renderer.
       // The mature `CalendarApp` (dock "Calendar") is the canonical calendar
       // surface and already renders `event` entities via `entities.list`; a

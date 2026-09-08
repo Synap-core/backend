@@ -37,6 +37,18 @@ import {
   MESSAGE_ALIAS_PATTERNS,
   OBSERVATION_NAMESPACES,
 } from "@synap-core/types/events/unified";
+// The event CATALOG (definitions, not the grammar): the only declared home of
+// `filterKeys`, which the runtime matcher really evaluates. Read here so the
+// WHERE menu for a non-entity trigger is derived from it rather than invented.
+//
+// ⚠️ SUB-PATH, deliberately — same reason as the `events/unified` import above,
+// plus one of its own: 33 test files `vi.mock("@synap/events")` for its
+// pg-boss-backed `emitSideEffects`, and a mock replaces the WHOLE module, so a
+// barrel import of a pure constant table makes four unrelated suites fail at
+// IMPORT time with "No `getEventCatalog` export is defined on the mock". The
+// sub-path is not mocked, and `event-types.ts` pulls in nothing (its only
+// import is the pure `generator.ts`), so this costs no runtime weight.
+import { getEventCatalog } from "@synap/events/event-types";
 // Vocabulary door — the ONE place machine tokens become human words. Trigger
 // events use PAST mood ("A task was created"); actions use IMPERATIVE mood
 // ("Create an entity"). Never a hand-written label map (see .claude/rules/vocabulary.md).
@@ -824,6 +836,26 @@ const eventOptionSchema = z.object({
   profileSlug: z.string().optional(),
   source: z.enum(["observed", "declared", "catalog"]),
   observedCount: z.number().int().nonnegative().optional(),
+  /**
+   * The `data` keys a WHERE row may narrow this event on — ADDITIVE to the
+   * pinned contract above (adding an optional field cannot break a reader).
+   *
+   * 🔴 Why the client needs it: relay builds its WHERE property list from the
+   * trigger's ENTITY PROFILE. A non-entity trigger has no profile, so the list
+   * came back empty and every one of the widened subjects was authorable with
+   * no way to narrow it. The keys already existed and were already evaluated —
+   * `EventDefinition.filterKeys` (`@synap/events`), read at runtime by
+   * `matchFilters` generically and by `matchTriggerSpecificFilters:468-540` for
+   * the hardcoded branches — they simply never reached a picker.
+   *
+   * Sourced by EXACT pattern match against `getEventCatalog()`. Absent when the
+   * catalog does not carry that pattern (a wildcard, an observed-only type, a
+   * capability's declared emit): absent is the honest answer, and a client that
+   * renders nothing for it is correct. Nothing here may INVENT a key — a guessed
+   * filter key compiles into a filter the matcher evaluates against a `data`
+   * field that does not exist, which silently narrows the rule to never.
+   */
+  filterKeys: z.array(z.string()).optional(),
 });
 export type EventOption = z.infer<typeof eventOptionSchema>;
 
@@ -1356,6 +1388,27 @@ function eventLabelFor(pattern: string, subject: string): string {
 }
 
 /** The `profileSlug` an event option carries — the object kind it concerns. */
+/**
+ * Pattern → the `data` keys the runtime can filter that event on.
+ *
+ * ONE lookup, built once from `getEventCatalog()`. EXACT pattern match only:
+ * `filterKeys` are declared per event TYPE, and a subject-level wildcard
+ * (`notification.*`) covers several types whose keys differ, so there is no
+ * honest union to hand a client. Absent → the picker shows no suggestions,
+ * which is correct; a guessed key would compile into a filter evaluated against
+ * a `data` field nothing writes.
+ */
+const CATALOG_FILTER_KEYS: ReadonlyMap<string, readonly string[]> = new Map(
+  getEventCatalog()
+    .filter((d) => Array.isArray(d.filterKeys) && d.filterKeys.length > 0)
+    .map((d) => [d.type, d.filterKeys as string[]] as const)
+);
+
+function filterKeysForPattern(pattern: string): string[] | undefined {
+  const keys = CATALOG_FILTER_KEYS.get(pattern);
+  return keys ? [...keys] : undefined;
+}
+
 function profileSlugForSubject(subject: string): string | undefined {
   // The generic `entity` base kind's concrete profile is unknown at this layer
   // (the WHERE step binds it); every other subject IS its own object kind.
@@ -1448,6 +1501,7 @@ export function foldDeclaredEmits(
       profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
       source: "declared",
       observedCount: existing?.observedCount,
+      filterKeys: existing?.filterKeys ?? filterKeysForPattern(pattern),
     });
   }
 }
@@ -1471,6 +1525,7 @@ function buildEventCatalog(): EventOption[] {
       label: eventLabelFor(pattern, subject),
       profileSlug: profileSlugForSubject(subject),
       source: "catalog",
+      filterKeys: filterKeysForPattern(pattern),
     });
   };
   for (const subject of SUBJECT_TYPES) {
@@ -1556,6 +1611,7 @@ async function resolveAvailableTriggerEvents(
         profileSlug: existing?.profileSlug ?? profileSlugForSubject(subject),
         source: "observed",
         observedCount: Number(row.n) || 0,
+        filterKeys: existing?.filterKeys ?? filterKeysForPattern(row.type),
       });
     }
   }

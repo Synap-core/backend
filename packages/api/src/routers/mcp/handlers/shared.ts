@@ -682,6 +682,44 @@ export const CAPTURE_CROSSKIND_PRECHECK_MAX = 8;
  */
 export const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
 
+/**
+ * The agent-supplied WHY for a governed write, read off the MCP `args` bag.
+ *
+ * Every MCP write tool that reaches `checkPermissionOrPropose` — directly, or
+ * through a Hub mutation whose input accepts `reasoning` — declares an optional
+ * `reasoning` property and forwards it through this ONE reader. Before it, the
+ * MCP door was the only agent transport that could not state a reason: the Hub
+ * accepted one at 18 call sites, the tool schemas exposed one at 3 of 35, and
+ * the gate therefore stored the placeholder `"<action> <type> requires your
+ * approval"` — which the review UI correctly suppresses as "No reason was given
+ * for this write."
+ *
+ * Returns `undefined` (never `""`) for a missing or blank value, so a caller can
+ * spread it conditionally and leave a payload byte-identical to what it was.
+ *
+ * CAPPED at {@link REASONING_MAX_CHARS}. This is an agent-authored string on a
+ * new wire, and it does not stay in the payload: the gate stores it as the
+ * proposal's `notificationDescription`, which every review surface renders as
+ * the row's reason line. Nothing downstream truncates it, so an unbounded value
+ * is a one-line field holding a 100KB paragraph — the row becomes unreadable and
+ * the queue around it with it. Not an injection concern (no proposal surface
+ * renders it as HTML); a LENGTH concern, and the cheapest place to fix it is the
+ * one door every MCP write reads it through. The receipt goal already slices at
+ * 160 in `deriveAgentProposalSessionGoal`; this cap is deliberately far looser
+ * because a reason may legitimately be a paragraph — it only rules out a
+ * document.
+ */
+export const REASONING_MAX_CHARS = 2000;
+
+export function readReasoning(
+  args: Record<string, unknown>
+): string | undefined {
+  const raw = args.reasoning;
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim().slice(0, REASONING_MAX_CHARS);
+  return trimmed ? trimmed : undefined;
+}
+
 export function normalizeCaptureText(value: unknown): string {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 }

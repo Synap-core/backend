@@ -54,6 +54,9 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import {
   normalizeObjectKind,
   buildObjectActionTitle,
+  resolveActionLabel,
+  resolveObjectNoun,
+  humanizeToken,
 } from "@synap-core/types/vocabulary";
 import {
   isLikelyUUID,
@@ -98,6 +101,10 @@ import {
 // Back-compat: these governance-policy symbols historically lived in this
 // module. Their canonical home is now @synap/governance-policy; re-export so
 // existing importers (tests, routers) keep resolving them from here.
+import {
+  labelFromOperations,
+  withRemainder,
+} from "../services/proposals/composite-summary.js";
 export { DEFAULT_AUTO_APPROVE, DESTRUCTIVE_ACTIONS };
 export {
   ADMIN_ACTIONS,
@@ -1513,6 +1520,17 @@ async function evaluatePermission(
                 proposalType: action,
                 targetType: subjectType,
                 notificationDescription: opts.reasoning ?? null,
+                // The SAME sentence the proposal itself stores as its summary
+                // (`createProposal` builds it from the same three inputs), so
+                // the receipt session and the proposal detail cannot name one
+                // write two different things. Ranked below every author-supplied
+                // arm inside the deriver, so it only ever displaces the
+                // `Agent <type> · <target>` machine-token fallback.
+                summary: buildProposalSummary(
+                  singularSubjectType(subjectType),
+                  action,
+                  data
+                ),
               }),
               // Per-proposal correlation UUIDs would force one session per row —
               // only reuse by agent+goal (openRunSession mint on miss).
@@ -1984,6 +2002,91 @@ async function evaluatePermission(
 }
 
 /**
+ * The singular form of a subject type, as `buildProposalSummary` expects it.
+ *
+ * THREE producers derive the same sentence — the provenance hoist, the
+ * pending-row session mint, and `createProposal`'s own `summary` — and a
+ * hand-repeated `endsWith("s")` in each is how the receipt title and the stored
+ * summary would drift apart on a plural subject (`workspaces`, `apiKeys`).
+ *
+ * The two session mints call this. `createProposal` deliberately keeps the strip
+ * INLINE: `severed-approval-doors.test.ts` (5) source-scans for that exact
+ * literal to prove the gate's plural subject still lands on the executor's
+ * singular key, and routing it through here would blind that guard. The two
+ * spellings are held identical by `permission-check.renderer-summary.test.ts`,
+ * which drives a plural subject through both paths and asserts one answer.
+ */
+function singularSubjectType(subjectType: string): string {
+  return subjectType.endsWith("s") ? subjectType.slice(0, -1) : subjectType;
+}
+
+/**
+ * The cell a `renderer.set` payload actually binds, as a human word.
+ *
+ * `ref.cellKey` is NOT always the cell: `buildCellRendererRef`
+ * (`routers/hub-protocol/profiles.ts`) wraps an iframe/native cell by rewriting
+ * `cellKey` to the shared host `"iframe-widget"` and moving the real typeKey
+ * into `props.typeKey`. Reading `cellKey` alone would print the same word
+ * ("Iframe widget") for every iframe cell ever proposed.
+ *
+ * The `generated:` namespace `defineCell` mints is stripped before humanizing —
+ * `humanizeToken` splits on `.`, not `:`, so it would otherwise leak the raw
+ * prefix ("Generated:task detail card").
+ */
+function resolveRendererCellName(data: Record<string, unknown>): string | null {
+  const ref = data.ref as
+    { cellKey?: unknown; props?: Record<string, unknown> } | undefined;
+  let key = typeof ref?.cellKey === "string" ? ref.cellKey : undefined;
+  if (key === "iframe-widget" && typeof ref?.props?.typeKey === "string") {
+    key = ref.props.typeKey;
+  }
+  if (!key && typeof data.cellKey === "string") key = data.cellKey;
+  if (!key) return null;
+  const bare = key.includes(":") ? key.slice(key.lastIndexOf(":") + 1) : key;
+  return humanizeToken(bare) || key;
+}
+
+/**
+ * The one sentence for a `renderer.set` proposal, or `null` when the payload is
+ * not one this can read (the `capability/renderer.set` variant carries
+ * `{capabilityId, scope, pages}` — no cell, no slot — and must keep the generic
+ * composition rather than be described in words that do not apply to it).
+ */
+function buildRendererSetSummary(data: Record<string, unknown>): string | null {
+  const cellName = resolveRendererCellName(data);
+  if (!cellName) return null;
+  const verb = resolveActionLabel("renderer.set", "imperative");
+  const scope = typeof data.scope === "string" ? data.scope : null;
+  const scopeSuffix = scope ? ` (${humanizeToken(scope).toLowerCase()})` : "";
+
+  // Kind-level (the `profile` subject): slot + profileSlug are both present.
+  if (typeof data.slot === "string" && typeof data.profileSlug === "string") {
+    const noun = resolveObjectNoun(data.profileSlug);
+    const slotWord = humanizeToken(data.slot).toLowerCase();
+    // The per-object exception binds the renderer for ONE entity, not for the
+    // kind. Saying "the Task detail renderer" there would tell the reviewer
+    // every Task changes, which is the opposite of what approving it does.
+    return typeof data.subjectId === "string" && data.subjectId
+      ? `${verb} the ${slotWord} renderer for one ${noun} to "${cellName}"${scopeSuffix}`
+      : `${verb} the ${noun} ${slotWord} renderer to "${cellName}"${scopeSuffix}`;
+  }
+
+  // Per-ENTITY (the `entity` subject, `routers/entities/mutate.ts`): no slot and
+  // no scope — an entity binding is always that entity's detail renderer.
+  if (typeof data.entityId === "string") {
+    const subject =
+      typeof data.entityTitle === "string" && data.entityTitle.trim()
+        ? `"${data.entityTitle.trim()}"`
+        : typeof data.profileSlug === "string"
+          ? `one ${resolveObjectNoun(data.profileSlug)}`
+          : "one object";
+    return `${verb} the detail renderer for ${subject} to "${cellName}"`;
+  }
+
+  return null;
+}
+
+/**
  * Build a short human-readable summary of what's being proposed.
  * Example: `Create task "Design new onboarding flow"`
  *          `Delete entity ent_abc`
@@ -2037,6 +2140,30 @@ export function buildProposalSummary(
     }
   }
 
+  // ── `renderer.set` — the action whose meaning is not (verb, noun) ────────
+  //
+  // Every OTHER action's meaning fits "<verb> <noun>": what happens, to what
+  // kind. `renderer.set`'s does not — it lives entirely in `slot`, `scope` and
+  // `ref`, none of which the generic composition can reach. So it composed
+  // "Set Task": three correct resolver outputs, and a sentence that tells a
+  // reviewer nothing about what approving it changes. That sentence was the
+  // whole of the reported proposal's detail title, pack row and receipt.
+  //
+  // Every user-facing WORD here still resolves through the ONE vocabulary door
+  // (`resolveActionLabel` for the verb, `resolveObjectNoun` for the kind,
+  // `humanizeToken` for the slot and the cell key), so this is a COMPOSITION,
+  // not a second label table — see `.claude/rules/vocabulary.md`.
+  //
+  // Deliberately NOT `buildObjectActionTitle`: its shape is
+  // `<verb> <noun> "<name>"` where the quoted name is the OBJECT's own name.
+  // Here the quoted thing is the CELL being bound and the object is the
+  // profile, so feeding the cell name in as `objectName` would assert the cell
+  // is what the profile is called.
+  if (action === "renderer.set") {
+    const rendererSentence = buildRendererSetSummary(data);
+    if (rendererSentence) return rendererSentence;
+  }
+
   // Vocabulary SSOT — NOT a call-site capitalisation (`.claude/rules/vocabulary.md`
   // forbids `charAt(0).toUpperCase()` on a domain token by name), and NOT the
   // raw `subjectType` interpolated into prose either (a reviewer would see
@@ -2051,17 +2178,33 @@ export function buildProposalSummary(
   // so it wins over the generic `subjectType`. Without a profileSlug, passing
   // `subjectType` straight through lets `entity` fall into that same
   // suppression rather than rendering "Create Entity".
+  //
+  // A COMPOSITE payload has neither `profileSlug` nor `targetName` at the top
+  // level — `capture-propose.ts:312` records that hoisting `profileSlug` there
+  // would hard-deny the proposal via the create-profile guardrail — so before
+  // this fallback every capture and import proposal rendered as the bare verb
+  // ("Create"), and three sat unreadable on the founder's pod for up to five
+  // days. The label is taken from `operations[]`, the plan the executor
+  // applies, so the preview and the apply read the SAME artifact and cannot
+  // diverge. See `services/proposals/composite-summary.ts`.
+  const composite = labelFromOperations(
+    (data as { operations?: unknown }).operations
+  );
   const objectKind =
     typeof data.profileSlug === "string" && data.profileSlug
       ? data.profileSlug
-      : subjectType;
+      : (composite?.objectKind ?? subjectType);
   // goal is a first-class label for focus_session (and harmless elsewhere)
-  const objectName = (data.targetName ||
-    data.title ||
-    data.name ||
-    data.goal ||
-    data.slug) as string | undefined;
-  return buildObjectActionTitle({ action, objectKind, objectName });
+  const objectName =
+    ((data.targetName || data.title || data.name || data.goal || data.slug) as
+      string | undefined) ?? composite?.objectName;
+  // The remainder is DISCLOSED, never hidden: naming one of three operations
+  // and staying silent about the other two tells the reviewer something true
+  // and something misleading in the same sentence.
+  return withRemainder(
+    buildObjectActionTitle({ action, objectKind, objectName }),
+    composite?.extraCount ?? 0
+  );
 }
 
 /**
@@ -2317,6 +2460,13 @@ async function createPendingProposalRow(
           proposalType: input.proposalType,
           targetType: input.targetType,
           notificationDescription: input.notificationDescription,
+          // Same sentence, same reason as the hoist above — this is the second
+          // of the two doors that mint an agent receipt session.
+          summary: buildProposalSummary(
+            singularSubjectType(input.targetType),
+            input.proposalType,
+            input.data
+          ),
         }),
         // Per-proposal correlation UUIDs would force one session per row —
         // only reuse by agent+goal (openRunSession mint on miss).
@@ -2621,6 +2771,12 @@ async function createProposal(args: {
     data.entityId ||
     data.id ||
     randomUUID()) as string;
+  // PINNED LITERAL — `severed-approval-doors.test.ts` (5) source-scans for this
+  // exact shape, paired with `subjectType: "workspaces"` in routers/workspaces.ts,
+  // to prove the gate's plural subject and the executor's singular key still
+  // agree. Left inline for that reason, NOT because the helper below is wrong:
+  // collapsing it into `singularSubjectType(subjectType)` is behaviour-identical
+  // and blinds that guard. Change one, change both.
   const singularType = subjectType.endsWith("s")
     ? subjectType.slice(0, -1)
     : subjectType;

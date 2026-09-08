@@ -48,6 +48,7 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 import { assertViewAccess } from "../../routers/views.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import type { SessionArtifactKind } from "./record-session-artifact.js";
+import type { ExpectedOutput } from "@synap/playbooks";
 // ONE uuid shape floor for the session services — this file had its own copy.
 import { UUID_RE } from "./session-metadata.js";
 
@@ -118,20 +119,83 @@ export async function isOutputRefVisible(params: {
     return Boolean(row);
   }
 
-  // `views` DOES now carry a registered VisibilityRule (added since this file
-  // was written), but the read path here stays `assertViewAccess` — the
-  // imperative predicate every `views.*` door already calls, which throws on
-  // refusal. Keep the two in step: a change to the view visibility rule must be
-  // mirrored in `assertViewAccess` or this floor and the view doors disagree.
-  const view = await db.query.views.findFirst({
-    where: eq(views.id, refId),
-    columns: { id: true, workspaceId: true, userId: true },
-  });
-  if (!view) return false;
-  try {
-    await assertViewAccess(view, userId, "read");
-    return true;
-  } catch {
-    return false;
+  if (kind === "view") {
+    // `views` DOES now carry a registered VisibilityRule (added since this file
+    // was written), but the read path here stays `assertViewAccess` — the
+    // imperative predicate every `views.*` door already calls, which throws on
+    // refusal. Keep the two in step: a change to the view visibility rule must
+    // be mirrored in `assertViewAccess` or this floor and the view doors
+    // disagree.
+    const view = await db.query.views.findFirst({
+      where: eq(views.id, refId),
+      columns: { id: true, workspaceId: true, userId: true },
+    });
+    if (!view) return false;
+    try {
+      await assertViewAccess(view, userId, "read");
+      return true;
+    } catch {
+      return false;
+    }
   }
+
+  // DEFAULT ARM — a kind this floor cannot adjudicate is REFUSED, never routed
+  // to the branch that happens to be last.
+  //
+  // `view` used to BE the fall-through, so an unparsed `{kind: "anything", id}`
+  // was adjudicated as a view: a ref outside the six cleared the floor whenever
+  // the id named a readable view, and was then stored verbatim for readers that
+  // believe the union. Unreachable from a door that parses (`outputRefWireSchema`
+  // enumerates `OUTPUT_REF_KINDS`), which is exactly why it must be explicit
+  // here — the floor is what a caller reaching the service DIRECTLY hits, and
+  // "the last branch wins" is one refactor away from being a disclosure hole
+  // rather than merely a broken contract.
+  return false;
+}
+
+/**
+ * THE SAME FLOOR, for the ref a DECLARED OUTPUT SLOT carries.
+ *
+ * `ExpectedOutput.ref` points at exactly the kinds a produced artifact can
+ * (`OUTPUT_REF_KINDS` = `SESSION_ARTIFACT_KINDS` minus `url`, which is the
+ * union's other arm), so it goes through {@link isOutputRefVisible} rather than
+ * a second predicate. That matters for the same reason the produced side does:
+ * `session-outputs.ts` resolves referenced objects by bare id, and a slot whose
+ * ref the caller cannot see would be a read oracle on the declare path instead
+ * of the attach path — the identical hole, one door over.
+ *
+ * Returns the LABELS of the offending slots rather than throwing, so each door
+ * shapes its own refusal (the update service returns `denied`, the block door
+ * a 400/`BAD_REQUEST`). An empty array means every ref cleared the floor.
+ *
+ * A slot with no `ref`, or `ref: null` (the wire's CLEAR), has nothing to check.
+ * The `{url}` arm was already scheme-gated at the parse by the same `isHttpUrl`
+ * this floor uses; it is re-checked here anyway so a caller reaching the service
+ * directly — the proposal executor re-applying an approved patch, above all —
+ * cannot bypass the parse.
+ */
+export async function findUnreachableOutputRefs(params: {
+  userId: string;
+  outputs: ReadonlyArray<Pick<ExpectedOutput, "label" | "ref">>;
+}): Promise<string[]> {
+  const bad: string[] = [];
+  for (const slot of params.outputs) {
+    const ref = slot?.ref;
+    if (!ref) continue;
+    const visible =
+      "url" in ref
+        ? isHttpUrl(ref.url)
+        : await isOutputRefVisible({
+            userId: params.userId,
+            kind: ref.kind,
+            refId: ref.id,
+          });
+    if (!visible) bad.push(slot.label);
+  }
+  return bad;
+}
+
+/** The refusal sentence both doors say, so they cannot word it two ways. */
+export function unreachableOutputRefError(labels: string[]): string {
+  return `Cannot reference an object you cannot see, on: ${labels.join(", ")}`;
 }

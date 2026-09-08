@@ -301,6 +301,37 @@ export const CaptureStructureResponseSchema = z
      */
     degradedReason: z.string().optional(),
     extraction: CaptureExtractionSchema.optional(),
+    /**
+     * Caller-state word. `needs_input` — the structurer asked a clarifying
+     * question. `not_structured` — structuring degraded; nothing was written,
+     * but the raw text survives in `salvagedEntities`. Neither is a receipt
+     * status: on both branches no graph was submitted, so there is no
+     * `writeReceipt.state` to derive from. A confirm-mode response carries the
+     * receipt-derived word instead (`proposed` | `applied` | `partial`), which
+     * is why this stays an open string rather than a closed enum.
+     */
+    status: z.string().optional(),
+    /**
+     * Human-readable account of a `degraded` outcome, DERIVED from
+     * `degradedReason`'s permanence class — never a hardcoded "temporarily
+     * unavailable". A configuration state (`vision_provider_not_configured`)
+     * reported as an outage is the defect the door-parity tripwire exists for.
+     */
+    degradedMessage: z.string().optional(),
+    /** Whether retrying the identical call could plausibly succeed. */
+    degradedRetryable: z.boolean().optional(),
+    /**
+     * The salvaged raw-text note the degraded path produced, echoed under an
+     * explicit name and already `/capture/execute`-shaped, so an agent can file
+     * it through the governed door without reconstructing it. Undeclared, zod
+     * would let it ride through `.passthrough()` published nowhere and promised
+     * to nobody — which is exactly how the honesty triple was lost on this door.
+     */
+    salvagedEntities: z.array(z.record(z.string(), z.unknown())).optional(),
+    /** The re-call protocol, spelled out for an agent caller. */
+    nextStep: z.string().optional(),
+    /** The clarifying question, when `status` is `needs_input`. */
+    pendingQuestion: z.unknown().optional(),
   })
   .passthrough()
   .openapi("CaptureStructureResponse");

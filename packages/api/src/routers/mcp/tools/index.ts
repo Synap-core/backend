@@ -21,6 +21,13 @@ import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js"
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
+// The output-slot `ref` kind union, DERIVED into the three JSON-Schema enums
+// below rather than retyped beside them. It was hand-written three times in
+// this file; @synap/playbooks is dependency-free, so there is no cycle and no
+// reason for a copy. Widening the union now widens what MCP advertises, in the
+// same commit, and `output-ref-kinds-parity` audits the mirrors this file
+// cannot import (the Hub REST client's duplicated literal).
+import { OUTPUT_REF_KINDS } from "@synap/playbooks";
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import { buildCapabilityExecuteAgentJsonSchema } from "../../../contracts/capability-execute-schema.js";
@@ -109,7 +116,7 @@ function buildRuleSentenceJsonSchema(): Record<string, unknown> {
   derived.description =
     "The rule's structured WHEN / WHERE / THEN. Send it when the rule should DO something — the door compiles it into a live automation or REFUSES naming the clause that failed. Omit it for a prose-only FACT rule. All three keys are required when you send it (`conditions` and `actions` may be empty arrays, but an empty `actions` is refused as 'no THEN').";
   properties.trigger.description =
-    "WHEN — `null` is refused (nothing would ever start the rule). triggerType 'event' → subjectCategory + actionVerb (+ optional profileSlug), e.g. { triggerType: 'event', subjectCategory: 'entity', profileSlug: 'deal', actionVerb: 'created' }. triggerType 'cron' → cronFrequency (+ cronTime / cronDays / cronDayOfMonth / cronTimezone). The compiled event pattern is checked against the runtime's own event grammar, so a WHEN nothing emits is refused rather than stored.";
+    "WHEN — `null` is refused (nothing would ever start the rule). triggerType 'event' → subjectCategory + actionVerb (+ optional profileSlug), e.g. { triggerType: 'event', subjectCategory: 'entity', profileSlug: 'deal', actionVerb: 'created' }. OMIT actionVerb for ANY activity on that subject — it compiles to the `<subject>.*` wildcard, which is the right choice for the non-entity subjects (notification, proposal, focus_session, external_message …) whose real actions are domain verbs, not create/update/delete. Every subjectCategory offered is producer-backed AND workspace-scoped, so none of them is a trigger that can never fire. triggerType 'cron' → cronFrequency (+ cronTime / cronDays / cronDayOfMonth / cronTimezone). The compiled event pattern is checked against the runtime's own event grammar, so a WHEN nothing emits is refused rather than stored.";
   properties.conditions.description =
     "WHERE — narrows the WHEN. Each row needs BOTH `key` and `value`: a half-filled row is refused, not dropped, because dropping it would silently apply the rule more widely than the author wrote. Empty array = no narrowing.";
   properties.actions.description =
@@ -656,6 +663,16 @@ export const tools = {
               description:
                 "The declared output slot this fulfils, exactly as declared on the session.",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["profileSlug", "title"],
         },
@@ -686,6 +703,16 @@ export const tools = {
               type: "string",
               description:
                 "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch. Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["entityId"],
@@ -735,6 +762,16 @@ export const tools = {
               type: "string",
               description:
                 "The declared output slot this fulfils, exactly as declared on the session.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["title"],
@@ -874,6 +911,16 @@ export const tools = {
               type: "string",
               description: "Workspace ID (optional)",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["sourceEntityId", "targetEntityId"],
         },
@@ -916,6 +963,16 @@ export const tools = {
               description:
                 "Optional disambiguator when the same role attaches in multiple contexts (e.g. a client OF a specific company).",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["entityId", "facetSlug"],
         },
@@ -952,6 +1009,16 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace lens used to resolve the facet when detaching by entityId + facetSlug.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: [],
@@ -1006,6 +1073,16 @@ export const tools = {
             workspaceId: {
               type: "string",
               description: "Workspace to define the role in.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["slug", "displayName", "workspaceId"],
@@ -1117,6 +1194,16 @@ export const tools = {
             workspaceId: {
               type: "string",
               description: "Workspace to define the kind in.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["slug", "displayName", "workspaceId"],
@@ -1270,6 +1357,32 @@ export const tools = {
                     description:
                       "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
                   },
+                  ref: {
+                    description:
+                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          kind: {
+                            type: "string",
+                            enum: [...OUTPUT_REF_KINDS],
+                          },
+                          id: { type: "string" },
+                        },
+                        required: ["kind", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          url: { type: "string", format: "uri" },
+                        },
+                        required: ["url"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
                 },
                 required: ["kind", "label"],
               },
@@ -1289,7 +1402,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
+          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1315,6 +1428,11 @@ export const tools = {
               type: "string",
               description:
                 "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. Changing it emits a stage-transition event automations can react to.",
+            },
+            subjectEntityId: {
+              type: ["string", "null"],
+              description:
+                "Re-point WHAT this session is about — the entity UUID of the person/company/deal the work concerns. Pass null to CLEAR it; omit to leave it alone. REFUSED if the entity is not one you can already see (the same floor an output ref goes through).",
             },
             expectedOutputs: {
               type: "array",
@@ -1356,6 +1474,32 @@ export const tools = {
                     description:
                       "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
                   },
+                  ref: {
+                    description:
+                      'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          kind: {
+                            type: "string",
+                            enum: [...OUTPUT_REF_KINDS],
+                          },
+                          id: { type: "string" },
+                        },
+                        required: ["kind", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          url: { type: "string", format: "uri" },
+                        },
+                        required: ["url"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
                 },
                 required: ["kind", "label"],
               },
@@ -1392,6 +1536,32 @@ export const tools = {
                   maxLength: 500,
                   description:
                     "Only with owner='human'. ONE line naming WHICH thing is missing, not its class.",
+                },
+                ref: {
+                  description:
+                    'WHERE to go for this deliverable — turns the card\'s title into a door instead of leaving the person to search. ONE of two shapes: {"kind":"entity|document|view|cell|automation|playbook","id":"<uuid>"} for something in the pod, or {"url":"https://..."} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner=\'human\': name the blocker in `why`, then point at it here.',
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        kind: {
+                          type: "string",
+                          enum: [...OUTPUT_REF_KINDS],
+                        },
+                        id: { type: "string" },
+                      },
+                      required: ["kind", "id"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        url: { type: "string", format: "uri" },
+                      },
+                      required: ["url"],
+                      additionalProperties: false,
+                    },
+                  ],
                 },
               },
               required: ["kind", "label"],
@@ -1586,6 +1756,16 @@ export const tools = {
               description:
                 "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want.",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["name", "rendererSource"],
         },
@@ -1631,6 +1811,16 @@ export const tools = {
               type: "string",
               description: "Workspace UUID (required for scope 'workspace').",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["profileSlug", "slot", "cellKey"],
         },
@@ -1651,6 +1841,16 @@ export const tools = {
             sessionId: {
               type: "string",
               description: "The focus session ID to promote into a playbook.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["sessionId"],
@@ -2066,6 +2266,16 @@ export const tools = {
               type: "string",
               description: "Idempotency key (optional)",
             },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+            },
           },
           required: ["name"],
         },
@@ -2111,6 +2321,16 @@ export const tools = {
                 },
                 required: ["workspaceId"],
               },
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["workspaceId"],
@@ -2187,6 +2407,16 @@ export const tools = {
               type: "string",
               description:
                 "The declared output slot this fulfils, exactly as declared on the session.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["name", "type", "workspaceId"],
@@ -2605,6 +2835,16 @@ export const tools = {
               type: "string",
               description:
                 "Optional workspace lens. When set, only automations in that workspace can be triggered; omit to trigger a pod-wide automation.",
+            },
+            /**
+             * WHY this write, in the person's own words — shown verbatim to the
+             * reviewer. Without it the proposal detail reads "No reason was
+             * given for this write."
+             */
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
             },
           },
           required: ["id"],

@@ -100,6 +100,14 @@ export function registerFocusSessionExecutors(): void {
           channelId: (innerData.channelId as string | undefined) ?? null,
           agentIds: (innerData.agentIds as string[] | undefined) ?? [],
           status: "active",
+          // A playbook-instantiate proposal (routers/playbooks.ts) carries the
+          // rendered goalTemplate as `prompt` alongside the title in `goal` —
+          // the same split instantiateSession writes directly. Stamp it so the
+          // approved path does not silently drop the agent's instruction.
+          // Absent on every other focus_session/create proposal ⇒ {} default.
+          ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
+            ? { metadata: { prompt: innerData.prompt } }
+            : {}),
         })
         .onConflictDoNothing()
         .returning();
@@ -337,6 +345,17 @@ export function registerFocusSessionExecutors(): void {
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
+        }
+        // SUBJECT anchor. Carried by both proposing doors; hand-listing the set
+        // above is exactly how the deliverables half went unapplied for months,
+        // so a field added to the gate payload is added HERE in the same hunk.
+        // `null` is the CLEAR and must survive — hence the explicit null arm
+        // rather than a `typeof === "string"` test that would silently drop it.
+        if (
+          innerData.subjectEntityId === null ||
+          typeof innerData.subjectEntityId === "string"
+        ) {
+          set.subjectEntityId = innerData.subjectEntityId;
         }
 
         // DELIVERABLES. Carried into the gate payload by both proposing doors

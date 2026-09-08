@@ -50,7 +50,7 @@ import type {
   InputStrategy,
   PlaybookStage,
 } from "@synap/playbooks";
-import { instantiateSession } from "./playbook-lifecycle.js";
+import { instantiateSession, runPromptFor } from "./playbook-lifecycle.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -631,7 +631,12 @@ async function executeSingleRun(
       playbookId: playbook.id,
       sessionId: session.id,
       channelId: channel.id,
-      goal: session.goal,
+      // The agent's INSTRUCTION, not the row's title. `session.goal` is now
+      // "<playbook> for <subject>" (a label every list renders); the rendered
+      // goalTemplate lives on `metadata.prompt`. `runPromptFor` falls back to
+      // `goal` so a session created before that split still dispatches its
+      // paragraph unchanged.
+      goal: runPromptFor(session),
       subjectId: input.subjectId,
       subjectName,
       subjectProfile,

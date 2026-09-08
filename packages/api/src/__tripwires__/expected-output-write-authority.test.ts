@@ -300,18 +300,17 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
     let inspected = 0;
     for (const tool of list) {
       const schema = tool.inputSchema as
-        | { properties?: Record<string, unknown> }
-        | undefined;
+        { properties?: Record<string, unknown> } | undefined;
       const outputs = schema?.properties?.expectedOutputs as
-        | { items?: { properties?: Record<string, unknown> } }
-        | undefined;
+        { items?: { properties?: Record<string, unknown> } } | undefined;
       const props = outputs?.items?.properties;
       if (!props) continue;
       inspected += 1;
       const advertised = Object.keys(props).filter((k) => stamped.has(k));
-      expect(advertised, `${tool.name} advertises a server-stamped field`).toEqual(
-        []
-      );
+      expect(
+        advertised,
+        `${tool.name} advertises a server-stamped field`
+      ).toEqual([]);
       // And it still advertises what an agent IS meant to send.
       expect(Object.keys(props)).toContain("owner");
     }

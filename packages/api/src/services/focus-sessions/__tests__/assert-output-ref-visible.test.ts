@@ -1,4 +1,28 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { OUTPUT_REF_KINDS } from "@synap/playbooks";
+
+/**
+ * PARTIAL mock — only `db`, and only so the VIEW branch is observable. The view
+ * lookup is the branch an unknown kind used to fall through to; making it THROW
+ * is what turns "an unknown kind is refused" from a shape assertion into a
+ * reachability one. A total replacement goes dark at collection time the moment
+ * the module under test imports one more export.
+ */
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return {
+    ...actual,
+    db: {
+      query: {
+        views: {
+          findFirst: async () => {
+            throw new Error("VIEWS_LOOKUP_REACHED");
+          },
+        },
+      },
+    },
+  };
+});
 
 /**
  * `isOutputRefVisible` — the `url` arm.
@@ -56,5 +80,55 @@ describe("isOutputRefVisible — url scheme floor", () => {
     await expect(
       isOutputRefVisible({ userId: "user-1", kind: "cell", refId: "some-cell" })
     ).resolves.toBe(true);
+  });
+});
+
+/**
+ * THE DEFAULT ARM — an unadjudicable kind is REFUSED, not routed to `views`.
+ *
+ * `view` used to be the FALL-THROUGH: after the entity / document / automation /
+ * playbook blocks the function simply ran the view lookup. So a kind outside
+ * `OUTPUT_REF_KINDS` — reachable from any caller that did not parse, which until
+ * this wave included the MCP door — was adjudicated AS A VIEW, cleared the floor
+ * whenever its id named a readable view, and was then stored verbatim for every
+ * reader that believes the union.
+ *
+ * Asserted by REACHABILITY, not shape: the mocked `views.findFirst` throws, so
+ * "the unknown kind did not reach the views lookup" is proved by the call
+ * RESOLVING rather than by reading the source. The `view` case below is the
+ * non-vacuity half — if the mock ever stopped being wired, it would resolve
+ * quietly and the refusal test would prove nothing.
+ */
+describe("isOutputRefVisible — a kind outside OUTPUT_REF_KINDS", () => {
+  const VIEW_UUID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  it("NON-VACUITY: a real `view` ref DOES reach the views lookup", async () => {
+    await expect(
+      isOutputRefVisible({ userId: "user-1", kind: "view", refId: VIEW_UUID })
+    ).rejects.toThrow("VIEWS_LOOKUP_REACHED");
+  });
+
+  it("is refused without touching the views lookup", async () => {
+    for (const kind of ["session", "proposal", "anything", ""]) {
+      await expect(
+        isOutputRefVisible({
+          // Unreachable through a door that parses — which is the point: the
+          // floor is what a caller reaching the service DIRECTLY hits.
+          userId: "user-1",
+          kind: kind as never,
+          refId: VIEW_UUID,
+        })
+      ).resolves.toBe(false);
+    }
+  });
+
+  it("the six adjudicable kinds are the ones the union declares", () => {
+    // Derived, not hand-listed: if a kind is added to the union without a
+    // branch here, the loop above would start refusing something the wire
+    // accepts. `url` and `cell` return before any query; the four backed kinds
+    // and `view` each have their own block.
+    expect([...OUTPUT_REF_KINDS].sort()).toEqual(
+      ["automation", "cell", "document", "entity", "playbook", "view"].sort()
+    );
   });
 });

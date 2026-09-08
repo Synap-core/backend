@@ -21,7 +21,7 @@ import {
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { proposalClassFields } from "../../services/proposals/proposal-class.js";
-import { entityFacets, profiles } from "@synap/database/schema";
+import { entityFacets, profiles, documents } from "@synap/database/schema";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalReviewEvent,
@@ -46,6 +46,16 @@ import type {
 } from "@synap-core/types/proposals";
 import type { FlowDefinition } from "@synap/database";
 import { proposals } from "@synap/database";
+import {
+  labelFromOperations,
+  withRemainder,
+} from "../../services/proposals/composite-summary.js";
+import {
+  humanizeToken,
+  resolveActionLabel,
+  resolveObjectNoun,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 import { buildProposalChanges } from "./changes.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 
@@ -227,6 +237,29 @@ export async function enrichProposalsForDisplay(
       .filter(isLikelyUUID),
     ...relationEndpointIds,
   ]);
+  /**
+   * DOCUMENT titles — the target type with no path to a name at all.
+   *
+   * The `targetName` chain resolves an entity via the batch-joined `entities`
+   * table, a `property_def` via TITLE_FIELD_OVERRIDES, and anything else via a
+   * `title`/`name` field on the payload. A document proposal has none of those:
+   * its target id is a `documents` PK (not an entity id) and its payload carries
+   * only `changes` / `proposedContent`. So every document proposal fell through
+   * to the generic fallback title — the founder's own example ("AI edit
+   * documents" instead of the document's name).
+   *
+   * One batched query for the whole page, floored by `ownerPrivateVisibleWhere`:
+   * `documents` is an ownerPrivate table (a NULL workspace means "personal to
+   * the owner"), so a plain userVisibleWhere would hand another user's private
+   * document title to every reviewer. A document the viewer may not see simply
+   * resolves to no name and the fallback title is kept — never fabricated.
+   */
+  const documentIds = uniqueStrings(
+    requests
+      .filter((request) => request.targetType === "document")
+      .map((request) => request.targetId)
+      .filter(isLikelyUUID)
+  );
   const uniqueFacetIds = uniqueStrings(facetIds);
   const uniqueRoleEntityIds = uniqueStrings(existingRoleEntityIds);
   const userIds = uniqueStrings(
@@ -261,6 +294,7 @@ export async function enrichProposalsForDisplay(
     roleFacetRows,
     viewerIsPodMember,
     sessionRows,
+    documentRows,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -396,6 +430,24 @@ export async function enrichProposalsForDisplay(
             )
           )
       : Promise.resolve([] as Array<{ id: string; goal: string }>),
+    // Document titles for `targetType: "document"` proposals — see the
+    // `documentIds` note above. Owner-floored, batched, skipped entirely when
+    // the page carries no document proposal.
+    documentIds.length > 0
+      ? db
+          .select({ id: documents.id, title: documents.title })
+          .from(documents)
+          .where(
+            and(
+              inArray(documents.id, documentIds),
+              ownerPrivateVisibleWhere(
+                documents.workspaceId,
+                documents.userId,
+                userId
+              )
+            )
+          )
+      : Promise.resolve([] as Array<{ id: string; title: string }>),
   ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
@@ -451,6 +503,9 @@ export async function enrichProposalsForDisplay(
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
   const sessionGoalById = new Map(sessionRows.map((row) => [row.id, row.goal]));
+  const documentTitleById = new Map(
+    documentRows.map((row) => [row.id, row.title])
+  );
   // Roles v2: group live role-facets by their entity id (unfiltered — the
   // workspace lens is applied per-proposal below via `rolesForLens`).
   const roleFacetsByEntityId = new Map<
@@ -497,6 +552,9 @@ export async function enrichProposalsForDisplay(
     const targetName =
       request.targetName ??
       titleFieldOverrideValue(request.targetType, payload) ??
+      (request.targetType === "document"
+        ? documentTitleById.get(request.targetId)
+        : undefined) ??
       displayLabelFromRecord(payload) ??
       entityMeta?.title ??
       entityMeta?.preview ??
@@ -567,15 +625,52 @@ export async function enrichProposalsForDisplay(
     const approverName = approverRow
       ? displayNameForUser(approverRow)
       : undefined;
-    const summary =
-      request.summary ??
+    // ── A GENERIC STORED SUMMARY LOSES TO A DERIVATION THAT NAMES THE OBJECT ──
+    // `request.summary ?? buildFallbackTitle(...)` meant the stored string ALWAYS
+    // won, forever. Two rows on the founder's pod (2026-09-03) carry
+    // `summary: "Create entity"` while their own `operations[]` carry
+    // `title: "Raycast V1 focus lens (product decision Focus A)"` — everything
+    // needed to name the object was in the payload; nothing looked, because a
+    // string was present. The producer has since been fixed
+    // (`buildProposalSummary` reads `operations[]`), but a stored summary is
+    // durable: those rows would read "Create entity" for the rest of their life.
+    //
+    // The test is `summaryNamesTheObject` — derived from the vocabulary door, NOT
+    // a blocklist of strings. A summary made only of this proposal's own action
+    // verb and kind noun carries no object identity, so a derivation that DOES
+    // name the object is strictly more informative and wins. Anything else — a
+    // human-written summary, the JOIN-gate sentence, a rule's intent — carries a
+    // word the derivation could not have produced and is kept untouched.
+    const compositeLabel = labelFromOperations(
+      (payload as { operations?: unknown } | undefined)?.operations
+    );
+    const derivedName = targetName ?? compositeLabel?.objectName;
+    const derivedSummary = withRemainder(
       buildFallbackTitle({
         changeType: request.changeType,
         proposalType: row.proposalType,
-        profileSlug,
+        profileSlug: profileSlug ?? compositeLabel?.objectKind,
         targetType: request.targetType,
-        targetName,
-      });
+        targetName: derivedName,
+      }),
+      compositeLabel?.extraCount ?? 0
+    );
+    const storedSummary = request.summary;
+    const summary =
+      storedSummary &&
+      // Only ever REPLACED by something strictly richer: the stored string must
+      // name no object AND the derivation must name one.
+      !(
+        derivedName &&
+        !summaryNamesTheObject(storedSummary, {
+          changeType: request.changeType,
+          proposalType: row.proposalType,
+          profileSlug: profileSlug ?? compositeLabel?.objectKind,
+          targetType: request.targetType,
+        })
+      )
+        ? storedSummary
+        : derivedSummary;
 
     // MF2: bind the workspace-scoped resolver to THIS proposal's workspace lens
     // so an endpoint/facet in another workspace can never leak its title/props.
@@ -1030,6 +1125,81 @@ function titleFieldOverrideValue(
   const field = TITLE_FIELD_OVERRIDES[targetType];
   if (!field) return undefined;
   return stringProp(payload, field);
+}
+
+/**
+ * Does a stored proposal summary NAME the object it is about, or does it only
+ * restate the action and the kind?
+ *
+ * ── Why this is not a list of bad strings ──────────────────────────────────
+ * The obvious "fix" is `if (summary === "Create entity") …`. That is a second
+ * label table: it rots the moment a producer spells one differently, and it can
+ * only ever catch the two strings someone happened to see on a live pod.
+ *
+ * The principled test is a PROPERTY of the string: a summary that carries no
+ * object identity is made ENTIRELY of words the proposal's own metadata could
+ * have produced — its action verb (either mood) and its kind noun (curated,
+ * pluralised, humanized, or raw). Nothing else. If even one word survives that
+ * subtraction, the summary says something the metadata alone could not, and it
+ * must be kept: a human wrote it, or it names the object, or it is a sentence
+ * ({@link JOIN_GATE_SUMMARY}, a rule's `intent`) that a computed title would
+ * destroy.
+ *
+ * Every word it subtracts comes from `@synap-core/types/vocabulary` — the same
+ * SSOT that BUILDS the title — so the comparison can never drift from the
+ * builder's own output. Both moods are subtracted because a producer may have
+ * written either ("Create entity" / "Created entity"), and the raw token is
+ * subtracted because older producers interpolated `subjectType` verbatim.
+ *
+ * Deliberately conservative in one direction only: an object whose real name
+ * happens to be its own kind (an entity titled "Task") is judged identity-free
+ * and the derivation replaces it — with the identical string, since the
+ * derivation resolves that same name. There is no case where this loses a word.
+ */
+export function summaryNamesTheObject(
+  summary: string,
+  parts: {
+    changeType?: string;
+    proposalType?: string;
+    profileSlug?: string;
+    targetType?: string;
+  }
+): boolean {
+  const wordsOf = (value: string): string[] =>
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  // "Proposal" is the builder's own no-action head (`buildFallbackTitle`), so it
+  // is metadata too — not a name.
+  const identityFree = new Set<string>(["proposal"]);
+  const subtract = (phrase: string | undefined | null): void => {
+    if (!phrase) return;
+    for (const word of wordsOf(phrase)) identityFree.add(word);
+  };
+
+  for (const action of [parts.proposalType, parts.changeType]) {
+    if (!action) continue;
+    subtract(resolveActionLabel(action, "imperative"));
+    subtract(resolveActionLabel(action, "past"));
+    subtract(action);
+  }
+  for (const kind of [
+    parts.profileSlug,
+    parts.targetType,
+    parts.proposalType,
+  ]) {
+    if (!kind) continue;
+    subtract(resolveObjectNoun(kind));
+    subtract(resolveObjectNounPlural(kind));
+    subtract(humanizeToken(kind));
+    subtract(kind);
+  }
+
+  return wordsOf(summary).some((word) => !identityFree.has(word));
 }
 
 export function uniqueStrings(

@@ -278,7 +278,7 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Map key for a resolved subject: `${subjectType}:${subjectId}`. */
-function subjectKey(subjectType: string, subjectId: string): string {
+export function subjectKey(subjectType: string, subjectId: string): string {
   return `${subjectType}:${subjectId}`;
 }
 
@@ -288,6 +288,13 @@ function subjectKey(subjectType: string, subjectId: string): string {
  * batched, user-scoped `inArray` query per KNOWN type. Returns a
  * `Map<"subjectType:subjectId", name>`.
  *
+ * EXPORTED (not copied) so `routers/events.ts` — the door relay's activity feed
+ * reads — resolves subject names through THIS resolver and not a second one. A
+ * fork here would be a fork of eight visibility predicates, which is how a name
+ * leaks. Cost is bounded by the number of DISTINCT subject types on the page
+ * (≤8 batched queries), not by the number of events, so it is flat across a
+ * 100-row `events.search` page and a 500-row subscription window alike.
+ *
  * FAIL-OPEN by construction: an id that matches no visible row is simply absent
  * from the map, so the caller keeps `deriveSubject`'s opaque fallback — a name
  * is NEVER fabricated. Every query is user-scoped via the canonical visibility
@@ -295,7 +302,7 @@ function subjectKey(subjectType: string, subjectId: string): string {
  * request-supplied filter, so no cross-tenant name can leak. Worst case ≤ ~7
  * batched queries (one per known type present in the ≤500-event window).
  */
-async function resolveSubjectNames(
+export async function resolveSubjectNames(
   events: EventRecord[],
   userId: string
 ): Promise<Map<string, string>> {

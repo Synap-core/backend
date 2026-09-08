@@ -11,6 +11,7 @@
  *   PATCH  /focus-sessions/:id      — update progress / status / correlationId
  *   POST   /focus-sessions/:id/complete — lifecycle close + proposal pack
  *   POST   /focus-sessions/:id/used — record capability usage link
+ *   POST   /focus-sessions/:id/channel — mint the session room if it has none
  *   POST   /focus-sessions/:id/outputs — record an existing object as an output
  *   POST   /focus-sessions/:id/outputs/delegate — hand a declared slot to an agent
  *   POST   /focus-sessions/:sessionId/complete-run — close running playbook_run
@@ -70,6 +71,7 @@ import {
 } from "../../../services/focus-sessions/block-output.js";
 import {
   expectedOutputWireSchema,
+  outputRefWireSchema,
   mergeExpectedOutputs,
 } from "../../../services/focus-sessions/update-session.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -135,6 +137,12 @@ const CreateBodySchema = z
     channelId: z.string().uuid().optional(),
     agentIds: z.array(z.string()).optional(),
     /**
+     * The entity this session is ABOUT — the subject-spine anchor. Floored
+     * server-side through the same `isOutputRefVisible` predicate an output's
+     * ref goes through; an entity the caller cannot see is a 404.
+     */
+    subjectEntityId: z.string().uuid().optional(),
+    /**
      * The session this one was PUSHED FROM (a detour). Recorded as
      * `session --spawned_from--> session`; owner-floored server-side, so an
      * unowned/unknown parent drops the edge rather than failing the create.
@@ -194,6 +202,9 @@ const UpdateBodySchema = z.object({
   verificationReport: z.unknown().optional(),
   // First-class stages: advance the active playbook stage (PlaybookStage.key).
   currentStage: z.string().min(1).optional(),
+  // Re-point (or CLEAR, with an explicit `null`) the subject-spine anchor.
+  // Same floor as the create door; `null` is the un-set.
+  subjectEntityId: z.string().uuid().nullable().optional(),
   // Free-form metadata bag — SHALLOW-MERGED into the existing row metadata.
   metadata: z.record(z.string(), z.unknown()).optional(),
   agentUserId: z.string().uuid().optional(),
@@ -248,6 +259,11 @@ const BlockOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
   blockedReason: z.enum(BLOCKED_REASONS),
   why: z.string().max(500).optional(),
+  /**
+   * WHERE the person must go. `null` clears a stored pointer; omitted leaves it.
+   * Twin of the tRPC `blockOutput.ref` — same union, same one visibility floor.
+   */
+  ref: outputRefWireSchema.nullable().optional(),
 });
 
 const UnblockOutputBodySchema = z.object({
@@ -711,6 +727,25 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       throw err;
     }
 
+    // VISIBILITY FLOOR on the subject anchor — the same predicate and the same
+    // refusal the PATCH door applies, so the two cannot disagree about what a
+    // caller may point a session at.
+    if (body.subjectEntityId) {
+      const { isOutputRefVisible } =
+        await import("../../../services/focus-sessions/assert-output-ref-visible.js");
+      const visible = await isOutputRefVisible({
+        userId,
+        kind: "entity",
+        refId: body.subjectEntityId,
+      });
+      if (!visible) {
+        return c.json(
+          { error: `No entity ${body.subjectEntityId} you can access` },
+          404
+        );
+      }
+    }
+
     try {
       // Delegate to the shared service (used by both Hub REST and MCP adapter).
       // On the capture path (X-Capture: 1) attribute the write to the seeded
@@ -731,6 +766,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         agentIds: body.agentIds,
         templateId: body.templateId ?? null,
         expectedOutputs: body.expectedOutputs,
+        subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
       });
@@ -812,6 +848,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       const { userId, workspaceId } = acting;
 
+      // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane
+      // for the same reason the output-ref floor sits there: an entity the
+      // caller cannot see must be refused to the caller who wrote it, not
+      // laundered into a proposal that explodes on the human at approval time.
+      // ONE door — `isOutputRefVisible`, the same predicate the output doors
+      // apply. `null` clears and names nothing, so it skips.
+      if (patch.subjectEntityId) {
+        const { isOutputRefVisible } =
+          await import("../../../services/focus-sessions/assert-output-ref-visible.js");
+        const visible = await isOutputRefVisible({
+          userId,
+          kind: "entity",
+          refId: patch.subjectEntityId,
+        });
+        if (!visible) {
+          return c.json(
+            { error: `No entity ${patch.subjectEntityId} you can access` },
+            404
+          );
+        }
+      }
+
       // Step 3: governance membrane. On the capture path (X-Capture: 1) attribute
       // the write to the seeded Capture agent so focus_session.update auto-approves;
       // a body-supplied agentUserId still wins, and a non-capture caller keeps its
@@ -858,6 +916,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             ? { currentStage: patch.currentStage }
             : {}),
           ...(patch.metadata !== undefined ? { metadata: patch.metadata } : {}),
+          ...(patch.subjectEntityId !== undefined
+            ? { subjectEntityId: patch.subjectEntityId }
+            : {}),
         },
       });
 
@@ -951,6 +1012,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
       if (patch.currentStage !== undefined)
         set.currentStage = patch.currentStage;
+      // `undefined` leaves the anchor; `null` is the CLEAR.
+      if (patch.subjectEntityId !== undefined)
+        set.subjectEntityId = patch.subjectEntityId;
       // Shallow-merge the metadata bag into the existing row metadata (additive).
       if (patch.metadata !== undefined) {
         const existingMeta =
@@ -1198,6 +1262,60 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /focus-sessions/:id/channel — MINT the session's room if it has none.
+   * Parity door for the tRPC `focusSessions.ensureChannel`.
+   *
+   * NEVER a second channel writer: the insert, the title derivation and the
+   * `focus_sessions.channel_id` write all stay inside `ensureSessionChannel`.
+   * Idempotent by construction — an existing `channelId` is returned as-is, so
+   * a retry cannot mint two rooms.
+   *
+   * Ungoverned like `/used`: minting the room a session already implies is
+   * provenance plumbing, not a mutation of user data.
+   */
+  app.post("/focus-sessions/:id/channel", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    try {
+      // Load by id, bind to the row's workspace (membership check) — the same
+      // two steps `/used` and PATCH take.
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session)
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      const acting = await resolveActingContext(c, {
+        workspaceId: session.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const { ensureSessionChannel } =
+        await import("../../../services/focus-sessions/ensure-session-channel.js");
+      const channelId = await ensureSessionChannel({
+        sessionId: session.id,
+        userId: acting.userId,
+        workspaceId: session.workspaceId,
+        goal: session.goal,
+      });
+      if (!channelId) {
+        return c.json(
+          { error: "Could not create a room for this session" },
+          500
+        );
+      }
+      return c.json({ channelId });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.ensureChannel failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/outputs
    *
    * Record an EXISTING object as this session's output. Parity door for the
@@ -1378,6 +1496,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               },
               400
             );
+          case "ref_unreachable":
+            // Named, never defaulted: the `default` below is the SUCCESS arm,
+            // so an unhandled refusal would answer 200 with no label at all.
+            return c.json({ error: result.reason }, 400);
           default:
             return c.json({
               ok: true as const,

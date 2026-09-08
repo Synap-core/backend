@@ -26,6 +26,7 @@ import { userVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
   ok,
   requireScope,
+  readReasoning,
   PROPERTY_VALUE_TYPES,
   McpToolContext,
   CallToolResult,
@@ -67,7 +68,10 @@ export const capabilityHandlers: McpHandlerMap = {
       ...(args.properties
         ? { defaultValues: args.properties as Record<string, unknown> }
         : {}),
-      reasoning: "Role type defined via MCP synap_define_role",
+      // The AGENT's own words win over the machine string — the hard-coded
+      // fallback stays only for a caller that supplied none.
+      reasoning:
+        readReasoning(args) ?? "Role type defined via MCP synap_define_role",
       ...(agentUserId ? { agentUserId } : {}),
     });
     return ok(result);
@@ -116,7 +120,8 @@ export const capabilityHandlers: McpHandlerMap = {
         ? { defaultValues: args.defaultValues as Record<string, unknown> }
         : {}),
       ...(declaredEntityScope ? { entityScope: declaredEntityScope } : {}),
-      reasoning: "Entity kind defined via MCP synap_define_kind",
+      reasoning:
+        readReasoning(args) ?? "Entity kind defined via MCP synap_define_kind",
       ...(agentUserId ? { agentUserId } : {}),
     });
 
@@ -190,6 +195,7 @@ export const capabilityHandlers: McpHandlerMap = {
           profileId,
           slug: propSlug,
           valueType,
+          ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
           ...(spec.constraints
             ? { constraints: spec.constraints as Record<string, unknown> }
             : {}),
@@ -692,6 +698,7 @@ export const capabilityHandlers: McpHandlerMap = {
       id: args.id,
       payload: args.payload as Record<string, unknown> | undefined,
       agentUserId: agentUserId ?? undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },

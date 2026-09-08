@@ -477,6 +477,10 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared output slot this fulfils, exactly as declared on the session."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["profileSlug", "title"]
@@ -513,6 +517,10 @@
           "content": {
             "type": "string",
             "description": "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch. Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["entityId"]
@@ -559,6 +567,10 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared output slot this fulfils, exactly as declared on the session."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["title"]
@@ -687,6 +699,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace ID (optional)"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["sourceEntityId", "targetEntityId"]
@@ -723,6 +739,10 @@
           "contextEntityId": {
             "type": "string",
             "description": "Optional disambiguator when the same role attaches in multiple contexts (e.g. a client OF a specific company)."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["entityId", "facetSlug"]
@@ -755,6 +775,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace lens used to resolve the facet when detaching by entityId + facetSlug."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": []
@@ -806,6 +830,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace to define the role in."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -906,6 +934,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace to define the kind in."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["slug", "displayName", "workspaceId"]
@@ -1039,6 +1071,43 @@
                   "type": "string",
                   "maxLength": 500,
                   "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do."
+                },
+                "ref": {
+                  "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "view",
+                            "cell",
+                            "document",
+                            "entity",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "id"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": ["url"],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": ["kind", "label"]
@@ -1057,7 +1126,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
+      "description": "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1081,6 +1150,10 @@
           "currentStage": {
             "type": "string",
             "description": "Advance the session to this playbook stage by its stage `key` (optional). Only meaningful for staged playbooks. Changing it emits a stage-transition event automations can react to."
+          },
+          "subjectEntityId": {
+            "type": ["string", "null"],
+            "description": "Re-point WHAT this session is about — the entity UUID of the person/company/deal the work concerns. Pass null to CLEAR it; omit to leave it alone. REFUSED if the entity is not one you can already see (the same floor an output ref goes through)."
           },
           "expectedOutputs": {
             "type": "array",
@@ -1117,6 +1190,43 @@
                   "type": "string",
                   "maxLength": 500,
                   "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do."
+                },
+                "ref": {
+                  "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "view",
+                            "cell",
+                            "document",
+                            "entity",
+                            "automation",
+                            "playbook"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "id"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": ["url"],
+                      "additionalProperties": false
+                    }
+                  ]
                 }
               },
               "required": ["kind", "label"]
@@ -1156,6 +1266,43 @@
                 "type": "string",
                 "maxLength": 500,
                 "description": "Only with owner='human'. ONE line naming WHICH thing is missing, not its class."
+              },
+              "ref": {
+                "description": "WHERE to go for this deliverable — turns the card's title into a door instead of leaving the person to search. ONE of two shapes: {\"kind\":\"entity|document|view|cell|automation|playbook\",\"id\":\"<uuid>\"} for something in the pod, or {\"url\":\"https://...\"} for an external page. REFUSED if the object is not one you can already see. Use it above all with owner='human': name the blocker in `why`, then point at it here.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "view",
+                          "cell",
+                          "document",
+                          "entity",
+                          "automation",
+                          "playbook"
+                        ]
+                      },
+                      "id": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "id"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string",
+                        "format": "uri"
+                      }
+                    },
+                    "required": ["url"],
+                    "additionalProperties": false
+                  }
+                ]
               }
             },
             "required": ["kind", "label"],
@@ -1330,6 +1477,10 @@
               "widget"
             ],
             "description": "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["name", "rendererSource"]
@@ -1372,6 +1523,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace UUID (required for scope 'workspace')."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["profileSlug", "slot", "cellKey"]
@@ -1392,6 +1547,10 @@
           "sessionId": {
             "type": "string",
             "description": "The focus session ID to promote into a playbook."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["sessionId"]
@@ -1761,6 +1920,10 @@
           "proposalId": {
             "type": "string",
             "description": "Idempotency key (optional)"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["name"]
@@ -1811,6 +1974,10 @@
               },
               "required": ["workspaceId"]
             }
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["workspaceId"]
@@ -1892,6 +2059,10 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared output slot this fulfils, exactly as declared on the session."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["name", "type", "workspaceId"]
@@ -2306,6 +2477,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace lens. When set, only automations in that workspace can be triggered; omit to trigger a pod-wide automation."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
           }
         },
         "required": ["id"]
@@ -2552,10 +2727,29 @@
                         "type": "string",
                         "enum": [
                           "entity",
-                          "external_message",
+                          "document",
+                          "proposal",
+                          "relation",
+                          "role",
+                          "project",
+                          "workspace",
+                          "view",
+                          "skill",
+                          "template",
+                          "tool",
+                          "apiKey",
+                          "focus_session",
+                          "command",
                           "capture",
                           "notification",
-                          "feed_item",
+                          "proactive",
+                          "feed",
+                          "hydration",
+                          "connector_sync",
+                          "channel_message",
+                          "external_message",
+                          "external_webhook",
+                          "messaging_account",
                           "inbox_item"
                         ]
                       },
@@ -2639,7 +2833,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "WHEN — `null` is refused (nothing would ever start the rule). triggerType 'event' → subjectCategory + actionVerb (+ optional profileSlug), e.g. { triggerType: 'event', subjectCategory: 'entity', profileSlug: 'deal', actionVerb: 'created' }. triggerType 'cron' → cronFrequency (+ cronTime / cronDays / cronDayOfMonth / cronTimezone). The compiled event pattern is checked against the runtime's own event grammar, so a WHEN nothing emits is refused rather than stored."
+                "description": "WHEN — `null` is refused (nothing would ever start the rule). triggerType 'event' → subjectCategory + actionVerb (+ optional profileSlug), e.g. { triggerType: 'event', subjectCategory: 'entity', profileSlug: 'deal', actionVerb: 'created' }. OMIT actionVerb for ANY activity on that subject — it compiles to the `<subject>.*` wildcard, which is the right choice for the non-entity subjects (notification, proposal, focus_session, external_message …) whose real actions are domain verbs, not create/update/delete. Every subjectCategory offered is producer-backed AND workspace-scoped, so none of them is a trigger that can never fire. triggerType 'cron' → cronFrequency (+ cronTime / cronDays / cronDayOfMonth / cronTimezone). The compiled event pattern is checked against the runtime's own event grammar, so a WHEN nothing emits is refused rather than stored."
               },
               "conditions": {
                 "type": "array",
