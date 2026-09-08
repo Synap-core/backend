@@ -96,6 +96,12 @@ export function registerProjectExecutors(): void {
           status: innerData.status as
             "active" | "archived" | "completed" | undefined,
           phase: innerData.phase as string | undefined,
+          // `proposals.data` is JSONB, so a `Date` proposed by an agent comes
+          // back out of it as an ISO STRING — never a Date. It is handed over
+          // unconverted on purpose: `create`'s input is `z.coerce.date()`, which
+          // is the ONE place the parse happens, for the tRPC, REST and replay
+          // callers alike. Converting here would be a second, drifting parser.
+          targetDate: innerData.targetDate as Date | undefined,
           subjectEntityId: innerData.subjectEntityId as string | undefined,
           settings: innerData.settings as Record<string, unknown> | undefined,
           metadata: innerData.metadata as Record<string, unknown> | undefined,
@@ -256,6 +262,13 @@ export function registerProjectExecutors(): void {
               : {}),
             ...("phase" in innerData
               ? { phase: innerData.phase as string | null }
+              : {}),
+            // `in`, not truthiness — an explicit `null` MEANS "clear the
+            // deadline" and must survive the replay. Value passed through
+            // unconverted (ISO string out of JSONB); `update`'s
+            // `z.coerce.date()` is the one parser. See `project/create` above.
+            ...("targetDate" in innerData
+              ? { targetDate: innerData.targetDate as Date | null }
               : {}),
             ...("subjectEntityId" in innerData
               ? { subjectEntityId: innerData.subjectEntityId as string | null }

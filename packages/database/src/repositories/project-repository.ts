@@ -32,6 +32,11 @@ export interface CreateProjectInput {
    * their phases differently, and the vocabulary is a config concern.
    */
   phase?: string | null;
+  /**
+   * When the project is aimed at (0252). `undefined`/`null` both mean UNDATED
+   * at create time — an undated project is not late, it has no deadline.
+   */
+  targetDate?: Date | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
   userId: string;
@@ -61,6 +66,8 @@ export interface UpdateProjectInput {
   status?: "active" | "archived" | "completed";
   /** See `CreateProjectInput.phase`. `null` clears it. */
   phase?: string | null;
+  /** See `CreateProjectInput.targetDate`. `null` clears the deadline. */
+  targetDate?: Date | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -143,6 +150,7 @@ export class ProjectRepository extends BaseRepository<
           description: data.description,
           status: data.status || "active",
           phase: data.phase ?? null,
+          targetDate: data.targetDate ?? null,
           settings: data.settings || {},
           metadata,
           userId,
@@ -198,6 +206,9 @@ export class ProjectRepository extends BaseRepository<
         // `undefined` is skipped by Drizzle (field untouched); an explicit
         // `null` is what CLEARS the phase. Both reach `.set()` unchanged.
         phase: data.phase,
+        // Same two-state contract as `phase` above: `undefined` is skipped by
+        // Drizzle (deadline untouched), an explicit `null` CLEARS it.
+        targetDate: data.targetDate,
         settings: data.settings,
         metadata: data.metadata,
         updatedAt: new Date(),

@@ -369,6 +369,35 @@ export const projectsRouter = router({
          */
         phase: z.string().max(120).optional(),
         /**
+         * When this project is AIMED at (0252). Omitted = undated, which is a
+         * first-class state: an undated project is not late, and nothing here
+         * invents a date for one.
+         *
+         * A PAST date is deliberately ACCEPTED. "Late" is exactly the state this
+         * column exists to make visible (`target_date < now()`), and a project
+         * is routinely recorded after its deadline has already slipped —
+         * refusing the input would hide the one signal the field was added for.
+         *
+         * `z.coerce.date()` rather than `z.date()`, for three callers, not
+         * style: the typed tRPC client sends a real `Date` (superjson), raw
+         * `fetch`/Hub REST sends an ISO string, and — the load-bearing one — the
+         * `project/create` proposal executor replays this out of `proposals.data`,
+         * which is JSONB, so an agent-proposed date comes back a STRING. A bare
+         * `z.date()` would typecheck everywhere and then throw on approval only.
+         * Same reason `events.read` coerces. An unparseable value still fails:
+         * `coerce` builds `new Date(x)` and ZodDate rejects Invalid Date.
+         *
+         * `.nullable()` is NOT cosmetic symmetry with `update` — it is a guard,
+         * and removing it silently corrupts data. `coerce` means `new Date(x)`,
+         * and `new Date(null)` is the EPOCH, not an error: without `.nullable()`
+         * short-circuiting null before the coercion runs, a caller sending
+         * `targetDate: null` to mean "no deadline" would create a project dated
+         * 1970-01-01 — permanently, silently overdue. (`phase` needs no such
+         * guard only because `z.string()` rejects null outright.) Null and
+         * omitted both land as UNDATED below.
+         */
+        targetDate: z.coerce.date().nullable().optional(),
+        /**
          * The real-world thing this container is about, as an entity id. Written
          * as a `project --targets--> entity` link, never a column — see
          * `utils/project-subject.ts`. The UI derives the project's user-facing
@@ -484,6 +513,9 @@ export const projectsRouter = router({
             : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.phase !== undefined ? { phase: input.phase } : {}),
+          ...(input.targetDate !== undefined
+            ? { targetDate: input.targetDate }
+            : {}),
           ...(input.subjectEntityId !== undefined
             ? { subjectEntityId: input.subjectEntityId }
             : {}),
@@ -515,6 +547,7 @@ export const projectsRouter = router({
           description: input.description,
           status: input.status,
           phase: input.phase ?? null,
+          targetDate: input.targetDate ?? null,
           settings: input.settings,
           metadata: input.metadata,
           userId: ctx.userId,
@@ -616,6 +649,16 @@ export const projectsRouter = router({
         /** Lifecycle position (0240). `null` clears it. */
         phase: z.string().max(120).nullable().optional(),
         /**
+         * Target date (0252). Omitted = untouched; `null` CLEARS it — dropping a
+         * deadline is a real act ("this is no longer time-boxed"), and it must be
+         * expressible or the only way to undo a mis-typed date is to leave a
+         * wrong one in place. Same two-state idiom as `phase` directly above.
+         *
+         * Past dates accepted; `z.coerce.date()` for the three callers — see the
+         * matching field on `create` for both arguments in full.
+         */
+        targetDate: z.coerce.date().nullable().optional(),
+        /**
          * Rebind the container's subject entity. `null` unbinds it (the project
          * falls back to its plain typed name). Omitted = untouched.
          */
@@ -651,6 +694,9 @@ export const projectsRouter = router({
             : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.phase !== undefined ? { phase: input.phase } : {}),
+          ...(input.targetDate !== undefined
+            ? { targetDate: input.targetDate }
+            : {}),
           ...(input.subjectEntityId !== undefined
             ? { subjectEntityId: input.subjectEntityId }
             : {}),
