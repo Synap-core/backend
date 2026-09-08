@@ -53,6 +53,7 @@
 import { db, focusSessions, eq, and } from "@synap/database";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { normalizeExpectedLabel } from "./expected-label.js";
 
 /** How long after close an approval still counts as satisfying this session. */
 const RECENTLY_CLOSED_MS = 24 * 60 * 60 * 1000;
@@ -173,12 +174,12 @@ export function selectOutputToSatisfy(
 ): number {
   const kind = normalizeObjectKind(targetType);
 
-  const claim = normalizeLabel(expectedLabel);
+  const claim = normalizeExpectedLabel(expectedLabel);
   if (claim) {
     const claimed = outputs.findIndex(
       (o) =>
         o.status !== "done" &&
-        normalizeLabel(o.label) === claim &&
+        normalizeExpectedLabel(o.label) === claim &&
         normalizeObjectKind(o.kind) === kind
     );
     if (claimed !== -1) return claimed;
@@ -195,23 +196,11 @@ export function selectOutputToSatisfy(
 /**
  * Trim + casefold — the ONE comparison used on both sides of a label match.
  *
- * Exported because THREE places now compare a caller-supplied label to a
- * declared slot label: this selector, the delegation door
- * (`delegate-output.ts`) and the rejection return (`return-delegated-slot.ts`).
- * A second casefold rule would be a second answer to "is this the same slot",
- * which is exactly the fork the vocabulary rules forbid.
+ * The implementation moved to the LEAF module `expected-label.ts` (see its
+ * docblock) so the DB-free signal union can reuse the SAME rule; this file
+ * stays the door every existing importer already names.
  */
-export function normalizeExpectedLabel(
-  label: string | null | undefined
-): string | undefined {
-  return normalizeLabel(label);
-}
-
-function normalizeLabel(label: string | null | undefined): string | undefined {
-  if (typeof label !== "string") return undefined;
-  const trimmed = label.trim().toLowerCase();
-  return trimmed || undefined;
-}
+export { normalizeExpectedLabel } from "./expected-label.js";
 
 /**
  * Read the slot CLAIM off a proposal's stored `data`. The ONE reader, so the two

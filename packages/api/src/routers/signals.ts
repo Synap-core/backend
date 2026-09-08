@@ -14,7 +14,7 @@
  *
  * IT ADDS NO ACCESS LOGIC AND NO NEW QUERIES for the pending lens. It calls the
  * existing doors through their own routers (`proposals.groups`,
- * `notifCenter.list`, `events.read`) via `createCaller` — the established
+ * `notifCenter.list`, `focusSessions.owed`, `events.read`) via `createCaller` — the established
  * in-process reuse pattern here (`workspaces.ts`, `capture.ts`, `signal.ts`) —
  * so every predicate those doors enforce (the `userVisibleWhere` floor, the
  * editor+ gate on a named workspace, the notification user floor + the pod-wide
@@ -43,12 +43,14 @@ import {
 import { requireUserId } from "../utils/user-scoped.js";
 import { proposalsRouter } from "./proposals.js";
 import { notifCenterRouter } from "./notif-center.js";
+import { focusSessionsRouter } from "./focus-sessions.js";
 import { eventsRouter } from "./events.js";
 import { extractProposalName } from "../services/proposals/fingerprint.js";
 import {
   unionNeedsYou,
   countNeedsYou,
   type NotificationSignalInput,
+  type OwedSlotSignalInput,
   type Signal,
 } from "../services/signals/needs-you-union.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
@@ -57,17 +59,28 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
  *  `truncated` reports when the cap was hit rather than hiding it. */
 const NOTIFICATION_SCAN_LIMIT = 100;
 
+/** How many owed slots the COUNT door pulls before it must call its number a
+ *  floor. `focusSessions.owed` caps at 200; this is a page, not a total. */
+const OWED_SCAN_LIMIT = 100;
+
 /**
- * The workspace lens, translated for `notifCenter.list`.
+ * The workspace lens, translated for EVERY half of the union that resolves its
+ * scope through `resolveScope` — today `notifCenter.list` AND
+ * `focusSessions.owed`.
  *
  * `proposals.groups` treats an ABSENT `workspaceId` as the full user floor,
- * while `notifCenter.list` (via `resolveScope`) falls back to the
- * active-workspace HEADER when the field is absent. Left alone, the two halves
- * of one union would speak different lenses. An explicit empty array is
- * `resolveScope`'s "widen to the floor" value and suppresses the header
- * default, so absent → `[]` makes both halves agree.
+ * while `resolveScope` falls back to the active-workspace HEADER when the field
+ * is absent. Left alone, the halves of one union speak different lenses: one
+ * narrows to whatever workspace the client last activated while the others stay
+ * pod-wide, and the tray claims "nothing needs you" with work waiting one lens
+ * over. An explicit empty array is `resolveScope`'s "widen to the floor" value
+ * and suppresses the header default, so absent → `[]` makes every half agree.
+ *
+ * This has shipped broken twice. Any new half of this union whose door calls
+ * `resolveScope` MUST come through here — it is not optional, and it is not
+ * per-door.
  */
-function notificationLens(
+export function floorLens(
   workspaceId: string | null | undefined
 ): string | null | string[] {
   return workspaceId === undefined ? [] : workspaceId;
@@ -110,6 +123,27 @@ function isContainerScoped(input: {
   return !!(input.sessionId || input.projectId || input.automationId);
 }
 
+/**
+ * Can the OWED half honour this scope?
+ *
+ * `focusSessions.owed` narrows on the two lenses `sessionScopeConditions`
+ * applies — workspace and project — and on nothing else. A `sessionId` or
+ * `automationId` scope has no corresponding predicate on `focus_sessions`, and
+ * post-filtering a `limit`-capped read is precisely what `owed-outputs.ts`
+ * exists to refuse (owed slots accumulate on OLD sessions, so a page-then-filter
+ * pass under-reports silently). So under those two scopes the owed half is
+ * SUPPRESSED, for the same reason and by the same rule the notification half is:
+ * a container-scoped tray never mixes a narrowed population with an unnarrowed
+ * one. A `projectId` scope, by contrast, IS narrowable, so owed slots do
+ * participate there even though notifications cannot.
+ */
+function isOwedNarrowable(input: {
+  sessionId?: string;
+  automationId?: string;
+}): boolean {
+  return !input.sessionId && !input.automationId;
+}
+
 export const signalsRouter = router({
   /**
    * The one read behind the decisions tray (`needs-you`) and the activity feed
@@ -129,7 +163,7 @@ export const signalsRouter = router({
       if (input.lens === "needs-you") {
         // Container-scoped → proposals only. See `isContainerScoped`.
         const scoped = isContainerScoped(input);
-        const [groups, notifs] = await Promise.all([
+        const [groups, notifs, owed] = await Promise.all([
           proposalsRouter.createCaller(ctx).groups({
             workspaceId: input.workspaceId,
             sessionId: input.sessionId,
@@ -141,15 +175,27 @@ export const signalsRouter = router({
           scoped
             ? Promise.resolve({ notifications: [] })
             : notifCenterRouter.createCaller(ctx).list({
-                workspaceId: notificationLens(input.workspaceId),
+                workspaceId: floorLens(input.workspaceId),
                 status: "unread",
                 limit: NOTIFICATION_SCAN_LIMIT,
               }),
+          // The SAME door `focusSessions.owed` exposes, through `createCaller`
+          // like the other two halves — so the owner floor and the lens
+          // application (`sessionScopeConditions`) are the ones Wave A already
+          // shipped, not a second derivation living in this file.
+          isOwedNarrowable(input)
+            ? focusSessionsRouter.createCaller(ctx).owed({
+                workspaceId: floorLens(input.workspaceId),
+                ...(input.projectId ? { projectId: input.projectId } : {}),
+                limit: input.limit,
+              })
+            : Promise.resolve([]),
         ]);
 
         const signals = unionNeedsYou({
           clusters: groups.groups,
           notifications: notifs.notifications as NotificationSignalInput[],
+          owedSlots: owed as OwedSlotSignalInput[],
         });
         return { signals: signals.slice(0, input.limit) };
       }
@@ -208,22 +254,28 @@ export const signalsRouter = router({
 
   /**
    * ONE number for both badges: distinct pending clusters + unread
-   * non-proposal notifications. `truncated` is inherited from
-   * `proposals.groups`.scanTruncated and the notification page cap — when true,
-   * the number is a FLOOR, and a caller must render it as such (e.g. "99+")
-   * rather than as an exact total.
+   * non-proposal notifications + owed slots — plus `blocked`, the owed subset,
+   * so a client can render "Needs you (needsYou)" with a BLOCKED-ONLY badge
+   * from this one query. `truncated` is inherited from
+   * `proposals.groups`.scanTruncated, the notification page cap and the owed
+   * page cap — when true, the number is a FLOOR, and a caller must render it as
+   * such (e.g. "99+") rather than as an exact total.
    *
    * Takes the SAME scope as `list`, and applies the SAME proposals-only rule
    * under a container scope — a badge that counted a container's proposals plus
    * every unread pod notification would be a number no surface could explain.
-   * Every existing caller passes at most `workspaceId`, so the pod-wide count is
-   * byte-identical to before.
+   * Every existing caller passes at most `workspaceId`. The pod-wide count is
+   * NO LONGER byte-identical to before: it now includes owed slots, which is the
+   * point — a deliverable blocked on you needed you and the badge did not say
+   * so. A client that wants the old proposal+notification badge reads
+   * `needsYou - blocked`; a client that wants the founder-settled badge reads
+   * `blocked`.
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
     .query(async ({ ctx, input }) => {
       const scoped = isContainerScoped(input);
-      const [groups, notifs] = await Promise.all([
+      const [groups, notifs, owed] = await Promise.all([
         proposalsRouter.createCaller(ctx).groups({
           workspaceId: input.workspaceId,
           sessionId: input.sessionId,
@@ -234,10 +286,20 @@ export const signalsRouter = router({
         scoped
           ? Promise.resolve({ notifications: [] })
           : notifCenterRouter.createCaller(ctx).list({
-              workspaceId: notificationLens(input.workspaceId),
+              workspaceId: floorLens(input.workspaceId),
               status: "unread",
               limit: NOTIFICATION_SCAN_LIMIT,
             }),
+        // Same door, same lens, same suppression rule as `list` — the count and
+        // the list must answer over ONE population or the badge disagrees with
+        // the rows under it.
+        isOwedNarrowable(input)
+          ? focusSessionsRouter.createCaller(ctx).owed({
+              workspaceId: floorLens(input.workspaceId),
+              ...(input.projectId ? { projectId: input.projectId } : {}),
+              limit: OWED_SCAN_LIMIT,
+            })
+          : Promise.resolve([]),
       ]);
 
       return countNeedsYou({
@@ -247,6 +309,8 @@ export const signalsRouter = router({
         notifications: notifs.notifications as NotificationSignalInput[],
         notificationsTruncated:
           notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
+        owedSlots: owed as OwedSlotSignalInput[],
+        owedTruncated: owed.length >= OWED_SCAN_LIMIT,
       });
     }),
 });
