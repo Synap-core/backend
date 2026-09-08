@@ -34,6 +34,7 @@
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import type { ExpectedOutput } from "@synap/playbooks";
+import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 
@@ -97,6 +98,14 @@ export interface Signal {
   why?: string;
   /** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
   claimedDone?: boolean;
+  /**
+   * The session's declared goal — WHAT WORK this slot came from. Absent on
+   * every other kind, the same way `why`/`blockedReason` are owed-slot-only.
+   * Without it a blocked row can say a reason and an age but not the work it
+   * blocks, which is the single most useful context for deciding whether to
+   * act on it now.
+   */
+  sessionGoal?: string | null;
   class?: ProposalClass;
   /**
    * Hours this class stays answerable; `null` when it never expires. Carried
@@ -208,7 +217,73 @@ export interface OwedSlotSignalInput {
   blockedReason?: ExpectedOutput["blockedReason"];
   why?: string;
   claimedDone?: boolean;
+  /** The owning session's declared goal, straight from `listOwedSlots`. */
+  sessionGoal?: string | null;
 }
+
+/**
+ * FIELD CLASSIFICATION for {@link OwedSlot} — every field is either PROJECTED
+ * onto the signal or DELIBERATELY WITHHELD, and the compile-time check below
+ * enforces that a new field can land in neither silently. This projection has
+ * already dropped a field twice without a build error to say so: the three
+ * disclosure fields (be0abb7d) and `sessionGoal` (this change).
+ *
+ * PROJECTED — reaches the signal, one way or another:
+ *   sessionId                       → `target.id` (via `SignalTarget`, not a
+ *                                      same-named field)
+ *   label                           → `title`, verbatim
+ *   owedSince                       → `occurredAt`, via `owedInstant`
+ *   sessionGoal                     → `sessionGoal` — the work this slot came
+ *                                      from, the context that decides whether
+ *                                      to act now
+ *   blockedReason, why, claimedDone → carried straight through (be0abb7d)
+ *
+ * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
+ *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
+ *                     `occurredAt`/age already answers "is this stale". Add it
+ *                     if a surface ever needs to tell "still-open session" from
+ *                     "obligation survived its session" apart — not before.
+ *   workspaceId,
+ *   projectId      → no `Signal` kind carries scope today (a cluster's scope is
+ *                     implicit in its target); giving only ONE kind a scope
+ *                     field would be state no shared renderer could rely on.
+ *   kind, icon     → would let a tray render a per-slot-kind icon, but every
+ *                     `Signal` renderer today draws its icon from `category`,
+ *                     never from a kind string — undrawn context, not a hole.
+ */
+const PROJECTED_OWED_SLOT_FIELDS = [
+  "sessionId",
+  "label",
+  "owedSince",
+  "sessionGoal",
+  "blockedReason",
+  "why",
+  "claimedDone",
+] as const satisfies ReadonlyArray<keyof OwedSlot>;
+
+const WITHHELD_OWED_SLOT_FIELDS = [
+  "sessionStatus",
+  "workspaceId",
+  "projectId",
+  "kind",
+  "icon",
+] as const satisfies ReadonlyArray<keyof OwedSlot>;
+
+/**
+ * COMPILE-TIME coverage floor, the same shape as `update-session.ts`'s
+ * `_ServerOwnedCoversEveryField`. A new `OwedSlot` field that is in neither
+ * list above makes this alias resolve to `never` and stops the build — the
+ * omission becomes a typecheck error instead of a silent, permanent drop.
+ */
+type _OwedSlotFieldsClassified =
+  Exclude<
+    keyof OwedSlot,
+    (typeof PROJECTED_OWED_SLOT_FIELDS)[number]
+  > extends (typeof WITHHELD_OWED_SLOT_FIELDS)[number]
+    ? true
+    : never;
+const _owedSlotFieldsClassified: _OwedSlotFieldsClassified = true;
+void _owedSlotFieldsClassified;
 
 /**
  * The sentinel `projectOwedSlots` writes for a slot whose `owedSince` predates
@@ -253,12 +328,15 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     // number the governance queue cannot explain.
     category: "ai",
     // The three-layer disclosure a surface renders (chip, why-prose, the
-    // agent's claim) is carried HERE rather than re-fetched — see the field
-    // docs on `Signal`. Spread-free and explicit so an added `OwedSlot` field
-    // is a deliberate choice to project, never an accident.
+    // agent's claim), plus the session goal that names the work this slot
+    // came from, is carried HERE rather than re-fetched — see the field docs
+    // on `Signal`. Spread-free and explicit so an added `OwedSlot` field is a
+    // deliberate choice to project, never an accident — see the classification
+    // above `OwedSlotSignalInput` for every field's disposition.
     ...(row.blockedReason ? { blockedReason: row.blockedReason } : {}),
     ...(row.why ? { why: row.why } : {}),
     ...(row.claimedDone !== undefined ? { claimedDone: row.claimedDone } : {}),
+    ...(row.sessionGoal ? { sessionGoal: row.sessionGoal } : {}),
   };
 }
 

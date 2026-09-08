@@ -461,4 +461,25 @@ describe("owed-slot signals carry their disclosure fields", () => {
     expect(signal).not.toHaveProperty("why");
     expect(signal).not.toHaveProperty("claimedDone");
   });
+
+  it("projects sessionGoal through to the signal", () => {
+    const [signal] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        owed({
+          sessionId: "33333333-3333-4333-8333-333333333333",
+          sessionGoal: "Ship the relay tray",
+        }),
+      ],
+    });
+
+    expect(signal?.kind).toBe("owed-slot");
+    expect(signal?.sessionGoal).toBe("Ship the relay tray");
+  });
+
+  it("omits sessionGoal when the session has none, rather than inventing one", () => {
+    const signal = signalFromOwedSlot(owed({ sessionGoal: null }));
+    expect(signal).not.toHaveProperty("sessionGoal");
+  });
 });
