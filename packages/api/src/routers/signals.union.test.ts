@@ -402,3 +402,63 @@ describe("signal targets", () => {
     expect(signal.lifetimeHours).toBeUndefined();
   });
 });
+
+/**
+ * REACHABILITY, not implementation.
+ *
+ * `blockedReason` / `why` / `claimedDone` exist so a surface can render the
+ * three-layer disclosure (chip · resumption cue · the agent's claim) WITHOUT
+ * re-fetching. Re-fetching was the alternative and it was rejected: the owed
+ * door is reached through `floorLens`, which maps an absent workspace to `[]`
+ * because `resolveScope` would otherwise fall back to the request header — a
+ * rule whose own comment records it "has shipped broken twice". A client that
+ * fetched the reason itself would have to reproduce that mapping.
+ *
+ * So the failure this pins is the one this repo keeps paying for: a field
+ * declared on the wire, populated by nobody, rendering as permanently absent
+ * while every type checks. Deleting either the projection in
+ * `signalFromOwedSlot` or the fields on `OwedSlotSignalInput` must turn this
+ * red — assert the VALUES arrive, never that the keys are declared.
+ */
+describe("owed-slot signals carry their disclosure fields", () => {
+  it("projects blockedReason, why and claimedDone through to the signal", () => {
+    const [signal] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        {
+          sessionId: "11111111-1111-4111-8111-111111111111",
+          label: "Mint CROSS_REPO_TOKEN",
+          owedSince: "2026-07-04T09:00:00.000Z",
+          blockedReason: "credential",
+          why: "Minting a PAT requires your GitHub identity.",
+          claimedDone: false,
+        },
+      ],
+    });
+
+    expect(signal?.kind).toBe("owed-slot");
+    expect(signal?.blockedReason).toBe("credential");
+    expect(signal?.why).toBe("Minting a PAT requires your GitHub identity.");
+    expect(signal?.claimedDone).toBe(false);
+  });
+
+  it("omits them when the slot never carried them, rather than inventing a reason", () => {
+    const [signal] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        {
+          sessionId: "22222222-2222-4222-8222-222222222222",
+          label: "Push synap-app",
+          owedSince: "2026-07-04T09:00:00.000Z",
+        },
+      ],
+    });
+
+    // An absent reason must render as "no reason recorded", never as a guess.
+    expect(signal).not.toHaveProperty("blockedReason");
+    expect(signal).not.toHaveProperty("why");
+    expect(signal).not.toHaveProperty("claimedDone");
+  });
+});

@@ -33,6 +33,7 @@
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
+import type { ExpectedOutput } from "@synap/playbooks";
 import type { ProposalCluster } from "../proposals/fingerprint.js";
 import type { ProposalClass } from "../proposals/proposal-class.js";
 
@@ -79,6 +80,23 @@ export interface Signal {
    * `lifetimeHours` already carries the only thing a surface needs to know —
    * that it never expires.
    */
+  /**
+   * The CLASS of thing that would unblock an `owed-slot` — one of the closed
+   * six (`credential | permission | capability | policy | decision | physical`).
+   * Absent on every other kind, the same way `class` is cluster-only.
+   *
+   * Carried on the SIGNAL rather than re-fetched, deliberately. The owed door
+   * is reached through `floorLens`, which maps an ABSENT workspace to `[]`
+   * because `resolveScope` would otherwise fall back to the request header —
+   * a rule whose own comment records that it "has shipped broken twice". A
+   * surface that fetched the reason itself would have to reproduce that
+   * mapping, which is the fork the lens helper exists to prevent.
+   */
+  blockedReason?: ExpectedOutput["blockedReason"];
+  /** One line naming WHICH thing is missing — the resumption cue. `owed-slot` only. */
+  why?: string;
+  /** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
+  claimedDone?: boolean;
   class?: ProposalClass;
   /**
    * Hours this class stays answerable; `null` when it never expires. Carried
@@ -182,6 +200,14 @@ export interface OwedSlotSignalInput {
   label: string;
   /** ISO-8601, written by the block door. The ordering key. */
   owedSince: string;
+  /**
+   * The three disclosure fields, carried from `listOwedSlots` straight through.
+   * Optional here because a slot blocked before these existed has none — and an
+   * absent reason must render as "no reason recorded", never as a guessed one.
+   */
+  blockedReason?: ExpectedOutput["blockedReason"];
+  why?: string;
+  claimedDone?: boolean;
 }
 
 /**
@@ -226,6 +252,13 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     // decision. Miscategorising it would let a governance-only filter show a
     // number the governance queue cannot explain.
     category: "ai",
+    // The three-layer disclosure a surface renders (chip, why-prose, the
+    // agent's claim) is carried HERE rather than re-fetched — see the field
+    // docs on `Signal`. Spread-free and explicit so an added `OwedSlot` field
+    // is a deliberate choice to project, never an accident.
+    ...(row.blockedReason ? { blockedReason: row.blockedReason } : {}),
+    ...(row.why ? { why: row.why } : {}),
+    ...(row.claimedDone !== undefined ? { claimedDone: row.claimedDone } : {}),
   };
 }
 
