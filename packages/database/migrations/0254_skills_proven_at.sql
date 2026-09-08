@@ -1,0 +1,21 @@
+-- 0254_skills_proven_at.sql
+--
+-- `skills.proven_at` — when a skill first COMPLETED A REAL RUN successfully.
+-- NULL (the value every existing row keeps) means "has never done the work".
+--
+-- A capability generated to unblock a stuck agent must not count as a remedy on
+-- creation: roughly one generated tool in five is wrong even in closed-loop
+-- generation with tests, so a block that disappears on CREATE becomes a silent
+-- bad write instead of a visible block. This column is the evidence that the
+-- capability actually ran.
+--
+-- Additive and nullable — no backfill, no default. There is deliberately NO
+-- backfill: a skill that ran before this column existed left no record this
+-- migration could honestly read, and stamping a timestamp nobody earned is the
+-- exact failure the column exists to prevent.
+--
+-- Written in ONE place only: `markSkillProven`, from `runResolvedSkill`
+-- (api services/capabilities/execute-capability.ts), floored on
+-- `proven_at IS NULL` so it records the FIRST success.
+
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "proven_at" timestamptz;

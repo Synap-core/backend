@@ -1,0 +1,30 @@
+-- 0253_config_scope_kind_work_kind.sql
+--
+-- Adds the `workKind` rung to `config_scope_kind` (0235's guideline ladder).
+--
+-- A guideline could previously attach only at a TRANSPORT granularity
+-- (default | channelType | bridge | channel | shape) — it could say "on this
+-- channel, prefer Proton" but never "whenever work is blocked on a credential,
+-- do this". `workKind` is that rung: `scope_ref` holds a work-kind token
+-- (today, closed to the `BLOCKED_REASONS` vocabulary, enforced at the write
+-- door `routers/guidelines.ts` — the only producer).
+--
+-- SPECIFICITY: default < workKind < channelType < bridge < channel < shape.
+-- The order lives in application code (`SCOPE_ORDER`, utils/config-settings.ts),
+-- NOT in this enum's declaration order — that order has never been the
+-- specificity order (`bridge` is declared before `channelType` but ranks after
+-- it), and `ALTER TYPE … ADD VALUE` appends regardless.
+--
+-- ADDITIVE AND INERT ON ITS OWN: no existing row can have the new value, and
+-- every existing resolver caller passes no `workKind` context, so a `workKind`
+-- row cannot match for any of them. Guideline resolution — including the
+-- governance origin-trust posture read at rung 2.55 — is byte-for-byte
+-- unchanged until something both writes such a row AND passes the context.
+
+-- TRANSACTION NOTE: `scripts/migrate.ts` runs every migration inside
+-- `sql.begin()`. `ALTER TYPE … ADD VALUE` is legal inside a transaction from
+-- Postgres 12 onward (this deployment is 16) with ONE restriction — the new
+-- value may not be USED in the same transaction. Nothing here uses it, and the
+-- first row carrying it can only be written by a later request. `IF NOT EXISTS`
+-- makes a re-run a no-op.
+ALTER TYPE config_scope_kind ADD VALUE IF NOT EXISTS 'workKind';

@@ -9,6 +9,12 @@
  * granularity (default | channelType | bridge | channel | shape) and is injected
  * into `message.interpret`'s prompt by `resolveGuidelines`.
  *
+ * The `workKind` rung scopes a guideline to a KIND OF WORK instead of a
+ * transport; its `scopeRef` is a `BLOCKED_REASONS` token and this router is the
+ * gate that keeps that vocabulary closed (see `CreateInputSchema`'s last
+ * refine, and `SCOPE_ORDER` in `utils/config-settings.ts` for why the rung
+ * ranks where it does).
+ *
  * MIRRORS the governance-rules router (access floors + owner-floor + validation),
  * with ONE deliberate difference: a pod-wide (NULL-workspace) guideline is
  * OWNER-FLOORED on read (`resolveGuidelines` only applies a pod-wide row to its
@@ -34,7 +40,12 @@ import {
   listGuidelines,
   revokeGuideline,
 } from "@synap/database";
-import { configSettings, workspaceMembers } from "@synap/database/schema";
+import {
+  configSettings,
+  workspaceMembers,
+  CONFIG_SCOPE_KINDS,
+} from "@synap/database/schema";
+import { BLOCKED_REASONS } from "@synap/playbooks";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
 
@@ -99,11 +110,23 @@ const ShapePredicateSchema = z.object({
   value: z.string().max(200).optional(),
 });
 
+/**
+ * The scope kinds whose `scopeRef` is REQUIRED — DERIVED from the ladder rather
+ * than listed by hand: every rung except `default` (which has no ref) and
+ * `shape` (whose predicate lives in `shape`) is keyed on one. A rung added to
+ * the enum joins this set by EXISTING, which is why `workKind` needed no edit
+ * here beyond its own vocabulary gate below.
+ */
+const SCOPE_KINDS_NEEDING_REF = CONFIG_SCOPE_KINDS.filter(
+  (k) => k !== "default" && k !== "shape"
+);
+
 const CreateInputSchema = z
   .object({
     text: z.string().min(1).max(2000),
     posture: z.enum(["auto", "propose"]).optional(),
-    scopeKind: z.enum(["default", "bridge", "channelType", "channel", "shape"]),
+    // DERIVED from the enum — see SCOPE_KINDS_NEEDING_REF.
+    scopeKind: z.enum(CONFIG_SCOPE_KINDS),
     scopeRef: z.string().min(1).optional(),
     shape: ShapePredicateSchema.optional(),
     capabilityId: z.string().uuid().optional(),
@@ -111,18 +134,39 @@ const CreateInputSchema = z
   })
   .refine(
     (v) =>
-      !["bridge", "channelType", "channel"].includes(v.scopeKind) ||
+      !(SCOPE_KINDS_NEEDING_REF as readonly string[]).includes(v.scopeKind) ||
       !!v.scopeRef,
     {
-      message:
-        "scopeRef is required for scopeKind 'bridge' | 'channelType' | 'channel'",
+      message: `scopeRef is required for scopeKind ${SCOPE_KINDS_NEEDING_REF.map(
+        (k) => `'${k}'`
+      ).join(" | ")}`,
       path: ["scopeRef"],
     }
   )
   .refine((v) => v.scopeKind !== "shape" || !!v.shape, {
     message: "shape is required when scopeKind is 'shape'",
     path: ["shape"],
-  });
+  })
+  /**
+   * THE `workKind` VOCABULARY GATE.
+   *
+   * This router is the ONLY producer of `workKind` rows, and the resolver
+   * matches `scopeRef` by string equality — so this refine is the whole reason
+   * the rung's `scopeRef` is a CLOSED set rather than the free-text tag the
+   * dead `guideline.appliesTo` was. Widening it means teaching the resolver a
+   * discriminator first (see `SCOPE_ORDER` in `utils/config-settings.ts`).
+   */
+  .refine(
+    (v) =>
+      v.scopeKind !== "workKind" ||
+      (BLOCKED_REASONS as readonly string[]).includes(v.scopeRef ?? ""),
+    {
+      message: `scopeRef must be one of ${BLOCKED_REASONS.join(
+        " | "
+      )} when scopeKind is 'workKind'`,
+      path: ["scopeRef"],
+    }
+  );
 
 export const guidelinesRouter = router({
   /**

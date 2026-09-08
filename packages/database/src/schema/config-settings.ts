@@ -11,8 +11,8 @@
  * A GUIDELINE (key = 'guideline') is natural-language intent the AI fetches while
  * interpreting a message ("messages saying 'ready for review' → set this client's
  * playbook to 'ready for review'"; "for this channel, use Proton not Google
- * Drive"). It attaches at ANY granularity (default | bridge | channelType |
- * channel | shape) and is injected into `message.interpret`'s prompt by
+ * Drive"). It attaches at ANY granularity (default | workKind | bridge |
+ * channelType | channel | shape) and is injected into `message.interpret`'s prompt by
  * `resolveGuidelines`. The `posture` field is STORED but not yet an executor —
  * interpret's writes stay proposal-gated; posture becomes load-bearing in the
  * later crystallization/patterns wave.
@@ -31,9 +31,19 @@ import { sql } from "drizzle-orm";
 import type { MessageShapePredicate } from "./automations.js";
 
 /**
- * The granularity a config row attaches at. Ordered general → specific by the
- * resolver (default < channelType < bridge < channel < shape):
+ * The granularity a config row attaches at. The DECLARATION ORDER BELOW IS NOT
+ * THE SPECIFICITY ORDER — it never was (`bridge` is declared before
+ * `channelType` but ranks after it), and a new member is appended here because
+ * postgres `ALTER TYPE … ADD VALUE` appends. The ONE ordering authority is
+ * `SCOPE_ORDER` in `utils/config-settings.ts`, and a member missing from it
+ * fails the build.
+ *
+ * Ordered general → specific by the resolver
+ * (default < workKind < channelType < bridge < channel < shape):
  *   default     — applies to every message (no `scopeRef`).
+ *   workKind    — a KIND OF WORK rather than a transport; `scopeRef` = the work
+ *                 kind's token. See `SCOPE_ORDER`'s note for the vocabulary and
+ *                 for why the rung sits where it does.
  *   channelType — the global channel context (e.g. "discord"); `scopeRef` = type.
  *   bridge      — a specific bridge/transport; `scopeRef` = toolId/bridgeId.
  *   channel     — a specific channel; `scopeRef` = channelId.
@@ -45,6 +55,7 @@ export const configScopeKindEnum = pgEnum("config_scope_kind", [
   "channelType",
   "channel",
   "shape",
+  "workKind",
 ]);
 export const CONFIG_SCOPE_KINDS = configScopeKindEnum.enumValues;
 export type ConfigScopeKind = (typeof CONFIG_SCOPE_KINDS)[number];
@@ -68,8 +79,9 @@ export const configSettings = pgTable(
     capabilityId: uuid("capability_id"),
 
     scopeKind: configScopeKindEnum("scope_kind").notNull(),
-    // toolId | channelType | channelId | shapeId — NULL for scope_kind='default'
-    // and 'shape' (shape rows carry their predicate in `shape`, not `scope_ref`).
+    // toolId | channelType | channelId | work-kind token — NULL for
+    // scope_kind='default' and 'shape' (shape rows carry their predicate in
+    // `shape`, not `scope_ref`).
     scopeRef: text("scope_ref"),
 
     // The setting key. 'guideline' for this wave; the table is general.

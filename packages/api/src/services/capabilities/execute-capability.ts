@@ -37,6 +37,7 @@ import {
   skills,
   eq,
   and,
+  isNull,
   desc,
   knowledgeRepository,
   capabilityRunReceipts,
@@ -1017,7 +1018,78 @@ export interface ResolvedSkillRow {
  *   TIER 1 declarative  → executeProviderVerb (connection-aware, in-process)
  *   TIER 2 code/instr.  → the IS isolate
  */
+/**
+ * PROOF-IT-RAN — the ONE writer of `skills.proven_at`.
+ *
+ * A capability generated to unblock a stuck agent is not a remedy until it has
+ * actually done the work once (roughly one generated tool in five is wrong even
+ * in closed-loop generation with tests), so a surface may show it as
+ * `Created · not yet used` until this stamp lands.
+ *
+ * Floored on `proven_at IS NULL` in the UPDATE itself, so it records the FIRST
+ * success and a concurrent second run cannot move it — no read-then-write race.
+ *
+ * BEST-EFFORT: the run has ALREADY happened by the time this is called. A
+ * telemetry write must never turn a delivered run into a failure, so every
+ * error is swallowed and logged, exactly as `recordDirectCapabilityRun` does.
+ */
+async function markSkillProven(skillId: string): Promise<void> {
+  try {
+    await db
+      .update(skills)
+      .set({ provenAt: new Date() })
+      .where(and(eq(skills.id, skillId), isNull(skills.provenAt)));
+  } catch (err) {
+    logger.warn(
+      { err, skillId },
+      "markSkillProven: failed to stamp proven_at (non-fatal)"
+    );
+  }
+}
+
+/**
+ * Did this outcome actually DO the work?
+ *
+ * `kind:"run"` is the success channel, with ONE exception that must not count:
+ * a declarative verb whose write was governance-gated flows through as a run
+ * carrying `{proposed:true}` — the effect is QUEUED for review, not performed.
+ * Stamping `proven_at` there would assert a capability had run when a human has
+ * not yet approved it, which is the precise "silent failure dressed as a fix"
+ * this column exists to prevent.
+ */
+function outcomeDidTheWork(result: unknown): boolean {
+  return !(
+    !!result &&
+    typeof result === "object" &&
+    (result as Record<string, unknown>).proposed === true
+  );
+}
+
+/**
+ * The shared post-gate runner (see `runResolvedSkillInner` below for the
+ * kind-branch), wrapped so that the FIRST genuine success stamps
+ * `skills.proven_at`.
+ *
+ * The stamp lives HERE, in the wrapper, rather than beside each of the inner
+ * function's three `kind:"run"` returns: one call site cannot be forgotten when
+ * a fourth skill kind is added, and both doors that run a capability — the
+ * direct-run door in this file and the `capability.run` approval executor
+ * (`routers/proposals/executors/capability.ts`) — already go through this one
+ * function, so there is exactly one writer for both.
+ */
 export async function runResolvedSkill(
+  skill: ResolvedSkillRow,
+  parameters: Record<string, unknown> | undefined,
+  ctx: Parameters<typeof runResolvedSkillInner>[2]
+): Promise<Awaited<ReturnType<typeof runResolvedSkillInner>>> {
+  const outcome = await runResolvedSkillInner(skill, parameters, ctx);
+  if (outcome.kind === "run" && outcomeDidTheWork(outcome.result)) {
+    await markSkillProven(skill.id);
+  }
+  return outcome;
+}
+
+async function runResolvedSkillInner(
   skill: ResolvedSkillRow,
   parameters: Record<string, unknown> | undefined,
   ctx: {

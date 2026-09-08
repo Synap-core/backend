@@ -278,6 +278,37 @@ export const skills = pgTable(
       .default("active"),
 
     /**
+     * PROOF-IT-RAN. When this skill first completed a real run successfully.
+     * NULL = it has never actually done the work.
+     *
+     * WHY THIS EXISTS. A capability generated to unblock a stuck agent is not a
+     * remedy until it has run once: closed-loop tool generation with 100+ unit
+     * tests still lands around 80%, so roughly one generated tool in five is
+     * wrong. Retiring a visible block the moment a capability is CREATED
+     * converts it into an invisible bad write, which is strictly worse than the
+     * block. A surface may show a capability as `Created · not yet used` while
+     * this is NULL, and only treat it as proven once it is set.
+     *
+     * A SEPARATE FIELD, NOT A `status` MEMBER. `status` is
+     * `active | inactive | error` and is read in many places; adding a fourth
+     * member would change the meaning of every existing branch. This is
+     * additive and nullable, so no reader can break on it.
+     *
+     * IT IS NOT `capability_run_receipts`. That table is a ~10-minute
+     * idempotency CAS window keyed on a dedup bucket, and READ verbs never
+     * write one — reusing it as a first-run marker would miss every
+     * read-shaped capability and expire in ten minutes.
+     *
+     * WRITE-ONCE, and written in exactly ONE place: `markSkillProven`, called
+     * from `runResolvedSkill` (api `services/capabilities/execute-capability.ts`)
+     * — the shared post-gate runner BOTH the direct-run door and the
+     * `capability.run` approval executor go through. Its update is floored on
+     * `proven_at IS NULL`, so the timestamp records the FIRST success and no
+     * later run moves it.
+     */
+    provenAt: timestamp("proven_at", { mode: "date", withTimezone: true }),
+
+    /**
      * Per-capability approval gate (orthogonal to `status` = lifecycle/health).
      * A skill is born NOT approved (DEFAULT false): a freshly-created or
      * AI-created `code` skill cannot execute and is not loaded as an agent tool

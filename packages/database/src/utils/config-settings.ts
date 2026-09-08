@@ -10,8 +10,8 @@
  * The resolver, `resolveGuidelines`, is the 4th copy of the additive-specificity
  * resolver already written 3× (profile-resolution's `{...base, ...profileLayer,
  * ...overlay}`, governance-rules' rung-2.8 scorer, property-def scoping). Here the
- * layers are the scope granularities (default < channelType < bridge < channel <
- * shape); it returns the applicable guideline texts ordered most-general →
+ * layers are the scope granularities (default < workKind < channelType < bridge <
+ * channel < shape); it returns the applicable guideline texts ordered most-general →
  * most-specific, so a specific guideline reinforces/overrides a general one when
  * they are concatenated into the interpret prompt.
  */
@@ -33,16 +33,68 @@ type DbHandle = typeof import("../client-pg.js").db;
 export const GUIDELINE_KEY = "guideline";
 
 /**
+ * THE ordering authority: scope kinds general → specific. Rank is the INDEX, so
+ * inserting a rung renumbers everything after it automatically and no second
+ * hand-maintained table can fall behind (the enum's own declaration order is
+ * arbitrary — see `configScopeKindEnum`).
+ *
+ * WHERE `workKind` SITS, AND WHY — a decision nobody can reconstruct from the
+ * code alone, so it is recorded here.
+ *
+ * The five original rungs form a TRANSPORT ladder: they narrow by where a
+ * message came from, and each contains the next (a channel is inside a
+ * channelType). `workKind` is on a DIFFERENT AXIS — it narrows by what kind of
+ * work is happening — so it is not orderable against the transport rungs by
+ * containment: `channel: #ops` and `workKind: credential` each cover situations
+ * the other does not. A linear ladder still has to place it, so the placement is
+ * a choice about WHO WINS when both match, and it is made this way:
+ *
+ *   a workKind guideline applies to every situation of that work class,
+ *   ACROSS all channels and bridges — a broader situation set than any single
+ *   transport rung. An operator instruction bound to one channel ("on this
+ *   bridge use Proton, not Drive") is the more local, more operational
+ *   override and must therefore be applied LAST. So `workKind` sits directly
+ *   above `default` and below every transport rung.
+ *
+ * THE `workKind` VOCABULARY IS CLOSED, and closed to ONE vocabulary:
+ * `scopeRef` holds a `BLOCKED_REASONS` value (@synap/playbooks —
+ * credential | permission | capability | policy | decision | physical),
+ * enforced at the write door (`routers/guidelines.ts`), which is the only
+ * producer. It is NOT a free-text tag: `scopeRef` carries no discriminator, so
+ * a SECOND vocabulary sharing this rung would be indistinguishable from the
+ * first, which is exactly the untyped-`appliesTo` failure this rung replaces.
+ * A different work vocabulary gets its OWN rung and its own context field —
+ * never a second namespace here.
+ */
+const SCOPE_ORDER = [
+  "default",
+  "workKind",
+  "channelType",
+  "bridge",
+  "channel",
+  "shape",
+] as const satisfies ReadonlyArray<ConfigScopeKind>;
+
+/**
+ * COMPILE-TIME COVERAGE FLOOR. A scope kind added to the enum but missing from
+ * `SCOPE_ORDER` makes this type `never` and the build stops — rather than
+ * silently resolving to rank `undefined` and sorting as `NaN`.
+ */
+type _AllScopeKindsRanked =
+  Exclude<ConfigScopeKind, (typeof SCOPE_ORDER)[number]> extends never
+    ? true
+    : never;
+const _allScopeKindsRanked: _AllScopeKindsRanked = true;
+void _allScopeKindsRanked;
+
+/**
  * Specificity rank per scope kind (general → specific). A specific guideline is
  * ordered LAST so it reinforces/overrides a general one when concatenated.
+ * DERIVED from `SCOPE_ORDER` — never written out by hand.
  */
-const SCOPE_SPECIFICITY: Record<ConfigScopeKind, number> = {
-  default: 0,
-  channelType: 1,
-  bridge: 2,
-  channel: 3,
-  shape: 4,
-};
+export const SCOPE_SPECIFICITY = Object.fromEntries(
+  SCOPE_ORDER.map((kind, index) => [kind, index])
+) as Record<ConfigScopeKind, number>;
 
 export interface ResolveGuidelinesInput {
   /** Injected Drizzle handle (the caller's `db`). */
@@ -60,6 +112,14 @@ export interface ResolveGuidelinesInput {
   channelId?: string | null;
   channelType?: string | null;
   bridgeId?: string | null;
+  /**
+   * The KIND OF WORK this resolution is for — a `BLOCKED_REASONS` token (see
+   * `SCOPE_ORDER`). Absent/null ⇒ NO `workKind` row can match, which is what
+   * keeps every existing caller (message.interpret, `resolveOriginTrust`) on
+   * exactly the behaviour it had before this rung existed: none of them passes
+   * it.
+   */
+  workKind?: string | null;
   /** null/undefined = pod lens only (no workspace-scoped rows match). */
   workspaceId?: string | null;
   /** The normalized message — required for `shape`-scoped rows to match. */
@@ -87,15 +147,17 @@ export interface ResolvedGuideline {
  *   (capability_id IS NULL) OR capability_id = :capabilityId.
  *
  * IN-MEMORY SCOPE MATCH (the additive-specificity ladder): each surviving row is
- * kept only if its `scopeKind` matches the context (default always; channelType /
- * bridge / channel match their ref; shape matches when the envelope satisfies the
- * row's `shape` via the SHARED `matchMessageShape`). Kept rows are sorted by
- * specificity ascending, tie-broken by `createdAt` ascending (deterministic).
+ * kept only if its `scopeKind` matches the context (default always; workKind /
+ * channelType / bridge / channel match their ref; shape matches when the envelope
+ * satisfies the row's `shape` via the SHARED `matchMessageShape`). Kept rows are
+ * sorted by specificity ascending, tie-broken by `createdAt` ascending
+ * (deterministic).
  */
 export async function resolveGuidelines(
   input: ResolveGuidelinesInput
 ): Promise<ResolvedGuideline[]> {
-  // channelId / channelType / bridgeId are read off `input` by `scopeMatches`.
+  // channelId / channelType / bridgeId / workKind are read off `input` by
+  // `scopeMatches`.
   const { db, userId, capabilityId, workspaceId, envelope } = input;
 
   const workspaceFloor = or(
@@ -194,12 +256,19 @@ function scopeMatches(
   scopeKind: ConfigScopeKind,
   scopeRef: string | null,
   shape: MessageShapePredicate | null,
-  ctx: Pick<ResolveGuidelinesInput, "channelId" | "channelType" | "bridgeId">,
+  ctx: Pick<
+    ResolveGuidelinesInput,
+    "channelId" | "channelType" | "bridgeId" | "workKind"
+  >,
   envelope: MessageEnvelope | undefined
 ): boolean {
   switch (scopeKind) {
     case "default":
       return true;
+    case "workKind":
+      // Absent context ⇒ never matches: a caller that knows nothing about the
+      // kind of work must resolve exactly as it did before this rung existed.
+      return !!ctx.workKind && scopeRef === ctx.workKind;
     case "channelType":
       return !!ctx.channelType && scopeRef === ctx.channelType;
     case "bridge":

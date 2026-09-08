@@ -63,6 +63,7 @@ import {
   configSettings,
   ChannelType,
   GUIDELINE_KEY,
+  SCOPE_SPECIFICITY,
   resolveMostSpecificPosture,
   MessageAuthorType,
   ProposalStatus,
@@ -830,13 +831,20 @@ async function resolveChannelOriginTrust(
     createdAt: Date;
   }>;
 
-  // Specificity of the three matchable scope kinds (general → specific) — the
-  // same ranks `config-settings`' SCOPE_SPECIFICITY assigns.
-  const RANK: Record<string, number> = {
-    default: 0,
-    channelType: 1,
-    channel: 3,
-  };
+  // Specificity of the three matchable scope kinds (general → specific).
+  // READ FROM `SCOPE_SPECIFICITY` rather than re-typed: the literal copy that
+  // used to sit here (`{default:0, channelType:1, channel:3}`) was correct only
+  // for as long as nobody inserted a rung into the ladder, and inserting one
+  // renumbers every rank after it. Reading the exported map means this mirror
+  // cannot disagree about ORDER by construction.
+  //
+  // The `inArray` allowlist above — not this map — is what bounds the mirror to
+  // the kinds `resolveOriginTrust` can actually activate. `workKind` is absent
+  // from it deliberately and MUST stay absent while `resolveOriginTrust` passes
+  // no `workKind` (it does not): a rung the per-write resolver can never match
+  // must not match here either, or the read-only twin would report a posture
+  // that governance never applies.
+  const RANK = SCOPE_SPECIFICITY;
 
   for (const c of chanRows) {
     // Guidelines applicable to THIS channel, ordered general → specific — the

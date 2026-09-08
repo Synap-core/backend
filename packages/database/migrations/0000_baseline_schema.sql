@@ -2067,6 +2067,8 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time z
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "teaches_tools" text[] NOT NULL DEFAULT '{}';
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "skill_group" text;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "always_on" boolean NOT NULL DEFAULT false;
+-- 0254: proof-it-ran. NULL = the skill has never completed a real run.
+ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "proven_at" timestamptz;
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
@@ -4366,7 +4368,7 @@ CREATE INDEX IF NOT EXISTS "capability_run_receipts_user_id_idx"
 -- intent injected into message.interpret. workspace_id NULL = pod-wide
 -- (owner-floored by created_by on read).
 DO $$ BEGIN
-  CREATE TYPE config_scope_kind AS ENUM ('default', 'bridge', 'channelType', 'channel', 'shape');
+  CREATE TYPE config_scope_kind AS ENUM ('default', 'bridge', 'channelType', 'channel', 'shape', 'workKind');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 CREATE TABLE IF NOT EXISTS "config_settings" (
@@ -4385,6 +4387,8 @@ CREATE TABLE IF NOT EXISTS "config_settings" (
 );
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "capability_id" uuid;
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "scope_kind" config_scope_kind;
+-- 0253: the workKind rung (idempotent for a pre-0253 baseline).
+ALTER TYPE config_scope_kind ADD VALUE IF NOT EXISTS 'workKind';
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "scope_ref" text;
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "key" text;
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "value" jsonb;
