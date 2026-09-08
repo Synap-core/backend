@@ -202,6 +202,15 @@ export const BLOCKED_REASONS = [
 
 export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 
+/**
+ * WHY an expected output stopped being owed without being delivered. Closed, so
+ * a new retirement path is a visible edit here rather than a free-text string
+ * every reader has to guess at — the same shape as {@link BLOCKED_REASONS}.
+ */
+export const OUTPUT_RETIRED_REASONS = ["session_cancelled"] as const;
+
+export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+
 export interface ExpectedOutput {
   kind: string;
   label: string;
@@ -285,6 +294,39 @@ export interface ExpectedOutput {
   returnedReason?: string;
   /** ISO timestamp of the return above. */
   returnedAt?: string;
+  /**
+   * ATTESTATION receipt — the human who owned this slot saying "I did this".
+   *
+   * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
+   * field rather than a fake proposal id: the two stamps are different KINDS of
+   * evidence and a reader must be able to tell them apart. An approval is a
+   * human accepting an artefact an agent produced; an attestation is a human
+   * reporting work only they could do (minting the key, signing the contract),
+   * for which no artefact and no proposal exists.
+   *
+   * Written ONLY by `attestExpectedOutput` (the one `done` door,
+   * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
+   * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
+   * deliberately KEPT alongside it: the record of who owed the slot and since
+   * when is the receipt's point, and the owed read drops the slot on `status`.
+   */
+  attestedBy?: string;
+  /** ISO timestamp of the attestation above. */
+  attestedAt?: string;
+  /**
+   * RETIREMENT receipt — this slot stopped being owed because the session that
+   * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
+   * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
+   * `returnedAt`. Clearing these two fields puts the slot back on the board, so
+   * the stamp is reversible in the way a delete never is.
+   *
+   * Only `cancelled` retires slots. A session that is `closed`, `failed` or
+   * `stale` leaves them owed — the work was declared, the session ended, and
+   * somebody still has to do it.
+   */
+  retiredAt?: string;
+  /** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
+  retiredReason?: OutputRetiredReason;
 }
 
 /**

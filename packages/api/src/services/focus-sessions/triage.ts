@@ -22,11 +22,14 @@
  * copy in a router is how the two forks.
  *
  * DISCARD IS CANCEL. There is no "delete a session": discarding routes to the
- * existing terminal status `cancelled`, and — like a close — retires the
- * session's EPHEMERAL proposals, which were bound to work that is now not
- * happening. `focusSessions.update({ status: "cancelled" })`, the pre-existing
- * cancel path, does NOT do that; this door does, and the divergence is named in
- * the Wave B report rather than papered over here.
+ * existing terminal status `cancelled` through `completeFocusSession` — the ONE
+ * close door — so it retires the session's EPHEMERAL proposals and stamps the
+ * outputs the human still owed, both of which were bound to work that is now not
+ * happening. The older note here said `focusSessions.update({ status:
+ * "cancelled" })` skipped all that; it no longer does — that door funnels a
+ * terminal status into the same service (`routers/focus-sessions.ts`), so the
+ * divergence this paragraph used to describe is CLOSED, and the note is
+ * corrected rather than left to mislead the next reader.
  */
 
 import {

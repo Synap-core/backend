@@ -746,6 +746,25 @@ export interface FocusSessionExpectedOutput {
    * cannot serve — any unrelated write to the session would resurface the row).
    */
   owedSince?: string;
+  /**
+   * ATTESTATION receipt — the human owner discharged this slot ("I did this").
+   * Read-only here: the pod exposes attestation on tRPC only, deliberately, so
+   * an agent cannot report that a human did the work the agent could not.
+   * Distinct from `satisfiedByProposalId`, which is an APPROVAL's lineage — a
+   * `done` slot carries one or the other, and they are different evidence.
+   */
+  attestedBy?: string;
+  /** ISO timestamp of the attestation above. */
+  attestedAt?: string;
+  /**
+   * RETIREMENT receipt — the declaring session was CANCELLED, so the slot
+   * stopped being owed without being delivered. Never a delete: the blocker,
+   * the `why` and the `owedSince` all remain, and clearing these two fields
+   * puts the slot back on the board.
+   */
+  retiredAt?: string;
+  /** Mirrored from `OUTPUT_RETIRED_REASONS` (@synap/playbooks). */
+  retiredReason?: "session_cancelled";
 }
 
 /**

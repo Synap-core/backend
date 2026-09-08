@@ -1,11 +1,35 @@
 /**
  * completeFocusSession — lifecycle close for a focus session.
  *
- * Callers today: MCP `synap_complete_session`, session-recap. Hub REST PATCH
- * and tRPC `close` still flip status without this service (known dual path —
- * consolidate later). Closes running playbook_run, stamps closed + report.
+ * THE ONE CLOSE DOOR. Every terminal exit — `closed`, `cancelled`, `failed`,
+ * from any surface — runs through here: MCP `synap_complete_session`,
+ * session-recap, triage discard, and (since `routers/focus-sessions.ts`'s update
+ * funnels a terminal `status` into this service) the tRPC and Hub REST doors
+ * too. The dual path those two used to take is CLOSED; the older note here that
+ * said otherwise outlived the fix and is corrected.
  *
- * Gate 2: returns a **proposal pack** (pending proposals for this session).
+ * Closes running playbook_run, stamps the terminal status + report, expires the
+ * session-bound ephemeral proposals, emits the close event, and returns a
+ * **proposal pack** (pending proposals for this session).
+ *
+ * ── WHAT HAPPENS TO OWED SLOTS ──────────────────────────────────────────────
+ * A slot handed to the human (`owner: 'human'`) OUTLIVES the session on
+ * `closed`, `failed` and `stale`: the work was declared, the session ended, and
+ * somebody still has to do it. `listOwedSlots` reads them back regardless of
+ * session status precisely so they cannot be lost by closing the window they
+ * were declared in.
+ *
+ * `cancelled` is the one exit that ends the obligation — the work is not
+ * happening — and it STAMPS them (`retiredAt` + `retiredReason`) rather than
+ * deleting them. A receipt, like `delegatedAt` / `returnedAt`: the slot, its
+ * blocker and its `owedSince` stay readable, the stamp is reversible, and
+ * deletion would be the only irreversible operation in this subsystem.
+ *
+ * `stale` never reaches this door at all (it is not a terminal status; the
+ * focus-session reaper stamps it directly), so its slots survive. That is the
+ * INTENDED outcome and it is now stated rather than left to accident: a session
+ * the reaper gave up on is the strongest case there is for the human still
+ * owing what they said they would do.
  */
 import {
   db,
@@ -18,6 +42,8 @@ import {
   desc,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
+import type { ExpectedOutput } from "@synap/playbooks";
+import { retirementForClose } from "./owed-outputs.js";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -72,6 +98,11 @@ export type CompleteFocusSessionResult = {
      * no longer answerable. Reported so the close is never a silent retirement.
      */
     expiredEphemerals: number;
+    /**
+     * Owed (human-owned, not-done) outputs RETIRED because this session was
+     * cancelled. Always 0 for `closed`/`failed` — those keep their slots.
+     */
+    retiredSlots: number;
   };
   warnings: string[];
 };
@@ -121,7 +152,12 @@ export async function completeFocusSession(
     return {
       session: session as FocusSession,
       pendingProposals: [],
-      counts: { pending: 0, unfinishedOutputs: 0, expiredEphemerals: 0 },
+      counts: {
+        pending: 0,
+        unfinishedOutputs: 0,
+        expiredEphemerals: 0,
+        retiredSlots: 0,
+      },
       warnings: [],
     };
   }
@@ -198,6 +234,16 @@ export async function completeFocusSession(
     (session.expectedOutputs as Array<{ status?: string }> | null) ?? []
   ).filter((o) => o.status !== "done").length;
 
+  // CANCELLED retires the slots the human still owed — the obligation ends with
+  // the work. Stamped, never deleted (see the header). Computed here so it
+  // lands in the SAME update as the terminal status: a session cannot end up
+  // cancelled with its slots still owed, or retired without being cancelled.
+  const storedOutputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
+    ? (session.expectedOutputs as ExpectedOutput[])
+    : [];
+  const retirement = retirementForClose(storedOutputs, terminalStatus);
+  const retiredSlots = retirement?.retiredSlots ?? 0;
+
   const warnings: string[] = [];
   if (unfinishedOutputs > 0) {
     warnings.push(
@@ -210,6 +256,7 @@ export async function completeFocusSession(
     .set({
       status: terminalStatus,
       closedAt: new Date(),
+      ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
       ...(verificationReport != null
         ? {
             verificationReport: {
@@ -246,6 +293,12 @@ export async function completeFocusSession(
   // a session must close even if the sweep fails. Only classes WITH a lifetime
   // are touched: a proposed entity or a merge candidate created during a session
   // outlives it by design.
+  //
+  // NOTE how this composes with owed slots: expiring an ephemeral can retire the
+  // only answer a still-pending slot had, so a close genuinely leaves MORE work
+  // undone than it found. That is why owed slots must SURVIVE the close rather
+  // than be swept with it — and why both counts are reported out loud instead of
+  // being absorbed silently.
   const expiredEphemerals = await expireSessionEphemerals(sessionId);
 
   // Proposal pack — pending rows attributed to this session.
@@ -266,6 +319,15 @@ export async function completeFocusSession(
   // Say it out loud. Expiry is honest only if the person closing the session
   // learns it happened — a silent retirement is the lying-count defect the C2
   // TTL removal was about, wearing a different hat.
+  // Same rule as the ephemeral sweep below: a retirement nobody is told about is
+  // a silent one. Say which slots stopped being owed and why.
+  if (retiredSlots > 0) {
+    warnings.push(
+      `${retiredSlots} output(s) you owed were retired because this session was ` +
+        `cancelled — they are stamped, not deleted, and stay readable on the session.`
+    );
+  }
+
   if (expiredEphemerals > 0) {
     warnings.push(
       `${expiredEphemerals} unanswered capability run(s) expired with this session — ` +
@@ -326,6 +388,7 @@ export async function completeFocusSession(
       pending: pendingProposals.length,
       unfinishedOutputs,
       expiredEphemerals,
+      retiredSlots,
     },
     warnings,
   };

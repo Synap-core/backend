@@ -15,7 +15,6 @@ import {
   and,
   desc,
   inArray,
-  isNull,
   isNotNull,
   focusSessions,
   proposals,
@@ -48,6 +47,12 @@ import {
   type BlockExpectedOutputResult,
 } from "../services/focus-sessions/block-output.js";
 import { BLOCKED_REASONS } from "@synap/playbooks";
+import {
+  attestExpectedOutput,
+  type AttestExpectedOutputResult,
+} from "../services/focus-sessions/satisfy-expected-output.js";
+import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
+import { sessionScopeConditions } from "../services/focus-sessions/session-scope.js";
 import {
   expectedOutputWireSchema,
   mergeExpectedOutputs,
@@ -114,7 +119,7 @@ const expectedOutputItemSchema = expectedOutputWireSchema;
  * sentences about the same missing label.
  */
 function slotOwnershipResult(
-  result: BlockExpectedOutputResult,
+  result: BlockExpectedOutputResult | AttestExpectedOutputResult,
   input: { sessionId: string; expectedLabel: string }
 ) {
   switch (result.status) {
@@ -132,6 +137,14 @@ function slotOwnershipResult(
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: `"${input.expectedLabel}" is already delivered`,
+      });
+    case "not_owed_by_you":
+      // Attestation only. A slot an AGENT still owes is not the human's to
+      // close — and saying so out loud is the point: a bare 200 on an unchanged
+      // row reads as "delivered" to whoever asked.
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `"${input.expectedLabel}" is not blocked on you — an agent still owes it`,
       });
     default:
       return {
@@ -251,25 +264,10 @@ function queryUserSessions(
 ) {
   const conditions = [eq(focusSessions.userId, requireUserId(userId))];
 
-  // Workspace lens narrows within the user's own rows (the floor is userId).
-  if (workspaceLens === null) {
-    conditions.push(isNull(focusSessions.workspaceId));
-  } else if (Array.isArray(workspaceLens)) {
-    if (workspaceLens.length > 0) {
-      conditions.push(inArray(focusSessions.workspaceId, workspaceLens));
-    }
-  } else if (typeof workspaceLens === "string") {
-    conditions.push(eq(focusSessions.workspaceId, workspaceLens));
-  }
-
-  // Project lens narrows on the session's own projectId column.
-  if (Array.isArray(projectLens)) {
-    if (projectLens.length > 0) {
-      conditions.push(inArray(focusSessions.projectId, projectLens));
-    }
-  } else if (typeof projectLens === "string") {
-    conditions.push(eq(focusSessions.projectId, projectLens));
-  }
+  // Both lenses narrow within the user's own rows (the floor is userId above).
+  // The APPLICATION lives in `sessionScopeConditions` — shared with the owed-slot
+  // read, so the two doors cannot drift into two answers about what a lens means.
+  conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
 
   if (status !== "all") {
     conditions.push(eq(focusSessions.status, status));
@@ -1457,6 +1455,72 @@ export const focusSessionsRouter = router({
         expectedLabel: input.expectedLabel,
       });
       return slotOwnershipResult(result, input);
+    }),
+
+  /**
+   * ATTEST — "I did this". The human owner of a blocked slot discharging it.
+   *
+   * The DISCHARGE half of the pair the owed board needs; the other verb is
+   * "Not mine", which is `unblockOutput` above and is NOT rebuilt here. There is
+   * deliberately no third verb and no DISMISS: a row may be closed or handed
+   * back, never merely hidden — GitHub's ambiguous "Done" is the precedent this
+   * refuses to repeat.
+   *
+   * Runs through `attestExpectedOutput`, which lives inside
+   * `satisfy-expected-output.ts` because `status: "done"` has ONE write door.
+   *
+   * tRPC ONLY, and that is a floor rather than an omission: `protectedProcedure`
+   * IS the person, on their own session. There is no Hub REST twin because Hub
+   * REST is the intelligence service's door, and an agent attesting that a human
+   * did the thing the agent said it could not do is exactly the self-graded
+   * homework this whole subsystem exists to prevent.
+   */
+  attestOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await attestExpectedOutput({
+        sessionId: input.sessionId,
+        userId: ctx.userId,
+        expectedLabel: input.expectedLabel,
+      });
+      return slotOwnershipResult(result, input);
+    }),
+
+  /**
+   * OWED — every deliverable blocked on YOU, across every session you own.
+   *
+   * NOT composed over `list`, and it must never become so: `list` is capped at
+   * 50 rows in SQL, while owed slots accumulate on OLD CLOSED sessions — exactly
+   * the rows that fall off page one. The predicate is a WHERE clause
+   * (`owed-outputs.ts`) for the same reason the triage and kind lenses are.
+   *
+   * No status filter: a slot outlives its session on `closed`/`failed`/`stale`,
+   * and `cancelled` retires it with a stamp rather than a delete.
+   *
+   * Same lenses as `list` and the SAME application of them
+   * (`sessionScopeConditions`), so "pod-wide" means one population, not two.
+   * Oldest first — blocks never expire, and `owedSince` is the ordering key.
+   */
+  owed: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: ScopeFilterShape.workspaceId,
+        projectId: ScopeFilterShape.projectId,
+        /** Cap on SLOTS, not sessions. */
+        limit: z.number().int().min(1).max(200).default(50),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      return listOwedSlots({
+        userId: requireUserId(ctx.userId),
+        scope: resolveScope(ctx, input),
+        limit: input.limit,
+      });
     }),
 
   /**

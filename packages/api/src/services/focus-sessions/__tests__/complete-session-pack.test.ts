@@ -25,7 +25,12 @@ describe("completeFocusSession pack types", () => {
     const result: CompleteFocusSessionResult = {
       session: { id: "s1" } as CompleteFocusSessionResult["session"],
       pendingProposals: [],
-      counts: { pending: 0, unfinishedOutputs: 2, expiredEphemerals: 0 },
+      counts: {
+        pending: 0,
+        unfinishedOutputs: 2,
+        expiredEphemerals: 0,
+        retiredSlots: 0,
+      },
       warnings: [
         "2 expected output(s) still not marked done — session closed anyway (warn-only).",
       ],

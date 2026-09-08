@@ -4454,6 +4454,12 @@ CREATE INDEX IF NOT EXISTS "governance_ceilings_source_proposal_idx"
 -- pre-existing rows to reclassify.
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "origin" text;  -- 0240 (playbook | automation | agent — an automation run wearing a session's shape is no longer a JSONB sniff)
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("origin");
+-- 0250 — the "blocked on you" read. A partial index whose predicate is the only
+-- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
+-- inside the JSONB array and cannot key an index). See migration 0250.
+CREATE INDEX IF NOT EXISTS "idx_focus_sessions_owed_outputs"
+  ON "focus_sessions" ("user_id")
+  WHERE "expected_outputs" @> '[{"owner": "human"}]'::jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "scope" text;  -- 0240 (session template vs project/engagement blueprint; NULL reads as 'session')
 CREATE INDEX IF NOT EXISTS "idx_playbooks_scope" ON "playbooks" ("scope");
 -- NOTE: `projects.phase` is NOT declared here. The `projects` table is not part

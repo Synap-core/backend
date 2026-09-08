@@ -56,6 +56,10 @@ const SAMPLE: Required<
   blockedReason: "credential",
   why: "The Stripe restricted key for the live account",
   owedSince: "2026-09-08T09:00:00.000Z",
+  attestedBy: "22222222-2222-2222-2222-222222222222",
+  attestedAt: "2026-09-08T12:00:00.000Z",
+  retiredAt: "2026-09-08T13:00:00.000Z",
+  retiredReason: "session_cancelled",
 };
 
 describe("ExpectedOutput server-owned coverage", () => {

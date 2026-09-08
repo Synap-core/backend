@@ -16,7 +16,11 @@
 
 import { z } from "zod";
 import { db, focusSessions, eq, and } from "@synap/database";
-import { BLOCKED_REASONS, type ExpectedOutput } from "@synap/playbooks";
+import {
+  BLOCKED_REASONS,
+  OUTPUT_RETIRED_REASONS,
+  type ExpectedOutput,
+} from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 
 export interface UpdateFocusSessionParams {
@@ -133,6 +137,14 @@ export const expectedOutputWireSchema = z.object({
   // at the parse — never so a client can author a time it did not observe; the
   // reconciler overwrites whatever arrives that contradicts `owner`.
   owedSince: z.string().optional(),
+  // Attestation receipt — stamped by `attestExpectedOutput` alongside `done`.
+  // On the wire for the same round-trip reason as `owedSince`, never so a
+  // client can author one: the door is the only writer.
+  attestedBy: z.string().optional(),
+  attestedAt: z.string().optional(),
+  // Retirement receipt — stamped when the declaring session is CANCELLED.
+  retiredAt: z.string().optional(),
+  retiredReason: z.enum(OUTPUT_RETIRED_REASONS).optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -181,6 +193,10 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "blockedReason",
   "why",
   "owedSince",
+  "attestedBy",
+  "attestedAt",
+  "retiredAt",
+  "retiredReason",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**

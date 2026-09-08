@@ -31,9 +31,26 @@
  * WHICH deliverable this is, never a `done` stamp: approval is still what stamps,
  * and an unmatched claim falls back to the kind guess rather than satisfying
  * nothing.
+ *
+ * ── THE SECOND PATH: HUMAN ATTESTATION ──────────────────────────────────────
+ * Everything above is about work an AGENT produced and a human accepted. A slot
+ * the agent handed to the HUMAN (`owner: 'human'`, blockExpectedOutput) has no
+ * artefact and no proposal — nobody can approve "I minted the Stripe key". Its
+ * only honest close is the owner saying so, and `attestExpectedOutput` below is
+ * that verb.
+ *
+ * It lives in THIS file, not a new one, because `status: "done"` has ONE write
+ * door and that rule is pinned by a tripwire. A second stamper would be the
+ * agent-grades-its-own-homework defect wearing a human's hat.
+ *
+ * Three floors make it a different act from the approval path rather than a
+ * bypass of it: only the slot's OWNER may attest, only on a slot whose `owner`
+ * is `human`, and the stamp is `attestedBy`/`attestedAt` — never a fabricated
+ * `satisfiedByProposalId`, which would make an attestation unfalsifiable by
+ * dressing it as approval lineage.
  */
 
-import { db, focusSessions, eq } from "@synap/database";
+import { db, focusSessions, eq, and } from "@synap/database";
 import { normalizeObjectKind } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
 
@@ -223,6 +240,146 @@ export function stampSatisfied(
   return outputs.map((o, i) =>
     i === index
       ? { ...o, status: "done" as const, satisfiedByProposalId: proposalId }
+      : o
+  );
+}
+
+/**
+ * ATTEST — the human owner of a blocked slot saying "I did this".
+ *
+ * The discharge verb for the other half of the board. Its counterpart is
+ * "Not mine", which is `unblockExpectedOutput` (block-output.ts) and already
+ * exists — there is deliberately no third verb, and above all no DISMISS: a row
+ * may be closed or handed back, never merely hidden.
+ *
+ * OWNER-FLOORED like every other slot door: `focus_sessions` is owner-private
+ * and carries no `VisibilityRule`, so the floor is an explicit `userId`
+ * predicate and missing is indistinguishable from not-yours.
+ *
+ * THE 24h GUARD DOES NOT APPLY, and that is not an oversight. The window above
+ * exists because an APPROVAL landing days after a session closed is not evidence
+ * about that session's deliverables — the approver was reviewing an artefact,
+ * not remembering the session. A human ticking a slot they personally owe IS
+ * evidence about that slot whenever it arrives: "I minted the key" is true the
+ * week after just as much as the hour after, and owed slots by their nature
+ * accumulate on sessions that closed long ago. Gating attestation on the
+ * proposal path's clock would make the oldest owed work — exactly the work most
+ * in need of discharging — permanently undischargeable. The proposal path's
+ * guard is untouched.
+ */
+export interface AttestExpectedOutputParams {
+  sessionId: string;
+  /** Owner floor AND the attesting identity — they are the same person. */
+  userId: string;
+  expectedLabel: string;
+}
+
+export type AttestExpectedOutputResult =
+  | { status: "not_found" }
+  | { status: "unknown_label" }
+  | { status: "already_done" }
+  /** The slot is not the human's to close — an agent still owes it. */
+  | { status: "not_owed_by_you" }
+  | { status: "attested"; expectedLabel: string; kind: string };
+
+export async function attestExpectedOutput(
+  params: AttestExpectedOutputParams
+): Promise<AttestExpectedOutputResult> {
+  const { sessionId, userId, expectedLabel } = params;
+  const wanted = normalizeExpectedLabel(expectedLabel);
+  if (!wanted) return { status: "unknown_label" };
+
+  return await db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        id: focusSessions.id,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(
+        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      )
+      .for("update");
+    if (!locked) return { status: "not_found" as const };
+
+    const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)
+      ? (locked.expectedOutputs as ExpectedOutput[])
+      : [];
+    const chosen = selectSlotToAttest(current, expectedLabel);
+    if ("refused" in chosen) return { status: chosen.refused };
+    const { index } = chosen;
+    const slot = current[index]!;
+
+    const next = stampAttested(current, index, userId);
+    await tx
+      .update(focusSessions)
+      .set({ expectedOutputs: next, updatedAt: new Date() })
+      .where(eq(focusSessions.id, sessionId));
+
+    return {
+      status: "attested" as const,
+      expectedLabel: slot.label,
+      kind: slot.kind,
+    };
+  });
+}
+
+/**
+ * WHICH slot an attestation may close, or WHY it may not. Pure, so all three
+ * floors are testable without a database — the same split
+ * `selectOutputToSatisfy` has from its own transaction.
+ *
+ * The floors, in the order a caller meets them:
+ *   - the label must name a DECLARED slot (`unknown_label`);
+ *   - the slot must not already be delivered (`already_done`) — re-stamping
+ *     would overwrite approval lineage with an attestation and destroy the
+ *     distinction between the two kinds of evidence;
+ *   - the slot must be the HUMAN's (`not_owed_by_you`). This is the floor that
+ *     matters: without it, "I did this" becomes a way for anyone holding a
+ *     session to close work an agent still owes, with a receipt saying a human
+ *     did it. Absent `owner` means AGENT (see `ExpectedOutput`), so the test is
+ *     a positive `=== "human"` and an un-owned slot is correctly refused.
+ */
+export function selectSlotToAttest(
+  outputs: ExpectedOutput[],
+  expectedLabel: string | null | undefined
+):
+  | { index: number }
+  | { refused: "unknown_label" | "already_done" | "not_owed_by_you" } {
+  const wanted = normalizeExpectedLabel(expectedLabel);
+  if (!wanted) return { refused: "unknown_label" };
+  const index = outputs.findIndex(
+    (o) => normalizeExpectedLabel(o?.label) === wanted
+  );
+  if (index === -1) return { refused: "unknown_label" };
+  const slot = outputs[index]!;
+  if (slot.status === "done") return { refused: "already_done" };
+  if (slot.owner !== "human") return { refused: "not_owed_by_you" };
+  return { index };
+}
+
+/**
+ * The attestation stamp — status + WHO said so and WHEN, every other slot
+ * untouched. Pure.
+ *
+ * `owner` and `owedSince` are deliberately KEPT: they are the record of who owed
+ * this and since when, which is the whole receipt. The slot leaves the owed read
+ * on `status`, not by having its history erased.
+ */
+export function stampAttested(
+  outputs: ExpectedOutput[],
+  index: number,
+  userId: string,
+  now: Date = new Date()
+): ExpectedOutput[] {
+  return outputs.map((o, i) =>
+    i === index
+      ? {
+          ...o,
+          status: "done" as const,
+          attestedBy: userId,
+          attestedAt: now.toISOString(),
+        }
       : o
   );
 }

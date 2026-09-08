@@ -442,6 +442,10 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     delegatedAt: "2026-09-08T10:00:00.000Z",
     returnedReason: "Missing the numbers",
     returnedAt: "2026-09-08T11:00:00.000Z",
+    attestedBy: "44444444-4444-4444-4444-444444444444",
+    attestedAt: "2026-09-08T12:00:00.000Z",
+    retiredAt: "2026-09-08T13:00:00.000Z",
+    retiredReason: "session_cancelled",
   };
 
   it("carries EVERY declared field onto the matched output", () => {
