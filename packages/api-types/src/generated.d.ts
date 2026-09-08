@@ -5915,6 +5915,16 @@ export interface ProposalExecutorResult {
 	 * (`focus_session/create`) is the reference conversion.
 	 */
 	effect?: ProposalEffect;
+	/**
+	 * Parts of the approved patch the pod DECLINED to apply, each a sentence the
+	 * reviewer can act on. `success: true` with a non-empty `refusals` is the
+	 * honest shape for a partial application: the write landed, but not all of it.
+	 *
+	 * NOT a general warnings bag — only a governance floor or an equivalent
+	 * documented refusal belongs here. An unexplained omission is the defect this
+	 * field exists to stop, so an entry without a reason is worse than none.
+	 */
+	refusals?: string[];
 }
 declare const SystemEventTypes: {
 	readonly WEBHOOK_DELIVERY: "webhooks.deliver.requested";
@@ -6540,6 +6550,10 @@ declare const BLOCKED_REASONS: readonly [
 	"physical"
 ];
 export type BlockedReason = (typeof BLOCKED_REASONS)[number];
+declare const OUTPUT_RETIRED_REASONS: readonly [
+	"session_cancelled"
+];
+export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
 export interface ExpectedOutput {
 	kind: string;
 	label: string;
@@ -6623,6 +6637,39 @@ export interface ExpectedOutput {
 	returnedReason?: string;
 	/** ISO timestamp of the return above. */
 	returnedAt?: string;
+	/**
+	 * ATTESTATION receipt — the human who owned this slot saying "I did this".
+	 *
+	 * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
+	 * field rather than a fake proposal id: the two stamps are different KINDS of
+	 * evidence and a reader must be able to tell them apart. An approval is a
+	 * human accepting an artefact an agent produced; an attestation is a human
+	 * reporting work only they could do (minting the key, signing the contract),
+	 * for which no artefact and no proposal exists.
+	 *
+	 * Written ONLY by `attestExpectedOutput` (the one `done` door,
+	 * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
+	 * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
+	 * deliberately KEPT alongside it: the record of who owed the slot and since
+	 * when is the receipt's point, and the owed read drops the slot on `status`.
+	 */
+	attestedBy?: string;
+	/** ISO timestamp of the attestation above. */
+	attestedAt?: string;
+	/**
+	 * RETIREMENT receipt — this slot stopped being owed because the session that
+	 * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
+	 * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
+	 * `returnedAt`. Clearing these two fields puts the slot back on the board, so
+	 * the stamp is reversible in the way a delete never is.
+	 *
+	 * Only `cancelled` retires slots. A session that is `closed`, `failed` or
+	 * `stale` leaves them owed — the work was declared, the session ended, and
+	 * somebody still has to do it.
+	 */
+	retiredAt?: string;
+	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
+	retiredReason?: OutputRetiredReason;
 }
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
@@ -8440,6 +8487,26 @@ export interface ConversionReceipt {
 	/** ISO deadline after which `revertConversion` refuses. */
 	undoUntil: string;
 }
+/** One owed deliverable, with just enough of its session to be actionable. */
+export interface OwedSlot {
+	sessionId: string;
+	sessionGoal: string | null;
+	/** The session's lifecycle state — an owed slot outlives its session. */
+	sessionStatus: string;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The DECLARED label — the key every slot door matches on. */
+	label: string;
+	kind: string;
+	icon?: string;
+	blockedReason?: ExpectedOutput["blockedReason"];
+	/** One line naming WHICH thing is missing. */
+	why?: string;
+	/** When it became the human's. Always present — the invariant guarantees it. */
+	owedSince: string;
+	/** The agent's claim that it produced this after all, if it made one. */
+	claimedDone?: boolean;
+}
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
  * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
@@ -9233,7 +9300,9 @@ export type SignalKind =
 /** A past `events` row (history lens). */
  | "event"
 /** A proposal that has been approved / rejected / expired (history lens). */
- | "decided-proposal";
+ | "decided-proposal"
+/** One deliverable an agent handed to the human and nobody has closed. */
+ | "owed-slot";
 /** One row in either lens. Deliberately identical in both, so the tray and the
  *  history feed render from ONE shape. */
 export interface Signal {
@@ -9251,7 +9320,12 @@ export interface Signal {
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door).
-	 * Absent on every other kind — a notification or an event has no class.
+	 * Absent on every other kind — a notification, an event or an owed slot has
+	 * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
+	 * invented for it: `class` is a PROPOSAL's decision class, consumed as an
+	 * ordering over proposals, and an obligation is not a decision. Its absent
+	 * `lifetimeHours` already carries the only thing a surface needs to know —
+	 * that it never expires.
 	 */
 	class?: ProposalClass;
 	/**
@@ -9365,7 +9439,37 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				offset?: number | undefined;
 				workspaceId?: string | undefined;
 			};
-			output: EventRecord[];
+			output: (EventRecord | {
+				subjectName: string;
+				id: string;
+				timestamp: Date;
+				subjectId: string;
+				subjectType: string;
+				eventType: string;
+				userId: string;
+				data: Record<string, unknown>;
+				metadata?: Record<string, unknown>;
+				version: number;
+				causationId?: string;
+				correlationId?: string;
+				source: string;
+				isAgent?: boolean;
+				agentUserId?: string;
+				agentType?: string;
+				model?: string;
+				provider?: string;
+				costUsd?: number | null;
+				tokensIn?: number;
+				tokensOut?: number;
+				tokensTotal?: number;
+				latencyMs?: number;
+				toolCount?: number;
+				runStatus?: string;
+				finishReason?: string;
+				workspaceId?: string;
+				proposalId?: string;
+				sessionId?: string;
+			})[];
 			meta: object;
 		}>;
 		listByCorrelationId: import("@trpc/server").TRPCQueryProcedure<{
@@ -12959,7 +13063,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				targetType: "entity" | "workspace" | "profile" | "document" | "view" | "relation";
-				changeType: "create" | "update" | "delete";
+				changeType: "update" | "create" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
 				reasoning?: string | undefined;
@@ -13516,7 +13620,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				events: EventDefinition[];
 				observationNamespaces: ("dev" | "ci")[];
-				reservedPhases: (".validated" | ".completed" | ".failed")[];
+				reservedPhases: (".failed" | ".validated" | ".completed")[];
 			};
 			meta: object;
 		}>;
@@ -16778,7 +16882,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "target" | "both" | undefined;
+				direction?: "source" | "both" | "target" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -16808,7 +16912,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "target" | "both" | undefined;
+				direction?: "source" | "both" | "target" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -18499,7 +18603,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					profileEntityBentoTemplates?: Record<string, unknown> | undefined;
 				};
-				mode?: "create" | "update" | undefined;
+				mode?: "update" | "create" | undefined;
 				workspaceId?: string | undefined;
 				proposalId?: string | undefined;
 				appId?: string | undefined;
@@ -22911,7 +23015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		initLink: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				channel: "telegram" | "whatsapp" | "discord";
+				channel: "telegram" | "discord" | "whatsapp";
 				defaultChannelId?: string | undefined;
 			};
 			output: {
@@ -24618,7 +24722,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				events: {
 					pattern: string;
 					label: string;
-					source: "observed" | "declared" | "catalog";
+					source: "declared" | "observed" | "catalog";
 					profileSlug?: string | undefined;
 					observedCount?: number | undefined;
 				}[];
@@ -25403,7 +25507,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | null | undefined;
 				limit?: number | undefined;
-				kind?: "automation" | "webhook" | "notify" | "ai_feed" | "ai_react" | "message_out" | undefined;
+				kind?: "automation" | "webhook" | "ai_feed" | "ai_react" | "notify" | "message_out" | undefined;
 				eventType?: string | undefined;
 				lens?: "external" | "all" | "internal" | undefined;
 			};
@@ -26005,6 +26109,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					blockedReason?: "credential" | "permission" | "capability" | "policy" | "decision" | "physical" | undefined;
 					why?: string | undefined;
 					owedSince?: string | undefined;
+					attestedBy?: string | undefined;
+					attestedAt?: string | undefined;
+					retiredAt?: string | undefined;
+					retiredReason?: "session_cancelled" | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -26071,6 +26179,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					blockedReason?: "credential" | "permission" | "capability" | "policy" | "decision" | "physical" | undefined;
 					why?: string | undefined;
 					owedSince?: string | undefined;
+					attestedBy?: string | undefined;
+					attestedAt?: string | undefined;
+					retiredAt?: string | undefined;
+					retiredReason?: "session_cancelled" | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 			};
@@ -26208,6 +26320,27 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				expectedLabel: string;
 				kind: string;
 			};
+			meta: object;
+		}>;
+		attestOutput: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+			};
+			output: {
+				ok: true;
+				expectedLabel: string;
+				kind: string;
+			};
+			meta: object;
+		}>;
+		owed: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				workspaceId?: string | string[] | null | undefined;
+				projectId?: string | string[] | null | undefined;
+				limit?: number | undefined;
+			};
+			output: OwedSlot[];
 			meta: object;
 		}>;
 		outputs: import("@trpc/server").TRPCQueryProcedure<{
@@ -28069,6 +28202,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				needsYou: number;
 				distinct: number;
 				truncated: boolean;
+				blocked: number;
 			};
 			meta: object;
 		}>;
