@@ -49,7 +49,18 @@ const {
   mockCreateEventBackedProposal: vi.fn(),
 }));
 
-vi.mock("@synap/database", async () => {
+/**
+ * PARTIAL mock (`importOriginal` + spread) — see
+ * `src/__tripwires__/database-mock-total-ratchet.test.ts`. This was TOTAL and it
+ * had already gone dark: `countTodayAgentProposals` started calling `ne(...)`
+ * and the propose test failed with *No "ne" export is defined on the mock*.
+ * That comment below about the provenance hoist is the SECOND time the same
+ * thing happened to this file — it was patched by adding more names to the
+ * hand-list, which fixes one instance and leaves the class. Spreading the real
+ * module retires it: a name this file never fakes now resolves to the real one.
+ */
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
   mockReturning.mockResolvedValue([{ id: "receipt-1" }]);
   mockValues.mockReturnValue({ returning: mockReturning });
   mockDbInsert.mockImplementation(() => ({ values: mockValues }));
@@ -72,6 +83,7 @@ vi.mock("@synap/database", async () => {
     deduped: false,
   });
   return {
+    ...actual,
     db: {
       insert: mockDbInsert,
       select: mockDbSelect,
@@ -108,7 +120,13 @@ vi.mock("@synap/database", async () => {
   };
 });
 
-vi.mock("@synap/database/agent-governance", () => ({
+// PARTIAL — `permission-check.ts` also imports `resolveOriginTrust` from this
+// specifier and this factory never named it. Unreached by these fixtures today,
+// live gap tomorrow.
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("@synap/database/agent-governance")
+  >()),
   resolveAgentGovernanceDecision: mockGov,
   resolveGovernanceRule: vi.fn().mockResolvedValue(null),
 }));

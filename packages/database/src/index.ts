@@ -171,6 +171,14 @@ export {
   type EnsureSystemProfilesResult,
 } from "./utils/ensure-system-profiles.js";
 
+// Machine-written property defs (read-only in every editor) + their pass
+export {
+  MACHINE_WRITTEN_PROPERTY_SLUGS,
+  isMachineWrittenPropertySlug,
+  ensureMachineWrittenPropertiesReadOnly,
+  type MachineWrittenPropertySlug,
+} from "./utils/machine-written-properties.js";
+
 // DEPRECATED: ensureDefaultViews is no longer auto-called. The frontend
 // renders views ephemerally from profile data and persists them only when
 // explicitly saved. The ensure-default-views.ts module is kept for reference

@@ -273,12 +273,37 @@ export function registerEntitiesRoutes(app: HubHono): void {
           .describe(
             "Same as facetSlug but by profile id. Wins if both are set."
           ),
+        createdAfter: z
+          .string()
+          .optional()
+          .describe(
+            "Creation-date window, INCLUSIVE lower bound (ISO-8601). " +
+              "Together with createdBefore forms the half-open interval " +
+              "[createdAfter, createdBefore), so consecutive windows tile. " +
+              "Rejected with 400 when combined with `q` — see createdBefore."
+          ),
+        createdBefore: z
+          .string()
+          .optional()
+          .describe(
+            "Creation-date window, EXCLUSIVE upper bound (ISO-8601). " +
+              "NOT combinable with `q`: the `q` branch is a relevance-ranked " +
+              "top-N served by Typesense, and a date window is an exhaustive " +
+              "question, so silently truncating one to the other would " +
+              "under-report. Ask for the window without `q`."
+          ),
       }),
     },
     responses: {
       200: {
         description: "Array of entities",
         content: { "application/json": { schema: z.array(WireEntitySchema) } },
+      },
+      400: {
+        description:
+          "Malformed or unsupported filter combination — an unparseable " +
+          "createdAfter/createdBefore, or a date window combined with `q`.",
+        content: { "application/json": { schema: ErrorSchema } },
       },
       401: {
         description: "Unauthorized",
@@ -326,6 +351,27 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const facetSlug = query.facetSlug || undefined;
     const facetProfileId = query.facetProfileId || undefined;
 
+    // CREATION-DATE WINDOW. Parsed HERE rather than handed on as a string so an
+    // unparseable date is a 400 the caller can see, not a silent `Invalid Date`
+    // that compares false against every row and returns an empty page.
+    const parseWindowBound = (raw: string | undefined) => {
+      if (!raw) return undefined;
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+    const createdAfter = parseWindowBound(query.createdAfter);
+    const createdBefore = parseWindowBound(query.createdBefore);
+    if (createdAfter === null || createdBefore === null) {
+      return c.json(
+        {
+          error:
+            "createdAfter/createdBefore must be ISO-8601 timestamps (e.g. 2026-09-01T00:00:00Z)",
+        },
+        400
+      );
+    }
+    const hasDateWindow = Boolean(createdAfter || createdBefore);
+
     try {
       const effectiveWsIds = workspaceIdParam
         ? [workspaceIdParam]
@@ -354,6 +400,35 @@ export function registerEntitiesRoutes(app: HubHono): void {
       });
 
       if (q.length > 0) {
+        // ⚠️ THE `q` BRANCH DOES NOT APPLY THIS DOOR'S FILTERS. It is served by
+        // Typesense (`search.search`) and post-filters `profileSlug` only —
+        // `projectId`, `offset`, `scope` and `includePodWide` are accepted,
+        // documented, and NOT APPLIED here today. That silent drop is a known
+        // defect; it is recorded rather than widened.
+        //
+        // The date window REFUSES instead of joining that list. Two reasons,
+        // both decisive:
+        //   1. `q` is a RELEVANCE-RANKED top-N with no offset and no total. A
+        //      date window is an EXHAUSTIVE question ("everything I captured
+        //      this week"). Ranking a window and cutting it at `limit` returns
+        //      an answer that looks complete and is not — the exact
+        //      under-reporting the window exists to eliminate.
+        //   2. Pushing it into Typesense `filter_by` is the right long-term
+        //      fix, but the `createdAt` int64 field would have to be threaded
+        //      through `searchRouter.search` → `searchService.search` →
+        //      `buildFilter` (`@synap/search`), and even then the result stays
+        //      offset-less and top-N — a filter that LOOKS exhaustive and is
+        //      not is worse than a refusal.
+        // A 400 is actionable: drop `q`, or narrow the window another way.
+        if (hasDateWindow) {
+          return c.json(
+            {
+              error:
+                "createdAfter/createdBefore cannot be combined with q — full-text search returns a relevance-ranked top-N, not an exhaustive date window. Ask for the window without q.",
+            },
+            400
+          );
+        }
         const searchResp = await caller.search.search({
           userId,
           query: q,
@@ -393,6 +468,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
               ...(projectIdParam ? { projectId: projectIdParam } : {}),
               ...(facetSlug ? { facetSlug } : {}),
               ...(facetProfileId ? { facetProfileId } : {}),
+              ...(createdAfter ? { createdAfter } : {}),
+              ...(createdBefore ? { createdBefore } : {}),
             })
           )
         );
@@ -434,6 +511,8 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(projectIdParam ? { projectId: projectIdParam } : {}),
         ...(facetSlug ? { facetSlug } : {}),
         ...(facetProfileId ? { facetProfileId } : {}),
+        ...(createdAfter ? { createdAfter } : {}),
+        ...(createdBefore ? { createdBefore } : {}),
       });
 
       let rows = (listed as unknown[]).map((e) => entityToWire(e));

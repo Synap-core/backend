@@ -118,6 +118,54 @@ export function getPlaybookRunner(): PlaybookRunner | null {
 }
 
 /**
+ * IoC slot for the appointment materializer (`materializeScheduledSession`,
+ * @synap/api) — the ONE producer of `focus_sessions.status = 'scheduled'`.
+ * Same inversion, same reason, as `registerPlaybookRunner` above.
+ *
+ * A SEPARATE slot rather than a flag on `PlaybookRunner` because the two do
+ * genuinely different things: the runner creates a session + channel + run row
+ * and DISPATCHES AN AGENT; this creates a session that waits for a human and
+ * nothing else. Folding them would put a `if (appointment) return early` fork
+ * through the middle of the run spine, leaving most of that function dead on
+ * one of its two paths.
+ */
+export interface SessionSchedulerInput {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+  userId: string;
+  params?: Record<string, unknown>;
+  subjectId?: string | null;
+  /** The slot this appointment is FOR (the cron tick), not "now". */
+  scheduledFor: Date;
+  /** `undefined` ⇒ defer to the spine's own resolveGoal (see run-playbook). */
+  goalResolver?: (goalTemplate: string) => string | undefined;
+  /** WHAT materialized this appointment — stored under `metadata.scheduledBy`. */
+  scheduledBy?: { automationId?: string; automationRunId?: string };
+  metadata?: Record<string, unknown>;
+}
+
+export interface SessionSchedulerResult {
+  session: { id: string; channelId: string | null };
+  outcome: "created" | "rolled";
+  missedCount: number;
+}
+
+type SessionScheduler = (
+  input: SessionSchedulerInput
+) => Promise<SessionSchedulerResult>;
+
+let sessionScheduler: SessionScheduler | null = null;
+
+export function registerSessionScheduler(fn: SessionScheduler): void {
+  sessionScheduler = fn;
+}
+
+export function getSessionScheduler(): SessionScheduler | null {
+  return sessionScheduler;
+}
+
+/**
  * Dispatch a capability (verb or skill) through the CANONICAL router
  * `executeCapability` — which routes all 3 tiers (builtin / declarative / code)
  * + connectionSelector and gates internally. In-process via the IoC slot above.

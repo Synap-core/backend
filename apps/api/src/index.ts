@@ -1992,8 +1992,11 @@ try {
           // the former /internal/* HTTP loopback + BRIDGE_SECRET: everything is a
           // direct in-process call now.
           {
-            const { registerCapabilityExecutor, registerPlaybookRunner } =
-              await import("@synap/jobs/workers/automation-executor.js");
+            const {
+              registerCapabilityExecutor,
+              registerPlaybookRunner,
+              registerSessionScheduler,
+            } = await import("@synap/jobs/workers/automation-executor.js");
             const { registerAgentWaker } =
               await import("@synap/jobs/utils/agent-wake.js");
             const { registerMailFeedRunner } =
@@ -2028,6 +2031,14 @@ try {
             // to api's runPlaybook via this slot, so is-agent | external-agent |
             // hybrid all dispatch through the executor spine + triggerAutoRespond.
             registerPlaybookRunner((input) => api.runPlaybook(input));
+            // ONE appointment materializer: a `playbook_run` node whose mode is
+            // "appointment" creates a `status:'scheduled'` focus_session that
+            // WAITS for the human — it never reaches the runner above, so no
+            // agent is dispatched at a session the person was meant to open.
+            // This slot is the pod's ONLY producer of `FocusSessionStatus.SCHEDULED`.
+            registerSessionScheduler((input) =>
+              api.materializeScheduledSession(input)
+            );
             // ONE session-close door: the reapers and the automation executor
             // used to stamp `status:'closed'` with a raw UPDATE, skipping the
             // review pack, the session-bound ephemeral expiry and both halves

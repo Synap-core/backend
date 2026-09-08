@@ -8,11 +8,45 @@
  * This is WORKFLOW-SIDE infrastructure, not data-side. It has no relationship
  * to the `sessions` table, which is IS memory/compaction machinery.
  *
- * Lifecycle: active → paused ↔ active → closed
- *   (or: active/paused → stale, when the focus-session reaper — C8 lifecycle
- *   hygiene — finds no activity for REAPER_STALE_HOURS. Non-destructive:
- *   `stale` is not terminal, the row can still be completed/reopened like any
- *   other session; it only stops counting as a live "in progress" session.)
+ * ── LIFECYCLE ───────────────────────────────────────────────────────────────
+ * This block must account for EVERY member of `FocusSessionStatus`. It did not:
+ * it described `active → paused ↔ active → closed (or → stale)` while the enum
+ * also carried `forming` and `scheduled`, two pre-start states the prose had
+ * never heard of. A guard now derives both sets and fails when they diverge
+ * (`__tests__/focus-session-lifecycle-doc.test.ts`), so a new status cannot be
+ * added without this paragraph being updated in the same commit — prose alone
+ * decays exactly the way the first version of this note did.
+ *
+ * PRE-START (a row exists; the work has not begun):
+ *   - scheduled — waits for a CLOCK. The session was materialized ahead of time
+ *     for a moment it is FOR; a person opens it when that moment arrives.
+ *     Produced by `materializeScheduledSession`
+ *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
+ *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
+ *   - forming — waits for a PERSON. Reserved for a session that has been drafted
+ *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
+ *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
+ *     browser test fixture and an unrelated content status). It is NOT redundant
+ *     with triage — `services/focus-sessions/triage.ts` states outright that
+ *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
+ *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
+ *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
+ *     superfluous; do not repurpose or delete it without deciding what it means.
+ *
+ * RUNNING:  active → paused ↔ active
+ *
+ * EXITS (terminal — every one MUST go through `completeFocusSession`):
+ *   closed · failed · cancelled
+ *
+ * NON-TERMINAL DECAY:
+ *   - stale — auto-set by the focus-session reaper (C8 lifecycle hygiene) when
+ *     an `active`/`paused` row has had no `updatedAt` activity for
+ *     REAPER_STALE_HOURS. Non-destructive: the row can still be
+ *     completed/reopened like any other session; it only stops counting as a
+ *     live "in progress" session. The reaper is scoped to `('active','paused')`
+ *     ONLY — a `scheduled` row is never aged out, which is why the appointment
+ *     producer owns its own non-accumulation policy (roll-forward) rather than
+ *     relying on the reaper.
  */
 
 import { sql } from "drizzle-orm";

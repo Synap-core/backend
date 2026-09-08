@@ -67,8 +67,25 @@ import { scanTotalMockGaps } from "../../scripts/scan-total-mock-gaps.mjs";
  * `../utils/permission-check.js` (6), `@synap/database/agent-governance` (4),
  * `./_shared.js` (3). Note that all but the first sit in specifiers the
  * `@synap/database` file-count ratchet does not watch at all.
+ *
+ * 37 → 34 on 2026-09-09, four factories converted across three files. NOT
+ * preventive — three of those files were ALREADY BROKEN and this is what the
+ * two ratchets were built for:
+ *   - `__tests__/import-orchestrator-progress.test.ts` was collecting ZERO
+ *     TESTS (a new `artifacts` import in `record-session-artifact.ts`), which
+ *     reads as a passing file in every summary line except these.
+ *   - `utils/permission-check.dry-run.test.ts` died on a new `ne(...)`. Its own
+ *     comment records a PREVIOUS detonation patched by adding three more names
+ *     to the hand-list — the repair this file's header says not to make.
+ *   - `utils/__tests__/project-scope.test.ts` failed with an error naming the
+ *     `user-visible-where` mock while the hole was one module further down
+ *     (`podMemberWhere` is a re-export of `@synap/database`). Converting it
+ *     unmasked two assertions the Wave-2 pod-shared floor branch had left
+ *     stale, which the module error had been hiding.
+ * The remaining two conversions closed gaps that were live but unreached —
+ * `parseCsvTable`/`csvRowsToTypedImportItems` and `resolveOriginTrust`.
  */
-const BASELINE = 37;
+const BASELINE = 34;
 
 describe("tripwire: total vi.mock factories vs the imports they must cover", () => {
   const { totalFactories, findings } = scanTotalMockGaps() as {

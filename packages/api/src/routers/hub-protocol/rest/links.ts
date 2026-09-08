@@ -52,6 +52,36 @@ const LINK_ENDPOINT_TYPES = [
   "workspace",
 ] as const;
 
+/**
+ * The link types an agent may WRITE over the Hub Protocol.
+ *
+ * This is the schema `LinkType` union MINUS members that nothing produces and
+ * nothing reads — not an independent list. `__tripwires__/links-type-ssot.test.ts`
+ * DERIVES both halves (the union from the schema, the live set from the
+ * producers/readers in source) so this array cannot drift again in either
+ * direction: land a producer and the tripwire demands the member here; delete
+ * the last producer and it demands the member go.
+ *
+ * The four that were missing, and why three of them are now here:
+ *   - `blocked_by`   — producer + reader in `session-blocked-by.ts`. Without it
+ *                      an IS agent, which reaches the pod ONLY through Hub
+ *                      Protocol, could never declare that one unit of work
+ *                      blocks another — a first-class primitive it is expected
+ *                      to use.
+ *   - `spawned_from` — producer + reader in `@synap/database`'s
+ *                      `session-spawn.ts` (work lineage).
+ *   - `activates`    — producer in `playbooks.ts` / `services/rules`, reader in
+ *                      `services/rules` (automation → playbook).
+ *
+ * `provides_credential` is deliberately NOT here. Migration 0161 RETIRED it —
+ * it folded every such edge onto its target secret and then `DELETE FROM links
+ * WHERE link_type = 'provides_credential'`; dynamic tool auth now lives on the
+ * secrets connection registry (see `routers/tools.ts`, which says so in as many
+ * words). It has ZERO producers and ZERO readers in TypeScript. Allowlisting it
+ * for symmetry would let an agent create edges nothing can interpret — the very
+ * defect the `governance_rule` removal recorded one level up, in the endpoint
+ * union. It stays out until a producer lands.
+ */
 const LINK_TYPES = [
   "grants",
   "requires",
@@ -66,6 +96,9 @@ const LINK_TYPES = [
   "about",
   "documents",
   "concerns",
+  "activates",
+  "spawned_from",
+  "blocked_by",
 ] as const;
 
 const CreateLinkRequestSchema = z.object({

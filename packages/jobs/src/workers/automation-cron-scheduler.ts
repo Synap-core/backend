@@ -35,8 +35,24 @@ const logger = createLogger({ module: "automation-cron-scheduler" });
  * Parse a 5-field cron expression and compute the next run time from a given base.
  * Supports: minute hour dayOfMonth month dayOfWeek
  *
- * Simple forward-scan implementation — checks the next 1440 minutes (24h)
- * to find the next matching slot.
+ * Simple forward-scan implementation — walks forward a minute at a time to the
+ * next matching slot.
+ *
+ * ⚠️ This said "checks the next 1440 minutes (24h)". The code scans
+ * `366 * 24 * 60` — a YEAR. The stale number matters because it is exactly the
+ * window in which `0 9 * * 1` (weekly) and `0 9 1 * *` (monthly) would return
+ * `null`, and a `null` here is not a soft failure: the row can never leave the
+ * `isNull(nextRunAt)` branch, so the rule NEVER FIRES and is marked
+ * unschedulable. Someone reading the comment instead of the loop bound will
+ * conclude those recurrences are broken. One person already did, briefly.
+ *
+ * ⚠️ TIMEZONE: the match below uses `getHours`/`getDate`/`getDay`/`getMonth` —
+ * LOCAL getters — so an expression is interpreted in THIS PROCESS's timezone,
+ * not the author's. The runtime image is `node:20-alpine` with no `ENV TZ` and
+ * no TZ in the deploy config, so that is UTC in practice. There is no per-user
+ * or per-workspace timezone anywhere on the automation cron path. Any surface
+ * that lets someone pick a clock time MUST say which zone it means, or it is
+ * quietly scheduling their rule for a different hour than the one they read.
  */
 function computeNextRunAt(cronExpr: string, fromDate: Date): Date | null {
   const parts = cronExpr.trim().split(/\s+/);
@@ -308,7 +324,21 @@ export async function handleAutomationCronScheduler(): Promise<void> {
           triggerPayload: {
             type: "cron",
             expression: cronExpression,
-            scheduledAt: now.toISOString(),
+            // The moment this run was DUE, not the moment the tick got to it.
+            // `now` is the scheduler's wall clock, and the loop selects
+            // `nextRunAt <= now` — so a tick that runs three seconds late, or
+            // a backed-up queue, stamps 09:00:03 / 09:01:41 / 09:00:00 for the
+            // same weekly 09:00 rule. The only consumer today is the
+            // appointment branch of `steps/playbook-run.ts`, which writes this
+            // straight onto `metadata.scheduledFor` and shows it to a person as
+            // "your Monday 9am review" — a drifting stamp there is a recurring
+            // appointment that never quite reads as recurring.
+            //
+            // `nextRunAt` is non-null by construction here (it is the column
+            // this loop filters on), but the fallback is honest rather than a
+            // non-null assertion: with no due moment recorded, the tick IS the
+            // only moment we know.
+            scheduledAt: (automation.nextRunAt ?? now).toISOString(),
           },
         })
         .returning({ id: automationRuns.id });

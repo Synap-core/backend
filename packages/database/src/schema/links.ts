@@ -94,8 +94,18 @@ export type LinkEndpointType =
 //
 // Re-add it WITH its producer, not before. That is three lines (this union, the
 // dependency-free mirror in `@synap/playbooks`, the REST allowlist), and
-// `links-endpoint-type-ssot.test.ts` now DISCOVERS those sites by scanning
-// source, so nothing can be missed.
+// `links-endpoint-type-ssot.test.ts` DISCOVERS those sites by scanning source,
+// so nothing can be missed.
+//
+// ⚠️ THAT TRIPWIRE COVERS `LinkEndpointType` ONLY. This paragraph used to read
+// as though it guarded both unions; it never did, and while it said so the
+// `LinkType` allowlist in the Hub REST door sat FOUR members behind this file
+// (`blocked_by`, `spawned_from`, `activates`, `provides_credential`), which
+// meant an IS agent — whose only door to the pod is Hub Protocol — could not
+// declare that one unit of work blocks another. `LinkType` now has a tripwire of
+// its own, `__tripwires__/links-type-ssot.test.ts`, which additionally derives
+// which members are LIVE (something produces or reads them) so the write
+// allowlist tracks reality rather than symmetry.
 
 /** The relationship an edge expresses. */
 export type LinkType =

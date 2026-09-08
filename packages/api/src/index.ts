@@ -387,6 +387,16 @@ export {
   type RunPlaybookResult,
   type RunChainContext,
 } from "./services/playbooks/run-playbook.js";
+// The appointment half of the same seam: a scheduled `playbook_run` node in
+// `appointment` mode fills the `registerSessionScheduler` IoC slot with this.
+// The ONE producer of `focus_sessions.status = 'scheduled'`.
+export {
+  materializeScheduledSession,
+  SCHEDULED_FOR_METADATA_KEY,
+  SCHEDULED_MISSED_COUNT_METADATA_KEY,
+  type ScheduleSessionInput,
+  type ScheduleSessionResult,
+} from "./services/focus-sessions/schedule-session.js";
 // BYOA local-spawn slot: the `external-agent` executor's no-webhook branch
 // starts the coding CLI on the pod. The spawn needs node-pty + the DevPlane
 // workspace gate, both of which live in apps/api, so apps/api fills this slot at

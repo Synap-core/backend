@@ -357,6 +357,20 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("drafted")).toBe("Drafted");
   });
 
+  it("names `scheduled` explicitly, and keeps it distinct from `drafted`", () => {
+    // Was reachable ONLY through the humanizeToken fallback, which exists to
+    // stop a raw token leaking — not as an endorsement of the word.
+    expect(STATUS_LABELS.scheduled).toBe("Scheduled");
+    expect(resolveStatusLabel("scheduled")).toBe("Scheduled");
+    // Two DIFFERENT pre-start ideas: `drafted` waits for a PERSON to accept a
+    // suggestion; `scheduled` waits for a CLOCK. Collapsing them would replace
+    // two correct strings with one wrong one — the same failure as collapsing
+    // the two verb moods.
+    expect(resolveStatusLabel("scheduled")).not.toBe(
+      resolveStatusLabel("drafted")
+    );
+  });
+
   it("never renders a raw token for any known status", () => {
     for (const key of Object.keys(STATUS_LABELS)) {
       const label = resolveStatusLabel(key);

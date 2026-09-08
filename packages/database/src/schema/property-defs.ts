@@ -144,6 +144,19 @@ export interface PropertyUIHints {
   /** Authoring-time requiredness hint. The enforced flag is on the LINK row
    *  (`profile_properties.required`); this is the template's declaration of it. */
   required?: boolean;
+  /**
+   * This field is WRITTEN BY A MACHINE and merely DECLARED to the user: a job's
+   * outcome, a provenance stamp, an AI-derived score. Editors must render it
+   * read-only.
+   *
+   * Declared on the SCHEMA, never deny-listed per surface — relay's
+   * `isSchemaReadOnly` and `browser/`'s `InlinePropertyEditor` are two of N
+   * editors, and a per-surface list forks the moment the second one exists.
+   *
+   * The canonical slug set + the pass that converges it onto pods already
+   * seeded lives in `utils/machine-written-properties.ts`.
+   */
+  readOnly?: boolean;
 }
 
 /**

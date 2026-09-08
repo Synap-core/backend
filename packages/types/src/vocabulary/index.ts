@@ -423,6 +423,14 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   done: "Done",
   // an agent- or automation-originated session not yet accepted from triage
   drafted: "Drafted",
+  // ⚠️ NOT the same idea as `drafted` above, and the two must never be
+  // collapsed. `drafted` waits for a PERSON (has anyone accepted this
+  // suggestion?); `scheduled` waits for a CLOCK (this session starts at a
+  // time). A `focus_sessions.status` value — unlike `drafted`, which is a
+  // triage lens name. It reached users only through the `humanizeToken`
+  // fallback until now; that fallback exists to stop a raw token leaking, not
+  // as an endorsement, so the state is spelled out here.
+  scheduled: "Scheduled",
   // session POPULATION lenses (derived, never stored — see
   // `services/focus-sessions/session-kind.ts`): one `focus_sessions` table
   // holds a person's units of work, machine executions, and the containers an

@@ -26,7 +26,18 @@ import { describe, it, expect, vi } from "vitest";
 // ── Mock @synap/database — exports db + all drizzle helpers re-exported from it
 // project-scope.ts imports: { and, eq, inArray, isNull, isNotNull, or, db }
 // from "@synap/database". All must be present or vitest throws "No X export".
-vi.mock("@synap/database", () => ({
+/**
+ * PARTIAL mock (`importOriginal` + spread) — see
+ * `src/__tripwires__/database-mock-total-ratchet.test.ts`. This was TOTAL, and
+ * it is what actually broke the three `facetLens` tests: `project-scope.ts`
+ * grew a `podMemberWhere` call, `user-visible-where.ts` serves that name as a
+ * RE-EXPORT of `@synap/database`, and a total mock here left the re-export
+ * pointing at nothing. The error blamed the `user-visible-where` mock; the hole
+ * was one module further down. Spreading the real module makes a name this file
+ * never fakes resolve to the real one instead of vanishing.
+ */
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     // Chainable stub: from → (innerJoin) → where → subquery. Supports both the
     // facet-lens semi-join (from→innerJoin→where) and the plain subqueries
@@ -71,7 +82,21 @@ vi.mock("@synap/database/schema", () => ({
 }));
 
 // ── Mock user-visible-where helpers ──────────────────────────────────────────
-vi.mock("../user-visible-where.js", () => ({
+/**
+ * PARTIAL mock (`importOriginal` + spread), not a total one. This mock was
+ * TOTAL and went dark exactly as `src/__tripwires__/database-mock-total-ratchet.test.ts`
+ * describes: `project-scope.ts` grew a `podMemberWhere` call
+ * (`podSharedFacetWhere`, :243) and three tests started failing at RUNTIME with
+ * *No "podMemberWhere" export is defined on the mock* — a real regression in
+ * the module under test would have looked identical. Spreading the real module
+ * means a newly-used export resolves instead of exploding; only the two
+ * predicates these tests actually assert on stay faked.
+ *
+ * (The ratchet tripwire scans `@synap/database` mocks only. The failure mode is
+ * the module, not the package.)
+ */
+vi.mock("../user-visible-where.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../user-visible-where.js")>()),
   userVisibleWhere: (col: unknown, userId: string) => ({
     _tag: "userVisibleWhere",
     col,
@@ -362,7 +387,13 @@ describe("accessScopeWhere", () => {
       expect(floor.args).toHaveLength(3);
     });
 
-    it("facetLens:true adds a 4th floor branch (facet⋈membership inArray on entityId)", () => {
+    it("facetLens:true adds BOTH facet floor branches (workspace-scoped and pod-shared)", () => {
+      // ⚠️ This asserted `toHaveLength(4)` and a single added branch, written
+      // when `facetLens` added only `facetLensMemberWhere`. Wave 2 added the
+      // pod-shared twin (`podSharedFacetWhere`), so the opt-in now widens the
+      // floor by TWO branches. The count was stale, not wrong to have — it is
+      // what says "nothing ELSE crept into the floor", so it is updated rather
+      // than dropped.
       const floor = (
         accessScopeWhere({
           workspaceIdColumn: wsIdCol,
@@ -372,11 +403,29 @@ describe("accessScopeWhere", () => {
           facetLens: true,
         }) as any
       ).args[0];
-      expect(floor.args).toHaveLength(4);
-      // The added branch is facetLensMemberWhere = inArray(entityIdColumn, sub).
+      expect(floor.args).toHaveLength(5);
+
+      // 1. workspace-scoped: facetLensMemberWhere = inArray(entityIdColumn, sub)
       const facetBranch = floor.args[3];
       expect(facetBranch._tag).toBe("inArray");
       expect(facetBranch.col).toBe(entityIdCol);
+
+      // 2. pod-shared: and(isNull(ws), inArray(entityId, sub), podMemberWhere)
+      //    — the pod-member gate is the part that must never go missing: without
+      //    it a pod-wide faceted entity would be visible to everyone, not to the
+      //    pod's members.
+      const podShared = floor.args[4];
+      expect(podShared._tag).toBe("and");
+      expect(
+        podShared.args.some(
+          (x: any) => x?._tag === "inArray" && x.col === entityIdCol
+        )
+      ).toBe(true);
+      expect(
+        podShared.args.some(
+          (x: any) => x?._tag === "isNull" && x.col === wsIdCol
+        )
+      ).toBe(true);
     });
 
     it("facetLens:true + string lens makes the workspace narrow facet-aware (OR of ws-lens + facet inArray)", () => {
@@ -413,13 +462,28 @@ describe("accessScopeWhere", () => {
         (a: any) => a?._tag === "workspaceLensWhere"
       );
       expect(wsLens).toBeUndefined();
-      const podPersonalArm = result.args.find(
-        (a: any) =>
-          a?._tag === "and" &&
-          Array.isArray(a.args) &&
-          a.args.some((x: any) => x?._tag === "isNull")
-      );
-      expect(podPersonalArm).toBeDefined();
+      // The pod-personal arm is still there, but Wave 2 moved it: with
+      // `facetLens` on, the null-lens narrow became `or(podPersonal, podShared)`
+      // — "pod-wide rows I may see" rather than "my own pod-wide rows" — so a
+      // top-level `.find` no longer reaches it. Walk the tree instead of
+      // pinning the depth, which is what made this assertion stale.
+      const hasPodPersonal = (node: any): boolean => {
+        if (!node || typeof node !== "object") return false;
+        if (
+          node._tag === "and" &&
+          Array.isArray(node.args) &&
+          node.args.some(
+            (x: any) => x?._tag === "isNull" && x.col === wsIdCol
+          ) &&
+          node.args.some((x: any) => x?._tag === "eq" && x.col === ownerCol)
+        ) {
+          return true;
+        }
+        return Array.isArray(node.args)
+          ? node.args.some(hasPodPersonal)
+          : false;
+      };
+      expect(result.args.some(hasPodPersonal)).toBe(true);
     });
   });
 

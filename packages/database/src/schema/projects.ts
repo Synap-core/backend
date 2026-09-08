@@ -59,6 +59,22 @@ export const projects = pgTable(
      * health signal.
      */
     phase: text("phase"),
+    /**
+     * When this project is AIMED at (migration 0252). The one field that lets a
+     * long-horizon object go red: with no date a project can only ever be green,
+     * which is how goal layers die quietly.
+     *
+     * Nullable, and that is a statement rather than a default: an undated project
+     * is not late, it is UNDATED. (It also keeps the Control Plane's `pod_projects`
+     * mirror — "an accelerator, never an authority" — working unchanged; its sync
+     * selects an explicit column list and never sees this.)
+     *
+     * There is deliberately no `progress` or `health` column beside it. Both are
+     * DERIVED — progress from the contained work, health from this date against
+     * now() — for the same reason `phase` records above: a stored percentage is a
+     * number nobody recomputes.
+     */
+    targetDate: timestamp("target_date", { mode: "date", withTimezone: true }),
 
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),

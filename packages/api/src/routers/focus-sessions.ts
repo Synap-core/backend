@@ -14,11 +14,7 @@ import {
   eq,
   and,
   desc,
-  inArray,
-  isNotNull,
   focusSessions,
-  proposals,
-  users,
   capabilities,
   vaultGrants,
   assertGrantScoped,
@@ -103,7 +99,11 @@ import {
   type ResolvedScope,
 } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { displayNameForUser } from "./proposals/display.js";
+import {
+  attachSessionParticipants,
+  withSessionParticipants,
+  type SessionParticipants,
+} from "../services/focus-sessions/participants.js";
 
 // ── Shared input fragment ──────────────────────────────────────────────────
 
@@ -333,7 +333,8 @@ function queryUserSessions(
 type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
-} & Partial<SessionEdges> &
+} & SessionParticipants &
+  Partial<SessionEdges> &
   Partial<SessionOutputDependencies>;
 
 export const focusSessionsRouter = router({
@@ -378,8 +379,10 @@ export const focusSessionsRouter = router({
         /**
          * Only sessions run FROM this playbook definition (the session's own
          * `playbookId` column). Pair with `kind: "run"` or `kind: "all"` — the
-         * default `work` lens excludes playbook-linked sessions by definition,
-         * so `playbookId` alone would return nothing.
+         * default `work` lens excludes playbook-linked sessions except the
+         * `scheduled` ones (an appointment is a person's, see
+         * `services/focus-sessions/session-kind.ts`), so `playbookId` alone
+         * returns a playbook's pending appointments and nothing else.
          */
         playbookId: z.string().uuid().optional(),
         /**
@@ -417,9 +420,27 @@ export const focusSessionsRouter = router({
       // `kind` rides along on EVERY row in EVERY lens, same contract as
       // `triage`: pure, no query, and the one place the predicate is decided.
       const withKind = attachSessionKind(withTriage);
-      if (!input.edges) return withKind;
+      // WHO worked here — one shared derivation with `get` (see
+      // `services/focus-sessions/participants.ts`), so a list row and a detail
+      // page can never name different agents for the same session.
+      //
+      // UNCONDITIONAL, not behind a flag like `edges`. The cost is two indexed
+      // reads for the whole page (`idx_proposals_session_id`, then one
+      // `users` lookup that is SKIPPED when the page has no participants), and
+      // the alternative is worse in kind rather than in degree: an opt-in flag
+      // leaves the DEFAULT answer wrong, which is exactly why every consumer
+      // reached past this door for the raw `agentIds` invite list instead. A
+      // field present on the type and populated only under a flag nobody sets
+      // is the "declared on the wire, populated by nobody" shape this codebase
+      // keeps paying for. `triage`, `kind` and `parentSessionId` ride along the
+      // same way and for the same reason.
+      const withParticipants = await attachSessionParticipants(
+        withKind,
+        requireUserId(ctx.userId)
+      );
+      if (!input.edges) return withParticipants;
       // Second batch projection, ONE more links query for the whole page.
-      const withEdges = await attachSessionEdges(withKind);
+      const withEdges = await attachSessionEdges(withParticipants);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.
@@ -699,21 +720,11 @@ export const focusSessionsRouter = router({
    * Get a single focus session by ID.
    * Scoped to the authenticated user — cannot read another user's session.
    *
-   * Returns `participants` — everyone STAFFED on this session, from the two
-   * stores that each know half the answer:
-   *
-   *   1. DERIVED — agents that actually WORKED here, read off the proposals they
-   *      filed against the session. This is evidence, and it is why the roster
-   *      was derived in the first place.
-   *   2. DECLARED — `focus_sessions.agentIds`. Historically an INVITE LIST that
-   *      only create-time writers could set (every door assigned it wholesale;
-   *      nothing appended), so an agent that joined mid-flight could not be
-   *      recorded and the column was worth ignoring. `attachSessionAgent` is now
-   *      the append door, so a declared-but-not-yet-productive agent is a real
-   *      answer this surface must show.
-   *
-   * UNIONED, not one or the other: an agent that filed no proposal is still on
-   * the session, and an agent nobody declared still did the work.
+   * Returns `participants` — everyone STAFFED on this session, unioned from the
+   * declared and the derived store. The derivation lives in
+   * `services/focus-sessions/participants.ts` and is SHARED with `list`, which
+   * is the whole reason it is no longer inline here: a detail page and a list
+   * row must never name different agents for the same session.
    */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
@@ -732,68 +743,17 @@ export const focusSessionsRouter = router({
         });
       }
 
-      // Same access predicate every other proposal read uses — owning the
-      // session does not by itself entitle you to a proposal filed into a
-      // workspace you have since left.
-      const participantRows = await db
-        .selectDistinct({ agentUserId: proposals.agentUserId })
-        .from(proposals)
-        .where(
-          and(
-            eq(proposals.sessionId, row.id),
-            isNotNull(proposals.agentUserId),
-            userVisibleWhere(proposals.workspaceId, requireUserId(ctx.userId))
-          )
-        );
-      // SORTED. Postgres guarantees no ordering for SELECT DISTINCT, and the UI
-      // assigns each party a colour by INDEX — so an unsorted set lets two agents
-      // swap tones between two refetches of the same session, on a surface that
-      // polls. Deterministic order is the difference between a stable roster and
-      // a flickering one.
-      // UNION of the two stores — declared (`agentIds`, now appendable via
-      // `attachSessionAgent`) and derived (proposals filed). A Set collapses an
-      // agent present in both.
-      const participantIds = [
-        ...new Set([
-          ...participantRows
-            .map((p) => p.agentUserId)
-            .filter((id): id is string => Boolean(id)),
-          ...((row.agentIds as string[] | null) ?? []).filter(Boolean),
-        ]),
-      ].sort();
-
-      // Resolve to display names in the SAME batch shape `proposals.list` uses
-      // for its agent labels — one `inArray`, one `displayNameForUser`. A bare
-      // uuid is not a name, and a party cluster rendering `4f2a…` would be a
-      // worse answer than the empty list this replaces.
-      const participants: Array<{ id: string; name: string }> = [];
-      if (participantIds.length > 0) {
-        const agentRows = await db
-          .select({
-            id: users.id,
-            name: users.name,
-            email: users.email,
-            userType: users.userType,
-            agentMetadata: users.agentMetadata,
-          })
-          .from(users)
-          .where(inArray(users.id, participantIds));
-        const nameById = new Map(
-          agentRows.map((u) => [u.id, displayNameForUser(u)])
-        );
-        for (const id of participantIds) {
-          participants.push({ id, name: nameById.get(id) ?? id.slice(0, 8) });
-        }
-      }
-
       // Derived detour lineage (see `services/focus-sessions/parent-lineage.ts`)
       // — mirrors `synap_get_session` (mcp/handlers/session.ts) so the two
       // doors can never disagree.
       // Same projection the list door attaches (pure, no query) so a detail
       // page never re-derives triage-pending from origin + metadata + status.
+      const staffed = await withSessionParticipants(
+        row,
+        requireUserId(ctx.userId)
+      );
       return withParentSessionId({
-        ...row,
-        participants,
+        ...staffed,
         triage: projectTriage(row),
         kind: projectSessionKind(row),
       });

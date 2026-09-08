@@ -205,6 +205,93 @@ export interface InstantiateInput {
    * added on top of whatever the caller passes and cannot be overridden here.
    */
   metadata?: Record<string, unknown>;
+  /**
+   * The lifecycle state the session is BORN in. Two values only, and the choice
+   * is about WHO the session is waiting for:
+   *
+   * - `"active"` (DEFAULT — every pre-existing caller, unchanged) — the session
+   *   is live now. The caller is expected to dispatch an agent / open a channel.
+   * - `"scheduled"` — an APPOINTMENT. The session materialized ahead of time and
+   *   is waiting for a HUMAN to open it. The caller MUST NOT kick off an agent.
+   *
+   * Deliberately narrowed to these two rather than the whole status union: this
+   * function births sessions, and `closed`/`failed`/`stale` are exits that have
+   * their own doors (`completeFocusSession`, the reaper). `scheduled` is already
+   * in OPEN_SESSION_STATUSES and UPDATABLE_SESSION_STATUSES, so the human's
+   * scheduled → active transition needs no new door.
+   */
+  status?: "active" | "scheduled";
+  /**
+   * WHO AUTHORED this session — `focus_sessions.origin`. Defaults to
+   * `"playbook"`, which is what every pre-existing caller gets and what this
+   * function has always written.
+   *
+   * The appointment path overrides it to `"human"` on purpose; the argument for
+   * that lives at the call site (`schedule-session.ts`), because it is the kind
+   * of value the next reader will assume is a bug.
+   */
+  origin?: "playbook" | "automation" | "agent" | "human";
+}
+
+/**
+ * Resolve a playbook the way every SCHEDULED door must: by id, else by NAME
+ * within the workspace, else a pod-wide (NULL-workspace) playbook — then assert
+ * the caller's workspace may actually see it.
+ *
+ * EXTRACTED from `runPlaybook` (which now calls it) rather than copied, because
+ * a second door onto the same config — the appointment materializer — must not
+ * re-derive the by-name fallback OR the cross-workspace guard. `playbooks.id` on
+ * a flow node has no FK and is editor-authored config, so that guard is the
+ * write-side IDOR floor; two copies of it is exactly how one of them ends up a
+ * version behind.
+ *
+ * Throws (never returns null) — a scheduled node naming a playbook that is gone
+ * or invisible is a config error the run must fail on, not silently skip.
+ */
+export async function resolveRunnablePlaybook(input: {
+  playbookId?: string;
+  playbookName?: string;
+  workspaceId: string;
+}): Promise<Playbook> {
+  const db = await getDb();
+
+  let playbook = input.playbookId
+    ? ((await db.query.playbooks.findFirst({
+        where: eq(playbooks.id, input.playbookId),
+      })) as Playbook | undefined)
+    : undefined;
+  if (!playbook && input.playbookName) {
+    playbook = ((await db.query.playbooks.findFirst({
+      where: and(
+        eq(playbooks.name, input.playbookName),
+        eq(playbooks.workspaceId, input.workspaceId)
+      ),
+    })) ??
+      (await db.query.playbooks.findFirst({
+        where: and(
+          eq(playbooks.name, input.playbookName),
+          isNull(playbooks.workspaceId)
+        ),
+      }))) as Playbook | undefined;
+  }
+  if (!playbook) {
+    throw new Error(
+      `Playbook not found (${
+        input.playbookId ?? input.playbookName ?? "no id/name given"
+      })`
+    );
+  }
+
+  if (playbook.workspaceId && playbook.workspaceId !== input.workspaceId) {
+    throw new Error(
+      // Named for THIS function, not for `runPlaybook`: since the appointment
+      // producer (`materializeScheduledSession`) started sharing this door,
+      // that prefix sent whoever read the log looking at the wrong caller.
+      `resolveRunnablePlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
+    );
+  }
+
+  return playbook;
 }
 
 /**
@@ -261,14 +348,14 @@ export async function instantiateSession(
       // Typed origin (migration 0240) — instantiating from a playbook IS the
       // definition of a playbook-origin session; the caller knows it without
       // inspecting metadata.
-      origin: "playbook",
+      origin: input.origin ?? "playbook",
       projectId: input.projectId ?? null,
       subjectEntityId: input.subjectId ?? null,
       expectedOutputs,
       currentStage,
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
-      status: "active",
+      status: input.status ?? "active",
       metadata: {
         ...(input.metadata ?? {}),
         [RUN_PROMPT_METADATA_KEY]: prompt,

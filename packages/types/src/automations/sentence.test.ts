@@ -25,6 +25,7 @@ import {
   triggerToSentence,
   type ActionVerb,
   type TriggerSubjectCategory,
+  UnevaluableConditionError,
 } from "./sentence.js";
 import { validateEventPattern } from "../events/unified.js";
 import { TRIGGER_FILTER_OPERATORS } from "./filter-operators.js";
@@ -507,11 +508,46 @@ describe("the WHERE operator survives compilation", () => {
     }
   });
 
-  it("emits NOTHING for an operator the runtime cannot evaluate", () => {
-    // Emitting a literal would silently turn "contains" into "equals"; the rule
-    // compiler refuses these by name instead.
+  it("REFUSES an operator the runtime cannot evaluate, by name", () => {
+    // ⚠️ THIS TEST USED TO ASSERT THE OPPOSITE — that an unevaluable operator
+    // "emits NOTHING" — and it was pinning the dangerous contract.
+    //
+    // Emitting nothing does not drop the CONDITION, it drops the NARROWING: the
+    // filter key disappears and the rule matches everything the trigger fires
+    // on. A user who wrote "only when status contains urgent" gets a rule that
+    // runs on every status, with no error, no empty state and a sentence that
+    // still reads correctly. That is the silent-widening defect this codebase
+    // has already shipped once.
+    //
+    // `toBackendTrigger` now throws `UnevaluableConditionError` naming the
+    // offending operator AND the six the matcher understands, which is the
+    // strictly better behaviour: a refusal the author can act on. Asserting the
+    // THROW, and asserting the message names the operator, so a future "fix"
+    // that restores the silent drop fails here.
+    expect(UNEVALUABLE_CONDITION_OPERATORS.length).toBeGreaterThan(0);
     for (const op of UNEVALUABLE_CONDITION_OPERATORS) {
-      expect(filtersFor(row(op))).toBeUndefined();
+      let thrown: unknown;
+      try {
+        filtersFor(row(op));
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, `operator "${op}" was not refused`).toBeInstanceOf(
+        UnevaluableConditionError
+      );
+      // The refusal must be actionable — naming the operator is what makes it
+      // a fixable message rather than "invalid rule".
+      expect(String((thrown as Error).message)).toContain(
+        op.replace(/_/g, " ")
+      );
+    }
+  });
+
+  it("does NOT refuse an operator the runtime can evaluate", () => {
+    // POSITIVE CONTROL. Without it, a change that threw on EVERYTHING would
+    // satisfy the test above while breaking every rule in the product.
+    for (const op of ["is", "is_not", "greater_than", "less_than"] as const) {
+      expect(() => filtersFor(row(op))).not.toThrow();
     }
   });
 

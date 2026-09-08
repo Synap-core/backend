@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildPlaybookRunFlowDefinition } from "./cron-automation.js";
+import { normalizePlaybookScheduleMode } from "@synap/playbooks";
 
 /**
  * W2 (radar kind-fan-out): a scheduled playbook with a `subjectProfile`
@@ -85,5 +86,81 @@ describe("buildPlaybookRunFlowDefinition", () => {
     });
     expect(flow.nodes).toHaveLength(1);
     expect(flow.nodes[0].type).toBe("playbook_run");
+  });
+});
+
+/**
+ * APPOINTMENT MODE — `schedule.mode` reaches the flow node.
+ *
+ * The seam that matters: the stored `schedule.mode` is what the user expressed,
+ * the node's `mode` is what the executor branches on, and NOTHING between them
+ * is typed (the `schedule` column is JSONB, the node `data` is a bag). A mode
+ * that never lands on the node is an appointment schedule that silently runs an
+ * agent — the exact "declared on the wire, populated by nobody" defect this
+ * repo keeps paying for. So assert the VALUE arrives, in both flow shapes.
+ */
+describe("buildPlaybookRunFlowDefinition — appointment mode", () => {
+  it('mode:"appointment" lands on the single playbook_run node', () => {
+    const flow = buildPlaybookRunFlowDefinition("pb-3", {
+      playbookName: "Weekly review",
+      mode: "appointment",
+    });
+    expect(flow.nodes).toHaveLength(1);
+    expect((flow.nodes[0].data as { mode?: string }).mode).toBe("appointment");
+  });
+
+  it('mode:"appointment" also lands on the LOOP-BODY node of a kind fan-out', () => {
+    // A kind-bound appointment schedule ("a review session per client, every
+    // Monday") emits query → loop → playbook_run. The mode has to reach the
+    // BODY node; landing it only on the single-node shape would make every
+    // per-entity appointment run an agent instead.
+    const flow = buildPlaybookRunFlowDefinition("pb-4", {
+      playbookName: "Client review",
+      subjectProfile: { profileSlug: "client" },
+      mode: "appointment",
+    });
+    const run = flow.nodes.find((n) => n.type === "playbook_run");
+    expect(run).toBeDefined();
+    expect((run!.data as { mode?: string }).mode).toBe("appointment");
+    // …and the subject binding survives alongside it.
+    expect(
+      (run!.data as { paramsMapping?: Record<string, string> }).paramsMapping
+        ?.entityId
+    ).toBe("{{loop.item.id}}");
+  });
+
+  it('absent / "run" mode emits NO `mode` key at all (byte-identical to pre-feature nodes)', () => {
+    // Every flow definition already stored was written without this key. A
+    // default-stamped `mode:"run"` would make every reconcile see drift and
+    // rewrite rows that did not change.
+    const bare = buildPlaybookRunFlowDefinition("pb-5", { playbookName: "X" });
+    expect(Object.keys(bare.nodes[0].data as object)).not.toContain("mode");
+    const explicit = buildPlaybookRunFlowDefinition("pb-6", {
+      playbookName: "X",
+      mode: "run",
+    });
+    expect(Object.keys(explicit.nodes[0].data as object)).not.toContain("mode");
+  });
+});
+
+describe("normalizePlaybookScheduleMode — the ONE decision about an unknown mode", () => {
+  it('only the exact string "appointment" opts in; everything else is a run', () => {
+    expect(normalizePlaybookScheduleMode("appointment")).toBe("appointment");
+    // The JSONB column can hold anything a hand-edit or an older client wrote.
+    // Every one of these must fall to "run" — failing OPEN here would turn a
+    // typo into "stop dispatching the agent", a silent stoppage.
+    for (const bad of [
+      undefined,
+      null,
+      "",
+      "run",
+      "Appointment",
+      "appointments",
+      42,
+      {},
+      ["appointment"],
+    ]) {
+      expect(normalizePlaybookScheduleMode(bad)).toBe("run");
+    }
   });
 });

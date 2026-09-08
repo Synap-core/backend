@@ -64,7 +64,29 @@ import { dirname, join, relative } from "node:path";
 // was converted to `importOriginal` + spread when the review-authority ladder was
 // merged onto one path and started importing `and` / `inArray` / `workspaceMembers`
 // (a total factory would have gone stale exactly there).
-const BASELINE = 64;
+// 64 → 63 on 2026-09-09: `utils/__tests__/project-scope.test.ts` converted to
+// `importOriginal` + spread. It was not a preventive conversion — the total mock
+// had already gone dark exactly as this file describes. `project-scope.ts` grew a
+// `podMemberWhere` call; `utils/user-visible-where.ts` serves that name as a
+// RE-EXPORT of `@synap/database`; the total mock left the re-export resolving to
+// nothing, and three `facetLens` tests failed with an error naming the
+// `user-visible-where` mock — one module away from the actual hole. Converting it
+// also unmasked two assertions left stale by the Wave-2 pod-shared floor branch,
+// which the module error had been hiding.
+// 63 → 62 on 2026-09-09: `utils/permission-check.dry-run.test.ts` converted.
+// Also already dark, on the same day and by the same mechanism:
+// `countTodayAgentProposals` started calling `ne(...)` and the propose test died
+// with *No "ne" export is defined on the mock*. That file's own comment records
+// a PREVIOUS instance ("a total mock must name them or every governed write
+// throws") patched by adding three more names to the hand-list — which fixes the
+// instance and leaves the class. Two dark files found in one sweep is the
+// argument for converting rather than re-listing.
+// 62 → 61 on 2026-09-09: `__tests__/import-orchestrator-progress.test.ts`
+// converted. This one was the header's scenario verbatim — a new `artifacts`
+// import in `services/focus-sessions/record-session-artifact.ts` killed the file
+// at COLLECTION and it reported "0 tests", so three real tests had stopped
+// running with no red anywhere. Third dark file found in one sweep.
+const BASELINE = 61;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

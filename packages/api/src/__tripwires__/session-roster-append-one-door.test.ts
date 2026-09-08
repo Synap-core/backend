@@ -138,7 +138,38 @@ describe("tripwire: session roster append has one door, on every door", () => {
   it("the derived participant roster includes DECLARED agents, not only proposers", () => {
     // The union is the point: an agent attached but not yet productive is on the
     // session, and the roster surface must say so.
+    //
+    // THIS ASSERTION WAS RE-POINTED, and how it broke is the lesson. It used to
+    // pin a CAST EXPRESSION in the router — `/row\.agentIds as string\[\] \|
+    // null/` — which is an implementation detail, not the invariant. Extracting
+    // the derivation into `services/focus-sessions/participants.ts` so `list`
+    // could share it with `get` deleted that cast and turned this red, while the
+    // union it guards became MORE correct, not less. A guard that goes red when
+    // the thing it protects improves is watching the wrong noun. (The sibling
+    // failure mode is worse and has happened here: routing call sites through a
+    // shared helper moves the scanned pattern INTO the helper and the scan then
+    // watches a shrinking set, silently GREEN.)
+    //
+    // So it now asserts the NOUN: the union is derived in ONE service, that
+    // service reads the DECLARED column, and BOTH doors go through it — which is
+    // what makes a list row and a detail page unable to name different agents.
+    // The union's actual BEHAVIOUR (all four declared/derived quadrants, the
+    // dedup, and the sort) is asserted for real, against the real function, in
+    // `services/focus-sessions/__tests__/participants.test.ts`.
+    const service = read("services/focus-sessions/participants.ts");
+    // It reads the DECLARED half — not proposers only.
+    expect(service).toMatch(/session\.agentIds/);
+    // ...and unions it with the DERIVED half, off the proposals the agent filed.
+    expect(service).toMatch(/proposals\.agentUserId/);
+
     const trpc = read("routers/focus-sessions.ts");
-    expect(trpc).toMatch(/row\.agentIds as string\[\] \| null/);
+    // BOTH doors, through the one service. `get` takes the single-session form,
+    // `list` the batch form; a door that stopped calling in would be back to
+    // naming a different roster than its sibling.
+    expect(trpc).toMatch(/withSessionParticipants\(/);
+    expect(trpc).toMatch(/attachSessionParticipants\(/);
+    // And the router must NOT have grown a second, local derivation behind the
+    // service's back — the same one-door rule this file enforces for the append.
+    expect(trpc).not.toMatch(/selectDistinct\(\{\s*agentUserId/);
   });
 });

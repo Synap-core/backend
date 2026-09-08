@@ -1309,6 +1309,17 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "always_on",
     addedBy: "0183_ai_teaching_substrate_columns.sql",
   },
+
+  // Proof-it-ran (0254): `skills.proven_at` records the FIRST successful run.
+  // Absence means a pod is on a pre-0254 schema where `markSkillProven`'s
+  // UPDATE (execute-capability.ts) would fail on every capability run — the
+  // stamp is best-effort and swallowed, so the miss would be SILENT and every
+  // generated capability would read "never proven" forever.
+  {
+    table: "skills",
+    column: "proven_at",
+    addedBy: "0254_skills_proven_at.sql",
+  },
   {
     table: "profiles",
     column: "ai_posture",
@@ -1404,6 +1415,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "projects",
     column: "slug",
     addedBy: "0200_project_slug.sql",
+  },
+  // The project horizon (0252) — the only thing that can make a long-horizon
+  // object late. SAME baseline exemption as `slug`/`phase` above: `projects` is
+  // created by 0151, not by the baseline, so this tripwire is the column's ONLY
+  // startup guard.
+  {
+    table: "projects",
+    column: "target_date",
+    addedBy: "0252_projects_target_date.sql",
   },
   // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
   // policy. New table; checking one column confirms the migration ran.

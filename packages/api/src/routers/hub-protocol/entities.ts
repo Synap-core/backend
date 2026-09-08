@@ -52,6 +52,19 @@ export const entitiesRouter = router({
         /** Kind + Facets filter — only entities carrying a live facet of this role-profile. */
         facetSlug: z.string().optional(),
         facetProfileId: z.string().uuid().optional(),
+        /**
+         * Creation-date window, half-open `[createdAfter, createdBefore)`.
+         * Forwarded verbatim to the regular `list` procedure, which owns the
+         * semantics (inclusive lower / exclusive upper, inverted window = 400).
+         *
+         * DECLARED HERE ON PURPOSE: this forwarder is a WHITELIST — zod strips
+         * every key it does not name, so a param added only to `entities.list`
+         * is silently dropped for every Hub and MCP caller, 200 OK and the
+         * filter gone. That has already happened once on this router (`content`
+         * on `createEntity`, essay dropped into a NULL documentId).
+         */
+        createdAfter: z.coerce.date().optional(),
+        createdBefore: z.coerce.date().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -82,6 +95,8 @@ export const entitiesRouter = router({
         ...(input.facetProfileId
           ? { facetProfileId: input.facetProfileId }
           : {}),
+        ...(input.createdAfter ? { createdAfter: input.createdAfter } : {}),
+        ...(input.createdBefore ? { createdBefore: input.createdBefore } : {}),
       });
 
       return result.entities;

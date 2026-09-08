@@ -25,7 +25,6 @@ import {
   eq,
   and,
   desc,
-  isNull,
   notInArray,
   channels,
   entities,
@@ -50,7 +49,11 @@ import type {
   InputStrategy,
   PlaybookStage,
 } from "@synap/playbooks";
-import { instantiateSession, runPromptFor } from "./playbook-lifecycle.js";
+import {
+  instantiateSession,
+  runPromptFor,
+  resolveRunnablePlaybook,
+} from "./playbook-lifecycle.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -372,48 +375,16 @@ async function resolveInputItems(
 export async function runPlaybook(
   input: RunPlaybookInput
 ): Promise<RunPlaybookResult> {
-  const db = await getDb();
-
   // Resolve the playbook — by id, else by NAME within this workspace (then a
-  // pod-wide NULL-workspace playbook). By-name is the template-friendly form: a
-  // capability seeds a playbook + an automation together, and the automation
-  // references the playbook by its stable name rather than a runtime id it can't
-  // know at author time (mirrors entity resolution by profileSlug).
-  let playbook = input.playbookId
-    ? ((await db.query.playbooks.findFirst({
-        where: eq(playbooks.id, input.playbookId),
-      })) as Playbook | undefined)
-    : undefined;
-  if (!playbook && input.playbookName) {
-    playbook = ((await db.query.playbooks.findFirst({
-      where: and(
-        eq(playbooks.name, input.playbookName),
-        eq(playbooks.workspaceId, input.workspaceId)
-      ),
-    })) ??
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, input.playbookName),
-          isNull(playbooks.workspaceId)
-        ),
-      }))) as Playbook | undefined;
-  }
-  if (!playbook) {
-    throw new Error(
-      `Playbook not found (${
-        input.playbookId ?? input.playbookName ?? "no id/name given"
-      })`
-    );
-  }
-
-  // Cross-workspace guard: a run may only target a playbook from its own
-  // workspace or a pod-wide (NULL) one. The scheduled path's playbookId is
-  // editor-authored config, so defend in depth (the column has no FK).
-  if (playbook.workspaceId && playbook.workspaceId !== input.workspaceId) {
-    throw new Error(
-      `runPlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
-    );
-  }
+  // pod-wide NULL-workspace playbook), with the cross-workspace visibility guard.
+  // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
+  // through the same function, so the by-name fallback and the write-side IDOR
+  // floor exist once, not once per scheduled door.
+  const playbook = await resolveRunnablePlaybook({
+    playbookId: input.playbookId,
+    playbookName: input.playbookName,
+    workspaceId: input.workspaceId,
+  });
 
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.

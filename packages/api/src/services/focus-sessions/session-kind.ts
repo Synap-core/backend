@@ -38,6 +38,7 @@
 
 import {
   and,
+  eq,
   inArray,
   isNull,
   isNotNull,
@@ -108,10 +109,30 @@ function metadataKeyWhere(
  */
 const ACCEPTED_PATH = drizzleSql.raw(`'{triage,acceptedAt}'`);
 
+/**
+ * A SCHEDULED session is never a run — nothing has executed.
+ *
+ * `run` means "a machine EXECUTION that happens to be recorded as a session"
+ * (see the header). An appointment materialised ahead of time has run nothing:
+ * it is a person's work, waiting for that person, and the whole reason it
+ * exists is to appear in their working list at the right moment.
+ *
+ * Without this clause it would be classified `run` twice over — it carries
+ * `origin: "playbook"` (truthfully: a playbook shaped it) and a `playbookId`
+ * (truthfully: that one) — and Work's default `kind: "work"` lens would exclude
+ * it. The feature would ship invisible, with every gate green.
+ *
+ * Fixed HERE rather than by stamping a friendlier `origin`, because `origin`
+ * answers "what shaped this row" and is correct as it stands. It is the
+ * EXECUTION reading that was wrong, and this is the one file that owns it.
+ */
+const SCHEDULED_STATUS = "scheduled";
+
 /** Run signals, before the receipt override. */
 function runSignalWhere(): SQL {
   return and(
     drizzleSql`${focusSessions.metadata} #>> ${ACCEPTED_PATH} IS NULL`,
+    not(eq(focusSessions.status, SCHEDULED_STATUS)),
     or(
       inArray(focusSessions.origin, [...RUN_ORIGINS]),
       isNotNull(focusSessions.playbookId),
@@ -124,6 +145,8 @@ function runSignalWhere(): SQL {
 function noRunSignalWhere(): SQL {
   return or(
     drizzleSql`${focusSessions.metadata} #>> ${ACCEPTED_PATH} IS NOT NULL`,
+    // The mirror of the clause in `runSignalWhere`: an appointment is work.
+    eq(focusSessions.status, SCHEDULED_STATUS),
     and(
       or(
         isNull(focusSessions.origin),
@@ -149,6 +172,16 @@ export interface SessionKindProjectable {
   origin?: string | null;
   playbookId?: string | null;
   metadata?: unknown;
+  /**
+   * REQUIRED, and not optional — the compiler is the enforcement.
+   *
+   * It was `status?:` under this very comment, which is the defect this file's
+   * header warns about wearing the disguise of a fix: a door that narrows its
+   * select and drops `status` would silently classify EVERY appointment as a
+   * `run`, and nothing would fail. Optionality made the guard a suggestion.
+   * `tsc` now refuses the narrowed select at the call site instead.
+   */
+  status: string | null;
 }
 
 function metadataValue(metadata: unknown, key: string): unknown {
@@ -167,6 +200,8 @@ export function projectSessionKind(row: SessionKindProjectable): SessionKind {
   const triage = metadataValue(row.metadata, "triage") as
     { acceptedAt?: unknown } | null | undefined;
   if (triage?.acceptedAt != null) return "work";
+  // A scheduled session has executed nothing — see `runSignalWhere`.
+  if (row.status === SCHEDULED_STATUS) return "work";
   const isRun =
     (!!row.origin && (RUN_ORIGINS as readonly string[]).includes(row.origin)) ||
     !!row.playbookId ||

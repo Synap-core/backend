@@ -2206,6 +2206,19 @@ export interface PropertyUIHints {
 	/** Authoring-time requiredness hint. The enforced flag is on the LINK row
 	 *  (`profile_properties.required`); this is the template's declaration of it. */
 	required?: boolean;
+	/**
+	 * This field is WRITTEN BY A MACHINE and merely DECLARED to the user: a job's
+	 * outcome, a provenance stamp, an AI-derived score. Editors must render it
+	 * read-only.
+	 *
+	 * Declared on the SCHEMA, never deny-listed per surface — relay's
+	 * `isSchemaReadOnly` and `browser/`'s `InlinePropertyEditor` are two of N
+	 * editors, and a per-surface list forks the moment the second one exists.
+	 *
+	 * The canonical slug set + the pass that converges it onto pods already
+	 * seeded lives in `utils/machine-written-properties.ts`.
+	 */
+	readOnly?: boolean;
 }
 declare enum PropertyValueType {
 	STRING = "string",
@@ -8431,6 +8444,41 @@ declare const SESSION_KINDS: readonly [
 	"receipt"
 ];
 export type SessionKind = (typeof SESSION_KINDS)[number];
+/**
+ * Session PARTICIPANTS — the roster of everyone staffed on a focus session,
+ * projected onto a session row.
+ *
+ * Lives here, beside `parent-lineage.ts` / `triage.ts` / `session-kind.ts`, for
+ * exactly the reason those exist: the derivation was written INLINE inside
+ * `focusSessions.get` and `focusSessions.list` had no equivalent, so a session
+ * LIST could not say which agents worked in it. Consumers then read the raw
+ * `focus_sessions.agentIds` column instead (relay's `SessionActiveCard`), which
+ * is the INVITE LIST whose own schema comment says not to read it as truth —
+ * and which is empty on nearly every live session. One implementation, two
+ * doors, nothing to keep in lockstep.
+ *
+ * TWO STORES, UNIONED — each knows half the answer:
+ *
+ *   1. DERIVED — agents that actually WORKED here, read off the proposals they
+ *      filed against the session. This is evidence, and it is why the roster
+ *      was derived in the first place.
+ *   2. DECLARED — `focus_sessions.agentIds`. Historically an invite list only
+ *      create-time writers could set; `attachSessionAgent` is now the append
+ *      door, so a declared-but-not-yet-productive agent is a real answer this
+ *      surface must show.
+ *
+ * An agent that filed no proposal is still on the session, and an agent nobody
+ * declared still did the work — so it is a UNION, never one or the other.
+ */
+/** One party on a session. `name` is resolved — never a bare uuid. */
+export interface SessionParticipant {
+	id: string;
+	name: string;
+}
+/** The projection this module attaches. */
+export interface SessionParticipants {
+	participants: SessionParticipant[];
+}
 export type BlockerEdgeResult = {
 	linked: true;
 } | {
@@ -9392,6 +9440,14 @@ export interface Signal {
 	why?: string;
 	/** The agent's own (unverified) claim it produced this after all. `owed-slot` only. */
 	claimedDone?: boolean;
+	/**
+	 * The session's declared goal — WHAT WORK this slot came from. Absent on
+	 * every other kind, the same way `why`/`blockedReason` are owed-slot-only.
+	 * Without it a blocked row can say a reason and an age but not the work it
+	 * blocks, which is the single most useful context for deciding whether to
+	 * act on it now.
+	 */
+	sessionGoal?: string | null;
 	class?: ProposalClass;
 	/**
 	 * Hours this class stays answerable; `null` when it never expires. Carried
@@ -10503,6 +10559,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				facetSlug?: string | undefined;
 				facetProfileId?: string | undefined;
 				includeFacets?: boolean | undefined;
+				createdAfter?: unknown;
+				createdBefore?: unknown;
 			};
 			output: {
 				items: {
@@ -20380,6 +20438,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executionMode: "sync" | "async";
 					timeoutSeconds: number | null;
 					status: "error" | "active" | "inactive";
+					provenAt: Date | null;
 					approved: boolean;
 					errorMessage: string | null;
 					metadata: Record<string, unknown>;
@@ -20450,6 +20509,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					alwaysOn: boolean;
 					executionMode: "sync" | "async";
 					timeoutSeconds: number | null;
+					provenAt: Date | null;
 					approved: boolean;
 				};
 				tools: {
@@ -20556,6 +20616,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executionMode: "sync" | "async";
 					timeoutSeconds: number | null;
 					status: "error" | "active" | "inactive";
+					provenAt: Date | null;
 					approved: boolean;
 					errorMessage: string | null;
 					metadata: Record<string, unknown>;
@@ -22187,7 +22248,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge" | "workKind";
 					createdBy: string;
 					revokedAt: Date | null;
 					capabilityId: string | null;
@@ -22201,7 +22262,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				text: string;
-				scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+				scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge" | "workKind";
 				posture?: "auto" | "propose" | undefined;
 				scopeRef?: string | undefined;
 				shape?: {
@@ -22218,7 +22279,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge" | "workKind";
 					createdBy: string;
 					revokedAt: Date | null;
 					capabilityId: string | null;
@@ -22240,7 +22301,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					createdAt: Date;
 					source: string;
 					shape: MessageShapePredicate | null;
-					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge";
+					scopeKind: "shape" | "channelType" | "channel" | "default" | "bridge" | "workKind";
 					createdBy: string;
 					revokedAt: Date | null;
 					capabilityId: string | null;
@@ -25944,7 +26005,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} & {
 				triage: TriageProjection;
 				kind: SessionKind;
-			} & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
+			} & SessionParticipants & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
 			meta: object;
 		}>;
 		addBlocker: import("@trpc/server").TRPCMutationProcedure<{
@@ -26092,10 +26153,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
-				participants: {
-					id: string;
-					name: string;
-				}[];
 				triage: TriageProjection;
 				kind: "run" | "receipt" | "work";
 				id: string;
@@ -26120,6 +26177,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				createdAt: Date;
 				updatedAt: Date;
+				participants: SessionParticipant[];
 			} & {
 				parentSessionId: string | null;
 			};
@@ -27537,6 +27595,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string | null;
 					status: "active" | "completed" | "archived";
 					phase: string | null;
+					targetDate: Date | null;
 					settings: unknown;
 					metadata: unknown;
 					createdAt: Date;
@@ -27559,6 +27618,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					slug: string | null;
 					status: "active" | "completed" | "archived";
 					phase: string | null;
+					targetDate: Date | null;
 					settings: unknown;
 					metadata: unknown;
 					createdAt: Date;
@@ -27584,6 +27644,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					description: string | null;
 					slug: string | null;
 					phase: string | null;
+					targetDate: Date | null;
 					settings: unknown;
 				};
 				subject: ProjectSubject | null;

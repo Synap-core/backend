@@ -586,6 +586,41 @@ export interface PlaybookSchedule {
   /** 5-field cron expression (e.g. "0 9 * * MON"). */
   cron: string;
   enabled: boolean;
+  /**
+   * WHAT the schedule materializes at each slot. Two different products:
+   *
+   * - `"run"` (DEFAULT, and the pre-existing behaviour byte-for-byte) — an
+   *   unattended run. The slot instantiates a session, opens its channel, writes
+   *   a `playbook_runs` ledger row and DISPATCHES an agent. Nobody has to be
+   *   there.
+   *
+   * - `"appointment"` — an APPOINTMENT. The slot materializes a
+   *   `focus_sessions` row with `status: 'scheduled'` and stops: no channel, no
+   *   run row, no agent kickoff. It waits for the HUMAN, who opens the app and
+   *   finds the session already there, already scoped, saying "this is what you
+   *   are doing now". This is the ONLY producer of
+   *   `FocusSessionStatus.SCHEDULED` — the status existed in the union with zero
+   *   writers until it was built.
+   *
+   * Absent ⇒ `"run"`, so every playbook scheduled before this field existed keeps
+   * behaving exactly as it did.
+   */
+  mode?: PlaybookScheduleMode;
+}
+
+/** @see PlaybookSchedule.mode */
+export type PlaybookScheduleMode = "run" | "appointment";
+
+/**
+ * The stored `schedule.mode` → the `playbook_run` flow-node's `mode` field, which
+ * is what the automation executor actually branches on. ONE place reads the
+ * unknown-valued JSONB and decides, so the flow builder and any future reader
+ * cannot disagree about what an absent / misspelled mode means (it means "run").
+ */
+export function normalizePlaybookScheduleMode(
+  value: unknown
+): PlaybookScheduleMode {
+  return value === "appointment" ? "appointment" : "run";
 }
 
 // ── Links — the config/runtime graph (mirrors the schema unions) ─────────────

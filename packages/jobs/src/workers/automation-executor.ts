@@ -165,10 +165,13 @@ export { evaluateCondition } from "./condition-eval.js";
 export {
   registerCapabilityExecutor,
   registerPlaybookRunner,
+  registerSessionScheduler,
   type CapabilityExecutorInput,
   type PlaybookRunnerChainContext,
   type PlaybookRunnerInput,
   type PlaybookRunnerResult,
+  type SessionSchedulerInput,
+  type SessionSchedulerResult,
 } from "./capability-dispatch.js";
 export { executeOutputStep } from "./steps/output.js";
 export { executeTransformStep } from "./steps/transform.js";
@@ -1216,6 +1219,7 @@ async function executeAutomationFlow(params: {
                             playbookName?: string;
                             paramsMapping?: Record<string, string>;
                             agentType?: string;
+                            mode?: "run" | "appointment";
                           },
                           context,
                           workspaceId,
@@ -1715,6 +1719,8 @@ async function executeAutomationFlow(params: {
                 paramsMapping?: Record<string, string>;
                 /** Agent selector (`agents.slug`); absent ⇒ default orchestrator. */
                 agentType?: string;
+                /** `"appointment"` ⇒ materialize a `scheduled` session, don't run. */
+                mode?: "run" | "appointment";
               };
 
               if (!data.playbookId && !data.playbookName)
@@ -1731,6 +1737,13 @@ async function executeAutomationFlow(params: {
                   // field-by-field, so an unlisted node field is dropped here even
                   // though it survives the loop-child path's wholesale cast.
                   agentType: data.agentType,
+                  // Same hazard, same fix: without this line an `appointment`
+                  // node reaching the TOP-LEVEL path would silently execute as a
+                  // RUN — dispatching an agent at a session the human was meant
+                  // to open — while the identical node inside a loop behaved
+                  // correctly. Forwarded explicitly, and pinned by
+                  // `steps/__tests__/playbook-run-appointment.test.ts`.
+                  mode: data.mode,
                 },
                 context,
                 workspaceId,

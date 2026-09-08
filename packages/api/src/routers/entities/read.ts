@@ -20,6 +20,8 @@ import {
   or,
   ilike,
   isNull,
+  gte,
+  lt,
   inArray,
   getDb,
   ProfileResolutionService,
@@ -262,6 +264,33 @@ export const readProcs = {
          * only widens the projection, so it is never an N+1.
          */
         includeFacets: z.boolean().optional().default(false),
+        /**
+         * CREATION-DATE WINDOW — half-open `[createdAfter, createdBefore)`.
+         *
+         * `createdAfter` is INCLUSIVE (`>=`) and `createdBefore` is EXCLUSIVE
+         * (`<`), so consecutive windows TILE: a week boundary belongs to
+         * exactly one of the two weeks, never both and never neither. Either
+         * bound may be given alone (an open-ended window).
+         *
+         * WHY IT LIVES IN SQL, not in the client. Without it, "the knowledge I
+         * captured this week, by kind" cannot be asked in one query: a caller
+         * must page the whole descending list and filter locally, which SILENTLY
+         * UNDER-REPORTS the moment the pod holds more than `limit` newer rows —
+         * the same failure `owed-outputs.ts` explicitly refused to ship. It also
+         * fixes `total`, which is computed from these same conditions.
+         *
+         * NOT NAMED `since`. That token already means REPLAY CURSOR in six
+         * places in this codebase; a third meaning for the same word on a read
+         * door is how two different questions end up sharing one param.
+         *
+         * `z.coerce.date()` so an ISO-8601 string over the wire (tRPC httpLink,
+         * the Hub forwarder, MCP) and a real `Date` from a typed caller both
+         * arrive as a `Date` — the type Drizzle binds against a `timestamp`
+         * column. An unparseable string is a Zod 400, never a silent `NaN` that
+         * would compare false against every row.
+         */
+        createdAfter: z.coerce.date().optional(),
+        createdBefore: z.coerce.date().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -419,6 +448,33 @@ export const readProcs = {
         conditions.push(
           facetRoleExists(db, facetProfileIds, facetVisibilityScope)
         );
+      }
+
+      // CREATION-DATE WINDOW. Pushed into SQL so it narrows BOTH the page and
+      // the `count(*)` below — a post-filter would leave `total` describing a
+      // different population than `items`, which is a lie a paginator cannot
+      // recover from.
+      //
+      // An INVERTED window is a 400, never an empty page. `createdAfter` later
+      // than `createdBefore` matches nothing, and "no rows" is indistinguishable
+      // from "this pod holds nothing for that week" — exactly the silent-empty
+      // this door already fails closed on for an unknown `profileSlug`.
+      if (
+        input.createdAfter &&
+        input.createdBefore &&
+        input.createdAfter.getTime() > input.createdBefore.getTime()
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "createdAfter must be earlier than createdBefore — that window is inverted and can never match a row",
+        });
+      }
+      if (input.createdAfter) {
+        conditions.push(gte(entities.createdAt, input.createdAfter));
+      }
+      if (input.createdBefore) {
+        conditions.push(lt(entities.createdAt, input.createdBefore));
       }
 
       const results = await db.query.entities.findMany({

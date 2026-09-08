@@ -33,7 +33,8 @@ import {
   type FlowDefinition,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
-import type { PlaybookSchedule } from "@synap/playbooks";
+import type { PlaybookSchedule, PlaybookScheduleMode } from "@synap/playbooks";
+import { normalizePlaybookScheduleMode } from "@synap/playbooks";
 // Reuse the scheduler's cron parser — do NOT add a second one.
 import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.js";
 // Same validator the automations create/update door runs — this module writes
@@ -90,7 +91,15 @@ function readSchedule(value: unknown): PlaybookSchedule | null {
   if (!value || typeof value !== "object") return null;
   const s = value as Partial<PlaybookSchedule>;
   if (typeof s.cron !== "string" || s.cron.trim() === "") return null;
-  return { cron: s.cron, enabled: s.enabled === true };
+  // `mode` goes through the ONE normalizer (@synap/playbooks) rather than a
+  // local cast: the column is untyped JSONB, so an absent, misspelled or
+  // hand-edited mode must resolve to "run" in exactly one place. Defaulting it
+  // here means every reader below sees a settled value.
+  return {
+    cron: s.cron,
+    enabled: s.enabled === true,
+    mode: normalizePlaybookScheduleMode(s.mode),
+  };
 }
 
 /** Narrowed view of the JSONB `subject_profile` column — the kind-binding. */
@@ -129,13 +138,27 @@ export function buildPlaybookRunFlowDefinition(
     paramsMapping?: Record<string, string>;
     /** When set, fan the schedule out over every entity of this kind. */
     subjectProfile?: { profileSlug?: string; filter?: string } | null;
+    /**
+     * WHAT each slot materializes — `"run"` (default, unchanged: an unattended
+     * run with an agent kickoff) or `"appointment"` (a `scheduled` session that
+     * waits for the human). Comes from the playbook's `schedule.mode`; see
+     * `normalizePlaybookScheduleMode`.
+     */
+    mode?: PlaybookScheduleMode;
   }
 ): FlowDefinition {
+  const mode = opts?.mode ?? "run";
   const runData = {
-    label: opts?.playbookName ?? "Run playbook",
+    label:
+      opts?.playbookName ??
+      (mode === "appointment" ? "Schedule session" : "Run playbook"),
     playbookId,
     playbookName: opts?.playbookName,
     paramsMapping: opts?.paramsMapping,
+    // Only stamped for an appointment: a `run` node must stay BYTE-IDENTICAL to
+    // what it was before this field existed, so the thousands of already-stored
+    // flow definitions and the ones written today are the same object.
+    ...(mode === "appointment" ? { mode } : {}),
   };
 
   const profileSlug = opts?.subjectProfile?.profileSlug?.trim();
@@ -280,6 +303,10 @@ export async function materializePlaybookCronAutomation(
     // A kind-bound playbook fans out over every entity of the kind; an unbound
     // one stays a single scheduled run.
     subjectProfile: readSubjectProfile(playbook.subjectProfile),
+    // "run" (agent does it unattended) vs "appointment" (a `scheduled` session
+    // waits for the human). Read off the playbook's own schedule — the schedule
+    // is where the user expressed which of the two they wanted.
+    mode: schedule.mode,
   });
   const nextRunAt = computeNextRunAt(schedule.cron, new Date());
 

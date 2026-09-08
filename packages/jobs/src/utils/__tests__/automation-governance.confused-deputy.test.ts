@@ -55,8 +55,32 @@ const {
   emitSideEffectsMock: vi.fn(),
 }));
 
-vi.mock("@synap/database", () => ({
-  db: { select: vi.fn() },
+/**
+ * PARTIAL mock (`importOriginal` + spread) — see
+ * `packages/api/src/__tripwires__/database-mock-total-ratchet.test.ts` for the
+ * class. This was TOTAL and had gone dark: `proposeAutomationWrite` grew a
+ * `users` lookup for the agent's declared project focus (rung 3.5), the mock's
+ * `users` table did not exist and `db.select` returned `undefined`, so the
+ * confused-deputy test died on `Cannot read properties of undefined (reading
+ * 'from')` — a message about a mock, for a guard about privilege escalation.
+ *
+ * `db.select` now returns a chainable stub ending in an empty result, which is
+ * the honest answer for these fixtures: no agent has declared a project focus,
+ * so the rung resolves to `null` and the assertions are about attribution, not
+ * about the lens.
+ */
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
+  db: {
+    select: vi.fn(() => {
+      const chain: Record<string, unknown> = {
+        from: vi.fn(() => chain),
+        where: vi.fn(() => chain),
+        limit: vi.fn().mockResolvedValue([]),
+      };
+      return chain;
+    }),
+  },
   eq: vi.fn(),
   and: vi.fn(),
   proposals: {},

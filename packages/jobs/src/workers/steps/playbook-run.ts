@@ -3,7 +3,10 @@
  * reached through the `registerPlaybookRunner` IoC slot.
  */
 import { db, eq, entities } from "@synap/database";
-import { getPlaybookRunner } from "../capability-dispatch.js";
+import {
+  getPlaybookRunner,
+  getSessionScheduler,
+} from "../capability-dispatch.js";
 import {
   guardProducerEffect,
   PolicyBlockedError,
@@ -50,6 +53,22 @@ export async function executePlaybookRun(
      * run on an unknown slug rather than quietly using the orchestrator.
      */
     agentType?: string;
+    /**
+     * WHAT this node materializes at its slot.
+     *
+     * - absent / `"run"` — an unattended RUN: session + channel + `playbook_runs`
+     *   row + agent kickoff. Every node authored before this field existed lands
+     *   here, unchanged.
+     * - `"appointment"` — an APPOINTMENT: one `focus_sessions` row with
+     *   `status: 'scheduled'`, waiting for the HUMAN. No channel, no run row, and
+     *   crucially NO agent kickoff — the branch below never reaches the runner,
+     *   so there is no suppression flag that could be forgotten.
+     *
+     * Set by `buildPlaybookRunFlowDefinition` from the playbook's
+     * `schedule.mode`; see `normalizePlaybookScheduleMode` (@synap/playbooks),
+     * the ONE place that decides what an absent/unknown mode means.
+     */
+    mode?: "run" | "appointment";
   },
   context: StepContext,
   workspaceId: string,
@@ -77,13 +96,6 @@ export async function executePlaybookRun(
       guard.kind === "deny"
         ? `playbook_run denied by producer-agent governance (confused-deputy guard): ${guard.reason ?? "capability denied"}`
         : `playbook_run cannot auto-execute: an agent produced this trigger, so a human-owned automation may not launch it ungoverned (confused-deputy guard).`
-    );
-  }
-
-  const playbookRunner = getPlaybookRunner();
-  if (!playbookRunner) {
-    throw new Error(
-      "Playbook runner not registered — apps/api must call registerPlaybookRunner() at boot"
     );
   }
 
@@ -124,10 +136,120 @@ export async function executePlaybookRun(
     }
   }
 
-  // Delegate to the ONE spine. `idempotentBySubject` makes a scheduled run
-  // start-if-missing/no-op-if-present. `goalResolver` resolves the playbook's
-  // goalTemplate against the automation StepContext — the spine invokes it after
-  // it loads the playbook — preserving the old `... || raw template` fallback.
+  // `goalResolver` resolves the playbook's goalTemplate against the automation
+  // StepContext — the spine invokes it after it loads the playbook — preserving
+  // the old `... || raw template` fallback. Hoisted out of the call so BOTH
+  // materializations (run and appointment) resolve the goal identically; a second
+  // copy of this grammar fork is how the two would drift.
+  const goalResolver = (goalTemplate: string): string | undefined => {
+    const resolved = resolveTemplate(goalTemplate, context);
+    // `resolveTemplate` speaks ONLY {{mustache}}. A goalTemplate authored in
+    // the command-template grammar (`@{arg:name:type}`) contains no `{{ }}`,
+    // so it comes back BYTE-FOR-BYTE — and handing that on as a "resolved"
+    // goal is how 49 sessions were born reading a literal
+    // "Advance @{arg:company:entity} through …". It never counted as a miss,
+    // so every existing diagnostic stayed silent. Returning undefined says
+    // "wrong resolver for this grammar" and lets the spine's resolveGoal —
+    // which DOES speak it — substitute against `params`.
+    if (resolved === goalTemplate && goalTemplate.includes("@{arg:")) {
+      return undefined;
+    }
+    // A template mixing both grammars cannot be fully resolved by either side
+    // alone. Don't guess — resolve what we can and make the remainder LOUD,
+    // since silence is what let the original bug run 49 times.
+    if (resolved.includes("@{arg:")) {
+      logger.warn(
+        { playbookId: data.playbookId, playbookName: data.playbookName },
+        "playbook_run: goal mixes {{...}} and @{arg:...} grammars — the @{arg:...} references will not be substituted"
+      );
+    }
+    return resolved || goalTemplate;
+  };
+
+  const chainContext = automationContext
+    ? {
+        automationRunId: automationContext.automationRunId,
+        automationId: automationContext.automationId,
+        chainDepth: automationContext.chainDepth ?? 0,
+        rootRunId:
+          automationContext.rootRunId ?? automationContext.automationRunId,
+        chainAutomationIds: automationContext.chainAutomationIds ?? [],
+      }
+    : undefined;
+
+  // ── APPOINTMENT: materialize a `scheduled` session and STOP. ───────────────
+  // Not a run. No channel, no `playbook_runs` row, and — the point of the whole
+  // mode — no agent kickoff: this branch RETURNS before reaching the playbook
+  // runner, which is where the executor spine's `triggerAutoRespond` dispatch
+  // lives. A scheduled session is waiting for the human, so nothing must answer
+  // it for them.
+  if (data.mode === "appointment") {
+    const sessionScheduler = getSessionScheduler();
+    if (!sessionScheduler) {
+      throw new Error(
+        "Session scheduler not registered — apps/api must call registerSessionScheduler() at boot"
+      );
+    }
+
+    // The slot this appointment is FOR. The cron scheduler stamps the due moment
+    // onto the trigger payload as `scheduledAt`
+    // (automation-cron-scheduler.ts: `triggerPayload.scheduledAt`); read THAT
+    // rather than the clock, so a worker that picked the job up late still
+    // records the scheduled moment. Any other trigger origin (manual test-run,
+    // an event) has no such stamp and falls back to now, which is the honest
+    // answer for "materialize this appointment right now".
+    const scheduledAtRaw = context.trigger.payload.scheduledAt;
+    const parsed =
+      typeof scheduledAtRaw === "string" ? new Date(scheduledAtRaw) : null;
+    const scheduledFor =
+      parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
+
+    const scheduled = await sessionScheduler({
+      playbookId: data.playbookId,
+      playbookName: data.playbookName,
+      workspaceId,
+      userId: ownerId,
+      params: resolvedParams,
+      subjectId: resolvedSubjectId ?? null,
+      scheduledFor,
+      goalResolver,
+      // Provenance: WHAT materialized this appointment. Deliberately handed to
+      // the scheduler as `scheduledBy` rather than merged into `metadata` as
+      // top-level `automationId`/`automationRunId` — those exact keys are the
+      // ones `session-kind.ts` reads to classify a row as `kind:'run'`.
+      scheduledBy: automationContext
+        ? {
+            automationId: automationContext.automationId,
+            automationRunId: automationContext.automationRunId,
+          }
+        : undefined,
+      // `automationChainContext` is NESTED, so the F2 depth floor still reads it
+      // while the top-level automation keys stay absent.
+      metadata: chainContext ? { automationChainContext: chainContext } : {},
+    });
+
+    // Same step-output contract downstream nodes already read
+    // (steps.<id>.output.{sessionId|status}). `status` is the SESSION's status,
+    // deliberately: there is no run, so reporting "running" would be a lie a
+    // downstream condition could branch on.
+    return {
+      sessionId: scheduled.session.id,
+      channelId: scheduled.session.channelId,
+      status: "scheduled",
+      outcome: scheduled.outcome,
+      missedCount: scheduled.missedCount,
+    };
+  }
+
+  // ── RUN: delegate to the ONE playbook-run spine. ───────────────────────────
+  // `idempotentBySubject` makes a scheduled run start-if-missing/no-op-if-present.
+  const playbookRunner = getPlaybookRunner();
+  if (!playbookRunner) {
+    throw new Error(
+      "Playbook runner not registered — apps/api must call registerPlaybookRunner() at boot"
+    );
+  }
+
   const result = await playbookRunner({
     playbookId: data.playbookId,
     playbookName: data.playbookName,
@@ -137,40 +259,8 @@ export async function executePlaybookRun(
     subjectId: resolvedSubjectId,
     idempotentBySubject: true,
     agentType: data.agentType,
-    goalResolver: (goalTemplate) => {
-      const resolved = resolveTemplate(goalTemplate, context);
-      // `resolveTemplate` speaks ONLY {{mustache}}. A goalTemplate authored in
-      // the command-template grammar (`@{arg:name:type}`) contains no `{{ }}`,
-      // so it comes back BYTE-FOR-BYTE — and handing that on as a "resolved"
-      // goal is how 49 sessions were born reading a literal
-      // "Advance @{arg:company:entity} through …". It never counted as a miss,
-      // so every existing diagnostic stayed silent. Returning undefined says
-      // "wrong resolver for this grammar" and lets the spine's resolveGoal —
-      // which DOES speak it — substitute against `params`.
-      if (resolved === goalTemplate && goalTemplate.includes("@{arg:")) {
-        return undefined;
-      }
-      // A template mixing both grammars cannot be fully resolved by either side
-      // alone. Don't guess — resolve what we can and make the remainder LOUD,
-      // since silence is what let the original bug run 49 times.
-      if (resolved.includes("@{arg:")) {
-        logger.warn(
-          { playbookId: data.playbookId, playbookName: data.playbookName },
-          "playbook_run: goal mixes {{...}} and @{arg:...} grammars — the @{arg:...} references will not be substituted"
-        );
-      }
-      return resolved || goalTemplate;
-    },
-    chainContext: automationContext
-      ? {
-          automationRunId: automationContext.automationRunId,
-          automationId: automationContext.automationId,
-          chainDepth: automationContext.chainDepth ?? 0,
-          rootRunId:
-            automationContext.rootRunId ?? automationContext.automationRunId,
-          chainAutomationIds: automationContext.chainAutomationIds ?? [],
-        }
-      : undefined,
+    goalResolver,
+    chainContext,
   });
 
   // Preserve the step-output contract downstream nodes read

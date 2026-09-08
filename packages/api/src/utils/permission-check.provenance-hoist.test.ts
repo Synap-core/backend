@@ -196,9 +196,22 @@ describe("auto-approved agent write — session provenance", () => {
 
     await gate({ ...AGENT });
 
+    // EXACT, not `objectContaining`: the point of this assertion is that the
+    // auto-approved receipt hands the helper the SAME inputs the pending door
+    // does, so a key appearing on one path and not the other is the drift to
+    // catch. It went stale once for exactly that reason — `threadId` and
+    // `focusProjectId` were added for rung-3.5 parity and this assertion, being
+    // exact, is what said so.
     expect(mockDeriveProjectId).toHaveBeenCalledWith({
+      // Nothing explicit was passed on this call…
       projectId: undefined,
+      // …so the hoisted session is the pin.
       sessionId: "sess-hoisted",
+      threadId: undefined,
+      // Rung 3.5 — the agent's declared sticky focus, consulted only because no
+      // explicit projectId was given. `null` here is the agent having declared
+      // none, not the rung being skipped.
+      focusProjectId: null,
     });
     expect(receiptRow()).toMatchObject({ projectId: "proj-1" });
   });

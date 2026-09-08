@@ -34,7 +34,17 @@ vi.mock("@synap/storage", () => ({
 }));
 
 // Stub heavy deps that are not exercised by these three test cases.
-vi.mock("@synap/database", () => ({
+/**
+ * PARTIAL mock (`importOriginal` + spread) — see
+ * `src/__tripwires__/database-mock-total-ratchet.test.ts`. This file was DARK:
+ * a total mock plus a new `artifacts` import in
+ * `services/focus-sessions/record-session-artifact.ts` meant the suite died at
+ * COLLECTION time and reported "0 tests" — the exact silent failure that
+ * tripwire's header describes. Spreading the real module means a name this file
+ * never fakes resolves instead of collapsing the file.
+ */
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {},
   messages: {},
   MessageRole: { USER: "user", ASSISTANT: "assistant", SYSTEM: "system" },
@@ -71,7 +81,14 @@ vi.mock("../import/import-parsers.js", () => ({
   detectJsonChatShape: vi.fn().mockReturnValue(null),
 }));
 
-vi.mock("../import/import-adapters.js", () => ({
+// PARTIAL — `import-orchestrator.ts` also imports `parseCsvTable` and
+// `csvRowsToTypedImportItems` from here, which this factory never named. They
+// are not reached by these fixtures TODAY, which is why the file was green
+// while the gap was live; the moment a path reaches one, the whole suite dies
+// at collection. Spread instead of naming them: naming fixes today's import and
+// re-arms the trap for the next one.
+vi.mock("../import/import-adapters.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../import/import-adapters.js")>()),
   adaptItems: vi.fn().mockReturnValue([]),
 }));
 

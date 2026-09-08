@@ -41,22 +41,25 @@ const FIXTURES: Array<{
     origin?: string | null;
     playbookId?: string | null;
     metadata?: unknown;
+    /** REQUIRED by `SessionKindProjectable` — see why, there. */
+    status: string | null;
   };
   kind: SessionKind;
 }> = [
   {
     name: "a person's own session",
-    row: { origin: "human", playbookId: null, metadata: {} },
+    row: { status: "active", origin: "human", playbookId: null, metadata: {} },
     kind: "work",
   },
   {
     name: "NULL origin (un-migrated row) — work, never lost",
-    row: { origin: null, playbookId: null, metadata: null },
+    row: { status: "active", origin: null, playbookId: null, metadata: null },
     kind: "work",
   },
   {
     name: "an agent session a person accepted",
     row: {
+      status: "active",
       origin: "agent",
       playbookId: null,
       metadata: { triage: { acceptedAt: "2026-09-05T00:00:00.000Z" } },
@@ -65,12 +68,18 @@ const FIXTURES: Array<{
   },
   {
     name: "an agent-origin run source with no run ids (digest, import) — work",
-    row: { origin: "agent", playbookId: null, metadata: { source: "digest" } },
+    row: {
+      status: "active",
+      origin: "agent",
+      playbookId: null,
+      metadata: { source: "digest" },
+    },
     kind: "work",
   },
   {
     name: "an automation-drafted session a person ACCEPTED from triage — work",
     row: {
+      status: "active",
       origin: "automation",
       playbookId: null,
       metadata: {
@@ -82,17 +91,28 @@ const FIXTURES: Array<{
   },
   {
     name: "playbook origin",
-    row: { origin: "playbook", playbookId: null, metadata: {} },
+    row: {
+      status: "active",
+      origin: "playbook",
+      playbookId: null,
+      metadata: {},
+    },
     kind: "run",
   },
   {
     name: "automation origin",
-    row: { origin: "automation", playbookId: null, metadata: {} },
+    row: {
+      status: "active",
+      origin: "automation",
+      playbookId: null,
+      metadata: {},
+    },
     kind: "run",
   },
   {
     name: "playbookId set, agent origin (openRunSession stamps origin=agent)",
     row: {
+      status: "active",
       origin: "agent",
       playbookId: "pb-1",
       metadata: { source: "playbook-run" },
@@ -102,6 +122,7 @@ const FIXTURES: Array<{
   {
     name: "metadata.automationRunId set",
     row: {
+      status: "active",
       origin: "agent",
       playbookId: null,
       metadata: { automationRunId: "ar-1" },
@@ -111,6 +132,7 @@ const FIXTURES: Array<{
   {
     name: "metadata.automationId set, no run id (a producer that stamps only the definition)",
     row: {
+      status: "active",
       origin: "agent",
       playbookId: null,
       metadata: { automationId: "au-1" },
@@ -124,6 +146,7 @@ const FIXTURES: Array<{
     // alone (RUN_ORIGINS) already carries this, so a producer that regresses
     // to chain-context-only metadata must not silently reclassify as `work`.
     row: {
+      status: "active",
       origin: "automation",
       playbookId: null,
       metadata: {
@@ -138,6 +161,7 @@ const FIXTURES: Array<{
   {
     name: "receipt — the agent-write container",
     row: {
+      status: "active",
       origin: "agent",
       playbookId: null,
       metadata: { source: "agent-write", kind: AGENT_PROPOSAL_PACKAGE_KIND },
@@ -147,6 +171,7 @@ const FIXTURES: Array<{
   {
     name: "receipt BEATS run — a receipt is also agent-minted by openRunSession",
     row: {
+      status: "active",
       origin: "automation",
       playbookId: "pb-2",
       metadata: {
@@ -175,7 +200,13 @@ describe("projectSessionKind", () => {
 describe("attachSessionKind", () => {
   it("is pure — adds `kind` and keeps every other field", () => {
     const rows = [
-      { id: "s1", origin: "human", playbookId: null, metadata: {} },
+      {
+        id: "s1",
+        origin: "human",
+        playbookId: null,
+        metadata: {},
+        status: "active",
+      },
     ];
     const [out] = attachSessionKind(rows);
     expect(out).toEqual({ ...rows[0], kind: "work" });
@@ -246,7 +277,11 @@ describe("BOTH automation keys, in BOTH halves", () => {
   for (const key of KEYS) {
     it(`TS: metadata.${key} alone makes a row a run`, () => {
       expect(
-        projectSessionKind({ origin: "agent", metadata: { [key]: "x" } })
+        projectSessionKind({
+          origin: "agent",
+          metadata: { [key]: "x" },
+          status: "active",
+        })
       ).toBe("run");
     });
 
@@ -319,5 +354,71 @@ describe("ambient attribution files writes under WORK only", () => {
     );
     const body = fn.slice(0, fn.indexOf(".orderBy("));
     expect(body).toContain('sessionKindWhere("work")');
+  });
+});
+
+/**
+ * AN APPOINTMENT IS NOT A RUN.
+ *
+ * A scheduled session is materialised from a playbook, so it truthfully
+ * carries `origin: "playbook"` AND a `playbookId` — two independent run
+ * signals. Without the status clause it classifies as `run` twice over, and
+ * Work's default `kind: "work"` lens excludes it: the feature ships invisible
+ * with every gate green. That is the failure this block exists to prevent.
+ *
+ * `run` means "a machine EXECUTION recorded as a session". An appointment has
+ * executed nothing — it is a person's work, waiting for that person.
+ */
+describe("a scheduled session is work, not a run", () => {
+  const appointment = {
+    origin: "playbook",
+    playbookId: "pb-1",
+    status: "scheduled",
+    metadata: {},
+  };
+
+  it("classifies as work despite carrying BOTH run signals", () => {
+    expect(projectSessionKind(appointment)).toBe("work");
+  });
+
+  it("the same row WITHOUT the scheduled status is still a run", () => {
+    // The negative control: this proves the clause is what moved it, not some
+    // unrelated shortcut, and that nothing else was loosened.
+    expect(projectSessionKind({ ...appointment, status: "active" })).toBe(
+      "run"
+    );
+  });
+
+  it("the SQL half carries the clause with the RIGHT POLARITY", () => {
+    // ⚠️ THIS ASSERTION USED TO BE `toContain("status")` ON BOTH HALVES, which
+    // is polarity-blind: swap the two mirrored clauses — `eq` into
+    // `runSignalWhere`, `not(eq)` into `noRunSignalWhere` — and both still
+    // pass while SQL says `run` and TypeScript says `work`. That is EXACTLY
+    // the drift this block's own comment claims to catch, and it could not.
+    //
+    // `'scheduled'` is also a BOUND PARAM, not inlined, so renaming the
+    // constant leaves a string match green. The value is asserted through
+    // `.params`, and the polarity through the presence/absence of the negation
+    // around the placeholder.
+    const work = new PgDialect().sqlToQuery(sessionKindWhere("work"));
+    const run = new PgDialect().sqlToQuery(sessionKindWhere("run"));
+
+    // The literal must reach the query as DATA, in both halves.
+    expect(work.params).toContain("scheduled");
+    expect(run.params).toContain("scheduled");
+
+    // Each half compares the status EXACTLY ONCE, so polarity is decidable
+    // from that one occurrence: the run half must negate it ("a scheduled
+    // session is not a run"), the work half must assert it. Drizzle renders
+    // `not(eq(...))` as `not "t"."c" = $n` — the parens are optional in the
+    // pattern so a dialect that adds them does not silently blind the guard.
+    const statusCompare = /"focus_sessions"\."status"\s*=/gi;
+    const negatedStatus = /\bnot\s*\(?\s*"focus_sessions"\."status"\s*=/i;
+
+    expect(run.sql.match(statusCompare)).toHaveLength(1);
+    expect(work.sql.match(statusCompare)).toHaveLength(1);
+
+    expect(run.sql).toMatch(negatedStatus);
+    expect(work.sql).not.toMatch(negatedStatus);
   });
 });

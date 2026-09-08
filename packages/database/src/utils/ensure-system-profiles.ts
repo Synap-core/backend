@@ -16,6 +16,7 @@ import {
   ProfileScope,
 } from "../index.js";
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
+import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
 
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
@@ -887,6 +888,15 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         propertiesCreated++;
       }
     }
+
+    // Machine-written enums (job outcomes, provenance, AI-derived) are DECLARED
+    // to the user, not edited by them. The general loop above is create-only, so
+    // this pass is what reaches pods that were already seeded. See
+    // `machine-written-properties.ts`.
+    await ensureMachineWrittenPropertiesReadOnly(
+      propertyDefRepo,
+      createdPropertyDefs
+    );
 
     // 3. Create system profiles (core + hierarchy)
     const profiles = [
@@ -2274,6 +2284,15 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
         propertiesCreated++;
       }
     }
+
+    // Machine-written enums (job outcomes, provenance, AI-derived) are DECLARED
+    // to the user, not edited by them. The general loop above is create-only, so
+    // this pass is what reaches pods that were already seeded. See
+    // `machine-written-properties.ts`.
+    await ensureMachineWrittenPropertiesReadOnly(
+      propertyDefRepo,
+      createdPropertyDefs
+    );
 
     // 2. DevPlane profiles — all workspace-scoped
     const devplaneProfiles = [
