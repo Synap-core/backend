@@ -306,17 +306,19 @@ export function applyOutputMutations(
       }),
     ];
   }
+  // GOVERNANCE FLOOR on the branch below — an agent may not complete a slot it
+  // handed to the human. `owner: 'human'` is the agent's own declaration that it
+  // CANNOT do this work; letting the same caller then mark it done would make
+  // the declaration a way to close work nobody did. (The wider residual — that
+  // this stamps `status` at all instead of `claimedDone` — is pinned in
+  // `__tripwires__/expected-output-done-one-door.test.ts` and deliberately
+  // untouched here. Keep this prose OUTSIDE the branch: that tripwire matches
+  // `completeOutput` within 400 chars of the `done` literal, and a comment
+  // wedged between the two blinds it to the very residual it pins.)
 
   if (typeof patch.completeOutput === "string") {
     const label = patch.completeOutput;
     next = next.map((o) =>
-      // GOVERNANCE FLOOR — an agent may not complete a slot it handed to the
-      // human. `owner: 'human'` is the agent's own declaration that it CANNOT
-      // do this work; letting the same caller then mark it done would make the
-      // declaration a way to close work nobody did. (The wider residual — that
-      // this stamps `status` at all instead of `claimedDone` — is pinned in
-      // `__tripwires__/expected-output-done-one-door.test.ts` and deliberately
-      // untouched here.)
       o.label === label && o.owner !== "human"
         ? { ...o, status: "done" as const }
         : o

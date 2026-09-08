@@ -22,6 +22,7 @@ import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput } from "@synap/playbooks";
+import { reconcileOwedSince } from "./update-session.js";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
 
@@ -260,7 +261,12 @@ export async function createFocusSession(
         // Seed it here so the column matches its contract from birth; stageless
         // playbooks (stages: []) correctly stay NULL.
         currentStage: firstStageKey(playbook?.stages),
-        expectedOutputs,
+        // `owedSince` is present IFF `owner === 'human'`, and that invariant has
+        // to hold from BIRTH: a session created with an already-blocked slot
+        // would otherwise carry the human's ownership with no clock, and the
+        // owed feed has nothing to order or age it by. Same reconciler the merge
+        // and the stampers use — never a second answer here.
+        expectedOutputs: expectedOutputs.map((o) => reconcileOwedSince(o)),
         channelId,
         agentIds,
         status: "active",

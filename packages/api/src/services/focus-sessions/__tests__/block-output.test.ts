@@ -22,7 +22,7 @@
 import { describe, it, expect } from "vitest";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { stampBlocked, stampUnblocked } from "../block-output.js";
-import { applyOutputMutations } from "../update-session.js";
+import { applyOutputMutations, reconcileOwedSince } from "../update-session.js";
 
 const AT = new Date("2026-09-08T09:00:00.000Z");
 
@@ -186,5 +186,33 @@ describe("addOutput — declaring a blocked slot stamps its clock", () => {
     });
     expect(added).not.toHaveProperty("owner");
     expect(added).not.toHaveProperty("owedSince");
+  });
+});
+
+/**
+ * THE INVARIANT AT BIRTH. `createFocusSession` writes `expectedOutputs`
+ * verbatim, so a session opened with an already-blocked slot carried the
+ * human's ownership with no clock — the one door that could violate
+ * "present IFF owner === 'human'" before it was ever read. Pinned on the pure
+ * reconciler the create path now maps through, so the rule has one answer.
+ */
+describe("reconcileOwedSince — one answer at every door", () => {
+  it("stamps a human-owned slot and leaves an agent-owned one bare", () => {
+    expect(
+      reconcileOwedSince({ kind: "entity", label: "NDA", owner: "human" }, AT)
+        .owedSince
+    ).toBe(AT.toISOString());
+    expect(
+      reconcileOwedSince({ kind: "entity", label: "NDA" }, AT)
+    ).not.toHaveProperty("owedSince");
+  });
+
+  it("strips a clock a caller invented for an agent-owned slot", () => {
+    expect(
+      reconcileOwedSince(
+        { kind: "entity", label: "NDA", owedSince: "1999-01-01T00:00:00.000Z" },
+        AT
+      )
+    ).not.toHaveProperty("owedSince");
   });
 });
