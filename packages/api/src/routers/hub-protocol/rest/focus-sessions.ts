@@ -1087,6 +1087,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
       return c.json(updated);
     } catch (err) {
+      // A WRITE-AUTHORITY refusal is a CALLER error, not a server fault. The
+      // slot floor throws `TRPCError(BAD_REQUEST)` naming the slot and the
+      // field; without this branch it escaped as a generic 500 reading "An
+      // unexpected server error occurred", which tells an agent nothing about
+      // what it may not write and reads as our bug rather than its own.
+      // Same lesson as the `completeOutput` refusal: a guard that holds while
+      // its report misleads is only half a guard.
+      const code = (err as { code?: string }).code;
+      if (code === "BAD_REQUEST" || code === "FORBIDDEN") {
+        return c.json(
+          { error: err instanceof Error ? err.message : "Refused" },
+          code === "FORBIDDEN" ? 403 : 400
+        );
+      }
       logger.error({ err, id }, "focus-sessions.update failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
