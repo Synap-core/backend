@@ -186,6 +186,16 @@ interface SessionGovernanceContext {
  * label EXACTLY, trimmed and case-insensitive. Anything looser would be a guess
  * dressed as evidence.
  *
+ * OWNERSHIP IS A FLOOR ON BOTH RUNGS. A slot the agent itself declared the
+ * HUMAN owns (`owner: 'human'`) can never be claimed by an agent write. Without
+ * it, rung 1 matched on NAME ALONE: an agent that created a document titled
+ * exactly like the slot it had just handed over claimed it back, and the
+ * approval then stamped that slot `done` — the agent closing work it had
+ * declared it could not do. Rung 2 was already safe, but only BY ACCIDENT (it
+ * keys on `delegatedTo`, which a human-owned slot happens not to carry); stated
+ * here it is intent, so a future widening of the delegation key cannot silently
+ * reopen it.
+ *
  * KIND IS A FLOOR ON BOTH RUNGS. A slot may only be claimed by a change of the
  * slot's own kind (`normalizeObjectKind`, the vocabulary's ONE normalization —
  * the same one `selectOutputToSatisfy` applies when the approval later reads
@@ -213,6 +223,8 @@ function resolveSessionSlotClaim(
   const targetKind = normalizeObjectKind(targetType);
   const ofKind = (o: ExpectedOutput) =>
     normalizeObjectKind(o.kind) === targetKind;
+  /** The ownership floor, applied to BOTH rungs below. */
+  const notTheHumans = (o: ExpectedOutput) => o.owner !== "human";
 
   // RUNG 1 — the change NAMES the slot (and is of its kind).
   const candidate = data
@@ -232,7 +244,8 @@ function resolveSessionSlotClaim(
       (o) =>
         typeof o.label === "string" &&
         o.label.trim().toLowerCase() === candidate &&
-        ofKind(o)
+        ofKind(o) &&
+        notTheHumans(o)
     )?.label;
     if (named) return named;
   }
@@ -263,7 +276,8 @@ function resolveSessionSlotClaim(
         o.status !== "done" &&
         typeof o.delegatedTo === "string" &&
         o.delegatedTo.trim().toLowerCase() === delegateType &&
-        ofKind(o)
+        ofKind(o) &&
+        notTheHumans(o)
     )?.label;
   }
 

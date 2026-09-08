@@ -130,9 +130,20 @@ export async function satisfyExpectedOutputs(
  *      and the session would report a deliverable nobody produced. On a kind
  *      mismatch the claim is dropped and rung 2 decides.
  *   2. KIND — the FIRST not-yet-done output whose kind normalizes to the
- *      proposal's target kind. First-only on purpose: two declared "document"
- *      outputs are two deliverables, and one approval is evidence for exactly
- *      one of them.
+ *      proposal's target kind, SKIPPING any slot the agent declared the human
+ *      owns. First-only on purpose: two declared "document" outputs are two
+ *      deliverables, and one approval is evidence for exactly one of them.
+ *
+ *      The `owner: 'human'` skip is what makes rung 2 a guess that cannot lie.
+ *      Governance already refuses to let an agent CLAIM a human-owned slot
+ *      (`resolveSessionSlotClaim`), but without this the refusal bought nothing:
+ *      with no claim the approval fell straight through to this rung and stamped
+ *      that very slot `done` anyway — the agent closing work it had itself
+ *      declared it could not do, with lineage that made it look verified. A
+ *      guess may not land on a deliverable nobody claims to have produced.
+ *      Rung 1 is deliberately NOT floored the same way: an explicit claim is
+ *      evidence, and one naming a human-owned slot can only have come from a
+ *      path that meant it.
  *
  * A claim that matches nothing (unknown label, or a label whose slot is already
  * done) falls THROUGH to rung 2 rather than returning `-1` — an approval is
@@ -157,7 +168,10 @@ export function selectOutputToSatisfy(
   }
 
   return outputs.findIndex(
-    (o) => o.status !== "done" && normalizeObjectKind(o.kind) === kind
+    (o) =>
+      o.status !== "done" &&
+      o.owner !== "human" &&
+      normalizeObjectKind(o.kind) === kind
   );
 }
 

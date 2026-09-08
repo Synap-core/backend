@@ -115,7 +115,27 @@ export interface UpdateRequest {
    * | `proposals.proposedByUserId`| row        | the HUMAN member who filed it; null for agents   |
    * | `proposals.agentUserId`     | row        | the ACTING AGENT's user row (RFC 8693 `act`)     |
    * | `proposals.createdBy`       | row        | OVERLOADED: human on the canonical path, agent on dev-approval/stage-gate |
-   * | `proposals.subjectUserId`   | row        | the user the proposal is ABOUT (not an actor)    |
+   * | `proposals.subjectUserId`   | row        | the EFFECTIVE USER of the principal that AUTHORED it |
+   *
+   * ⚠️ CORRECTED 2026-09-08. This row previously read "the user the
+   * proposal is ABOUT (not an actor)" — the OPPOSITE of what the column
+   * holds, and the error shipped: this file compiles into
+   * `packages/api-types/src/generated.d.ts`, so the wrong definition was
+   * the one every frontend engineer and every agent reading the API types
+   * would find, while the correct one sat in a schema file they never open.
+   *
+   * What it actually holds (see `packages/database/src/schema/proposals.ts`,
+   * the writer): `effectiveUserId` = `apiKeys.linkedUserId ?? apiKeys.userId`,
+   * stamped as `ctx.userId` by every proposal door. So it is the RFC 8693
+   * DELEGATION fact — the human an agent acted FOR, or the agent itself when
+   * it acted as its own principal (a pod-wide agent, `linkedUserId: null`).
+   * That is exactly why `deriveProposalPrincipal` can discriminate
+   * global-vs-delegated from it, and why rewriting it to the agent's
+   * `createdByUserId` would destroy the distinction.
+   *
+   * The correction is RECORDED rather than silently replaced because the
+   * stale sentence actively taught the opposite of the truth about an
+   * authority-adjacent field.
    * | `data.sourceId`  (this)     | JSONB      | **HUMAN or AGENT — depends on the writer**       |
    *
    * The two writers, verbatim:

@@ -309,8 +309,27 @@ export interface PackageCellDef {
   name: string;
   /** Raw ESM source (`widget_definitions.renderer_source`). */
   code: string;
+  /**
+   * Rendering MECHANISM — `"frame"` (sandboxed ESM React cell) or `"iframe"`
+   * (raw HTML document). Needs a slot for the SAME reason `viewTypes` and
+   * `contentKind` do: without one the field is stripped, `defineCell` applies
+   * its default `"frame"` on install, and an HTML Card round-trips into an ESM
+   * React cell that fails to mount — silently, at every hop.
+   *
+   * `"builtin"` is deliberately absent: a builtin renderer is HOST code, not
+   * anything a package can carry. `"native"` is absent by construction
+   * everywhere (NATIVE_RENDERER_REJECTED).
+   */
+  rendererType?: "iframe" | "frame";
   deps?: Record<string, string>;
   defaultSize?: { w: number; h: number };
+  /**
+   * Minimum grid footprint (`widget_definitions.min_size`). Needs a slot for the
+   * same reason `viewTypes` / `contentKind` / `rendererType` do: without one the
+   * field is stripped, and an authored Card round-trips without its floor — it
+   * can then be placed in a grid too small for it to render anything.
+   */
+  minSize?: { w: number; h: number };
   configSchema?: Record<string, unknown>;
   /** View types this cell can render — see `widget_definitions.view_renderer_view_types`. */
   viewTypes?: string[];

@@ -49,6 +49,9 @@ const ONE_ROW_PER_CLASS = [
     targetType: "governance_rule",
     cls: "governance",
   },
+  // The live row from the founder's pod, 2026-09-04: an agent asking to join a
+  // workspace as editor. It classified `objectWork` until 2026-09-08.
+  { proposalType: "join", targetType: "workspace", cls: "access" },
 ] as const;
 
 it("the fixtures cover every declared class", () => {

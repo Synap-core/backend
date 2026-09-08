@@ -2913,7 +2913,6 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			size: undefined;
 			baseBuilder: import("drizzle-orm/pg-core").PgColumnBuilder<{
 				name: "agent_ids";
 				dataType: "string";
@@ -2925,6 +2924,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 				];
 				driverParam: string;
 			}, {}, {}, import("drizzle-orm").ColumnBuilderExtraConfig>;
+			size: undefined;
 		}>;
 		closedAt: import("drizzle-orm/pg-core").PgColumn<{
 			name: "closed_at";
@@ -4825,7 +4825,27 @@ export interface UpdateRequest {
 	 * | `proposals.proposedByUserId`| row        | the HUMAN member who filed it; null for agents   |
 	 * | `proposals.agentUserId`     | row        | the ACTING AGENT's user row (RFC 8693 `act`)     |
 	 * | `proposals.createdBy`       | row        | OVERLOADED: human on the canonical path, agent on dev-approval/stage-gate |
-	 * | `proposals.subjectUserId`   | row        | the user the proposal is ABOUT (not an actor)    |
+	 * | `proposals.subjectUserId`   | row        | the EFFECTIVE USER of the principal that AUTHORED it |
+	 *
+	 * ⚠️ CORRECTED 2026-09-08. This row previously read "the user the
+	 * proposal is ABOUT (not an actor)" — the OPPOSITE of what the column
+	 * holds, and the error shipped: this file compiles into
+	 * `packages/api-types/src/generated.d.ts`, so the wrong definition was
+	 * the one every frontend engineer and every agent reading the API types
+	 * would find, while the correct one sat in a schema file they never open.
+	 *
+	 * What it actually holds (see `packages/database/src/schema/proposals.ts`,
+	 * the writer): `effectiveUserId` = `apiKeys.linkedUserId ?? apiKeys.userId`,
+	 * stamped as `ctx.userId` by every proposal door. So it is the RFC 8693
+	 * DELEGATION fact — the human an agent acted FOR, or the agent itself when
+	 * it acted as its own principal (a pod-wide agent, `linkedUserId: null`).
+	 * That is exactly why `deriveProposalPrincipal` can discriminate
+	 * global-vs-delegated from it, and why rewriting it to the agent's
+	 * `createdByUserId` would destroy the distinction.
+	 *
+	 * The correction is RECORDED rather than silently replaced because the
+	 * stale sentence actively taught the opposite of the truth about an
+	 * authority-adjacent field.
 	 * | `data.sourceId`  (this)     | JSONB      | **HUMAN or AGENT — depends on the writer**       |
 	 *
 	 * The two writers, verbatim:
@@ -5564,11 +5584,58 @@ export interface SearchResponse {
 	searchTimeMs: number;
 	facetCounts?: Record<string, Record<string, number>>;
 }
+/**
+ * The three states of "is a human's identity behind this agent's act?", read
+ * off `proposals.subjectUserId` (RFC 8693 delegation).
+ *
+ *   unresolved — the row predates migration 0248; the column is NULL. NOT the
+ *                same as "no delegation" — we simply never recorded it, and a
+ *                surface must say so rather than render a blank.
+ *   global     — `subjectUserId === agentUserId`: the agent's key is pod-wide
+ *                (`linkedUserId: null`), so it acted AS ITSELF. No human
+ *                delegated this.
+ *   delegated  — the effective user is somebody else: a human's identity is
+ *                behind the act, and `name` is theirs (absent only when that
+ *                user row is unreadable).
+ *
+ * ── IT CARRIES NO USER ID, BY CONSTRUCTION ─────────────────────────────────
+ * This type is a LABEL and must never become a FILTER. The `delegated` branch
+ * deliberately carries a `name` and NOT the `subjectUserId` it was derived
+ * from, and that omission is load-bearing, not an oversight.
+ *
+ * A principal carrying a resolved user id would look irresistibly like the
+ * right input to `routers/proposals/review-authority.ts:220-223`:
+ *
+ *     if (!isOwner && proposal.agentUserId) {
+ *       isOwner = facts.agentCreatedByUserId === userId;
+ *     }
+ *
+ * It is not. `subjectUserId` is the EFFECTIVE user of the acting principal, so
+ * on a POD-WIDE agent (`apiKeys.linkedUserId === null`) it resolves to THE
+ * AGENT ITSELF — feeding it into an owner check would let an agent's own id
+ * satisfy the owner floor and re-open the self-approval hole closed in
+ * `1ce38ef0`. The one-line defence is that the type STRUCTURALLY CANNOT be
+ * used as a filter: there is no id on it to compare.
+ *
+ * Pinned by `src/__tripwires__/principal-is-a-label-not-a-filter.test.ts`.
+ * Do not add an id-shaped member here. If a surface needs to FILTER by the
+ * delegating human, it must read the column through the authority path, not
+ * through this display label.
+ */
+export type ProposalPrincipal = {
+	kind: "unresolved";
+} | {
+	kind: "global";
+} | {
+	kind: "delegated";
+	name?: string;
+};
 declare const PROPOSAL_CLASSES: readonly [
 	"ephemeral",
 	"curatorial",
 	"objectWork",
-	"governance"
+	"governance",
+	"access"
 ];
 export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
 /** One distinct origin behind a cluster's proposals. */
@@ -6057,15 +6124,6 @@ declare const OperationalEventTypes: {
 			"channelId"
 		];
 	};
-	readonly EXTERNAL_CHANNEL_CREATED: {
-		readonly type: "external_channel.created.completed";
-		readonly label: "External channel created";
-		readonly domain: "Messaging";
-		readonly description: "A new external conversation channel was auto-created.";
-		readonly filterKeys: [
-			"provider"
-		];
-	};
 	readonly MESSAGING_ACCOUNT_CREATED: {
 		readonly type: "messaging_account.created.completed";
 		readonly label: "Messaging account connected";
@@ -6473,10 +6531,58 @@ export type GrantableKind = "tool" | "skill" | "command";
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
  */
 export type ExecMode = "auto" | "propose" | "dry-run";
+declare const BLOCKED_REASONS: readonly [
+	"credential",
+	"permission",
+	"capability",
+	"policy",
+	"decision",
+	"physical"
+];
+export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 export interface ExpectedOutput {
 	kind: string;
 	label: string;
 	icon?: string;
+	/**
+	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
+	 * field existed is semantically unchanged, so there is no backfill and no DB
+	 * default. Do not add one: a stored `agent` and an absent value must stay
+	 * indistinguishable, or "the agent never said" becomes unreadable.
+	 *
+	 * `human` is the agent DECLARING a slot it cannot take — not a delegation
+	 * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
+	 * `pending` either way; ownership says who the board is waiting on, and
+	 * `status: 'done'` is still stamped by the one door on approval.
+	 */
+	owner?: "human" | "agent";
+	/**
+	 * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
+	 * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
+	 * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
+	 * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
+	 */
+	blockedReason?: BlockedReason;
+	/**
+	 * One line of prose: the resumption cue a human reads to know what to do.
+	 * The taxonomy above says what class of thing is missing; this says WHICH —
+	 * "the Stripe restricted key for the live account", not "a credential".
+	 * Only meaningful alongside `owner: 'human'`.
+	 */
+	why?: string;
+	/**
+	 * WHEN the slot became the human's — stamped the moment `owner` becomes
+	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
+	 * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
+	 * writes the timestamp, never the declaring agent.
+	 *
+	 * It exists because a "needs you" feed has to order and age its rows, and
+	 * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
+	 * — a progress bump, a sibling slot's rename — would resurface an owed slot
+	 * to the top of the list forever. The invariant is exact: `owedSince` is
+	 * present IFF `owner === 'human'`.
+	 */
+	owedSince?: string;
 	/**
 	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
 	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
@@ -8357,13 +8463,18 @@ export interface SessionOutput {
 	producedAt: Date;
 	/** Derivable from artifact provenance or the satisfying proposal's actor. */
 	producedBy?: "agent" | "human";
-	/** The declared deliverable this object satisfies, when one matched. */
-	expected?: {
-		label: string;
-		status?: "pending" | "done";
-		claimedDone?: boolean;
-		satisfiedByProposalId?: string;
-	};
+	/**
+	 * The declared deliverable this object satisfies, when one matched — the
+	 * WHOLE slot, never a subset.
+	 *
+	 * It was an enumerated subset until 2026-09-08, and the enumeration is what
+	 * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
+	 * readable in `pendingExpected` and invisible the instant the deliverable
+	 * landed. A matched slot and an unmatched one must read identically; the only
+	 * way to guarantee that as the type grows is to carry the type, so this is
+	 * `ExpectedOutput` itself and the assignment spreads.
+	 */
+	expected?: ExpectedOutput;
 	/** Which ledger(s) reported it — provenance for the join itself. */
 	source: Array<"artifact" | "produced_edge" | "expected">;
 }
@@ -12501,6 +12612,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					authorName?: string;
 					agentActorName?: string;
 					onBehalfOfName?: string;
+					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
 					sessionGoal?: string;
@@ -12553,6 +12665,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					authorName?: string;
 					agentActorName?: string;
 					onBehalfOfName?: string;
+					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
 					sessionGoal?: string;
@@ -12660,6 +12773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				authorName?: string;
 				agentActorName?: string;
 				onBehalfOfName?: string;
+				principal?: ProposalPrincipal;
 				approverName?: string;
 				targetName?: string;
 				sessionGoal?: string;
@@ -12819,12 +12933,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				proposalIds: string[];
 				comment?: string | undefined;
+				expectedRevisions?: Record<string, number> | undefined;
 			};
 			output: {
 				results: {
 					proposalId: string;
 					success: boolean;
 					error?: string;
+					errorCode?: import("@trpc/server").TRPCError["code"];
 				}[];
 			};
 			meta: object;
@@ -25885,6 +26001,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					delegatedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					returnedAt?: string | undefined;
+					owner?: "human" | "agent" | undefined;
+					blockedReason?: "credential" | "permission" | "capability" | "policy" | "decision" | "physical" | undefined;
+					why?: string | undefined;
+					owedSince?: string | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -25947,6 +26067,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					delegatedAt?: string | undefined;
 					returnedReason?: string | undefined;
 					returnedAt?: string | undefined;
+					owner?: "human" | "agent" | undefined;
+					blockedReason?: "credential" | "permission" | "capability" | "policy" | "decision" | "physical" | undefined;
+					why?: string | undefined;
+					owedSince?: string | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 			};
@@ -26057,6 +26181,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				messageId: string;
 				triggered: boolean;
 				agentAttached: boolean;
+			};
+			meta: object;
+		}>;
+		blockOutput: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+				blockedReason: "credential" | "permission" | "capability" | "policy" | "decision" | "physical";
+				why?: string | undefined;
+			};
+			output: {
+				ok: true;
+				expectedLabel: string;
+				kind: string;
+			};
+			meta: object;
+		}>;
+		unblockOutput: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				expectedLabel: string;
+			};
+			output: {
+				ok: true;
+				expectedLabel: string;
+				kind: string;
 			};
 			meta: object;
 		}>;

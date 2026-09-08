@@ -24,6 +24,7 @@ import type { StepContext } from "../automation-executor-types.js";
 const ctx: StepContext = {
   trigger: {
     payload: { subjectId: "abc-123", data: { profileSlug: "person" } },
+    subject: null,
   },
   steps: {},
   automation: { id: "auto-1", state: {} },

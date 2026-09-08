@@ -14,8 +14,15 @@ import {
   resolveProposalKindLabel,
   PROPOSAL_KIND_LABELS,
   resolveObjectNounPlural,
+  resolveProvenanceLabel,
+  PROVENANCE_LABELS,
+  resolveBlockedReasonLabel,
+  BLOCKED_REASON_LABELS,
 } from "./index.js";
 import { buildFallbackTitle } from "../proposals/proposal-utils.js";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 
 describe("humanizeToken", () => {
   it("never leaks a raw machine token", () => {
@@ -589,5 +596,134 @@ describe("withdraw — the mood trap", () => {
     expect(resolveActionLabel("withdraw", "past")).not.toBe(
       resolveActionLabel("withdraw", "imperative")
     );
+  });
+});
+
+describe("provenance — one label door over three forked DB enums", () => {
+  /**
+   * The coverage claim is DERIVED from the schema, never hand-listed. Three
+   * columns spell the same idea differently (`ProvenanceKind` human|ai_agent|
+   * system, `CellInstanceCreatedByKind` user|agent|system,
+   * `messages.authorType` human|ai_agent|external|bot) and `generated.d.ts`
+   * documents the fork as intentional. A hand-written list here would go stale
+   * the day a fourth member lands — exactly the silent under-coverage this
+   * repo has shipped before. So the members are parsed out of the schema.
+   */
+  const SCHEMA = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "database",
+    "src",
+    "schema"
+  );
+
+  /** Members of a `export type X = "a" | "b";` union in a schema file. */
+  function unionMembers(file: string, typeName: string): string[] {
+    const src = readFileSync(resolve(SCHEMA, file), "utf8");
+    const re = new RegExp(`export type ${typeName} =([^;]*);`);
+    const m = re.exec(src);
+    // NON-VACUITY: a renamed/moved type must fail loudly rather than certify
+    // an empty set.
+    expect(m, `${typeName} not found in schema/${file}`).toBeTruthy();
+    return [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+  }
+
+  const provenanceKinds = unionMembers("provenance.ts", "ProvenanceKind");
+  const cellKinds = unionMembers(
+    "cell-instances.ts",
+    "CellInstanceCreatedByKind"
+  );
+  // `messages.authorType` is a text column, not an exported union — its four
+  // values are documented in the file's own header block, which is where the
+  // fork is asserted. Pinned literally, with the file cited so a change is
+  // findable.
+  const messageAuthorTypes = ["human", "ai_agent", "external", "bot"];
+
+  it("found real members to check", () => {
+    expect(provenanceKinds.length).toBeGreaterThanOrEqual(3);
+    expect(cellKinds.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("every DB provenance value has an EXPLICIT label, not a humanized guess", () => {
+    const all = [...provenanceKinds, ...cellKinds, ...messageAuthorTypes];
+    for (const value of all) {
+      expect(
+        PROVENANCE_LABELS[value],
+        `${value} is a live DB provenance value with no row in PROVENANCE_LABELS`
+      ).toBeTruthy();
+      // `humanizeToken("ai_agent")` is "Ai agent" — the exact leak the table
+      // exists to prevent. Assert the resolver did NOT fall through.
+      expect(resolveProvenanceLabel(value)).toBe(PROVENANCE_LABELS[value]);
+    }
+  });
+
+  it("the two spellings of one idea resolve to ONE word", () => {
+    // The whole point: a user must never be able to tell from the screen
+    // which table a row came out of.
+    expect(resolveProvenanceLabel("human")).toBe(
+      resolveProvenanceLabel("user")
+    );
+    expect(resolveProvenanceLabel("ai_agent")).toBe(
+      resolveProvenanceLabel("agent")
+    );
+  });
+
+  it("keeps genuinely different provenances DIFFERENT", () => {
+    // `external` is a real person outside the pod; `bot` is an automated
+    // message. Folding either into Person/AI agent destroys a real fact.
+    const distinct = new Set([
+      resolveProvenanceLabel("human"),
+      resolveProvenanceLabel("ai_agent"),
+      resolveProvenanceLabel("system"),
+      resolveProvenanceLabel("external"),
+      resolveProvenanceLabel("bot"),
+    ]);
+    expect(distinct.size).toBe(5);
+  });
+
+  it("never leaks a raw token, and says nothing for nothing", () => {
+    expect(resolveProvenanceLabel("some_new_kind")).toBe("Some new kind");
+    expect(resolveProvenanceLabel(null)).toBe("");
+    expect(resolveProvenanceLabel(undefined)).toBe("");
+    expect(resolveProvenanceLabel("")).toBe("");
+  });
+});
+
+describe("resolveBlockedReasonLabel", () => {
+  it("names all six blockers of the closed set", () => {
+    expect(resolveBlockedReasonLabel("credential")).toBe("Credential missing");
+    expect(resolveBlockedReasonLabel("permission")).toBe("Permission missing");
+    expect(resolveBlockedReasonLabel("capability")).toBe("Capability missing");
+    expect(resolveBlockedReasonLabel("policy")).toBe("Policy block");
+    expect(resolveBlockedReasonLabel("decision")).toBe("Human decision");
+    expect(resolveBlockedReasonLabel("physical")).toBe("Physical action");
+  });
+
+  it("keeps all six DISTINCT — the set exists to be grouped and counted", () => {
+    const labels = new Set(Object.values(BLOCKED_REASON_LABELS));
+    expect(labels.size).toBe(Object.keys(BLOCKED_REASON_LABELS).length);
+  });
+
+  it("does NOT read as the object kind of the same name", () => {
+    // `capability` and `decision` are also OBJECT_NOUNS. A bare humanize would
+    // render both tables identically, which is precisely the ambiguity this
+    // table's phrasing exists to remove.
+    expect(resolveBlockedReasonLabel("capability")).not.toBe(
+      resolveObjectNoun("capability")
+    );
+    expect(resolveBlockedReasonLabel("decision")).not.toBe(
+      resolveObjectNoun("decision")
+    );
+  });
+
+  it("never leaks a raw token, and says nothing for nothing", () => {
+    expect(resolveBlockedReasonLabel("some_new_blocker")).toBe(
+      "Some new blocker"
+    );
+    expect(resolveBlockedReasonLabel(null)).toBe("");
+    expect(resolveBlockedReasonLabel(undefined)).toBe("");
+    expect(resolveBlockedReasonLabel("")).toBe("");
   });
 });

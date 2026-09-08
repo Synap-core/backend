@@ -16,7 +16,7 @@
 
 import { z } from "zod";
 import { db, focusSessions, eq, and } from "@synap/database";
-import type { ExpectedOutput } from "@synap/playbooks";
+import { BLOCKED_REASONS, type ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 
 export interface UpdateFocusSessionParams {
@@ -28,7 +28,21 @@ export interface UpdateFocusSessionParams {
   status?: "active" | "paused";
   progress?: number;
   currentStage?: string;
-  addOutput?: { kind: string; label: string; icon?: string };
+  /**
+   * Append ONE slot. `owner`/`blockedReason`/`why` make this the door an agent
+   * uses to declare a slot it CANNOT take: the work is named on the board, the
+   * blocker is classified, and the human reads one line to know what to do.
+   * The slot lands `pending` like any other — declaring a blocker is not a
+   * claim of delivery, and `status: 'done'` is still the approval door's.
+   */
+  addOutput?: {
+    kind: string;
+    label: string;
+    icon?: string;
+    owner?: ExpectedOutput["owner"];
+    blockedReason?: ExpectedOutput["blockedReason"];
+    why?: ExpectedOutput["why"];
+  };
   completeOutput?: string;
   /**
    * APPEND one agent to the session roster. Mirrors `addOutput`: incremental
@@ -91,6 +105,23 @@ export const expectedOutputWireSchema = z.object({
   delegatedAt: z.string().optional(),
   returnedReason: z.string().optional(),
   returnedAt: z.string().optional(),
+  // Blocked-on-human slot. `owner` absent ⇒ `agent` (see ExpectedOutput).
+  //
+  // NOT cross-field-refined ("blockedReason/why only with owner:'human'"). That
+  // rule is CONVENTIONAL here on purpose: this schema parses WHOLESALE patches,
+  // and {@link mergeExpectedOutputs} carries forward the server-owned fields an
+  // incoming item is silent about — so a legal patch may legitimately arrive
+  // carrying `owner` without `blockedReason` (the stored one is about to be
+  // re-attached) or vice versa. A refinement at the parse sees only the incoming
+  // half and would reject writes the merge is designed to accept.
+  owner: z.enum(["human", "agent"]).optional(),
+  blockedReason: z.enum(BLOCKED_REASONS).optional(),
+  why: z.string().max(500).optional(),
+  // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
+  // ON the wire only so a caller round-tripping a stored slot does not lose it
+  // at the parse — never so a client can author a time it did not observe; the
+  // reconciler overwrites whatever arrives that contradicts `owner`.
+  owedSince: z.string().optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -110,8 +141,24 @@ export const expectedOutputWireSchema = z.object({
  * The rule is: an incoming item that is SILENT about a server-owned field keeps
  * the stored value; one that carries the field explicitly wins. Silence is not
  * an instruction to delete.
+ *
+ * MEMBERSHIP IS ABOUT ERASURE, NOT AUTHORITY. Being listed here does not make a
+ * field unwritable by an agent — `owner`/`blockedReason`/`why` are the agent's
+ * own declaration, written through `addOutput`. It makes the field survive the
+ * NEXT wholesale patch by a client that has never heard of it. Every key of
+ * `ExpectedOutput` except the three a client authors (`kind`, `label`, `icon`)
+ * belongs here, and `__tripwires__/expected-output-server-owned-coverage.test.ts`
+ * derives that set from the type so a new field cannot be silently omitted —
+ * `satisfies ReadonlyArray<keyof ExpectedOutput>` permits omission, which is
+ * exactly the erasure bug described above.
  */
-const SERVER_OWNED_OUTPUT_FIELDS = [
+export const CLIENT_AUTHORED_OUTPUT_FIELDS = [
+  "kind",
+  "label",
+  "icon",
+] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
+
+export const SERVER_OWNED_OUTPUT_FIELDS = [
   "status",
   "claimedDone",
   "satisfiedByProposalId",
@@ -119,7 +166,33 @@ const SERVER_OWNED_OUTPUT_FIELDS = [
   "delegatedAt",
   "returnedReason",
   "returnedAt",
+  "owner",
+  "blockedReason",
+  "why",
+  "owedSince",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
+
+/**
+ * COMPILE-TIME coverage floor for the list above.
+ *
+ * `satisfies ReadonlyArray<keyof ExpectedOutput>` only checks that each listed
+ * name IS a field — it happily accepts a list that OMITS one, and an omitted
+ * field is silently erased by the next wholesale patch. This says the other
+ * direction: every key of `ExpectedOutput` that is not client-authored must be
+ * in the list, or `Exclude<...>` fails to extend the tuple union, the alias
+ * resolves to `never`, and this assignment stops the build. A new field on the
+ * interface is therefore a TYPECHECK error until it is classified — no test run
+ * required, and nothing for a regex to be blinded by.
+ */
+type _ServerOwnedCoversEveryField =
+  Exclude<
+    keyof ExpectedOutput,
+    (typeof CLIENT_AUTHORED_OUTPUT_FIELDS)[number]
+  > extends (typeof SERVER_OWNED_OUTPUT_FIELDS)[number]
+    ? true
+    : never;
+const _serverOwnedCoverage: _ServerOwnedCoversEveryField = true;
+void _serverOwnedCoverage;
 
 /**
  * Merge an incoming `expectedOutputs` array onto the stored one BY LABEL — the
@@ -159,8 +232,98 @@ export function mergeExpectedOutputs(
         Object.assign(carried, { [field]: value });
       }
     }
-    return { ...item, ...carried };
+    return reconcileOwedSince({ ...item, ...carried });
   });
+}
+
+/**
+ * THE `owedSince` INVARIANT, in one place: the stamp is present IFF the slot is
+ * owned by the human.
+ *
+ * `owner: 'human'` is authored by an agent (through `addOutput`, a wholesale
+ * patch, or `blockExpectedOutput`), but the TIME it became owed is an
+ * observation only the server can make — the same split `delegatedAt` has from
+ * `delegatedTo`. So every path that can change `owner` runs the slot through
+ * here rather than each stamping its own timestamp, and a client that sends a
+ * fabricated `owedSince` on a slot it is handing BACK to the agent has it
+ * dropped rather than believed.
+ *
+ * An ALREADY-owed slot keeps its original stamp: re-declaring the same blocker
+ * must not reset the clock the "needs you" feed ages rows by.
+ */
+export function reconcileOwedSince(
+  item: OutputItem,
+  now: Date = new Date()
+): OutputItem {
+  if (item.owner === "human") {
+    return item.owedSince ? item : { ...item, owedSince: now.toISOString() };
+  }
+  if (item.owedSince === undefined) return item;
+  const { owedSince: _dropped, ...rest } = item;
+  return rest;
+}
+
+/**
+ * The three output mutations a `focus_session/update` can carry, applied to the
+ * CURRENT stored array. Pure, and EXPORTED because it has two callers that must
+ * not drift: this service's row-locked write, and the `focus_session/update`
+ * proposal executor, which re-applies the very same patch on approval. When the
+ * executor had its own inline field list it applied none of these at all, and
+ * approving a slot change returned success while changing nothing.
+ */
+export function applyOutputMutations(
+  current: OutputItem[],
+  patch: {
+    expectedOutputs?: OutputItem[];
+    addOutput?: UpdateFocusSessionParams["addOutput"];
+    completeOutput?: string;
+  }
+): OutputItem[] {
+  // Wholesale replace goes through the ONE merge, so a client that sends back
+  // the four fields it knows about cannot erase a delegation, a return note or
+  // an approval's lineage.
+  let next: OutputItem[] = patch.expectedOutputs
+    ? mergeExpectedOutputs(current, patch.expectedOutputs)
+    : current;
+
+  if (patch.addOutput) {
+    const add = patch.addOutput;
+    next = [
+      ...next,
+      reconcileOwedSince({
+        kind: add.kind,
+        label: add.label,
+        icon: add.icon,
+        status: "pending",
+        // Only spread what was actually declared — an absent `owner` MUST
+        // stay absent (it is what "the agent never said" looks like), not
+        // become an explicit "agent".
+        ...(add.owner !== undefined ? { owner: add.owner } : {}),
+        ...(add.blockedReason !== undefined
+          ? { blockedReason: add.blockedReason }
+          : {}),
+        ...(add.why !== undefined ? { why: add.why } : {}),
+      }),
+    ];
+  }
+
+  if (typeof patch.completeOutput === "string") {
+    const label = patch.completeOutput;
+    next = next.map((o) =>
+      // GOVERNANCE FLOOR — an agent may not complete a slot it handed to the
+      // human. `owner: 'human'` is the agent's own declaration that it CANNOT
+      // do this work; letting the same caller then mark it done would make the
+      // declaration a way to close work nobody did. (The wider residual — that
+      // this stamps `status` at all instead of `claimedDone` — is pinned in
+      // `__tripwires__/expected-output-done-one-door.test.ts` and deliberately
+      // untouched here.)
+      o.label === label && o.owner !== "human"
+        ? { ...o, status: "done" as const }
+        : o
+    );
+  }
+
+  return next;
 }
 
 export async function updateFocusSession(
@@ -281,31 +444,11 @@ export async function updateFocusSession(
       const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
         ? (locked.expectedOutputs as OutputItem[])
         : [];
-      // Wholesale replace goes through the ONE merge, so a client that sends
-      // back the four fields it knows about cannot erase a delegation, a return
-      // note or an approval's lineage.
-      let next: OutputItem[] = params.expectedOutputs
-        ? mergeExpectedOutputs(current, params.expectedOutputs)
-        : current;
-      if (params.addOutput) {
-        const add = params.addOutput;
-        next = [
-          ...next,
-          {
-            kind: add.kind,
-            label: add.label,
-            icon: add.icon,
-            status: "pending",
-          },
-        ];
-      }
-      if (typeof params.completeOutput === "string") {
-        const label = params.completeOutput;
-        next = next.map((o) =>
-          o.label === label ? { ...o, status: "done" as const } : o
-        );
-      }
-      set.expectedOutputs = next;
+      set.expectedOutputs = applyOutputMutations(current, {
+        expectedOutputs: params.expectedOutputs,
+        addOutput: params.addOutput,
+        completeOutput: params.completeOutput,
+      });
     }
     return tx
       .update(focusSessions)

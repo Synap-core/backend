@@ -171,10 +171,80 @@ export interface ChannelSpec {
   aiReactionMode?: "only_mentioned" | "when_confident" | "off";
 }
 
+/**
+ * Why an agent could NOT take a slot — the CLOSED set of blockers.
+ *
+ * Closed on purpose, and for the same reason `ProposalClass` is closed
+ * (`api services/proposals/proposal-class.ts`): an agent free to nominate its
+ * own class nominates the quiet one. A blocker the agent invents is a blocker
+ * no surface can group, count or route.
+ *
+ * THE RULE THAT PRODUCED THIS SET — apply it before adding a seventh value:
+ * a value earns its place only if it changes what you would BUILD to remove it.
+ *   - `credential` → mint or store a secret.
+ *   - `permission` → write a governance rule.
+ *   - `capability` → the tool does not exist; build or install it.
+ *   - `policy`     → change the rule, or accept it.
+ *   - `decision`   → nothing to build. Honestly terminal: a human has to choose.
+ *   - `physical`   → nothing to build. Honestly terminal: a human has to act
+ *                    in the world.
+ * Two values that lead to the same build are one value; a value that leads to
+ * no build AND is not honestly terminal is a `why` string, not a member here.
+ */
+export const BLOCKED_REASONS = [
+  "credential",
+  "permission",
+  "capability",
+  "policy",
+  "decision",
+  "physical",
+] as const;
+
+export type BlockedReason = (typeof BLOCKED_REASONS)[number];
+
 export interface ExpectedOutput {
   kind: string;
   label: string;
   icon?: string;
+  /**
+   * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
+   * field existed is semantically unchanged, so there is no backfill and no DB
+   * default. Do not add one: a stored `agent` and an absent value must stay
+   * indistinguishable, or "the agent never said" becomes unreadable.
+   *
+   * `human` is the agent DECLARING a slot it cannot take — not a delegation
+   * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
+   * `pending` either way; ownership says who the board is waiting on, and
+   * `status: 'done'` is still stamped by the one door on approval.
+   */
+  owner?: "human" | "agent";
+  /**
+   * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
+   * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
+   * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
+   * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
+   */
+  blockedReason?: BlockedReason;
+  /**
+   * One line of prose: the resumption cue a human reads to know what to do.
+   * The taxonomy above says what class of thing is missing; this says WHICH —
+   * "the Stripe restricted key for the live account", not "a credential".
+   * Only meaningful alongside `owner: 'human'`.
+   */
+  why?: string;
+  /**
+   * WHEN the slot became the human's — stamped the moment `owner` becomes
+   * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
+   * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
+   * writes the timestamp, never the declaring agent.
+   *
+   * It exists because a "needs you" feed has to order and age its rows, and
+   * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
+   * — a progress bump, a sibling slot's rename — would resurface an owed slot
+   * to the top of the list forever. The invariant is exact: `owedSince` is
+   * present IFF `owner === 'human'`.
+   */
+  owedSince?: string;
   /**
    * Whether the deliverable actually landed. `done` is stamped by ONE door —
    * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),

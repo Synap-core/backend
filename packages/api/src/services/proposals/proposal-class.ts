@@ -16,6 +16,27 @@
  *   objectWork   69  create · import.graph · ai_edit
  *   governance    2  governance.*
  *   access        0  does not exist in the data yet — deliberately NOT a class
+ *
+ * ── Re-measured 2026-09-08: `access` now EXISTS, and is a class ─────────────
+ * The 09-02 reading was correct when taken and was invalidated two days later
+ * with nothing watching. On 2026-09-04 the founder's pod took its first one:
+ * `{ proposalType: "join", targetType: "workspace" }` — "Agent Claude (Web)
+ * requests to join workspace Builder as editor". It fell through to
+ * `objectWork`, so an agent asking for EDITOR RIGHTS was filed beside a
+ * proposed entity, indistinguishable from ordinary graph work. It has sat
+ * unanswered since.
+ *
+ * The lesson is about the measurement, not the number: "0 instances ⇒ not a
+ * class" is a reading of a MOMENT, and nothing re-read it. A class whose
+ * population is zero because the door only just opened looks identical to one
+ * that will stay empty forever.
+ *
+ * Why it earns a lane rather than a filter: an access decision is the
+ * highest-consequence and lowest-volume item in the queue, and the only one
+ * whose subject is WHO MAY ACT rather than WHAT IS TRUE. The data-write half of
+ * governance has effectively self-resolved on that pod (38 of the last 40
+ * writes auto-approved); the identity/permission half has not, and had no lane
+ * to be seen in.
  */
 
 /**
@@ -42,9 +63,68 @@ export const PROPOSAL_CLASSES = [
   "curatorial",
   "objectWork",
   "governance",
+  "access",
 ] as const;
 
 export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
+
+/**
+ * The `${targetType}/${proposalType}` pairs whose approval changes WHO MAY ACT
+ * — a membership, a role, a permission, a credential, or an exposure.
+ *
+ * Keyed on the PAIR, in the same `targetType/proposalType` shape as
+ * `GOVERNED_WRITE_DOORS` (`@synap/governance-policy`), from which this set was
+ * derived door-by-door. It is a LOCAL literal on purpose: this module imports
+ * nothing, which is the property that lets every reader import it without a
+ * cycle. The cost is that a new access door must be added here by hand; the
+ * test below pins the pairs so the omission is at least visible, and an
+ * omitted pair fails to `objectWork`, which never expires.
+ *
+ * The test for membership is not "is this sensitive" — `workspace/delete` is
+ * far more destructive and is NOT here. It is "does approving this hand a
+ * principal (a person, an agent, or the public) a right it did not have".
+ */
+const ACCESS_DOORS: ReadonlySet<string> = new Set([
+  // Workspace membership. `workspace/join` is the live one: an agent that is
+  // not yet a member files this instead of being hard-denied, and approving it
+  // inserts the workspace_members row at the role the payload names.
+  "workspace/join",
+  // A2AI channel membership — an agent asking to join an open channel.
+  "a2ai/join",
+  // The human-side membership doors (routers/workspaces/invites.ts).
+  "workspaceMember/add",
+  "workspaceMember/remove",
+  "workspaceMember/updateRole",
+  // Project membership is a SCOPE CHANGE: it widens that user's read floor
+  // across every workspace the project exposes (`exposureMemberWhere`).
+  "projectMember/create",
+  // Reserved-but-unbuilt in ADMIN_ACTIONS_RESERVED. Listed for the same reason
+  // that list keeps them: a door that ships tomorrow inherits the lane on day
+  // one rather than arriving classified as ordinary object work.
+  "projectMember/remove",
+  "projectMember/updateRole",
+  // RBAC role definitions — the permission table itself.
+  "role/create",
+  "role/update",
+  "role/delete",
+  // API keys ARE credentials. `apiKey/update` is included even though it is
+  // deliberately NOT admin-floored: whether a write must be proposed and what
+  // lane it is reviewed IN are different questions, and every key write is an
+  // access decision once it reaches a human.
+  "apiKey/create",
+  "apiKey/update",
+  "apiKey/delete",
+  // What an agent principal is permitted to do.
+  "agent/updateCapabilities",
+  // A capability granted to a running session — the same question, narrower
+  // scope. NOT session-bound for expiry: see the lifetime note below.
+  "focus_session/grant_capability",
+  // A secret handed to an agent, with an access level and a TTL.
+  "vault/vault.request",
+  // Exposure rather than membership: this is the door that makes a workspace
+  // projection readable by principals outside it, so it widens who may SEE.
+  "workspace/configure_public_projection",
+]);
 
 /**
  * How long a class stays answerable once its context is gone, in hours.
@@ -65,6 +145,13 @@ export const CLASS_LIFETIME_HOURS: Record<ProposalClass, number | null> = {
   curatorial: null,
   objectWork: null,
   governance: null,
+  // NEVER. An access request that silently expires is strictly worse than one
+  // that waits: the agent is still blocked either way, but the expiry deletes
+  // the only record that anyone was ever asked. `null` also keeps it out of
+  // `diesWithSession` (expire-lapsed-proposals.ts), whose first arm is exactly
+  // "belongs to a class WITH a lifetime" — so closing the session an agent
+  // asked from cannot retire the question of whether it may join at all.
+  access: null,
 };
 
 /**
@@ -89,7 +176,13 @@ export function classifyProposal(
   )
     return "ephemeral";
   // Governance meta-proposals are the policy lane, already rendered apart.
+  // Checked BEFORE access so a `governance.widen_lane` — which does change who
+  // may act — keeps the lane it already has. Widening a lane is a change to the
+  // RULE; the access lane is a decision about one principal, one grant, once.
   if (proposalType.startsWith("governance.")) return "governance";
+  // Who may act. Pair-keyed, exactly like every rule above it, so the security
+  // property is unchanged: an agent can influence neither column.
+  if (ACCESS_DOORS.has(`${targetType}/${proposalType}`)) return "access";
   // "Are these two records the same thing?" — unhurried, batched work.
   if (proposalType === "merge") return "curatorial";
   return "objectWork";

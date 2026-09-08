@@ -121,6 +121,7 @@ describe("joinSessionOutputs — expected outputs", () => {
     expect(pendingExpected).toEqual([]);
     expect(outputs.find((o) => o.refId === DOC_A)!.expected).toBeUndefined();
     expect(outputs.find((o) => o.refId === DOC_B)!.expected).toEqual({
+      kind: "document",
       label: "Spec",
       status: "done",
       satisfiedByProposalId: PROPOSAL,
@@ -134,7 +135,11 @@ describe("joinSessionOutputs — expected outputs", () => {
       expectedOutputs: [{ kind: "document", label: "Spec", claimedDone: true }],
     });
     expect(pendingExpected).toEqual([]);
-    expect(outputs[0]!.expected).toEqual({ label: "Spec", claimedDone: true });
+    expect(outputs[0]!.expected).toEqual({
+      kind: "document",
+      label: "Spec",
+      claimedDone: true,
+    });
     expect(outputs[0]!.source).toEqual(["artifact", "expected"]);
   });
 
@@ -270,7 +275,7 @@ describe("joinSessionOutputs — declared label", () => {
       ],
       expectedOutputs: [{ kind: "document", label: "Spec" }],
     });
-    expect(outputs[0]!.expected).toEqual({ label: "Spec" });
+    expect(outputs[0]!.expected).toEqual({ kind: "document", label: "Spec" });
     expect(outputs[0]!.expected!.status).toBeUndefined();
   });
 
@@ -403,5 +408,58 @@ describe("joinSessionOutputs — automation and playbook outputs", () => {
     });
     const slot = outputs.find((o) => o.expected?.label === "The rule");
     expect(slot!.refId).toBe(AUTOMATION);
+  });
+});
+
+/**
+ * THE PROJECTION MUST NOT NARROW.
+ *
+ * `SessionOutput.expected` used to be a hand-enumerated subset of
+ * `ExpectedOutput`, re-listed field by field at the assignment. Every field the
+ * list had not heard of was DROPPED for any slot that matched a produced object
+ * — so `delegatedTo`, `delegatedAt`, `returnedReason`, `returnedAt` and
+ * `owedSince` were readable in `pendingExpected` and invisible the moment the
+ * deliverable landed. Advertised-and-unreadable, and it grew back twice by
+ * someone adding three more names to the same list.
+ *
+ * The assertion is therefore WHOLE-OBJECT, never a field checklist: a new field
+ * on `ExpectedOutput` is covered by this test the day it is added, without
+ * anyone remembering to extend it.
+ */
+describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
+  const fullSlot: Required<ExpectedOutput> = {
+    kind: "entity",
+    label: "The dossier",
+    icon: "file",
+    owner: "human",
+    blockedReason: "credential",
+    why: "The Stripe restricted key for the live account",
+    owedSince: "2026-09-08T09:00:00.000Z",
+    status: "done",
+    claimedDone: true,
+    satisfiedByProposalId: PROPOSAL,
+    delegatedTo: "researcher",
+    delegatedAt: "2026-09-08T10:00:00.000Z",
+    returnedReason: "Missing the numbers",
+    returnedAt: "2026-09-08T11:00:00.000Z",
+  };
+
+  it("carries EVERY declared field onto the matched output", () => {
+    const { outputs } = joinSessionOutputs({
+      ...empty,
+      artifacts: [artifact({})],
+      expectedOutputs: [fullSlot],
+    });
+    expect(outputs).toHaveLength(1);
+    // Whole-object: no subset may be enumerated here either.
+    expect(outputs[0]!.expected).toEqual(fullSlot);
+  });
+
+  it("reads the same matched as unmatched — pendingExpected is the control", () => {
+    const { pendingExpected } = joinSessionOutputs({
+      ...empty,
+      expectedOutputs: [fullSlot],
+    });
+    expect(pendingExpected[0]).toEqual(fullSlot);
   });
 });

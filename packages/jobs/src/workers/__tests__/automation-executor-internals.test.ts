@@ -27,7 +27,7 @@ import {
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 
 const ctx = (overrides: Partial<StepContext> = {}): StepContext => ({
-  trigger: { payload: {} },
+  trigger: { payload: {}, subject: null },
   steps: {},
   automation: { id: "a1", state: {} },
   ...overrides,
@@ -57,7 +57,7 @@ describe("resolveTemplate", () => {
     expect(
       resolveTemplate(
         "{{trigger.payload.title}}",
-        ctx({ trigger: { payload: { title: "Hi" } } })
+        ctx({ trigger: { payload: { title: "Hi" }, subject: null } })
       )
     ).toBe("Hi");
   });
@@ -244,6 +244,7 @@ describe("evaluateCondition", () => {
     const c = ctx({
       trigger: {
         payload: { a: "id-1", b: "id-1", data: { channelId: "id-2" } },
+        subject: null,
       },
     });
     // equal → false
@@ -268,7 +269,7 @@ describe("evaluateCondition", () => {
   // ── Membership operators (list-based): in / not-in / contains / contains-any ──
   describe("membership operators", () => {
     const withFrom = (from: string, extra: Record<string, unknown> = {}) =>
-      ctx({ trigger: { payload: { from, ...extra } } });
+      ctx({ trigger: { payload: { from, ...extra }, subject: null } });
 
     it("`in` — value ∈ inline literal allow-list (member / non-member)", () => {
       expect(
@@ -307,7 +308,7 @@ describe("evaluateCondition", () => {
 
     it("`contains-any` — non-empty intersection (either side a list)", () => {
       const c = ctx({
-        trigger: { payload: { tags: ["urgent", "sales"] } },
+        trigger: { payload: { tags: ["urgent", "sales"] }, subject: null },
       });
       expect(
         evaluateCondition("trigger.payload.tags contains-any 'sales','ops'", c)
@@ -631,12 +632,12 @@ describe("shouldRunFlow (Wave 4.V3 precondition early-exit)", () => {
   });
 
   it("runs when the precondition evaluates true against the trigger payload", () => {
-    const c = ctx({ trigger: { payload: { stage: "won" } } });
+    const c = ctx({ trigger: { payload: { stage: "won" }, subject: null } });
     expect(shouldRunFlow("trigger.payload.stage === 'won'", c)).toBe(true);
   });
 
   it("skips (returns false) when the precondition evaluates false", () => {
-    const c = ctx({ trigger: { payload: { stage: "lost" } } });
+    const c = ctx({ trigger: { payload: { stage: "lost" }, subject: null } });
     expect(shouldRunFlow("trigger.payload.stage === 'won'", c)).toBe(false);
   });
 
@@ -726,7 +727,7 @@ describe("resolveQueryProfileSlug (query node profileSlug resolution)", () => {
   });
 
   it("template-resolves a nested profileSlug reference", () => {
-    const c = ctx({ trigger: { payload: { slug: "event" } } });
+    const c = ctx({ trigger: { payload: { slug: "event" }, subject: null } });
     expect(
       resolveQueryProfileSlug(
         { filter: { profileSlug: "{{trigger.payload.slug}}" } },

@@ -232,13 +232,14 @@ export const OperationalEventTypes = {
     description: "An inbound message arrived on a connected external channel.",
     filterKeys: ["provider", "channelId"],
   },
-  EXTERNAL_CHANNEL_CREATED: {
-    type: "external_channel.created.completed",
-    label: "External channel created",
-    domain: "Messaging",
-    description: "A new external conversation channel was auto-created.",
-    filterKeys: ["provider"],
-  },
+  // REMOVED 2026-09-08 — `external_channel.created.completed` had ZERO
+  // producers: no `emitSideEffects({ subjectType: "external_channel" })` exists
+  // anywhere in any repo (the channel auto-create in inbound-recorder.ts emits
+  // `external_message.received.completed` only). This catalog is what the
+  // trigger pickers render, so the entry offered users a trigger that could
+  // never fire — an automation built on it installs `active` and stays inert
+  // forever, the same silent-never-matches class as an unevaluable filter.
+  // Re-add it the moment a producer exists, not before.
   MESSAGING_ACCOUNT_CREATED: {
     type: "messaging_account.created.completed",
     label: "Messaging account connected",
@@ -278,6 +279,9 @@ export const OperationalEventTypes = {
   },
 
   // ── User / identity ──────────────────────────────────────────────────────
+  // KEPT — this one DOES have a producer, contrary to a `packages/`-only grep:
+  // it lives in `apps/api/src/webhooks/kratos.ts` (the Kratos `identity.updated`
+  // webhook calls `emitSideEffects({ subjectType: "user", action: "updated" })`).
   USER_UPDATED: {
     type: "user.updated.completed",
     label: "User updated",

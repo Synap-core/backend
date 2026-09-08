@@ -2251,14 +2251,51 @@ export const proposalsRouter = router({
       z.object({
         proposalIds: z.array(z.string()).min(1).max(50),
         comment: z.string().optional(),
+        /**
+         * Diff-scoped approval, PER PROPOSAL — `proposalId → the
+         * `revisionHistory.length` the client RENDERED for that row.
+         *
+         * Single `approve` has carried `expectedRevision` since Slice 5; this
+         * door never got it, so the BULK control — where a human commits many
+         * decisions at once, and is least likely to re-read each — was the one
+         * approve path with no consent binding at all. A proposal revised after
+         * the queue was rendered would be approved against content nobody saw.
+         *
+         * A map rather than an array: positional pairing with `proposalIds`
+         * would silently mis-bind if a caller ever filtered one list and not the
+         * other, and that is precisely the class of defect this guard exists to
+         * catch. Omitted ids simply are not diff-scoped (the same backward
+         * -compatible no-op `assertReviewedRevision` already implements), so a
+         * caller may supply revisions for the rows it rendered and omit the rest
+         * — never a fabricated 0, which would positively claim "I read revision
+         * zero" and PASS for every never-revised proposal.
+         */
+        expectedRevisions: z
+          .record(z.string(), z.number().int().nonnegative())
+          .optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      /**
+       * Per-item outcome. `errorCode` is the tRPC error CODE the failure
+       * actually carried — the same machine token single `approve` refuses
+       * with, so a client can tell "this changed since you reviewed it"
+       * (`CONFLICT` ⇒ reload and re-decide) from "the pod refused for another
+       * reason" WITHOUT matching prose. Before it existed, relay's grouped
+       * approve had to regex the message, and rewording the guard would have
+       * silently disabled the branch.
+       *
+       * The code is never hand-assigned per branch. EVERY refusal below throws
+       * a real `TRPCError` and the ONE catch at the bottom of the loop reads
+       * `.code` off it — so the code and the sentence are authored in the same
+       * place and cannot drift into two tables.
+       */
       const results: Array<{
         proposalId: string;
         success: boolean;
         error?: string;
+        errorCode?: TRPCError["code"];
       }> = [];
 
       for (const proposalId of input.proposalIds) {
@@ -2268,23 +2305,44 @@ export const proposalsRouter = router({
           });
 
           if (!proposal) {
-            results.push({ proposalId, success: false, error: "Not found" });
-            continue;
+            throw new TRPCError({ code: "NOT_FOUND", message: "Not found" });
+          }
+
+          // Diff-scoped approval, before ANY state transition — the same
+          // ordering single `approve` uses (assert, then act), so a stale row is
+          // refused rather than half-applied. Per-item: one stale proposal fails
+          // its own entry and the rest of the batch proceeds, which matches this
+          // door's established shape (record the failure, continue the batch).
+          //
+          // The guard's own `TRPCError` (code `CONFLICT`) propagates to the
+          // loop's catch UNCAUGHT here on purpose: it already carries both the
+          // sentence and the code, and re-wrapping it locally is exactly how a
+          // second, drifting code table gets born.
+          const expectedRevision = input.expectedRevisions?.[proposalId];
+          if (expectedRevision !== undefined) {
+            assertReviewedRevision(expectedRevision, proposal.revisionHistory);
           }
 
           // PENDING or APPROVAL_FAILED are the retryable states (both surface in
           // the actionable queue). A previously-failed approval can be retried in
           // a batch just like a single Retry; every terminal state is skipped.
+          //
+          // `PRECONDITION_FAILED`, deliberately NOT `CONFLICT`: this row is in
+          // a terminal state, which is a settled fact the client should absorb
+          // — not the diff-scoped review conflict, which means the human has
+          // not seen the current version and must re-read before deciding.
+          // Collapsing the two would make "already approved" demand a reload it
+          // does not need, and would blunt the one signal the revision binding
+          // exists to send. `CONFLICT` on this door means the revision guard
+          // and nothing else.
           if (
             proposal.status !== ProposalStatus.PENDING &&
             proposal.status !== ProposalStatus.APPROVAL_FAILED
           ) {
-            results.push({
-              proposalId,
-              success: false,
-              error: `Already ${proposal.status}`,
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Already ${proposal.status}`,
             });
-            continue;
           }
 
           // Ownership check — SAME computation as single `approve`; this door's
@@ -2296,12 +2354,10 @@ export const proposalsRouter = router({
             purpose: "approve",
           });
           if (!canApprove) {
-            results.push({
-              proposalId,
-              success: false,
-              error: "Not authorized",
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "Not authorized",
             });
-            continue;
           }
 
           // ONE door — the SAME `applyProposalApproval` single approve runs.
@@ -2333,12 +2389,36 @@ export const proposalsRouter = router({
             },
             ctx,
           });
-          results.push({ proposalId, success: result.success });
+          if (result.success) {
+            results.push({ proposalId, success: true });
+          } else {
+            // The shared door returned a falsy `success` WITHOUT throwing, so
+            // there is no `TRPCError` to read a code off. This is the one
+            // explicitly-chosen fallback — the same one the catch below uses —
+            // and it carries no invented sentence: the door reported no reason,
+            // and manufacturing one would be a claim about what happened that
+            // nothing verified. (This arm previously reported `success:false`
+            // with NO error and NO code at all, which read to a client as an
+            // unexplained failure.)
+            results.push({
+              proposalId,
+              success: false,
+              errorCode: "INTERNAL_SERVER_ERROR",
+            });
+          }
         } catch (error) {
+          // THE single derivation site. Every refusal above throws a real
+          // `TRPCError`, so its own `.code` is what lands on the wire — no
+          // branch→code lookup table exists to drift from the messages.
+          // A non-TRPCError throw (a bug, a driver error) has no code of its
+          // own: it falls back to INTERNAL_SERVER_ERROR, the honest reading of
+          // "this was not a governance refusal".
           results.push({
             proposalId,
             success: false,
             error: error instanceof Error ? error.message : "Unknown error",
+            errorCode:
+              error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
           });
         }
       }

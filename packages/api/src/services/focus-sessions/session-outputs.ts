@@ -67,13 +67,18 @@ export interface SessionOutput {
   producedAt: Date;
   /** Derivable from artifact provenance or the satisfying proposal's actor. */
   producedBy?: "agent" | "human";
-  /** The declared deliverable this object satisfies, when one matched. */
-  expected?: {
-    label: string;
-    status?: "pending" | "done";
-    claimedDone?: boolean;
-    satisfiedByProposalId?: string;
-  };
+  /**
+   * The declared deliverable this object satisfies, when one matched — the
+   * WHOLE slot, never a subset.
+   *
+   * It was an enumerated subset until 2026-09-08, and the enumeration is what
+   * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
+   * readable in `pendingExpected` and invisible the instant the deliverable
+   * landed. A matched slot and an unmatched one must read identically; the only
+   * way to guarantee that as the type grows is to carry the type, so this is
+   * `ExpectedOutput` itself and the assignment spreads.
+   */
+  expected?: ExpectedOutput;
   /** Which ledger(s) reported it — provenance for the join itself. */
   source: Array<"artifact" | "produced_edge" | "expected">;
 }
@@ -265,14 +270,11 @@ export function joinSessionOutputs(
       continue;
     }
     claimed.add(target.id);
-    target.expected = {
-      label: e.label,
-      ...(e.status ? { status: e.status } : {}),
-      ...(e.claimedDone !== undefined ? { claimedDone: e.claimedDone } : {}),
-      ...(e.satisfiedByProposalId
-        ? { satisfiedByProposalId: e.satisfiedByProposalId }
-        : {}),
-    };
+    // SPREAD, never re-list. The three targeted stampers (`stampSatisfied`,
+    // `stampDelegated`, `stampReturned`) all spread the slot for the same
+    // reason: an enumeration here is a second, blinder copy of the type that
+    // silently drops whatever was added to it last.
+    target.expected = { ...e };
     if (e.icon) target.icon = e.icon;
     if (!target.source.includes("expected")) target.source.push("expected");
     // A proposal filed by an agent is agent provenance the artifact ledger may

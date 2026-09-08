@@ -716,6 +716,36 @@ export interface FocusSessionExpectedOutput {
   returnedReason?: string;
   /** ISO timestamp of the return. */
   returnedAt?: string;
+  /**
+   * WHO the slot is waiting on. ABSENT MEANS `agent` — no backfill, no default;
+   * a stored "agent" and an absent value must stay indistinguishable.
+   * `human` is the agent declaring work it CANNOT take.
+   */
+  owner?: "human" | "agent";
+  /**
+   * Why the agent could not take it — a CLOSED set, mirrored from
+   * `BLOCKED_REASONS` (@synap/playbooks). This package is dependency-free by
+   * design, so the union is duplicated rather than imported; the pod's
+   * `expectedOutputWireSchema` is the enforcing copy and will reject anything
+   * outside it. Only meaningful with `owner: 'human'`.
+   */
+  blockedReason?:
+    | "credential"
+    | "permission"
+    | "capability"
+    | "policy"
+    | "decision"
+    | "physical";
+  /** One line: WHICH thing is missing, not its class. Max 500 chars. */
+  why?: string;
+  /**
+   * ISO timestamp of the moment the slot became the human's — server-stamped,
+   * present IFF `owner === 'human'`. Read it, never author it: the pod's
+   * reconciler overwrites a value that contradicts `owner`, and it is what an
+   * owed-work feed orders and ages its rows by (`focus_sessions.updatedAt`
+   * cannot serve — any unrelated write to the session would resurface the row).
+   */
+  owedSince?: string;
 }
 
 /**

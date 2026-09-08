@@ -18,6 +18,12 @@ import {
   isTerminalSessionStatus,
   type TerminalSessionStatus,
 } from "../../../services/focus-sessions/session-statuses.js";
+import {
+  applyOutputMutations,
+  expectedOutputWireSchema,
+} from "../../../services/focus-sessions/update-session.js";
+import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
+import { z } from "zod";
 
 const logger = createLogger({
   module: "proposal-approve-executors-focus-session",
@@ -327,6 +333,19 @@ export function registerFocusSessionExecutors(): void {
           set.currentStage = innerData.currentStage;
         }
 
+        // DELIVERABLES. Carried into the gate payload by both proposing doors
+        // and, until 2026-09-08, applied by NEITHER: the field set above was
+        // hand-listed as status/progress/goal/currentStage, so approving a
+        // proposal that declared a blocker, appended a slot or marked one
+        // complete returned SUCCESS and changed nothing — a receipt for a change
+        // that never happened, which is worse than a refusal.
+        //
+        // Applied through `applyOutputMutations` — the SAME function the direct
+        // write uses, so the merge (and therefore the no-erasure rule and the
+        // `owner: 'human'` completion floor) cannot fork between the ungated and
+        // the approved path — inside the SAME row lock the direct write takes.
+        await applyProposedOutputMutations(sessionId, innerData);
+
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`
         // and the Hub PATCH) so the PROPOSED path is not a silent no-op —
         // approving a "staff this session" proposal that changed nothing is the
@@ -387,3 +406,54 @@ export function registerFocusSessionExecutors(): void {
     },
   });
 }
+
+/**
+ * Re-apply the deliverable half of an approved `focus_session/update`.
+ *
+ * The gate payload is untyped JSONB by the time it reaches here, so each field
+ * is PARSED with the same wire schema the proposing door parsed it with rather
+ * than cast — a payload that has been sitting in the queue since before a schema
+ * change must fail closed on its bad half, not write it.
+ *
+ * No-op (and no lock taken) when the proposal carried no output mutation at all.
+ */
+async function applyProposedOutputMutations(
+  sessionId: string,
+  innerData: Record<string, unknown>
+): Promise<void> {
+  const expectedOutputs = z
+    .array(expectedOutputWireSchema)
+    .safeParse(innerData.expectedOutputs);
+  const addOutput = AddOutputSchema.safeParse(innerData.addOutput);
+  const completeOutput =
+    typeof innerData.completeOutput === "string"
+      ? innerData.completeOutput
+      : undefined;
+
+  const patch = {
+    ...(expectedOutputs.success
+      ? { expectedOutputs: expectedOutputs.data }
+      : {}),
+    ...(addOutput.success ? { addOutput: addOutput.data } : {}),
+    ...(completeOutput !== undefined ? { completeOutput } : {}),
+  };
+  if (Object.keys(patch).length === 0) return;
+
+  await updateExpectedOutputsLocked(sessionId, (current) =>
+    applyOutputMutations(current, patch)
+  );
+}
+
+/**
+ * `addOutput`'s wire shape. The three ownership fields ride the same schema the
+ * MCP door advertises; everything else about the slot is server-owned and is
+ * NOT accepted from a stored payload.
+ */
+const AddOutputSchema = expectedOutputWireSchema.pick({
+  kind: true,
+  label: true,
+  icon: true,
+  owner: true,
+  blockedReason: true,
+  why: true,
+});

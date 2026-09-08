@@ -367,3 +367,80 @@ describe("rung 1 still outranks rung 2", () => {
     expect(writtenOutputs()![1]).not.toHaveProperty("status");
   });
 });
+
+/**
+ * THE OWNERSHIP FLOOR — an agent may not claim back a slot it declared the
+ * HUMAN owns.
+ *
+ * `owner: 'human'` is the agent's own statement that it CANNOT do this work.
+ * Rung 1 matched on NAME ALONE, so an agent that then created a document titled
+ * exactly like that slot claimed it — and because the claim rides the approval,
+ * the slot was stamped `done` with lineage. The agent closing work it had just
+ * declared it could not do, and it looked verified.
+ *
+ * Rung 2 was already safe, but only because a human-owned slot happens not to
+ * carry `delegatedTo`. That is a coincidence, not a rule, so it is pinned here
+ * too — a future widening of the delegation key must fail this test rather than
+ * silently reopen the hole.
+ */
+describe("an agent cannot claim a slot it handed to the human", () => {
+  const HUMAN_OWNED = [
+    {
+      kind: "document",
+      label: "Signed NDA",
+      owner: "human",
+      blockedReason: "physical",
+      why: "Someone has to sign the paper copy",
+      owedSince: "2026-09-08T09:00:00.000Z",
+    },
+  ];
+
+  it("RUNG 1 — an exact name match does not claim a human-owned slot", async () => {
+    sessionRow.current = openSessionWith(HUMAN_OWNED);
+    governanceRow.current = declares(HUMAN_OWNED);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      // The spelling test rung 1 IS — and it must not be enough here.
+      data: { id: "doc-xyz", title: "Signed NDA" },
+    });
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    // …and no claim must also mean no STAMP. Withholding the claim alone bought
+    // nothing while `selectOutputToSatisfy`'s kind fallback still guessed onto
+    // this slot: the approval wrote `done` anyway. Nothing is written at all.
+    expect(writtenOutputs()).toBeUndefined();
+  });
+
+  it("RUNG 2 — a delegation on a human-owned slot does not claim it either", async () => {
+    // The coincidence made explicit: even carrying `delegatedTo`, the human's
+    // ownership wins.
+    const both = [{ ...HUMAN_OWNED[0], delegatedTo: "workspace-builder" }];
+    sessionRow.current = openSessionWith(both);
+    governanceRow.current = declares(both);
+
+    await checkPermissionOrPropose(OPTS);
+
+    expect(receiptData()).not.toHaveProperty("expectedLabel");
+    expect(writtenOutputs()).toBeUndefined();
+  });
+
+  it("still claims a sibling slot the agent DOES own", async () => {
+    // The floor is about the human's slot, not about disabling the mechanism.
+    const mixed = [
+      HUMAN_OWNED[0],
+      { kind: "document", label: "Summary", delegatedTo: "workspace-builder" },
+    ];
+    sessionRow.current = openSessionWith(mixed);
+    governanceRow.current = declares(mixed);
+
+    await checkPermissionOrPropose(OPTS);
+
+    expect(receiptData()).toMatchObject({ expectedLabel: "Summary" });
+    expect(writtenOutputs()![0]).not.toHaveProperty("status");
+    expect(writtenOutputs()![1]).toMatchObject({
+      label: "Summary",
+      status: "done",
+    });
+  });
+});

@@ -189,9 +189,13 @@ EOF
 # Publish using the caller's existing npm login.
 # Interactive TTY: npm prompts for OTP (2FA). Non-TTY: need --otp or Automation token.
 #
-# Why auth-type=legacy for this process only:
-#   Global auth-type=web opens browser + polls /-/v1/done?authId=… → 404 for you.
-#   Legacy uses your //registry.npmjs.org/:_authToken and asks for OTP in the terminal.
+# Auth type is INHERITED, not forced (--legacy-auth opts in):
+#   Forcing legacy used to be the default here, to route around a web flow that
+#   404'd on /-/v1/done?authId=… . That is the WRONG default for a SECURITY KEY /
+#   passkey account: legacy prints the "open this URL to use your security key"
+#   link and then blocks on `Enter OTP:` — which a security key cannot produce.
+#   Hit for real on 2026-09-07. npm 10 defaults to `web`, which is what a
+#   security key needs; --legacy-auth remains for the historical 404, TOTP only.
 #
 # Why pnpm --filter (not bare npm in the package dir):
 #   api-types depends on workspace:* — pnpm rewrites those to real versions on publish.
@@ -209,7 +213,7 @@ do_npm_publish() {
     warn "non-interactive — pass --otp=XXXXXX or use an Automation token"
   fi
 
-  log "pnpm publish $PKG_NAME@$ver (your session, auth-type=legacy for this process)"
+  log "pnpm publish $PKG_NAME@$ver${LEGACY_AUTH:+ (auth-type=legacy, forced)}"
 
   local -a cmd=(
     pnpm --filter "$PKG_NAME" publish
@@ -268,8 +272,10 @@ cmd_auth() {
     tfa="$(printf '%s\n' "$profile" | awk -F': ' '/two-factor auth/ {print $2; exit}')"
     info "2FA mode:  ${tfa:-unknown}"
     if [[ "$tfa" == *auth-and-writes* ]]; then
-      ok "2FA=auth-and-writes — interactive publish will prompt for OTP in the terminal"
-      info "(script forces auth-type=legacy for publish so the browser web-auth 404 is avoided)"
+      ok "2FA=auth-and-writes — publish needs a second factor"
+      info "auth-type is INHERITED from your npm config, not forced by this script."
+      info "  security key / passkey → needs auth-type=web (npm config delete auth-type)"
+      info "  authenticator app      → either flow; --otp=XXXXXX skips the prompt"
     fi
   fi
   # package rights

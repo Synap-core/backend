@@ -268,16 +268,48 @@ describe("typeKey namespaces", () => {
     }
   });
 
-  it("a namespaced key may be EDITED but never MINTED through this door", () => {
+  it("a namespaced key may be EDITED but never MINTED — at EVERY door", () => {
     // The prefix is a provenance claim two shipped surfaces read back
     // ("Made for you" reads `generated:`, the installed list parses `cell:`),
     // so the guard is an existence check, not a character rule.
-    const source = readFileSync(
-      join(import.meta.dirname, "widget-definitions.ts"),
+    //
+    // It used to live in `widget-definitions.ts` as a private function while
+    // the Hub REST door (`POST /cells/define`) had NO guard at all — an
+    // operator-scoped key could MINT `cell:<vendor>:<key>` and overwrite an
+    // installed vendor cell's renderer source. So this now pins BOTH doors and
+    // the shared module they call, not one door's private copy.
+    const guard = readFileSync(
+      join(
+        import.meta.dirname,
+        "..",
+        "services",
+        "cells",
+        "namespaced-type-key.ts"
+      ),
       "utf8"
     );
-    expect(source).toMatch(/await assertMayWriteNamespacedTypeKey\(/);
-    expect(source).toMatch(/function isNamespacedTypeKey/);
+    expect(guard).toMatch(/function isNamespacedTypeKey/);
+    // …and the rule is EXISTENCE (a lookup that throws when nothing is found),
+    // not a prefix character test.
+    expect(guard).toMatch(/\.limit\(1\)/);
+    expect(guard).toMatch(/throw new NamespacedTypeKeyError/);
+
+    for (const doorPath of [
+      ["widget-definitions.ts"],
+      ["hub-protocol", "rest", "cells.ts"],
+    ]) {
+      const rel = doorPath.join("/");
+      const door = readFileSync(join(import.meta.dirname, ...doorPath), "utf8");
+      expect(door, `${rel} does not call the shared provenance floor`).toMatch(
+        /await assertMayWriteNamespacedTypeKey\(/
+      );
+      // No door may keep a SECOND copy of the rule — that is how the Hub door
+      // ended up with none while this one had one.
+      expect(
+        door,
+        `${rel} re-declares the namespace predicate instead of importing it`
+      ).not.toMatch(/function isNamespacedTypeKey/);
+    }
   });
 
   it("no longer accepts `source` — the native-only field with no writer", () => {

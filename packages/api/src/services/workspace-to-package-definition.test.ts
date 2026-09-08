@@ -275,6 +275,7 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
         viewRendererViewTypes: ["kanban"],
         externalHosts: null,
         contentKind: "collection",
+        rendererType: "frame",
       },
     ]);
 
@@ -288,12 +289,138 @@ describe("workspaceToPackageDefinition — captures automations + playbooks", ()
       key: "win-rate-gauge",
       name: "Win Rate Gauge",
       code: "export default function Cell() { return null; }",
+      rendererType: "frame",
       deps: { recharts: "2.12.0" },
       defaultSize: { w: 4, h: 3 },
       configSchema: { type: "object" },
       viewTypes: ["kanban"],
       contentKind: "collection",
+      // Emitted even though this row has none — see the revocation case below.
+      externalHosts: [],
     });
+  });
+
+  /**
+   * EGRESS REVOCATION needs a wire representation.
+   *
+   * Every other cell field is omit-is-silence end to end, so an ABSENT
+   * `externalHosts` means "leave the stored grant alone". For a security
+   * allowlist that makes removal impossible: author drops an origin →
+   * re-export → re-install → the OLD grant survives, and migration 0249's own
+   * docblock says no cell reconciler will ever catch it. Grants would widen
+   * easily and never narrow.
+   */
+  it("emits externalHosts: [] for an ungranted Card so a revocation can travel", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "no-egress",
+        name: "No Egress",
+        category: "app-specific",
+        isActive: true,
+        rendererType: "frame",
+        rendererSource: "export default () => null;",
+        externalHosts: null,
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells?.[0]?.externalHosts).toEqual([]);
+  });
+
+  it("still emits a real grant verbatim", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "vendor-panel",
+        name: "Vendor Panel",
+        category: "app-specific",
+        isActive: true,
+        rendererType: "frame",
+        rendererSource: "export default () => null;",
+        externalHosts: ["https://api.vendor.com"],
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells?.[0]?.externalHosts).toEqual(["https://api.vendor.com"]);
+  });
+
+  it("carries minSize — a Card without its floor can land in a grid too small", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "big-chart",
+        name: "Big Chart",
+        category: "app-specific",
+        isActive: true,
+        rendererType: "frame",
+        rendererSource: "export default () => null;",
+        minSize: { w: 4, h: 3 },
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells?.[0]?.minSize).toEqual({ w: 4, h: 3 });
+  });
+
+  /**
+   * The MECHANISM round trip. This select had no `rendererType` filter and the
+   * emitted payload no slot, so an `iframe` HTML Card exported, published, and
+   * installed elsewhere as an ESM React cell (`defineCell`'s `"frame"` default)
+   * and failed to mount — silently, at every hop.
+   */
+  it("carries rendererType so an iframe Card does not round-trip as a frame cell", async () => {
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "html-brief",
+        name: "HTML Brief",
+        category: "app-specific",
+        isActive: true,
+        rendererType: "iframe",
+        rendererSource: "<!doctype html><html></html>",
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells).toHaveLength(1);
+    expect(def.cells?.[0]?.rendererType).toBe("iframe");
+  });
+
+  it("skips a builtin row rather than publishing host code as a frame cell", async () => {
+    // `renderer_type` defaults to "builtin" on this table. A builtin's renderer
+    // is HOST code keyed by name — nothing a package can reconstitute — so the
+    // export declines to claim it instead of emitting it as a frame cell.
+    rowsByTable.set(sentinel.widgetDefinitions, [
+      {
+        typeKey: "builtin-thing",
+        name: "Builtin Thing",
+        category: "app-specific",
+        isActive: true,
+        rendererType: "builtin",
+        rendererSource: "whatever",
+      },
+    ]);
+
+    const def = await workspaceToPackageDefinition({
+      workspaceId: "ws-1",
+      userId: "user-1",
+    });
+
+    expect(def.cells).toBeUndefined();
   });
 
   it("excludes a cell whose typeKey is package-namespaced (cell:<pkg>:<key> = installed, not authored)", async () => {

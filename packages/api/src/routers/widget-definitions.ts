@@ -23,7 +23,17 @@ import { requireUserId } from "../utils/user-scoped.js";
 // unused); the function itself is kept on disk at `../utils/widget-compiler.ts`
 // with its own DO-NOT-REVIVE-AS-IS header. See NATIVE_RENDERER_REJECTED.
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
-import { defineCell } from "../services/cells/define-cell.js";
+import {
+  CellDefinitionError,
+  defineCell,
+} from "../services/cells/define-cell.js";
+// The typeKey PROVENANCE FLOOR, shared with the Hub REST cell-define door. It
+// used to live here as a private function while `POST /cells/define` had no
+// guard at all; one implementation is the point.
+import {
+  assertMayWriteNamespacedTypeKey,
+  NamespacedTypeKeyError,
+} from "../services/cells/namespaced-type-key.js";
 import { randomUUID } from "crypto";
 
 /**
@@ -123,16 +133,13 @@ function requireAdminRole(role: string | undefined | null) {
  * `generated:` as AI-authored (`apps/made-for-you.ts`), and the installed list
  * parses `cell:<pkg>:` back to a package slug
  * (`hub-protocol/rest/installed.ts`). That guarantee is real and is kept
- * separately, by `assertMayWriteNamespacedTypeKey` below: this door may UPDATE a
- * namespaced row that already exists, but may never MINT one.
+ * separately, by `assertMayWriteNamespacedTypeKey`
+ * (`services/cells/namespaced-type-key.ts`, shared with the Hub REST
+ * cell-define door): a door may UPDATE a namespaced row that already exists,
+ * but may never MINT one.
  */
 const TYPE_KEY_RE =
   /^(?:[a-z][a-z0-9-]+|generated:[a-z0-9][a-z0-9._-]*|cell:[a-z0-9][a-z0-9._-]*:[a-z0-9][a-z0-9._-]*)$/;
-
-/** True for the two namespaces this door may edit but never mint. */
-function isNamespacedTypeKey(typeKey: string): boolean {
-  return typeKey.startsWith("generated:") || typeKey.startsWith("cell:");
-}
 
 const WidgetUpsertSchema = z.object({
   typeKey: z
@@ -210,46 +217,6 @@ const WidgetUpsertSchema = z.object({
     .object({ w: z.number().int().min(1).max(12), h: z.number().int().min(1) })
     .optional(),
 });
-
-/**
- * A namespaced typeKey (`generated:*` / `cell:*`) may be UPDATED through this
- * door but never MINTED by it.
- *
- * The prefix is a provenance CLAIM that two shipped surfaces read back — the
- * browser's "Made for you" lane treats `generated:` as AI-authored, and the
- * installed list parses `cell:<pkg>:` into a package slug it reports as
- * installed. Cell Studio needs to re-save such a row (that is the whole
- * "install then tweak" flow), but it must not be able to CREATE a row that
- * claims an origin it does not have. Editing an existing row claims nothing new.
- */
-async function assertMayWriteNamespacedTypeKey(
-  typeKey: string,
-  workspaceId: string
-): Promise<void> {
-  if (!isNamespacedTypeKey(typeKey)) return;
-  const db = await getDb();
-  const [existing] = await db
-    .select({ id: widgetDefinitions.id })
-    .from(widgetDefinitions)
-    .where(
-      and(
-        eq(widgetDefinitions.typeKey, typeKey),
-        eq(widgetDefinitions.workspaceId, workspaceId)
-      )
-    )
-    .limit(1);
-  if (!existing) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        `typeKey "${typeKey}" is namespaced, and no such cell exists in this ` +
-        "workspace. `generated:` keys are minted by the cell-define door " +
-        "(synap_create_cell / POST /cells/define) and `cell:` keys by the " +
-        "package installer — this door may edit them, not create them. Use a " +
-        "kebab-case typeKey for a new cell.",
-    });
-  }
-}
 
 export const widgetDefinitionsRouter = router({
   /**
@@ -480,7 +447,16 @@ export const widgetDefinitionsRouter = router({
 
       // Provenance floor — see `assertMayWriteNamespacedTypeKey`. Runs BEFORE
       // the write so a forged `cell:`/`generated:` key never reaches the row.
-      await assertMayWriteNamespacedTypeKey(input.typeKey, workspaceId);
+      try {
+        await assertMayWriteNamespacedTypeKey(input.typeKey, workspaceId);
+      } catch (err) {
+        // A caller error, not a server one — keep the 400 this door has always
+        // returned now that the check lives in a shared, door-agnostic module.
+        if (err instanceof NamespacedTypeKeyError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
 
       try {
         await defineCell({
@@ -510,6 +486,12 @@ export const widgetDefinitionsRouter = router({
           userId,
         });
       } catch (err) {
+        // A contradictory definition (`contentKind` vs `viewTypes`) is the
+        // caller's payload too — same BAD_REQUEST lane as a rejected dep, and
+        // Cell Studio renders the message directly.
+        if (err instanceof CellDefinitionError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
         // `defineCell` throws a plain Error for a rejected dep. Surface it as
         // BAD_REQUEST — it is the caller's payload that is wrong, and Cell
         // Studio renders the message directly.

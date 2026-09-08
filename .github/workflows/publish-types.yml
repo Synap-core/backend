@@ -40,11 +40,40 @@ jobs:
       - name: Install backend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build types package
-        run: cd packages/types && pnpm build
+      # BUILD THROUGH TURBO, NOT `cd <pkg> && pnpm build`.
+      #
+      # Those two `cd` steps built one package each and NOTHING they depend on,
+      # so this pipeline failed on every run — the very first build step, not
+      # the second:
+      #
+      #   error TS2307: Cannot find module '@synap/database' or its
+      #   corresponding type declarations   (packages/types/src/users/index.ts:23)
+      #
+      # `packages/types` imports `@synap/database`, whose `dist/` is gitignored
+      # (`.gitignore:6`, 0 files tracked). On a laptop that dist is left over
+      # from some earlier build, so the `cd` steps appear to work; a fresh CI
+      # checkout has no dist and there is nothing to resolve. The pipeline was
+      # therefore green only where it did not need to be.
+      #
+      # The ordering is NOT hand-listed here. turbo.json declares
+      # `build: { dependsOn: ["^build"] }`, so selecting a package pulls its
+      # whole workspace dependency chain into the task graph, topologically
+      # ordered. Verified with `--dry=json` against this checkout:
+      #   --filter=@synap-core/types → 5 packages, and `@synap-core/types#build`
+      #     lists `@synap/database#build` among its dependencies
+      #   --filter=@synap/api        → 18 packages, `@synap/database` included
+      # A new dependency is picked up by the graph; there is no second list to
+      # keep in step with package.json.
+      #
+      # `turbo`, not `pnpm --filter`, for a second reason: a `pnpm --filter` that
+      # matches nothing prints "No projects matched" and EXITS 0 — a false green.
+      # Measured on this repo: `pnpm --filter @synap/does-not-exist build` → 0;
+      # `turbo run build --filter=@synap/does-not-exist` → 1.
+      - name: Build @synap-core/types (and its workspace dependencies)
+        run: pnpm turbo run build --filter=@synap-core/types
 
-      - name: Build API package
-        run: cd packages/api && pnpm build
+      - name: Build @synap/api (and its workspace dependencies)
+        run: pnpm turbo run build --filter=@synap/api
 
       - name: Auto-bump @synap-core/types (patch)
         run: cd packages/types && npm version patch --no-git-tag-version

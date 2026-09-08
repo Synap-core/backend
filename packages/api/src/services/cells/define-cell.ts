@@ -41,6 +41,18 @@ export function validateDeps(
   return null;
 }
 
+/**
+ * Thrown when the definition a caller asked for is internally CONTRADICTORY —
+ * a caller error, not a server one, so each door maps it to its own 400 /
+ * BAD_REQUEST shape.
+ */
+export class CellDefinitionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CellDefinitionError";
+  }
+}
+
 export interface DefineCellInput {
   name: string;
   rendererSource: string;
@@ -130,10 +142,20 @@ export interface DefineCellInput {
    * so a source-only re-push cannot erase a declared grant. Pass an explicit
    * `[]` or `null` to clear it.
    *
-   * CHANGING it on an existing row DEMOTES `trustLevel` back to `generated` —
-   * see `defineCell`. Origins are NOT validated here: `buildFrameCsp` is the
-   * single parser of the string before it reaches a CSP directive, and adding a
-   * second one is exactly the shape of CVE-2022-41042.
+   * CHANGING it on an existing row demotes `trustLevel` to `generated` (see
+   * `defineCell`). ⚠️ That demotion is currently a NO-OP in practice, and the
+   * code is kept as a forward guard rather than a live control: nothing writes
+   * `widget_definitions.trust_level = "trusted"` today — every `"trusted"`
+   * write targets `cell_instances` (`routers/cell-instances.ts`,
+   * `hub-protocol/rest/cell-instances.ts`), and `sync.ts:1181` floors an
+   * incoming row to `"generated"` deliberately. So a row cannot be trusted, and
+   * demoting it changes nothing. It becomes load-bearing the moment a
+   * human-approval path grants definition-level trust — do not delete it, and
+   * do not cite it as an existing mitigation.
+   *
+   * Origins are NOT validated here: `buildFrameCsp` is the single parser of the
+   * string before it reaches a CSP directive, and adding a second one is
+   * exactly the shape of CVE-2022-41042.
    */
   externalHosts?: string[] | null;
   /**
@@ -190,6 +212,97 @@ export async function defineCell(
 
   const viewTypes = normalizeStringList(input.viewTypes);
   const externalHosts = normalizeStringList(input.externalHosts);
+
+  // `contentKind` (the renderer SLOT) and `viewTypes` (view-renderer AFFINITY)
+  // are DIFFERENT axes, but declaring an affinity IS declaring the cell renders
+  // a collection of things — which is what `resolveCellContentKind` already
+  // says in prose ("a cell that declares which view types it renders IS a
+  // collection renderer"). Persisting `contentKind: "widget"` next to
+  // `viewTypes: ["table"]` therefore stores a pair no consumer can honour: the
+  // browser registers the cell as a view renderer on `viewTypes.length > 0`
+  // alone (`useRegisterFrameCells.ts`), while `renderersForType` filters on the
+  // slot and never offers it.
+  //
+  // REJECT rather than coerce. Forcing `contentKind = "collection"` would
+  // silently rewrite an explicit choice, and a cell the author did not choose
+  // is worse than an error. Where `contentKind` is ABSENT the derivation in
+  // `resolveCellContentKind` still applies and is correct — this fires only when
+  // the caller states BOTH, in the same call, and they disagree.
+  if (
+    input.contentKind !== undefined &&
+    input.contentKind !== "collection" &&
+    viewTypes !== undefined &&
+    viewTypes !== null &&
+    viewTypes.length > 0
+  ) {
+    throw new CellDefinitionError(
+      `contentKind "${input.contentKind}" contradicts viewTypes ` +
+        `[${viewTypes.join(", ")}]: declaring view types makes this cell a ` +
+        'collection renderer, so contentKind must be "collection" (or be ' +
+        "omitted, in which case it is derived). Send an empty viewTypes list " +
+        `if this cell is a ${input.contentKind} and not a view renderer.`
+    );
+  }
+  // ── The SAME contradiction, assembled ACROSS CALLS ─────────────────────
+  // The check above only sees one call. Both fields are omit-is-silence, so the
+  // contradiction can be built by two individually-clean calls:
+  //
+  //   call 1  viewTypes: ["list"]                  (no contentKind)  → ok
+  //   call 2  contentKind: "widget"  (viewTypes omitted, stored list survives)
+  //
+  // Each passes an input-only check; the ROW ends up contradictory. That is not
+  // a hypothetical — it is exactly the source-only re-push the omit-is-silence
+  // rule exists to serve. So the invariant has to hold on the POST-WRITE state:
+  // evaluate {stored ∪ input}, not the input alone.
+  //
+  // Only reachable when the caller is silent on one of the two fields; when it
+  // states both, the check above already ran and this select is skipped.
+  // `null` is a STATEMENT ("clear it"), not silence — `normalizeStringList`
+  // maps an explicit `[]` to `null`. Only `undefined` is silence. Conflating the
+  // two made this check reject `viewTypes: []`, the exact escape hatch its own
+  // error message tells the caller to use.
+  const statesContentKind = input.contentKind !== undefined;
+  const statesViewTypes = viewTypes !== undefined;
+  if (statesContentKind !== statesViewTypes) {
+    const [row] = await db
+      .select({
+        contentKind: widgetDefinitions.contentKind,
+        viewTypes: widgetDefinitions.viewRendererViewTypes,
+      })
+      .from(widgetDefinitions)
+      .where(
+        and(
+          eq(widgetDefinitions.typeKey, typeKey),
+          workspaceId
+            ? eq(widgetDefinitions.workspaceId, workspaceId)
+            : isNull(widgetDefinitions.workspaceId)
+        )
+      )
+      .limit(1);
+    if (row) {
+      const effectiveKind = statesContentKind
+        ? input.contentKind
+        : row.contentKind;
+      const effectiveViews = statesViewTypes
+        ? (viewTypes ?? [])
+        : ((row.viewTypes as string[] | null) ?? []);
+      if (
+        effectiveKind &&
+        effectiveKind !== "collection" &&
+        effectiveViews &&
+        effectiveViews.length > 0
+      ) {
+        throw new CellDefinitionError(
+          `this write would leave contentKind "${effectiveKind}" contradicting ` +
+            `viewTypes [${effectiveViews.join(", ")}] on the stored cell. ` +
+            "Declaring view types makes a cell a collection renderer. Send " +
+            "viewTypes: [] in the same call to clear the affinity, or set " +
+            'contentKind: "collection".'
+        );
+      }
+    }
+  }
+
   // Only carried into the UPDATE branch when the caller actually spoke about
   // affinity — see `DefineCellInput.viewTypes`.
   const viewTypesUpdate =
@@ -286,10 +399,27 @@ export async function defineCell(
     viewRendererViewTypes: viewTypes ?? null,
     // INSERT branch: omitted ⇒ NULL ⇒ the frame reaches no external origin.
     externalHosts: externalHosts ?? null,
-    // INSERT branch: omitted ⇒ let the column default (`widget`) apply.
-    ...(input.contentKind === undefined
-      ? {}
-      : { contentKind: input.contentKind }),
+    // INSERT branch. Omitted ⇒ the column default `widget` — EXCEPT when the
+    // same call declares a view-type affinity, in which case the slot is
+    // DERIVED as `collection`.
+    //
+    // Not an optional nicety: `content_kind` is NOT NULL DEFAULT 'widget', so
+    // "unstated" has no representation in the column. Without this derivation an
+    // insert carrying only `viewTypes` mints `widget` + a non-empty affinity —
+    // the exact contradictory pair the checks above exist to prevent — and the
+    // post-write check then REFUSES every later call that touches either field.
+    // The door would be minting a state it will not let anyone edit.
+    //
+    // Same rule as `resolveCellContentKind`'s "a cell that declares which view
+    // types it renders IS a collection renderer", applied at the ONE door so no
+    // caller can mint the pair. That resolver is untouched: it still runs at the
+    // install layer, and when it produces an explicit value this branch never
+    // fires.
+    ...(input.contentKind !== undefined
+      ? { contentKind: input.contentKind }
+      : viewTypes && viewTypes.length > 0
+        ? { contentKind: "collection" as const }
+        : {}),
     // INSERT branch: omitted ⇒ let the column default ('1.0.0') apply.
     ...versionUpdate,
   };

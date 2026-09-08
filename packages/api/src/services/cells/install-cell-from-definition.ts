@@ -40,6 +40,20 @@ import { CONTENT_KINDS, type ContentKind } from "@synap/database/schema";
  * and to leave an existing row's kind untouched (the same omit-is-silence rule
  * as `viewTypes`).
  */
+/**
+ * INFERENCE FROM SILENCE — and deliberately more permissive than the CLI.
+ *
+ * `synap-cli`'s `validateStandalonePackage` requires `contentKind` outright; this
+ * does not. Strict-in / permissive-out, on purpose: authoring is the cheap moment
+ * to catch an omission, while INSTALL must keep already-published packages
+ * working — including ones authored before that rule existed, which nobody can
+ * now re-publish. A package may therefore be door-valid and validator-invalid.
+ *
+ * `raw` WINS when it is a recognised kind. It does NOT correct a contradiction:
+ * an explicit non-"collection" `contentKind` alongside a non-empty `viewTypes` is
+ * rejected upstream by `defineCell`, not silently coerced here — coercing would
+ * hand an author a cell they never chose to be a view renderer.
+ */
 export function resolveCellContentKind(
   raw: string | undefined,
   viewTypes: string[] | undefined
@@ -72,6 +86,22 @@ export interface PackageCellDefinition {
   externalHosts?: string[];
   /** Renderer slot this cell fills — see `resolveCellContentKind`. */
   contentKind?: string;
+  /**
+   * Rendering MECHANISM the package declares — `"frame"` (sandboxed ESM React
+   * cell) or `"iframe"` (raw HTML document). Absent ⇒ undefined ⇒ `defineCell`
+   * applies its `"frame"` default on insert and leaves an existing row's
+   * mechanism untouched, the same omit-is-silence rule as `viewTypes`.
+   *
+   * This slot exists because the export→publish→install round trip was
+   * `rendererType`-BLIND: an `iframe` HTML Card installed elsewhere as an ESM
+   * React cell and failed to mount, at every hop, with no error.
+   */
+  rendererType?: "iframe" | "frame";
+  /**
+   * Minimum grid footprint the package declares. Absent ⇒ undefined ⇒
+   * omit-is-silence in `defineCell` (insert-only there, like `defaultSize`).
+   */
+  minSize?: { w: number; h: number };
 }
 
 export interface InstallCellFromDefinitionInput {
@@ -147,6 +177,9 @@ export async function installCellFromDefinition(
     typeKey: packageCellTypeKey(input.packageSlug, cellKey),
     deps: definition.deps,
     defaultSize: definition.defaultSize,
+    // The floor a Card needs to render. Dropped, an installed Card can be
+    // placed in a grid too small to show anything.
+    minSize: definition.minSize,
     // Undefined (not `[]`) when the payload says nothing about affinity, so an
     // upsert over an existing row leaves a declared affinity untouched — the
     // contract `DefineCellInput.viewTypes` documents.
@@ -164,6 +197,16 @@ export async function installCellFromDefinition(
       definition.contentKind,
       definition.viewTypes
     ),
+    // Undefined when the package says nothing — `defineCell` then applies its
+    // `"frame"` default on insert and leaves an existing row untouched. An
+    // unrecognised value is dropped rather than forwarded: the payload is
+    // caller-supplied and `"builtin"`/`"native"` must never reach the column
+    // through a package.
+    rendererType:
+      definition.rendererType === "iframe" ||
+      definition.rendererType === "frame"
+        ? definition.rendererType
+        : undefined,
     // Omitted when the caller has no version to give, so an upsert can never
     // erase a stamp a versioned install wrote — see `packageVersion`.
     version: input.packageVersion ?? undefined,

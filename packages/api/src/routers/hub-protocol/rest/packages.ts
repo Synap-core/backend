@@ -283,9 +283,34 @@ export const PackageApplySchema = z.object({
         key: z.string().min(1).max(100),
         name: z.string().min(1).max(128),
         code: z.string().min(1),
+        /**
+         * Rendering MECHANISM. Same nested-strip class as `viewTypes` /
+         * `contentKind` / `externalHosts`: with no slot here zod drops it, the
+         * pod's install path never passes it, and `defineCell` applies its
+         * default `"frame"` — so an `iframe` HTML Card exports, publishes,
+         * installs elsewhere as an ESM React cell and fails to mount, silently,
+         * at every hop.
+         *
+         * `"builtin"` is not offered: a builtin renderer is HOST code, not
+         * package payload. `"native"` is absent by construction everywhere
+         * (NATIVE_RENDERER_REJECTED).
+         */
+        rendererType: z.enum(["iframe", "frame"]).optional(),
         deps: z.record(z.string(), z.string()).optional(),
         previewCode: z.string().optional(),
         defaultSize: z
+          .object({
+            w: z.number().int().min(1).max(12),
+            h: z.number().int().min(1),
+          })
+          .optional(),
+        /**
+         * Minimum grid footprint. Same nested-strip class as `viewTypes` /
+         * `contentKind` / `rendererType`: with no slot here zod drops it and an
+         * authored Card round-trips without its floor, landing in grids too
+         * small to render it. Bounds mirror `defaultSize`.
+         */
+        minSize: z
           .object({
             w: z.number().int().min(1).max(12),
             h: z.number().int().min(1),

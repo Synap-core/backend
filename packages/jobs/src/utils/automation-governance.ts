@@ -641,10 +641,12 @@ async function proposeAutomationWrite(opts: {
   stepRunId?: string;
   nodeId?: string;
   /**
-   * OWNER FLOOR (0248) — the HUMAN this proposal is for. Passed by the
-   * confused-deputy branch, where the automation's owning principal IS a human.
-   * Omitted on the owner-is-an-agent branch, where this door resolves the
-   * agent's owning human below (there is no human anywhere in that call chain).
+   * OWNER FLOOR (0248) — the EFFECTIVE USER of the principal this write runs
+   * under. Passed by the confused-deputy branch, where the automation's owning
+   * principal IS a human and the agent is only the step's author. Omitted on
+   * the owner-is-an-agent branch, where the agent is its own principal and the
+   * fallback below is `agentUserId`. Never `users.createdByUserId` — see the
+   * column contract in `schema/proposals.ts`.
    */
   subjectUserId?: string | null;
 }): Promise<{ proposed: true; proposalId: string; deduped?: boolean }> {
@@ -706,12 +708,25 @@ async function proposeAutomationWrite(opts: {
   // at the top level, so every existing reader of those keys is unaffected — the
   // only keys that moved are the write payload's own, which is exactly what the
   // approve side was already looking for one level down.
-  // OWNER FLOOR (0248) — the HUMAN this proposal awaits. An automation run has
-  // no human in the loop, so unlike every other door there is nothing to read
-  // off a request context. The agent's OWNER is the answer, and it is the SAME
-  // derivation the governance recommenders already use (`agent.createdByUserId`).
-  // Resolved here, once, rather than at both call sites. Never guessed: an
-  // unresolvable owner leaves the column NULL.
+  // OWNER FLOOR (0248) — the EFFECTIVE USER of the acting principal. An
+  // automation run has no request context, so unlike every other door there is
+  // no `ctx.userId` to read. This door's own RBAC ladder already answers it:
+  // step 1 above runs `verifyPermission` with "effective user = owning agent's
+  // user id". So the fallback is `agentUserId` — the agent IS its own effective
+  // principal here.
+  //
+  // IT USED TO BE `ownerRow.createdByUserId` AND THAT WAS A DEFECT. That column
+  // is the ACCOUNTABILITY anchor (who created the agent), not the LINKAGE, and
+  // every agent has one. Writing it here made a POD-WIDE agent — which acts as
+  // its own principal by construction (`linkedUserId: null`) — indistinguishable
+  // on the row from a human-linked one, so the principal reading (see the column
+  // contract in `schema/proposals.ts`) rendered "Scout · for Antoine" for a
+  // delegation that never happened.
+  //
+  // THE FLOOR IS UNCHANGED BY THIS. Reading 1 of the contract resolves an
+  // agent-valued `subjectUserId` through that agent's `users.createdByUserId` —
+  // which lands on exactly the human this line used to write. Same reviewer,
+  // honest linkage.
   //
   // The SAME row also carries rung 3.5 of the project ladder — the agent's
   // DECLARED sticky project focus (`agentMetadata.focusProjectId`, set only by
@@ -721,19 +736,15 @@ async function proposeAutomationWrite(opts: {
   // Without it an automation proposal — which frequently has no session and no
   // channel — could never reach the declared focus, which is precisely the rung
   // the hand-rolled proposal ladder was missing.
-  let subjectUserId = opts.subjectUserId ?? null;
+  const subjectUserId = opts.subjectUserId ?? agentUserId;
   let focusProjectId: string | null = null;
   const [ownerRow] = await db
     .select({
-      createdByUserId: users.createdByUserId,
       agentMetadata: users.agentMetadata,
     })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);
-  if (!subjectUserId) {
-    subjectUserId = ownerRow?.createdByUserId ?? null;
-  }
   {
     const meta = ownerRow?.agentMetadata as
       { focusProjectId?: string } | null | undefined;

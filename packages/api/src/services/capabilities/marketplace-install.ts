@@ -227,6 +227,12 @@ interface CellCatalogDef {
   code?: string;
   deps?: Record<string, string>;
   defaultSize?: { w: number; h: number };
+  /**
+   * Minimum grid footprint. A CAST like the fields below — the value already
+   * survives at runtime and `installCellFromDefinition` reads it; declaring it
+   * stops the local type claiming a thinner payload than the applier consumes.
+   */
+  minSize?: { w: number; h: number };
   packageSlug?: string;
   /** View types this cell can render (0221) — optional in the payload. */
   viewTypes?: string[];
@@ -244,6 +250,14 @@ interface CellCatalogDef {
    * from claiming a narrower payload than the applier actually reads.
    */
   contentKind?: string;
+  /**
+   * Rendering MECHANISM. A CAST like `contentKind`/`externalHosts` — the value
+   * already survives at runtime; declaring it stops the local type claiming a
+   * thinner payload than `installCellFromDefinition` reads. Absent ⇒
+   * `defineCell`'s `"frame"` default, which is exactly how an `iframe` HTML
+   * Card used to install as an ESM React cell and fail to mount.
+   */
+  rendererType?: "iframe" | "frame";
 }
 
 /**

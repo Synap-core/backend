@@ -50,6 +50,74 @@ import { buildProposalChanges } from "./changes.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 
 type ProposalRow = typeof proposals.$inferSelect;
+
+/**
+ * The three states of "is a human's identity behind this agent's act?", read
+ * off `proposals.subjectUserId` (RFC 8693 delegation).
+ *
+ *   unresolved — the row predates migration 0248; the column is NULL. NOT the
+ *                same as "no delegation" — we simply never recorded it, and a
+ *                surface must say so rather than render a blank.
+ *   global     — `subjectUserId === agentUserId`: the agent's key is pod-wide
+ *                (`linkedUserId: null`), so it acted AS ITSELF. No human
+ *                delegated this.
+ *   delegated  — the effective user is somebody else: a human's identity is
+ *                behind the act, and `name` is theirs (absent only when that
+ *                user row is unreadable).
+ *
+ * ── IT CARRIES NO USER ID, BY CONSTRUCTION ─────────────────────────────────
+ * This type is a LABEL and must never become a FILTER. The `delegated` branch
+ * deliberately carries a `name` and NOT the `subjectUserId` it was derived
+ * from, and that omission is load-bearing, not an oversight.
+ *
+ * A principal carrying a resolved user id would look irresistibly like the
+ * right input to `routers/proposals/review-authority.ts:220-223`:
+ *
+ *     if (!isOwner && proposal.agentUserId) {
+ *       isOwner = facts.agentCreatedByUserId === userId;
+ *     }
+ *
+ * It is not. `subjectUserId` is the EFFECTIVE user of the acting principal, so
+ * on a POD-WIDE agent (`apiKeys.linkedUserId === null`) it resolves to THE
+ * AGENT ITSELF — feeding it into an owner check would let an agent's own id
+ * satisfy the owner floor and re-open the self-approval hole closed in
+ * `1ce38ef0`. The one-line defence is that the type STRUCTURALLY CANNOT be
+ * used as a filter: there is no id on it to compare.
+ *
+ * Pinned by `src/__tripwires__/principal-is-a-label-not-a-filter.test.ts`.
+ * Do not add an id-shaped member here. If a surface needs to FILTER by the
+ * delegating human, it must read the column through the authority path, not
+ * through this display label.
+ */
+export type ProposalPrincipal =
+  | { kind: "unresolved" }
+  | { kind: "global" }
+  | { kind: "delegated"; name?: string };
+
+/**
+ * The principal reading of `proposals.subjectUserId` — PURE, so the branch that
+ * used to be a false delegation claim is testable without a database.
+ *
+ * `resolveName` is the caller's already-batched user lookup; it is consulted
+ * ONLY on the delegated branch, because that is the only branch that names a
+ * person. `global` deliberately carries no name: naming the agent's creator
+ * there is precisely the collapse this replaces.
+ *
+ * Returns `undefined` when no agent acted — a human-authored proposal has no
+ * principal question to answer.
+ */
+export function deriveProposalPrincipal(input: {
+  agentUserId: string | null;
+  subjectUserId: string | null;
+  resolveName: (userId: string) => string | undefined;
+}): ProposalPrincipal | undefined {
+  const { agentUserId, subjectUserId, resolveName } = input;
+  if (!agentUserId) return undefined;
+  if (!subjectUserId) return { kind: "unresolved" };
+  if (subjectUserId === agentUserId) return { kind: "global" };
+  const name = resolveName(subjectUserId);
+  return name ? { kind: "delegated", name } : { kind: "delegated" };
+}
 type DisplayEnrichedProposal = ProposalRow & {
   request: UpdateRequest;
   /**
@@ -61,10 +129,32 @@ type DisplayEnrichedProposal = ProposalRow & {
   /** ACTOR — the agent that authored this proposal. Absent for human authors. */
   agentActorName?: string;
   /**
-   * ON-BEHALF-OF — the human the acting agent belongs to (`users.createdByUserId`
-   * on the agent's row). Absent when there is no agent actor.
+   * @deprecated MIRROR ONLY — read `principal` instead.
+   *
+   * The human the acting agent belongs to (`users.createdByUserId` on the
+   * agent's row). That column is the ACCOUNTABILITY anchor — who CREATED this
+   * agent — and every agent has one, delegated or not. Rendering it as
+   * "on behalf of" asserted a delegation that never happened for a pod-wide
+   * agent, which is the exact claim the governance surface exists to disprove.
+   * Kept so existing consumers keep compiling while they move to `principal`.
    */
   onBehalfOfName?: string;
+  /**
+   * PRINCIPAL — whether a human's identity is actually behind this agent's act,
+   * discriminated rather than collapsed. Present iff there IS an agent actor.
+   *
+   * Derived from `proposals.subjectUserId`, the one column that carries the
+   * LINKAGE fact (`apiKeys.linkedUserId ?? apiKeys.userId`); see the column
+   * contract in `@synap/database` `schema/proposals.ts`. `createdByUserId`
+   * cannot answer this — it is defined for every agent, so it can only ever
+   * say "delegated".
+   *
+   * `unresolved` is a VALUE, not an absence: pre-0248 rows have a NULL column
+   * and the honest answer is "we do not know", which the surface must SAY.
+   *
+   * A LABEL, never a filter.
+   */
+  principal?: ProposalPrincipal;
   /** APPROVER — the human who reviewed it. Absent while the proposal is pending. */
   approverName?: string;
   targetName?: string;
@@ -321,16 +411,29 @@ export async function enrichProposalsForDisplay(
    * skipped entirely when no proposal on the page has an agent actor — which is
    * every human-authored page.
    */
-  const ownerIds = uniqueStrings(
-    rows.map((row) => {
+  const ownerIds = uniqueStrings([
+    ...rows.map((row) => {
       if (!row.agentUserId) return undefined;
       const agentRow = userById.get(row.agentUserId);
       if (!agentRow || userById.has(agentRow.createdByUserId ?? "")) {
         return undefined;
       }
       return agentRow.createdByUserId ?? undefined;
-    })
-  );
+    }),
+    // PRINCIPAL (0248): the DELEGATED human is `subjectUserId` — the effective
+    // user of the acting principal — NOT `createdByUserId` above. The two are
+    // the same person on a single-owner pod and different the moment an agent
+    // acts for someone who did not create it, so both ids are resolved. Only
+    // fetched when an agent actually acted and the id is neither the agent
+    // itself (that is the `global` reading, which needs no name) nor already
+    // loaded.
+    ...rows.map((row) => {
+      if (!row.agentUserId || !row.subjectUserId) return undefined;
+      if (row.subjectUserId === row.agentUserId) return undefined;
+      if (userById.has(row.subjectUserId)) return undefined;
+      return row.subjectUserId;
+    }),
+  ]);
   if (ownerIds.length > 0) {
     const ownerRows = await db
       .select({
@@ -440,6 +543,24 @@ export async function enrichProposalsForDisplay(
     const onBehalfOfName = onBehalfOfRow
       ? displayNameForUser(onBehalfOfRow)
       : undefined;
+    // ── PRINCIPAL — the delegation question, ANSWERED rather than assumed ────
+    // `onBehalfOfName` above reads `users.createdByUserId`, which is defined for
+    // EVERY agent. So it can only ever say "delegated", and it said it for
+    // pod-wide agents too: "Scout · for Antoine" on an act Antoine never
+    // delegated — a false claim on the surface built to prove it cannot happen.
+    //
+    // `subjectUserId` is the only column on this row that carries the linkage
+    // (it is stamped `ctx.userId` = `linkedUserId ?? keyOwner`), so it — and
+    // only it — can distinguish the two. Three outcomes, all named; nothing
+    // falls back to another role's name.
+    const principal = deriveProposalPrincipal({
+      agentUserId: row.agentUserId,
+      subjectUserId: row.subjectUserId,
+      resolveName: (id) => {
+        const subjectRow = userById.get(id);
+        return subjectRow ? displayNameForUser(subjectRow) : undefined;
+      },
+    });
     const approverRow = row.reviewedBy
       ? userById.get(row.reviewedBy)
       : undefined;
@@ -557,6 +678,7 @@ export async function enrichProposalsForDisplay(
       // The three roles, each absent when it does not apply (see above).
       ...(agentActorName ? { agentActorName } : {}),
       ...(onBehalfOfName ? { onBehalfOfName } : {}),
+      ...(principal ? { principal } : {}),
       ...(approverName ? { approverName } : {}),
       targetName,
       ...(row.sessionId && sessionGoalById.has(row.sessionId)

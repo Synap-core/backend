@@ -116,6 +116,75 @@ describe("installCellFromDefinition", () => {
     expect(callArg().contentKind).toBe("entity-profile");
   });
 
+  /**
+   * The MECHANISM, the third field of this exact drop class. The exporter had
+   * no `rendererType` filter, the CP payload no slot, and this mapping never
+   * passed one — so `defineCell` applied its `"frame"` default and an `iframe`
+   * HTML Card installed as an ESM React cell that cannot mount.
+   */
+  it("threads rendererType through — an iframe Card installs as an iframe", async () => {
+    await installCellFromDefinition({
+      definition: { ...BASE, rendererType: "iframe" },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().rendererType).toBe("iframe");
+  });
+
+  it("passes rendererType as UNDEFINED when unstated, and drops a bogus value", async () => {
+    // Unstated ⇒ omit-is-silence: `defineCell` applies its "frame" default on
+    // insert and leaves an existing row's mechanism untouched.
+    await installCellFromDefinition({
+      definition: { ...BASE },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().rendererType).toBeUndefined();
+
+    // A package payload must never smuggle host-code mechanisms into the
+    // column, so an unrecognised value is dropped rather than forwarded.
+    await installCellFromDefinition({
+      definition: {
+        ...BASE,
+        rendererType: "native" as unknown as "iframe",
+      },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg(1).rendererType).toBeUndefined();
+  });
+
+  it("threads minSize through — the floor an installed Card needs to render", async () => {
+    await installCellFromDefinition({
+      definition: { ...BASE, minSize: { w: 4, h: 3 } },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().minSize).toEqual({ w: 4, h: 3 });
+  });
+
+  it("forwards an EXPLICIT empty externalHosts — revocation must reach the row", async () => {
+    // `[]` is the only way a re-published Card can REMOVE an origin it once
+    // declared: `defineCell` maps it to null ("reaches no external origin"),
+    // whereas an absent list is silence and leaves the old grant standing.
+    await installCellFromDefinition({
+      definition: { ...BASE, externalHosts: [] },
+      name: "Todo Table",
+      packageSlug: "crm",
+      workspaceId: "ws-1",
+      userId: "u-1",
+    });
+    expect(callArg().externalHosts).toEqual([]);
+  });
+
   it("passes contentKind as UNDEFINED on no signal, and ignores a bogus value", async () => {
     // Same omit-is-silence rule as viewTypes: an upsert must not stamp `widget`
     // over a kind a previous install declared, and an unknown string must not

@@ -32,7 +32,10 @@ import {
 } from "../automation-executor.js";
 
 const context = (): StepContext => ({
-  trigger: { payload: { prompt: "", topic: "growth", nothing: null } },
+  trigger: {
+    payload: { prompt: "", topic: "growth", nothing: null },
+    subject: null,
+  },
   steps: { q1: { output: { items: [1, 2, 3] } } },
   automation: { id: "auto-1", state: {} },
 });
@@ -67,7 +70,7 @@ describe("unresolved-reference diagnostics", () => {
     // it now applies.
     const refs = collect(() => {
       resolveTemplate("{{steps.q1.output.blank}}|{{steps.q1.gone.deep}}", {
-        trigger: { payload: {} },
+        trigger: { payload: {}, subject: null },
         steps: { q1: { output: { blank: null } } },
         automation: { id: "auto-1", state: {} },
       } as never);
@@ -166,7 +169,7 @@ describe("caller-supplied input is not a wiring fault", () => {
   it("does NOT record a missing trigger.payload key", () => {
     const refs = collect(() => {
       resolveTemplate("Prompt: {{trigger.payload.prompt}}", {
-        trigger: { payload: {} },
+        trigger: { payload: {}, subject: null },
         steps: {},
       } as never);
     });
@@ -176,7 +179,7 @@ describe("caller-supplied input is not a wiring fault", () => {
   it("STILL records a missing steps.* wiring reference", () => {
     const refs = collect(() => {
       resolveTemplate("{{steps.nope.output.result}}", {
-        trigger: { payload: {} },
+        trigger: { payload: {}, subject: null },
         steps: {},
       } as never);
     });
@@ -187,7 +190,7 @@ describe("caller-supplied input is not a wiring fault", () => {
     const refs = collect(() => {
       resolveTemplate(
         "{{trigger.payload.prompt}} {{trigger.payload.focus}} {{steps.gone.output}}",
-        { trigger: { payload: {} }, steps: {} } as never
+        { trigger: { payload: {}, subject: null }, steps: {} } as never
       );
     });
     expect(refs).toHaveLength(1);
@@ -213,7 +216,7 @@ describe("an unset entity property is data, not a wiring fault", () => {
   /** One row of the tasks projection against a task that has set nothing. */
   const projectionContext = () =>
     ({
-      trigger: { payload: {} },
+      trigger: { payload: {}, subject: null },
       steps: {},
       item: {
         id: "e1",
@@ -248,7 +251,7 @@ describe("an unset entity property is data, not a wiring fault", () => {
   it("exempts an entity that carries no property bag at all", () => {
     const refs = collect(() => {
       resolveTemplate("{{item.properties.status}}", {
-        trigger: { payload: {} },
+        trigger: { payload: {}, subject: null },
         steps: {},
         item: { id: "e1" },
       } as never);

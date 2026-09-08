@@ -6,12 +6,21 @@ import { z } from "zod";
 import { getDb, and, eq, isNull, or } from "@synap/database";
 import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
 import {
+  CellDefinitionError,
   defineCell,
   validateDeps,
 } from "../../../services/cells/define-cell.js";
 // The ONE explicit-then-derive-from-viewTypes rule for a package cell's
 // renderer slot — shared with the tRPC twin and both package appliers.
 import { resolveCellContentKind } from "../../../services/cells/install-cell-from-definition.js";
+// typeKey PROVENANCE FLOOR — the SAME guard the tRPC door (`widgetDefinitions.
+// upsert`) applies, not a second implementation. This door declared `typeKey`
+// and passed it straight to `defineCell`, so an operator-scoped key could MINT
+// `cell:<pkg>:<key>` and land on the row an installed vendor cell occupies.
+import {
+  assertMayWriteNamespacedTypeKey,
+  NamespacedTypeKeyError,
+} from "../../../services/cells/namespaced-type-key.js";
 import {
   hasScope,
   logger,
@@ -202,6 +211,10 @@ export function registerCellsRoutes(app: HubHono): void {
         typeKey: `cell:${packageSlug}:${cellKey}`,
         description: cell.description,
         defaultSize: cell.defaultSize,
+        // Parity with the other two install doors (`installCellFromDefinition`
+        // and `/packages/apply`). Dropped here, the SAME CP cell installed
+        // through THIS door loses its render floor.
+        minSize: cell.minSize,
         deps: cell.deps,
         viewTypes: cell.viewTypes,
         // Renderer SLOT. Its tRPC twin (`routers/cells.ts` cells.install) has
@@ -210,6 +223,13 @@ export function registerCellsRoutes(app: HubHono): void {
         // was invisible to `renderersForType`. Resolved through the ONE shared
         // resolver so the explicit-then-derive-from-viewTypes rule cannot fork.
         contentKind: resolveCellContentKind(cell.contentKind, cell.viewTypes),
+        // Rendering MECHANISM. Unrecognised values are dropped rather than
+        // forwarded — `"builtin"`/`"native"` must never reach the column
+        // through a marketplace payload.
+        rendererType:
+          cell.rendererType === "iframe" || cell.rendererType === "frame"
+            ? cell.rendererType
+            : undefined,
         userId: userId ?? "",
       });
 
@@ -329,6 +349,16 @@ export function registerCellsRoutes(app: HubHono): void {
     }
 
     try {
+      // PROVENANCE FLOOR — runs BEFORE the governance gate so a forged
+      // `cell:`/`generated:` key cannot even become a PROPOSAL that a reviewer
+      // would then approve on the strength of its (forged) origin.
+      if (parsed.data.typeKey) {
+        await assertMayWriteNamespacedTypeKey(
+          parsed.data.typeKey,
+          workspaceId ?? null
+        );
+      }
+
       // Governance membrane — AGENT callers only. Operator-initiated defines
       // (CLI `synap cell push` / `synap artifact`, which post to this same
       // route with no agentUserId) stay DIRECT writes: hub-protocol calls are
@@ -366,6 +396,13 @@ export function registerCellsRoutes(app: HubHono): void {
             // cell materializes into the default `widget` slot, so the reviewer
             // approves one thing and the pod writes another.
             ...(contentKind ? { contentKind } : {}),
+            // Carried for the same reason as `viewTypes`/`contentKind`: without
+            // it an approved cell materialises under `generated:<slug(name)>`,
+            // so the reviewer approves one key and the pod writes another. Safe
+            // to carry because the executor re-runs the SAME provenance floor
+            // against the scope the proposal was REVIEWED at (a `revise` can
+            // re-target `proposals.workspaceId` after this payload is written).
+            ...(parsed.data.typeKey ? { typeKey: parsed.data.typeKey } : {}),
           },
           reasoning,
         });
@@ -407,6 +444,14 @@ export function registerCellsRoutes(app: HubHono): void {
 
       return c.json({ success: true, typeKey }, 201);
     } catch (err) {
+      // A forged namespaced typeKey is a CALLER error — 400, not the 500 a
+      // bare rethrow would produce.
+      if (
+        err instanceof NamespacedTypeKeyError ||
+        err instanceof CellDefinitionError
+      ) {
+        return c.json({ error: err.message }, 400);
+      }
       logger.error({ err }, "cells.define failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
@@ -461,8 +506,16 @@ interface CellDef {
   deps?: Record<string, string>;
   description?: string;
   defaultSize?: { w: number; h: number };
+  /** Minimum grid footprint declared by the package — the Card's render floor. */
+  minSize?: { w: number; h: number };
   /** View-type affinity declared by the package (0221) — optional. */
   viewTypes?: string[];
   /** Renderer slot declared by the package — see `resolveCellContentKind`. */
   contentKind?: string;
+  /**
+   * Rendering MECHANISM declared by the package. Absent ⇒ `defineCell`'s
+   * `"frame"` default — which is exactly how an `iframe` HTML Card used to
+   * install as an ESM React cell and fail to mount.
+   */
+  rendererType?: "iframe" | "frame";
 }

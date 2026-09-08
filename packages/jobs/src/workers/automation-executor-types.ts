@@ -47,6 +47,29 @@ export interface ExecutionPayload {
 export interface StepContext {
   trigger: {
     payload: Record<string, unknown>;
+    /**
+     * The entity this run IS ABOUT — `automation_runs.subject_entity_id`,
+     * exposed to authors as `{{trigger.subject}}`.
+     *
+     * WHY IT EXISTS: the four run origins build four different trigger
+     * payloads (event → `subjectId`; manual → a flat bag with `entityId` by
+     * convention; webhook and cron → neither), so no expression over
+     * `trigger.payload` can name the subject for every origin. The run row
+     * already carries the ONE answer, derived by `run-subject.ts` at run
+     * creation — this only surfaces it. It is NOT a second derivation.
+     *
+     * WHY UNDER `trigger` AND NOT A NEW TOP-LEVEL ROOT: `CONTEXT_ROOT_PATTERN`
+     * (`context-path.ts`) is enforced only by `condition-eval.ts` — never by
+     * `resolveTemplate`. A genuinely new root would therefore resolve in
+     * templates and silently compare as a LITERAL STRING inside conditions.
+     * Hanging it under the already-recognised `trigger` root makes both paths
+     * agree by construction.
+     *
+     * `null` (never absent) when the run has no subject — a run about a
+     * deleted entity, a cron/webhook run, or a manual run with no `entityId`.
+     * Renders `""` in a template, exactly like any other null binding.
+     */
+    subject: string | null;
   };
   // `output` is the RAW result of the node (whatever the verb/skill/handler
   // returned — object, array, string, number). ONE rule for every node type:

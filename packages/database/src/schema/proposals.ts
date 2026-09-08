@@ -119,8 +119,47 @@ export const proposals = pgTable(
     // "mine I proposed" split.
     proposedByUserId: text("proposed_by_user_id"),
     /**
-     * The HUMAN this proposal is FOR — the operator/owner whose review it
-     * awaits and whose data it would change. THE OWNER FLOOR (0248).
+     * THE EFFECTIVE USER of the principal that authored this proposal — the
+     * `effectiveUserId` of `access/key-identity.ts`, i.e.
+     * `apiKeys.linkedUserId ?? apiKeys.userId`. THE OWNER FLOOR (0248).
+     *
+     * ── ONE FACT, TWO READINGS. Both are named; neither may drift. ──────────
+     *
+     * The original wording of this comment was "the HUMAN this proposal is FOR
+     * … NOT the author", and that is TRUE for every human-linked principal but
+     * FALSE for a POD-WIDE agent. A pod-wide agent key is minted with
+     * `linkedUserId: null` on purpose (`provisionSurfaceAgentKey({podWide:true})`),
+     * so its `effectiveUserId` IS its own agent-user row. Every door stamps
+     * `ctx.userId`, so for such an agent this column holds an AGENT id.
+     *
+     * That is deliberate and must be PRESERVED, because it is the only place on
+     * the row where the LINKAGE fact survives. `createdBy` is overloaded,
+     * `agentUserId` says only "an agent acted", and `users.createdByUserId` is
+     * the ACCOUNTABILITY anchor (who created the agent) — a value every agent
+     * has, delegated or not, so it cannot distinguish them. Rewriting this
+     * column to `createdByUserId` would make a global agent and a delegated
+     * agent byte-identical and destroy the distinction.
+     *
+     * READING 1 — THE FLOOR ("who reviews this?"). NOT a raw equality. When
+     * this column holds an AGENT user id, the reviewing human is that agent's
+     * `users.createdByUserId`; otherwise the value IS the human. A floor that
+     * compares `subjectUserId === viewerId` directly would floor a pod-wide
+     * agent's proposals to a principal that is not a person — visible to
+     * nobody, reviewable by nobody, undecidable forever. The resolution step is
+     * mandatory, not an optimisation.
+     *
+     * READING 2 — THE PRINCIPAL ("did a human delegate this?"), the label
+     * `routers/proposals/display.ts` emits and the browser renders:
+     *     null                    → unresolved  (pre-0248 row — say so, never blank)
+     *     === row.agentUserId     → global      (the agent acted as its own principal)
+     *     otherwise               → delegated   (a human's identity is behind it)
+     * This is a LABEL and never a FILTER. `ownAgentUserFilter`,
+     * `assertProposalVisibleTo` and `computeCanReviewApproval` all key on
+     * `users.createdByUserId` and must stay untouched.
+     *
+     * WRITER INVARIANT: every door passes the EFFECTIVE USER of the acting
+     * principal (`ctx.userId`), never a derived owner. Pinned by
+     * `packages/api/src/__tripwires__/subject-user-id-is-the-effective-user.test.ts`.
      *
      * The fourth, distinct "who" on this row, and the only one answerable at
      * every door:

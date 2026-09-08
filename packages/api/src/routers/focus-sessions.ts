@@ -43,6 +43,12 @@ import {
 import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
+  blockExpectedOutput,
+  unblockExpectedOutput,
+  type BlockExpectedOutputResult,
+} from "../services/focus-sessions/block-output.js";
+import { BLOCKED_REASONS } from "@synap/playbooks";
+import {
   expectedOutputWireSchema,
   mergeExpectedOutputs,
 } from "../services/focus-sessions/update-session.js";
@@ -100,6 +106,41 @@ import { displayNameForUser } from "./proposals/display.js";
 // (`delegatedTo`, `returnedReason`, `satisfiedByProposalId`, …) out of any
 // array a client echoes back, before `mergeExpectedOutputs` can carry them.
 const expectedOutputItemSchema = expectedOutputWireSchema;
+
+/**
+ * The ONE error mapping for the slot-ownership doors — `blockOutput` and
+ * `unblockOutput` answer the same four failures for the same reasons, so they
+ * share one translation rather than two that can drift into two different
+ * sentences about the same missing label.
+ */
+function slotOwnershipResult(
+  result: BlockExpectedOutputResult,
+  input: { sessionId: string; expectedLabel: string }
+) {
+  switch (result.status) {
+    case "not_found":
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Focus session ${input.sessionId} not found`,
+      });
+    case "unknown_label":
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `This session declares no output labelled "${input.expectedLabel}"`,
+      });
+    case "already_done":
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `"${input.expectedLabel}" is already delivered`,
+      });
+    default:
+      return {
+        ok: true as const,
+        expectedLabel: result.expectedLabel,
+        kind: result.kind,
+      };
+  }
+}
 
 // DERIVED from the ONE status vocabulary (`@synap-core/types/focus-sessions`),
 // never hand-mirrored: a new `focus_sessions.status` value reaches this filter
@@ -1358,6 +1399,64 @@ export const focusSessionsRouter = router({
             agentAttached: result.agentAttached,
           };
       }
+    }),
+
+  /**
+   * BLOCK one declared deliverable ON THE HUMAN — the other verb a slot needed.
+   *
+   * The twin of `delegateOutput`: that one hands a slot to an AGENT, this one
+   * hands it to the PERSON, with the class of blocker and one line saying which
+   * thing is missing. Both are targeted stampers rather than array patches, for
+   * the reason `services/focus-sessions/block-output.ts` sets out — a wholesale
+   * `update` cannot express "unset this field" at all.
+   *
+   * Never stamps `status`: declaring you cannot do the work is the opposite of
+   * having done it.
+   *
+   * Ungoverned on purpose, exactly like `update`, `attachOutput` and
+   * `delegateOutput`: `protectedProcedure` IS the person, on their own session.
+   */
+  blockOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        /** The declared `expectedOutputs[].label` to hand over. */
+        expectedLabel: z.string().min(1).max(500),
+        blockedReason: z.enum(BLOCKED_REASONS),
+        /** ONE line naming WHICH thing is missing, not its class. */
+        why: z.string().max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await blockExpectedOutput({
+        sessionId: input.sessionId,
+        userId: ctx.userId,
+        expectedLabel: input.expectedLabel,
+        blockedReason: input.blockedReason,
+        why: input.why,
+      });
+      return slotOwnershipResult(result, input);
+    }),
+
+  /**
+   * UNBLOCK — the agent reclaiming a slot it can now do. Clears `owner`,
+   * `blockedReason`, `why` and `owedSince` together; the deliverable itself is
+   * unchanged and still owed.
+   */
+  unblockOutput: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        expectedLabel: z.string().min(1).max(500),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await unblockExpectedOutput({
+        sessionId: input.sessionId,
+        userId: ctx.userId,
+        expectedLabel: input.expectedLabel,
+      });
+      return slotOwnershipResult(result, input);
     }),
 
   /**

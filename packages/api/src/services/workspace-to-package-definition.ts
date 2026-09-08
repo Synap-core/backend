@@ -516,19 +516,52 @@ export async function workspaceToPackageDefinition(opts: {
   for (const c of cellRows) {
     if (c.typeKey.startsWith("cell:")) continue; // belt-and-suspenders — see above
     if (!c.rendererSource) continue; // nothing to emit as `code` (required)
+    // A `builtin` row's "renderer" is HOST code keyed by name — there is nothing
+    // a package can carry that would reconstitute it on another pod, and
+    // emitting it would publish a row that installs as a `frame` cell with
+    // source that was never meant to be evaluated. Declared loss, not a silent
+    // one: the export simply does not claim to carry builtins. (`native` cannot
+    // occur — NATIVE_RENDERER_REJECTED.)
+    if (c.rendererType !== "iframe" && c.rendererType !== "frame") continue;
     const cell: PackageCellDef = {
       key: c.typeKey,
       name: c.name,
       code: c.rendererSource,
+      // The MECHANISM, carried explicitly. This select had NO filter on
+      // `rendererType` and the payload no slot for it, so an `iframe` HTML Card
+      // exported, published, and installed elsewhere as an ESM React cell —
+      // `defineCell` applied its `"frame"` default — and failed to mount at
+      // every hop, silently. Emitted for BOTH values rather than only the
+      // non-default: an explicit `"frame"` costs nothing and makes the round
+      // trip readable.
+      rendererType: c.rendererType,
     };
     if (c.deps && Object.keys(c.deps).length > 0) cell.deps = c.deps;
     if (c.defaultSize) cell.defaultSize = c.defaultSize;
+    // Minimum grid footprint. `widget_definitions` stores it and `defineCell`
+    // accepts it, but the package payload had no slot — so an authored Card
+    // round-tripped without its floor and could land in a grid too small to
+    // render anything.
+    if (c.minSize) cell.minSize = c.minSize;
     if (c.configSchema && Object.keys(c.configSchema).length > 0)
       cell.configSchema = c.configSchema;
     if (c.viewRendererViewTypes && c.viewRendererViewTypes.length > 0)
       cell.viewTypes = c.viewRendererViewTypes;
-    if (c.externalHosts && c.externalHosts.length > 0)
-      cell.externalHosts = c.externalHosts;
+    // EGRESS IS EMITTED UNCONDITIONALLY, INCLUDING EMPTY.
+    //
+    // Every other field here is omit-is-silence all the way down: absent ⇒
+    // `installCellFromDefinition` passes `undefined` ⇒ `defineCell` leaves the
+    // stored value alone. For a SECURITY ALLOWLIST that makes revocation
+    // unrepresentable — an author removes an origin, re-exports, re-installs,
+    // and the OLD grant survives on the target pod. Grants would widen easily
+    // and never narrow, and per migration 0249 there is no cell reconciler to
+    // catch it later.
+    //
+    // An explicit `[]` IS the revocation on the wire: `normalizeStringList`
+    // maps it to `null`, which `defineCell` writes as "reaches no external
+    // origin". Emitting it always also means a re-export of an ungranted Card
+    // states its containment rather than merely failing to mention it.
+    cell.externalHosts = c.externalHosts ?? [];
     if (c.contentKind && c.contentKind !== "widget")
       cell.contentKind = c.contentKind;
     emittedCells.push(cell);

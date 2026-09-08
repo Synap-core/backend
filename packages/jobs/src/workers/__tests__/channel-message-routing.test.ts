@@ -67,7 +67,7 @@ const OWNER = "user-owner";
 const WORKSPACE = "ws-1";
 
 const context = (steps: StepContext["steps"] = {}): StepContext => ({
-  trigger: { payload: {} },
+  trigger: { payload: {}, subject: null },
   steps,
   automation: { id: "auto-1", state: {} },
 });

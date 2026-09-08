@@ -307,10 +307,15 @@ describe("(c/d) partial failure is isolated and visible", () => {
     ids: string[],
     failed: Array<{ proposalId: string; reason: string }>
   ) {
+    // Mirrors the door's loop, INCLUDING its per-item `errorCode` derivation.
+    // ⚠️ This is a COPY of `batchApprove`'s body, so it proves the dispatch
+    // contract, never the router itself — the router's own guarantee is the
+    // source scan in `__tripwires__/batch-approve-is-diff-scoped.test.ts`.
     const results: Array<{
       proposalId: string;
       success: boolean;
       error?: string;
+      errorCode?: TRPCError["code"];
     }> = [];
     for (const proposalId of ids) {
       try {
@@ -326,6 +331,8 @@ describe("(c/d) partial failure is isolated and visible", () => {
           proposalId,
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
+          errorCode:
+            error instanceof TRPCError ? error.code : "INTERNAL_SERVER_ERROR",
         });
       }
     }
@@ -402,6 +409,9 @@ describe("(c/d) partial failure is isolated and visible", () => {
       proposalId: "p3",
       success: false,
       error: "automation was deleted",
+      // A plain `Error` carries no tRPC code of its own — the one explicit
+      // fallback, and the honest reading of "this was not a governance refusal".
+      errorCode: "INTERNAL_SERVER_ERROR",
     });
   });
 
@@ -416,7 +426,13 @@ describe("(c/d) partial failure is isolated and visible", () => {
     expect(callIdx).toBeLessThan(catchIdx);
     // The catch pushes a failed result and lets the loop continue — it must not
     // rethrow, which would abort the remaining items.
-    const catchBody = BATCH_APPROVE_BLOCK.slice(catchIdx);
+    // Strip line comments before scanning: the catch explains where its
+    // `errorCode` comes from, and the word "throw" in PROSE is not a rethrow.
+    // (A guard that reads comments is a guard that fires on documentation.)
+    const catchBody = BATCH_APPROVE_BLOCK.slice(catchIdx).replace(
+      /^\s*\/\/.*$/gm,
+      ""
+    );
     expect(catchBody).toContain("success: false");
     expect(catchBody).not.toContain("throw ");
   });
@@ -565,10 +581,15 @@ describe("(f) return shape is unchanged", () => {
     expect(BATCH_APPROVE_BLOCK).toContain("proposalId: string;");
     expect(BATCH_APPROVE_BLOCK).toContain("success: boolean;");
     expect(BATCH_APPROVE_BLOCK).toContain("error?: string;");
+    // ADDITIVE (2026-09-08): the per-item tRPC code, so a client can tell a
+    // stale-revision CONFLICT from any other refusal without matching prose.
+    expect(BATCH_APPROVE_BLOCK).toContain('errorCode?: TRPCError["code"];');
     expect(BATCH_APPROVE_BLOCK).toContain("return { results };");
-    // No field was removed from what the consumer destructures.
+    // No field was removed from what the consumer destructures. The success
+    // push is now its own arm (the failure arm carries the code), so the
+    // literal moved — it did not disappear.
     expect(BATCH_APPROVE_BLOCK).toContain(
-      "results.push({ proposalId, success: result.success })"
+      "results.push({ proposalId, success: true })"
     );
   });
 });

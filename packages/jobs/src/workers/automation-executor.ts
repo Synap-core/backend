@@ -334,6 +334,11 @@ async function executeAutomationFlow(params: {
     const preconditionContext: StepContext = {
       trigger: {
         payload: (run.triggerPayload as Record<string, unknown>) ?? {},
+        // Same subject the run row carries (see StepContext.trigger.subject) —
+        // the precondition gate must see the SAME `{{trigger.subject}}` the
+        // steps below will, or a flow could be gated on one value and act on
+        // another.
+        subject: run.subjectEntityId ?? null,
       },
       steps: {},
       automation: {
@@ -529,6 +534,10 @@ async function executeAutomationFlow(params: {
     const context: StepContext = {
       trigger: {
         payload: (loadedRun.triggerPayload as Record<string, unknown>) ?? {},
+        // `{{trigger.subject}}` — the ONE origin-independent name for "the
+        // entity this run is about". Already on the loaded run row (derived by
+        // `run-subject.ts` at run creation); nothing extra is loaded here.
+        subject: loadedRun.subjectEntityId ?? null,
       },
       steps: {},
       // Snapshot of the automation's persistent state at trigger time. A

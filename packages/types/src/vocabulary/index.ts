@@ -443,3 +443,121 @@ export function resolveStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
   return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
 }
+
+/**
+ * PROVENANCE labels — "who or what produced this", as a human word.
+ *
+ * ── Why this table exists BEFORE anything renders provenance ───────────────
+ * The database carries THREE incompatible spellings of the same idea, and
+ * `generated.d.ts` documents the fork as intentional:
+ *
+ *   `ProvenanceKind`               human | ai_agent | system
+ *     (`schema/provenance.ts` — entities, documents, relations, facets)
+ *   `CellInstanceCreatedByKind`    user  | agent    | system
+ *     (`schema/cell-instances.ts`)
+ *   `messages.authorType`          human | ai_agent | external | bot
+ *
+ * That fork is HARMLESS today for exactly one reason: no frontend file renders
+ * either column. The moment one does, the surface has to turn `ai_agent` into
+ * a word — and `.claude/rules/vocabulary.md` forbids it hand-writing a label
+ * map to do so. This is that door, opened first, so the first renderer has
+ * somewhere to go.
+ *
+ * `human`/`user` resolve to the SAME word, and so do `ai_agent`/`agent`. That
+ * collapse is the point: they are two DB spellings of one idea, and a user
+ * must never be able to tell from the screen which table a row came out of.
+ *
+ * ── What this deliberately does NOT do ─────────────────────────────────────
+ *  • It does NOT unify the DB enums. Three columns with different value sets
+ *    is a migration and a separate decision; this unifies the LABEL only.
+ *  • It is NOT a predicate. "Was this agent-made?" is a governance question
+ *    answered by the policy engine, never by comparing a display string.
+ *  • `external` and `bot` are NOT folded into the others. A WhatsApp contact
+ *    who sent a message is a PERSON outside the pod, and a system-generated
+ *    bot message is neither a person nor an AI agent. Flattening those into
+ *    "Person"/"AI agent" would destroy a real distinction — the same mistake
+ *    as collapsing the two verb moods.
+ */
+export const PROVENANCE_LABELS: Readonly<Record<string, string>> = {
+  // ProvenanceKind + messages.authorType
+  human: "Person",
+  // CellInstanceCreatedByKind — the same idea, spelled differently.
+  user: "Person",
+  ai_agent: "AI agent",
+  agent: "AI agent",
+  system: "System",
+  // messages.authorType only: a real person reaching the pod from OUTSIDE it
+  // (WhatsApp, Slack) — not a pod user, and not an agent.
+  external: "External",
+  // messages.authorType only: an automated system message. Distinct from
+  // `ai_agent` (a reasoning agent) and from `system` (the platform itself).
+  bot: "Bot",
+};
+
+/**
+ * The human label for a provenance value, whichever of the three columns it
+ * came from. Unknown values humanize rather than leak, so a new DB enum member
+ * can never reach a user as a raw token.
+ */
+export function resolveProvenanceLabel(
+  kind: string | null | undefined
+): string {
+  if (!kind) return "";
+  return PROVENANCE_LABELS[kind.toLowerCase()] ?? humanizeToken(kind);
+}
+
+/**
+ * BLOCKED-REASON labels — why an agent could not take a deliverable, as a
+ * human word.
+ *
+ * ── Why this is its OWN table, not a STATUS_LABELS block ───────────────────
+ * `STATUS_LABELS`'s own scope note says it holds LIFECYCLE STATES and is not a
+ * dumping ground. A blocked reason is not a state the slot is in — the slot is
+ * `pending`, same as any other. It is a CLASSIFICATION of the obstacle, a
+ * different closed domain, and it collides on `capability` and `decision` with
+ * `OBJECT_NOUNS` — two tables that must not merge.
+ *
+ * ── Why the labels are not just `humanizeToken` ────────────────────────────
+ * They would be ambiguous. Rendered bare, "Capability" and "Decision" read as
+ * the OBJECT KINDS of the same name (a capability record, a decision record),
+ * not as "the tool does not exist" and "a person has to choose". The parallel
+ * "<thing> missing" / "<thing> block" phrasing is deliberate: the six read as
+ * one taxonomy at a glance, which is the whole job of a closed set.
+ *
+ * MOOD does not apply — these are not verbs. A blocker is named the same way
+ * whether it is open or was cleared last week; the tense lives on the slot's
+ * own lifecycle, not here.
+ *
+ * The value set is defined ONCE, as `BLOCKED_REASONS` in `@synap/playbooks`
+ * (the home of the `ExpectedOutput` interface that carries it). This package
+ * is dependency-free by design and so mirrors the keys; the parity tripwire in
+ * `@synap/api` (`__tripwires__/blocked-reason-vocabulary-parity.test.ts`)
+ * derives the set from that constant and fails if a value has no label here.
+ */
+export const BLOCKED_REASON_LABELS: Readonly<Record<string, string>> = {
+  /** A secret to mint or store. */
+  credential: "Credential missing",
+  /** A governance rule to write. */
+  permission: "Permission missing",
+  /** The tool does not exist. NOT the `capability` object kind. */
+  capability: "Capability missing",
+  /** A rule to change, or to accept. */
+  policy: "Policy block",
+  /** Honestly terminal: a choice only a person can make. */
+  decision: "Human decision",
+  /** Honestly terminal: an action in the world. */
+  physical: "Physical action",
+};
+
+/**
+ * The human label for a blocked reason. Unknown values humanize rather than
+ * leak — but the set is CLOSED at the parse (`expectedOutputWireSchema`), so an
+ * unknown value reaching here means something bypassed a door, not that the
+ * taxonomy grew.
+ */
+export function resolveBlockedReasonLabel(
+  reason: string | null | undefined
+): string {
+  if (!reason) return "";
+  return BLOCKED_REASON_LABELS[reason.toLowerCase()] ?? humanizeToken(reason);
+}

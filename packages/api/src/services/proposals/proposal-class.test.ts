@@ -199,3 +199,146 @@ describe("classifyProposal", () => {
     expect(proposalLifetimeHours("run", "capability")).toBeNull();
   });
 });
+
+/**
+ * `access` — the class added 2026-09-08, after the founder's pod filed the
+ * first one on 09-04 and nothing was watching the "0 instances" reading that
+ * had ruled it out two days earlier.
+ */
+describe("classifyProposal — access", () => {
+  it("the live row that forced the class: an agent asking to JOIN a workspace", () => {
+    // `{ proposalType: "join", targetType: "workspace" }` — the pending row on
+    // the founder's pod since 2026-09-04, "Agent Claude (Web) requests to join
+    // workspace Builder as editor". It classified `objectWork` until today.
+    expect(classifyProposal("join", "workspace")).toBe("access");
+  });
+
+  it("covers every membership / permission / credential / exposure door", () => {
+    // Derived door-by-door from GOVERNED_WRITE_DOORS (@synap/governance-policy).
+    // Listed explicitly rather than looped over the private set: a test that
+    // reads the implementation's own table proves only that the table equals
+    // itself.
+    const accessPairs: [string, string][] = [
+      ["join", "workspace"],
+      ["join", "a2ai"],
+      ["add", "workspaceMember"],
+      ["remove", "workspaceMember"],
+      ["updateRole", "workspaceMember"],
+      ["create", "projectMember"],
+      ["remove", "projectMember"],
+      ["updateRole", "projectMember"],
+      ["create", "role"],
+      ["update", "role"],
+      ["delete", "role"],
+      ["create", "apiKey"],
+      ["update", "apiKey"],
+      ["delete", "apiKey"],
+      ["updateCapabilities", "agent"],
+      ["grant_capability", "focus_session"],
+      ["vault.request", "vault"],
+      ["configure_public_projection", "workspace"],
+    ];
+    for (const [proposalType, targetType] of accessPairs) {
+      expect(
+        classifyProposal(proposalType, targetType),
+        `${targetType}/${proposalType} hands a principal a right it did not have`
+      ).toBe("access");
+    }
+  });
+
+  it("NEVER expires — the whole point of giving it a lane", () => {
+    // An access request that silently expires deletes the only record that
+    // anyone was ever asked; the agent stays blocked either way.
+    expect(CLASS_LIFETIME_HOURS.access).toBeNull();
+    expect(proposalLifetimeHours("join", "workspace")).toBeNull();
+    expect(
+      proposalLifetimeHours("grant_capability", "focus_session")
+    ).toBeNull();
+    // A null lifetime IS the negation of `diesWithSession`'s first arm ("a
+    // class WITH a lifetime"), so closing the session an agent asked from
+    // cannot retire the question of whether it may join at all.
+    //
+    // The end-to-end assertion on `diesWithSession` itself deliberately does
+    // NOT live here. Importing it drags `expire-lapsed-proposals.ts` →
+    // `@synap-core/core` → `loadConfig`, which throws on a missing
+    // `database.url` — so a single import turns this pure, DB-free file into
+    // one that cannot even LOAD without a database, and a test that cannot load
+    // is a test that does not run. `expire-lapsed-proposals.test.ts` is where
+    // that arm belongs; note that it currently requires a DB env to load at
+    // all, which is a pre-existing gap in this area, not a new one.
+  });
+
+  it("still reads ONLY the two columns — an agent cannot nominate the lane", () => {
+    // The security property, restated for the new rule: `access` is matched on
+    // the PAIR, like every rule above it. `join` alone is not enough, and a
+    // payload cannot reach this function at all.
+    expect(classifyProposal("join", "entity")).toBe("objectWork");
+    expect(classifyProposal("create", "entity")).toBe("objectWork");
+    expect(classifyProposal("updateRole", "entity")).toBe("objectWork");
+    expect(
+      classifyProposal.length,
+      "arity is still (proposalType, targetType)"
+    ).toBe(2);
+  });
+
+  it("does NOT swallow the governance lane", () => {
+    // `governance.widen_lane` genuinely changes who may act, and is checked
+    // FIRST on purpose: it is a change to the RULE, not a grant to one
+    // principal. Reclassifying it would empty a lane that already renders.
+    expect(classifyProposal("governance.widen_lane", "governance")).toBe(
+      "governance"
+    );
+    expect(classifyProposal("governance.tighten_lane", "governance")).toBe(
+      "governance"
+    );
+  });
+
+  it("does NOT reclassify anything that classified before it", () => {
+    // The regression that matters: every pair the 09-02 measurement covered,
+    // plus the sensitive-but-not-access doors deliberately left out. A silent
+    // reclassification of a live row is how a lane empties without anyone
+    // noticing.
+    const unchanged: [string, string, string][] = [
+      ["capability.run", "capability", "ephemeral"],
+      ["merge", "entity", "curatorial"],
+      ["create", "entity", "objectWork"],
+      ["import.graph", "entity", "objectWork"],
+      ["capture.graph", "entity", "objectWork"],
+      ["ai_edit", "document", "objectWork"],
+      ["user_edit", "document", "objectWork"],
+      ["governance.tighten_posture", "governance", "governance"],
+      ["run", "capability", "objectWork"],
+      ["capability.install", "capability", "objectWork"],
+      // EXCLUDED ON PURPOSE — destructive and admin-floored, but approving one
+      // grants nobody anything. "Sensitive" is not the test; "hands a principal
+      // a right" is.
+      ["delete", "workspace", "objectWork"],
+      ["update", "workspace", "objectWork"],
+      ["delete", "entity", "objectWork"],
+      ["delete", "project", "objectWork"],
+      // Tool/skill provisioning changes what the workspace CAN do, not who may.
+      ["create", "tool", "objectWork"],
+      ["attach", "capability", "objectWork"],
+      ["create", "skill", "objectWork"],
+      // Human gates about WORK, not access.
+      ["dev.plan_approval", "focus_session", "objectWork"],
+      ["dev.deploy_approval", "focus_session", "objectWork"],
+      ["playbook.stage_gate", "focus_session", "objectWork"],
+    ];
+    for (const [proposalType, targetType, expected] of unchanged) {
+      expect(
+        classifyProposal(proposalType, targetType),
+        `${targetType}/${proposalType} must keep the class it had before access existed`
+      ).toBe(expected);
+    }
+  });
+
+  it("adding access did not give a second class a lifetime", () => {
+    // Mirrors the pre-existing "ONLY ephemeral has a lifetime" pin, re-asserted
+    // because a new class is exactly when that invariant would break.
+    expect(
+      PROPOSAL_CLASSES.filter((c) => CLASS_LIFETIME_HOURS[c] !== null)
+    ).toEqual(["ephemeral"]);
+    expect(PROPOSAL_CLASSES).toContain("access");
+  });
+});

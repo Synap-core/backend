@@ -84,13 +84,25 @@ function cpContentKinds(file: string): string[] {
   return kinds;
 }
 
+/**
+ * The CP files that still ENUMERATE the vocabulary and must therefore be
+ * compared value-by-value.
+ *
+ * `routes/marketplace-apps.ts` used to be here. Its cell projection no longer
+ * names `contentKind` — or any other field — because it now forwards the stored
+ * definition WHOLESALE; a spread cannot omit a value, so enumerating against it
+ * is not merely unnecessary, it is impossible. That file's guarantee is checked
+ * STRUCTURALLY below instead, which is strictly stronger: it holds for kinds
+ * added after this test was written.
+ */
 const CP_FILES: Array<[label: string, path: string]> = [
   ["publish gate (routes/packages.ts)", CP_ROUTE],
   ["stored-definition type (db/schema/packages.ts)", CP_TYPE],
-  ["marketplace projection (routes/marketplace-apps.ts)", CP_PROJECTION],
 ];
 
-const haveCp = CP_FILES.every(([, p]) => existsSync(p));
+const haveCp = [...CP_FILES.map(([, p]) => p), CP_PROJECTION].every((p) =>
+  existsSync(p)
+);
 
 describe("tripwire: every pod renderer slot is publishable from the CP", () => {
   it("the pod's own slot kinds are real and a subset of CONTENT_KINDS", () => {
@@ -118,6 +130,31 @@ describe("tripwire: every pod renderer slot is publishable from the CP", () => {
           `CANNOT be shipped as a package — a 400 at publish, or a field the ` +
           `client cannot legally set. Widen the declaration in that CP file.`
       ).toEqual([]);
+    }
+  );
+
+  it.skipIf(!haveCp)(
+    "CP marketplace projection forwards cells WHOLESALE, so no kind can drop",
+    () => {
+      // The third file this test used to enumerate. It rebuilt each discovery
+      // row from ~11 named fields, so anything unnamed — `contentKind` among
+      // them — was DROPPED on the way to the pod. Enumerating a finite list was
+      // the defect, not the guard, so the projection now spreads the definition
+      // and this asserts THAT rather than a list of kinds.
+      const code = readFileSync(CP_PROJECTION, "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^[ \t]*\/\/.*$/gm, "");
+      expect(
+        code,
+        "the marketplace cell projection no longer spreads the definition — a " +
+          "field-by-field rebuild silently drops every field nobody named, " +
+          "which is how viewTypes/contentKind/externalHosts were lost before."
+      ).toMatch(/flatCells\.push\(\{\s*\.\.\.cell,/);
+      expect(
+        code,
+        "the marketplace cell projection re-enumerates `contentKind` — that is " +
+          "the finite list this guard exists to keep out of that file."
+      ).not.toMatch(/contentKind\??:/);
     }
   );
 

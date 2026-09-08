@@ -1244,6 +1244,31 @@ export const tools = {
                     description:
                       "Per-item lifecycle. Defaults to 'pending' when omitted.",
                   },
+                  owner: {
+                    type: "string",
+                    enum: ["human", "agent"],
+                    description:
+                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them.",
+                  },
+                  blockedReason: {
+                    type: "string",
+                    enum: [
+                      "credential",
+                      "permission",
+                      "capability",
+                      "policy",
+                      "decision",
+                      "physical",
+                    ],
+                    description:
+                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
+                  },
+                  why: {
+                    type: "string",
+                    maxLength: 500,
+                    description:
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                  },
                 },
                 required: ["kind", "label"],
               },
@@ -1304,6 +1329,31 @@ export const tools = {
                     description:
                       "Per-item lifecycle. Defaults to 'pending' when omitted.",
                   },
+                  owner: {
+                    type: "string",
+                    enum: ["human", "agent"],
+                    description:
+                      "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take — the slot stays pending and the board shows the person what is waiting on them.",
+                  },
+                  blockedReason: {
+                    type: "string",
+                    enum: [
+                      "credential",
+                      "permission",
+                      "capability",
+                      "policy",
+                      "decision",
+                      "physical",
+                    ],
+                    description:
+                      "Only with owner='human'. WHY you could not take it, as the class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world. Pick the one that names what someone would BUILD or DO to remove the block.",
+                  },
+                  why: {
+                    type: "string",
+                    maxLength: 500,
+                    description:
+                      "Only with owner='human'. ONE line naming WHICH thing is missing, not its class — 'the Stripe restricted key for the live account', not 'a credential'. This is what the person reads to know what to do.",
+                  },
                 },
                 required: ["kind", "label"],
               },
@@ -1316,10 +1366,35 @@ export const tools = {
                 kind: { type: "string" },
                 label: { type: "string" },
                 icon: { type: "string" },
+                owner: {
+                  type: "string",
+                  enum: ["human", "agent"],
+                  description:
+                    "WHO this deliverable is waiting on. Omit (= 'agent') for anything you can do yourself. Set 'human' to declare work you CANNOT take.",
+                },
+                blockedReason: {
+                  type: "string",
+                  enum: [
+                    "credential",
+                    "permission",
+                    "capability",
+                    "policy",
+                    "decision",
+                    "physical",
+                  ],
+                  description:
+                    "Only with owner='human'. The class of thing that would unblock you: 'credential' a secret to mint or store; 'permission' a governance rule to write; 'capability' a tool that does not exist; 'policy' a rule to change or accept; 'decision' a choice only a person can make; 'physical' an action in the world.",
+                },
+                why: {
+                  type: "string",
+                  maxLength: 500,
+                  description:
+                    "Only with owner='human'. ONE line naming WHICH thing is missing, not its class.",
+                },
               },
               required: ["kind", "label"],
               description:
-                "Append ONE new deliverable (stored with status 'pending').",
+                "Append ONE new deliverable (stored with status 'pending'). This is also how you HAND WORK BACK: set owner='human' with a blockedReason and a one-line why to put a named, classified blocker on the board instead of stalling silently.",
             },
             completeOutput: {
               type: "string",
@@ -2560,7 +2635,7 @@ export const tools = {
             triggerConfig: {
               type: "object",
               description:
-                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { 'properties.score': { $gt: 30 } }. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data.",
+                "Trigger settings. cron → { expression: '0 9 * * *' }. event → { eventPattern: 'entity.create.completed', filters: { ... } }. FILTERS GRAMMAR (enforced — a filter the runtime cannot evaluate is REJECTED, because an automation with an unevaluable filter installs as 'active' and then never fires): each key is a dot-notation path into the event data ('profileSlug', 'channel.contextObjectType'); each value is EITHER a plain string/number/boolean/null (exact match) OR an operator object — $eq, $ne, $in (non-empty array), $gt, $gte, $lt, $lte (numeric). E.g. { profileSlug: 'person' }, { profileSlug: { $in: ['person','contact'] } }, { score: { $gt: 30 } }. ENTITY PROPERTIES ARE FLAT: 'entity.update.completed' spreads the entity's changed properties onto event data under their BARE slug, so the key is 'score' — NOT 'properties.score', which resolves to undefined and silently never matches. A bare array value and a nested object value are BOTH rejected: use $in for several values, and a dot-notation key to reach nested data.",
             },
             flowDefinition: {
               type: "object",

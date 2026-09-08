@@ -16,6 +16,8 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
+import type { ExpectedOutput } from "@synap/playbooks";
+import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import {
   SESSION_KINDS,
   attachSessionKind,
@@ -83,14 +85,10 @@ export const sessionHandlers: McpHandlerMap = {
       channelId: args.channelId as string | undefined,
       agentIds: args.agentIds as string[] | undefined,
       templateId: args.templateId as string | undefined,
-      expectedOutputs: args.expectedOutputs as
-        | Array<{
-            kind: string;
-            label: string;
-            icon?: string;
-            status?: "pending" | "done";
-          }>
-        | undefined,
+      // Cast to the SHARED type, never a re-typed inline shape: an inline copy
+      // silently narrows what this door believes a slot is, which is how the
+      // per-door shapes drifted in the first place.
+      expectedOutputs: args.expectedOutputs as ExpectedOutput[] | undefined,
       parentSessionId: args.parentSessionId as string | undefined,
       suspendedIntent: args.suspendedIntent as string | undefined,
     });
@@ -303,17 +301,13 @@ export const sessionHandlers: McpHandlerMap = {
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
       addOutput: args.addOutput as
-        { kind: string; label: string; icon?: string } | undefined,
+        UpdateFocusSessionParams["addOutput"] | undefined,
       completeOutput: args.completeOutput as string | undefined,
       addAgentId: args.addAgentId as string | undefined,
-      expectedOutputs: args.expectedOutputs as
-        | Array<{
-            kind: string;
-            label: string;
-            icon?: string;
-            status?: "pending" | "done";
-          }>
-        | undefined,
+      // Cast to the SHARED type, never a re-typed inline shape: an inline copy
+      // silently narrows what this door believes a slot is, which is how the
+      // per-door shapes drifted in the first place.
+      expectedOutputs: args.expectedOutputs as ExpectedOutput[] | undefined,
     });
     switch (result.status) {
       case "not_found":

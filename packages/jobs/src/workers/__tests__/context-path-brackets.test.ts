@@ -27,7 +27,7 @@ import { beginStepDiagnostics } from "../unresolved-references.js";
 import type { StepContext } from "../automation-executor-types.js";
 
 const emptyContext = (): StepContext => ({
-  trigger: { payload: {} },
+  trigger: { payload: {}, subject: null },
   steps: {},
   automation: { id: "a1", state: {} },
 });

@@ -43,11 +43,35 @@ export function registerCellExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      // typeKey the door carried into the gate `data`. Without it an approved
+      // cell materialises under `generated:<slug(name)>` — the reviewer
+      // approves one key and the pod writes another.
+      //
+      // Caller-supplied, so it is RE-VALIDATED here rather than trusted: the
+      // provenance floor runs again against `proposal.workspaceId`, the scope
+      // this proposal was actually REVIEWED at. That matters because `revise`
+      // can re-target `proposals.workspaceId` after the payload was written, so
+      // a key that was editable at the original scope may be a MINT at the new
+      // one.
+      const proposedTypeKey =
+        typeof innerData.typeKey === "string" && innerData.typeKey.length > 0
+          ? innerData.typeKey
+          : undefined;
+      if (proposedTypeKey) {
+        const { assertMayWriteNamespacedTypeKey } =
+          await import("../../../services/cells/namespaced-type-key.js");
+        await assertMayWriteNamespacedTypeKey(
+          proposedTypeKey,
+          proposal.workspaceId ?? null
+        );
+      }
+
       const { defineCell } =
         await import("../../../services/cells/define-cell.js");
       await defineCell({
         name,
         rendererSource,
+        typeKey: proposedTypeKey,
         // SCOPE = THE REVIEWED SCOPE, never the payload. This used to read
         // `innerData.workspaceId ?? proposal.workspaceId ?? null`, so the
         // caller-supplied gate `data` chose the cell's scope.

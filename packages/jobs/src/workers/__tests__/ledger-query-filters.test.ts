@@ -30,7 +30,7 @@ import {
 } from "../automation-executor.js";
 
 const ctx = (overrides: Partial<StepContext> = {}): StepContext => ({
-  trigger: { payload: {} },
+  trigger: { payload: {}, subject: null },
   steps: {},
   automation: { id: "a1", state: {} },
   ...overrides,
@@ -65,7 +65,9 @@ describe("resolveSinceFilter — DROP, never bind, an unparseable date", () => {
   it("resolves a template that DOES point at a real date", () => {
     const d = resolveSinceFilter(
       "{{trigger.payload.since}}",
-      ctx({ trigger: { payload: { since: "2026-07-30T00:00:00Z" } } }),
+      ctx({
+        trigger: { payload: { since: "2026-07-30T00:00:00Z" }, subject: null },
+      }),
       "runs_query"
     );
     expect(d?.toISOString()).toBe("2026-07-30T00:00:00.000Z");
@@ -94,7 +96,9 @@ describe("parseMultiValueField", () => {
     expect(
       parseMultiValueField(
         "{{trigger.payload.statuses}}",
-        ctx({ trigger: { payload: { statuses: "failed,cancelled" } } })
+        ctx({
+          trigger: { payload: { statuses: "failed,cancelled" }, subject: null },
+        })
       )
     ).toEqual(["failed", "cancelled"]);
   });

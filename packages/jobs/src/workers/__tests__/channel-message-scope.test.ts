@@ -131,7 +131,7 @@ const post = (channelId: string, workspaceId: string | null) =>
       config: { channelId, content: "payload" },
     },
     {
-      trigger: { payload: {} },
+      trigger: { payload: {}, subject: null },
       steps: {},
       automation: { id: "auto-1", state: {} },
     },

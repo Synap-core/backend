@@ -83,7 +83,7 @@ const WORKSPACE = "ws-1";
 const ENTITY = "11111111-1111-4111-8111-111111111111";
 
 const context = (): StepContext => ({
-  trigger: { payload: {} },
+  trigger: { payload: {}, subject: null },
   steps: {},
   automation: { id: "auto-1", state: {} },
 });

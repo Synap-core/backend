@@ -62,6 +62,12 @@ import {
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
+import { BLOCKED_REASONS } from "@synap/playbooks";
+import {
+  blockExpectedOutput,
+  unblockExpectedOutput,
+  type BlockExpectedOutputResult,
+} from "../../../services/focus-sessions/block-output.js";
 import {
   expectedOutputWireSchema,
   mergeExpectedOutputs,
@@ -208,6 +214,21 @@ const DelegateOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
   /** Absent ⇒ the orchestrator, `triggerAutoRespond`'s own default. */
   agentType: z.string().min(1).max(100).optional(),
+});
+
+/**
+ * The ownership pair. `blockedReason` is `z.enum(BLOCKED_REASONS)` — the closed
+ * set from `@synap/playbooks`, never a locally retyped copy: a sixth value
+ * added there must not need a second edit here to be sendable.
+ */
+const BlockOutputBodySchema = z.object({
+  expectedLabel: z.string().min(1).max(500),
+  blockedReason: z.enum(BLOCKED_REASONS),
+  why: z.string().max(500).optional(),
+});
+
+const UnblockOutputBodySchema = z.object({
+  expectedLabel: z.string().min(1).max(500),
 });
 
 const UsedCapabilityBodySchema = z.object({
@@ -399,6 +420,63 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           messageId: z.string(),
           triggered: z.boolean(),
           agentAttached: z.boolean(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/block",
+    tags: ["FocusSessions"],
+    summary: "Hand a declared deliverable to the human",
+    description:
+      "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the " +
+      "named slot. The slot stays `pending` — declaring that you cannot do the " +
+      "work is the opposite of having done it.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: BlockOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Blocked on the human",
+        schema: z.object({
+          ok: z.boolean(),
+          expectedLabel: z.string(),
+          kind: z.string(),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/unblock",
+    tags: ["FocusSessions"],
+    summary: "Reclaim a deliverable handed to the human",
+    description:
+      "Clears `owner`, `blockedReason`, `why` and `owedSince` together. The " +
+      "deliverable itself is unchanged and still owed.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: UnblockOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "Reclaimed",
+        schema: z.object({
+          ok: z.boolean(),
+          expectedLabel: z.string(),
+          kind: z.string(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -1207,6 +1285,111 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       );
     }
   });
+
+  /**
+   * POST /focus-sessions/:id/outputs/block
+   * POST /focus-sessions/:id/outputs/unblock
+   *
+   * The Hub twins of `focusSessions.blockOutput` / `.unblockOutput`. Registered
+   * BEFORE the 3-segment `/outputs` route for the same first-match reason the
+   * delegate route is. OWNER-FLOORED identically: the service takes the acting
+   * user as the floor, so a co-member of the workspace gets 404 rather than the
+   * ability to re-own someone else's slot.
+   */
+  const slotOwnershipRoute = (
+    path: "block" | "unblock",
+    run: (args: {
+      sessionId: string;
+      userId: string;
+      body: unknown;
+    }) => Promise<BlockExpectedOutputResult>,
+    schema: typeof BlockOutputBodySchema | typeof UnblockOutputBodySchema
+  ) => {
+    app.post(`/focus-sessions/:id/outputs/${path}`, async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+      }
+      const id = c.req.param("id");
+      const raw = await c.req.json().catch(() => null);
+      const parsed = schema.safeParse(raw);
+      if (!parsed.success) {
+        return c.json(
+          { error: "Invalid request body", details: parsed.error.flatten() },
+          400
+        );
+      }
+      try {
+        const session = await db.query.focusSessions.findFirst({
+          where: eq(focusSessions.id, id),
+        });
+        if (!session) {
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        }
+        const acting = await resolveActingContext(c, {
+          workspaceId: session.workspaceId ?? undefined,
+        });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+        const result = await run({
+          sessionId: session.id,
+          userId: acting.userId,
+          body: parsed.data,
+        });
+        switch (result.status) {
+          case "not_found":
+            return c.json({ error: `Focus session ${id} not found` }, 404);
+          case "unknown_label":
+            return c.json(
+              {
+                error: `This session declares no output labelled "${parsed.data.expectedLabel}"`,
+              },
+              404
+            );
+          case "already_done":
+            return c.json(
+              {
+                error: `"${parsed.data.expectedLabel}" is already delivered`,
+              },
+              400
+            );
+          default:
+            return c.json({
+              ok: true as const,
+              expectedLabel: result.expectedLabel,
+              kind: result.kind,
+            });
+        }
+      } catch (err) {
+        logger.error({ err, id }, `focus-sessions.${path}Output failed`);
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    });
+  };
+
+  slotOwnershipRoute(
+    "block",
+    ({ sessionId, userId, body }) =>
+      blockExpectedOutput({
+        sessionId,
+        userId,
+        ...(body as z.infer<typeof BlockOutputBodySchema>),
+      }),
+    BlockOutputBodySchema
+  );
+
+  slotOwnershipRoute(
+    "unblock",
+    ({ sessionId, userId, body }) =>
+      unblockExpectedOutput({
+        sessionId,
+        userId,
+        ...(body as z.infer<typeof UnblockOutputBodySchema>),
+      }),
+    UnblockOutputBodySchema
+  );
 
   app.post("/focus-sessions/:id/outputs", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {

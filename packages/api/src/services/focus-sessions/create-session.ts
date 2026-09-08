@@ -21,6 +21,7 @@ import {
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
+import type { ExpectedOutput } from "@synap/playbooks";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
 
@@ -60,12 +61,13 @@ export interface CreateFocusSessionParams {
   channelId?: string | null;
   agentIds?: string[];
   templateId?: string | null;
-  expectedOutputs?: Array<{
-    kind: string;
-    label: string;
-    icon?: string;
-    status?: "pending" | "done";
-  }>;
+  /**
+   * Declared deliverables. The SHARED type, not an inline copy — the four-field
+   * inline shape that used to sit here quietly narrowed what this door believed
+   * a slot was, so a slot's delegation, its return note and (now) its
+   * blocked-on-human declaration were invisible to the create path.
+   */
+  expectedOutputs?: ExpectedOutput[];
   /**
    * The session this one was PUSHED FROM — a detour. Recorded as
    * `session --spawned_from--> session` (the edge, never a column: see

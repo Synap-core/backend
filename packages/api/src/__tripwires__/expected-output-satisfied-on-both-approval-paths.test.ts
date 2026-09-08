@@ -117,10 +117,41 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     );
     // The AUTO path resolved the claim itself (governance reading the session),
     // so it forwards that local rather than re-reading the receipt.
-    expect(checkCall).toMatch(/expectedLabel: sessionSlotClaim/);
-    // …and the same local must be STORED on the receipt, so the claim survives
-    // even when the stamp is re-derived later from the row.
-    expect(check).toMatch(/expectedLabel: sessionSlotClaim \} : \{\}\)/);
+    expect(checkCall).toMatch(/expectedLabel:\s*sessionSlotClaim\b/);
+
+    // …and the same local must be STORED on the receipt row, so the claim
+    // survives even when the stamp is re-derived later from the row.
+    //
+    // 2026-09-07 — this assertion USED to read
+    //     expect(check).toMatch(/expectedLabel: sessionSlotClaim \} : \{\}\)/)
+    // and it went RED against CORRECT, committed source. The receipt's
+    // conditional spread is wrapped by prettier across three lines:
+    //     ...(sessionSlotClaim
+    //       ? { expectedLabel: sessionSlotClaim }
+    //       : {}),
+    // so the single-line form it demanded never existed — not even in the
+    // commit that introduced this file. A FALSE red is the more dangerous half
+    // of a broken guard: it trains readers to ignore the gate, and the next
+    // reader "fixes" it by deleting it. What is load-bearing is the INTENT —
+    // the receipt carries the claim's LABEL — never the syntax expressing it.
+    // So: scan the receipt-INSERT REGION for the key, whitespace-tolerant and
+    // indifferent to conditional-spread vs plain property. Do NOT re-tighten
+    // this to a literal source form.
+    const satisfyCall = check.indexOf("await satisfyExpectedOutputs({");
+    const receiptStart = check.indexOf(
+      "const { expectedLabel: _callerSlotClaim"
+    );
+    // Non-vacuity: `indexOf` returns -1 on a miss, and a -1 start would slice
+    // from the END of the file — matching nothing and reading GREEN. Both
+    // anchors must be real and ordered BEFORE the slice is trusted, so a
+    // renamed symbol fails LOUDLY here rather than quietly matching zero.
+    expect(receiptStart).toBeGreaterThan(-1);
+    expect(satisfyCall).toBeGreaterThan(receiptStart);
+    // Region = the caller-claim strip through the receipt insert, ending BEFORE
+    // the satisfy call — so that call's own forwarding cannot stand in for the
+    // stored one.
+    const receiptInsert = check.slice(receiptStart, satisfyCall);
+    expect(receiptInsert).toMatch(/expectedLabel:\s*sessionSlotClaim\b/);
     // The PENDING door stores it too — otherwise the deferred path above has
     // nothing to read. Asserted INSIDE the propose branch, so the satisfy call's
     // own forwarding above cannot stand in for it.
@@ -131,8 +162,9 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
       'if (gov.decision === "execute" || lifecycleCloseEscape) {'
     );
     expect(proposeBranch).toBeGreaterThan(-1);
+    expect(executeBranch).toBeGreaterThan(proposeBranch);
     expect(check.slice(proposeBranch, executeBranch)).toMatch(
-      /expectedLabel: sessionSlotClaim,/
+      /expectedLabel:\s*sessionSlotClaim\b/
     );
   });
 

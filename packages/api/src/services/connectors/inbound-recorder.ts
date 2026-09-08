@@ -728,7 +728,13 @@ export async function recordInboundMessage(
     userId: args.userId,
     workspaceId: args.workspaceId,
     data: {
-      entityId: contextObjectId,
+      // Same guard as the observation log above (and the outbound one in
+      // channels/send-message.ts): an EXTERNAL channel's `contextObjectId` may
+      // name a document/view/proposal, so only label it `entityId` when it IS
+      // an entity. `deriveMessageEnvelope` and `deriveEventSubjectEntityId`
+      // both read this key as an entity id — an unguarded document id made a
+      // rule's entity filter match a non-entity.
+      entityId: contextObjectType === "entity" ? contextObjectId : undefined,
       channelId,
       provider: args.provider,
       threadId: args.externalId,

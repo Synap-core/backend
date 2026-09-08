@@ -131,13 +131,31 @@ export const focusSessions = pgTable(
     playbookId: uuid("playbook_id"),
     /**
      * Expected deliverables declared at session start.
-     * Shape: ExpectedOutput[] (@synap/playbooks) — [{ kind, label, icon?,
-     * status?: "pending" | "done", claimedDone?: boolean, satisfiedByProposalId? }]
-     * `status` is a per-item lifecycle flag (defaults to "pending" when omitted)
-     * and is stamped by ONE door only — `satisfyExpectedOutputs`, on approval of
-     * a session-scoped proposal. `claimedDone` is the AGENT's own (unverified)
-     * mark; the two are deliberately different fields
-     * — a shape-within-jsonb addition, no column/migration change.
+     *
+     * Shape: `ExpectedOutput[]` (@synap/playbooks) — that interface is the SSOT
+     * and this comment is a mirror, so read it there rather than trusting the
+     * list below to be current (it has already been stale once, omitting four
+     * shipped fields). Fields today:
+     *   kind, label, icon?                  — client-authored
+     *   status?: "pending" | "done"         — per-item lifecycle, defaults to
+     *       "pending" when omitted, stamped by ONE door only:
+     *       `satisfyExpectedOutputs`, on approval of a session-scoped proposal
+     *   claimedDone?: boolean               — the AGENT's own UNVERIFIED mark;
+     *       deliberately a different field from `status`
+     *   satisfiedByProposalId?              — lineage of the approval above
+     *   delegatedTo?, delegatedAt?          — agent→agent delegation (never a
+     *       claim of delivery; the slot stays pending)
+     *   returnedReason?, returnedAt?        — reviewer's note when a proposal
+     *       claiming the slot was rejected; the slot returns to the board
+     *   owner?: "human" | "agent"           — who the slot waits on. ABSENT
+     *       MEANS "agent": no DB default and no backfill, so every row stored
+     *       before the field existed is semantically unchanged
+     *   blockedReason?                      — closed set (`BLOCKED_REASONS`),
+     *       why the agent could not take it; only with owner="human"
+     *   why?: string                        — one line, WHICH thing is missing
+     *
+     * Every one of these is a shape-within-jsonb addition — no column, no
+     * migration. Adding another follows the same path.
      */
     expectedOutputs: jsonb("expected_outputs").default([]),
     /**
