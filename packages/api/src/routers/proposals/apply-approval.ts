@@ -438,6 +438,38 @@ export interface GovernanceTightenPostureProposalData {
   sampleProposalIds: string[];
 }
 
+/**
+ * `governance.work_guideline` proposal payload — emitted ONLY by the
+ * blocked-slot recurrence scanner
+ * (`packages/jobs/src/workers/blocked-slot-recurrence-scanner.ts`, which keeps
+ * the authoritative copy of this interface; jobs cannot import api, so the two
+ * are hand-mirrored exactly as `GovernanceWidenLaneProposalData` is).
+ *
+ * Approval here is the ONE door that turns it into a `config_settings`
+ * guideline at `scopeKind:'workKind'`.
+ *
+ * IT CARRIES NO `posture`, AND MUST NOT. `resolveMostSpecificPosture` (rung
+ * 2.55) reads only `posture`, so a text-only guideline cannot move an origin
+ * between trusted and untrusted. That is what keeps this producer outside the
+ * governance trust decision: it writes standing INTENT for the interpret pass,
+ * never a trust verdict. Adding a posture here would make an automatically
+ * proposed row able to flip trust, which is a different and much larger
+ * decision than the one this wave made.
+ */
+export interface GovernanceWorkGuidelineProposalData {
+  userId: string;
+  blockedReason: string;
+  text: string;
+  workspaceId?: string | null;
+  evidence?: {
+    occurrences: number;
+    sessions: number;
+    signature: string;
+    windowDays: number;
+    sampleSessionIds: string[];
+  };
+}
+
 export async function applyProposalApproval(args: {
   proposal: NonNullable<
     Awaited<ReturnType<typeof db.query.proposals.findFirst>>
@@ -1600,6 +1632,87 @@ async function applyProposalApprovalInner(
         applied: "verified",
         rows: guideline?.id ? 1 : 0,
         ...(guideline?.id ? { ids: [guideline.id] } : {}),
+        subject: "config_settings(guideline)",
+      },
+    };
+  }
+
+  // B4d: governance.work_guideline — the WORK-KIND twin of B4c. Approving
+  // creates a `config_settings` guideline at `scopeKind:'workKind'`, whose
+  // `scopeRef` is the `blockedReason` the recurrence scanner clustered on.
+  //
+  // THIS BRANCH IS NOT OPTIONAL PLUMBING. Without it the proposal falls to the
+  // execution registry's `*/*` catch-all, which flips the row APPROVED and
+  // materializes NOTHING — a green receipt for work that never happened, the
+  // most-repeated defect in this codebase. A proposal type is only shippable
+  // once something executes it.
+  //
+  // The text is taken from the payload, which the reviewer may EDIT before
+  // approving: a draft a human rewrites is the point, not a draft a human
+  // rubber-stamps.
+  if (proposal.proposalType === "governance.work_guideline") {
+    const workData = payload as GovernanceWorkGuidelineProposalData | null;
+    if (
+      !workData ||
+      typeof workData !== "object" ||
+      !workData.blockedReason ||
+      typeof workData.text !== "string" ||
+      !workData.text.trim()
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed governance.work_guideline proposal data.",
+      });
+    }
+
+    // EVIDENCE: `createGuideline` returns the row from its own INSERT ...
+    // RETURNING, so `rows` below is the storage engine's receipt, not a
+    // service-layer boolean.
+    const workGuideline = await createGuideline({
+      db,
+      text: workData.text.trim(),
+      // NO posture — see the payload interface. A work guideline informs the
+      // interpret pass; it never votes on trust.
+      scopeKind: "workKind",
+      scopeRef: workData.blockedReason,
+      workspaceId: workData.workspaceId ?? null,
+      source: "system",
+      createdBy: userId,
+    });
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return {
+      success: true,
+      effect: {
+        applied: "verified",
+        rows: workGuideline?.id ? 1 : 0,
+        ...(workGuideline?.id ? { ids: [workGuideline.id] } : {}),
         subject: "config_settings(guideline)",
       },
     };

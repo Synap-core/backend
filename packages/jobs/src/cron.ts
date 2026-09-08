@@ -28,6 +28,10 @@ import {
   GOVERNANCE_LANE_SCANNER_CRON,
 } from "./workers/governance-lane-scanner.js";
 import {
+  BLOCKED_SLOT_RECURRENCE_QUEUE,
+  BLOCKED_SLOT_RECURRENCE_CRON,
+} from "./workers/blocked-slot-recurrence-scanner.js";
+import {
   LIBRARIAN_ARCHIVER_QUEUE,
   LIBRARIAN_ARCHIVER_CRON,
 } from "./workers/librarian-archiver.js";
@@ -197,6 +201,20 @@ export async function registerCronSchedules(): Promise<void> {
     {}
   );
   logger.info("Registered cron: governance.lane-scan (daily at 3:30 AM UTC)");
+
+  // Blocked-slot recurrence scanner (daily at 3:50 AM UTC — after the
+  // librarian archiver at 3:45). Files PENDING governance.work_guideline
+  // proposals only; the guideline itself is only ever created by a human
+  // approving one.
+  await scheduleSafe(
+    boss,
+    BLOCKED_SLOT_RECURRENCE_QUEUE,
+    BLOCKED_SLOT_RECURRENCE_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: blocked-slot.recurrence-scan (daily at 3:50 AM UTC)"
+  );
 
   // Librarian project archiver (daily at 3:45 AM UTC — after near-dup at 3:15).
   // Proposes archival of stale 0-gravity active projects; never auto-archives.

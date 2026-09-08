@@ -177,6 +177,10 @@ import {
   GOVERNANCE_LANE_SCANNER_QUEUE,
 } from "./governance-lane-scanner.js";
 import {
+  BLOCKED_SLOT_RECURRENCE_QUEUE,
+  handleBlockedSlotRecurrenceScan,
+} from "./blocked-slot-recurrence-scanner.js";
+import {
   handleLibrarianArchiver,
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
@@ -218,6 +222,14 @@ const ALL_QUEUES = [
   // class as cal-backfill-cron (2026-07-12); `queues-are-created.tripwire.test.ts`
   // now pins it so a third recurrence is a red gate, not a log line nobody reads.
   GOVERNANCE_LANE_SCANNER_QUEUE,
+  // The daily blocked-slot recurrence scanner. Files PENDING
+  // governance.work_guideline proposals only. A queue that is worked and
+  // scheduled but never createQueue()'d fails pg-boss v10's FK on EVERY boot,
+  // and `scheduleSafe` swallows it, so the worker silently never runs — that
+  // has happened twice here (cal-backfill 2026-07-12, and the lane scanner
+  // above). `queues-are-created.tripwire.test.ts` derives THIS list from
+  // source and cross-checks it against every worked and scheduled queue.
+  BLOCKED_SLOT_RECURRENCE_QUEUE,
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
@@ -835,6 +847,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleGovernanceLaneScan()
   );
   logger.info("Registered worker: governance.lane-scan");
+
+  // Blocked-slot recurrence scanner (cron: daily 03:50 UTC — files
+  // governance.work_guideline proposals only; never writes a guideline)
+  await boss.work(BLOCKED_SLOT_RECURRENCE_QUEUE, async () =>
+    handleBlockedSlotRecurrenceScan()
+  );
+  logger.info("Registered worker: blocked-slot.recurrence-scan");
 
   await boss.work(LIBRARIAN_ARCHIVER_QUEUE, async () =>
     handleLibrarianArchiver()
