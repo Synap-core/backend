@@ -12,6 +12,7 @@
  */
 
 import { z } from "zod";
+import { ProviderUpsertSchema } from "./ai-providers.schema.js";
 import { router, podProcedure, podAdminProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { db, eq, drizzleSql } from "@synap/database";
@@ -41,34 +42,12 @@ async function syncToIS(): Promise<void> {
 
 // ── Input schemas ─────────────────────────────────────────────────────────
 
-const ModelEntrySchema = z.object({
-  id: z.string(),
-  tier: z.enum(["free", "balanced", "advanced", "complex"]).optional(),
-  contextWindow: z.number().optional(),
-  supportsTools: z.boolean().optional(),
-  supportsJson: z.boolean().optional(),
-  costPer1MInput: z.number().optional(),
-  costPer1MOutput: z.number().optional(),
-});
-
-const UpsertSchema = z.object({
-  providerId: z.string().min(1).max(64),
-  name: z.string().min(1).max(128),
-  baseUrl: z.string().url(),
-  apiKeyEnvVar: z.string().min(1),
-  /** Plaintext API key — encrypted before storage, never returned */
-  apiKey: z.string().optional(),
-  enabled: z.boolean().default(true),
-  priority: z.number().int().min(0).default(10),
-  tags: z.array(z.string()).default([]),
-  models: z.array(ModelEntrySchema).default([]),
-  rateLimit: z
-    .object({ rpm: z.number(), rpd: z.number().optional() })
-    .optional(),
-  extraBody: z.record(z.string(), z.unknown()).optional(),
-  systemPromptPrefix: z.string().optional(),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-});
+// Schemas are DERIVED from the shared definition in `ai-providers.schema.ts`,
+// not restated here. Both write doors (this tRPC router and the Hub REST
+// router) parse the same shape — they had already drifted once, with the REST
+// body silently dropping supportsTools / supportsJson / costPer1M* and four
+// top-level fields.
+const UpsertSchema = ProviderUpsertSchema;
 
 // ── Router ────────────────────────────────────────────────────────────────
 

@@ -202,6 +202,16 @@ export const API_KEY_SCOPES = [
   "mcp.read", // Read resources via MCP
   "mcp.write", // Execute tools via MCP
   "mcp.connect", // Establish an MCP session
+  // AI provider administration scope (deliberately NOT in the default agent
+  // bundle). Creating or updating an ai_providers row sets the `baseUrl` the
+  // Intelligence Service sends every prompt to, so this door can silently
+  // redirect all pod LLM traffic to an arbitrary host. It was previously
+  // reachable with plain `hub-protocol.write` — the scope EVERY agent key is
+  // minted with (agent-identity-service.ts) — which made prompt exfiltration a
+  // config change any agent could perform. Grant this only to an operator tool
+  // (e.g. the `eve` CLI) that legitimately administers providers, the same way
+  // `setup.agent` is granted narrowly rather than bundled.
+  "providers.write",
   // Agent provisioning scope
   "setup.agent", // Call POST /setup/agent to provision agents on this pod.
   // Grant this to automation services (n8n, scripts, third-party

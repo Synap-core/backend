@@ -45,6 +45,10 @@ import { registerWorkspaceExecutors } from "./executors/workspace.js";
 import { registerMessagingExecutors } from "./executors/messaging.js";
 import { registerCapabilityExecutors } from "./executors/capability.js";
 import { registerProviderExecutors } from "./executors/provider.js";
+// NB: distinct from `provider.js` above — that one dispatches external
+// connector HTTP actions (`provider.action`). This one materializes AI MODEL
+// provider config (`aiProvider/*`). Same English word, unrelated doors.
+import { registerAiProviderExecutors } from "./executors/ai-provider.js";
 import { registerWidgetExecutors } from "./executors/widget.js";
 import { registerCatchAllExecutor } from "./executors/catch-all.js";
 
@@ -80,6 +84,7 @@ export function registerApproveExecutors(): void {
   registerMessagingExecutors();
   registerCapabilityExecutors();
   registerProviderExecutors();
+  registerAiProviderExecutors();
   registerWidgetExecutors();
   // Wildcard catch-all — registered LAST (see module docstring).
   registerCatchAllExecutor();

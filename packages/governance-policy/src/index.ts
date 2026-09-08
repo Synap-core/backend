@@ -324,6 +324,17 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   // `delete`, never `revoke` (`routers/api-keys.ts`).
   "apiKey.create",
   "apiKey.delete",
+  // AI providers. Real gates: `hub-protocol/rest/ai-providers.ts` — subjectType
+  // "aiProvider" + create / update / delete. An ai_providers row carries the
+  // `baseUrl` every IS prompt is sent to, so changing one is a SCOPE CHANGE over
+  // pod-wide data egress, not an ordinary content write: it can redirect every
+  // future prompt (and whatever pod context the agents inject) to an arbitrary
+  // host. Placing it here puts it BELOW the rung-2 ADMIN floor, so no rung-2.8
+  // governance rule and no rung-4 `autoApproveFor` entry can widen it to
+  // auto-execute for an agent — approval stays human, by construction.
+  "aiProvider.create",
+  "aiProvider.update",
+  "aiProvider.delete",
 ];
 
 /**
@@ -1342,6 +1353,11 @@ export type GovernedWriteCreator =
 export const GATE_WRITE_DOORS = {
   "a2ai/join": "gate",
   "agent/updateCapabilities": "gate",
+  // AI provider config. Writing one sets the baseUrl the IS sends every prompt
+  // to, so these are credential-shaped writes in the same class as apiKey/*.
+  "aiProvider/create": "gate",
+  "aiProvider/delete": "gate",
+  "aiProvider/update": "gate",
   "apiKey/create": "gate",
   "apiKey/delete": "gate",
   "apiKey/update": "gate",
