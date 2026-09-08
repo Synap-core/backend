@@ -141,7 +141,7 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     const stored = stampBlocked(slots(), "Signed NDA", "physical", "sign", AT);
     const [, after] = applyOutputMutations(stored, {
       completeOutput: "Signed NDA",
-    });
+    }).outputs;
     // `owner: 'human'` is the agent's own statement that it CANNOT do this. A
     // door that then lets the same caller mark it done makes the declaration a
     // way to close work nobody did.
@@ -151,8 +151,65 @@ describe("completeOutput — the agent may not close the human's slot", () => {
   it("still completes a slot the agent owns", () => {
     const [after] = applyOutputMutations(slots(), {
       completeOutput: "Launch brief",
-    });
+    }).outputs;
     expect(after.status).toBe("done");
+  });
+
+  // ── THE REFUSAL MUST BE REPORTED, NOT JUST PERFORMED ──────────────────────
+  // The floor above worked and said nothing: the row came back unchanged with
+  // no refusal field anywhere, so an agent parsed it as success and moved on
+  // believing it had delivered the work. Asserting "status stayed pending" only
+  // pins the floor; these pin the REPORT, and specifically that a refusal is
+  // tellable apart from a label that simply matched nothing (a documented,
+  // legal no-op the tool description advertises).
+  it("REPORTS the refusal — refused, with an actionable sentence", () => {
+    const stored = stampBlocked(slots(), "Signed NDA", "physical", "sign", AT);
+    const { completeOutput } = applyOutputMutations(stored, {
+      completeOutput: "Signed NDA",
+    });
+    expect(completeOutput).toBeDefined();
+    expect(completeOutput?.result).toBe("refused");
+    expect(completeOutput?.completed).toBe(0);
+    expect(completeOutput?.refusedHumanOwned).toBe(1);
+    expect(completeOutput?.message).toBeTruthy();
+    expect(completeOutput?.message).toContain("Signed NDA");
+  });
+
+  it("tells a REFUSAL apart from a label that matched NOTHING", () => {
+    const stored = stampBlocked(slots(), "Signed NDA", "physical", "sign", AT);
+    const refused = applyOutputMutations(stored, {
+      completeOutput: "Signed NDA",
+    }).completeOutput;
+    const missed = applyOutputMutations(stored, {
+      completeOutput: "No such deliverable",
+    }).completeOutput;
+
+    // Both leave the array untouched — which is exactly why the verdicts must
+    // differ. One is "you are not allowed"; the other is "you spelled it wrong".
+    expect(refused?.result).toBe("refused");
+    expect(missed?.result).toBe("no_match");
+    expect(missed?.refusedHumanOwned).toBe(0);
+    expect(missed?.completed).toBe(0);
+    expect(missed?.message).toBeTruthy();
+    expect(refused?.message).not.toBe(missed?.message);
+  });
+
+  it("reports a plain success, and says nothing at all when unasked", () => {
+    const done = applyOutputMutations(slots(), {
+      completeOutput: "Launch brief",
+    }).completeOutput;
+    expect(done?.result).toBe("completed");
+    expect(done?.completed).toBe(1);
+    // A success needs no explanation — an always-present message is the one
+    // callers learn to ignore.
+    expect(done?.message).toBeUndefined();
+
+    // A patch that never mentioned completeOutput must not manufacture a report.
+    expect(
+      applyOutputMutations(slots(), {
+        addOutput: { kind: "document", label: "Notes" },
+      }).completeOutput
+    ).toBeUndefined();
   });
 
   it("completes an unblocked slot once the agent has reclaimed it", () => {
@@ -160,7 +217,7 @@ describe("completeOutput — the agent may not close the human's slot", () => {
     const reclaimed = stampUnblocked(blocked, "Signed NDA");
     const [, after] = applyOutputMutations(reclaimed, {
       completeOutput: "Signed NDA",
-    });
+    }).outputs;
     expect(after.status).toBe("done");
   });
 });
@@ -175,7 +232,7 @@ describe("addOutput — declaring a blocked slot stamps its clock", () => {
         blockedReason: "physical",
         why: "Someone has to sign it",
       },
-    });
+    }).outputs;
     expect(added.owedSince).toEqual(expect.any(String));
     expect(added.status).toBe("pending");
   });
@@ -183,7 +240,7 @@ describe("addOutput — declaring a blocked slot stamps its clock", () => {
   it("leaves an ordinary new slot with no owner and no clock", () => {
     const [added] = applyOutputMutations([], {
       addOutput: { kind: "document", label: "Launch brief" },
-    });
+    }).outputs;
     expect(added).not.toHaveProperty("owner");
     expect(added).not.toHaveProperty("owedSince");
   });

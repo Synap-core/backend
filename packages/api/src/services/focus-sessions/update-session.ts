@@ -71,7 +71,18 @@ export type UpdateFocusSessionResult =
       reviewPath?: string;
       reviewUrl?: string;
     }
-  | { status: "updated"; session: typeof focusSessions.$inferSelect };
+  | {
+      status: "updated";
+      session: typeof focusSessions.$inferSelect;
+      /**
+       * What the patch's `completeOutput` did — present only when the patch
+       * carried one. It MUST cross this boundary: the governance floor that
+       * refuses to close a human-owned slot changes nothing on the row, so a
+       * caller handed only the session object reads a refusal as a success and
+       * moves on believing the work is delivered.
+       */
+      completeOutput?: CompleteOutputOutcome;
+    };
 
 type OutputItem = ExpectedOutput;
 
@@ -264,12 +275,86 @@ export function reconcileOwedSince(
 }
 
 /**
+ * What a `completeOutput` in the patch ACTUALLY did — the report that makes the
+ * governance floor below observable to whoever asked.
+ *
+ * Three outcomes, and they must stay tellable apart. `completed` is the write.
+ * `refused` is the floor: the slot is the human's and the agent may not close
+ * it — actionable, the caller should stop claiming the work is done. `no_match`
+ * is the DOCUMENTED contract of this field (the MCP tool advertises "no-op if no
+ * deliverable matches the label exactly"), not an error — but a caller still has
+ * to be able to distinguish "you spelled the label wrong" from "you are not
+ * allowed", which is exactly what a bare 200 with an unchanged row cannot do.
+ */
+export type CompleteOutputOutcome = {
+  /** The label the caller asked to complete, verbatim. */
+  label: string;
+  /** Matching slots that were stamped done. */
+  completed: number;
+  /** Matching slots REFUSED because `owner: 'human'`. */
+  refusedHumanOwned: number;
+  /** The one-word verdict, derived from the two counts above. */
+  result: "completed" | "refused" | "no_match";
+  /**
+   * Caller-facing sentence for the two non-success verdicts. Absent when the
+   * mark landed — a success needs no explanation, and an always-present message
+   * is the thing callers learn to ignore.
+   */
+  message?: string;
+};
+
+/** The outputs array a patch produced, plus the report of what it refused. */
+export interface OutputMutationResult {
+  outputs: OutputItem[];
+  /** Present only when the patch carried a `completeOutput`. */
+  completeOutput?: CompleteOutputOutcome;
+}
+
+/**
+ * Turn the two match counts into the verdict + its sentence. Lives OUTSIDE
+ * {@link applyOutputMutations} deliberately: prose wedged between that
+ * function's `patch.completeOutput` read and its `status: "done"` literal blinds
+ * the `__tripwires__/expected-output-done-one-door.test.ts` proximity window to
+ * the residual it exists to pin.
+ */
+function describeCompleteOutput(
+  label: string,
+  completed: number,
+  refusedHumanOwned: number
+): CompleteOutputOutcome {
+  if (completed > 0) {
+    return { label, completed, refusedHumanOwned, result: "completed" };
+  }
+  if (refusedHumanOwned > 0) {
+    return {
+      label,
+      completed,
+      refusedHumanOwned,
+      result: "refused",
+      message: `"${label}" is the human's slot — you declared it owner: "human", so you cannot mark it done. Nothing was changed. Reclaim the slot first (clear its blocker) if you did the work after all, or leave it for the human.`,
+    };
+  }
+  return {
+    label,
+    completed,
+    refusedHumanOwned,
+    result: "no_match",
+    message: `No deliverable is labelled exactly "${label}". Nothing was changed. Labels match verbatim — list the session's deliverables and resend the exact label.`,
+  };
+}
+
+/**
  * The three output mutations a `focus_session/update` can carry, applied to the
  * CURRENT stored array. Pure, and EXPORTED because it has two callers that must
  * not drift: this service's row-locked write, and the `focus_session/update`
  * proposal executor, which re-applies the very same patch on approval. When the
  * executor had its own inline field list it applied none of these at all, and
  * approving a slot change returned success while changing nothing.
+ *
+ * Returns the new array ALONGSIDE the `completeOutput` report rather than
+ * throwing on a refusal: a wholesale patch that merely happens to mention a
+ * blocked label must still land its other mutations, and both callers already
+ * run inside a row lock a throw would abort.
  */
 export function applyOutputMutations(
   current: OutputItem[],
@@ -278,7 +363,7 @@ export function applyOutputMutations(
     addOutput?: UpdateFocusSessionParams["addOutput"];
     completeOutput?: string;
   }
-): OutputItem[] {
+): OutputMutationResult {
   // Wholesale replace goes through the ONE merge, so a client that sends back
   // the four fields it knows about cannot erase a delegation, a return note or
   // an approval's lineage.
@@ -316,16 +401,24 @@ export function applyOutputMutations(
   // `completeOutput` within 400 chars of the `done` literal, and a comment
   // wedged between the two blinds it to the very residual it pins.)
 
+  let completeOutput: CompleteOutputOutcome | undefined;
   if (typeof patch.completeOutput === "string") {
     const label = patch.completeOutput;
-    next = next.map((o) =>
-      o.label === label && o.owner !== "human"
-        ? { ...o, status: "done" as const }
-        : o
-    );
+    let completed = 0;
+    let refused = 0;
+    next = next.map((o) => {
+      if (o.label !== label) return o;
+      if (o.owner === "human") {
+        refused += 1;
+        return o;
+      }
+      completed += 1;
+      return { ...o, status: "done" as const };
+    });
+    completeOutput = describeCompleteOutput(label, completed, refused);
   }
 
-  return next;
+  return { outputs: next, ...(completeOutput ? { completeOutput } : {}) };
 }
 
 export async function updateFocusSession(
@@ -436,6 +529,10 @@ export async function updateFocusSession(
     typeof params.completeOutput === "string" ||
     params.expectedOutputs !== undefined;
 
+  // Captured out of the transaction so the RETURN can report it — see the
+  // `completeOutput` field on UpdateFocusSessionResult.
+  let completeOutputOutcome: CompleteOutputOutcome | undefined;
+
   const [updated] = await db.transaction(async (tx) => {
     if (mutatesOutputs) {
       const [locked] = await tx
@@ -446,11 +543,13 @@ export async function updateFocusSession(
       const current: OutputItem[] = Array.isArray(locked?.expectedOutputs)
         ? (locked.expectedOutputs as OutputItem[])
         : [];
-      set.expectedOutputs = applyOutputMutations(current, {
+      const applied = applyOutputMutations(current, {
         expectedOutputs: params.expectedOutputs,
         addOutput: params.addOutput,
         completeOutput: params.completeOutput,
       });
+      set.expectedOutputs = applied.outputs;
+      completeOutputOutcome = applied.completeOutput;
     }
     return tx
       .update(focusSessions)
@@ -523,5 +622,6 @@ export async function updateFocusSession(
   return {
     status: "updated",
     session: gatedStatus ? { ...updated, status: gatedStatus } : updated,
+    ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
   };
 }

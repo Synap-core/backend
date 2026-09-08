@@ -330,7 +330,17 @@ export const sessionHandlers: McpHandlerMap = {
           session: null,
         });
       case "updated":
-        return ok({ status: "updated", session: result.session });
+        // `completeOutput` rides the SUCCESS response, not an error: the rest
+        // of the patch landed. Without it a refused mark is indistinguishable
+        // from a completed one — the row simply comes back unchanged and the
+        // agent reads that as done.
+        return ok({
+          status: "updated",
+          session: result.session,
+          ...(result.completeOutput
+            ? { completeOutput: result.completeOutput }
+            : {}),
+        });
     }
     // Defensive: an unhandled decision must NOT fall through — every
     // FocusSessionUpdateResult status is handled above (exhaustive switch).

@@ -220,6 +220,36 @@ describe("focus_session/update — the deliverables half of an approval", () => 
     expect(writtenOutputs()![0]).not.toHaveProperty("status");
   });
 
+  it("REPORTS that refusal to the approver — success is not the whole story", async () => {
+    lockedOutputs = [
+      {
+        kind: "entity",
+        label: "Signed NDA",
+        owner: "human",
+        blockedReason: "physical",
+      },
+    ];
+    const result = await approve({
+      goal: "Ship the ownership pair",
+      completeOutput: "Signed NDA",
+    });
+
+    // The rest of the patch landed, so `success: true` is honest — but a bare
+    // success is a receipt for a change that did not happen. The reviewer has
+    // to be TOLD which half was declined and why.
+    expect(result.success).toBe(true);
+    expect(result.refusals).toBeDefined();
+    expect((result.refusals as string[])[0]).toContain("Signed NDA");
+    expect((result.refusals as string[])[0]).toContain("human");
+  });
+
+  it("says nothing when there was nothing to refuse", async () => {
+    const done = await approve({ completeOutput: "Launch brief" });
+    expect(done.refusals).toBeUndefined();
+    const scalarOnly = await approve({ goal: "A new goal" });
+    expect(scalarOnly.refusals).toBeUndefined();
+  });
+
   it("takes no output lock at all when the proposal carried none", async () => {
     await approve({ goal: "A new goal", progress: 60 });
     expect(writtenOutputs()).toBeUndefined();

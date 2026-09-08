@@ -231,6 +231,12 @@ export function registerFocusSessionExecutors(): void {
         {}) as Record<string, unknown>;
       const sessionId = proposal.targetId;
 
+      // Parts of the approved patch the pod DECLINED to apply. Reported on the
+      // result rather than thrown: the rest of the update legitimately landed,
+      // and failing the whole approval would leave the proposal pending after a
+      // partial write.
+      let outputRefusals: string[] = [];
+
       const session = await db.query.focusSessions.findFirst({
         where: eq(focusSessions.id, sessionId),
       });
@@ -344,7 +350,10 @@ export function registerFocusSessionExecutors(): void {
         // write uses, so the merge (and therefore the no-erasure rule and the
         // `owner: 'human'` completion floor) cannot fork between the ungated and
         // the approved path — inside the SAME row lock the direct write takes.
-        await applyProposedOutputMutations(sessionId, innerData);
+        outputRefusals = await applyProposedOutputMutations(
+          sessionId,
+          innerData
+        );
 
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`
         // and the Hub PATCH) so the PROPOSED path is not a silent no-op —
@@ -402,7 +411,10 @@ export function registerFocusSessionExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return {
+        success: true,
+        ...(outputRefusals.length > 0 ? { refusals: outputRefusals } : {}),
+      };
     },
   });
 }
@@ -416,11 +428,17 @@ export function registerFocusSessionExecutors(): void {
  * change must fail closed on its bad half, not write it.
  *
  * No-op (and no lock taken) when the proposal carried no output mutation at all.
+ *
+ * Returns the human-readable refusals the shared applier reported, so approving
+ * a proposal whose `completeOutput` the governance floor declined does not hand
+ * the reviewer a bare success for a change that did not happen. The rest of the
+ * patch still lands — a wholesale update must not be lost because one slot was
+ * the human's.
  */
 async function applyProposedOutputMutations(
   sessionId: string,
   innerData: Record<string, unknown>
-): Promise<void> {
+): Promise<string[]> {
   const expectedOutputs = z
     .array(expectedOutputWireSchema)
     .safeParse(innerData.expectedOutputs);
@@ -437,11 +455,23 @@ async function applyProposedOutputMutations(
     ...(addOutput.success ? { addOutput: addOutput.data } : {}),
     ...(completeOutput !== undefined ? { completeOutput } : {}),
   };
-  if (Object.keys(patch).length === 0) return;
+  if (Object.keys(patch).length === 0) return [];
 
-  await updateExpectedOutputsLocked(sessionId, (current) =>
-    applyOutputMutations(current, patch)
-  );
+  const refusals: string[] = [];
+  await updateExpectedOutputsLocked(sessionId, (current) => {
+    const applied = applyOutputMutations(current, patch);
+    if (
+      applied.completeOutput &&
+      applied.completeOutput.result !== "completed"
+    ) {
+      refusals.push(
+        applied.completeOutput.message ??
+          `"${applied.completeOutput.label}" was not marked done.`
+      );
+    }
+    return applied.outputs;
+  });
+  return refusals;
 }
 
 /**

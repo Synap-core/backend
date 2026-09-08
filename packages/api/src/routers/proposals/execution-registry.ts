@@ -219,6 +219,16 @@ export interface ProposalExecutorResult {
    * (`focus_session/create`) is the reference conversion.
    */
   effect?: ProposalEffect;
+  /**
+   * Parts of the approved patch the pod DECLINED to apply, each a sentence the
+   * reviewer can act on. `success: true` with a non-empty `refusals` is the
+   * honest shape for a partial application: the write landed, but not all of it.
+   *
+   * NOT a general warnings bag — only a governance floor or an equivalent
+   * documented refusal belongs here. An unexplained omission is the defect this
+   * field exists to stop, so an entry without a reason is worse than none.
+   */
+  refusals?: string[];
 }
 
 export interface ProposalExecutor {

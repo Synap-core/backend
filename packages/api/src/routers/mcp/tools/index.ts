@@ -1399,7 +1399,7 @@ export const tools = {
             completeOutput: {
               type: "string",
               description:
-                "Mark the deliverable with this exact label as 'done'. No-op if no deliverable matches the label exactly.",
+                "Mark the deliverable with this exact label as 'done'. REFUSED for a slot you declared owner='human' — you cannot close work you handed back. The reply always carries `completeOutput.result`: 'completed' (marked done), 'refused' (human-owned; nothing changed, do NOT report the work as delivered), or 'no_match' (no deliverable has that exact label; nothing changed). A 'refused' or 'no_match' still comes back as a successful update because the rest of the patch landed — read the field, not just the session.",
             },
             addAgentId: {
               type: "string",

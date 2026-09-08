@@ -149,6 +149,29 @@ const CreateBodySchema = z
     path: ["workspaceId"],
   });
 
+/**
+ * Fields this door does NOT implement, REJECTED rather than silently stripped.
+ *
+ * zod strips undeclared keys, so a PATCH carrying `completeOutput` returned 200
+ * with the whole session and the slot untouched — and an unchanged 200 is what
+ * an agent reads as "marked done". Worse, that silence is indistinguishable
+ * from the governance floor that legitimately refuses to close a human-owned
+ * slot, and from an actual success.
+ *
+ * Marking a declared deliverable done belongs to the MCP `synap_update_session`
+ * door, which takes the row lock this PATCH deliberately does not (see the
+ * header of `services/focus-sessions/update-session.ts` on why the two doors
+ * are distinct). Returns the caller-facing message, or null when the body is
+ * clean.
+ */
+export function unsupportedUpdateFieldError(raw: unknown): string | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  if ("completeOutput" in raw) {
+    return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
+  }
+  return null;
+}
+
 // workspaceId is accepted for back-compat with CLI callers that still send it,
 // but the authoritative workspace comes from the LOADED ROW (write-gate rule:
 // never trust a caller-supplied workspaceId for scoping a mutation).
@@ -752,6 +775,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const id = c.req.param("id");
     const raw = await c.req.json().catch(() => null);
     if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+
+    const unsupported = unsupportedUpdateFieldError(raw);
+    if (unsupported) return c.json({ error: unsupported }, 400);
 
     const parsed = UpdateBodySchema.safeParse(raw);
     if (!parsed.success) {
