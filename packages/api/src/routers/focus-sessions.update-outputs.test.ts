@@ -163,21 +163,45 @@ describe("focusSessions.update — expectedOutputs is MERGED, not replaced", () 
 
   it("accepts the server-owned fields on the wire instead of stripping them", async () => {
     // The schema half of the defect: a caller that genuinely holds the current
-    // slot must be able to round-trip it, including an explicit change.
+    // slot must be able to round-trip it. The keys must survive the PARSE — a
+    // strip there erases them before any merge can carry them.
     await caller().update({
       id: SESSION,
       expectedOutputs: [
         {
           kind: "document",
           label: "Spec",
-          delegatedTo: "researcher",
-          delegatedAt: "2026-09-05T00:00:00.000Z",
+          delegatedTo: "workspace-builder",
+          delegatedAt: "2026-09-01T00:00:00.000Z",
         },
       ],
     });
     expect(writtenOutputs()[0]).toMatchObject({
-      delegatedTo: "researcher",
-      delegatedAt: "2026-09-05T00:00:00.000Z",
+      delegatedTo: "workspace-builder",
+      delegatedAt: "2026-09-01T00:00:00.000Z",
     });
+  });
+
+  it("REFUSES a patch that CHANGES a delegation instead of echoing it", async () => {
+    // CORRECTED 2026-09-08. This case previously asserted that an explicit
+    // change WINS, which is the wholesale bypass: the same rule that let
+    // `delegatedTo` be reassigned let `status: "done"` and a forged `attestedBy`
+    // through, with no receipt and no proposal. Round-tripping is a client
+    // right; re-authoring a server stamp never was.
+    await expect(
+      caller().update({
+        id: SESSION,
+        expectedOutputs: [
+          {
+            kind: "document",
+            label: "Spec",
+            delegatedTo: "researcher",
+            delegatedAt: "2026-09-05T00:00:00.000Z",
+          },
+        ],
+      })
+    ).rejects.toThrow(/server-stamped/i);
+    // …and it is a refusal, not a partial write: nothing reached the column.
+    expect(sets).toHaveLength(0);
   });
 });

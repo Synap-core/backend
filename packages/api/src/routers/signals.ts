@@ -48,6 +48,7 @@ import { eventsRouter } from "./events.js";
 import { extractProposalName } from "../services/proposals/fingerprint.js";
 import {
   unionNeedsYou,
+  pageNeedsYou,
   countNeedsYou,
   type NotificationSignalInput,
   type OwedSlotSignalInput,
@@ -197,7 +198,11 @@ export const signalsRouter = router({
           notifications: notifs.notifications as NotificationSignalInput[],
           owedSlots: owed as OwedSlotSignalInput[],
         });
-        return { signals: signals.slice(0, input.limit) };
+        // Paged through `pageNeedsYou`, never a bare slice: owed slots are an
+        // unbounded, never-expiring source sitting FIRST, so one shared cap let
+        // them evict the entire pending-proposal queue from the tray while the
+        // badge went on counting it.
+        return { signals: pageNeedsYou(signals, input.limit) };
       }
 
       // ── history: past events merged with decided proposals ──────────────

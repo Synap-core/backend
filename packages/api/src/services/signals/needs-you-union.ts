@@ -328,6 +328,54 @@ export function unionNeedsYou(args: {
 }
 
 /**
+ * How many rows of the page are RESERVED for decisions (clusters +
+ * notifications) when there are that many to show.
+ *
+ * THE BUG THIS EXISTS FOR. `unionNeedsYou` puts every owed slot first — correct,
+ * and settled: an owed slot never expires, so age is severity and the oldest
+ * blocker is the most urgent row on the board. But the page was then a single
+ * `slice(0, limit)` across the concatenation, which makes the two sources share
+ * ONE cap: an UNBOUNDED, never-decaying source ahead of a bounded, decaying one.
+ * At 37 live owed slots against a limit of 50 the browser already showed nothing
+ * but owed slots; past 50 the pending-proposal queue is UNREACHABLE from the
+ * tray while the badge keeps counting it. A queue you are told about and cannot
+ * open is worse than one that is merely long.
+ *
+ * The ordering is untouched — owed slots still come first, oldest first, and a
+ * reserved row is not a re-ordering. Only the CUT changes: each source keeps a
+ * floor inside the page, so neither can evict the other entirely.
+ *
+ * WHY 10. The browser tray renders 7 rows without scrolling, so 10 guarantees
+ * the whole visible tray cannot be one source plus a scroll to reach the other.
+ * It is a floor, never an allocation: with fewer than 10 decisions the unused
+ * rows go straight back to owed slots, and with none the page is all owed.
+ */
+export const RESERVED_DECISION_ROWS = 10;
+
+/**
+ * Page the union so neither source can starve the other. Pure.
+ *
+ * Splits on the signal's OWN `kind` rather than taking the two lists again —
+ * the caller must not be able to page a different set from the one it ordered,
+ * and re-deriving membership here would be a second answer to "what is an owed
+ * slot". The reserve is capped at HALF the page so a small `limit` cannot
+ * invert the settled ordering: at `limit: 1` the one row is still the oldest
+ * blocker, not a proposal.
+ */
+export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
+  const owed = signals.filter((s) => s.kind === "owed-slot");
+  const rest = signals.filter((s) => s.kind !== "owed-slot");
+  const reserved = Math.min(
+    RESERVED_DECISION_ROWS,
+    Math.floor(limit / 2),
+    rest.length
+  );
+  const owedTake = Math.min(owed.length, Math.max(0, limit - reserved));
+  const restTake = Math.min(rest.length, Math.max(0, limit - owedTake));
+  return [...owed.slice(0, owedTake), ...rest.slice(0, restTake)];
+}
+
+/**
  * ONE number for both badges (tray and bell), plus the BREAKDOWN the badge
  * itself renders.
  *

@@ -146,6 +146,14 @@ function slotOwnershipResult(
         code: "BAD_REQUEST",
         message: `"${input.expectedLabel}" is not blocked on you — an agent still owes it`,
       });
+    case "retired":
+      // Attestation only. The `default` below returns SUCCESS, so a refusal
+      // that is not named here reports `ok: true` with an undefined label —
+      // exactly the "guard works, report lies" shape. Every refusal gets a case.
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `"${input.expectedLabel}" was retired when its session was cancelled — there is nothing left to attest`,
+      });
     default:
       return {
         ok: true as const,

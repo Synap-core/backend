@@ -86,13 +86,28 @@ describe("mergeExpectedOutputs", () => {
     });
   });
 
-  it("an EXPLICIT value wins — a client that genuinely round-tripped the slot", () => {
+  it("a ROUND-TRIP of the stored value is accepted, not treated as a write", () => {
+    const incoming: ExpectedOutput[] = [
+      { kind: "document", label: "Spec", delegatedTo: "workspace-builder" },
+    ];
+    expect(mergeExpectedOutputs(stored(), incoming)[0]).toMatchObject({
+      delegatedTo: "workspace-builder",
+    });
+  });
+
+  it("but an explicit CHANGE to a server stamp is REFUSED", () => {
+    // CORRECTED 2026-09-08. This case asserted the opposite — "an explicit value
+    // wins" — which was the wholesale bypass in one line: the rule that let a
+    // patch reassign `delegatedTo` equally let it write `status: "done"` on a
+    // slot the agent had declared blocked on the human, with no receipt and no
+    // proposal. `owner`/`blockedReason`/`why` still work this way (see below);
+    // the receipts do not.
     const incoming: ExpectedOutput[] = [
       { kind: "document", label: "Spec", delegatedTo: "researcher" },
     ];
-    expect(mergeExpectedOutputs(stored(), incoming)[0]).toMatchObject({
-      delegatedTo: "researcher",
-    });
+    expect(() => mergeExpectedOutputs(stored(), incoming)).toThrow(
+      /server-stamped/i
+    );
   });
 
   it("matches by the ONE label comparison — trimmed and case-insensitive", () => {

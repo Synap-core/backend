@@ -156,9 +156,22 @@ describe("ExpectedOutput server-owned coverage", () => {
     expect(reclaimed.owedSince).toBeUndefined();
 
     // And a client cannot author one on a slot it is not handing over.
+    // CORRECTED 2026-09-08: this is now a visible REFUSAL rather than a silent
+    // drop — `owedSince` is a server stamp, and a patch that contradicts the
+    // stored value is a caller trying to write it. The guarantee is strictly
+    // stronger; what changed is that the caller is told.
+    expect(() =>
+      mergeExpectedOutputs(
+        [{ kind: "doc", label: "Brief" }],
+        [{ kind: "doc", label: "Brief", owedSince: "1999-01-01T00:00:00.000Z" }]
+      )
+    ).toThrow(/server-stamped/i);
+
+    // On a slot with NO stored twin there is nothing to contradict, so it is
+    // dropped rather than refused — and never believed.
     const [fabricated] = mergeExpectedOutputs(
-      [{ kind: "doc", label: "Brief" }],
-      [{ kind: "doc", label: "Brief", owedSince: "1999-01-01T00:00:00.000Z" }]
+      [],
+      [{ kind: "doc", label: "Fresh", owedSince: "1999-01-01T00:00:00.000Z" }]
     );
     expect(fabricated.owedSince).toBeUndefined();
   });

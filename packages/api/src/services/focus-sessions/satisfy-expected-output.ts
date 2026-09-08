@@ -269,6 +269,12 @@ export type AttestExpectedOutputResult =
   | { status: "already_done" }
   /** The slot is not the human's to close — an agent still owes it. */
   | { status: "not_owed_by_you" }
+  /**
+   * The slot was RETIRED — its session was cancelled, so the obligation ended.
+   * Nothing to discharge, and attesting one would mint a receipt saying a human
+   * delivered work that was called off.
+   */
+  | { status: "retired" }
   | { status: "attested"; expectedLabel: string; kind: string };
 
 export async function attestExpectedOutput(
@@ -328,13 +334,18 @@ export async function attestExpectedOutput(
  *     session to close work an agent still owes, with a receipt saying a human
  *     did it. Absent `owner` means AGENT (see `ExpectedOutput`), so the test is
  *     a positive `=== "human"` and an un-owned slot is correctly refused.
+ *   - the slot must not be RETIRED (`retired`) — a cancelled session's slots are
+ *     stamped, not deleted, so they stay readable and stay reachable BY LABEL
+ *     long after the obligation ended.
  */
 export function selectSlotToAttest(
   outputs: ExpectedOutput[],
   expectedLabel: string | null | undefined
 ):
   | { index: number }
-  | { refused: "unknown_label" | "already_done" | "not_owed_by_you" } {
+  | {
+      refused: "unknown_label" | "already_done" | "not_owed_by_you" | "retired";
+    } {
   const wanted = normalizeExpectedLabel(expectedLabel);
   if (!wanted) return { refused: "unknown_label" };
   const index = outputs.findIndex(
@@ -344,6 +355,14 @@ export function selectSlotToAttest(
   const slot = outputs[index]!;
   if (slot.status === "done") return { refused: "already_done" };
   if (slot.owner !== "human") return { refused: "not_owed_by_you" };
+  // A RETIRED slot is not owed and so is not dischargeable. The owed read
+  // (`isOwedSlot`) already drops it on `retiredAt`, so it cannot reach a "needs
+  // you" surface — but the attest door is reachable by label, and without this
+  // it would stamp `attestedBy`/`attestedAt` onto a slot whose session was
+  // CANCELLED. That is a receipt asserting a person delivered work that was
+  // called off, and it is unfalsifiable afterwards: `retiredAt` and `attestedAt`
+  // would both stand, with nothing to say which one is the truth.
+  if (slot.retiredAt != null) return { refused: "retired" };
   return { index };
 }
 

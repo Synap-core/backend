@@ -1018,11 +1018,6 @@
                 "icon": {
                   "type": "string"
                 },
-                "status": {
-                  "type": "string",
-                  "enum": ["pending", "done"],
-                  "description": "Per-item lifecycle. Defaults to 'pending' when omitted."
-                },
                 "owner": {
                   "type": "string",
                   "enum": ["human", "agent"],
@@ -1100,11 +1095,6 @@
                 },
                 "icon": {
                   "type": "string"
-                },
-                "status": {
-                  "type": "string",
-                  "enum": ["pending", "done"],
-                  "description": "Per-item lifecycle. Defaults to 'pending' when omitted."
                 },
                 "owner": {
                   "type": "string",

@@ -95,6 +95,35 @@ export function owedSlotPrefilter(): SQL {
 }
 
 /**
+ * SQL: rank a session by its OLDEST owed slot — the twin of the TypeScript sort
+ * at the end of {@link listOwedSlots}, and exported so the two can be compared.
+ *
+ * `coalesce(..., MISSING_OWED_SINCE)` is load-bearing, not cosmetic. `min()`
+ * SKIPS NULLs, so a session holding one UNSTAMPED slot and one stamped
+ * `2026-09-01` ranked by the September date — while the TypeScript sort places
+ * that unstamped slot FIRST of everything, via the same sentinel. The two
+ * orderings disagreed on exactly the anomalous row, and because this ORDER BY
+ * decides which rows survive `.limit()`, the globally-oldest slot was the one
+ * the page could silently drop. One sentinel, both orderings.
+ *
+ * `NULLS FIRST` is kept as a belt: with the coalesce in place the expression can
+ * only be NULL when a session matched the WHERE but yields no slot here, which
+ * the shared predicate makes unreachable.
+ */
+export function owedSlotOrder(): SQL {
+  return drizzleSql`(
+    SELECT min(coalesce(slot->>'owedSince', ${MISSING_OWED_SINCE})) FROM jsonb_array_elements(
+      CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
+           THEN ${focusSessions.expectedOutputs}
+           ELSE '[]'::jsonb END
+    ) AS slot
+    WHERE slot->>'owner' = 'human'
+      AND slot->>'status' IS DISTINCT FROM 'done'
+      AND slot->>'retiredAt' IS NULL
+  ) ASC NULLS FIRST`;
+}
+
+/**
  * THE derivation in TypeScript — the twin of {@link owedSlotWhere}, kept in this
  * file so the two cannot drift.
  *
@@ -106,6 +135,20 @@ export function isOwedSlot(slot: ExpectedOutput): boolean {
     slot.owner === "human" && slot.status !== "done" && slot.retiredAt == null
   );
 }
+
+/**
+ * The sort key for a slot with NO `owedSince` — an anomaly the invariant should
+ * make impossible, but which a legacy row or a write around the doors can still
+ * produce. It must sort BEFORE every real stamp (an unorderable slot is shown at
+ * the top, where an anomaly belongs, never buried as if it were new), and it is
+ * shared by BOTH orderings — the SQL `ORDER BY` that decides which rows survive
+ * the page limit, and the TypeScript sort that orders the flattened slots. A
+ * sentinel used by only one of the two is how they disagreed.
+ *
+ * `signalFromOwedSlot` maps it to the epoch (it is an Invalid Date, and NaN
+ * loses every comparison silently) — the same intent, one layer up.
+ */
+export const MISSING_OWED_SINCE = "0000-00-00";
 
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
@@ -164,7 +207,7 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
     // Skipping it would hide it, so it sorts as the OLDEST thing there is —
     // visible, and at the top where an anomaly belongs.
     const owedSince =
-      typeof slot.owedSince === "string" ? slot.owedSince : "0000-00-00";
+      typeof slot.owedSince === "string" ? slot.owedSince : MISSING_OWED_SINCE;
     owed.push({
       sessionId: row.id,
       sessionGoal: row.goal,
@@ -225,25 +268,12 @@ export async function listOwedSlots(
     // Rows are capped at `limit` because a session yields at least one slot, so
     // `limit` rows can never yield fewer than `limit` slots when more exist —
     // and the ones this cuts are, by this ordering, the NEWEST.
-    .orderBy(
-      drizzleSql`(
-        SELECT min(slot->>'owedSince') FROM jsonb_array_elements(
-          CASE WHEN jsonb_typeof(${focusSessions.expectedOutputs}) = 'array'
-               THEN ${focusSessions.expectedOutputs}
-               ELSE '[]'::jsonb END
-        ) AS slot
-        WHERE slot->>'owner' = 'human'
-          AND slot->>'status' IS DISTINCT FROM 'done'
-          AND slot->>'retiredAt' IS NULL
-      ) ASC NULLS FIRST`
-    )
+    .orderBy(owedSlotOrder())
     .limit(limit);
 
   return rows
     .flatMap((r) => projectOwedSlots(r as OwedRow))
-    .sort((a, b) =>
-      a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
-    )
+    .sort((a, b) => (a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0))
     .slice(0, limit);
 }
 

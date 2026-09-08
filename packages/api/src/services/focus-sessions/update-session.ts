@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { db, focusSessions, eq, and } from "@synap/database";
 import {
   BLOCKED_REASONS,
@@ -181,7 +182,42 @@ export const CLIENT_AUTHORED_OUTPUT_FIELDS = [
   "icon",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
-export const SERVER_OWNED_OUTPUT_FIELDS = [
+/**
+ * THE SECOND AXIS: WHO MAY WRITE THE FIELD, as against who may ERASE it.
+ *
+ * The set above answers "what does a silent patch destroy". It says nothing
+ * about AUTHORITY, and its own docblock says so — which left the wholesale path
+ * with no floor at all. `completeOutput` refuses to close a slot the agent
+ * declared `owner: 'human'`, but ONE `expectedOutputs: [{kind, label, status:
+ * "done"}]` stamped the same slot done with no receipt, or forged an
+ * `attestedBy` naming the user, or hid an owed slot behind a `retiredAt`. The
+ * floor was a fence with a gate beside it.
+ *
+ * So the fields split a SECOND way, and this is the split that carries the
+ * governance meaning:
+ *
+ *   CLIENT-DECLARABLE — what an agent legitimately SAYS about a deliverable.
+ *   `kind`/`label`/`icon` name it; `owner`/`blockedReason`/`why` are the agent's
+ *   own declaration that it cannot take the work (written through `addOutput`,
+ *   and re-assertable through a wholesale patch). Declaring a blocker is not a
+ *   claim of delivery, so none of these can close anything.
+ *
+ *   SERVER-STAMPED — every RECEIPT: what happened, who said so, and when. Each
+ *   has exactly one writing door already (`attestExpectedOutput`,
+ *   `satisfyExpectedOutputs`, `delegateOutput`, `returnDelegatedSlot`,
+ *   `retirementForClose`, `reconcileOwedSince`). A client may round-trip them —
+ *   the wire schema accepts them so a naive echo does not lose them at the
+ *   PARSE — but may never author or change one. {@link mergeExpectedOutputs}
+ *   enforces that.
+ */
+export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
+  ...CLIENT_AUTHORED_OUTPUT_FIELDS,
+  "owner",
+  "blockedReason",
+  "why",
+] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
+
+export const SERVER_STAMPED_OUTPUT_FIELDS = [
   "status",
   "claimedDone",
   "satisfiedByProposalId",
@@ -189,14 +225,24 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   "delegatedAt",
   "returnedReason",
   "returnedAt",
-  "owner",
-  "blockedReason",
-  "why",
   "owedSince",
   "attestedBy",
   "attestedAt",
   "retiredAt",
   "retiredReason",
+] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
+
+/**
+ * DERIVED, not hand-maintained — a third list is a third place to forget a
+ * field. Everything the server stamps must survive a silent patch, and so must
+ * the agent's own declaration, which the client authors but a client that has
+ * never heard of it would otherwise erase.
+ */
+export const SERVER_OWNED_OUTPUT_FIELDS = [
+  ...SERVER_STAMPED_OUTPUT_FIELDS,
+  "owner",
+  "blockedReason",
+  "why",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -222,6 +268,27 @@ const _serverOwnedCoverage: _ServerOwnedCoversEveryField = true;
 void _serverOwnedCoverage;
 
 /**
+ * The SAME floor for the authority axis, and it is the load-bearing one: a new
+ * `ExpectedOutput` field that is not named client-declarable must be
+ * server-stamped, or this alias resolves to `never` and the build stops.
+ *
+ * WHY THE DEFAULT IS SAFE. Omission cannot make a field silently
+ * client-writable — the only way to reach a green build is to classify it, and
+ * classifying it as declarable is a visible edit to a list whose docblock says
+ * what that means. The failure mode the old single list had (add a field, forget
+ * it, and it is writable by anyone) is not reachable from here.
+ */
+type _ServerStampedCoversEveryField =
+  Exclude<
+    keyof ExpectedOutput,
+    (typeof CLIENT_DECLARABLE_OUTPUT_FIELDS)[number]
+  > extends (typeof SERVER_STAMPED_OUTPUT_FIELDS)[number]
+    ? true
+    : never;
+const _serverStampedCoverage: _ServerStampedCoversEveryField = true;
+void _serverStampedCoverage;
+
+/**
  * Merge an incoming `expectedOutputs` array onto the stored one BY LABEL — the
  * ONE merge, called by all three wholesale-update doors so they cannot drift
  * into three answers about what a patch destroys.
@@ -236,30 +303,138 @@ export function mergeExpectedOutputs(
   current: OutputItem[],
   incoming: OutputItem[]
 ): OutputItem[] {
+  const violations = detectServerStampedWrites(current, incoming);
+  if (violations.length > 0) {
+    throw serverStampedWriteError(violations);
+  }
+
+  const stored = indexByLabel(current);
+
+  return incoming.map((item) => {
+    const key = normalizeExpectedLabel(item?.label);
+    const prior = key ? stored.get(key) : undefined;
+    // A slot the stored array does not carry is NEW, and a new slot has no
+    // receipts by definition. Server-stamped fields on it are DROPPED rather
+    // than refused: there is no stored value being contradicted, so nothing is
+    // being overwritten — and refusing would break the legitimate rename (read
+    // the array, change one label, send it back), which arrives as exactly this
+    // shape. Dropping still defeats the bypass: a patch inventing a `done` slot
+    // under an unmatched label lands it pending, like any other declaration.
+    if (!prior) return reconcileOwedSince(stripServerStamped(item));
+    // Only the fields the incoming item is SILENT about are carried; a
+    // client-declarable field it states explicitly wins. Server-stamped fields
+    // are always carried from storage — an incoming one either equalled the
+    // stored value (a round-trip) or the detector above already refused.
+    const carried: Partial<ExpectedOutput> = {};
+    for (const field of SERVER_OWNED_OUTPUT_FIELDS) {
+      if (
+        item[field] !== undefined &&
+        !SERVER_STAMPED_FIELD_SET.has(field as string)
+      ) {
+        continue;
+      }
+      const value = prior[field];
+      if (value !== undefined) {
+        Object.assign(carried, { [field]: value });
+      }
+    }
+    // Stripped first so a server-stamped field the STORED slot does not carry
+    // cannot survive as the incoming value — `carried` can only overwrite keys
+    // it has, and an absent stored receipt has none.
+    return reconcileOwedSince({ ...stripServerStamped(item), ...carried });
+  });
+}
+
+const SERVER_STAMPED_FIELD_SET: ReadonlySet<string> = new Set(
+  SERVER_STAMPED_OUTPUT_FIELDS
+);
+
+/** Every incoming slot indexed by the casefolded label the doors match on. */
+function indexByLabel(outputs: OutputItem[]): Map<string, OutputItem> {
   const stored = new Map<string, OutputItem>();
-  for (const o of current) {
+  for (const o of outputs) {
     const key = normalizeExpectedLabel(o?.label);
     // First wins: two slots sharing a label are already ambiguous everywhere
     // else (the delegation and satisfy doors both take the first match), so
     // this resolves it the same way rather than inventing a second answer.
     if (key && !stored.has(key)) stored.set(key, o);
   }
+  return stored;
+}
 
-  return incoming.map((item) => {
+/** The slot with every receipt removed — what a client may actually author. */
+function stripServerStamped(item: OutputItem): OutputItem {
+  const out: OutputItem = { ...item };
+  for (const field of SERVER_STAMPED_OUTPUT_FIELDS) delete out[field];
+  return out;
+}
+
+/** One attempt to write a field the client does not own. */
+export interface ServerStampedWrite {
+  /** The slot's label, verbatim — so the caller can find it. */
+  label: string;
+  field: (typeof SERVER_STAMPED_OUTPUT_FIELDS)[number];
+}
+
+/**
+ * Every server-stamped field an incoming patch is trying to CHANGE — the
+ * authority floor for the wholesale path, pure and exported so both its
+ * consumers share one derivation.
+ *
+ * ROUND-TRIP IS NOT A WRITE. A client that read the array and sends it back
+ * unchanged carries every receipt verbatim, and must not error — that is the
+ * shape `useDeclareOutput` (browser) and every naive echo already produce. So
+ * the test is on the VALUE: equal to the stored one is a round-trip and passes;
+ * DIFFERENT is a caller trying to author a receipt and is refused, loudly.
+ *
+ * Refused rather than silently dropped, deliberately. A silent no-op is the
+ * "guard works, report lies" defect this codebase has shipped repeatedly: the
+ * caller is told its patch landed, reads back a slot that is still pending, and
+ * has no way to tell a refusal from a bug. (The one place silence IS correct is
+ * a slot with no stored twin — see {@link mergeExpectedOutputs}.)
+ */
+export function detectServerStampedWrites(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): ServerStampedWrite[] {
+  const stored = indexByLabel(current);
+  const violations: ServerStampedWrite[] = [];
+  for (const item of incoming) {
     const key = normalizeExpectedLabel(item?.label);
     const prior = key ? stored.get(key) : undefined;
-    if (!prior) return item;
-    // Only the fields the incoming item is SILENT about are carried; an
-    // explicit value (including one the caller genuinely round-tripped) wins.
-    const carried: Partial<ExpectedOutput> = {};
-    for (const field of SERVER_OWNED_OUTPUT_FIELDS) {
-      if (item[field] !== undefined) continue;
-      const value = prior[field];
-      if (value !== undefined) {
-        Object.assign(carried, { [field]: value });
-      }
+    if (!prior) continue;
+    for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
+      const value = item[field];
+      if (value === undefined) continue;
+      if (value === prior[field]) continue;
+      violations.push({ label: item.label, field });
     }
-    return reconcileOwedSince({ ...item, ...carried });
+  }
+  return violations;
+}
+
+/**
+ * The refusal, as a `BAD_REQUEST` — this is a caller error, not a server fault,
+ * and every door must say so rather than returning a 500 that reads like a bug
+ * on our side. `TRPCError` is used at all four merge call sites (tRPC ×2, Hub
+ * REST, the approval executor) so the message survives to the caller on each.
+ */
+export function serverStampedWriteError(
+  violations: ServerStampedWrite[]
+): TRPCError {
+  const named = violations
+    .map((v) => `"${v.label}".${v.field}`)
+    .slice(0, 5)
+    .join(", ");
+  const more = violations.length > 5 ? ` (+${violations.length - 5} more)` : "";
+  return new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      `Refused: ${named}${more} — these are server-stamped receipts and a patch ` +
+      `cannot author or change one. Nothing was changed. Mark a deliverable done ` +
+      `by approving the proposal that produced it, or — if it is your own slot — ` +
+      `by attesting it (focusSessions.attestOutput). Round-tripping the stored ` +
+      `value unchanged is always fine.`,
   });
 }
 
@@ -452,6 +627,34 @@ export async function updateFocusSession(
   });
   if (!existing) {
     return { status: "not_found" };
+  }
+
+  // AUTHORITY FLOOR, BEFORE THE MEMBRANE. The merge enforces this too — it is
+  // the one door and it throws — but reaching it via governance would mean an
+  // agent's forged receipt becomes a PROPOSAL, sits in the human's queue looking
+  // like ordinary work, and only explodes at approval time, on the human. So the
+  // same pure detector runs here against the row we already loaded, and the
+  // refusal goes back to the caller that tried it, as the `denied` this result
+  // type already carries.
+  //
+  // Not a second derivation: `detectServerStampedWrites` is the derivation, and
+  // both call sites pass it the stored array. This one races (the load is
+  // unlocked) — harmlessly, because the merge inside the row lock is the one
+  // that decides; this only spares the human a poisoned proposal.
+  if (params.expectedOutputs !== undefined) {
+    const storedOutputs: OutputItem[] = Array.isArray(existing.expectedOutputs)
+      ? (existing.expectedOutputs as OutputItem[])
+      : [];
+    const violations = detectServerStampedWrites(
+      storedOutputs,
+      params.expectedOutputs
+    );
+    if (violations.length > 0) {
+      return {
+        status: "denied",
+        reason: serverStampedWriteError(violations).message,
+      };
+    }
   }
 
   // Governance membrane — AI callers route through proposals (same gate the

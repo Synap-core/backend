@@ -1238,12 +1238,13 @@ export const tools = {
                   kind: { type: "string" },
                   label: { type: "string" },
                   icon: { type: "string" },
-                  status: {
-                    type: "string",
-                    enum: ["pending", "done"],
-                    description:
-                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
-                  },
+                  // `status` and the other receipts (attestedBy, retiredAt,
+                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
+                  // advertised, on purpose: a field a model is told about is a
+                  // field it will try to send, and each of these is stamped by
+                  // exactly one server door. The wire still ACCEPTS them so a
+                  // caller echoing a stored slot back does not lose them at the
+                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
                   owner: {
                     type: "string",
                     enum: ["human", "agent"],
@@ -1323,12 +1324,13 @@ export const tools = {
                   kind: { type: "string" },
                   label: { type: "string" },
                   icon: { type: "string" },
-                  status: {
-                    type: "string",
-                    enum: ["pending", "done"],
-                    description:
-                      "Per-item lifecycle. Defaults to 'pending' when omitted.",
-                  },
+                  // `status` and the other receipts (attestedBy, retiredAt,
+                  // satisfiedByProposalId, delegatedTo, owedSince…) are NOT
+                  // advertised, on purpose: a field a model is told about is a
+                  // field it will try to send, and each of these is stamped by
+                  // exactly one server door. The wire still ACCEPTS them so a
+                  // caller echoing a stored slot back does not lose them at the
+                  // parse; CHANGING one is refused (`mergeExpectedOutputs`).
                   owner: {
                     type: "string",
                     enum: ["human", "agent"],

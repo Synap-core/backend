@@ -235,14 +235,18 @@ export async function completeFocusSession(
   ).filter((o) => o.status !== "done").length;
 
   // CANCELLED retires the slots the human still owed — the obligation ends with
-  // the work. Stamped, never deleted (see the header). Computed here so it
-  // lands in the SAME update as the terminal status: a session cannot end up
-  // cancelled with its slots still owed, or retired without being cancelled.
-  const storedOutputs: ExpectedOutput[] = Array.isArray(session.expectedOutputs)
-    ? (session.expectedOutputs as ExpectedOutput[])
-    : [];
-  const retirement = retirementForClose(storedOutputs, terminalStatus);
-  const retiredSlots = retirement?.retiredSlots ?? 0;
+  // the work. Stamped, never deleted (see the header). Computed inside the
+  // update's own transaction, from a ROW-LOCKED read, and only there.
+  //
+  // WHY NOT FROM `session` ABOVE. That row was loaded BEFORE the governance
+  // membrane, which is an await of unbounded duration (it can hit the policy
+  // engine and write a proposal). `expectedOutputs` is JSONB written WHOLESALE
+  // by five other doors — attest, satisfy, delegate, return, the update merge —
+  // every one of which takes `FOR UPDATE` precisely because a stale read here is
+  // a lost write. This one did not, and it does not merely lose the retirement:
+  // it writes the WHOLE array back, so an attestation landing during the
+  // membrane was silently reverted, receipt and all.
+  let retiredSlots = 0;
 
   const warnings: string[] = [];
   if (unfinishedOutputs > 0) {
@@ -251,7 +255,27 @@ export async function completeFocusSession(
     );
   }
 
-  const [updated] = await db
+  const [updated] = await db.transaction(async (tx) => {
+    // Only the cancel path touches the array, so only it needs the lock — a
+    // `closed`/`failed` exit leaves `expectedOutputs` alone and cannot lose a
+    // concurrent write because it never writes the column.
+    let retirement: ReturnType<typeof retirementForClose> = null;
+    if (terminalStatus === "cancelled") {
+      const [locked] = await tx
+        .select({ expectedOutputs: focusSessions.expectedOutputs })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, sessionId))
+        .for("update");
+      const lockedOutputs: ExpectedOutput[] = Array.isArray(
+        locked?.expectedOutputs
+      )
+        ? (locked.expectedOutputs as ExpectedOutput[])
+        : [];
+      retirement = retirementForClose(lockedOutputs, terminalStatus);
+      retiredSlots = retirement?.retiredSlots ?? 0;
+    }
+
+    return await tx
     .update(focusSessions)
     .set({
       status: terminalStatus,
@@ -280,6 +304,7 @@ export async function completeFocusSession(
     })
     .where(eq(focusSessions.id, sessionId))
     .returning();
+  });
 
   // The session is closed, so its EPHEMERAL proposals are no longer answerable.
   // A capability run is an outbound call bound to this session — urgent for

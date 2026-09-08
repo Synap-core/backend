@@ -12,6 +12,8 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
   isOwedSlot,
+  MISSING_OWED_SINCE,
+  owedSlotOrder,
   owedSlotWhere,
   projectOwedSlots,
   retirementForClose,
@@ -88,6 +90,51 @@ describe("owedSlotWhere — the SQL half", () => {
     // `jsonb_array_elements` ERRORS on a scalar, and `expected_outputs` is
     // untyped JSONB a legacy row can hold anything in.
     expect(sql).toContain("jsonb_typeof");
+  });
+});
+
+describe("owedSlotOrder — the SQL ordering must agree with the TS sort", () => {
+  /**
+   * THE BUG. `min()` skips NULLs. A session with one UNSTAMPED owed slot and one
+   * stamped `2026-09-01` therefore ranked by September, while `projectOwedSlots`
+   * substitutes `MISSING_OWED_SINCE` and the TypeScript sort puts that same slot
+   * FIRST of everything. This ORDER BY decides which rows survive `.limit()`, so
+   * the disagreement could drop the globally-oldest slot off the page silently.
+   *
+   * Source-shaped for the same reason the `owedSlotWhere` block above is: no
+   * local postgres in this suite. What it CANNOT see is whether postgres agrees
+   * that the sentinel sorts below every ISO stamp — that is a property of the
+   * text collation, asserted in TypeScript below instead.
+   */
+  const sql = new PgDialect().sqlToQuery(owedSlotOrder()).sql;
+
+  it("substitutes the sentinel rather than letting min() skip NULLs", () => {
+    expect(sql).toContain("coalesce");
+    expect(sql).toMatch(/min\(coalesce\(slot->>'owedSince'/);
+  });
+
+  it("binds the SAME sentinel `projectOwedSlots` substitutes", () => {
+    const { params } = new PgDialect().sqlToQuery(owedSlotOrder());
+    expect(params).toContain(MISSING_OWED_SINCE);
+  });
+
+  it("shares the owed predicate with the WHERE clause, verbatim", () => {
+    // Ordering on a different population than you filtered on is its own bug.
+    const where = new PgDialect().sqlToQuery(owedSlotWhere()).sql;
+    for (const clause of [
+      "slot->>'owner' = 'human'",
+      "slot->>'status' IS DISTINCT FROM 'done'",
+      "slot->>'retiredAt' IS NULL",
+    ]) {
+      expect(where).toContain(clause);
+      expect(sql).toContain(clause);
+    }
+  });
+
+  it("the sentinel sorts BEFORE every real stamp", () => {
+    // The property both orderings depend on, in the comparison the TS sort uses.
+    expect(MISSING_OWED_SINCE < "1970-01-01T00:00:00.000Z").toBe(true);
+    expect(MISSING_OWED_SINCE < "2026-09-01T09:00:00.000Z").toBe(true);
   });
 });
 

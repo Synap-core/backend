@@ -27,6 +27,50 @@ const OWED: ExpectedOutput = {
   owedSince: "2026-09-01T09:00:00.000Z",
 };
 
+describe("selectSlotToAttest — a RETIRED slot is not dischargeable", () => {
+  /**
+   * A cancelled session STAMPS its owed slots (`retiredAt` + `retiredReason`)
+   * rather than deleting them — deliberately, so the record stays readable. That
+   * keeps them reachable BY LABEL, which is how the attest door addresses a
+   * slot, and nothing here refused them: attesting one minted an
+   * `attestedBy`/`attestedAt` receipt asserting a person delivered work that had
+   * been called off. Afterwards both stamps stand and neither falsifies the
+   * other.
+   *
+   * The owed READ (`isOwedSlot`) already drops retired slots, so this never
+   * showed on a "needs you" surface — which is exactly why it needed a floor at
+   * the door rather than a filter upstream.
+   */
+  const RETIRED: ExpectedOutput = {
+    ...OWED,
+    retiredAt: "2026-09-05T10:00:00.000Z",
+    retiredReason: "session_cancelled",
+  };
+
+  it("refuses a retired slot", () => {
+    expect(selectSlotToAttest([RETIRED], OWED.label)).toEqual({
+      refused: "retired",
+    });
+  });
+
+  it("is not reachable through the owed read either — belt and braces", () => {
+    expect(isOwedSlot(RETIRED)).toBe(false);
+  });
+
+  it("still accepts the SAME slot before it was retired", () => {
+    // The discriminating pair: identical but for the stamp. Without it, a test
+    // asserting only the refusal would pass on a door that refused everything.
+    expect(selectSlotToAttest([OWED], OWED.label)).toEqual({ index: 0 });
+  });
+
+  it("refuses on `retiredAt` alone, not on the reason", () => {
+    const { retiredReason: _drop, ...noReason } = RETIRED;
+    expect(selectSlotToAttest([noReason as ExpectedOutput], OWED.label)).toEqual(
+      { refused: "retired" }
+    );
+  });
+});
+
 describe("selectSlotToAttest — the three floors", () => {
   it("picks the slot the human owns, matching the label trimmed + casefolded", () => {
     expect(selectSlotToAttest([OWED], "  stripe LIVE key ")).toEqual({
@@ -70,12 +114,7 @@ describe("selectSlotToAttest — the three floors", () => {
 
 describe("stampAttested — the receipt", () => {
   it("stamps done + WHO and WHEN, and never a fake proposal id", () => {
-    const [slot] = stampAttested(
-      [OWED],
-      0,
-      USER,
-      new Date("2026-09-08T12:00:00Z")
-    );
+    const [slot] = stampAttested([OWED], 0, USER, new Date("2026-09-08T12:00:00Z"));
     expect(slot).toMatchObject({
       status: "done",
       attestedBy: USER,
