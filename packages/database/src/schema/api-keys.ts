@@ -239,6 +239,34 @@ export function isValidScope(scope: string): scope is ApiKeyScope {
   return API_KEY_SCOPES.includes(scope as ApiKeyScope);
 }
 
+/**
+ * Scopes that confer AUTHORITY rather than ordinary data access, and therefore
+ * may never be minted by a caller who does not already hold comparable
+ * authority.
+ *
+ * WHY THIS EXISTS. `/setup/service` mints a key with CALLER-DECLARED scopes,
+ * and one of its accepted credentials is any active `hub-protocol.write` key —
+ * the scope every agent key is minted with. Without this list, narrowing a
+ * dangerous door to a dedicated scope achieves nothing: an agent simply mints
+ * itself a new key carrying that scope and walks through. The narrow scope and
+ * this list are one mechanism; neither works alone.
+ *
+ * `satisfies` ties every entry to a REAL scope, so a rename or typo is a
+ * compile error rather than an entry that silently protects nothing.
+ */
+export const PRIVILEGED_MINT_SCOPES = [
+  // Sets the baseUrl the pod sends every prompt to.
+  "providers.write",
+  // Mints further agents — the escalation multiplier.
+  "setup.agent",
+  // Elevated Hub Protocol access.
+  "hub-protocol.admin",
+] as const satisfies ReadonlyArray<ApiKeyScope>;
+
+export function isPrivilegedMintScope(scope: string): boolean {
+  return (PRIVILEGED_MINT_SCOPES as readonly string[]).includes(scope);
+}
+
 // Relations
 import { relations } from "drizzle-orm";
 import { users } from "./users.js";

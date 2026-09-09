@@ -54,7 +54,11 @@ import {
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
-import { API_KEY_SCOPES, isValidScope } from "@synap/database/schema";
+import {
+  API_KEY_SCOPES,
+  isValidScope,
+  isPrivilegedMintScope,
+} from "@synap/database/schema";
 
 import { kratosAdmin, safeTokenEqual } from "@synap/auth";
 import type { Context } from "hono";
@@ -1030,6 +1034,38 @@ export function registerSetupRoutes(app: HubHono): void {
           : ["hub-protocol.read"];
     } else {
       return c.json({ error: "scopes must be an array of strings" }, 400);
+    }
+
+    // ── NO PRIVILEGE ESCALATION BY MINTING ────────────────────────────────────
+    // This door accepts ANY active `hub-protocol.write` key (auth Path 4) — the
+    // scope every agent key carries. Scopes here are CALLER-DECLARED and were
+    // previously validated only for spelling, so an agent could mint itself a
+    // key bearing a privileged scope and walk through a door its own key was
+    // deliberately not allowed to open. Narrowing `POST /ai-providers` to
+    // `providers.write` is worth nothing without this check: the scope and this
+    // rule are ONE mechanism.
+    //
+    // Operator-grade credentials (trusted-issuer JWT, PROVISIONING_TOKEN, or a
+    // key already holding `setup.agent`) may still mint these — that is the
+    // legitimate provisioning path, e.g. granting the `eve` CLI its
+    // `providers.write`.
+    if (auth.authMethod === "api_key_surface") {
+      const privileged = scopes.filter((s) => isPrivilegedMintScope(s));
+      if (privileged.length > 0) {
+        logger.warn(
+          { flowId, privileged },
+          "setup/service: refused privileged scope mint from a surface key"
+        );
+        return c.json(
+          {
+            error:
+              `Cannot mint privileged scope(s) with a surface key: ${privileged.join(", ")}. ` +
+              `These confer authority beyond ordinary data access, so they require a trusted-issuer JWT, ` +
+              `the PROVISIONING_TOKEN, or a key that already holds \`setup.agent\`.`,
+          },
+          403
+        );
+      }
     }
 
     try {
