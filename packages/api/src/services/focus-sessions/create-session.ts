@@ -22,7 +22,7 @@ import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { reconcileOwedSince } from "./update-session.js";
+import { sanitizeDeclaredOutputs } from "./update-session.js";
 // STATIC — see the note on the same import in `update-session.ts`: there is no
 // cycle here, the `await import()` this replaces stated no reason, and
 // `block-output.ts` has always imported this module statically.
@@ -290,9 +290,15 @@ export async function createFocusSession(
         // `owedSince` is present IFF `owner === 'human'`, and that invariant has
         // to hold from BIRTH: a session created with an already-blocked slot
         // would otherwise carry the human's ownership with no clock, and the
-        // owed feed has nothing to order or age it by. Same reconciler the merge
-        // and the stampers use — never a second answer here.
-        expectedOutputs: expectedOutputs.map((o) => reconcileOwedSince(o)),
+        // owed feed has nothing to order or age it by.
+        //
+        // The SAME door the merge uses, never a second answer here — and it is
+        // the whole write-authority floor, not just the clock. This was
+        // `reconcileOwedSince` alone, which meant a caller could declare a slot
+        // already carrying `attestedBy` (a forged human confirmation) or
+        // `retiredAt` (born invisible to the owed board). The update door had
+        // refused both for as long as the floor existed; this one had not.
+        expectedOutputs: sanitizeDeclaredOutputs(expectedOutputs),
         channelId,
         agentIds,
         status: "active",

@@ -443,6 +443,34 @@ function indexByLabel(outputs: OutputItem[]): Map<string, OutputItem> {
   return stored;
 }
 
+/**
+ * WHAT A CLIENT MAY AUTHOR AT DECLARATION TIME — the CREATE half of the write
+ * authority floor that {@link mergeExpectedOutputs} enforces on every update.
+ *
+ * A create has no stored slot to carry anything forward from, which makes the
+ * rule simpler than the merge's, not laxer: every server-stamped field is by
+ * definition UNEARNED on a slot that is being born, so all of them are dropped
+ * and the reconciler then stamps the one the server owes.
+ *
+ * ⚠️ This existed only as the merge's private strip, so `startFocusSession`
+ * wrote the caller's array through `reconcileOwedSince` ALONE. That reconciler
+ * touches `owedSince` and nothing else, so a create could persist a slot
+ * carrying `attestedBy`/`attestedAt` — a forged receipt saying a human
+ * confirmed work nobody confirmed — or `retiredAt`, which makes the slot
+ * invisible to `owedSlotWhere` from birth. The update door had refused both
+ * since the floor was built; the create door had never been asked.
+ *
+ * Order is load-bearing: strip FIRST (which also drops a client-supplied
+ * `owedSince`), then reconcile, so the stamp is the server's observation and
+ * never the caller's claim.
+ */
+export function sanitizeDeclaredOutputs(
+  outputs: readonly OutputItem[],
+  now: Date = new Date()
+): OutputItem[] {
+  return outputs.map((o) => reconcileOwedSince(stripServerStamped(o), now));
+}
+
 /** The slot with every receipt removed — what a client may actually author. */
 function stripServerStamped(item: OutputItem): OutputItem {
   const out: OutputItem = { ...item };
