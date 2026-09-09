@@ -56,14 +56,15 @@ const PROPOSED_DISCRIMINATORS = [
   { key: "status", value: "proposed" },
 ] as const;
 
-/** The union of `{key: value}` shapes the table above can recognise. */
-type DiscriminatorShapes = {
-  [I in keyof typeof PROPOSED_DISCRIMINATORS]: {
-    [
-      K in (typeof PROPOSED_DISCRIMINATORS)[I]["key"]
-    ]: (typeof PROPOSED_DISCRIMINATORS)[I]["value"];
-  };
-}[number];
+/**
+ * The union of `{key: value}` shapes the table above can recognise, DERIVED by
+ * distributing over the table's own members rather than restated — so the floor
+ * below can never assert coverage the runtime predicate does not have.
+ */
+type ShapeOf<D> = D extends { key: infer K extends string; value: infer V }
+  ? { [P in K]: V }
+  : never;
+type DiscriminatorShapes = ShapeOf<(typeof PROPOSED_DISCRIMINATORS)[number]>;
 
 /**
  * COMPILE-TIME COVERAGE FLOOR (the `PROJECTED_OWED_SLOT_FIELDS` /

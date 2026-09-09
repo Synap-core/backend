@@ -76,6 +76,10 @@ describe("skills.proven_at — stamped on the FIRST genuine success", () => {
   });
 
   it("REACHABILITY: a successful run issues the stamp, against `skills`, with a real Date, floored on proven_at IS NULL", async () => {
+    // The SUCCESS half of the real `entity.create` return: the governed router
+    // granted, so the caller gets the created row. Its other half — the
+    // governed-to-review half — is a separate test below, and its ABSENCE here
+    // is what let the proven_at defect ship.
     BUILTIN_VERBS["entity.create"] = vi.fn(async () => ({ id: "e1" }));
     const before = Date.now();
 
@@ -125,6 +129,49 @@ describe("skills.proven_at — stamped on the FIRST genuine success", () => {
     expect(out.kind).toBe("run");
     expect(updates).toHaveLength(0);
   });
+
+  /**
+   * THE DEFECT THIS FILE MISSED ONCE.
+   *
+   * A builtin verb does not do the write itself: it calls a governed tRPC
+   * router through `createCaller` and surfaces the result verbatim. When the
+   * gate routes the write to a human that result is `{status:"proposed",
+   * proposalId}` — a DIFFERENT spelling from the declarative path's
+   * `{proposed:true}` — and the builtin branch returns `kind:"run"`
+   * unconditionally. The old predicate knew only `proposed === true`, so every
+   * agent `entity.create` sent to review stamped `proven_at` on a capability
+   * that had never run — permanently, because the UPDATE is floored on
+   * `IS NULL` and no later real run can correct it.
+   *
+   * Both spellings are asserted here, from the SAME table the production
+   * predicate reads, so a third one added to `ProposedEnvelope` without a
+   * discriminator fails the build in `proposed-envelope.ts` rather than
+   * quietly re-opening this.
+   */
+  it.each([
+    [
+      "router spelling (builtin → governed tRPC caller)",
+      { status: "proposed", proposalId: "p1" },
+    ],
+    ["capability spelling", { proposed: true, proposalId: "p1" }],
+    ["proposed envelope carrying no proposalId", { status: "proposed" }],
+  ])(
+    "a BUILTIN run that was only PROPOSED — %s — does NOT stamp",
+    async (_label, envelope) => {
+      BUILTIN_VERBS["entity.create"] = vi.fn(async () => envelope);
+
+      const out = await runResolvedSkill(
+        row({ kind: "builtin", name: "entity.create" }),
+        {},
+        ctx
+      );
+
+      // It really does flow through as a SUCCESS outcome carrying the envelope
+      // — which is exactly why the exclusion cannot be implied by `kind`.
+      expect(out).toEqual({ kind: "run", skillId: "s1", result: envelope });
+      expect(updates).toHaveLength(0);
+    }
+  );
 
   it("a FAILED run does not stamp", async () => {
     vi.mocked(executeProviderVerb).mockResolvedValueOnce({
