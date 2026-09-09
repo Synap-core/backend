@@ -156,7 +156,15 @@ describe("validateTriggerFilters — the create door accepts exactly what the ma
     ],
     ["an empty $in", { s: { $in: [] } }, /non-empty array/],
     ["a non-array $in", { s: { $in: "a" } }, /non-empty array/],
-    ["a non-numeric $gt", { s: { $gt: "soon" } }, /compared numerically/],
+    // The wording moved from "compared numerically" to "compared as an ordered
+    // value" when dates learned to participate — the operand may now be a
+    // number OR an ISO-8601 instant. "soon" is still neither, so the REFUSAL is
+    // unchanged; only the sentence describing it grew.
+    [
+      "a non-numeric, non-date $gt",
+      { s: { $gt: "soon" } },
+      /compared as an ordered value/,
+    ],
     [
       "an object $eq operand",
       { s: { $eq: { a: 1 } } },

@@ -139,13 +139,28 @@ const GOOD_SENTENCE = {
   actions: [{ type: "notify" as const, config: { message: "hi" } }],
 };
 
+/**
+ * A sentence the runtime CANNOT evaluate, so activating it would produce a rule
+ * that saves green and never fires.
+ *
+ * ⚠️ THE FIXTURE WENT STALE, NOT THE RULE. This used `operator: "contains"`,
+ * which was refused by name until the matcher gained `$contains`. Once it
+ * became evaluable this stopped being a holed sentence at all, and the two
+ * tests below started failing while asserting a property that is still
+ * completely correct — activation must refuse an un-runnable rule.
+ *
+ * `changed_to` is now the ONLY operator still refused, and unlike the other two
+ * it is not an omission: it asks "did this field BECOME x", which needs the
+ * value before the event, and the matcher is handed one payload. So it is the
+ * durable choice here rather than the next one to expire.
+ */
 const BAD_WHERE = {
   ...GOOD_SENTENCE,
   conditions: [
     {
       id: "c1",
       key: "status",
-      operator: "contains",
+      operator: "changed_to",
       value: "open",
     } as unknown as never,
   ],

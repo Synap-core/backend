@@ -56,9 +56,139 @@ export const TRIGGER_FILTER_OPERATORS = [
   "$gte",
   "$lt",
   "$lte",
+  // Relative time window, resolved against NOW at evaluation. See
+  // `TRIGGER_FILTER_WINDOWS`. Not compiled by `query-dsl.ts` — it takes that
+  // module's existing "in the shared vocabulary but not compiled to SQL"
+  // branch, which drops the term with a named warning rather than silently.
+  "$within",
+  // Substring (on a string) or membership (in an array). Neither is compiled by
+  // `query-dsl.ts`; both take its existing "in the shared vocabulary but not
+  // compiled to SQL" branch, which drops the term with a named warning.
+  "$contains",
+  "$starts_with",
 ] as const;
 
+/**
+ * ⚠️ `$contains` and `$starts_with` compare CASE-INSENSITIVELY on strings, and
+ * they are the only operators here that do.
+ *
+ * `$eq` stays strict — an exact match that quietly ignored case would change
+ * the meaning of every stored equality filter. But a substring test is asked
+ * for in the user's own words ("subject contains invoice"), and one that misses
+ * "Invoice #42" is a rule that looks right and silently never fires on the very
+ * rows it was written for. That is the failure this module exists to remove, so
+ * the inconsistency is deliberate and stated rather than tidy and wrong.
+ *
+ * Array membership is a different comparison and stays EXACT: elements are
+ * compared with `===`, the same test `$in` makes in the other direction.
+ */
+
 export type TriggerFilterOperator = (typeof TRIGGER_FILTER_OPERATORS)[number];
+
+/**
+ * The relative time windows `$within` accepts — a CLOSED set, on purpose.
+ *
+ * ── Why named windows and not a date expression ────────────────────────────
+ * The alternative is letting an author write an absolute instant, which freezes
+ * at authoring time ("deadline is today" would mean the day the rule was
+ * written, forever) or a mini date language, which is a control that cannot
+ * round-trip its own value on a phone (HA frontend#7463). Relative windows are
+ * the precedented shape — Notion and Airtable both default to them — and a
+ * closed set is one a picker can offer without inventing a parser.
+ *
+ * ── ZONE HONESTY, which splits this set in two ─────────────────────────────
+ * Four of these are ROLLING: anchored on `now` and therefore identical in every
+ * timezone. `today` is a CALENDAR window and is not — it needs a day boundary,
+ * and the matcher has no per-user zone (the pod runs UTC; `ENV TZ=UTC` is
+ * pinned in `deploy/Dockerfile`). So `today` means the UTC day, and any surface
+ * offering it MUST say so. Prefer a rolling window wherever one expresses the
+ * intent: `last_24_hours` is the same idea as "today" for most rules and is
+ * true for every reader.
+ */
+export const TRIGGER_FILTER_WINDOWS = {
+  /** Strictly before now — an overdue date. Rolling. */
+  past: "past",
+  /** Now or later. Rolling. */
+  future: "future",
+  /** Within the 24 hours ending now. Rolling. */
+  last_24_hours: "last_24_hours",
+  /** Within the 7 days ending now. Rolling. */
+  last_7_days: "last_7_days",
+  /** Between now and 7 days from now. Rolling. */
+  next_7_days: "next_7_days",
+  /** The current UTC calendar day. ⚠️ Zone-dependent — see the note above. */
+  today: "today",
+} as const;
+
+export type TriggerFilterWindow = keyof typeof TRIGGER_FILTER_WINDOWS;
+
+/**
+ * The words each window reads as.
+ *
+ * Beside the windows, not in a surface, because a window key exists in the TYPE
+ * SYSTEM — the test `.claude/rules/vocabulary.md` gives for "is this vocabulary
+ * or copy?" — and two surfaces spelling "next_7_days" differently is the fork
+ * that rule exists to prevent. It is NOT in `STATUS_LABELS`: a window is not a
+ * lifecycle state, and that table warns against becoming a junk drawer.
+ *
+ * ⚠️ `today` names its zone. The matcher has no per-user timezone and the pod
+ * runs UTC, so a bare "Today" would be a lie for anyone east or west of it —
+ * the same defect the cron labels had. `last_24_hours` is offered right beside
+ * it precisely so there is an honest option that means almost the same thing.
+ */
+export const TRIGGER_FILTER_WINDOW_LABELS: Readonly<
+  Record<TriggerFilterWindow, string>
+> = {
+  past: "is in the past",
+  future: "is in the future",
+  last_24_hours: "is within the last 24 hours",
+  last_7_days: "is within the last 7 days",
+  next_7_days: "is within the next 7 days",
+  today: "is today (UTC)",
+};
+
+const WINDOW_SET: ReadonlySet<string> = new Set(
+  Object.keys(TRIGGER_FILTER_WINDOWS)
+);
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Does `value` fall inside `window`, as of `now`?
+ *
+ * Exported so the authoring surfaces can PREVIEW a window without duplicating
+ * the arithmetic — a second implementation of "what does today mean" is exactly
+ * the fork the shared vocabulary exists to prevent.
+ */
+export function isWithinWindow(
+  value: unknown,
+  window: string,
+  now: number
+): boolean {
+  const at = toComparableNumber(value);
+  if (at === undefined || !WINDOW_SET.has(window)) return false;
+  switch (window as TriggerFilterWindow) {
+    case "past":
+      return at < now;
+    case "future":
+      return at >= now;
+    case "last_24_hours":
+      return at > now - DAY_MS && at <= now;
+    case "last_7_days":
+      return at > now - 7 * DAY_MS && at <= now;
+    case "next_7_days":
+      return at >= now && at < now + 7 * DAY_MS;
+    case "today": {
+      // UTC day boundaries — see the zone note on TRIGGER_FILTER_WINDOWS.
+      const start = Date.UTC(
+        new Date(now).getUTCFullYear(),
+        new Date(now).getUTCMonth(),
+        new Date(now).getUTCDate()
+      );
+      return at >= start && at < start + DAY_MS;
+    }
+  }
+}
 
 const OPERATOR_SET: ReadonlySet<string> = new Set(TRIGGER_FILTER_OPERATORS);
 
@@ -79,13 +209,53 @@ const NUMERIC_OPERATORS: ReadonlySet<string> = new Set([
  */
 const NUMERIC_TEXT = /^-?[0-9]+(\.[0-9]+)?$/;
 
-/** Coerce for a numeric comparison, or `undefined` when the value does not
- * participate — the in-memory equivalent of SQL's `NULL`, which drops the row. */
+/**
+ * ISO-8601 instants and plain dates, STRICTLY.
+ *
+ * Not `Date.parse`: it is engine-dependent and accepts things like
+ * `"March 3"` and `"2026 foo"` on some runtimes, which would make a filter's
+ * meaning depend on which Node built the pod. A filter that matches on one host
+ * and not another is worse than one that never matches.
+ */
+const ISO_DATE =
+  /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+
+/**
+ * Coerce for an ordered comparison, or `undefined` when the value does not
+ * participate — the in-memory equivalent of SQL's `NULL`, which drops the row.
+ *
+ * ── DATES PARTICIPATE NOW, AND THAT IS THE WHOLE DATE UNLOCK ────────────────
+ * This returned `undefined` for every ISO string, so `$gt/$gte/$lt/$lte`
+ * ALWAYS failed closed on a date and the authoring grammar had to refuse the
+ * whole `date` type (`CONDITION_OPERATORS_BY_VALUE_TYPE.date` was `[]`, with the
+ * comment "numeric coercion fails on every ISO string"). Comparing dates
+ * therefore needs no new operator NAMES — only a coercion that understands
+ * them. Epoch milliseconds order identically to instants, so `$lt` on two dates
+ * means exactly what a reader expects.
+ *
+ * ⚠️ STRICTLY WIDENING, and it must stay that way: every value that already
+ * coerced still coerces to the SAME number, and only values that previously
+ * returned `undefined` can now return one. So no stored automation can change
+ * meaning — it can only start matching where it previously could not match at
+ * all. NUMERIC TEXT KEEPS PRECEDENCE for the same reason: `"2026"` stays the
+ * number 2026 and does not silently become a year.
+ */
 function toComparableNumber(value: unknown): number | undefined {
   if (typeof value === "number")
     return Number.isFinite(value) ? value : undefined;
-  if (typeof value === "string" && NUMERIC_TEXT.test(value.trim())) {
-    return Number(value.trim());
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    // Numeric first — see the precedence note above.
+    if (NUMERIC_TEXT.test(trimmed)) return Number(trimmed);
+    if (ISO_DATE.test(trimmed)) {
+      const ms = Date.parse(trimmed);
+      return Number.isNaN(ms) ? undefined : ms;
+    }
+    return undefined;
+  }
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isFinite(ms) ? ms : undefined;
   }
   return undefined;
 }
@@ -125,7 +295,14 @@ export function isTriggerFilterOperatorObject(
  */
 export function evaluateTriggerFilterValue(
   actual: unknown,
-  expected: unknown
+  expected: unknown,
+  /**
+   * Evaluation instant. Injected rather than read inside, so a `$within` filter
+   * is deterministic under test — a time-dependent matcher that calls
+   * `Date.now()` internally can only be tested by mocking the clock, and the
+   * tests that result pin the mock instead of the rule.
+   */
+  now: number = Date.now()
 ): boolean {
   if (!isTriggerFilterOperatorObject(expected)) {
     return actual === expected;
@@ -142,6 +319,37 @@ export function evaluateTriggerFilterValue(
       if (op === "$gte" && !(a >= b)) return false;
       if (op === "$lt" && !(a < b)) return false;
       if (op === "$lte" && !(a <= b)) return false;
+      continue;
+    }
+
+    if (op === "$contains") {
+      if (!isPrimitive(operand)) return false;
+      if (Array.isArray(actual)) {
+        // Membership. `===` against each element, the same comparison `$in`
+        // makes in the other direction.
+        if (!actual.some((el) => el === operand)) return false;
+        continue;
+      }
+      if (typeof actual !== "string" || typeof operand !== "string")
+        return false;
+      if (!actual.toLowerCase().includes(operand.toLowerCase())) return false;
+      continue;
+    }
+
+    if (op === "$starts_with") {
+      if (typeof actual !== "string" || typeof operand !== "string")
+        return false;
+      if (!actual.toLowerCase().startsWith(operand.toLowerCase())) return false;
+      continue;
+    }
+
+    if (op === "$within") {
+      if (
+        typeof operand !== "string" ||
+        !isWithinWindow(actual, operand, now)
+      ) {
+        return false;
+      }
       continue;
     }
 
@@ -170,6 +378,7 @@ function isPrimitive(value: unknown): boolean {
 }
 
 const SUPPORTED = TRIGGER_FILTER_OPERATORS.join(", ");
+const SUPPORTED_WINDOWS = Object.keys(TRIGGER_FILTER_WINDOWS).join(", ");
 
 export type TriggerFilterValidation =
   { ok: true } | { ok: false; error: string };
@@ -257,11 +466,24 @@ export function validateTriggerFilters(
         }
         continue;
       }
+      if (op === "$within") {
+        // Rejected HERE rather than at evaluation. An unknown window fails
+        // closed in the matcher, which looks exactly like "the rule is fine,
+        // nothing matched yet" — the failure mode this whole module exists to
+        // remove. The door names the windows so a typo is fixable.
+        if (typeof operand !== "string" || !WINDOW_SET.has(operand)) {
+          return {
+            ok: false,
+            error: `${where}.$within must be one of: ${SUPPORTED_WINDOWS}.`,
+          };
+        }
+        continue;
+      }
       if (NUMERIC_OPERATORS.has(op)) {
         if (toComparableNumber(operand) === undefined) {
           return {
             ok: false,
-            error: `${where}.${op} must be a number (or a numeric string) — it is compared numerically.`,
+            error: `${where}.${op} must be a number, a numeric string, or an ISO-8601 date — it is compared as an ordered value.`,
           };
         }
         continue;

@@ -154,7 +154,12 @@ export type ConditionOperator =
   | "less_than"
   | "changed_to"
   | "is_true"
-  | "is_false";
+  | "is_false"
+  // Relative time window — the DATE operator. Its `value` is a
+  // `TRIGGER_FILTER_WINDOWS` key ("today", "past", "next_7_days", …), not an
+  // instant, so the rule means the same thing every day it runs. An absolute
+  // date would freeze at authoring time.
+  | "is_within";
 
 export interface ConditionRow {
   id: string;
@@ -386,10 +391,27 @@ export function conditionToFilterValue(row: ConditionRow): unknown {
       return row.value ? { $gt: row.value } : undefined;
     case "less_than":
       return row.value ? { $lt: row.value } : undefined;
-    // No runtime operator exists for these. Emitting nothing would silently
-    // WIDEN the rule, so the compiler refuses them instead.
+    // ── THE DATE UNLOCK ───────────────────────────────────────────────────
+    // `date` was refused outright by the authoring grammar because
+    // `toComparableNumber` could not read an ISO string, so every ordered
+    // comparison on a date failed closed. Coercion now understands dates, and
+    // this compiles the relative half. The window NAME is carried through
+    // verbatim; `validateTriggerFilters` refuses one that is not in the closed
+    // set, at the door, rather than letting it fail closed at 3am.
+    case "is_within":
+      return row.value ? { $within: row.value } : undefined;
+    // Substring on a string, membership in an array. Both compare
+    // case-insensitively on strings — see the note on `TRIGGER_FILTER_OPERATORS`.
     case "contains":
+      return row.value ? { $contains: row.value } : undefined;
     case "starts_with":
+      return row.value ? { $starts_with: row.value } : undefined;
+    // STILL REFUSED, and this one is not an omission. `changed_to` asks "did
+    // this field become X", which needs the value BEFORE the event as well as
+    // after; the matcher is handed one payload and has no previous state to
+    // compare against. Emitting nothing would silently WIDEN the rule, so the
+    // compiler refuses it by name. The `changed.<field>` flag is the shape that
+    // does work, because the producer computes the diff.
     case "changed_to":
       return undefined;
   }
@@ -397,8 +419,9 @@ export function conditionToFilterValue(row: ConditionRow): unknown {
 
 /** Operators the sentence offers that the runtime cannot evaluate. */
 export const UNEVALUABLE_CONDITION_OPERATORS: readonly ConditionOperator[] = [
-  "contains",
-  "starts_with",
+  // `contains` and `starts_with` LEFT this list when `$contains`/`$starts_with`
+  // were implemented in the matcher. `changed_to` remains because it needs the
+  // pre-event value, which no payload carries — see `conditionToFilterValue`.
   "changed_to",
 ];
 

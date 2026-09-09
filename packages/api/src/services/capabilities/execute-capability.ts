@@ -86,6 +86,7 @@ import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
+import { isProposedEnvelope } from "./proposed-envelope.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import type {
   ConnectionSelector,
@@ -1051,18 +1052,23 @@ async function markSkillProven(skillId: string): Promise<void> {
  * Did this outcome actually DO the work?
  *
  * `kind:"run"` is the success channel, with ONE exception that must not count:
- * a declarative verb whose write was governance-gated flows through as a run
- * carrying `{proposed:true}` — the effect is QUEUED for review, not performed.
+ * a write the governance gate routed to a human flows through as a run carrying
+ * a PROPOSED envelope — the effect is QUEUED for review, not performed.
  * Stamping `proven_at` there would assert a capability had run when a human has
  * not yet approved it, which is the precise "silent failure dressed as a fix"
  * this column exists to prevent.
+ *
+ * THE EXCEPTION HAS TWO SPELLINGS AND THIS USED TO KNOW ONLY ONE. Declarative
+ * verbs return `{proposed:true}`; BUILTIN verbs call a governed tRPC router
+ * through `createCaller` and surface its `{status:"proposed"}` verbatim, under a
+ * branch that returns `kind:"run"` unconditionally. So every agent
+ * `entity.create` routed to review stamped `proven_at` — permanently, because
+ * the UPDATE is floored on `IS NULL`. Recognition now goes through the ONE
+ * predicate `isProposedEnvelope`, which is bound to the `ProposedEnvelope`
+ * contract by a compile-time floor so a third spelling cannot re-open this.
  */
 function outcomeDidTheWork(result: unknown): boolean {
-  return !(
-    !!result &&
-    typeof result === "object" &&
-    (result as Record<string, unknown>).proposed === true
-  );
+  return !isProposedEnvelope(result);
 }
 
 /**
@@ -1170,10 +1176,10 @@ async function runResolvedSkillInner(
     // `kind:"run"`. A PROPOSED (unapproved write) envelope carries `proposed:true`
     // and is NOT an error: let it flow through as a run so the caller surfaces the
     // review inline. `capErrorMessage` is the SHARED envelope-message extractor.
-    const isProposed =
-      !!result &&
-      typeof result === "object" &&
-      (result as Record<string, unknown>).proposed === true;
+    // The SAME predicate the proven_at gate uses — one door for "was this
+    // queued rather than performed", so the two can never disagree about an
+    // envelope spelling.
+    const isProposed = isProposedEnvelope(result);
     if (!isProposed) {
       const errMessage = capErrorMessage({ kind: "run", result });
       if (errMessage !== undefined) {

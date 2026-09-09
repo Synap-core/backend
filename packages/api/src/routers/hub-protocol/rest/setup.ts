@@ -48,7 +48,10 @@ import {
 } from "../../../notifications/notification-event-map.js";
 import { verifyIssuerJwt } from "../../../utils/jwks-client.js";
 import { normalizeIssuerUrl } from "../../../utils/issuer-url-safety.js";
-import { integrationHubIdFromIssuerUrl } from "../../../services/hub-integration-registration.js";
+import {
+  integrationHubIdFromIssuerUrl,
+  SETUP_AGENT_HUB_SCOPES,
+} from "../../../services/hub-integration-registration.js";
 import {
   createAndVerifyServiceKey,
   toRegistrationTrace,
@@ -806,8 +809,70 @@ export function registerSetupRoutes(app: HubHono): void {
       // (resolvedLinkedUserId); ownerUserId is only a last-resort fallback and
       // for workspace membership repair.
       const agentCreatorId = resolvedLinkedUserId ?? ownerUserId ?? null;
+
+      // ── Optional extra scopes, subject to the SAME escalation rule ──────────
+      // `/setup/agent` otherwise mints the fixed SETUP_AGENT_HUB_SCOPES bundle.
+      // An operator tool sometimes needs one scope beyond it — `eve` needs
+      // `providers.write` to administer AI providers — and the alternative
+      // (adding it to the shared bundle) would hand a privileged scope to EVERY
+      // agent, undoing the narrowing it exists to serve.
+      //
+      // The privileged subset is gated by the same predicate `/setup/service`
+      // uses, keyed on the same weak credential. One rule, two doors — not a
+      // second policy that can drift from the first.
+      let extraScopes: ApiKeyScope[] = [];
+      if (body.extraScopes !== undefined) {
+        if (
+          !Array.isArray(body.extraScopes) ||
+          !body.extraScopes.every((x: unknown) => typeof x === "string")
+        ) {
+          return c.json(
+            { error: "extraScopes must be an array of strings" },
+            400
+          );
+        }
+        const invalid = (body.extraScopes as string[]).filter(
+          (x) => !isValidScope(x)
+        );
+        if (invalid.length > 0) {
+          return c.json(
+            { error: `Invalid scope(s): ${invalid.join(", ")}` },
+            400
+          );
+        }
+        const requested = body.extraScopes as ApiKeyScope[];
+        if (authMethod === "api_key_surface") {
+          const privileged = requested.filter((x) => isPrivilegedMintScope(x));
+          if (privileged.length > 0) {
+            logger.warn(
+              { flowId, privileged },
+              "setup/agent: refused privileged scope grant from a surface key"
+            );
+            return c.json(
+              {
+                error:
+                  `Cannot grant privileged scope(s) with a surface key: ${privileged.join(", ")}. ` +
+                  `Use a trusted-issuer JWT, the PROVISIONING_TOKEN, or a key holding \`setup.agent\`.`,
+              },
+              403
+            );
+          }
+        }
+        extraScopes = requested;
+      }
+
       const provisioned = await provisionSurfaceAgentKey({
         agentType,
+        // Union, deduped — never a replacement, so a caller cannot NARROW the
+        // agent bundle here and mint a key that silently lacks what the surface
+        // needs to function.
+        ...(extraScopes.length > 0
+          ? {
+              scopes: Array.from(
+                new Set([...SETUP_AGENT_HUB_SCOPES, ...extraScopes])
+              ) as ApiKeyScope[],
+            }
+          : {}),
         createdByUserId: agentCreatorId,
         linkedUserId: resolvedLinkedUserId ?? agentCreatorId,
         // OPT-IN pod-wide: forces the minted key's linkedUserId to null (governed

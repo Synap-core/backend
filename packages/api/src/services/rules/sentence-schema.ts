@@ -119,6 +119,19 @@ const conditionOperatorSchema = z.enum([
   "changed_to",
   "is_true",
   "is_false",
+  // The DATE operator. Its `value` is a `TRIGGER_FILTER_WINDOWS` key
+  // ("today", "past", "next_7_days", …), not an instant, so the rule means the
+  // same thing every day it runs.
+  //
+  // ⚠️ This enum is HAND-WRITTEN and `_conditionOperatorsInSync` below asserts
+  // it equals `ConditionRow["operator"]` exactly — that guard is what caught
+  // this being missed, and the compile error was the LESSER half. This schema
+  // is the only validator on the rule sentence at BOTH agent doors, and
+  // `buildRuleSentenceJsonSchema()` DERIVES the published MCP `inputSchema`
+  // from it. So while it lagged, `synap_create_rule` hard-refused a date rule
+  // an agent had every reason to think was valid, and the tool manifest
+  // advertised a grammar the product no longer had.
+  "is_within",
 ]);
 
 const conditionRowSchema = z.object({
