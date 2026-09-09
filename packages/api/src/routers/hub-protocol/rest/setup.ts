@@ -368,6 +368,10 @@ async function authenticateServiceSetupRequest(
   };
 }
 
+/** Canonical uuid shape — anything else in `linkedUserId` is an email or name. */
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export function registerSetupRoutes(app: HubHono): void {
   app.post("/setup/agent", async (c) => {
     const flowId = randomUUID();
@@ -653,7 +657,52 @@ export function registerSetupRoutes(app: HubHono): void {
       //   human; multi-human pods FAIL CLOSED without an explicit link (never
       //   warn-and-continue to oldest-human — that mis-attributes agents).
       // Agent user singleton is (createdByUserId × agentType), not pod-wide type.
+      // ── linkedUserId accepts an EMAIL or NAME, not only a uuid ───────────
+      // A uuid is the one identifier an operator does not have to hand; making
+      // them go to psql for it is why this door was unusable on a multi-human
+      // pod. Anything that is not a uuid is matched, case-insensitively, against
+      // the humans' email then name. An ambiguous or unknown value is REFUSED
+      // rather than resolved to a best guess: binding an agent to the wrong
+      // human mis-attributes every write it later makes.
       let resolvedLinkedUserId: string | undefined = linkedUserId;
+      if (
+        typeof resolvedLinkedUserId === "string" &&
+        resolvedLinkedUserId.trim() !== "" &&
+        !UUID_RE.test(resolvedLinkedUserId.trim())
+      ) {
+        const needle = resolvedLinkedUserId.trim().toLowerCase();
+        const candidates = await db.query.users.findMany({
+          where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
+          columns: { id: true, email: true, name: true },
+          limit: 200,
+        });
+        const byEmail = candidates.filter(
+          (u) => (u.email ?? "").toLowerCase() === needle
+        );
+        const byName = candidates.filter(
+          (u) => (u.name ?? "").toLowerCase() === needle
+        );
+        const hits = byEmail.length > 0 ? byEmail : byName;
+
+        if (hits.length !== 1) {
+          return c.json(
+            {
+              error:
+                hits.length === 0
+                  ? `No human on this pod matches "${resolvedLinkedUserId}"`
+                  : `"${resolvedLinkedUserId}" matches ${hits.length} humans — pass the id`,
+              code: "LINKED_USER_UNRESOLVED",
+              humans: candidates.map((h) => ({
+                id: h.id,
+                email: h.email,
+                name: h.name ?? null,
+              })),
+            },
+            409
+          );
+        }
+        resolvedLinkedUserId = hits[0]!.id;
+      }
       if (podWide) {
         // Pod-wide agent: the KEY carries NO linked human (governed as its own
         // agent-user principal). We still need a human CREATOR to attribute
@@ -668,8 +717,11 @@ export function registerSetupRoutes(app: HubHono): void {
         const humans = await db.query.users.findMany({
           where: (u, { eq: eqFn }) => eqFn(u.userType, "human"),
           orderBy: (u, { asc }) => [asc(u.createdAt)],
-          columns: { id: true },
-          limit: 2,
+          columns: { id: true, email: true, name: true },
+          // Was `limit: 2` — enough to detect "more than one", but not enough to
+          // TELL the caller who they are. The 409 now lists the candidates, so
+          // the operator picks a human instead of going to psql for a UUID.
+          limit: 25,
         });
         if (humans.length > 1) {
           // ── FAIL CLOSED: multi-human pod without explicit linkedUserId ────
@@ -688,7 +740,17 @@ export function registerSetupRoutes(app: HubHono): void {
               detail:
                 "This pod has more than one human. Agent keys act on behalf of a specific " +
                 "human (creator × agentType singleton). Pass body.linkedUserId to bind the " +
-                "agent to the intended human. Single-human pods may omit it.",
+                "agent to the intended human. Single-human pods may omit it. " +
+                "`linkedUserId` accepts the user's EMAIL or NAME as well as their id.",
+              // The candidates, so the caller can choose without a database
+              // query. Reachable only by operator-grade credentials (trusted
+              // issuer JWT or PROVISIONING_TOKEN) — a surface key never gets
+              // here, it takes the `api_key_surface` branch above.
+              humans: humans.map((h) => ({
+                id: h.id,
+                email: h.email,
+                name: h.name ?? null,
+              })),
             },
             409
           );
