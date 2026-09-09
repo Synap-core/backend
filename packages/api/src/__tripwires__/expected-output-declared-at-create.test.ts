@@ -133,18 +133,66 @@ describe("a declared slot carries no receipt it did not earn", () => {
     });
   });
 
-  it("the create door actually routes its slots through this rule", () => {
-    // The SEAM. Everything above proves the rule; this proves the door uses it.
-    const src = readFileSync(
-      join(__dirname, "../services/focus-sessions/create-session.ts"),
-      "utf8"
-    );
-    expect(src).toMatch(
-      /expectedOutputs:\s*sanitizeDeclaredOutputs\(expectedOutputs\)/
-    );
-    // And has not reverted to the reconciler that let the receipts through.
-    expect(src).not.toMatch(
-      /expectedOutputs\.map\(\(o\) => reconcileOwedSince\(o\)\)/
-    );
+  it("EVERY create door routes its slots through this rule", () => {
+    /**
+     * The SEAM — and it now names all of them, because the first version of
+     * this test scanned ONE file for ONE call and was fully satisfied by the
+     * branch that was already fixed.
+     *
+     * `startFocusSession` has TWO exits. The direct insert was floored; the
+     * PROPOSED exit was not — and a proposal is precisely what an AI caller
+     * gets, so the threat this file is named for still landed, one approval
+     * later, through the door the threat actually uses. Two independent review
+     * passes found it; this assertion is what would have.
+     */
+    const doors: Array<[string, string, RegExp[]]> = [
+      [
+        "create-session.ts (direct insert + proposed payload)",
+        "../services/focus-sessions/create-session.ts",
+        [
+          /expectedOutputs:\s*sanitizeDeclaredOutputs\(expectedOutputs\)/,
+          /expectedOutputs:\s*sanitizeDeclaredOutputs\(expectedOutputs\)\s*\}/,
+        ],
+      ],
+      [
+        "the approval executor (the write an AI caller reaches)",
+        "../routers/proposals/executors/focus-session.ts",
+        [/expectedOutputs:\s*sanitizeDeclaredOutputs\(/],
+      ],
+    ];
+
+    for (const [label, rel, patterns] of doors) {
+      const src = readFileSync(join(__dirname, rel), "utf8");
+      for (const pattern of patterns) {
+        expect(pattern.test(src), `${label} must sanitize: ${pattern}`).toBe(
+          true
+        );
+      }
+    }
+  });
+
+  it("no create door writes expectedOutputs RAW", () => {
+    /**
+     * The mirror of the test above, and the half that catches a THIRD door.
+     * Scanning for the presence of a call cannot see an insert that never had
+     * one; this scans for the shape of a raw write instead.
+     */
+    for (const rel of [
+      "../services/focus-sessions/create-session.ts",
+      "../routers/proposals/executors/focus-session.ts",
+    ]) {
+      const src = readFileSync(join(__dirname, rel), "utf8");
+      // A cast straight into the column, with no floor in the expression.
+      expect(
+        /expectedOutputs:\s*\(innerData\.expectedOutputs as[^)]*\)\s*\?\?\s*\[\]/.test(
+          src
+        ),
+        `${rel} inserts the caller's array verbatim`
+      ).toBe(false);
+      expect(
+        /expectedOutputs:\s*expectedOutputs\s*[,}]/.test(src),
+        `${rel} passes the caller's array through unsanitized`
+      ).toBe(false);
+    }
   });
 });

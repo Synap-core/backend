@@ -206,7 +206,14 @@ export async function createFocusSession(
       templateId,
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
-      ...(expectedOutputs.length > 0 ? { expectedOutputs } : {}),
+      // Sanitized BEFORE it is proposed, so the payload a human reviews is the
+      // one that will be written — a proposal showing `attestedBy: "Antoine"`
+      // is asking someone to approve a claim about themselves. The executor
+      // floors it again at the write, because these two moments are weeks apart
+      // and only the second one is the door.
+      ...(expectedOutputs.length > 0
+        ? { expectedOutputs: sanitizeDeclaredOutputs(expectedOutputs) }
+        : {}),
       ...(agentIds.length > 0 ? { agentIds } : {}),
       // Detour lineage must survive the PROPOSED path too, or an agent-opened
       // detour silently loses its parent on approval (the plumbed-field-with-

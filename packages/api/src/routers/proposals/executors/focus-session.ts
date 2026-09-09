@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import type { ExpectedOutput } from "@synap/playbooks";
 import {
   db,
   proposals,
@@ -21,6 +22,7 @@ import {
 import {
   applyOutputMutations,
   expectedOutputWireSchema,
+  sanitizeDeclaredOutputs,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { z } from "zod";
@@ -95,8 +97,24 @@ export function registerFocusSessionExecutors(): void {
           // openRunSession and never propose). "agent" is what the sniff also
           // returns for these rows (no playbookId, no automation metadata).
           origin: "agent",
-          expectedOutputs:
-            (innerData.expectedOutputs as unknown[] | undefined) ?? [],
+          // THE FLOOR, on the door an AI caller actually takes.
+          //
+          // `create-session.ts` sanitizes its DIRECT insert, but an AI caller
+          // is precisely the one routed through a proposal — so for a while
+          // this branch inserted the caller's array verbatim, and every receipt
+          // the floor exists to refuse (`attestedBy` naming a human who never
+          // looked, `retiredAt` making the slot invisible to `owedSlotWhere`
+          // from birth, `status: "done"`) landed here one approval later. The
+          // `owedSince` invariant was lost too: an `owner: 'human'` slot
+          // inserted with no clock for the owed board to age it by.
+          //
+          // Sanitizing HERE and not only at the propose site is deliberate:
+          // this is the write, and a payload can sit in the proposals table for
+          // weeks between the two. `now` is approval time, which is the moment
+          // the slot actually becomes owed.
+          expectedOutputs: sanitizeDeclaredOutputs(
+            (innerData.expectedOutputs as ExpectedOutput[] | undefined) ?? []
+          ),
           channelId: (innerData.channelId as string | undefined) ?? null,
           agentIds: (innerData.agentIds as string[] | undefined) ?? [],
           status: "active",
