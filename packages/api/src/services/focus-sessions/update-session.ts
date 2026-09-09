@@ -561,6 +561,22 @@ export function serverStampedWriteError(
  *
  * An ALREADY-owed slot keeps its original stamp: re-declaring the same blocker
  * must not reset the clock the "needs you" feed ages rows by.
+ *
+ * ⚠️ SCOPE, stated because the neighbouring rule reads wider than this one.
+ * `block-output.ts` writes `owner`/`blockedReason`/`why`/`owedSince` as a UNIT
+ * and `unblockExpectedOutput` clears all four together. This reconciler is NOT
+ * that unit: it reconciles `owedSince` with `owner` and touches nothing else.
+ * So a WHOLESALE patch that sets `owner: 'agent'` on a previously blocked slot
+ * drops `owedSince` here while the stored `blockedReason`/`why` are carried
+ * forward by the merge — those are client-declarable, and silence means KEEP.
+ *
+ * That is deliberate, not an oversight: reconciling them here would mean
+ * silently DELETING an agent's own declaration on a patch that never mentioned
+ * it, which is the erasure the merge exists to prevent. The resulting state
+ * (agent-owned, still carrying a blocker) is unreachable through the targeted
+ * doors and inert on every surface — `blockerChipLabel`
+ * (`relay-app/src/lib/session-outputs-model.ts`) returns null unless
+ * `owner === 'human'`, and that owner guard is the enforcement point.
  */
 export function reconcileOwedSince(
   item: OutputItem,

@@ -9414,16 +9414,6 @@ export interface Signal {
 	/** Notification category vocabulary: governance | data | ai | system | inbox. */
 	category: string;
 	/**
-	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
-	 * cluster (which derives it through `proposalClassFields`, the one door).
-	 * Absent on every other kind — a notification, an event or an owed slot has
-	 * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
-	 * invented for it: `class` is a PROPOSAL's decision class, consumed as an
-	 * ordering over proposals, and an obligation is not a decision. Its absent
-	 * `lifetimeHours` already carries the only thing a surface needs to know —
-	 * that it never expires.
-	 */
-	/**
 	 * The CLASS of thing that would unblock an `owed-slot` — one of the closed
 	 * six (`credential | permission | capability | policy | decision | physical`).
 	 * Absent on every other kind, the same way `class` is cluster-only.
@@ -9448,6 +9438,21 @@ export interface Signal {
 	 * act on it now.
 	 */
 	sessionGoal?: string | null;
+	/**
+	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
+	 * cluster (which derives it through `proposalClassFields`, the one door).
+	 * Absent on every other kind — a notification, an event or an owed slot has
+	 * no class. In particular an owed slot does NOT get a sixth `ProposalClass`
+	 * invented for it: `class` is a PROPOSAL's decision class, consumed as an
+	 * ordering over proposals, and an obligation is not a decision. Its absent
+	 * `lifetimeHours` already carries the only thing a surface needs to know —
+	 * that it never expires.
+	 *
+	 * (This paragraph sat above `blockedReason`, thirty lines up, where two
+	 * docblocks had been stacked back to back. Whoever edited `blockedReason`
+	 * read an argument about proposals; whoever edited `class` found it
+	 * undocumented.)
+	 */
 	class?: ProposalClass;
 	/**
 	 * Hours this class stays answerable; `null` when it never expires. Carried
