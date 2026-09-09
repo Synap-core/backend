@@ -64,6 +64,35 @@ import { sessionScopeConditions } from "./session-scope.js";
  * carries in production: `jsonb_array_elements` ERRORS on a non-array value, and
  * `expected_outputs` is untyped JSONB that a legacy row can hold anything in.
  */
+/**
+ * THE owed-slot predicate, as DATA — the clause SET, not a spelling.
+ *
+ * ⚠️ This existed as the same three lines typed out inside BOTH SQL builders,
+ * and the suite asserted them with `toContain`. Membership is not completeness:
+ * adding `AND slot->>'kind' = 'doc'` to both builders narrowed the pod-wide
+ * "blocked on you" read to documents — hiding every other blocked slot from the
+ * one screen that exists to show them — and all 23 tests stayed GREEN. Verified
+ * by applying exactly that mutation.
+ *
+ * Two things changed. The clauses are a value both builders compose, so the
+ * WHERE and the ORDER BY can no longer hold different predicates by drift. And
+ * the guard asserts the SET — a fourth clause fails the count — rather than
+ * asserting that three particular strings appear somewhere in it.
+ */
+export const OWED_SLOT_CLAUSES = [
+  "slot->>'owner' = 'human'",
+  "slot->>'status' IS DISTINCT FROM 'done'",
+  "slot->>'retiredAt' IS NULL",
+] as const;
+
+/**
+ * The three clauses as ONE SQL fragment, so the WHERE and the ORDER BY cannot
+ * hold different predicates — they now share a value, not a convention.
+ */
+const owedSlotPredicateSql = drizzleSql.raw(
+  OWED_SLOT_CLAUSES.join("\n      AND ")
+);
+
 export function owedSlotWhere(): SQL {
   return drizzleSql`EXISTS (
     SELECT 1 FROM jsonb_array_elements(
@@ -71,9 +100,7 @@ export function owedSlotWhere(): SQL {
            THEN ${focusSessions.expectedOutputs}
            ELSE '[]'::jsonb END
     ) AS slot
-    WHERE slot->>'owner' = 'human'
-      AND slot->>'status' IS DISTINCT FROM 'done'
-      AND slot->>'retiredAt' IS NULL
+    WHERE ${owedSlotPredicateSql}
   )`;
 }
 
@@ -117,9 +144,7 @@ export function owedSlotOrder(): SQL {
            THEN ${focusSessions.expectedOutputs}
            ELSE '[]'::jsonb END
     ) AS slot
-    WHERE slot->>'owner' = 'human'
-      AND slot->>'status' IS DISTINCT FROM 'done'
-      AND slot->>'retiredAt' IS NULL
+    WHERE ${owedSlotPredicateSql}
   ) ASC NULLS FIRST`;
 }
 

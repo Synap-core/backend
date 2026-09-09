@@ -8,9 +8,12 @@
  * twin — are tested for exactly that case.
  */
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import {
+  OWED_SLOT_CLAUSES,
   isOwedSlot,
   MISSING_OWED_SINCE,
   owedSlotOrder,
@@ -239,5 +242,82 @@ describe("retirementForClose — which exit ends the obligation", () => {
     expect(
       retirementForClose([{ kind: "doc", label: "Runbook" }], "cancelled")
     ).toBeNull();
+  });
+});
+
+/**
+ * THE PREDICATE IS A SET, AND THE SET IS WHAT IS GUARDED.
+ *
+ * The suite above asserts membership — `toContain("IS DISTINCT FROM")`, and two
+ * negatives for `!=` / `<>`. Membership cannot see an ADDED clause. Verified by
+ * mutation: appending `AND slot->>'kind' = 'doc'` to both SQL builders narrowed
+ * the pod-wide "blocked on you" read to documents only — hiding every other
+ * blocked slot from the one screen built to show them — and all 23 tests stayed
+ * GREEN. The mutation was confirmed present in the file before the run.
+ *
+ * Two assertions close it, and they fail for different reasons on purpose: the
+ * COUNT catches a clause added to the rendered SQL, and the FIELD PARITY catches
+ * the SQL and its TypeScript twin drifting apart — which no assertion anywhere
+ * previously compared, though the file's own docblock says they "cannot drift"
+ * because they sit side by side. Adjacency is not a guard.
+ */
+describe("the owed predicate is a SET, not three strings that happen to appear", () => {
+  /**
+   * Only the PREDICATE half. `owedSlotOrder` also reads `owedSince` inside its
+   * `min(coalesce(...))` — that is the sort key, not a filter, and folding it in
+   * made this guard fail on correct code the first time it ran. Slicing at
+   * `WHERE` is what separates "which slots count" from "how they are ranked".
+   */
+  const predicateOf = (rendered: string): string => {
+    const at = rendered.indexOf("WHERE");
+    expect(at, "every builder must have a WHERE to slice at").toBeGreaterThan(
+      -1
+    );
+    return rendered.slice(at);
+  };
+
+  const whereSql = predicateOf(new PgDialect().sqlToQuery(owedSlotWhere()).sql);
+  const orderSql = predicateOf(new PgDialect().sqlToQuery(owedSlotOrder()).sql);
+
+  /** Every `slot->>'x'` key named in a blob of SQL. */
+  const keysIn = (text: string): Set<string> =>
+    new Set([...text.matchAll(/slot->>'([A-Za-z]+)'/g)].map((m) => m[1]));
+
+  it("the constant is not vacuous and names the fields the rule is about", () => {
+    expect(OWED_SLOT_CLAUSES.length).toBe(3);
+    expect(keysIn(OWED_SLOT_CLAUSES.join(" "))).toEqual(
+      new Set(["owner", "status", "retiredAt"])
+    );
+  });
+
+  it("both builders carry EXACTLY these clauses — a fourth fails here", () => {
+    // Counting the keys, not the string, so reformatting the SQL cannot break
+    // this while adding a clause still does.
+    for (const [label, rendered] of [
+      ["WHERE", whereSql],
+      ["ORDER BY", orderSql],
+    ] as const) {
+      expect(
+        keysIn(rendered),
+        `${label} must test exactly the owed-slot fields`
+      ).toEqual(keysIn(OWED_SLOT_CLAUSES.join(" ")));
+    }
+  });
+
+  it("the SQL and its TypeScript twin read the SAME fields", () => {
+    // `isOwedSlot` is the twin the file's docblock promises cannot drift. This
+    // is what makes that true: the fields it reads are parsed out of its own
+    // source and compared to the clause set.
+    const src = readFileSync(join(__dirname, "../owed-outputs.ts"), "utf8");
+    const body = src.slice(src.indexOf("export function isOwedSlot"));
+    const twinKeys = new Set(
+      [...body.slice(0, body.indexOf("}")).matchAll(/slot\.([A-Za-z]+)/g)].map(
+        (m) => m[1]
+      )
+    );
+    // Non-vacuity: a parse that found nothing would make the comparison pass
+    // against an equally empty set on a bad regex.
+    expect(twinKeys.size).toBe(3);
+    expect(twinKeys).toEqual(keysIn(OWED_SLOT_CLAUSES.join(" ")));
   });
 });
