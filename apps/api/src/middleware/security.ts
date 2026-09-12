@@ -14,6 +14,7 @@ import {
   classifyRateLimitPath,
   getRateLimitClassConfig,
   type RateLimitClass,
+  getCalendarFeedIpCeiling,
 } from "./rate-limit-classes.js";
 
 // Re-export pure helpers so existing import sites can stay on security.js
@@ -147,6 +148,48 @@ const calendarFeedRateLimiter = rateLimiter({
   ),
 });
 
+const calendarFeedIpCeiling = getCalendarFeedIpCeiling();
+
+/**
+ * The IP ceiling in FRONT of the per-token calendar bucket.
+ *
+ * `/calendar/feed/{token}.ics` is the pod's only unauthenticated endpoint whose
+ * bucket key comes from the caller's own path. Without this, varying the token
+ * per request means never sharing a bucket with yourself: no throttle at all,
+ * and one map entry per attempted token retained for two windows. This limiter
+ * is keyed on IP ONLY (never on the path), so the key space is bounded by the
+ * network, and it is generous enough that a household of polling devices never
+ * reaches it.
+ */
+const calendarFeedIpRateLimiter = rateLimiter({
+  windowMs: calendarFeedIpCeiling.windowMs,
+  limit: calendarFeedIpCeiling.max,
+  standardHeaders: false,
+  keyGenerator: (c: Context): string => {
+    if (
+      process.env.NODE_ENV === "development" &&
+      c.req.header("x-test-user-id")
+    ) {
+      return "test-bypass-calendar_feed_ip-" + Math.random();
+    }
+    const ip = clientIp(c);
+    if (
+      ip === "127.0.0.1" ||
+      ip === "::1" ||
+      ip === "localhost" ||
+      (process.env.NODE_ENV === "development" && ip === "unknown")
+    ) {
+      return "localhost-bypass-calendar_feed_ip-" + Math.random();
+    }
+    return `calendar_feed_ip:${ip}`;
+  },
+  handler: classHandler(
+    "calendar_feed",
+    calendarFeedIpCeiling.max,
+    calendarFeedIpCeiling.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -165,7 +208,15 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
     case "ai_interactive":
       return aiInteractiveRateLimiter(c, next);
     case "calendar_feed":
-      return calendarFeedRateLimiter(c, next);
+      // IP ceiling FIRST (bounded key space, bounds an anonymous caller), then
+      // the per-token bucket (so one NAT's devices do not share a budget).
+      return calendarFeedIpRateLimiter(c, async () => {
+        // The inner limiter's 429 is a Response, and `next` must resolve to
+        // void — so assign it onto the context rather than returning it, or a
+        // per-token 429 is silently swallowed and the request proceeds.
+        const limited = await calendarFeedRateLimiter(c, next);
+        if (limited instanceof Response) c.res = limited;
+      });
     case "crud":
     default:
       return crudRateLimiter(c, next);

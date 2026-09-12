@@ -154,6 +154,37 @@ export function classifyRateLimitPath(path: string): RateLimitClass {
 }
 
 /**
+ * The IP ceiling that sits IN FRONT of the per-token calendar bucket.
+ *
+ * Why a second limiter rather than one key: the token bucket is keyed on a
+ * path segment the CALLER chooses, and the pod cannot know whether that token
+ * exists until it has hashed it and hit the database. Keyed on the token
+ * alone, a fresh random token per request buys a fresh budget every request —
+ * unlimited unauthenticated work, and unbounded key growth in the limiter's
+ * in-process store. Keyed on IP alone, a household behind one NAT shares one
+ * budget, which is the thing the per-token key exists to avoid.
+ *
+ * So: both. The IP ceiling is deliberately generous — several devices in one
+ * home, each polling every 5 minutes, must never see a 429 — while still
+ * bounding an anonymous caller to a fixed cost per window.
+ */
+export function getCalendarFeedIpCeiling(): {
+  max: number;
+  windowMs: number;
+  retryAfter: string;
+} {
+  const windowMs = parsePositiveInt(
+    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
+    5 * 60 * 1000
+  );
+  return {
+    max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_IP_MAX, 600),
+    windowMs,
+    retryAfter: formatRetryAfter(windowMs),
+  };
+}
+
+/**
  * Stable SHA-256 prefix of a bearer token. Never log the raw token.
  */
 export function hashBearerToken(token: string): string {

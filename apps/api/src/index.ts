@@ -22,6 +22,7 @@ import { Hono, type Context as HonoContext } from "hono";
 import { HTTPException } from "hono/http-exception";
 
 import { logger } from "hono/logger";
+import { redactSecretPath } from "./middleware/redact-secret-path.js";
 import { secureHeaders } from "hono/secure-headers";
 import { getCookie } from "hono/cookie";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
@@ -434,8 +435,15 @@ app.use("*", async (c, next) => {
   }
 });
 
-// Logging
-app.use("*", logger());
+// Logging — the path is redacted first: two routes carry their capability IN
+// the path (calendar ICS feed, agent setup hand-off), and a subscribed calendar
+// client would otherwise write its permanent token to stdout every 5 minutes.
+app.use(
+  "*",
+  logger((message, ...rest) =>
+    console.log(redactSecretPath(message), ...rest.map(String))
+  )
+);
 
 // Health check (public, no auth)
 app.get("/health", (c) => {
@@ -1559,7 +1567,9 @@ app.onError((err, c) => {
     {
       err: synapError,
       errorId,
-      path: c.req.path,
+      // Redacted: a 4xx/5xx on a secret-in-path route (calendar feed, agent
+      // setup) would otherwise file the capability into the error log.
+      path: redactSecretPath(c.req.path),
       method: c.req.method,
       statusCode: synapError.statusCode,
       ...(shouldLogStack && { stack: synapError.stack }),
