@@ -80,6 +80,38 @@ export function registerAiProviderExecutors(): void {
     return row?.status === ProposalStatus.APPROVED;
   };
 
+  /**
+   * Mark the proposal APPROVED — the executor's job, by the convention every
+   * other executor in this folder follows (the registry path does not flip
+   * status for you). This was missing: an approved provider change was APPLIED
+   * and pushed to the IS while the proposal stayed `pending` forever, so it sat
+   * in the review queue as undone work, and approving it again re-ran the write.
+   */
+  const markApproved = async (
+    proposal: { workspaceId: string | null },
+    proposalId: string,
+    userId: string,
+    deps: { emitProposalReviewed: (...a: never[]) => unknown }
+  ): Promise<void> => {
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, proposalId));
+    (
+      deps.emitProposalReviewed as (
+        id: string,
+        ws: string | null,
+        d: "approved",
+        by: string
+      ) => void
+    )(proposalId, proposal.workspaceId, "approved", userId);
+  };
+
   const parsePayload = (
     proposal: { data: unknown },
     what: string
@@ -105,7 +137,7 @@ export function registerAiProviderExecutors(): void {
   for (const key of ["aiProvider/create", "aiProvider/update"] as const) {
     registerProposalExecutor({
       key,
-      async execute({ proposal, input, deps }) {
+      async execute({ proposal, input, deps, userId }) {
         if (await alreadyApproved(input.proposalId)) {
           return { success: true, alreadyApproved: true };
         }
@@ -118,6 +150,7 @@ export function registerAiProviderExecutors(): void {
         // `POST /ai-providers/sync` re-pushes.
         await pushProvidersToIS().catch(() => undefined);
 
+        await markApproved(proposal, input.proposalId, userId, deps);
         reportApproved(deps, proposal, input.proposalId);
         return { success: true };
       },
@@ -126,7 +159,7 @@ export function registerAiProviderExecutors(): void {
 
   registerProposalExecutor({
     key: "aiProvider/delete",
-    async execute({ proposal, input, deps }) {
+    async execute({ proposal, input, deps, userId }) {
       if (await alreadyApproved(input.proposalId)) {
         return { success: true, alreadyApproved: true };
       }
@@ -145,6 +178,7 @@ export function registerAiProviderExecutors(): void {
         .where(eq(aiProviders.providerId, providerId));
       await pushProvidersToIS().catch(() => undefined);
 
+      await markApproved(proposal, input.proposalId, userId, deps);
       reportApproved(deps, proposal, input.proposalId);
       return { success: true };
     },

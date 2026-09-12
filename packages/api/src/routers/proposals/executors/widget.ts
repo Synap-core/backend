@@ -86,7 +86,28 @@ export function registerWidgetExecutors(): void {
         }
       );
 
+      // Mark APPROVED — the executor's job (the registry path does not do it).
+      // Without this, an approved widget registration stayed `pending` forever:
+      // still in the review queue, and re-approving re-ran the upsert. Same
+      // defect as the aiProvider executors; found by the convention guard in
+      // __tests__/executors-mark-approved.test.ts.
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
       reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
       return { success: true };
     },
   });
