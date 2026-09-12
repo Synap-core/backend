@@ -26030,6 +26030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | string[] | null | undefined;
 				projectId?: string | string[] | null | undefined;
 				status?: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale" | ("active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale")[] | "all" | undefined;
+				closedSince?: string | undefined;
 				limit?: number | undefined;
 				edges?: boolean | undefined;
 				lens?: "default" | "all" | "triage" | undefined;

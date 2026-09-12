@@ -17,7 +17,6 @@ import {
   desc,
   eq,
   focusSessions,
-  inArray,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -25,6 +24,7 @@ import {
   withParentSessionId,
   attachParentSessionIds,
 } from "../services/focus-sessions/parent-lineage.js";
+import { sessionStatusConditions } from "../services/focus-sessions/session-status-filter.js";
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
   isTerminalSessionStatus,
@@ -294,7 +294,8 @@ function queryUserSessions(
   limit: number,
   lens: SessionLens = "default",
   kind: SessionKindFilter = "work",
-  flow: { playbookId?: string; automationId?: string } = {}
+  flow: { playbookId?: string; automationId?: string } = {},
+  closedSince?: string
 ) {
   const conditions = [eq(focusSessions.userId, requireUserId(userId))];
 
@@ -303,14 +304,10 @@ function queryUserSessions(
   // read, so the two doors cannot drift into two answers about what a lens means.
   conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
 
-  if (Array.isArray(status)) {
-    // A set never means "match zero": an empty array is refused at the schema
-    // (`.nonempty()`), for the same reason the workspace lens treats `[]` as
-    // "no narrow" — a filter may restrict a floor, never empty it.
-    conditions.push(inArray(focusSessions.status, status));
-  } else if (status !== "all") {
-    conditions.push(eq(focusSessions.status, status));
-  }
+  // STATUS (and the recently-closed window) — a WHERE clause, never a
+  // post-filter, for the reason the triage and kind lenses below give. See
+  // `session-status-filter.ts` for why the time window lives here too.
+  conditions.push(...sessionStatusConditions(status, closedSince));
 
   // TRIAGE LENS — applied as a WHERE clause, never as a post-filter. A page is
   // `limit`-capped in SQL, so filtering after the fact would let unaccepted
@@ -384,6 +381,18 @@ export const focusSessionsRouter = router({
         workspaceId: ScopeFilterShape.workspaceId,
         projectId: ScopeFilterShape.projectId,
         status: statusFilterSchema,
+        /**
+         * Also return `closed` sessions concluded at or after this instant
+         * (`coalesce(closedAt, updatedAt)`), OR'd with `status`. Ignored when
+         * `status` is `"all"` or already selects `closed`.
+         *
+         * Exists so a surface showing "still wants you + closed today" can
+         * narrow BOTH halves in SQL. Sending `closed` in the set and filtering
+         * the window on the device let sessions closed long ago fill the page
+         * and push qualifying rows past the limit — measured on the live pod
+         * as 11 rendered of 19 qualifying. See `session-status-filter.ts`.
+         */
+        closedSince: z.string().datetime({ offset: true }).optional(),
         limit: z.number().int().min(1).max(50).default(20),
         /**
          * Also project the dependency edges for the page. TWO kinds, on the
@@ -433,7 +442,8 @@ export const focusSessionsRouter = router({
         input.limit,
         input.lens,
         input.kind,
-        { playbookId: input.playbookId, automationId: input.automationId }
+        { playbookId: input.playbookId, automationId: input.automationId },
+        input.closedSince
       );
       // Derived lineage for the whole page in ONE query (never N+1, never a
       // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
