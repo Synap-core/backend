@@ -886,6 +886,11 @@ export interface CapabilityVaultDef {
   /** Secret value — usually a `{{param}}` placeholder. */
   value: string;
   /**
+   * A SHARED pod key rather than one user's secret — honoured only on a
+   * pod-wide install (sets `secrets.is_pod_wide`). Mirrors `VaultDefSchema.podWide`.
+   */
+  podWide?: boolean;
+  /**
    * Vault secret type — mirrors the `secret_type` pg enum (underscore form, kept
    * in lock-step with @synap/database). Defaults to "api_key" in the applier.
    */

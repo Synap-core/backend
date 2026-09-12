@@ -414,6 +414,15 @@ export interface McpServerEntry {
   url?: string;
   env?: Record<string, string>;
   enabled: boolean;
+  /** Resolved per call from `auth` for the IS transport. Never cached. (0257) */
+  headers?: Record<string, string>;
+  /** Inline vs governed tools; absent = governed in the IS. (0257) */
+  toolPolicy?: { default: "governed" | "inline"; inline?: string[] };
+  /**
+   * INTERNAL: the vault reference `headers` is built from. Cached, and stripped
+   * by `getMcpServersForWorkspace` before any entry leaves it — never sent to the IS.
+   */
+  auth?: { credentialRef: string; header: string; prefix?: string };
 }
 
 export const MCP_CACHE_TTL_MS = 30_000;
@@ -472,36 +481,89 @@ export async function resolveAgentId(agentId?: string): Promise<string> {
 }
 
 export async function getMcpServersForWorkspace(
-  workspaceId: string
+  workspaceId: string,
+  /** The acting user + agent — the redeemer for any server auth secret. */
+  actor?: { userId: string; agentUserId?: string | null }
 ): Promise<McpServerEntry[]> {
+  let servers: McpServerEntry[];
   const cached = mcpServerCache.get(workspaceId);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.servers;
+    servers = cached.servers;
+  } else {
+    const rows = await db.query.mcpServers.findMany({
+      where: and(
+        // Pod-wide servers (workspace_id NULL) as well. A pod-scoped capability
+        // install creates exactly those, and this filter used to exclude them —
+        // so its MCP tools never reached chat, while `mcp://` dispatch (which
+        // does include NULL) worked. The two readers now agree.
+        or(
+          eq(mcpServers.workspaceId, workspaceId),
+          isNull(mcpServers.workspaceId)
+        ),
+        eq(mcpServers.approved, true),
+        eq(mcpServers.enabled, true)
+      ),
+    });
+    // One entry per slug: a workspace server overrides a pod-wide one of the same
+    // slug (the IS names tools `mcp_<slug>_<tool>`, so two would collide).
+    const bySlug = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const prev = bySlug.get(r.slug);
+      if (!prev || (prev.workspaceId === null && r.workspaceId !== null)) {
+        bySlug.set(r.slug, r);
+      }
+    }
+    servers = [...bySlug.values()]
+      .filter((r) => r.transport === "stdio" || r.transport === "http")
+      .map((r) => ({
+        id: r.slug,
+        name: r.name,
+        transport: r.transport as "stdio" | "http",
+        command: r.command ?? undefined,
+        args: r.args,
+        url: r.url ?? undefined,
+        env: r.env,
+        enabled: r.enabled,
+        toolPolicy: r.toolPolicy ?? undefined,
+        auth: r.auth ?? undefined,
+      }));
+    mcpServerCache.set(workspaceId, {
+      servers,
+      expiresAt: Date.now() + MCP_CACHE_TTL_MS,
+    });
   }
-  const rows = await db.query.mcpServers.findMany({
-    where: and(
-      eq(mcpServers.workspaceId, workspaceId),
-      eq(mcpServers.approved, true),
-      eq(mcpServers.enabled, true)
-    ),
-  });
-  const servers: McpServerEntry[] = rows
-    .filter((r) => r.transport === "stdio" || r.transport === "http")
-    .map((r) => ({
-      id: r.slug,
-      name: r.name,
-      transport: r.transport as "stdio" | "http",
-      command: r.command ?? undefined,
-      args: r.args,
-      url: r.url ?? undefined,
-      env: r.env,
-      enabled: r.enabled,
-    }));
-  mcpServerCache.set(workspaceId, {
-    servers,
-    expiresAt: Date.now() + MCP_CACHE_TTL_MS,
-  });
-  return servers;
+
+  // Resolve auth headers PER CALL, never from the cache: a decrypted secret must
+  // not outlive this request, nor be served to a different actor. A server whose
+  // credential cannot be resolved is SKIPPED with its reason logged — connecting
+  // without the header would only surface as an anonymous 401 in the IS.
+  const out: McpServerEntry[] = [];
+  for (const server of servers) {
+    const { auth, ...entry } = server;
+    if (!auth) {
+      out.push(entry);
+      continue;
+    }
+    if (!actor) {
+      logger.warn(
+        `[mcp] skipping server "${server.id}": it requires auth and no actor was supplied`
+      );
+      continue;
+    }
+    const { resolveMcpServerAuthHeader } =
+      await import("../../connectors/external-dispatch.js");
+    const resolved = await resolveMcpServerAuthHeader(auth, {
+      userId: actor.userId,
+      agentUserId: actor.agentUserId,
+      workspaceId,
+    });
+    if (!resolved.ok) {
+      logger.warn(`[mcp] skipping server "${server.id}": ${resolved.error}`);
+      continue;
+    }
+    out.push({ ...entry, headers: resolved.headers });
+  }
+  return out;
 }
 
 /**

@@ -893,7 +893,10 @@ export const sendMessageProcedure = protectedProcedure
     let mcpServersList: McpServerEntry[] | undefined;
     if (workspaceId) {
       try {
-        const rows = await getMcpServersForWorkspace(workspaceId);
+        const rows = await getMcpServersForWorkspace(workspaceId, {
+          userId,
+          agentUserId,
+        });
         if (rows.length > 0) {
           mcpServersList = rows;
         }
@@ -922,6 +925,11 @@ export const sendMessageProcedure = protectedProcedure
         transport: "http" as const,
         url: resolvedService.mcpEndpoint,
         enabled: true,
+        // The IS's OWN local tools (ZeroClaw/OpenClaw), already owner-approved via
+        // `mcpApproved`. Explicitly inline: an absent policy means GOVERNED, and
+        // these tools have no pod tool row to govern through, so leaving it out
+        // would make every one of them fail.
+        toolPolicy: { default: "inline" as const },
       };
       mcpServersList = mcpServersList
         ? [

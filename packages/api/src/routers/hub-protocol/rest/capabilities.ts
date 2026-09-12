@@ -75,6 +75,13 @@ export const ParamSpecSchema = z.object({
 export const VaultDefSchema = z.object({
   ref: z.string().min(1),
   name: z.string().min(1),
+  /**
+   * A SHARED pod key (e.g. an MCP server's service credential) rather than one
+   * user's secret. Applied only to a pod-wide install. Sets `secrets.is_pod_wide`,
+   * which removes the per-user vault-GRANT requirement for using it — the RUN is
+   * still governed by the capability gate (same contract as 0211 connections).
+   */
+  podWide: z.boolean().optional(),
   value: z.string(),
   type: z
     .enum([
@@ -191,6 +198,32 @@ export const McpServerDefSchema = z.object({
   enabled: z.boolean().optional(),
   /** Trusted package install may approve the official public MCP endpoint. */
   approved: z.boolean().optional(),
+  /**
+   * http: authenticate with a vault secret. `credentialRef` is a template-local
+   * `vault[].ref` (rewritten to `vault://<id>` at install) or an existing
+   * `vault://<id>`. The secret is resolved server-side, sent to the IS as a
+   * header, and never stored on the row or shown to the agent.
+   */
+  auth: z
+    .object({
+      credentialRef: z.string().min(1),
+      header: z
+        .string()
+        .regex(/^[A-Za-z0-9-]+$/, "Must be a valid HTTP header name"),
+      prefix: z.string().optional(),
+    })
+    .optional(),
+  /**
+   * Which tools an agent may call INLINE; every other tool goes through the
+   * pod's governance door. Omitted = governed (fail-closed). Declare
+   * `{ default: "inline" }` only for a server that exposes nothing but reads.
+   */
+  toolPolicy: z
+    .object({
+      default: z.enum(["governed", "inline"]),
+      inline: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 });
 

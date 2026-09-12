@@ -249,6 +249,16 @@ export interface CapabilityMcpServerDef {
   enabled?: boolean;
   /** Default false — supply-chain gate. Trusted public MCP packs may set true. */
   approved?: boolean;
+  /**
+   * http: authenticate with a vault secret (0257). `credentialRef` is a
+   * template-local `vault[].ref` or an existing `vault://<id>`.
+   * MIRRORS `McpServerDefSchema.auth` in routers/hub-protocol/rest/capabilities.ts —
+   * this interface is hand-written, not inferred, so a field added to the schema
+   * and not here is rejected by nothing and silently dropped by the applier.
+   */
+  auth?: { credentialRef: string; header: string; prefix?: string };
+  /** Inline vs governed tools (0257). Omitted = governed. Mirrors the schema. */
+  toolPolicy?: { default: "governed" | "inline"; inline?: string[] };
   metadata?: Record<string, unknown>;
 }
 
@@ -479,6 +489,27 @@ export async function createCapabilityFromDefinition(
     createdVault.push({ ref: v.ref, ...vaultRef });
   }
 
+  // An MCP server's `auth.credentialRef` names a template-local `vault[].ref`
+  // (or an existing `vault://<id>`). Rewrite it to the created secret — and fail
+  // LOUDLY on an unknown ref: silently storing an unresolvable reference would
+  // install a server that 401s on every call with nothing pointing at why.
+  const resolveMcpAuth = (
+    auth:
+      { credentialRef: string; header: string; prefix?: string } | undefined,
+    slug: string
+  ) => {
+    if (!auth) return null;
+    const ref = auth.credentialRef.startsWith("vault://")
+      ? auth.credentialRef
+      : vaultByRef.get(auth.credentialRef);
+    if (!ref) {
+      throw new Error(
+        `MCP server "${slug}": auth.credentialRef "${auth.credentialRef}" matches no vault[] entry in this template.`
+      );
+    }
+    return { credentialRef: ref, header: auth.header, prefix: auth.prefix };
+  };
+
   // 1b. MCP servers — register before tools so `mcp://<slug>` credentialRefs
   //     resolve. Idempotent on (workspace scope, slug). Scope mirrors tools:
   //     pod-scoped capability → null workspaceId; else active workspace.
@@ -519,6 +550,9 @@ export async function createCapabilityFromDefinition(
           args: m.args ?? [],
           url: m.url ?? null,
           env: m.env ?? {},
+          // Converge to the template on re-apply (0257).
+          auth: resolveMcpAuth(m.auth, m.slug),
+          toolPolicy: m.toolPolicy ?? null,
           enabled: m.enabled !== false,
           // Only promote approval (never silently demote on re-apply).
           ...(m.approved === true ? { approved: true } : {}),
@@ -547,6 +581,8 @@ export async function createCapabilityFromDefinition(
           args: m.args ?? [],
           url: m.url ?? null,
           env: m.env ?? {},
+          auth: resolveMcpAuth(m.auth, m.slug),
+          toolPolicy: m.toolPolicy ?? null,
           enabled: m.enabled !== false,
           approved: m.approved === true,
           metadata: {
@@ -1582,6 +1618,9 @@ async function createVaultSecret(
     .values({
       userId,
       workspaceId,
+      // Shared pod key only on a POD-WIDE install; a workspace-scoped secret stays
+      // per-user no matter what the template asks for.
+      isPodWide: v.podWide === true && workspaceId === null,
       name: v.name,
       type: v.type ?? "api_key",
       url: null,

@@ -1370,6 +1370,136 @@ async function vaultDelegatedHandler(ctx: {
 // (c) fetch behind the shared validateExternalUrl SSRF guard (blocks loopback /
 //     private / link-local / cloud-metadata) and return the SAME structured
 //     shape the nango branch returns. The secret is NEVER logged.
+/**
+ * THE policy for using a direct vault secret on a caller's behalf. Extracted
+ * UNCHANGED from `vaultHandler` so every consumer of a server-side credential —
+ * the vault:// tool handler and an MCP server's auth header — applies the same
+ * rule instead of each writing its own. (`mcpHandler`'s env injection predates
+ * this and still grant-gates every caller with no owner/pod-wide bypass; left as
+ * is, flagged, not silently changed.)
+ *
+ *  - SEC#1: the owner bypass keys off the EFFECTIVE actor. An agent running under
+ *    the owner's hub identity is still grant-gated; only a genuine human-owner
+ *    run (no agentUserId) bypasses the grant.
+ *  - POD-WIDE bypass (0211): a pod-wide secret is a SHARED key any member may use
+ *    without a per-user vault grant. This removes ONLY the vault-GRANT
+ *    requirement; the RUN stays governed by `gateCapabilityExecution`.
+ *  - Otherwise: grant-gated, redeemed by the effective actor (never the owner we
+ *    decrypt under), atomic consume-after-decrypt inside the resolver.
+ */
+export async function resolveDirectVaultCredential(args: {
+  vaultId: string;
+  secretRow: { userId: string; isPodWide: boolean | null };
+  field?: string;
+  userId: string;
+  agentUserId?: string | null;
+  workspaceId?: string | null;
+}): Promise<
+  | { ok: true; secret: string }
+  | { ok: false; result: Awaited<ReturnType<SchemeHandler>> }
+> {
+  const { vaultId, secretRow, field, userId } = args;
+  const ownerUserId = secretRow.userId;
+  const effectiveActor = args.agentUserId ?? userId;
+  const callerIsOwner = ownerUserId === effectiveActor && !args.agentUserId;
+  const podWideBypass = secretRow.isPodWide === true;
+  const ungated = callerIsOwner || podWideBypass;
+
+  let secret: string | null;
+  try {
+    secret = await resolveVaultSecret(
+      vaultId,
+      ownerUserId,
+      field,
+      ungated
+        ? undefined
+        : {
+            requireGrant: true,
+            redeemer: {
+              agentUserId: effectiveActor,
+              workspaceId: args.workspaceId ?? null,
+            },
+          }
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 403,
+        errorCode: "bad_request",
+        error: `Vault grant check failed: ${err instanceof Error ? err.message : String(err)}`,
+      },
+    };
+  }
+  if (!secret) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 404,
+        errorCode: "not_found",
+        error: `Vault secret "${vaultId}" could not be resolved (missing, deleted, or not server-resolvable).`,
+      },
+    };
+  }
+  return { ok: true, secret };
+}
+
+/**
+ * Build an MCP server's auth header from its `auth` config (0257), under the
+ * same vault policy as a vault:// tool. The secret goes only into the IS
+ * transport's request headers — never into a tool result, log, or prompt.
+ *
+ * A provider-integration secret (OAuth/Nango) is refused: it is not a static key
+ * and has no header form. Returns an error rather than a missing header, so a
+ * misconfigured server fails with a reason instead of an anonymous 401.
+ */
+export async function resolveMcpServerAuthHeader(
+  auth: { credentialRef: string; header: string; prefix?: string },
+  actor: {
+    userId: string;
+    agentUserId?: string | null;
+    workspaceId?: string | null;
+  }
+): Promise<
+  { ok: true; headers: Record<string, string> } | { ok: false; error: string }
+> {
+  const vaultId = auth.credentialRef.replace(/^vault:\/\//, "");
+  const secretRow = await db.query.secrets.findFirst({
+    where: eq(secrets.id, vaultId),
+    columns: { userId: true, isPodWide: true, providerIntegrationId: true },
+  });
+  if (!secretRow) {
+    return { ok: false, error: `MCP auth secret "${vaultId}" not found.` };
+  }
+  if (secretRow.providerIntegrationId) {
+    return {
+      ok: false,
+      error: `MCP auth secret "${vaultId}" is a provider-integration credential, not a static key.`,
+    };
+  }
+  const resolved = await resolveDirectVaultCredential({
+    vaultId,
+    secretRow,
+    userId: actor.userId,
+    agentUserId: actor.agentUserId,
+    workspaceId: actor.workspaceId,
+  });
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      error: resolved.result.success
+        ? "unknown"
+        : String(resolved.result.error),
+    };
+  }
+  return {
+    ok: true,
+    headers: { [auth.header]: `${auth.prefix ?? ""}${resolved.secret}` },
+  };
+}
+
 const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const { userId, provider, method, path, body, accountHint } = input;
   void accountHint; // used below in connection-selection
@@ -1422,63 +1552,19 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     });
   }
 
-  const ownerUserId = secretRow.userId;
-  // SEC#1: the owner-bypass must key off the EFFECTIVE actor, not raw `userId`.
-  // An agent running under the owner's hub identity (agentUserId present, userId =
-  // secret owner) must STILL be grant-gated on the per-secret vault grant (TTL /
-  // once / revoke) — otherwise the owner can't scope an agent's access to their
-  // own secret. Only a GENUINE human-owner run (no agentUserId) bypasses the grant.
-  const effectiveActor = input.agentUserId ?? userId;
-  const callerIsOwner = ownerUserId === effectiveActor && !input.agentUserId;
-
-  // POD-WIDE bypass (0211): a pod-wide connection is a SHARED vault key any member
-  // may use for this capability WITHOUT holding a per-user vault grant — it is
-  // decrypted under the secret's owner. This removes ONLY the per-user vault-GRANT
-  // requirement; the RUN is still governed by `gateCapabilityExecution` upstream in
-  // `triggerProviderAction` (agent runs still route to propose/deny without an
-  // approved capability + grant). VAULT ONLY: this path is reached only after the
-  // provider-integration (Nango) delegation returned above, so the secret here is
-  // always a direct vault key.
-  const podWideBypass = secretRow.isPodWide === true;
-  const ungated = callerIsOwner || podWideBypass;
-
-  // (a) Resolve the credential. Owner / pod-wide → ungated. Delegated → grant-gated
-  //     with a server-derived redeemer (atomic consume-after-decrypt inside resolver).
-  let secret: string | null;
-  try {
-    secret = await resolveVaultSecret(
-      vaultId,
-      ownerUserId,
-      field,
-      ungated
-        ? undefined
-        : {
-            requireGrant: true,
-            redeemer: {
-              // Bind to the EFFECTIVE actor (the genuine agent identity when
-              // present, else the caller) so the grant's `granted_to` matches the
-              // principal actually running — never the secret owner we decrypt under.
-              agentUserId: effectiveActor,
-              workspaceId: input.workspaceId ?? null,
-            },
-          }
-    );
-  } catch (err) {
-    return {
-      success: false,
-      status: 403,
-      errorCode: "bad_request",
-      error: `Vault grant check failed: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  }
-  if (!secret) {
-    return {
-      success: false,
-      status: 404,
-      errorCode: "not_found",
-      error: `Vault secret "${vaultId}" could not be resolved (missing, deleted, or not server-resolvable).`,
-    };
-  }
+  // (a) Resolve the credential under the ONE vault policy (see
+  //     resolveDirectVaultCredential): owner / pod-wide → ungated; delegated →
+  //     grant-gated with the effective actor as redeemer.
+  const resolved = await resolveDirectVaultCredential({
+    vaultId,
+    secretRow,
+    field,
+    userId,
+    agentUserId: input.agentUserId,
+    workspaceId: input.workspaceId,
+  });
+  if (!resolved.ok) return resolved.result;
+  const secret = resolved.secret;
 
   // (b) Build the outbound URL. SECURITY: when `config.baseUrl` is configured
   //     the destination host is FIXED at proposal-time — a call-time absolute
@@ -1774,6 +1860,26 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
   // (server-configured + vault-injected) before it crosses to the IS spawner.
   const safeEnv = stripDangerousEnv(env);
 
+  // (5) Auth header for an http server (0257), under the ONE vault policy —
+  //     so an approved replay authenticates exactly as the chat path does.
+  let authHeaders: Record<string, string> | undefined;
+  if (server.auth) {
+    const authRes = await resolveMcpServerAuthHeader(server.auth, {
+      userId,
+      agentUserId: input.agentUserId,
+      workspaceId: input.workspaceId,
+    });
+    if (!authRes.ok) {
+      return {
+        success: false,
+        status: 403,
+        errorCode: "bad_request",
+        error: `MCP server "${serverSlug}" could not authenticate: ${authRes.error}`,
+      };
+    }
+    authHeaders = authRes.headers;
+  }
+
   let res: Response;
   try {
     res = await fetch(`${hubUrl}/api/mcp/call`, {
@@ -1791,6 +1897,7 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
           args: server.args,
           url: server.url,
           env: safeEnv,
+          headers: authHeaders,
           enabled: server.enabled,
         },
         name: mcpToolName,

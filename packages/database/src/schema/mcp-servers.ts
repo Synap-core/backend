@@ -26,6 +26,25 @@ import { workspaces } from "./workspaces.js";
 export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
 
+/** How the pod authenticates to an HTTP MCP server (0257). */
+export interface McpServerAuth {
+  /** `vault://<secretId>` — resolved server-side, never persisted in clear. */
+  credentialRef: string;
+  /** Header name, e.g. "Authorization". */
+  header: string;
+  /** Prepended to the secret, e.g. "Bearer ". */
+  prefix?: string;
+}
+
+/**
+ * Tool governance for an MCP server (0257). `default` applies to every tool not
+ * named in `inline`. Absent policy = `{ default: "governed" }`.
+ */
+export interface McpToolPolicy {
+  default: "governed" | "inline";
+  inline?: string[];
+}
+
 export const mcpServers = pgTable(
   "mcp_servers",
   {
@@ -60,6 +79,19 @@ export const mcpServers = pgTable(
 
     /** Environment variables injected into the server process */
     env: jsonb("env").$type<Record<string, string>>().default({}).notNull(),
+
+    /**
+     * http: how the pod authenticates to the server. References a vault secret;
+     * the secret is resolved server-side and sent to the IS as a header, never
+     * stored here and never shown to the agent. (0257)
+     */
+    auth: jsonb("auth").$type<McpServerAuth | null>(),
+
+    /**
+     * Which tools an agent may call inline vs through the governance door.
+     * NULL = governed (fail-closed). See McpToolPolicy. (0257)
+     */
+    toolPolicy: jsonb("tool_policy").$type<McpToolPolicy | null>(),
 
     // ── Lifecycle ────────────────────────────────────────────────────────
 
