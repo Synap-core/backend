@@ -11,12 +11,14 @@ import { z } from "@hono/zod-openapi";
 import {
   db,
   entities,
+  entityExternalLinks,
   profiles,
   calendarFeedTokens,
   eq,
   and,
   isNull,
   inArray,
+  notInArray,
   desc,
 } from "@synap/database";
 
@@ -174,7 +176,49 @@ function asProps(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-async function loadVisibleCalendarEntities(
+/**
+ * The provider string the Google Calendar import ACTUALLY writes into
+ * `entity_external_links.provider`.
+ *
+ * It is `"google"`, not `"google-calendar"` — `GOOGLE_PROVIDER` in
+ * `services/event-sync/run-gcal-import.ts` (and `migrate-gcal-events.ts`), fed
+ * to `makeExternalLinkIdempotency().register()`, which is the only writer.
+ * `"google-calendar"` appears in this repo ONLY inside comments
+ * (`schema/entity-external-links.ts:31`, `schema/automations.ts:110`,
+ * `automation-trigger-matcher.ts:526`) and would match zero rows — a filter
+ * written from those comments would be silently inert.
+ */
+const GOOGLE_SYNC_PROVIDER = "google";
+
+/**
+ * Entity ids that came FROM Google Calendar (they carry a `google` external
+ * link). The feed must not re-export them.
+ *
+ * A user can both connect Google Calendar (pulling its events in as `event`
+ * entities) and subscribe Google to this ICS URL — two toggles one screen apart
+ * in relay Settings. Our UID is `<entityId>@<podHost>`, which Google cannot
+ * reconcile with its own event id, so it renders the same appointment a second
+ * time, forever, with no way for the user to delete the copy (the feed is
+ * read-only).
+ *
+ * Status is deliberately NOT filtered. A `disconnected` link still means the
+ * event exists in Google's calendar as well as here, so re-exporting it would
+ * still double-render; the link row is the durable "Google already owns this
+ * occurrence" fact, not a liveness signal.
+ *
+ * Scoped to the profiles the feed reads anyway (task/event/meeting), so a later
+ * Gmail/Drive sync landing under the same `google` provider — a registered
+ * `SyncKindHandler` with `provider: "google"`, per `connection-sync.ts` — cannot
+ * accidentally remove anything from the calendar.
+ */
+function googleSyncedEntityIds() {
+  return db
+    .select({ id: entityExternalLinks.entityId })
+    .from(entityExternalLinks)
+    .where(eq(entityExternalLinks.provider, GOOGLE_SYNC_PROVIDER));
+}
+
+async function loadOwnedCalendarEntities(
   userId: string
 ): Promise<CalendarFeedEntity[]> {
   const rows = await db
@@ -191,9 +235,26 @@ async function loadVisibleCalendarEntities(
     .innerJoin(profiles, eq(entities.profileId, profiles.id))
     .where(
       and(
+        // FLOOR — unchanged, and kept even though ownership implies it. The
+        // canonical read floor is never removed from a read; the ownership
+        // conjunct below only NARROWS it.
         entityReadVisibleWhere(userId),
+        // OWNERSHIP — the feed carries the TOKEN OWNER's own objects.
+        //
+        // The floor alone is the widest read predicate in the codebase: over an
+        // UNAUTHENTICATED URL it exported every colleague's dated entity from
+        // every shared workspace. There is no `ownedEntitiesWhere` helper —
+        // ownership is expressed as a bare `eq(entities.userId, …)` everywhere
+        // it is meant (hub.ts:144, discover.ts:390, retrieve.ts:159,
+        // entities/read.ts:537), so that is the canonical spelling.
+        //
+        // This does NOT drop AI-created objects: an agent key resolves to its
+        // `linkedUserId` (the human) in `_middleware/auth.ts`, so entities an
+        // agent creates already carry the human's `userId`.
+        eq(entities.userId, userId),
         isNull(entities.deletedAt),
-        inArray(profiles.slug, [...CALENDAR_PROFILE_SLUGS])
+        inArray(profiles.slug, [...CALENDAR_PROFILE_SLUGS]),
+        notInArray(entities.id, googleSyncedEntityIds())
       )
     )
     // A hard ceiling on one poll. The date window that decides what actually
@@ -415,7 +476,7 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
     const podHost = resolvePodHost(
       c.req.header("x-forwarded-host") || c.req.header("host")
     );
-    const visible = await loadVisibleCalendarEntities(row.userId);
+    const visible = await loadOwnedCalendarEntities(row.userId);
     const { ics, maxUpdatedAt } = buildSynapCalendarIcs(visible, podHost, {
       entityUrl: (id) => openLink(id),
     });

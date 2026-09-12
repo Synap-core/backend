@@ -8,7 +8,6 @@
  */
 
 export const CALENDAR_PROFILE_SLUGS = ["task", "event", "meeting"] as const;
-export type CalendarProfileSlug = (typeof CALENDAR_PROFILE_SLUGS)[number];
 
 export interface CalendarFeedEntity {
   id: string;
@@ -213,7 +212,6 @@ export interface VEventInput {
   summary: string;
   description?: string;
   location?: string;
-  url?: string;
   lastModified?: string;
 }
 
@@ -298,8 +296,7 @@ export function veventLines(event: VEventInput, url?: string): string[] {
   if (event.location) {
     lines.push(`LOCATION:${escapeIcsText(event.location)}`);
   }
-  const href = url ?? event.url;
-  if (href) lines.push(`URL:${href}`);
+  if (url) lines.push(`URL:${url}`);
   lines.push("END:VEVENT");
   return lines;
 }
@@ -318,8 +315,7 @@ export function buildIcsCalendar(
   ];
   for (const event of events) {
     const uidEntityId = event.uid.split("@")[0] ?? "";
-    const url = opts?.entityUrl?.(uidEntityId);
-    lines.push(...veventLines(event, url ?? event.url));
+    lines.push(...veventLines(event, opts?.entityUrl?.(uidEntityId)));
   }
   lines.push("END:VCALENDAR");
   return lines.map(foldIcsLine).join("\r\n") + "\r\n";

@@ -6,6 +6,8 @@
  */
 
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { PgDialect } from "drizzle-orm/pg-core";
+import type { SQL } from "drizzle-orm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../../../utils/share-token.js";
 
@@ -31,6 +33,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       orderBy: () => ({ limit: () => rows }),
     };
   };
+  // Only the FEED's own read is intercepted. Everything else that calls
+  // `db.select()` inside this handler — the access floor's membership
+  // subqueries, the google external-link subquery — must reach the REAL
+  // drizzle builder, or `inArray(col, <plain mock object>)` compiles to
+  // garbage and the predicate this suite inspects would be fiction. The
+  // discriminator is the feed projection's own `preview` column.
+  const isFeedProjection = (cols: unknown) =>
+    !!cols && typeof cols === "object" && "preview" in (cols as object);
   return {
     ...actual,
     calendarFeedTokens: actual.calendarFeedTokens ?? {
@@ -46,7 +56,10 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: {
         calendarFeedTokens: { findFirst: findFirstMock },
       },
-      select: () => selectChain,
+      select: (cols?: unknown) =>
+        isFeedProjection(cols)
+          ? selectChain
+          : (actual.db.select as (c?: never) => unknown)(cols as never),
       update: () => ({
         set: () => ({
           where: (...args: unknown[]) => updateWhereMock(...args),
@@ -346,5 +359,134 @@ describe("an agent credential cannot change the feed", () => {
     // `revokedAt` was only ever written null and the reader's revoked branch
     // was unreachable code.
     expect(updateWhereMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * THE READ PREDICATE ITSELF — ownership, and the Google exclusion.
+ *
+ * The suite above mocks `db`, so no row is ever actually filtered: `whereMock`
+ * hands back whatever the fixture says regardless of the predicate. Asserting
+ * "B's row did not come back" against that mock would be theatre.
+ *
+ * So these tests assert the thing that IS real here: the WHERE the handler
+ * hands to Postgres. They compile it with `PgDialect` and inspect its
+ * TOP-LEVEL conjuncts + bound params — the same technique, and the same
+ * justification, as `access/two-user-floor.test.ts` ("the access unit suite
+ * runs without a seeded DB; compiling the WHERE proves the floor structurally").
+ *
+ * TOP-LEVEL is load-bearing, not decoration. The access floor
+ * (`entityReadVisibleWhere`) ALSO contains `"entities"."user_id" = $n` bound to
+ * the same id, inside its pod-personal branch. A substring match on the whole
+ * statement would therefore stay green with the ownership conjunct deleted —
+ * a vacuous guard. The floor is one parenthesised `or(...)`, so its copy sits
+ * at depth ≥ 2; only the conjunct added here appears at depth 1.
+ *
+ * WHAT THIS DOES NOT COVER, measured: it proves the predicate reaches the
+ * statement with the right binding. It does not execute it — Postgres row
+ * semantics (NULL handling in `NOT IN`, index behaviour) are out of scope.
+ * `entity_external_links.entity_id` is NOT NULL, which is what makes `NOT IN`
+ * safe here.
+ */
+describe("the feed read predicate — owner-scoped, google-excluded", () => {
+  const dialect = new PgDialect();
+
+  /** Drive the real handler once and compile the WHERE it emitted. */
+  async function emittedWhere(): Promise<{ sql: string; params: unknown[] }> {
+    findFirstMock.mockResolvedValue({
+      id: "feed-a",
+      userId: USER_A,
+      tokenLookupHash: hashToken(TOKEN_A),
+      tokenPrefix: "token-aa",
+      createdAt: new Date(),
+      revokedAt: null,
+    });
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    expect(res.status).toBe(200);
+    expect(whereMock).toHaveBeenCalledTimes(1);
+    const predicate = whereMock.mock.calls[0]![0] as SQL;
+    const q = dialect.sqlToQuery(predicate);
+    return { sql: q.sql, params: q.params as unknown[] };
+  }
+
+  /**
+   * The conjuncts of the outermost `and(...)` — i.e. the ones at paren depth 1.
+   * Anything nested inside a sub-expression (the floor's own `or(...)`, a
+   * subquery) is deliberately invisible here.
+   */
+  function topLevelConjuncts(sql: string): string[] {
+    let s = sql.trim();
+    if (s.startsWith("(") && s.endsWith(")")) s = s.slice(1, -1);
+    const out: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < s.length; i += 1) {
+      const ch = s[i];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") depth -= 1;
+      else if (depth === 0 && s.startsWith(" and ", i)) {
+        out.push(s.slice(start, i).trim());
+        i += 4;
+        start = i + 1;
+      }
+    }
+    out.push(s.slice(start).trim());
+    return out.filter(Boolean);
+  }
+
+  /** The bound value behind a `$n` placeholder inside a conjunct. */
+  function boundValue(conjunct: string, params: unknown[]): unknown {
+    const m = /\$(\d+)/.exec(conjunct);
+    expect(m, `no placeholder in: ${conjunct}`).not.toBeNull();
+    return params[Number(m![1]) - 1];
+  }
+
+  it("the splitter can see the statement (non-vacuity self-check)", async () => {
+    const { sql } = await emittedWhere();
+    const parts = topLevelConjuncts(sql);
+    // Two conjuncts that predate this change and must always be top-level: if
+    // the splitter ever returns one blob (or nothing), every assertion below
+    // would pass by never looking at anything.
+    expect(parts).toContain('"entities"."deleted_at" is null');
+    expect(parts.some((p) => p.startsWith('"profiles"."slug" in ('))).toBe(
+      true
+    );
+    expect(parts.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("narrows to the TOKEN OWNER's own rows — a visible-but-not-owned row cannot match", async () => {
+    const { sql, params } = await emittedWhere();
+    const owner = topLevelConjuncts(sql).filter((p) =>
+      /^"entities"\."user_id" = \$\d+$/.test(p)
+    );
+    // Exactly one, at the top level — ANDed, so a row owned by anyone else is
+    // excluded no matter how widely the floor beneath it can see.
+    expect(owner).toHaveLength(1);
+    expect(boundValue(owner[0]!, params)).toBe(USER_A);
+    expect(params).not.toContain(USER_B);
+  });
+
+  it("keeps the access floor — ownership NARROWS it, never replaces it", async () => {
+    const { sql } = await emittedWhere();
+    // The floor is the one conjunct carrying the workspace-membership union.
+    const floor = topLevelConjuncts(sql).filter((p) =>
+      p.includes('from "workspace_members"')
+    );
+    expect(floor).toHaveLength(1);
+    expect(entityReadVisibleWhereSpy).toHaveBeenCalledWith(USER_A);
+  });
+
+  it("excludes entities that came from Google Calendar", async () => {
+    const { sql, params } = await emittedWhere();
+    const excl = topLevelConjuncts(sql).filter((p) =>
+      p.includes('from "entity_external_links"')
+    );
+    expect(excl).toHaveLength(1);
+    expect(excl[0]).toMatch(/^"entities"\."id" not in \(select /);
+    expect(excl[0]).toContain('"entity_external_links"."provider" = $');
+    // The provider string the gcal import actually writes. `"google-calendar"`
+    // exists only in comments and would match zero rows.
+    expect(boundValue(excl[0]!, params)).toBe("google");
   });
 });

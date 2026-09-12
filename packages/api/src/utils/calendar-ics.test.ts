@@ -293,3 +293,34 @@ describe("the feed is windowed", () => {
     expect(events).toHaveLength(1);
   });
 });
+
+/**
+ * The URL line — the only thing that gets a subscriber back to the object.
+ *
+ * Nothing covered it before, which is what let a dead second source
+ * (`VEventInput.url`, written by no producer, read through `url ?? event.url`
+ * in two places) sit here looking load-bearing. With that field gone the
+ * `entityUrl` callback is the ONE source, so this asserts the value ARRIVES in
+ * the body — not that a field is declared.
+ *
+ * Negative control (verified): drop the `url` argument in `veventLines`'
+ * caller and this goes red; the rest of the file stays green.
+ */
+describe("URL comes from entityUrl, and only from there", () => {
+  it("the resolved link reaches the VEVENT body", () => {
+    const { ics } = build([entity({ id: "abc" })], {
+      entityUrl: (id) => `https://pod.test/e/${id}`,
+    });
+    expect(ics).toContain("URL:https://pod.test/e/abc");
+  });
+
+  it("no URL line when the resolver returns nothing", () => {
+    const { ics } = build([entity()], { entityUrl: () => undefined });
+    expect(ics).not.toContain("URL:");
+  });
+
+  it("no URL line when no resolver is supplied at all", () => {
+    const { ics } = build([entity()]);
+    expect(ics).not.toContain("URL:");
+  });
+});
