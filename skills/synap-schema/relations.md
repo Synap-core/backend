@@ -15,4 +15,4 @@ POST /api/hub/relation-defs
 }
 ```
 
-Defining a relation def is rarely worth it — `related_to` + a property usually suffices. Only create one when the relationship is semantic enough that UI should treat it specially (e.g., show "mentored by Jane" on a person's profile card).
+Defining a relation def is rarely worth it — `relates_to` + a property usually suffices. Only create one when the relationship is semantic enough that UI should treat it specially (e.g., show "mentored by Jane" on a person's profile card).

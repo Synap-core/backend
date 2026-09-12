@@ -16,6 +16,14 @@ export interface ExecutionPayload {
     rootRunId: string;
     chainAutomationIds: string[];
     /**
+     * The `events` row that fired this run (`automation_runs.trigger_event_id`,
+     * 0256). Absent for cron / manual / webhook runs, which have no triggering
+     * event. Carried for PROVENANCE only — the depth and cycle guards never
+     * read it — so a `playbook_run` step can stamp it onto the session it opens
+     * and back-stamp `events.session_id` on the event row.
+     */
+    triggerEventId?: string;
+    /**
      * The focus session opened for this run (non-playbook-delegate automations
      * only — see `executeAutomationFlow`). Threaded through delay-resumption
      * re-enqueues so a suspended run reuses the SAME session on resume instead

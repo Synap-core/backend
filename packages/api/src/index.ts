@@ -370,6 +370,16 @@ export {
   type CompleteFocusSessionParams,
   type CompleteFocusSessionResult,
 } from "./services/focus-sessions/complete-session.js";
+// Exported for @synap/jobs' `registerStageAdvancer` IoC slot, for the same
+// reason and by the same inversion: a playbook stage's `gate: { kind: "human" }`
+// is resolved by ONE door, and the automation `session_update` output used to
+// write `current_stage` with a raw UPDATE that walked straight through it.
+export {
+  advanceSessionStage,
+  type AdvanceSessionStageInput,
+  type AdvanceSessionStageResult,
+  type StageAdvanceSession,
+} from "./services/focus-sessions/advance-stage.js";
 // Exported for the @synap/jobs flow-validator IoC slot: the pattern detector
 // writes `automations` directly and cannot import this package statically.
 export {

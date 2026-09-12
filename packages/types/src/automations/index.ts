@@ -135,6 +135,11 @@ export {
   unevaluableConditionMessage,
   VALUELESS_CONDITION_OPERATORS,
   BOOKKEEPING_KEYS,
+  // The `playbook_run` node's derived `label`. A VALUE, because the SECOND
+  // writer of that node (`sentenceToWriteInput`, @synap-core/automation-intent)
+  // must call the same function rather than re-derive the string — the schema
+  // declares `label` REQUIRED and that writer emitted none.
+  playbookRunNodeLabel,
   flowToConditions,
 } from "./sentence.js";
 export type {

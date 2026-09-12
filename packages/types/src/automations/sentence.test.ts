@@ -643,6 +643,22 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         topic: "{{trigger.data.title}}",
       },
     ],
+    [
+      "id + goal",
+      {
+        __playbookId: "33333333-3333-4333-8333-333333333333",
+        __goal: "Qualify {{trigger.payload.data.title}} for the Q3 pipeline",
+      },
+    ],
+    [
+      "id + agent + goal + params",
+      {
+        __playbookId: "44444444-4444-4444-8444-444444444444",
+        __agentType: "researcher",
+        __goal: "Brief @{arg:company:entity} before the call",
+        topic: "{{trigger.data.title}}",
+      },
+    ],
   ])(
     "a grammar-authored playbook flow round-trips unchanged (%s)",
     (_l, cfg) => {
@@ -679,6 +695,15 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         playbookId: "22222222-2222-4222-8222-222222222222",
         agentType: "researcher",
         paramsMapping: { topic: "{{trigger.data.title}}" },
+      },
+      "Run playbook",
+    ],
+    [
+      "id + goalOverride",
+      {
+        playbookId: "33333333-3333-4333-8333-333333333333",
+        goalOverride: "Qualify {{trigger.payload.data.title}}",
+        paramsMapping: {},
       },
       "Run playbook",
     ],
@@ -736,6 +761,57 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     const node = rebuilt.nodes.find((n) => n.type === "playbook_run");
     expect(node!.data.label).toBe("Run playbook");
     expect(node!.data.playbookId).toBe("11111111-1111-4111-8111-111111111111");
+  });
+
+  // ── GOAL OVERRIDE ─────────────────────────────────────────────────────────
+  // Until this existed a playbook_run THEN could only inherit the playbook's own
+  // goalTemplate, so every rule running the same playbook spawned a session with
+  // an identical goal and the reason THIS rule fired was nowhere in the session.
+  it("carries the rule's own goal onto the node the executor reads", () => {
+    const flow = toFlowDefinition([
+      {
+        type: null,
+        config: {
+          __nodeType: "playbook_run",
+          __playbookId: "11111111-1111-4111-8111-111111111111",
+          __goal: "Qualify {{trigger.payload.data.title}}",
+          topic: "{{trigger.data.title}}",
+        },
+      },
+    ]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run");
+    // The VALUE arrives on the exact field `executePlaybookRun` reads
+    // (`data.goalOverride`) — not merely "a goal key is declared somewhere".
+    expect(node!.data.goalOverride).toBe(
+      "Qualify {{trigger.payload.data.title}}"
+    );
+    // And it is BOOKKEEPING: it must not leak into paramsMapping, where the
+    // executor would resolve it as a real playbook param named `__goal`.
+    expect(node!.data.paramsMapping).toEqual({
+      topic: "{{trigger.data.title}}",
+    });
+  });
+
+  it("omits goalOverride entirely when the rule states no goal", () => {
+    // Absent, not `undefined`: a node without a goal must round-trip to a node
+    // without one, which is what keeps every pre-existing node byte-identical.
+    const flow = toFlowDefinition([{ ...byId, config: { ...byId.config } }]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run");
+    expect("goalOverride" in (node!.data as Record<string, unknown>)).toBe(
+      false
+    );
+  });
+
+  it("a goal alone does not make an action CONFIGURED", () => {
+    // `isActionConfigured` is unchanged: the one-of that matters is still
+    // playbookId OR playbookName (what `validate-flow` requires). A goal with no
+    // playbook would persist green and throw at run time.
+    expect(
+      isActionConfigured({
+        type: null,
+        config: { __nodeType: "playbook_run", __goal: "Do the thing" },
+      })
+    ).toBe(false);
   });
 
   it("survives the lossy single-action reader too", () => {

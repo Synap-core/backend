@@ -378,6 +378,74 @@ describe("auto-approve satisfies the session's expected outputs", () => {
     expect(updatedSets).toHaveLength(0);
   });
 
+  /**
+   * THE SEAM: the gate must hand the ENTITY'S PROFILE to the stamper, not just
+   * the generic `entity` target type. Live defect (2026-09-12): three applied
+   * knowledge captures left a `kind: "knowledge"` slot pending forever.
+   * Driven through the real gate + the real `satisfyExpectedOutputs`, so
+   * dropping the projection in either half fails here.
+   */
+  it("a knowledge ENTITY satisfies a kind:'knowledge' slot", async () => {
+    sessionRow.current = openSessionWith([
+      { kind: "task", label: "Follow-up" },
+      { kind: "knowledge", label: "Lesson" },
+    ]);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      subjectType: "entity",
+      data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
+    });
+
+    expect(updatedSets).toHaveLength(1);
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[1]).toMatchObject({
+      label: "Lesson",
+      status: "done",
+      satisfiedByProposalId: "receipt-1",
+    });
+    // The task slot is a DIFFERENT deliverable and stays owed.
+    expect(written[0]).not.toHaveProperty("status");
+  });
+
+  it("a knowledge ENTITY leaves a kind:'task' slot owed", async () => {
+    sessionRow.current = openSessionWith([
+      { kind: "task", label: "Follow-up" },
+    ]);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      subjectType: "entity",
+      data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
+    });
+
+    expect(updatedSets).toHaveLength(0);
+  });
+
+  it("a kind:'entity' slot still behaves as today", async () => {
+    sessionRow.current = openSessionWith([
+      { kind: "entity", label: "Client record" },
+    ]);
+
+    await checkPermissionOrPropose({
+      ...OPTS,
+      subjectType: "entity",
+      data: { id: "ent-1", profileSlug: "knowledge", title: "A lesson" },
+    });
+
+    const written = updatedSets[0]!.expectedOutputs as Record<
+      string,
+      unknown
+    >[];
+    expect(written[0]).toMatchObject({
+      label: "Client record",
+      status: "done",
+    });
+  });
+
   it("does not stamp when the write carries no session", async () => {
     sessionRow.current = openSessionWith([{ kind: "document", label: "Spec" }]);
 

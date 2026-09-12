@@ -246,6 +246,11 @@ export {
   type TemplateEnumSource,
   type StoredEnumSource,
 } from "./utils/property-enum.js";
+export {
+  resolvePropertyLabel,
+  resolvePropertyOptions,
+  type StoredPropertyPresentation,
+} from "./utils/property-presentation.js";
 
 // Export workspace definitions (built-in presets for createWorkspaceFromDefinition)
 export { DEVOPS_DEFINITION } from "./definitions/devops-definition.js";

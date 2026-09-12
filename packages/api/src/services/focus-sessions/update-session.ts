@@ -957,65 +957,36 @@ export async function updateFocusSession(
       .returning();
   });
 
-  // Stage transition side-effect: when the active stage actually changes,
-  // emit `focus_session.stage_changed` so automations can react (mirrors the
-  // tRPC + Hub REST update doors). No-op for stageless / unchanged stages.
-  if (
-    params.currentStage !== undefined &&
-    params.currentStage !== existing.currentStage
-  ) {
-    const { emitSideEffects } = await import("@synap/events");
-    emitSideEffects({
-      subjectType: "focus_session",
-      action: "stage_changed",
-      subjectId: updated.id,
-      userId,
-      workspaceId: existing.workspaceId,
-      data: {
-        sessionId: updated.id,
-        subjectId: existing.subjectEntityId,
-        playbookId: existing.playbookId,
-        fromStage: existing.currentStage,
-        toStage: updated.currentStage,
-        workspaceId: existing.workspaceId,
-        userId,
-      },
-    });
-  }
-
-  // ── HUMAN GATE ON STAGE ENTRY ───────────────────────────────────────────────
-  // A stage may declare `gate: { kind: "human" }`. Advancing INTO it pauses the
-  // session and files a proposal; the stage STANDS (the write above already
-  // landed — see services/playbooks/stage-gate.ts for why the gate is a pause
-  // and not a veto). Ungated stages, stageless playbooks and unchanged stages
-  // cost nothing: the resolver is only consulted when the stage actually moved.
+  // ── STAGE ADVANCE ───────────────────────────────────────────────────────────
+  // The `stage_changed` fan-out AND the human gate both live in ONE door now
+  // (`advance-stage.ts`). This service used to carry the only wired gate while
+  // the tRPC, Hub REST and automation doors each hand-copied the emit and walked
+  // straight through it — four copies of one rule, three a field behind.
   //
-  // DOOR PARITY: this is one of THREE stage-advance implementations
-  // (`routers/focus-sessions.ts`, `jobs/steps/output.ts` and this service).
-  // Only this one — the MCP/agent door — is wired today; the other two are
-  // named as follow-ups rather than edited under a concurrent change.
+  // `stageWrite: "caller"` because the stage rode along in the multi-field UPDATE
+  // above (inside the outputs row lock); the door must not write it a second time.
   let gatedStatus: typeof updated.status | undefined;
-  if (
-    params.currentStage !== undefined &&
-    params.currentStage !== existing.currentStage
-  ) {
-    const { applyStageGateOnAdvance } =
-      await import("../playbooks/stage-gate.js");
-    const gate = await applyStageGateOnAdvance({
-      sessionId: updated.id,
+  if (params.currentStage !== undefined) {
+    const { advanceSessionStage } = await import("./advance-stage.js");
+    const advance = await advanceSessionStage({
+      session: {
+        id: updated.id,
+        currentStage: existing.currentStage,
+        workspaceId: existing.workspaceId,
+        projectId: existing.projectId,
+        channelId: existing.channelId,
+        playbookId: existing.playbookId,
+        subjectEntityId: existing.subjectEntityId,
+      },
+      toStage: params.currentStage,
       userId,
       agentUserId,
-      workspaceId: existing.workspaceId,
-      projectId: existing.projectId,
-      channelId: existing.channelId,
-      playbookId: existing.playbookId,
-      toStage: params.currentStage,
-      fromStage: existing.currentStage,
+      stageWrite: "caller",
     });
     // Report the status the ROW now holds, not the one this call asked for —
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
-    if (gate?.paused) gatedStatus = "paused";
+    if (advance.paused) gatedStatus = "paused";
   }
 
   return {

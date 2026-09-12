@@ -36,7 +36,6 @@ import {
 import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
-import { emitSideEffects } from "@synap/events";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import {
@@ -1047,29 +1046,36 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         }
       }
 
-      // Stage transition side-effect: when the active stage actually changes,
-      // emit `focus_session.stage_changed` so automations can react (and filter
-      // on toStage). No-op for stageless playbooks / unchanged stages.
-      if (
-        patch.currentStage !== undefined &&
-        patch.currentStage !== existing.currentStage
-      ) {
-        emitSideEffects({
-          subjectType: "focus_session",
-          action: "stage_changed",
-          subjectId: updated.id,
-          userId,
-          workspaceId: existing.workspaceId,
-          data: {
-            sessionId: updated.id,
-            subjectId: existing.subjectEntityId,
-            playbookId: existing.playbookId,
-            fromStage: existing.currentStage,
-            toStage: updated.currentStage,
+      // ── STAGE ADVANCE ─────────────────────────────────────────────────────
+      // ONE door owns the `stage_changed` fan-out AND the human stage gate
+      // (`services/focus-sessions/advance-stage.ts`). This door used to carry a
+      // hand-copy of the emit and NO gate, so an Intelligence-Service advance
+      // into a `gate: { kind: "human" }` stage never paused and never filed.
+      //
+      // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
+      // `agentUserId` is threaded so the gate proposal carries agent provenance,
+      // exactly as the MCP door does.
+      if (updated && patch.currentStage !== undefined) {
+        const { advanceSessionStage } =
+          await import("../../../services/focus-sessions/advance-stage.js");
+        const advance = await advanceSessionStage({
+          session: {
+            id: updated.id,
+            currentStage: existing.currentStage,
             workspaceId: existing.workspaceId,
-            userId,
+            projectId: existing.projectId,
+            channelId: existing.channelId,
+            playbookId: existing.playbookId,
+            subjectEntityId: existing.subjectEntityId,
           },
+          toStage: patch.currentStage,
+          userId,
+          agentUserId,
+          stageWrite: "caller",
         });
+        // Report the status the ROW now holds — see the MCP door for why a
+        // caller told "active" past an open gate is the dangerous answer.
+        if (advance.paused) updated = { ...updated, status: "paused" };
       }
 
       emitHubRealtimeEvent({

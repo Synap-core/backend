@@ -598,7 +598,17 @@ export async function executeCapability(input: {
   // builtin writes carry no external-double-send risk — and content-hash
   // windowing must NOT collapse legit duplicate local writes — so they run
   // unguarded through the shared path below.
-  if (capabilityVerbHasExternalEffect(skillRow)) {
+  // An EXPLICIT idempotency key is the CALLER declaring "this is one operation,
+  // never run it twice" — true of a local builtin write as much as an external
+  // send. The receipt runner's own note says local-write idempotency "belongs in
+  // an explicit-key mechanism"; this IS that condition, and it is safe precisely
+  // because only an explicit key claims strictly. A DERIVED content-hash key is
+  // still never applied to a local write (two legitimately-identical local
+  // writes must stay two writes), so the widening is opt-in by the caller.
+  if (
+    capabilityVerbHasExternalEffect(skillRow) ||
+    input.idempotencyKey != null
+  ) {
     return attachConnectBlock(
       await runDirectWriteVerbOnce({
         skillRow,
@@ -609,6 +619,7 @@ export async function executeCapability(input: {
         connectionSelector: input.connectionSelector ?? null,
         agentUserId: input.agentUserId ?? null,
         idempotencyKey: input.idempotencyKey,
+        sessionId: input.sessionId ?? null,
       }),
       skillRow,
       userId,
@@ -643,6 +654,8 @@ export async function executeCapability(input: {
     skillId: skillRow.id,
     verbId: verbId ?? null,
     runResult: ran.result,
+    sessionId: input.sessionId ?? null,
+    idempotencyKey: input.idempotencyKey,
   });
   return { ...ran, ackState: "applied" as const, correlationId };
 }
@@ -751,6 +764,7 @@ async function runDirectWriteVerbOnce(opts: {
   connectionSelector: ConnectionSelector | null;
   agentUserId: string | null;
   idempotencyKey?: string;
+  sessionId?: string | null;
 }): Promise<ExecuteCapabilityResult> {
   const key = resolveWriteIdempotencyKey(
     opts.idempotencyKey,
@@ -925,6 +939,8 @@ async function runDirectWriteVerbOnce(opts: {
     skillId: opts.skillRow.id,
     verbId: opts.verbId,
     runResult: ran.result,
+    sessionId: opts.sessionId ?? null,
+    idempotencyKey: opts.idempotencyKey,
   });
   return { ...ran, ackState: "applied" as const, correlationId };
 }
@@ -956,6 +972,17 @@ async function recordDirectCapabilityRun(opts: {
   skillId: string;
   verbId: string | null;
   runResult: unknown;
+  /**
+   * PROVENANCE PARITY with the proposed branch (dogfooded 2026-09-12, run
+   * `3ecbf109…`). Every door forwards `sessionId` + `idempotencyKey`
+   * (`contracts/capability-execute.ts`) and the PROPOSED branch persists both —
+   * `proposals.session_id` (column) and `data.idempotencyKey`. A DIRECT run has
+   * no proposal row, so THIS event IS its run record; the same two facts land
+   * here or they are lost. `sessionId` rides the `events.session_id` COLUMN
+   * (0241 — what the index keys on), never a `data` field.
+   */
+  sessionId?: string | null;
+  idempotencyKey?: string;
 }): Promise<void> {
   const label = opts.verbId ?? opts.skillId;
 
@@ -966,10 +993,15 @@ async function recordDirectCapabilityRun(opts: {
     userId: opts.userId,
     workspaceId: opts.workspaceId,
     correlationId: opts.correlationId,
+    sessionId: opts.sessionId ?? null,
     data: {
       kind: "capability_run",
       skillId: opts.skillId,
       verbId: opts.verbId,
+      // The CALLER's declared key only — the derived content hash is an internal
+      // dedup artifact, not a handle anyone passed in (the proposed branch
+      // stores it under the same condition).
+      ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       // A direct run has NO proposal to carry the output — stash a bounded copy
       // on the event so getRun's "capability" branch can surface it.
       runResult: boundEventRunResult(opts.runResult),

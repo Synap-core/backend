@@ -41,6 +41,7 @@ import {
   guardProducerEffect,
   PolicyBlockedError,
 } from "../../utils/automation-governance.js";
+import { advanceSessionStageViaSlot } from "../../utils/stage-advance.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
 import {
   assertAgentWakeBudget,
@@ -1066,9 +1067,12 @@ export async function executeOutputStep(
         updatedAt: new Date(),
       };
 
+      // The stage is NOT written here. `focus_sessions.current_stage` advances
+      // through the ONE door (api's `advanceSessionStage`) reached via the
+      // fail-closed IoC slot below — it owns the `stage_changed` fan-out AND the
+      // human stage gate this door used to walk straight through.
       const stageChanged =
         currentStage !== undefined && currentStage !== session.currentStage;
-      if (stageChanged) set.currentStage = currentStage;
 
       // grantStatus → shallow-merge into session.metadata under `grantStatus`.
       if (grantStatus !== undefined) {
@@ -1100,30 +1104,37 @@ export async function executeOutputStep(
         .set(set)
         .where(eq(focusSessions.id, session.id));
 
-      // Stage transition side-effect — mirror rest/focus-sessions.ts:503-524 so
-      // automations can react (and filter on toStage). Only when stage changed.
-      if (stageChanged) {
-        emitSideEffects({
-          subjectType: "focus_session",
-          action: "stage_changed",
-          subjectId: session.id,
-          userId: ownerId,
-          workspaceId: session.workspaceId,
-          data: {
-            sessionId: session.id,
-            subjectId: session.subjectEntityId,
-            playbookId: session.playbookId,
-            fromStage: session.currentStage,
-            toStage: currentStage,
+      // ── STAGE ADVANCE through the ONE door ──────────────────────────────
+      // The column write, the `stage_changed` fan-out and the human gate all
+      // happen here, in api's `advanceSessionStage`. `stageWrite: "door"`
+      // because the UPDATE above deliberately no longer carries the stage.
+      //
+      // ACTOR: `ownerId` reviews the gate (the automation's owner is the human
+      // this run acts for, and is already the actor every proposal this door
+      // files is attributed to), with `producerAgentUserId` carried as agent
+      // provenance. That keeps the gate proposal's governance identical to the
+      // `checkAutomationWriteOrPropose` decision taken a few lines above.
+      //
+      // NOT wrapped in a try/catch: an unreachable door (unfilled slot) must
+      // fail the step, not advance the run past an approval it could not resolve.
+      let stageGated = false;
+      if (stageChanged && currentStage !== undefined) {
+        const advance = await advanceSessionStageViaSlot({
+          session: {
+            id: session.id,
+            currentStage: session.currentStage,
             workspaceId: session.workspaceId,
-            userId: ownerId,
+            projectId: session.projectId,
+            channelId: session.channelId,
+            playbookId: session.playbookId,
+            subjectEntityId: session.subjectEntityId,
           },
-        }).catch((err) => {
-          logger.warn(
-            { err, sessionId: session.id },
-            "session_update: stage_changed emit failed (non-fatal)"
-          );
+          toStage: currentStage,
+          userId: ownerId,
+          agentUserId: producerAgentUserId,
+          stageWrite: "door",
         });
+        stageGated = advance.gated;
       }
 
       // MIRROR: when the stage-advance actually APPLIED (direct write, not a
@@ -1166,6 +1177,10 @@ export async function executeOutputStep(
         status: "updated",
         sessionId: session.id,
         ...(stageChanged ? { stageChanged: true, toStage: currentStage } : {}),
+        // The advance landed but the run is now waiting on a human. A step that
+        // reported only "updated" would read as "carry on" to every downstream
+        // node and to the run feed.
+        ...(stageGated ? { stageGated: true } : {}),
       };
     }
 

@@ -21,6 +21,9 @@
  * Matching is by KIND, via the vocabulary's `normalizeObjectKind` — the SAME
  * targetType→object-kind normalization the render + governance layers use
  * (`@synap-core/types/vocabulary`). No second mapping table exists or should.
+ * For an ENTITY change the kind is its PROFILE (`data.profileSlug`) when the
+ * caller knows it — see `resolveChangeKind` — because `targetType` can only
+ * ever say `entity` while slots are declared as `knowledge`, `task`, `person`.
  *
  * A proposal may additionally carry a SLOT CLAIM (`proposals.data.expectedLabel`,
  * written by `checkPermissionOrPropose` when the change's own name matches a
@@ -62,6 +65,14 @@ export interface SatisfyExpectedOutputsParams {
   sessionId: string;
   /** The proposal's `targetType` (e.g. `entity`, `document`, `focus_session`). */
   targetType: string | null | undefined;
+  /**
+   * The PROFILE of the entity the change produced (`data.profileSlug`), when
+   * the target is an entity. `targetType` alone can only ever say `entity`,
+   * while a slot is declared in the vocabulary the agent thinks in — `task`,
+   * `knowledge`, `person`. Absent ⇒ the generic `entity` kind, exactly as
+   * before. See `resolveChangeKind`.
+   */
+  entityProfileSlug?: string | null;
   /** Lineage stamped onto every output this call satisfies. */
   proposalId: string;
   /**
@@ -89,7 +100,13 @@ export interface SatisfyExpectedOutputsResult {
 export async function satisfyExpectedOutputs(
   params: SatisfyExpectedOutputsParams
 ): Promise<SatisfyExpectedOutputsResult> {
-  const { sessionId, targetType, proposalId, expectedLabel } = params;
+  const {
+    sessionId,
+    targetType,
+    proposalId,
+    expectedLabel,
+    entityProfileSlug,
+  } = params;
 
   return await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -118,7 +135,12 @@ export async function satisfyExpectedOutputs(
       : [];
     if (current.length === 0) return { satisfied: [] };
 
-    const index = selectOutputToSatisfy(current, targetType, expectedLabel);
+    const index = selectOutputToSatisfy(
+      current,
+      targetType,
+      expectedLabel,
+      entityProfileSlug
+    );
     if (index === -1) return { satisfied: [] };
 
     const next = stampSatisfied(current, index, proposalId);
@@ -170,9 +192,19 @@ export async function satisfyExpectedOutputs(
 export function selectOutputToSatisfy(
   outputs: ExpectedOutput[],
   targetType: string | null | undefined,
-  expectedLabel?: string | null
+  expectedLabel?: string | null,
+  entityProfileSlug?: string | null
 ): number {
-  const kind = normalizeObjectKind(targetType);
+  const kind = resolveChangeKind(targetType, entityProfileSlug);
+  // A slot declared as the bare `entity` is satisfied by ANY entity, profile or
+  // not — that is what it asks for, and it is the behaviour every existing
+  // session relies on. The profile only ever ADDS reach; it never narrows an
+  // `entity` slot out of range.
+  const isEntityChange = normalizeObjectKind(targetType) === "entity";
+  const matchesKind = (o: ExpectedOutput): boolean => {
+    const slot = normalizeObjectKind(o.kind);
+    return slot === kind || (isEntityChange && slot === "entity");
+  };
 
   const claim = normalizeExpectedLabel(expectedLabel);
   if (claim) {
@@ -180,17 +212,49 @@ export function selectOutputToSatisfy(
       (o) =>
         o.status !== "done" &&
         normalizeExpectedLabel(o.label) === claim &&
-        normalizeObjectKind(o.kind) === kind
+        matchesKind(o)
     );
     if (claimed !== -1) return claimed;
   }
 
   return outputs.findIndex(
-    (o) =>
-      o.status !== "done" &&
-      o.owner !== "human" &&
-      normalizeObjectKind(o.kind) === kind
+    (o) => o.status !== "done" && o.owner !== "human" && matchesKind(o)
   );
+}
+
+/**
+ * The object kind a CHANGE presents to the slot matcher.
+ *
+ * `targetType` is the row-level noun — `document`, `focus_session`, and for
+ * every entity in the pod the single word `entity`. A declared slot, though, is
+ * written in the vocabulary the agent and the profile registry share:
+ * `kind: "knowledge"`, `kind: "task"`. So an entity change presents its PROFILE
+ * when it has one, and the generic `entity` when it does not.
+ *
+ * This is the whole of the fix for the live defect where a `kind: "knowledge"`
+ * slot could never be satisfied: three applied knowledge captures left it
+ * pending, because `normalizeObjectKind("knowledge")` and
+ * `normalizeObjectKind("entity")` are — correctly — different kinds.
+ *
+ * BOTH sides go through `normalizeObjectKind` (@synap-core/types/vocabulary),
+ * the same door the render and governance layers use. There is deliberately no
+ * alias table here: a profile slug IS an object kind in that vocabulary, so
+ * teaching it a new profile is a row in `OBJECT_KIND_ALIASES`, never a second
+ * map in this file.
+ *
+ * Pure, and exported so the rule is testable without a database.
+ */
+export function resolveChangeKind(
+  targetType: string | null | undefined,
+  entityProfileSlug?: string | null
+): string {
+  const kind = normalizeObjectKind(targetType);
+  // The slug is read ONLY for an entity target: a document that happens to
+  // carry a `profileSlug` in its payload is still a document.
+  if (kind !== "entity") return kind;
+  // `normalizeObjectKind(undefined)` is already `"entity"`, so an entity change
+  // with no profile keeps exactly today's kind.
+  return normalizeObjectKind(entityProfileSlug);
 }
 
 /**
@@ -214,6 +278,37 @@ export function readProposalExpectedLabel(data: unknown): string | undefined {
   if (!data || typeof data !== "object") return undefined;
   const value = (data as { expectedLabel?: unknown }).expectedLabel;
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/**
+ * The PROFILE of the entity a stored proposal would produce — the ONE reader,
+ * so the approval stamp cannot drift from where the executors look.
+ *
+ * NESTED FIRST, FLAT FALLBACK — the same posture as the `entity/create`
+ * executor (`routers/proposals/executors/entity.ts`): the canonical envelope is
+ * request-shaped (`proposals.data.data.profileSlug`); proposals pending before
+ * that shape landed carry it flat. Reading only the flat key returns `undefined`
+ * for every current proposal and leaves a `kind: "knowledge"` slot pending.
+ *
+ * Returns `undefined` when neither level names a profile (composite graphs have
+ * no top-level slug; entity/update payloads carry none — the executor resolves
+ * `targetEntity.profileId`). This reads the STORED envelope only: the gate
+ * payload in `permission-check.ts` is already the inner object and is read
+ * directly there.
+ */
+export function readProposalEntityProfileSlug(
+  data: unknown
+): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const outer = data as { profileSlug?: unknown; data?: unknown };
+  const inner =
+    outer.data && typeof outer.data === "object"
+      ? (outer.data as { profileSlug?: unknown }).profileSlug
+      : undefined;
+  for (const value of [inner, outer.profileSlug]) {
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  return undefined;
 }
 
 /**

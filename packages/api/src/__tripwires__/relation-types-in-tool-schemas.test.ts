@@ -33,8 +33,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_RELATION_DEFS, SYSTEM_RELATION_TYPES } from "@synap/database";
 import { IMPACT_RELATION_TYPES } from "../routers/relations.js";
@@ -260,5 +260,206 @@ describe("TRIPWIRE: relation types named in MCP tool schemas must resolve", () =
       "synap_link_entities lost its `type` default — this assertion is now vacuous"
     ).toBe("string");
     expect(RESOLVABLE.has(fallback as string)).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SKILL FILES — the same contract, on the surface agents load most.
+//
+// The header's premise ("prose is EXECUTABLE: the model reads it and complies")
+// is at least as true of a skill topic as of a tool schema: `skills/manifest.json`
+// `baseline` packages are delivered to EVERY agent context (`GET /skills/system`,
+// seeded as `system/<pkg>/<stem>` rows by `ensureSystemSkills`, installed on disk
+// by the CLI). On 2026-09-12 this scan's first run found 12 unresolvable slugs
+// taught there — `related_to` in a worked example, `source` in the research flow,
+// and a "pick a type" table with 7 bogus rows — while the manifest scan above was
+// green, because it never looked.
+//
+// WHAT IS READ: every `*.md` under `synap-backend/skills/`, DERIVED by walking the
+// tree (a new package or topic joins by existing). The generated `SKILL.md` is
+// included on purpose: it is the `?scope=core` payload agents actually receive,
+// so a hand-edit there is caught too. README.md is excluded (packaging copy, the
+// same exclusion the disk loader applies).
+//
+// HARVEST — markdown carries ~60 `"type": "..."` fields that are NOT relations
+// (bento, output, condition, note…), so an unanchored scan cries wolf. A token is
+// harvested only under one of three anchors:
+//   A. a `type` value within ±6 lines of a relation ENDPOINT key
+//      (sourceEntityId / targetEntityId / sourceRef / targetRef)
+//   B. a `type=` / `type:` on a line naming the `/relations` route
+//   C. a contiguous markdown TABLE whose backticked first-cell tokens include at
+//      least one real slug (the anchor rule above, adapted to tables)
+//
+// STATED LIMITS, measured on the first run (89 files, 39 sites, 19 tokens, zero
+// false positives): a lone slug in running prose ("use `part_of`") with no
+// endpoint, route or table nearby is NOT harvested. The IS mirror
+// (`intelligence-hub/src/skills/baseline/`) is not read here — it is held
+// byte-identical to these topic files by that repo's `baseline-drift.test.ts`.
+// IS-ONLY skills (e.g. `propose-workspace.md`, which teaches `owned_by`) are NOT
+// covered by either guard.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SKILLS_ROOT = join(__dirname, "../../../../skills");
+
+function listSkillMarkdown(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) return listSkillMarkdown(full);
+    return entry.name.endsWith(".md") && entry.name !== "README.md"
+      ? [full]
+      : [];
+  });
+}
+
+const ENDPOINT_KEY =
+  /\b(?:sourceEntityId|targetEntityId|sourceRef|targetRef)\b/;
+const RELATIONS_ROUTE = /\/relations\b/;
+const MD_TYPE_VALUE = /\btype"?\s*[:=]\s*"?([a-z][a-z0-9_]*)"?/g;
+const BACKTICK_TOKEN = /`([a-z][a-z0-9_]*)`/g;
+const ENDPOINT_WINDOW = 6;
+
+interface SkillSite {
+  /** `pkg/file.md:line` — relative to skills/, stable across machines. */
+  at: string;
+  file: string;
+  token: string;
+}
+
+function harvestSkillFile(absPath: string, known: ReadonlySet<string>) {
+  const file = relative(SKILLS_ROOT, absPath);
+  const lines = readFileSync(absPath, "utf8").split("\n");
+  const out = new Map<string, SkillSite>();
+  const add = (lineIdx: number, token: string) => {
+    const at = `${file}:${lineIdx + 1}`;
+    out.set(`${at}:${token}`, { at, file, token });
+  };
+
+  lines.forEach((line, i) => {
+    if (ENDPOINT_KEY.test(line)) {
+      const lo = Math.max(0, i - ENDPOINT_WINDOW);
+      const hi = Math.min(lines.length - 1, i + ENDPOINT_WINDOW);
+      for (let j = lo; j <= hi; j++) {
+        for (const m of lines[j].matchAll(MD_TYPE_VALUE)) add(j, m[1]);
+      }
+    }
+    if (RELATIONS_ROUTE.test(line)) {
+      for (const m of line.matchAll(MD_TYPE_VALUE)) add(i, m[1]);
+    }
+  });
+
+  for (let i = 0; i < lines.length;) {
+    if (!lines[i].trimStart().startsWith("|")) {
+      i++;
+      continue;
+    }
+    const block: Array<[number, string]> = [];
+    let j = i;
+    while (j < lines.length && lines[j].trimStart().startsWith("|")) {
+      const firstCell = lines[j].split("|")[1] ?? "";
+      for (const m of firstCell.matchAll(BACKTICK_TOKEN)) block.push([j, m[1]]);
+      j++;
+    }
+    if (block.some(([, t]) => known.has(t))) {
+      for (const [lineIdx, t] of block) add(lineIdx, t);
+    }
+    i = j;
+  }
+  return [...out.values()];
+}
+
+/**
+ * EXACT RATCHET — unresolvable slugs still taught, each awaiting a PRODUCT
+ * decision (seed the def, or rewrite the teaching). Keyed `file:token` so a NEW
+ * file teaching an already-pending slug is still caught. Both directions are
+ * asserted: a new offender fails, and an entry that stops offending fails until
+ * it is deleted here — this list can only shrink, never silently rot.
+ *
+ * Deliberately NOT auto-corrected: each needs a meaning, not a spelling.
+ */
+const AWAITING_DECISION: Readonly<Record<string, string>> = {
+  // CRM vocabulary with no def anywhere — should these defs EXIST?
+  "synap/crm.md:linked_to_deal": "CRM verb, no def — seed or rewrite",
+  "synap/crm.md:is_client": "role expressed as an edge; Kind+Facets says facet",
+  "synap/crm.md:produced_by_deal": "CRM verb, no def — seed or rewrite",
+  "synap/crm.md:member_of": "no def; `affiliated_with` is close but not equal",
+  "synap/SKILL.md:linked_to_deal": "generated from crm.md",
+  "synap/SKILL.md:is_client": "generated from crm.md",
+  "synap/SKILL.md:produced_by_deal": "generated from crm.md",
+  "synap/SKILL.md:member_of": "generated from crm.md",
+  // Content OS
+  "synap/content-os.md:belongs_to_pillar": "content verb, no def",
+  // Research flow — `references` is the likely meaning, but that is a choice
+  "synap/work-flow.md:source": "likely `references`; semantic, not a typo",
+  "synap/SKILL.md:source": "generated from work-flow.md",
+  // linking.md's "pick a type" table — semantic neighbours exist, none exact
+  "synap/linking.md:child_of": "inverse of parent_of; directed defs only",
+  "synap/linking.md:belongs_to": "no def",
+  "synap/linking.md:authored_by": "inverse of created_by",
+  "synap/linking.md:works_with": "no def; `knows` is not equal",
+  "synap/linking.md:part_of": "no def (named in this file's own header)",
+  "synap/linking.md:from_meeting": "no def; `met_at` is not equal",
+  "synap/linking.md:anchored_in": "no def",
+};
+
+describe("TRIPWIRE: relation types taught in skill files must resolve", () => {
+  const files = listSkillMarkdown(SKILLS_ROOT);
+  const sites = files.flatMap((f) => harvestSkillFile(f, RESOLVABLE));
+  const offenders = sites.filter((s) => !RESOLVABLE.has(s.token));
+  const offenderKeys = new Set(offenders.map((s) => `${s.file}:${s.token}`));
+
+  it("walked the skill tree (never vacuously green)", () => {
+    expect(files.length).toBeGreaterThanOrEqual(50);
+    expect(files.some((f) => f.endsWith("synap/linking.md"))).toBe(true);
+    expect(files.some((f) => f.endsWith("synap/capture.md"))).toBe(true);
+  });
+
+  it("harvested relation-type sites through every anchor", () => {
+    expect(sites.length).toBeGreaterThanOrEqual(25);
+    expect(new Set(sites.map((s) => s.token)).size).toBeGreaterThanOrEqual(10);
+    // Self-check: capture.md's graph example (`"type": "works_at"` beside
+    // `sourceRef`) must stay visible — anchor A going blind would drop it.
+    expect(
+      sites.some((s) => s.file === "synap/capture.md" && s.token === "works_at")
+    ).toBe(true);
+    // Anchor C: linking.md's table carries real slugs; it must be read.
+    expect(
+      sites.some(
+        (s) => s.file === "synap/linking.md" && s.token === "relates_to"
+      )
+    ).toBe(true);
+  });
+
+  it("the harvest sees a planted defect (anchors are live, not decorative)", () => {
+    const planted = [
+      "```json",
+      '{ "sourceEntityId": "a", "targetEntityId": "b", "type": "related_to" }',
+      "```",
+    ].join("\n");
+    const tokens = [...planted.matchAll(MD_TYPE_VALUE)].map((m) => m[1]);
+    expect(ENDPOINT_KEY.test(planted)).toBe(true);
+    expect(tokens).toContain("related_to");
+    expect(RESOLVABLE.has("related_to")).toBe(false);
+  });
+
+  it("teaches no unresolvable relation type outside the decision ratchet", () => {
+    const unexpected = offenders
+      .filter((s) => !(`${s.file}:${s.token}` in AWAITING_DECISION))
+      .map((s) => `${s.at}: '${s.token}'`);
+    expect(
+      unexpected,
+      "A skill file teaches a relation type no relation_def provides — every " +
+        "agent that loads it gets its edges rejected. Use a slug from " +
+        "DEFAULT_RELATION_DEFS; never add it to AWAITING_DECISION to go green."
+    ).toEqual([]);
+  });
+
+  it("every AWAITING_DECISION entry is still a live offender (ratchet only shrinks)", () => {
+    const stale = Object.keys(AWAITING_DECISION).filter(
+      (k) => !offenderKeys.has(k)
+    );
+    expect(
+      stale,
+      "These entries no longer offend — delete them from AWAITING_DECISION."
+    ).toEqual([]);
   });
 });

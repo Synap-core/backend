@@ -680,6 +680,24 @@ const PLAYBOOK_ID_KEY = "__playbookId";
 const PLAYBOOK_NAME_KEY = "__playbookName";
 const PLAYBOOK_AGENT_TYPE_KEY = "__agentType";
 /**
+ * GOAL OVERRIDE — what the spawned session is FOR, stated by the rule rather
+ * than by the playbook.
+ *
+ * Without it a `playbook_run` THEN can only inherit the playbook's own
+ * `goalTemplate`, so every rule that runs the same playbook spawns a session
+ * with an identical goal and the reason THIS rule fired is nowhere in the
+ * session. The value is a TEMPLATE in the same two grammars the goalTemplate
+ * already speaks — `{{trigger.payload.x}}` / `{{steps.x.output.y}}` (resolved
+ * against the automation StepContext) and `@{arg:name:type}` (substituted
+ * against the resolved params) — because it is resolved by the SAME resolver
+ * (`executePlaybookRun`'s `goalResolver` → `runPlaybook` → `resolveGoal`), not
+ * by a second interpolator.
+ *
+ * Bookkeeping, so `persistedConfig` keeps it out of `paramsMapping`; it lands
+ * on the node as `data.goalOverride` (declared on `PlaybookRunNodeDef.data`).
+ */
+const PLAYBOOK_GOAL_KEY = "__goal";
+/**
  * The generic display label for a playbook-run node — used when the sentence
  * references its playbook by ID (the common case), so no name is available to
  * show. Composed through the vocabulary door in IMPERATIVE mood ("Run"), because
@@ -689,6 +707,24 @@ const PLAYBOOK_RUN_LABEL = `${resolveActionLabel(
   "run",
   "imperative"
 )} ${resolveObjectNoun("playbook").toLowerCase()}`;
+
+/**
+ * The `label` a `playbook_run` node is born with — the playbook's own name when
+ * the sentence carries one, else the generic vocabulary-composed fallback.
+ *
+ * EXPORTED because there are TWO writers of this node — this module's
+ * `toFlowDefinition` (the rule door) and `sentenceToWriteInput`
+ * (@synap/automation-intent, the app's authoring surface) — and
+ * `PlaybookRunNodeDef.data.label` is declared REQUIRED. The app-side writer
+ * emitted no label at all, so the same authored sentence produced a node with a
+ * label through one door and a node missing a required field through the other.
+ * One function, so the two cannot drift; see the parity test that reads both.
+ */
+export function playbookRunNodeLabel(playbookName?: string): string {
+  return typeof playbookName === "string" && playbookName.length > 0
+    ? playbookName
+    : PLAYBOOK_RUN_LABEL;
+}
 
 /**
  * EXPORTED so the browser's `sentence-io.ts` can derive its `RESERVED_CONFIG_KEYS`
@@ -713,6 +749,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_ID_KEY,
   PLAYBOOK_NAME_KEY,
   PLAYBOOK_AGENT_TYPE_KEY,
+  PLAYBOOK_GOAL_KEY,
 ];
 
 /** The action's config with every `__`-prefixed bookkeeping key removed. */
@@ -797,9 +834,11 @@ function actionToFlowNode(
     // NORMALIZES the label — see the round-trip tests, which assert exactly that
     // rather than pretending the label survives untouched.
     const data: Record<string, unknown> = {
-      label: nonEmptyStr(cfg[PLAYBOOK_NAME_KEY])
-        ? (cfg[PLAYBOOK_NAME_KEY] as string)
-        : PLAYBOOK_RUN_LABEL,
+      label: playbookRunNodeLabel(
+        nonEmptyStr(cfg[PLAYBOOK_NAME_KEY])
+          ? (cfg[PLAYBOOK_NAME_KEY] as string)
+          : undefined
+      ),
     };
     if (nonEmptyStr(cfg[PLAYBOOK_ID_KEY]))
       data.playbookId = cfg[PLAYBOOK_ID_KEY];
@@ -807,6 +846,8 @@ function actionToFlowNode(
       data.playbookName = cfg[PLAYBOOK_NAME_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_AGENT_TYPE_KEY]))
       data.agentType = cfg[PLAYBOOK_AGENT_TYPE_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_GOAL_KEY]))
+      data.goalOverride = cfg[PLAYBOOK_GOAL_KEY];
     data.paramsMapping = persistedConfig(cfg);
     return {
       id: nodeId,
@@ -1063,6 +1104,7 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       playbookId?: string;
       playbookName?: string;
       agentType?: string;
+      goalOverride?: string;
       paramsMapping?: Record<string, unknown>;
     };
     const config: Record<string, unknown> = {
@@ -1074,6 +1116,8 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       config[PLAYBOOK_NAME_KEY] = pdata.playbookName;
     if (nonEmptyStr(pdata.agentType))
       config[PLAYBOOK_AGENT_TYPE_KEY] = pdata.agentType;
+    if (nonEmptyStr(pdata.goalOverride))
+      config[PLAYBOOK_GOAL_KEY] = pdata.goalOverride;
     config[CAPABILITY_ACTION_KEY] =
       `playbook:${pdata.playbookId ?? pdata.playbookName ?? ""}`;
     return {

@@ -1423,7 +1423,7 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
    { "userId": "{userId}",
      "sourceEntityId": "ent_new_task",
      "targetEntityId": "ent_acme",
-     "type": "related_to" }
+     "type": "relates_to" }
    ```
 
 5. Confirm: "Task created and linked to Acme, due Friday."
@@ -1468,7 +1468,7 @@ a `file`/`document`-kind entity and stuff the Markdown into it.
    }
    ```
 
-3. Link it to the relevant project: `POST /api/hub/relations` `{ sourceEntityId: "ent_new_plan", targetEntityId: "ent_project_q3", type: "related_to" }`.
+3. Link it to the relevant project: `POST /api/hub/relations` `{ sourceEntityId: "ent_new_plan", targetEntityId: "ent_project_q3", type: "relates_to" }`.
 4. Confirm: "Plan captured and linked to Q3 launch." No upload, no `file` entity, no separate `synap_create_document` call.
 
 ---
@@ -2305,7 +2305,7 @@ await SynapWidget.mutate("delete_entity", { id: "uuid" });
 await SynapWidget.mutate("create_relation", {
   sourceEntityId: "uuid-a",
   targetEntityId: "uuid-b",
-  type: "related_to",
+  type: "relates_to",
 });
 ```
 

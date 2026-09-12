@@ -46,7 +46,10 @@ import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { sanitizeImportPath, mimeFromPath } from "../utils/import-path.js";
 import { channelsRouter } from "../routers/channels.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
-import { materializeCompositeGraph } from "../utils/materialize-composite.js";
+import {
+  materializeCompositeGraph,
+  type MaterializeRelationFailure,
+} from "../utils/materialize-composite.js";
 import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
 import { entitiesRouter as regularEntitiesRouter } from "../routers/entities.js";
@@ -1035,6 +1038,7 @@ export class ImportOrchestrator {
       created,
       linked,
       entities: materialized,
+      relationsFailed,
     } = await materializeCompositeGraph(
       operations,
       entityCaller,
@@ -1100,6 +1104,8 @@ export class ImportOrchestrator {
       source: input.source,
       created,
       linked,
+      // Edges that did not land (each fails alone after its entities exist).
+      ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
       ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
     };
   }
@@ -1500,6 +1506,8 @@ export class ImportOrchestrator {
     // per-call Set would otherwise reset each chunk). Fresh per apply → retries
     // (a new applyLarge call) still link correctly via the registered keys.
     const idemSeen = new Set<string>();
+    // Accumulated across chunks — a chunk's failed edges must survive the loop.
+    const relationsFailed: MaterializeRelationFailure[] = [];
 
     const totalChunks = Math.max(1, Math.ceil(operations.length / chunkSize));
     for (let c = 0; c < totalChunks; c++) {
@@ -1552,6 +1560,7 @@ export class ImportOrchestrator {
       Object.assign(refToRealId, res.refToRealId);
       created += res.created;
       linked += res.linked;
+      relationsFailed.push(...res.relationsFailed);
       // Project membership (lens-context) per chunk — same as apply().
       // Skips entities materialize already filed via op.projectId.
       await stampProjectMembership(this.ctx, res.entities);
@@ -1597,6 +1606,7 @@ export class ImportOrchestrator {
       created,
       linked,
       chunks: totalChunks,
+      ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
       ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
     };
   }

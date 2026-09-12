@@ -13,7 +13,287 @@
  *   automation that wants to react to every entity create must therefore match
  *   `.completed`, NOT `.validated` — `.validated` would silently miss every
  *   auto-approved / direct write.
+ *
+ * NODE TYPES ARE DERIVED, NEVER HAND-LISTED (dogfooded 2026-09-12, D5).
+ *   `nodeTypes` used to be a hand-written object literal, and it fell behind the
+ *   executor: it documented TEN of the twenty-three types `FLOW_NODE_TYPES`
+ *   accepts, silently omitting `playbook_run` and `capability` among others. An
+ *   agent authoring a flow from this door (the ONLY machine-readable description
+ *   of the DSL) therefore could not emit a playbook step at all — the grammar
+ *   accepted it, the reference denied it existed.
+ *   The map below is now keyed by `FLOW_NODE_TYPES` through a `Record<…>` whose
+ *   key type is the union itself, so a node type added to the executor and not
+ *   documented here FAILS THE BUILD. Do not replace this with a plain object.
  */
+
+import { FLOW_NODE_TYPES } from "../../../services/automations/validate-flow.js";
+
+/** One node type's agent-readable reference entry. */
+type NodeTypeDoc = {
+  description: string;
+  fields?: Record<string, string>;
+  outputTypes?: Record<string, { fields: Record<string, string> }>;
+};
+
+/**
+ * COMPILE-TIME COVERAGE FLOOR: the key type is the executor's own union, so
+ * every accepted node type must carry a doc entry or `tsc` refuses. This is the
+ * derivation — `nodeTypes` below is built by iterating `FLOW_NODE_TYPES`, so the
+ * SERVED set is the EXECUTOR's set by construction, not by anyone remembering.
+ */
+const NODE_TYPE_DOCS: Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc> = {
+  trigger: {
+    description:
+      "Entry node. Always present. No additional data fields beyond triggerType + config (set at top level).",
+  },
+  output: {
+    description:
+      "Executes an action — notification, entity write, webhook call, or channel message",
+    outputTypes: {
+      notification: {
+        fields: {
+          title: "string",
+          body: "string",
+          userId: "string (optional — targets specific user)",
+        },
+      },
+      entity_create: {
+        fields: {
+          profileSlug: "string",
+          name: "string (template)",
+          properties: "Record<string,unknown> (template values)",
+        },
+      },
+      entity_update: {
+        fields: {
+          entityId: "string (template)",
+          properties: "Record<string,unknown>",
+        },
+      },
+      webhook: {
+        fields: {
+          url: "string",
+          method: "GET|POST|PUT|PATCH|DELETE",
+          headers: "Record<string,string>",
+          body: "string (template)",
+        },
+      },
+      channel_message: {
+        fields: {
+          channelId: "string",
+          content: "string (template)",
+        },
+      },
+    },
+  },
+  command: {
+    description: "Calls a pod intelligence command by ID",
+    fields: {
+      commandId: "string — ID of the intelligence_command to invoke",
+      commandTitle: "string — human label",
+      inputMapping:
+        "Record<string,string> — maps command inputs to prior step outputs using {{stepId.output.field}} syntax",
+      promptOverride:
+        "string (optional) — augments the command's default prompt",
+    },
+  },
+  condition: {
+    description: "Evaluates an expression and routes to yes/no branches",
+    fields: {
+      expression:
+        "string — JS-like expression over the trigger payload / prior steps. E.g. \"trigger.payload.data.profileSlug === 'note'\"",
+      trueLabel: "string (optional)",
+      falseLabel: "string (optional)",
+    },
+  },
+  delay: {
+    description: "Pauses execution for a duration before continuing",
+    fields: { duration: "string — e.g. '5m', '1h', '2d'" },
+  },
+  fetch: {
+    description: "Makes an HTTP request",
+    fields: {
+      method: "GET|POST|PUT|DELETE|PATCH",
+      url: "string (template)",
+      headers: "Record<string,string>",
+      body: "string (template)",
+    },
+  },
+  query: {
+    description: "Queries entities in the workspace by profile",
+    fields: {
+      profileSlug: "string",
+      filter: "string — filter expression",
+      limit: "number",
+    },
+  },
+  transform: {
+    description: "Applies a pipe-style expression to a prior step value",
+    fields: {
+      expression: "string — e.g. '{{stepId.output}} | uppercase'",
+    },
+  },
+  loop: {
+    description: "Iterates over a collection, executing child nodes per item",
+    fields: {
+      iteratorExpression: "string — e.g. 'steps.query1.output.results'",
+      itemVariable:
+        "string — variable name inside loop, referenced as {{loop.item}}",
+    },
+  },
+  switch: {
+    description:
+      "Routes to one of several branches based on an expression value",
+    fields: {
+      expression: "string",
+      cases: "Array<{ value: string, label: string }>",
+    },
+  },
+  entity_read: {
+    description:
+      "Reads ONE entity by id, within the automation's workspace/pod lens",
+    fields: {
+      entityId: "string (template) — the entity to read",
+    },
+  },
+  related_entities: {
+    description:
+      "Traverses a bounded set of graph relations and projects the counterparties",
+    fields: {
+      entityId: "string (template) — the entity to traverse from",
+      direction: "outbound|inbound|both (optional)",
+      relationTypes: "string[] (optional) — restrict to these relation types",
+      propertyEquals: "Record<string,unknown> (optional) — AND predicates",
+      propertyAnyEquals:
+        "Record<string,unknown[]> (optional) — OR across predicates",
+      excludeEntityId:
+        "string (optional) — drop a known counterparty (e.g. the trigger entity)",
+      limit: "number (optional)",
+    },
+  },
+  guard: {
+    description:
+      "Fail-CLOSED business guard — refuses to continue with an actionable reason",
+    fields: {
+      checks:
+        "Array<{ path, exists?, equals?, notEquals?, arrayIncludes?, lengthEquals?, minLength?, numberGte? }> — `exists` is a NULL check that '' and 0 satisfy; use `minLength: 1` to assert CONTENT",
+    },
+  },
+  compute: {
+    description: "Finite numeric operation over literal or template values",
+    fields: {
+      operation: "add|subtract|multiply|divide|coalesce|now",
+      left: "unknown (template) — operands for the binary operations",
+      right: "unknown (template)",
+      values: "unknown[] — for `coalesce`: first finite numeric value wins",
+    },
+  },
+  select: {
+    description:
+      "Chooses one typed value from a boolean produced by a prior deterministic step",
+    fields: {
+      when: "unknown (template) — the boolean to branch on",
+      ifTrue: "unknown",
+      ifFalse: "unknown",
+    },
+  },
+  claim: {
+    description:
+      "Atomically reserves a namespace-scoped key — the FIRST run to claim it sees `claimed: true`, later runs see false (one-time policy decisions; released on terminal failure)",
+    fields: {
+      namespace: "string",
+      key: "string (template)",
+    },
+  },
+  messages_query: {
+    description:
+      "Source node: reads recent messages from the channel(s) bound to an entity (or one channel directly)",
+    fields: {
+      subjectEntityId:
+        "string (template) — read the channels bound to this entity",
+      channelId:
+        "string — read this channel directly (wins over subjectEntityId)",
+      scope:
+        "single-external (default) | all-channels — fan across every bound channel and merge chronologically",
+      channelTypes:
+        "string[] — all-channels only: restrict to these channel types",
+      branchPurpose:
+        "string — all-channels only: restrict to this firewall purpose",
+      limit: "number — most-recent N per channel (default 40, capped 200)",
+      includeDocuments:
+        "boolean — also gather the entity's linked document titles + body previews",
+    },
+  },
+  runs_query: {
+    description:
+      "Source node: reads this pod's OWN automation run ledger (self-narration — 'what broke last night')",
+    fields: {
+      automationId: "string (template) — only runs of this automation",
+      status: "string — one value or a comma-separated list",
+      since: "string — ISO-8601 / epoch ms lower bound",
+      subjectEntityId: "string — only runs launched ABOUT this entity",
+      limit: "number — most-recent N (default 20, capped 100)",
+    },
+  },
+  proposals_query: {
+    description: "Source node: reads this pod's governance proposal queue",
+    fields: {
+      status: "string — one value or a comma-separated list",
+      targetType: "string — entity | facet | document | …",
+      changeType: "string — the normalized change kind",
+      correlationId: "string — all proposals of one request chain",
+      sessionId: "string — all proposals produced in one agent session",
+      proposalIds: "string (comma-separated) | string[]",
+      since: "string — ISO-8601 / epoch ms lower bound",
+      limit: "number — most-recent N (default 20, capped 100)",
+    },
+  },
+  skill: {
+    description: "Runs a pod SKILL by id, through the capability gate",
+    fields: {
+      skillId: "string — the skill to run",
+      skillTitle: "string — human label",
+      inputMapping:
+        "Record<string,string> — maps skill inputs to prior step outputs ({{steps.id.output}})",
+    },
+  },
+  capability: {
+    description:
+      "Typed, governed Tool → Verb step. Pick a tool (`capabilityId`) and a verb on it (`verbId`); the executor resolves the verb to its backing skill and runs it through the SAME gate the `skill` node uses",
+    fields: {
+      capabilityId: "string — tool row id of the selected capability",
+      capabilityName: "string (optional) — display name",
+      verbId: "string — the verb id (= the requiring skill's NAME)",
+      verbLabel: "string (optional)",
+      verbKind: "read|write|action (optional)",
+      execMode: "auto|propose|dry-run (optional)",
+      inputMapping:
+        "Record<string,string> — maps verb args to prior step outputs ({{steps.id.output}})",
+    },
+  },
+  sub_automation: {
+    description: "Invokes another automation as a step",
+    fields: {
+      automationId: "string — the automation to run",
+      automationName: "string (optional) — human label",
+      payloadMapping:
+        "Record<string,string> — builds the sub-automation's trigger payload from prior step outputs",
+    },
+  },
+  playbook_run: {
+    description:
+      "Spawns a PLAYBOOK run (a focus session with an agent answering it). This is how an automation creates a session — never an output node",
+    fields: {
+      playbookId: "string — the playbook to run (or use playbookName)",
+      playbookName:
+        "string — resolve by stable name instead (template-friendly; a capability references its seeded playbook this way). One of playbookId/playbookName is REQUIRED",
+      paramsMapping:
+        "Record<string,string> — maps prior step outputs to playbook params",
+      agentType:
+        "string (optional) — `agents.slug` of the agent that should answer the spawned run. Absent ⇒ the default orchestrator ('meta')",
+    },
+  },
+};
 
 export const AUTOMATION_SCHEMA = {
   triggerTypes: {
@@ -73,115 +353,16 @@ export const AUTOMATION_SCHEMA = {
         "User-triggered via API or pod-admin. No trigger config needed.",
     },
   },
-  nodeTypes: {
-    trigger: {
-      description:
-        "Entry node. Always present. No additional data fields beyond triggerType + config (set at top level).",
-    },
-    output: {
-      description:
-        "Executes an action — notification, entity write, webhook call, or channel message",
-      outputTypes: {
-        notification: {
-          fields: {
-            title: "string",
-            body: "string",
-            userId: "string (optional — targets specific user)",
-          },
-        },
-        entity_create: {
-          fields: {
-            profileSlug: "string",
-            name: "string (template)",
-            properties: "Record<string,unknown> (template values)",
-          },
-        },
-        entity_update: {
-          fields: {
-            entityId: "string (template)",
-            properties: "Record<string,unknown>",
-          },
-        },
-        webhook: {
-          fields: {
-            url: "string",
-            method: "GET|POST|PUT|PATCH|DELETE",
-            headers: "Record<string,string>",
-            body: "string (template)",
-          },
-        },
-        channel_message: {
-          fields: {
-            channelId: "string",
-            content: "string (template)",
-          },
-        },
-      },
-    },
-    command: {
-      description: "Calls a pod intelligence command by ID",
-      fields: {
-        commandId: "string — ID of the intelligence_command to invoke",
-        commandTitle: "string — human label",
-        inputMapping:
-          "Record<string,string> — maps command inputs to prior step outputs using {{stepId.output.field}} syntax",
-        promptOverride:
-          "string (optional) — augments the command's default prompt",
-      },
-    },
-    condition: {
-      description: "Evaluates an expression and routes to yes/no branches",
-      fields: {
-        expression:
-          "string — JS-like expression over the trigger payload / prior steps. E.g. \"trigger.payload.data.profileSlug === 'note'\"",
-        trueLabel: "string (optional)",
-        falseLabel: "string (optional)",
-      },
-    },
-    delay: {
-      description: "Pauses execution for a duration before continuing",
-      fields: { duration: "string — e.g. '5m', '1h', '2d'" },
-    },
-    fetch: {
-      description: "Makes an HTTP request",
-      fields: {
-        method: "GET|POST|PUT|DELETE|PATCH",
-        url: "string (template)",
-        headers: "Record<string,string>",
-        body: "string (template)",
-      },
-    },
-    query: {
-      description: "Queries entities in the workspace by profile",
-      fields: {
-        profileSlug: "string",
-        filter: "string — filter expression",
-        limit: "number",
-      },
-    },
-    transform: {
-      description: "Applies a pipe-style expression to a prior step value",
-      fields: {
-        expression: "string — e.g. '{{stepId.output}} | uppercase'",
-      },
-    },
-    loop: {
-      description: "Iterates over a collection, executing child nodes per item",
-      fields: {
-        iteratorExpression: "string — e.g. 'steps.query1.output.results'",
-        itemVariable:
-          "string — variable name inside loop, referenced as {{loop.item}}",
-      },
-    },
-    switch: {
-      description:
-        "Routes to one of several branches based on an expression value",
-      fields: {
-        expression: "string",
-        cases: "Array<{ value: string, label: string }>",
-      },
-    },
-  },
+  /**
+   * DERIVED from the executor's own node-type list — never hand-written.
+   * `FLOW_NODE_TYPES` (services/automations/validate-flow.ts) is what
+   * `validateFlowDefinition` accepts, so the SERVED set is the ACCEPTED set by
+   * construction. `NODE_TYPE_DOCS` is keyed by that union, so an undocumented
+   * new node type is a compile error, not a silent omission.
+   */
+  nodeTypes: Object.fromEntries(
+    FLOW_NODE_TYPES.map((t) => [t, NODE_TYPE_DOCS[t]])
+  ) as Record<(typeof FLOW_NODE_TYPES)[number], NodeTypeDoc>,
   templateSyntax: {
     description:
       "All string fields in node data support {{...}} template interpolation at runtime",

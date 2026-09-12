@@ -29,6 +29,7 @@ import type {
 } from "@synap-core/types";
 import type { PropertyDecisionMap } from "@synap/database";
 import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
+import type { MaterializeRelationFailure } from "../../utils/materialize-composite.js";
 
 const logger = createLogger({ module: "proposal-execution-registry" });
 
@@ -229,6 +230,13 @@ export interface ProposalExecutorResult {
    * field exists to stop, so an entry without a reason is worse than none.
    */
   refusals?: string[];
+  /**
+   * Relation ops of an approved composite graph that did NOT land, each with
+   * the reason the create door gave. Entities are created before edges and each
+   * edge fails ALONE, so `success: true` with a non-empty list is a PARTIAL
+   * application. Omitted when every submitted edge landed.
+   */
+  relationsFailed?: MaterializeRelationFailure[];
 }
 
 export interface ProposalExecutor {

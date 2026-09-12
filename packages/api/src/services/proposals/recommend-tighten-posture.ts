@@ -50,9 +50,8 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "@synap/events";
 import { computeProposalFingerprint } from "./fingerprint.js";
-import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
 import { resolvePodOwnerUserId } from "../capabilities/pod-owner.js";
 
 const logger = createLogger({ module: "governance-recommend-tighten-posture" });
@@ -289,34 +288,36 @@ export async function recommendTightenPostureForAllChannels(): Promise<{
         subjectUserId: podOwnerUserId ?? null,
       });
 
-      if (!deduped) {
-        void notifyPodWideProposal({
-          proposalId: proposal.id,
-          proposalType: "governance.tighten_posture",
-          description: `Tighten posture for a channel (rejected ${acc.rejected}× — ${Math.round(
-            rejectRate * 100
-          )}%)`,
-        });
-      }
-
-      if (podOwnerUserId) {
-        void emitSideEffects({
-          subjectType: "proposal",
-          action: "created",
-          subjectId: proposal.id,
-          userId: podOwnerUserId,
-          data: {
-            proposalStatus: "created",
-            targetType: "governance",
-            changeType: "governance.tighten_posture",
-          },
-        }).catch((err) => {
+      // ORDERED — fan-out first, emit second. See `notifyProposalCreatedOrdered`.
+      // The emit arm stays conditional on a resolved pod owner: the payload's
+      // `userId` is that owner, and there is no guess to put there.
+      await notifyProposalCreatedOrdered({
+        podWide: deduped
+          ? null
+          : {
+              proposalId: proposal.id,
+              proposalType: "governance.tighten_posture",
+              description: `Tighten posture for a channel (rejected ${acc.rejected}× — ${Math.round(
+                rejectRate * 100
+              )}%)`,
+            },
+        sideEffect: podOwnerUserId
+          ? {
+              subjectId: proposal.id,
+              userId: podOwnerUserId,
+              data: {
+                proposalStatus: "created",
+                targetType: "governance",
+                changeType: "governance.tighten_posture",
+              },
+            }
+          : null,
+        onEmitError: (err) =>
           logger.warn(
             { err, proposalId: proposal.id, channelId },
             "recommend-tighten-posture: emitSideEffects failed (non-fatal)"
-          );
-        });
-      }
+          ),
+      });
 
       proposalIds.push(proposal.id);
       logger.info(

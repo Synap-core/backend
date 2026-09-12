@@ -56,8 +56,7 @@ import {
 } from "@synap/database";
 import { resolveDailyWriteCeiling } from "@synap/database/agent-governance";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "@synap/events";
-import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
 
 const logger = createLogger({ module: "governance-recommend-raise-ceiling" });
 
@@ -250,30 +249,30 @@ async function recommendRaiseCeilingForAgent(
 
   // TELL A HUMAN — same rationale as recommend-tighten: insertPendingProposal is
   // durable but fires no notification, so without this the proposal is invisible.
-  if (!deduped) {
-    void notifyPodWideProposal({
-      proposalId: proposal.id,
-      proposalType: "governance.raise_ceiling",
-      description: `Raise daily write ceiling ${currentLimit}→${proposedLimit} (at ceiling ${atCeilingDays.length}/${LOOKBACK_DAYS} days)`,
-      agentUserId: agent.id,
-    });
-  }
-
-  void emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    subjectId: proposal.id,
-    userId: agent.createdByUserId,
-    data: {
-      proposalStatus: "created",
-      targetType: "governance",
-      changeType: "governance.raise_ceiling",
+  // ORDERED — fan-out first, emit second. See `notifyProposalCreatedOrdered`.
+  await notifyProposalCreatedOrdered({
+    podWide: deduped
+      ? null
+      : {
+          proposalId: proposal.id,
+          proposalType: "governance.raise_ceiling",
+          description: `Raise daily write ceiling ${currentLimit}→${proposedLimit} (at ceiling ${atCeilingDays.length}/${LOOKBACK_DAYS} days)`,
+          agentUserId: agent.id,
+        },
+    sideEffect: {
+      subjectId: proposal.id,
+      userId: agent.createdByUserId,
+      data: {
+        proposalStatus: "created",
+        targetType: "governance",
+        changeType: "governance.raise_ceiling",
+      },
     },
-  }).catch((err) => {
-    logger.warn(
-      { err, proposalId: proposal.id, agentId: agent.id },
-      "recommend-raise-ceiling: emitSideEffects failed (non-fatal)"
-    );
+    onEmitError: (err) =>
+      logger.warn(
+        { err, proposalId: proposal.id, agentId: agent.id },
+        "recommend-raise-ceiling: emitSideEffects failed (non-fatal)"
+      ),
   });
 
   logger.info(

@@ -84,7 +84,6 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "@synap/events";
 import { computeProposalFingerprint } from "./fingerprint.js";
 import {
   proposalReasonBucket,
@@ -93,7 +92,7 @@ import {
   UNKNOWN_REASON,
   type RejectionFaultClass,
 } from "./reason-bucket.js";
-import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
 const SAMPLE_CAP = 20;
 
 /**
@@ -551,37 +550,40 @@ async function recommendTightenForAgent(
     // proposal is already committed, and the helper never throws.
     // A dedup hit returns a PRE-EXISTING pending row that already notified when
     // it was first filed — same guard `createPendingProposal` applies.
-    if (!deduped) {
-      void notifyPodWideProposal({
-        proposalId: proposal.id,
-        proposalType,
-        // VISIBILITY is the whole reason the advisory is a proposal and not an
-        // event: it rides the same pod-wide bell + review inbox the rule does.
-        description: isMechanical
-          ? `${targetPattern} rejected ${rejected.count}× as "${reason}" (${Math.round(rejectRate * 100)}%) — likely a code-level fix, not a stricter gate`
-          : `Pin ${targetPattern} to review (rejected ${rejected.count}× — ${Math.round(rejectRate * 100)}%, mostly "${reason}")`,
-        // The SUBJECT agent, for bell grouping — mirrors the workspace path's
-        // `agentUserId` grouping key. `proposals.agentUserId` is null here (this
-        // recommender authors the row), so it comes from the payload.
-        agentUserId: agent.id,
-      });
-    }
-
-    void emitSideEffects({
-      subjectType: "proposal",
-      action: "created",
-      subjectId: proposal.id,
-      userId: agent.createdByUserId,
-      data: {
-        proposalStatus: "created",
-        targetType: "governance",
-        changeType: proposalType,
+    // ORDERED: the fan-out completes before the side effect is emitted, so the
+    // emit's pod-wide reactor finds the bell row instead of racing it.
+    await notifyProposalCreatedOrdered({
+      podWide: deduped
+        ? null
+        : {
+            proposalId: proposal.id,
+            proposalType,
+            // VISIBILITY is the whole reason the advisory is a proposal and not
+            // an event: it rides the same pod-wide bell + review inbox the rule
+            // does.
+            description: isMechanical
+              ? `${targetPattern} rejected ${rejected.count}× as "${reason}" (${Math.round(rejectRate * 100)}%) — likely a code-level fix, not a stricter gate`
+              : `Pin ${targetPattern} to review (rejected ${rejected.count}× — ${Math.round(rejectRate * 100)}%, mostly "${reason}")`,
+            // The SUBJECT agent, for bell grouping — mirrors the workspace
+            // path's `agentUserId` grouping key. `proposals.agentUserId` is null
+            // here (this recommender authors the row), so it comes from the
+            // payload.
+            agentUserId: agent.id,
+          },
+      sideEffect: {
+        subjectId: proposal.id,
+        userId: agent.createdByUserId,
+        data: {
+          proposalStatus: "created",
+          targetType: "governance",
+          changeType: proposalType,
+        },
       },
-    }).catch((err) => {
-      logger.warn(
-        { err, proposalId: proposal.id, agentId: agent.id },
-        "recommend-tighten: emitSideEffects failed (non-fatal)"
-      );
+      onEmitError: (err) =>
+        logger.warn(
+          { err, proposalId: proposal.id, agentId: agent.id },
+          "recommend-tighten: emitSideEffects failed (non-fatal)"
+        ),
     });
 
     filed.push(proposal.id);

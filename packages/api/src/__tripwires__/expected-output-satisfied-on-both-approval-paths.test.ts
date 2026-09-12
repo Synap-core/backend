@@ -89,6 +89,33 @@ describe("tripwire: every approval path satisfies expected outputs", () => {
     );
   });
 
+  it("the DEFERRED path forwards the entity PROFILE through the ONE reader", () => {
+    // WHY: `targetType` only says "entity", while a slot is declared
+    // `kind: "knowledge"` / "task". Without `entityProfileSlug` a knowledge slot
+    // satisfied by a PROPOSED capture stays pending forever — and every
+    // behavioural assertion that hand-builds the args stays green. The auto-
+    // approve half forwards it; this pins the approval half.
+    //
+    // BOUNDED BY THE CALL, NOT A CHARACTER COUNT: the slice ends at the call's
+    // own `});`, so a longer comment inside the argument object cannot push the
+    // argument out of view (the fixed-window failure mode seen on 2026-09-12).
+    // It sees an ABSENT argument or a hand-rolled cast; it does not see a
+    // reader that returns the wrong level — `approval-stamps-entity-profile.test.ts`
+    // drives that behaviourally.
+    const applier = read("routers", "proposals", "apply-approval.ts");
+    const start = applier.indexOf("await satisfyExpectedOutputs({");
+    expect(start).toBeGreaterThan(-1);
+    const end = applier.indexOf("});", start);
+    expect(end).toBeGreaterThan(start);
+    const call = applier.slice(start, end);
+    expect(call).toMatch(
+      /entityProfileSlug: readProposalEntityProfileSlug\(args\.proposal\.data\)/
+    );
+    expect(applier).toMatch(
+      /import\s*\{[^}]*readProposalEntityProfileSlug[^}]*\}\s*from\s*"[^"]*satisfy-expected-output\.js"/
+    );
+  });
+
   it("BOTH call sites forward the SLOT CLAIM — the label, not just the kind", () => {
     // WHY: `selectOutputToSatisfy` falls back to the FIRST not-done output of
     // the matching kind. A session owing two documents therefore stamps the

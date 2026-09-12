@@ -23,32 +23,50 @@ function buildApp(): HubHono {
   return app;
 }
 
-function mockProfilesCaller() {
-  const listProfiles = vi.fn().mockResolvedValue({
-    profiles: [
-      {
-        id: "11111111-1111-4111-8111-111111111111",
-        slug: "task",
-        displayName: "Task",
-        entityScope: "workspace",
-        scope: "system",
-        profileKind: "kind",
-      },
-      {
-        id: "22222222-2222-4222-8222-222222222222",
-        slug: "investor",
-        displayName: "Investor",
-        entityScope: "workspace",
-        scope: "shared",
-        profileKind: "role",
-        applicableKinds: ["person", "company"],
-      },
-    ],
+/**
+ * The listed rows. `getProfile` resolves FROM this same table, the way the real
+ * door does: `{ profile, effectiveProperties }` where `profile` IS the row. A
+ * mock returning only `effectiveProperties` cannot say WHICH row it describes,
+ * and discover now refuses to guess (`resolveRowSchema` throws on an answer
+ * with no identity) — that half-shaped mock is how this file went red.
+ */
+const PROFILES = [
+  {
+    id: "11111111-1111-4111-8111-111111111111",
+    slug: "task",
+    displayName: "Task",
+    entityScope: "workspace",
+    scope: "system",
+    profileKind: "kind",
+  },
+  {
+    id: "22222222-2222-4222-8222-222222222222",
+    slug: "investor",
+    displayName: "Investor",
+    entityScope: "workspace",
+    scope: "shared",
+    profileKind: "role",
+    applicableKinds: ["person", "company"],
+  },
+];
+
+function notFound(identifier: string) {
+  return Object.assign(new Error(`Profile not found: ${identifier}`), {
+    code: "NOT_FOUND",
   });
-  const getProfile = vi.fn().mockImplementation(({ identifier }) =>
-    Promise.resolve({
+}
+
+function mockProfilesCaller() {
+  const listProfiles = vi.fn().mockResolvedValue({ profiles: PROFILES });
+  const getProfile = vi.fn().mockImplementation(({ identifier }) => {
+    const profile = PROFILES.find(
+      (p) => p.slug === identifier || p.id === identifier
+    );
+    if (!profile) return Promise.reject(notFound(identifier));
+    return Promise.resolve({
+      profile,
       effectiveProperties:
-        identifier === "task"
+        profile.slug === "task"
           ? [
               {
                 id: "property-task",
@@ -62,8 +80,8 @@ function mockProfilesCaller() {
               },
             ]
           : [],
-    })
-  );
+    });
+  });
   vi.mocked(getCaller).mockResolvedValue({
     profiles: { listProfiles, getProfile },
   } as never);
@@ -169,5 +187,56 @@ describe("GET /discover?profileSlugs", () => {
       userId: "user-1",
       identifier: "task",
     });
+  });
+
+  it("withholds a row its slug cannot identify — marked, never the twin's schema, and no create command", async () => {
+    // A shared row whose slug resolves to a workspace twin at this lens, and
+    // whose own id the door refuses (the no-lens shared case).
+    const shared = {
+      id: "33333333-3333-4333-8333-333333333333",
+      slug: "partner",
+      displayName: "Partner",
+      entityScope: "workspace",
+      scope: "shared",
+      profileKind: "kind",
+    };
+    const twin = {
+      ...shared,
+      id: "44444444-4444-4444-8444-444444444444",
+      scope: "workspace",
+    };
+    const listProfiles = vi.fn().mockResolvedValue({ profiles: [shared] });
+    const getProfile = vi.fn().mockImplementation(({ identifier }) =>
+      identifier === "partner"
+        ? Promise.resolve({
+            profile: twin,
+            effectiveProperties: [{ slug: "twin-only", valueType: "string" }],
+          })
+        : Promise.reject(notFound(identifier))
+    );
+    vi.mocked(getCaller).mockResolvedValue({
+      profiles: { listProfiles, getProfile },
+    } as never);
+
+    const response = await buildApp().request(
+      "/discover?userId=user-1&profileSlugs=partner"
+    );
+
+    expect(response.status).toBe(200);
+    // It tried the row's OWN identity after the slug landed on the twin.
+    expect(getProfile).toHaveBeenCalledWith({
+      userId: "user-1",
+      identifier: shared.id,
+    });
+    const row = (await response.json()).profiles[0];
+    expect(row).toMatchObject({
+      slug: "partner",
+      schemaUnavailable: {
+        reason: "slug-resolves-to-another-row",
+        resolvedProfileId: twin.id,
+      },
+    });
+    expect(row.properties).toEqual([]); // withheld — NOT the twin's `twin-only`
+    expect(row).not.toHaveProperty("createCommand");
   });
 });

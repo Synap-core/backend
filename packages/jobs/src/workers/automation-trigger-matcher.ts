@@ -226,6 +226,24 @@ interface TriggerMatchPayload {
    */
   sessionId?: string | null;
   /**
+   * THE `events` ROW that this trigger is about — the immutable audit record,
+   * not the rebuilt envelope in `data`. Stamped onto every run this event opens
+   * (`automation_runs.trigger_event_id`, 0256) and carried into the spawned
+   * session so "why does this session exist" resolves to a FACT rather than to
+   * a JSONB blob.
+   *
+   * Optional because three of the queue's origins genuinely have no event row
+   * (cron, manual, inbound webhook) — NULL there is the honest answer, not a
+   * loss.
+   *
+   * ⚠️ A TOP-LEVEL field, deliberately NOT `data.eventId`. `data.eventId` is the
+   * FIRST candidate `resolveAutomationEventFingerprintId` reads, so putting a
+   * per-event unique id there would give every event a unique fingerprint and
+   * silently disable the D5 exactly-once claim that the `stableJsonHash`
+   * fallback provides. Provenance must not change dedupe.
+   */
+  eventId?: string | null;
+  /**
    * CONFUSED-DEPUTY GUARD (the causal-chain producer). The userId of the actor
    * that PRODUCED the triggering event — the agent (or human) whose write/observation
    * fired this match. Threaded UNCHANGED into every fired automation's
@@ -749,6 +767,14 @@ export async function handleAutomationTriggerMatch(job: {
     producerAgentUserId,
   } = job.data;
 
+  // The triggering `events` row id, when the producer named one. Normalized to
+  // undefined for anything that is not a plain non-empty string so a malformed
+  // payload writes NULL (no claim) rather than a junk provenance pointer.
+  const triggerEventId =
+    typeof job.data.eventId === "string" && job.data.eventId.trim().length > 0
+      ? job.data.eventId.trim()
+      : undefined;
+
   // ── F2 depth floor across the agent boundary ───────────────────────────
   // An agent's Hub writes carry the focus session (sessionId) but NO
   // automationContext, so a cron→agent→write→automation chain would reset to
@@ -1105,6 +1131,7 @@ export async function handleAutomationTriggerMatch(job: {
         workspaceId: runWorkspaceId,
         subjectEntityId: runSubjectEntityId,
         triggeredBy: effectiveContext ? "system" : userId,
+        triggerEventId,
         triggerPayload,
         status: "running",
       })
@@ -1154,6 +1181,10 @@ export async function handleAutomationTriggerMatch(job: {
         chainDepth: currentDepth + 1,
         rootRunId: rootRunId ?? run.id,
         chainAutomationIds: [...chainIds, automationId],
+        // Provenance ride-along: NOT read by the depth/cycle guard, only carried
+        // so the playbook_run step can stamp it on the spawned session and
+        // back-stamp `events.session_id`. Omitted when there is no event row.
+        ...(triggerEventId ? { triggerEventId } : {}),
       },
       // Carry the causal-chain producer so the executor governs THEN-actions
       // against the agent that fired this trigger (closing the confused-deputy

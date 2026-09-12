@@ -53,6 +53,7 @@ import {
   instantiateSession,
   runPromptFor,
   resolveRunnablePlaybook,
+  resolveGoal,
 } from "./playbook-lifecycle.js";
 import {
   resolveGrantedCapabilities,
@@ -76,6 +77,19 @@ export interface RunChainContext {
   chainDepth: number;
   rootRunId: string;
   chainAutomationIds: string[];
+  /**
+   * The `events` row that fired the automation whose run spawned this session
+   * (`automation_runs.trigger_event_id`, 0256). Absent for a cron, manual or
+   * webhook run — those have no triggering event.
+   *
+   * Carried through so the SESSION can answer "which fact am I here because
+   * of", which `automationRunId` alone cannot: the run knows its trigger, the
+   * session only knew its run. Stamped nested under `automationChainContext`
+   * (never as a top-level metadata key — `session-kind.ts` reads the top-level
+   * automation keys to classify a row as `kind:'run'`, and a new sibling there
+   * is a classification hazard for no gain).
+   */
+  triggerEventId?: string;
 }
 
 export interface RunPlaybookInput {
@@ -116,6 +130,16 @@ export interface RunPlaybookInput {
    * `@{arg:name:type}` references against `params`.
    */
   goalResolver?: (goalTemplate: string) => string | undefined;
+  /**
+   * A goal template supplied by the CALLER that replaces the playbook's own
+   * `goalTemplate` for this run (an automation `playbook_run` node's
+   * `data.goalOverride`). Used ONLY when `goalResolver` declines the template
+   * (returns undefined — "wrong resolver for this grammar"), so the
+   * `@{arg:name:type}` fallback substitutes the caller's template against
+   * `params` instead of the playbook's. Resolved with `resolveGoal`, the SAME
+   * function `instantiateSession` uses — never a second interpolator.
+   */
+  goalTemplateOverride?: string;
   /** Automation chain context — stamped onto the session (F2 depth floor). */
   chainContext?: RunChainContext;
   /** The entity this run is about (e.g. a contact, deal, or document).
@@ -208,6 +232,13 @@ export function buildRunSessionMetadata(opts: {
             rootRunId:
               opts.chainContext.rootRunId ?? opts.chainContext.automationRunId,
             chainAutomationIds: opts.chainContext.chainAutomationIds ?? [],
+            // Provenance, not control flow: the matcher's depth floor
+            // (`deriveSessionChainContext`) ignores it, so a chained run's
+            // guard behaviour is unchanged. OMITTED when absent so a session
+            // spawned by a cron/manual run does not carry a null claim.
+            ...(opts.chainContext.triggerEventId
+              ? { triggerEventId: opts.chainContext.triggerEventId }
+              : {}),
           },
         }
       : {}),
@@ -474,9 +505,22 @@ async function executeSingleRun(
     params,
     agentIds: input.agentIds,
     subjectId: input.subjectId ?? null,
-    goalOverride: input.goalResolver
-      ? input.goalResolver(playbook.goalTemplate)
-      : undefined,
+    // Two grammars, one resolution. `goalResolver` handles {{mustache}} against
+    // the caller's own context; when it declines (a pure `@{arg:}` template) the
+    // caller's override template is substituted here with `resolveGoal` — the
+    // same function `instantiateSession` would otherwise apply to the
+    // PLAYBOOK's template, which is what would have dropped the override.
+    // No override + no resolver ⇒ undefined, i.e. every pre-existing caller is
+    // byte-identical.
+    goalOverride:
+      (input.goalResolver
+        ? input.goalResolver(
+            input.goalTemplateOverride ?? playbook.goalTemplate
+          )
+        : undefined) ??
+      (input.goalTemplateOverride
+        ? resolveGoal(input.goalTemplateOverride, params, playbook.id)
+        : undefined),
     metadata: sessionMetadata,
   });
 

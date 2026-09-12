@@ -588,8 +588,16 @@ describe("(f) return shape is unchanged", () => {
     // No field was removed from what the consumer destructures. The success
     // push is now its own arm (the failure arm carries the code), so the
     // literal moved — it did not disappear.
+    //
+    // ADDITIVE (2026-09-12): an approved graph's failed edges ride on the
+    // success item as an OPTIONAL `relationsFailed`, so the push became a
+    // multi-line object. The contract is unchanged — `proposalId` and
+    // `success: true` are still both on that push — which is what is pinned.
+    expect(BATCH_APPROVE_BLOCK).toMatch(
+      /results\.push\(\{\s*proposalId,\s*success: true,/
+    );
     expect(BATCH_APPROVE_BLOCK).toContain(
-      "results.push({ proposalId, success: true })"
+      'relationsFailed?: ProposalExecutorResult["relationsFailed"];'
     );
   });
 });

@@ -1059,32 +1059,40 @@ export const focusSessionsRouter = router({
         .where(eq(focusSessions.id, input.id))
         .returning();
 
-      // Stage transition side-effect: when the active stage actually changes,
-      // emit `focus_session.stage_changed` so automations can react to the
-      // transition (and filter on toStage). No-op for stageless playbooks.
-      if (
-        patch.currentStage !== undefined &&
-        patch.currentStage !== existing.currentStage
-      ) {
-        emitSideEffects({
-          subjectType: "focus_session",
-          action: "stage_changed",
-          subjectId: updated.id,
-          userId: ctx.userId,
-          workspaceId: existing.workspaceId,
-          data: {
-            sessionId: updated.id,
-            subjectId: existing.subjectEntityId,
-            playbookId: existing.playbookId,
-            fromStage: existing.currentStage,
-            toStage: updated.currentStage,
+      // ── STAGE ADVANCE ─────────────────────────────────────────────────────
+      // ONE door owns the `stage_changed` fan-out AND the human stage gate
+      // (`services/focus-sessions/advance-stage.ts`). This router used to carry
+      // a hand-copy of the emit and NO gate at all, so a `gate: { kind: "human" }`
+      // stage advanced from the browser walked straight through the approval it
+      // was declared to require.
+      //
+      // `stageWrite: "caller"` — the stage was already written by the UPDATE above.
+      let stageGated = false;
+      if (patch.currentStage !== undefined) {
+        const { advanceSessionStage } =
+          await import("../services/focus-sessions/advance-stage.js");
+        const advance = await advanceSessionStage({
+          session: {
+            id: updated.id,
+            currentStage: existing.currentStage,
             workspaceId: existing.workspaceId,
-            userId: ctx.userId,
+            projectId: existing.projectId,
+            channelId: existing.channelId,
+            playbookId: existing.playbookId,
+            subjectEntityId: existing.subjectEntityId,
           },
+          toStage: patch.currentStage,
+          userId: ctx.userId,
+          stageWrite: "caller",
         });
+        stageGated = advance.paused;
       }
 
-      return updated as FocusSession;
+      // Return the status the ROW now holds. A caller handed `active` while the
+      // gate has just paused the session would step past the approval it opened.
+      return (
+        stageGated ? { ...updated, status: "paused" } : updated
+      ) as FocusSession;
     }),
 
   /**

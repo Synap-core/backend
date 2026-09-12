@@ -88,6 +88,7 @@ import { messages } from "@synap/database/schema";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import {
   satisfyExpectedOutputs,
+  readProposalEntityProfileSlug,
   readProposalExpectedLabel,
 } from "../../services/focus-sessions/satisfy-expected-output.js";
 
@@ -519,6 +520,11 @@ export async function applyProposalApproval(args: {
         // `checkPermissionOrPropose`). Without it a session owing two documents
         // stamps the FIRST one whatever this draft was actually for.
         expectedLabel: readProposalExpectedLabel(args.proposal.data),
+        // The PROFILE of the entity this approval produced. `targetType` can
+        // only say `entity`, while a slot is declared `knowledge` / `task` —
+        // without it a `kind: "knowledge"` slot satisfied by a PROPOSED capture
+        // stayed pending forever. Same field the auto-approve half forwards.
+        entityProfileSlug: readProposalEntityProfileSlug(args.proposal.data),
       });
     } catch (err) {
       logger.warn(
@@ -748,6 +754,7 @@ async function applyProposalApprovalInner(
       primaryId,
       entities: createdEntities,
       refToRealId,
+      relationsFailed,
     } = await materializeCompositeGraph(
       reconciledOperations,
       entityCaller,
@@ -1014,7 +1021,16 @@ async function applyProposalApprovalInner(
       }
     }
 
-    return { success: true, primaryId, created: createdCount, linked };
+    return {
+      success: true,
+      primaryId,
+      created: createdCount,
+      linked,
+      // Edges that did not land. Taken off the materializer's result and handed
+      // to the caller — dropping it here is what made an approval whose every
+      // edge failed read as a clean success.
+      ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
+    };
   }
 
   // B3: Document content proposal (hub/chat/user_edit) – apply content directly

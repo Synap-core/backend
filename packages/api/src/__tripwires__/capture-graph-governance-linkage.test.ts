@@ -21,8 +21,14 @@ import { join } from "path";
  * exactly "no authorizer", and that is what the graph honestly reported.
  *
  * The fix threads the already-decided receipt id into the door:
- *   - capture auto-apply PRE-ALLOCATES the id, puts it on the composite ctx, and
- *     inserts the auto_approved row afterwards WITH that same id;
+ *   - capture auto-apply PRE-ALLOCATES the id, INSERTS the auto_approved row
+ *     with that id, and only then puts it on the composite ctx. The insert
+ *     MUST come first: `entities.source_proposal_id` is an FK to `proposals(id)`
+ *     (migration 0107), so a ctx id naming no row kills the first entity insert
+ *     and rolls the whole capture back — which is exactly what shipped between
+ *     233112b3 and its fix. Ordering is guarded by
+ *     `preallocated-proposal-id-insert-order.test.ts` (lexical, all files) and
+ *     `submit-capture-graph.receipt-order.test.ts` (runtime call order);
  *   - proposal approval passes the proposal's own id;
  *   - `entities.create` prefers its own auto-approve receipt and falls back to
  *     the ctx one.
@@ -62,16 +68,31 @@ describe("capture/approval graph writes carry their governance receipt", () => {
     expect(src).toContain("const captureProposalId = randomUUID();");
     // On the ctx the create door reads…
     expect(src).toMatch(/governanceProposalId:\s*captureProposalId/);
-    // …and on the auto_approved row that is minted after materialization, so the
-    // events and the proposal row can never name different ids.
+    // …and on the auto_approved row minted with that same id, so the events and
+    // the proposal row can never name different ids.
     expect(src).toMatch(
       /createAutoApprovedProposal\(\{[\s\S]{0,200}id:\s*captureProposalId/
     );
-    // Pre-allocation must PRECEDE materialization, otherwise the entity events
-    // are written before the id exists and the linkage is lost again.
+    // Pre-allocation AND the receipt INSERT must both precede materialization.
+    // Pre-allocation alone was the 2026-09-12 P0: the ctx named an id whose row
+    // did not exist yet, so the first entity insert died on
+    // `entities_source_proposal_id_fkey` and the whole capture rolled back.
+    //
+    // ⚠️ The anchor is `materializeCompositeGraph(` WITHOUT a leading `await` on
+    // purpose. The previous spelling pinned `await materializeCompositeGraph(`
+    // and went to indexOf === -1 the moment the call was wrapped in a helper —
+    // `toBeLessThan(-1)` then failed loudly, but a guard pinned to an incidental
+    // keyword is one refactor away from being deleted rather than fixed.
+    const materializeAt = src.indexOf("materializeCompositeGraph(\n");
+    expect(materializeAt).toBeGreaterThan(0);
     expect(src.indexOf("const captureProposalId = randomUUID();")).toBeLessThan(
-      src.indexOf("await materializeCompositeGraph(")
+      materializeAt
     );
+    expect(
+      src.search(
+        /createAutoApprovedProposal\(\{[\s\S]{0,200}id:\s*captureProposalId/
+      )
+    ).toBeLessThan(materializeAt);
   });
 
   it("proposal approval passes the proposal's own id on BOTH composite ctx branches", () => {

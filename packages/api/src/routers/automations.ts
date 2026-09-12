@@ -343,6 +343,45 @@ async function injectSkillIdsFromNames(
  * predicate as the runtime capability dispatcher. Playbook references follow
  * the runner's workspace-or-pod resolution (an id has priority over a name).
  */
+/**
+ * The access context a playbook REFERENCE is resolved through.
+ *
+ * ── WHY THIS EXISTS ─────────────────────────────────────────────────────────
+ * The OFFER door (`availableActionsFor`) listed playbooks through
+ * `scopedDb(access)` — the canonical read door, which applies the registered
+ * `playbooks` VisibilityRule: every workspace the caller belongs to, plus
+ * pod-wide. The VALIDATE door here used a RAW `database.select` narrowed to
+ * `isNull(playbooks.workspaceId)` whenever no workspace was set. Those are two
+ * different answers to one question — "which playbooks may this rule reference"
+ * — and the pod has ZERO pod-wide playbooks, so at pod altitude the picker
+ * offered 22 and the validator accepted none. Choosing any playbook in the
+ * browser rule editor then failed on save with "references a playbook that does
+ * not exist" about a playbook that plainly does.
+ *
+ * This is ALIGNMENT to the canonical read door, not a widening: a playbook the
+ * caller can already SEE in the picker is one the caller may reference. The
+ * floor is unchanged — `scopedDb` still ANDs the user/membership predicate, so
+ * a playbook in a workspace the caller does not belong to stays invisible here
+ * exactly as it is in the picker.
+ *
+ * ── THE LENS, AND WHY IT MIRRORS THE OFFER DOOR EXACTLY ─────────────────────
+ * `undefined` = all my workspaces + globals (what the picker does when
+ * `scope.workspaceId` is absent); a workspace id = that workspace + globals
+ * (what the picker's `or(isNull, eq)` does). `null` is deliberately NOT used —
+ * that is globals-only, the very narrowing this fixes.
+ *
+ * The read path consumes only `userId` (see `AccessContext`'s SCOPE note:
+ * operator and agent are scoped identically), so minting an operator context
+ * from the same user id yields the same visibility an agent caller would get.
+ */
+export function playbookValidationAccess(
+  userId: string,
+  workspaceId: string | null | undefined
+): AccessContext {
+  const access = AccessContext.operator({ userId });
+  return workspaceId ? access.withLens(workspaceId) : access;
+}
+
 async function loadFlowValidationResolvers(
   database: Awaited<ReturnType<typeof getDb>>,
   flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
@@ -409,28 +448,24 @@ async function loadFlowValidationResolvers(
 
   const playbookRows =
     playbookReferenceIds.length > 0 || playbookReferenceNames.length > 0
-      ? await database
-          .select({ id: playbooks.id, name: playbooks.name })
-          .from(playbooks)
-          .where(
-            and(
-              workspaceId
-                ? or(
-                    eq(playbooks.workspaceId, workspaceId),
-                    isNull(playbooks.workspaceId)
-                  )
-                : isNull(playbooks.workspaceId),
-              playbookReferenceIds.length > 0 &&
-                playbookReferenceNames.length > 0
-                ? or(
-                    inArray(playbooks.id, playbookReferenceIds),
-                    inArray(playbooks.name, playbookReferenceNames)
-                  )
-                : playbookReferenceIds.length > 0
-                  ? inArray(playbooks.id, playbookReferenceIds)
-                  : inArray(playbooks.name, playbookReferenceNames)
-            )
-          )
+      ? await scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
+          id: string;
+          name: string;
+        }>(playbooks, {
+          columns: { id: true, name: true },
+          where: and(
+            // Archived playbooks are not referenceable, matching the OFFER door.
+            ne(playbooks.status, "archived"),
+            playbookReferenceIds.length > 0 && playbookReferenceNames.length > 0
+              ? or(
+                  inArray(playbooks.id, playbookReferenceIds),
+                  inArray(playbooks.name, playbookReferenceNames)
+                )
+              : playbookReferenceIds.length > 0
+                ? inArray(playbooks.id, playbookReferenceIds)
+                : inArray(playbooks.name, playbookReferenceNames)
+          ),
+        })
       : [];
 
   const foundSkillIds = new Set(skillRows.map((skill) => skill.id));
@@ -1171,7 +1206,21 @@ export function playbookActionOptions(
     params?: unknown;
   }[]
 ): ActionOption[] {
-  return rows.map((row) => ({
+  // Dedupe by ID ONLY, and deliberately so. Two rows with the same id are the
+  // same playbook reaching this projection twice (a widened read, a union) and
+  // would render as two identical rows keyed `playbook:<id>` — a menu where the
+  // author cannot tell the two apart AND cannot tell them apart afterwards
+  // either, since the key is what round-trips. Two DIFFERENT ids sharing a name
+  // are two different playbooks (a pod-wide one and a workspace one may
+  // legitimately both be called "Client Onboarding"); collapsing those would
+  // silently drop a playbook the author can see and might mean. They stay.
+  const seen = new Set<string>();
+  const unique = rows.filter((row) => {
+    if (seen.has(row.id)) return false;
+    seen.add(row.id);
+    return true;
+  });
+  return unique.map((row) => ({
     key: `playbook:${row.id}`,
     label: row.name,
     nodeType: "playbook_run" as const,
@@ -1725,12 +1774,30 @@ async function resolveAvailableActions(
     params: unknown;
   }>(playbooks, {
     columns: { id: true, name: true, params: true },
+    // ARCHIVED playbooks are excluded. This offered every row at the lens, so a
+    // retired playbook — "TEST — provenance verification (safe to delete)" was
+    // one, live in the founder's own menu — was still selectable as the THEN of
+    // a new rule. `status` is the playbook's only retirement axis: the table has
+    // no `deleted_at` column, so archived IS deleted here.
+    //
+    // It also removes most of the DUPLICATE rows the menu showed (two "Client
+    // Onboarding", two "Lead Outreach"): the partial unique index
+    // `playbooks_workspace_name_active_uq` guarantees at most one NON-archived
+    // playbook per (workspace | pod-wide, lower(name)), so an archived row was
+    // the second of each pair. It cannot remove ALL of them — that index keys
+    // on COALESCE(workspace_id, sentinel), so a pod-wide and a workspace
+    // playbook may legitimately share a name and both be active. Those are two
+    // different playbooks and both stay offered; see the id-dedupe note in
+    // `playbookActionOptions`.
     where: scope.workspaceId
-      ? or(
-          isNull(playbooks.workspaceId),
-          eq(playbooks.workspaceId, scope.workspaceId)
+      ? and(
+          ne(playbooks.status, "archived"),
+          or(
+            isNull(playbooks.workspaceId),
+            eq(playbooks.workspaceId, scope.workspaceId)
+          )
         )
-      : undefined,
+      : ne(playbooks.status, "archived"),
     orderBy: asc(playbooks.name),
     limit: 200,
   });

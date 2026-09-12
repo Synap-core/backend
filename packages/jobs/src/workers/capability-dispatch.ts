@@ -78,6 +78,12 @@ export interface PlaybookRunnerChainContext {
   chainDepth: number;
   rootRunId: string;
   chainAutomationIds: string[];
+  /**
+   * The `events` row that fired this run (`automation_runs.trigger_event_id`,
+   * 0256). Absent for cron / manual / webhook runs. Provenance only — no guard
+   * reads it; the spine stamps it onto the session it opens.
+   */
+  triggerEventId?: string;
 }
 
 export interface PlaybookRunnerInput {
@@ -90,6 +96,15 @@ export interface PlaybookRunnerInput {
   idempotentBySubject?: boolean;
   /** `undefined` ⇒ defer to the spine's own resolveGoal (see run-playbook). */
   goalResolver?: (goalTemplate: string) => string | undefined;
+  /**
+   * A goal template supplied by the CALLER (the `playbook_run` node's
+   * `data.goalOverride`) that replaces the playbook's own `goalTemplate`. Used
+   * by the spine ONLY when `goalResolver` declines the template — i.e. for the
+   * `@{arg:name:type}` half of the goal grammar, which `goalResolver` does not
+   * speak. Without it that half would silently substitute the PLAYBOOK's
+   * template and discard the node's goal.
+   */
+  goalTemplateOverride?: string;
   chainContext?: PlaybookRunnerChainContext;
   /** Agent selector (`agents.slug`) — absent ⇒ the default orchestrator. */
   agentType?: string | null;

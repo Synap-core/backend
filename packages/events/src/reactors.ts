@@ -16,6 +16,9 @@
  */
 
 import type PgBoss from "pg-boss";
+// TYPE-ONLY, and load-bearing: erased at runtime, so the one-way value
+// dependency (side-effects.ts → this registry) is unchanged.
+import type { SideEffectPayload } from "./side-effects.js";
 
 /** Dependencies handed to every reactor handler. */
 export interface ReactorDeps {
@@ -24,25 +27,20 @@ export interface ReactorDeps {
 
 /**
  * The payload `emitSideEffects` receives and forwards to reactors.
- * Kept structurally in sync with `SideEffectPayload` (side-effects.ts) — the
- * canonical definition lives there and is re-exported as the public type.
+ *
+ * DERIVED from `SideEffectPayload`, not copied. It used to be a hand-maintained
+ * structural twin under a comment asserting the two were "kept in sync" — which
+ * is the worst shape available: a mirror ONE FIELD BEHIND still typechecks and
+ * still reads as authoritative, so a field added to the emit payload and not to
+ * this copy is dropped at the reactor boundary with every type green and the
+ * docblock still claiming parity. `eventId` would have been the tenth field to
+ * need copying. An alias cannot drift.
+ *
+ * The import is TYPE-ONLY, so it is erased at runtime and the value-level
+ * dependency still runs one way (side-effects.ts imports the registry from
+ * here, never the reverse).
  */
-export interface ReactorPayload {
-  subjectType: string;
-  action: string;
-  subjectId: string;
-  userId: string;
-  workspaceId?: string | null;
-  data?: Record<string, unknown>;
-  automationContext?: {
-    automationRunId: string;
-    automationId: string;
-    chainDepth: number;
-    rootRunId?: string;
-    chainAutomationIds?: string[];
-  };
-  sessionId?: string | null;
-}
+export type ReactorPayload = SideEffectPayload;
 
 export interface Reactor {
   /** Stable identifier (matches the existing reaction name). */

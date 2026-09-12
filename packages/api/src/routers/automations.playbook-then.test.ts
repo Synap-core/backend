@@ -101,6 +101,33 @@ describe("playbookActionOptions (playbooks → playbook_run THEN options)", () =
     expect(opt.params).toEqual([{ key: "ok", label: "Ok", required: false }]);
   });
 
+  it("collapses a repeated ROW ID to one option", () => {
+    // Two rows with the same id are the same playbook arriving twice. They
+    // would render as two identical rows keyed `playbook:<id>`, which the
+    // author can neither tell apart in the menu nor disambiguate afterwards —
+    // the key is what round-trips.
+    const opts = playbookActionOptions([
+      { id: PB, name: "Client Onboarding", params: [] },
+      { id: PB, name: "Client Onboarding", params: [] },
+    ]);
+    expect(opts).toHaveLength(1);
+    expect(opts[0].key).toBe(`playbook:${PB}`);
+  });
+
+  it("KEEPS two different playbooks that share a name", () => {
+    // A pod-wide and a workspace playbook may legitimately both be called
+    // "Client Onboarding" — the partial unique index keys on
+    // COALESCE(workspace_id, sentinel), so both can be active. Collapsing them
+    // would silently drop one the author can see and might mean. Dedupe is by
+    // id, never by label.
+    const other = "77777777-7777-7777-7777-777777777777";
+    const opts = playbookActionOptions([
+      { id: PB, name: "Client Onboarding", params: [] },
+      { id: other, name: "Client Onboarding", params: [] },
+    ]);
+    expect(opts.map((o) => o.playbookId)).toEqual([PB, other]);
+  });
+
   it("tolerates a non-array params jsonb (hand-edited row) as no params", () => {
     expect(
       playbookActionOptions([{ id: PB, name: "P", params: {} }])[0].params

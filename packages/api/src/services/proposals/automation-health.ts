@@ -67,8 +67,7 @@ import {
   ProposalStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { emitSideEffects } from "@synap/events";
-import { notifyPodWideProposal } from "../../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../../notifications/notify-proposal-created-ordered.js";
 import {
   detectZeroRunAutomations,
   DEFAULT_MIN_AGE_DAYS,
@@ -378,32 +377,32 @@ export async function scanAutomationHealth(opts?: {
       // adding a warden. Recorded rather than papered over: today the warden's
       // findings reliably reach admins, and reach a non-admin owner only when
       // they open the review queue.
-      if (!deduped) {
-        void notifyPodWideProposal({
-          proposalId: proposal.id,
-          proposalType: AUTOMATION_HEALTH_ADVISORY_TYPE,
-          description:
-            ownerFindings.length === 1
-              ? `"${ownerFindings[0]!.name}" is enabled but has never run (${ownerFindings[0]!.ageDays} days)`
-              : `${ownerFindings.length} enabled automations have never run`,
-        });
-      }
-
-      void emitSideEffects({
-        subjectType: "proposal",
-        action: "created",
-        subjectId: proposal.id,
-        userId: ownerUserId,
-        data: {
-          proposalStatus: "created",
-          targetType: "governance",
-          changeType: AUTOMATION_HEALTH_ADVISORY_TYPE,
+      // ORDERED — fan-out first, emit second. See `notifyProposalCreatedOrdered`.
+      await notifyProposalCreatedOrdered({
+        podWide: deduped
+          ? null
+          : {
+              proposalId: proposal.id,
+              proposalType: AUTOMATION_HEALTH_ADVISORY_TYPE,
+              description:
+                ownerFindings.length === 1
+                  ? `"${ownerFindings[0]!.name}" is enabled but has never run (${ownerFindings[0]!.ageDays} days)`
+                  : `${ownerFindings.length} enabled automations have never run`,
+            },
+        sideEffect: {
+          subjectId: proposal.id,
+          userId: ownerUserId,
+          data: {
+            proposalStatus: "created",
+            targetType: "governance",
+            changeType: AUTOMATION_HEALTH_ADVISORY_TYPE,
+          },
         },
-      }).catch((err) => {
-        logger.warn(
-          { err, proposalId: proposal.id },
-          "automation-health: emitSideEffects failed (non-fatal)"
-        );
+        onEmitError: (err) =>
+          logger.warn(
+            { err, proposalId: proposal.id },
+            "automation-health: emitSideEffects failed (non-fatal)"
+          ),
       });
 
       proposalIds.push(proposal.id);

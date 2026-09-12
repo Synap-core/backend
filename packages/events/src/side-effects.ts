@@ -42,6 +42,31 @@ export interface SideEffectPayload {
    * by their session. Threaded from the materialize chokepoint.
    */
   sessionId?: string | null;
+  /**
+   * THE `events` ROW this emit is about — the immutable audit record's id, not
+   * anything reconstructed. Set by `recordDomainMutation` from the `EventRecord`
+   * that `auditLog` has already returned by the time the fan-out runs, so it
+   * costs no extra query.
+   *
+   * Forwarded by the `automation-trigger-match` reactor and stamped onto every
+   * run the event opens (`automation_runs.trigger_event_id`, 0256), which is
+   * what lets a spawned session be walked back to the FACT that caused it
+   * rather than to a rebuilt JSONB envelope.
+   *
+   * Nullable: a bare `emitSideEffects` that fires WITHOUT a matching log row
+   * (a facet change's parent-entity refresh, document re-indexing) genuinely
+   * has no event to name, and so does a failed best-effort append. NULL means
+   * "no event is claimed", never "the event was lost".
+   *
+   * ⚠️ A TOP-LEVEL field, and it must NEVER be moved into `data`.
+   * `resolveAutomationEventFingerprintId` reads `data.eventId` FIRST, so a
+   * per-event unique id there would give every event a unique fingerprint and
+   * silently disable the D5 exactly-once claim that the `stableJsonHash`
+   * fallback provides — turning a dedupe guarantee off as a side effect of
+   * adding provenance. Pinned by
+   * `automation-trigger-matcher.fingerprint-provenance.test.ts`.
+   */
+  eventId?: string | null;
 }
 
 // Re-export the reactor registry surface so future reactions can register
@@ -151,6 +176,10 @@ const automationTriggerMatchReactor: Reactor = {
       userId: payload.userId,
       workspaceId: payload.workspaceId,
       data: payload.data,
+      // Provenance: WHICH `events` row this is. Top-level, never inside `data`
+      // — see the fingerprint warning on `SideEffectPayload.eventId`. Null for
+      // an emit with no log row, which is the honest answer, not a loss.
+      eventId: payload.eventId ?? null,
       automationContext: payload.automationContext,
       sessionId: payload.sessionId ?? null,
       // CONFUSED-DEPUTY GUARD: carry the event's ACTOR as the causal-chain

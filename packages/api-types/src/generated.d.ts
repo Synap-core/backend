@@ -1902,6 +1902,31 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * `agentType`, so a loop-authored playbook run keeps the "meta" default.
 		 */
 		agentType?: string;
+		/**
+		 * GOAL OVERRIDE — what the spawned session is FOR, stated by the NODE
+		 * instead of inherited from the playbook's own `goalTemplate`.
+		 *
+		 * Absent (every node authored before this field existed) ⇒ unchanged: the
+		 * playbook's `goalTemplate` is what the session's agent reads. Present ⇒ it
+		 * replaces that template wholesale, and is resolved by the SAME resolver in
+		 * the SAME two grammars — `{{trigger.payload.*}}` / `{{steps.*}}` against
+		 * the automation StepContext (`executePlaybookRun`'s `goalResolver`) and
+		 * `@{arg:name:type}` against the resolved params (`resolveGoal`, reached via
+		 * `runPlaybook`'s `goalTemplateOverride`). There is deliberately no second
+		 * interpolator: a goal that resolved differently from a goalTemplate would
+		 * be a fork of the template grammar.
+		 *
+		 * Producer: the rule-sentence grammar's `__goal` bookkeeping key
+		 * (packages/types/src/automations/sentence.ts) and the app-side writer
+		 * (`makePlaybookRunAction`, @synap/automation-intent).
+		 *
+		 * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
+		 * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
+		 * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
+		 * to pass through, so a loop/cron-authored playbook run keeps the
+		 * playbook's own goalTemplate.
+		 */
+		goalOverride?: string;
 		errorHandling?: NodeErrorHandling;
 	};
 }
@@ -2141,6 +2166,23 @@ export type MessageLink = typeof messageLinks.$inferSelect;
  */
 export type McpTransport = "stdio" | "http";
 export type McpStatus = "connected" | "disconnected" | "error" | "unknown";
+/** How the pod authenticates to an HTTP MCP server (0257). */
+export interface McpServerAuth {
+	/** `vault://<secretId>` — resolved server-side, never persisted in clear. */
+	credentialRef: string;
+	/** Header name, e.g. "Authorization". */
+	header: string;
+	/** Prepended to the secret, e.g. "Bearer ". */
+	prefix?: string;
+}
+/**
+ * Tool governance for an MCP server (0257). `default` applies to every tool not
+ * named in `inline`. Absent policy = `{ default: "governed" }`.
+ */
+export interface McpToolPolicy {
+	default: "governed" | "inline";
+	inline?: string[];
+}
 /**
  * Property Definitions Schema
  *
@@ -5838,15 +5880,6 @@ export interface ApprovalPatternScan {
 	funnel: ApprovalPatternFunnel;
 }
 /**
- * Shared external-action dispatcher — ONE implementation, two entry doors:
- *   1. Human-direct (immediate REST — operator IS the approval)
- *   2. Agent-approved (proposals.ts approve branch — proposal already past governance)
- *
- * Extracted here so the immediate hub paths and the proposal-approval path call
- * the SAME connector.sendMessage / connector.triggerAction — no duplicate sends,
- * no implementation drift.
- */
-/**
  * P1 "every failure carries a next action" — the machine-readable failure class a
  * dispatch failure is stamped with (alongside the human `error` string), so the
  * browser can derive a one-click action ("Reconnect Google", "Retry", "Connect X")
@@ -5938,6 +5971,13 @@ export interface ProposalExecutorResult {
 	 * field exists to stop, so an entry without a reason is worse than none.
 	 */
 	refusals?: string[];
+	/**
+	 * Relation ops of an approved composite graph that did NOT land, each with
+	 * the reason the create door gave. Entities are created before edges and each
+	 * edge fails ALONE, so `success: true` with a non-empty list is a PARTIAL
+	 * application. Omitted when every submitted edge landed.
+	 */
+	relationsFailed?: MaterializeRelationFailure[];
 }
 declare const SystemEventTypes: {
 	readonly WEBHOOK_DELIVERY: "webhooks.deliver.requested";
@@ -13173,6 +13213,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					success: boolean;
 					error?: string;
 					errorCode?: import("@trpc/server").TRPCError["code"];
+					relationsFailed?: ProposalExecutorResult["relationsFailed"];
 				}[];
 			};
 			meta: object;
@@ -16409,7 +16450,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					toolName: string;
 					verbName: string;
-					method: "POST" | "GET" | "PUT" | "PATCH" | "DELETE";
+					method: "POST" | "DELETE" | "GET" | "PUT" | "PATCH";
 					pathTemplate: string;
 					description?: string | undefined;
 					query?: Record<string, string | string[]> | undefined;
@@ -22351,6 +22392,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					command: string | null;
 					args: string[];
 					env: Record<string, string>;
+					auth: McpServerAuth | null;
+					toolPolicy: McpToolPolicy | null;
 					lastPingAt: Date | null;
 				}[];
 			};
@@ -22387,6 +22430,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					command: string | null;
 					args: string[];
 					env: Record<string, string>;
+					auth: McpServerAuth | null;
+					toolPolicy: McpToolPolicy | null;
 					lastPingAt: Date | null;
 				};
 			};
@@ -22418,6 +22463,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					args: string[];
 					url: string | null;
 					env: Record<string, string>;
+					auth: McpServerAuth | null;
+					toolPolicy: McpToolPolicy | null;
 					enabled: boolean;
 					approved: boolean;
 					status: McpStatus;
@@ -22447,6 +22494,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					args: string[];
 					url: string | null;
 					env: Record<string, string>;
+					auth: McpServerAuth | null;
+					toolPolicy: McpToolPolicy | null;
 					enabled: boolean;
 					approved: boolean;
 					status: McpStatus;
@@ -22475,6 +22524,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					args: string[];
 					url: string | null;
 					env: Record<string, string>;
+					auth: McpServerAuth | null;
+					toolPolicy: McpToolPolicy | null;
 					enabled: boolean;
 					approved: boolean;
 					status: McpStatus;
@@ -23236,6 +23287,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				viewProposalIds?: string[] | undefined;
+				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
 				created: number;
@@ -23332,6 +23384,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				viewProposalIds?: string[] | undefined;
+				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				workspaceId: string | null;
 				source: ImportRevealSource;
 				created: number;
@@ -23953,7 +24006,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		addPeer: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				peerPodUrl: string;
-				direction: "push" | "bidirectional" | "pull" | "inbound";
+				direction: "push" | "bidirectional" | "inbound" | "pull";
 				label?: string | undefined;
 				authToken?: string | undefined;
 				workspaceIds?: string[] | undefined;
@@ -25032,6 +25085,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 					subjectEntityId: string | null;
 					triggeredBy: string | null;
+					triggerEventId: string | null;
 					triggerPayload: Record<string, unknown>;
 					status: "failed" | "cancelled" | "completed" | "running" | "skipped" | "blocked_by_policy";
 					errorMessage: string | null;
@@ -25068,6 +25122,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outputSummary: Record<string, unknown> | null;
 					automationId: string;
 					triggeredBy: string | null;
+					triggerEventId: string | null;
 					triggerPayload: Record<string, unknown>;
 					stepsCompleted: number;
 					stepsFailed: number;
@@ -25974,7 +26029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | string[] | null | undefined;
 				projectId?: string | string[] | null | undefined;
-				status?: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale" | "all" | undefined;
+				status?: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale" | ("active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale")[] | "all" | undefined;
 				limit?: number | undefined;
 				edges?: boolean | undefined;
 				lens?: "default" | "all" | "triage" | undefined;

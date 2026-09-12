@@ -1392,6 +1392,11 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0214_automation_run_path_taken.sql",
   },
   {
+    table: "automation_runs",
+    column: "trigger_event_id",
+    addedBy: "0256_automation_runs_trigger_event_id.sql",
+  },
+  {
     table: "mcp_servers",
     column: "auth",
     addedBy: "0257_mcp_servers_auth_and_tool_policy.sql",

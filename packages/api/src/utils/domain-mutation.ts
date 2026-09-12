@@ -113,6 +113,21 @@ export async function recordDomainMutation(
     subjectId: opts.subjectId,
     userId: opts.userId,
     workspaceId: opts.workspaceId,
+    // PROVENANCE — the `events` row id this fan-out is about. THIS is the door
+    // that makes `automation_runs.trigger_event_id` (0256) non-NULL: the log
+    // append above is already awaited, so its `EventRecord` is in hand here and
+    // naming it costs no extra query. Nothing else on the first-party path
+    // could supply it — `emitSideEffects` has no events row of its own, which
+    // is exactly why the column read NULL for every event-fired run.
+    //
+    // `null` when the best-effort append failed: an emit with no log row must
+    // claim no event rather than a stale or guessed one.
+    //
+    // ⚠️ TOP-LEVEL, never `data.eventId` — that key is the first thing
+    // `resolveAutomationEventFingerprintId` reads, so a unique id there would
+    // give every event a unique fingerprint and silently disable the
+    // exactly-once claim. See `SideEffectPayload.eventId`.
+    eventId: record?.id ?? null,
     sessionId: opts.sessionId ?? null,
     automationContext: opts.automationContext,
     data: opts.data,

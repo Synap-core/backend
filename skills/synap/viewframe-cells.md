@@ -182,7 +182,7 @@ await SynapWidget.mutate("delete_entity", { id: "uuid" });
 await SynapWidget.mutate("create_relation", {
   sourceEntityId: "uuid-a",
   targetEntityId: "uuid-b",
-  type: "related_to",
+  type: "relates_to",
 });
 ```
 

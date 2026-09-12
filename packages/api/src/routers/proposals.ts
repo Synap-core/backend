@@ -114,6 +114,7 @@ export {
   type GovernanceWidenLaneProposalData,
   type GovernanceTightenLaneProposalData,
 } from "./proposals/apply-approval.js";
+import type { ProposalExecutorResult } from "./proposals/execution-registry.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -2296,6 +2297,8 @@ export const proposalsRouter = router({
         success: boolean;
         error?: string;
         errorCode?: TRPCError["code"];
+        /** Edges of an approved graph that did not land — see ProposalExecutorResult. */
+        relationsFailed?: ProposalExecutorResult["relationsFailed"];
       }> = [];
 
       for (const proposalId of input.proposalIds) {
@@ -2390,7 +2393,13 @@ export const proposalsRouter = router({
             ctx,
           });
           if (result.success) {
-            results.push({ proposalId, success: true });
+            results.push({
+              proposalId,
+              success: true,
+              ...(result.relationsFailed?.length
+                ? { relationsFailed: result.relationsFailed }
+                : {}),
+            });
           } else {
             // The shared door returned a falsy `success` WITHOUT throwing, so
             // there is no `TRPCError` to read a code off. This is the one

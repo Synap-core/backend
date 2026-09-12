@@ -85,6 +85,34 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
     expect(meta.automationRunId).toBe("run-1");
   });
 
+  it("stamps the triggering event id NESTED, never as a top-level key (0256)", () => {
+    // The session's answer to "which fact am I here because of". NESTED under
+    // `automationChainContext` deliberately: `session-kind.ts` classifies a row
+    // as `kind:'run'` from the TOP-LEVEL automation keys, so a new sibling up
+    // there is a classification hazard for no gain.
+    const meta = buildRunSessionMetadata({
+      chainContext: { ...chain, triggerEventId: "evt-1" },
+      forceProposeWrites: false,
+    });
+    expect(
+      (meta.automationChainContext as Record<string, unknown>).triggerEventId
+    ).toBe("evt-1");
+    expect("triggerEventId" in meta).toBe(false);
+  });
+
+  it("OMITS triggerEventId when the run had no triggering event", () => {
+    // A cron / manual / webhook run has no event row. Absent, not null: an
+    // explicit null would read as "the event was lost" rather than "none".
+    const meta = buildRunSessionMetadata({
+      chainContext: chain,
+      forceProposeWrites: false,
+    });
+    expect(
+      "triggerEventId" in
+        (meta.automationChainContext as Record<string, unknown>)
+    ).toBe(false);
+  });
+
   it("defaults chainDepth/rootRunId/chainAutomationIds like the old jobs stamp", () => {
     const meta = buildRunSessionMetadata({
       chainContext: {

@@ -398,6 +398,15 @@ export const observationsRouter = router({
                 userId,
                 workspaceId: workspaceId ?? null,
                 data: event.data,
+                // PROVENANCE — the recorded observation's own row. It was
+                // already in hand here (`row.id`, returned by the insert above)
+                // and was dropped, which is why a run fired by an observation
+                // could not name the fact that fired it. Top-level, never
+                // inside `data`: `resolveAutomationEventFingerprintId` reads
+                // `data.eventId` first, and a unique id there would give every
+                // observation a unique fingerprint and disable the
+                // exactly-once claim.
+                eventId: row.id,
                 // The producing agent, so a fired automation's THEN-actions are
                 // governed against it (proposal, never an ungoverned effect).
                 // Null for a human producer → owner-only governance, unchanged.

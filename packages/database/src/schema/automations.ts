@@ -773,6 +773,31 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * `agentType`, so a loop-authored playbook run keeps the "meta" default.
      */
     agentType?: string;
+    /**
+     * GOAL OVERRIDE — what the spawned session is FOR, stated by the NODE
+     * instead of inherited from the playbook's own `goalTemplate`.
+     *
+     * Absent (every node authored before this field existed) ⇒ unchanged: the
+     * playbook's `goalTemplate` is what the session's agent reads. Present ⇒ it
+     * replaces that template wholesale, and is resolved by the SAME resolver in
+     * the SAME two grammars — `{{trigger.payload.*}}` / `{{steps.*}}` against
+     * the automation StepContext (`executePlaybookRun`'s `goalResolver`) and
+     * `@{arg:name:type}` against the resolved params (`resolveGoal`, reached via
+     * `runPlaybook`'s `goalTemplateOverride`). There is deliberately no second
+     * interpolator: a goal that resolved differently from a goalTemplate would
+     * be a fork of the template grammar.
+     *
+     * Producer: the rule-sentence grammar's `__goal` bookkeeping key
+     * (packages/types/src/automations/sentence.ts) and the app-side writer
+     * (`makePlaybookRunAction`, @synap/automation-intent).
+     *
+     * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
+     * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
+     * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
+     * to pass through, so a loop/cron-authored playbook run keeps the
+     * playbook's own goalTemplate.
+     */
+    goalOverride?: string;
     errorHandling?: NodeErrorHandling;
   };
 }
@@ -970,6 +995,24 @@ export const automationRuns = pgTable(
     /** Entity the run was explicitly launched about, when applicable. */
     subjectEntityId: uuid("subject_entity_id"),
     triggeredBy: text("triggered_by"), // userId or "system"
+
+    /**
+     * The `events` row that fired this run (0256). NULL for a cron, manual or
+     * webhook run — those have no triggering event row at all — and for every
+     * run that predates the column.
+     *
+     * `triggered_by` says WHO and `trigger_payload` says roughly WHAT, but
+     * neither is a POINTER: the payload is an envelope the matcher rebuilt, not
+     * the immutable audit record with its own actor, `proposal_id`,
+     * `session_id` and timestamp. This column is the forward edge of the pair
+     * whose reverse edge is `events.session_id` (0241), so a spawned session
+     * can be walked back to the fact that caused it and vice-versa.
+     *
+     * Soft reference, no FK — same reasoning as the sibling `subjectEntityId`:
+     * `events` is an append-only spine subject to retention pruning, and run
+     * provenance must neither block a prune nor be silently rewritten by one.
+     */
+    triggerEventId: uuid("trigger_event_id"),
 
     triggerPayload: jsonb("trigger_payload")
       .$type<Record<string, unknown>>()

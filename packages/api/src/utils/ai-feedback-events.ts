@@ -39,6 +39,12 @@ export async function emitAiDecision(opts: {
   userId: string;
   workspaceId?: string | null;
   correlationId: string;
+  /**
+   * The focus session this decision belongs to → the event row's `session_id`
+   * COLUMN (0241), forwarded to the ONE event writer. Absent → the decision
+   * happened outside any session; NEVER synthesise one.
+   */
+  sessionId?: string | null;
   data: Record<string, unknown> & { kind: string };
 }): Promise<void> {
   try {
@@ -50,6 +56,7 @@ export async function emitAiDecision(opts: {
       subjectId: randomUUID(),
       userId: opts.userId,
       workspaceId: opts.workspaceId ?? null,
+      sessionId: opts.sessionId ?? null,
       source: "api",
       correlationId: opts.correlationId,
       data: opts.data,

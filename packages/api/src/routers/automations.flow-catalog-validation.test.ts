@@ -10,6 +10,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   selectResults: [] as Array<Array<{ id: string; name: string }>>,
+  /**
+   * Playbook rows the SCOPED read returns.
+   *
+   * Kept separate from `selectResults` because the two doors are no longer the
+   * same door: skills still go through `database.select(...)`, while playbook
+   * REFERENCES now resolve through `scopedDb(...).findMany(playbooks, …)` — the
+   * canonical read door, so the validator and the THEN picker cannot disagree
+   * about which playbooks exist (they did: the picker offered 22 at pod
+   * altitude and the validator, narrowed to `workspace_id IS NULL`, accepted
+   * none). A single shared queue would have hidden that split behind ordering.
+   */
+  playbookRows: [] as Array<{ id: string; name: string }>,
   insertValues: [] as Array<Record<string, unknown>>,
   updateSets: [] as Array<Record<string, unknown>>,
   permissionCalls: 0,
@@ -36,6 +48,18 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The visibility registry resolves `playbooks` through the MODULE-LEVEL
+    // `db` (`query: () => db.query.playbooks`), not through `getDb()`, so the
+    // getDb stub below cannot intercept the scoped playbook read. Overriding
+    // `db.query.playbooks` is what keeps this suite off a real Postgres.
+    db: {
+      ...(actual.db as unknown as Record<string, unknown>),
+      query: {
+        ...((actual.db as unknown as { query?: Record<string, unknown> })
+          .query ?? {}),
+        playbooks: { findMany: vi.fn(async () => h.playbookRows) },
+      },
+    },
     // Feeds the REAL `assertWorkspaceWrite` (see below — it is deliberately NOT
     // mocked), so the write floor under `update` is exercised, not stubbed away.
     getWorkspaceMembership: vi.fn(async () => h.membership),
@@ -118,6 +142,27 @@ const UNKNOWN_REFERENCES_FLOW = {
   edges: [],
 };
 
+/**
+ * A flow whose ONLY unresolvable reference is the playbook.
+ *
+ * ⚠️ MEASURED HOLE this closes. `UNKNOWN_REFERENCES_FLOW` carries an unknown
+ * verb, skill AND playbook, and the assertions below pin only `missing.verb` —
+ * so the whole suite stayed GREEN with `playbookExists` mutated to `() => true`
+ * (verified by mutating it and grepping the changed line). The playbook lane
+ * was never guarded here; the skill error simply arrived first. A flow with
+ * nothing else wrong is the input that tells the two rules apart.
+ */
+const UNKNOWN_PLAYBOOK_ONLY_FLOW = {
+  nodes: [
+    {
+      id: "playbook-step",
+      type: "playbook_run",
+      data: { playbookId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" },
+    },
+  ],
+  edges: [],
+};
+
 const VALID_DATA_CONTRACT = {
   version: 1 as const,
   mode: "react" as const,
@@ -143,6 +188,7 @@ const VALID_DATA_CONTRACT = {
 
 beforeEach(() => {
   h.selectResults.length = 0;
+  h.playbookRows.length = 0;
   h.insertValues.length = 0;
   h.updateSets.length = 0;
   h.permissionCalls = 0;
@@ -195,9 +241,11 @@ describe("automations.update — the write floor is real", () => {
 
 describe("automations flow catalog validation", () => {
   it("rejects unknown capability verbs, skills, and playbooks before create writes or proposes", async () => {
-    // One bounded skills lookup, then one bounded playbooks lookup; neither
-    // returns a match for the three submitted references.
-    h.selectResults.push([], []);
+    // One bounded skills lookup (raw select) and one bounded playbook lookup
+    // (the scoped read door); neither returns a match for the three submitted
+    // references.
+    h.selectResults.push([]);
+    h.playbookRows.length = 0;
 
     await expect(
       caller().create({
@@ -289,8 +337,54 @@ describe("automations flow catalog validation", () => {
     expect(h.permissionCalls).toBe(0);
   });
 
+  it("rejects an unknown PLAYBOOK on its own, with nothing else wrong", async () => {
+    // The discriminating input. Without it, `playbookExists` could return a
+    // constant `true` and every assertion in this file would still pass.
+    h.selectResults.push([]);
+    h.playbookRows.length = 0;
+
+    await expect(
+      caller().create({
+        workspaceId: WORKSPACE_ID,
+        name: "Playbook-only automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+    });
+
+    expect(h.insertValues).toHaveLength(0);
+  });
+
+  it("ACCEPTS that same playbook once the scoped read returns it", async () => {
+    // The other half: proves the rejection above is about RESOLUTION, not about
+    // playbook_run nodes being refused outright.
+    h.selectResults.push([]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Existing playbook",
+    });
+
+    const result = await caller().create({
+      // No `workspaceId` — same as the sibling accept case below. A
+      // workspace-scoped create continues past validation into
+      // `verifyPermission`, which this suite's db mock does not stand up; the
+      // point here is the RESOLUTION outcome, not the permission path.
+      name: "Playbook-only automation",
+      triggerType: "manual",
+      triggerConfig: {},
+      flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+    });
+
+    expect(result.status).toBe("created");
+  });
+
   it("rejects the same unknown references before update persists", async () => {
-    h.selectResults.push([], []);
+    h.selectResults.push([]);
+    h.playbookRows.length = 0;
 
     await expect(
       caller().update({
@@ -418,15 +512,13 @@ describe("automations flow catalog validation", () => {
   });
 
   it("allows references returned by the scoped catalog lookups", async () => {
-    h.selectResults.push(
-      [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "missing.verb" }],
-      [
-        {
-          id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-          name: "Existing playbook",
-        },
-      ]
-    );
+    h.selectResults.push([
+      { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "missing.verb" },
+    ]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Existing playbook",
+    });
 
     const result = await caller().create({
       name: "Valid automation",

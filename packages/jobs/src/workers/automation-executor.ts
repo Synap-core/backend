@@ -1219,6 +1219,7 @@ async function executeAutomationFlow(params: {
                             playbookName?: string;
                             paramsMapping?: Record<string, string>;
                             agentType?: string;
+                            goalOverride?: string;
                             mode?: "run" | "appointment";
                           },
                           context,
@@ -1719,6 +1720,8 @@ async function executeAutomationFlow(params: {
                 paramsMapping?: Record<string, string>;
                 /** Agent selector (`agents.slug`); absent ⇒ default orchestrator. */
                 agentType?: string;
+                /** The rule's own goal for the spawned session; absent ⇒ the playbook's. */
+                goalOverride?: string;
                 /** `"appointment"` ⇒ materialize a `scheduled` session, don't run. */
                 mode?: "run" | "appointment";
               };
@@ -1737,6 +1740,11 @@ async function executeAutomationFlow(params: {
                   // field-by-field, so an unlisted node field is dropped here even
                   // though it survives the loop-child path's wholesale cast.
                   agentType: data.agentType,
+                  // Same hazard, same fix — an unlisted field is dropped HERE
+                  // while the loop-child path's wholesale cast keeps it, so the
+                  // identical node would carry the rule's goal inside a loop and
+                  // silently fall back to the playbook's at the top level.
+                  goalOverride: data.goalOverride,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant

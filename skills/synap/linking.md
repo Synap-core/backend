@@ -74,7 +74,7 @@ String-typed, case-insensitive by convention. Use these first before inventing n
 
 | Type           | Direction       | When                                              |
 | -------------- | --------------- | ------------------------------------------------- |
-| `related_to`   | bidirectional   | Generic association, no stronger label fits       |
+| `relates_to`   | bidirectional   | Generic association, no stronger label fits       |
 | `parent_of`    | source → target | Hierarchy (project parent of sub-project)         |
 | `child_of`     | source → target | Hierarchy (inverse of parent_of)                  |
 | `belongs_to`   | source → target | Membership                                        |
@@ -87,7 +87,7 @@ String-typed, case-insensitive by convention. Use these first before inventing n
 | `from_meeting` | source → target | Any entity extracted from a meeting/event         |
 | `anchored_in`  | source → target | Anchor (pinned chat message) in a channel         |
 
-If none fits, invent a snake_case verb. Keep it short and symmetric with existing verbs. Don't create `related-to-this-specific-thing` — prefer a generic `related_to` plus a more specific property or document.
+If none fits, invent a snake_case verb. Keep it short and symmetric with existing verbs. Don't create `related-to-this-specific-thing` — prefer a generic `relates_to` plus a more specific property or document.
 
 ## Decision table
 
@@ -125,5 +125,5 @@ GET /api/hub/graph/traverse?entityId={id}&maxDepth=2
 - **Spinning up a new project instead of linking into an existing one.** A project is a **commitment with gravity**, not a folder for a task, plan, repo, or theme (those are entities). Before `create_project`, search existing projects and file the entity into one via `belongs_to_project` (Way 1 `projectId`, or Way 2 relation). Near-duplicate project names are rejected server-side with the existing candidates, and an agent-created project also requires **≥5 existing entities** as evidence.
 - **Creating an orphan, then forgetting to link it.** Every `POST /entities` should include properties that link, OR be immediately followed by a `POST /relations`. Never close the operation with a disconnected node.
 - **Double-linking.** If you set `properties.projectId` AND also `POST /relations` with type `belongs_to_project`, the auto-sync already did it. Don't duplicate.
-- **Using `related_to` when a specific verb fits.** `related_to` is the fallback. `authored_by`, `depends_on`, `references` carry more meaning to both the user and downstream views.
+- **Using `relates_to` when a specific verb fits.** `relates_to` is the fallback. `authored_by`, `depends_on`, `references` carry more meaning to both the user and downstream views.
 - **Inverting direction.** Source is "the thing doing the action or owning the relationship." `task depends_on task` means the source is blocked by the target. Check twice.

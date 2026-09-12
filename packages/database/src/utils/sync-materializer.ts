@@ -550,7 +550,10 @@ async function materializeRelation(
         workspaceId: (data.workspaceId as string) ?? null,
         sourceEntityId: data.sourceEntityId as string,
         targetEntityId: data.targetEntityId as string,
-        type: (data.type as string) ?? "related_to",
+        // `relates_to` is a real default relation def; `related_to` never was.
+        // NB this is a direct insert — the type is NOT validated against
+        // relation_defs here (see relations.create for the validated door).
+        type: (data.type as string) ?? "relates_to",
         metadata: data.metadata ?? {},
       })
       // UNTARGETED on purpose. A targeted `ON CONFLICT (id)` arbitrates the

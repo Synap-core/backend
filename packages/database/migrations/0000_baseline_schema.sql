@@ -2322,6 +2322,7 @@ ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "definition_snapshot" jso
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;  -- 0198 (replay lineage; soft self-ref)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "summary_message_id" uuid;  -- 0199 (run-narration summary claim slot; soft ref to messages.id)
 ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "path_taken" jsonb;  -- 0214 (per-run traversed/pruned edge ids; NULL = unknown)
+ALTER TABLE "automation_runs" ADD COLUMN IF NOT EXISTS "trigger_event_id" uuid;  -- 0256 (the events row that fired this run; NULL = cron/manual/webhook, or no event claimed)
 
 CREATE INDEX IF NOT EXISTS "automation_runs_automation_id_idx"
   ON "automation_runs" ("automation_id");
@@ -2334,6 +2335,11 @@ CREATE INDEX IF NOT EXISTS "automation_runs_started_at_idx"
 
 CREATE INDEX IF NOT EXISTS "automation_runs_subject_entity_id_idx"
   ON "automation_runs" ("subject_entity_id");
+
+-- 0256 — partial (NOT NULL): most runs carry no triggering event row.
+CREATE INDEX IF NOT EXISTS "idx_automation_runs_trigger_event_id"
+  ON "automation_runs" ("trigger_event_id")
+  WHERE "trigger_event_id" IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS "automation_step_runs" (
   "id"               uuid  PRIMARY KEY DEFAULT gen_random_uuid(),

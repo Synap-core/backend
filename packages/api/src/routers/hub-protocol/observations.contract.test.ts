@@ -28,6 +28,27 @@ const appended: any[] = [];
 // export, and this module graph pulls in far more of @synap/database than the
 // event repository — the suite then fails to collect with "No X export is
 // defined on the mock", which reads as a broken test rather than a broken mock.
+/**
+ * The UNIFIED TRIGGER HOP. `observations.ts` enqueues `automation-trigger-match`
+ * itself (deliberately NOT through `emitSideEffects`), and that send is wrapped
+ * in a try/catch so a boss failure never flips a RECORDED fact to `ok:false` —
+ * which also means nothing here observed it until now. Captured so the
+ * provenance field below is asserted on the real send.
+ */
+const triggerSends: Array<[string, any]> = [];
+vi.mock("@synap/events", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    getBoss: () => ({
+      send: async (queue: string, payload: any) => {
+        triggerSends.push([queue, payload]);
+        return null;
+      },
+    }),
+  };
+});
+
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -351,5 +372,48 @@ describe("observations.append — workspace tagging is clamped, never trusted", 
       appended[0].metadata,
       "do not write metadata the store discards — it reads back null"
     ).toBeUndefined();
+  });
+});
+
+describe("observations.append — the trigger hop names the event it recorded", () => {
+  /**
+   * `automation_runs.trigger_event_id` (0256) is only ever non-NULL because a
+   * producer names the event. This door ALREADY held `row.id` — the id the
+   * event store just returned — and dropped it, so a run fired by an
+   * observation could not be walked back to the observation.
+   */
+  it("forwards the recorded row's id as a TOP-LEVEL eventId", async () => {
+    appended.length = 0;
+    triggerSends.length = 0;
+    await callAppend([
+      { type: "dev.commit", subjectId: "repo:backend", data: { sha: "abc" } },
+    ]);
+
+    // Non-vacuity: the hop actually fired. Without this the assertions below
+    // would pass over an empty array if the enqueue were removed entirely.
+    const hop = triggerSends.find(([q]) => q === "automation-trigger-match");
+    expect(hop, "the unified trigger hop did not fire").toBeDefined();
+
+    // The stub returns `row-<n>` from `append`, so this ties the enqueued id to
+    // the row that was actually recorded rather than to a constant.
+    expect(hop![1].eventId).toBe("row-1");
+  });
+
+  it("never puts it inside `data` — that would disable the dedupe claim", async () => {
+    // `resolveAutomationEventFingerprintId` reads `data.eventId` FIRST. A
+    // per-event unique id there gives every observation a unique fingerprint,
+    // so the D5 exactly-once claim can never collide and silently stops
+    // deduping. Nothing throws; runs just start duplicating.
+    appended.length = 0;
+    triggerSends.length = 0;
+    await callAppend([
+      { type: "dev.commit", subjectId: "repo:backend", data: { sha: "abc" } },
+    ]);
+
+    const hop = triggerSends.find(([q]) => q === "automation-trigger-match");
+    expect(hop).toBeDefined();
+    expect(hop![1].data.eventId).toBeUndefined();
+    // …and the caller's own payload is untouched.
+    expect(hop![1].data.sha).toBe("abc");
   });
 });

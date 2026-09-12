@@ -81,6 +81,44 @@ function isDriverError(err: unknown): boolean {
   );
 }
 
+/**
+ * Postgres INTEGRITY violations (SQLSTATE class 23) — a DETERMINISTIC rejection,
+ * not a transient fault.
+ *
+ * 23503 foreign_key_violation · 23505 unique_violation · 23502 not_null_violation
+ * · 23514 check_violation · 23P01 exclusion_violation.
+ *
+ * WHY THIS IS ITS OWN BRANCH (measured 2026-09-12): every structured
+ * `synap_capture` create died on `entities_source_proposal_id_fkey` and the
+ * generic storage-fault text told the model "Retry once". That advice is WRONG
+ * for 23xxx: the same arguments against the same data will fail identically
+ * forever, so a retry is pure waste and — worse — makes a permanent defect read
+ * as flakiness to whoever reads the logs. The honest sentence names the class,
+ * says a retry changes nothing, and points at the one action that does help.
+ *
+ * DISCLOSURE: the CONSTRAINT NAME only. Never the query, the bound parameters,
+ * the failing row, or postgres's `detail` (which quotes the offending values).
+ * The name is schema vocabulary the agent can act on; the rest is caller data.
+ */
+const INTEGRITY_SQLSTATE_RE = /^23[0-9A-Z]{3}$/;
+/** Defensive: an identifier, capped — never a free-text field echoed onward. */
+const CONSTRAINT_NAME_RE = /^[A-Za-z0-9_.$]{1,120}$/;
+
+function integrityViolation(
+  err: unknown
+): { code: string; constraint?: string } | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as Record<string, unknown>;
+  if (typeof e.code !== "string" || !INTEGRITY_SQLSTATE_RE.test(e.code))
+    return null;
+  // postgres.js spells it `constraint_name`; node-postgres spells it
+  // `constraint`. Accept both rather than betting on the driver.
+  const raw = e.constraint_name ?? e.constraint;
+  const constraint =
+    typeof raw === "string" && CONSTRAINT_NAME_RE.test(raw) ? raw : undefined;
+  return constraint ? { code: e.code, constraint } : { code: e.code };
+}
+
 /** Flatten a ZodError into a capped, readable issue list (never the raw dump). */
 function zodIssues(err: unknown): string[] | null {
   if (!err || typeof err !== "object") return null;
@@ -103,6 +141,29 @@ export function toSafeToolError(
 ): CallToolResult {
   // Unwrap one level of `cause` so a wrapped driver error is still caught.
   const cause = (err as { cause?: unknown } | null)?.cause;
+
+  // Integrity violations are checked FIRST: they also satisfy isDriverError
+  // (they carry a SQLSTATE), so the generic storage branch below would otherwise
+  // swallow them and hand back the wrong "Retry once" advice.
+  const integrity = integrityViolation(err) ?? integrityViolation(cause);
+  if (integrity) {
+    logger.error(
+      { err, toolName, sqlstate: integrity.code },
+      "MCP tool failed a data-integrity rule (deterministic — not retryable)"
+    );
+    return toolError(
+      `Tool '${toolName}' was rejected by a data-integrity rule in the pod's database` +
+        (integrity.constraint ? ` (${integrity.constraint})` : "") +
+        `. Nothing was written. This is DETERMINISTIC — the same call will fail identically on retry, so do not retry it. ` +
+        `Either the arguments reference something that does not exist or conflicts with an existing row, or this is a pod-side defect. ` +
+        `Check the ids you passed resolve (synap_get_entity / synap_orient); if they do, call synap_diagnose() and report ` +
+        (integrity.constraint
+          ? `the constraint name above`
+          : `this tool call`) +
+        ` rather than retrying.`
+    );
+  }
+
   if (isDriverError(err) || isDriverError(cause)) {
     logger.error({ err, toolName }, "MCP tool failed with a driver error");
     return toolError(

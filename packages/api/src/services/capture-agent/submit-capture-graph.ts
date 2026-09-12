@@ -40,11 +40,13 @@ import {
   isNull,
   entities,
   projects,
+  proposals,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
 } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -80,6 +82,50 @@ import {
 } from "../import/structuring.js";
 
 const logger = createLogger({ module: "submit-capture-graph" });
+
+/**
+ * Run the materialization of an auto-applied capture graph under an ALREADY
+ * INSERTED `auto_approved` receipt row.
+ *
+ * The receipt has to exist before materialization (its id is the FK target of
+ * `entities.source_proposal_id` — see the ordering note at the call site), which
+ * means a materialization failure would otherwise leave a receipt CLAIMING a
+ * write that never happened: a lying, revertible record of nothing. So on a
+ * throw we mark that row `approval_failed` and re-throw. We never DELETE it —
+ * a partially-materialized graph may already have rows pointing at it, and a
+ * deleted receipt would silently NULL their `source_proposal_id` (the FK is
+ * ON DELETE SET NULL), erasing the very provenance this linkage exists for.
+ */
+async function runMaterializationUnderReceipt<T>(
+  receipt: { id?: string; data?: Record<string, unknown> } | undefined,
+  run: () => Promise<T>
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (receipt?.id) {
+      try {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVAL_FAILED,
+            data: {
+              ...(receipt.data ?? {}),
+              materializationError:
+                err instanceof Error ? err.message : String(err),
+            },
+          })
+          .where(eq(proposals.id, receipt.id));
+      } catch (markErr) {
+        logger.error(
+          { err: markErr, proposalId: receipt.id },
+          "capture auto-apply: could not mark receipt approval_failed — row may overstate what landed"
+        );
+      }
+    }
+    throw err;
+  }
+}
 
 /** One flagged create_entity op that fails its EFFECTIVE schema at propose time. */
 export interface CaptureGraphInvalidEntity {
@@ -750,97 +796,40 @@ export async function submitCaptureGraph(
       } else {
         // Pre-allocate the auto_approved receipt id BEFORE materializing, so the
         // `entity.create.completed` events the create door writes below can name
-        // the proposal that authorized them (`events.proposal_id`). The receipt
-        // row itself is inserted after materialization (it has to carry
-        // `data.materialized.entityIds` for revert) WITH THIS id — so the events
-        // and the row can never disagree. Until now the receipt was created with
-        // a fresh id afterwards and nothing linked it to the entities: every
+        // the proposal that authorized them (`events.proposal_id`), AND so the
+        // created rows can carry `entities.source_proposal_id = this id`. Until
+        // this linkage existed the receipt was created with a fresh id
+        // afterwards and nothing joined it to the entities: every
         // capture-created entity read as an authorizer-less write, and the object
         // graph's `via: "governed"` fold returned no proposal neighbour for it.
+        //
+        // ⚠️ ORDERING IS LOAD-BEARING — the id is a FOREIGN KEY, not a label.
+        // `entities.source_proposal_id → proposals(id)` has existed since
+        // migration 0107, and `entities.create` stamps it from
+        // `ctx.governanceProposalId`. Inserting the receipt AFTER materialization
+        // (as this did between 233112b3 and this fix) made the FIRST entity
+        // insert die with `entities_source_proposal_id_fkey` and roll the whole
+        // capture back — every structured MCP `synap_capture` write failed, and
+        // the MCP layer reported it as a "storage layer" fault.
+        //
+        // So: insert the receipt FIRST (with an empty materialized set), then
+        // materialize, then UPDATE the SAME row with the real ids. NO outer
+        // transaction wraps any of this — deliberately. `EntityRepository.create`
+        // opens its OWN `this.db.transaction` on the shared handle, so a receipt
+        // insert held open in an uncommitted outer tx would be invisible to the
+        // FK check inside it and fail exactly the same way. The receipt row must
+        // be COMMITTED before the first entity insert runs, which plain
+        // autocommit gives us.
         const captureProposalId = randomUUID();
-        const compositeCtx = {
-          db,
-          authenticated: true as const,
-          userId,
-          workspaceId,
-          workspaceRole: membershipRole,
-          sessionId: input.sessionId ?? null,
-          // Internal composite-caller channel read by `entities.create` — never
-          // set from HTTP. See the note at its recordDomainMutation call.
-          governanceProposalId: captureProposalId,
-        };
-        const { entitiesRouter } = await import("../../routers/entities.js");
-        const { relationsRouter } = await import("../../routers/relations.js");
-        const entityCaller = entitiesRouter.createCaller(
-          compositeCtx as unknown as Parameters<
-            typeof entitiesRouter.createCaller
-          >[0]
-        );
-        const relationCaller = relationsRouter.createCaller(
-          compositeCtx as unknown as Parameters<
-            typeof relationsRouter.createCaller
-          >[0]
-        );
 
-        const materialized = await materializeCompositeGraph(
-          operations,
-          entityCaller,
-          relationCaller,
-          (err, type) =>
-            logger.warn(
-              { err, type },
-              "capture auto-apply: relation create failed (entities kept)"
-            ),
-          {
-            source,
-            // Homes are per-op via stampScopeAwareHomesOnOps (targetWorkspaceId
-            // on workspace-scoped kinds only). Do NOT blanket workspaceScoped —
-            // that re-pinned pod identity into the graph home (folder prison).
-            // materializeCompositeGraph forces pin only when op.targetWorkspaceId
-            // is set; pod kinds stay null via entities.create entityScope.
-            // The composite ctx's `attachFacet` door — same governance context,
-            // so a policy-approved graph attaches facets directly.
-            facetCaller: entityCaller,
-            // Rule Loop callers — the SAME three canonical doors proposal
-            // approval wires. Without them a config op in an auto-applied
-            // graph would be silently dropped here while the identical graph
-            // materialized it on the approval path.
-            ...buildRuleLoopCallers({
-              database: db,
-              userId,
-              workspaceId: workspaceId ?? null,
-              auditSource: "rule_loop_capture_auto_apply",
-            }),
-            // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
-            // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
-            // the SAME graph is auto-applied twice (a retry that races the
-            // auto_approved record write, so the early proposal lookup missed
-            // it), the second materialize LINKS the already-created entities
-            // instead of duplicating them. userId-prefixed so a client-supplied
-            // key can't collide with another tenant on the global links index —
-            // exactly the pattern the tRPC capture door uses.
-            idempotency: makeExternalLinkIdempotency(db, {
-              namespace: `${userId}:${idempotencyKey}`,
-              provider: "capture",
-              userId,
-            }),
-          }
-        );
-        const materializedEntityIds = materialized.entities
-          .filter((e) => !e.linked)
-          .map((e) => e.entityId);
-
-        // Record the already-done write as a durable `auto_approved` proposal so
-        // it is traceable, shows in the Proposals app, and can be REVERTED
-        // (revert reads `data.materialized.entityIds`; proposalType
-        // `capture.graph` is the recognized auto-approved-capture shape). NOT
-        // `notifyProposalCreated` — an applied write is not a pending review
-        // item. Best-effort: a recording hiccup must never fail the
-        // already-committed capture.
-        let recordId: string | undefined;
+        // Receipt first. If this insert fails we must NOT stamp the id onto the
+        // writes — an id naming no row is the FK failure above. The graph then
+        // materializes unstamped (the capture still lands, just without the
+        // governance join), which is strictly better than losing the capture.
+        let captureReceipt:
+          { id?: string; data?: Record<string, unknown> } | undefined;
         try {
           const { proposal } = await createAutoApprovedProposal({
-            // The id the events above already name (see captureProposalId).
             id: captureProposalId,
             userId,
             reviewedBy: userId,
@@ -861,7 +850,12 @@ export async function submitCaptureGraph(
               source,
               graphSource: "capture",
               homes,
-              materialized: { entityIds: materializedEntityIds },
+              // Filled in by the UPDATE below, once materialization has told us
+              // what actually landed. Empty here is the HONEST value: nothing
+              // has been created yet. `revert` treats an empty set as "no
+              // materialized record" and refuses rather than deleting the wrong
+              // rows, so the sub-second window before the update is safe.
+              materialized: { entityIds: [] as string[] },
               // Stored so a re-submit of the same graph resolves to THIS record
               // via findPriorCaptureGraphProposal (queries data->>'idempotencyKey').
               idempotencyKey,
@@ -870,12 +864,123 @@ export async function submitCaptureGraph(
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
           });
-          recordId = (proposal as { id?: string })?.id;
+          captureReceipt = proposal as {
+            id?: string;
+            data?: Record<string, unknown>;
+          };
         } catch (err) {
           logger.warn(
             { err, userId },
-            "capture auto-apply: auto_approved record failed (capture preserved)"
+            "capture auto-apply: auto_approved receipt insert failed (materializing unstamped)"
           );
+        }
+
+        const compositeCtx = {
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId,
+          workspaceRole: membershipRole,
+          sessionId: input.sessionId ?? null,
+          // Internal composite-caller channel read by `entities.create` — never
+          // set from HTTP. See the note at its recordDomainMutation call.
+          // Only set when the receipt row EXISTS (FK, see above).
+          ...(captureReceipt?.id
+            ? { governanceProposalId: captureProposalId }
+            : {}),
+        };
+        const { entitiesRouter } = await import("../../routers/entities.js");
+        const { relationsRouter } = await import("../../routers/relations.js");
+        const entityCaller = entitiesRouter.createCaller(
+          compositeCtx as unknown as Parameters<
+            typeof entitiesRouter.createCaller
+          >[0]
+        );
+        const relationCaller = relationsRouter.createCaller(
+          compositeCtx as unknown as Parameters<
+            typeof relationsRouter.createCaller
+          >[0]
+        );
+
+        const materialized = await runMaterializationUnderReceipt(
+          captureReceipt,
+          () =>
+            materializeCompositeGraph(
+              operations,
+              entityCaller,
+              relationCaller,
+              (err, type) =>
+                logger.warn(
+                  { err, type },
+                  "capture auto-apply: relation create failed (entities kept)"
+                ),
+              {
+                source,
+                // Homes are per-op via stampScopeAwareHomesOnOps (targetWorkspaceId
+                // on workspace-scoped kinds only). Do NOT blanket workspaceScoped —
+                // that re-pinned pod identity into the graph home (folder prison).
+                // materializeCompositeGraph forces pin only when op.targetWorkspaceId
+                // is set; pod kinds stay null via entities.create entityScope.
+                // The composite ctx's `attachFacet` door — same governance context,
+                // so a policy-approved graph attaches facets directly.
+                facetCaller: entityCaller,
+                // Rule Loop callers — the SAME three canonical doors proposal
+                // approval wires. Without them a config op in an auto-applied
+                // graph would be silently dropped here while the identical graph
+                // materialized it on the approval path.
+                ...buildRuleLoopCallers({
+                  database: db,
+                  userId,
+                  workspaceId: workspaceId ?? null,
+                  auditSource: "rule_loop_capture_auto_apply",
+                }),
+                // RE-SUBMIT IDEMPOTENCY (piece 1a): key every created entity in the
+                // external-link store by `${userId}:${idempotencyKey}:${op.ref}`. If
+                // the SAME graph is auto-applied twice (a retry that races the
+                // auto_approved record write, so the early proposal lookup missed
+                // it), the second materialize LINKS the already-created entities
+                // instead of duplicating them. userId-prefixed so a client-supplied
+                // key can't collide with another tenant on the global links index —
+                // exactly the pattern the tRPC capture door uses.
+                idempotency: makeExternalLinkIdempotency(db, {
+                  namespace: `${userId}:${idempotencyKey}`,
+                  provider: "capture",
+                  userId,
+                }),
+              }
+            )
+        );
+        const materializedEntityIds = materialized.entities
+          .filter((e) => !e.linked)
+          .map((e) => e.entityId);
+
+        // Complete the receipt inserted BEFORE materialization: fill in what
+        // actually landed, so the row is traceable, shows in the Proposals app,
+        // and can be REVERTED (revert reads `data.materialized.entityIds`;
+        // proposalType `capture.graph` is the recognized auto-approved-capture
+        // shape). An UPDATE, not a second insert — the row already exists and
+        // the created entities' `source_proposal_id` points at it. Merged over
+        // the row's OWN stored `data` so the fields the recorder folded in
+        // (correlationId, requestedEventId, summary) survive. Best-effort: a
+        // recording hiccup must never fail the already-committed capture.
+        let recordId: string | undefined = captureReceipt?.id;
+        if (captureReceipt?.id) {
+          try {
+            await db
+              .update(proposals)
+              .set({
+                data: {
+                  ...(captureReceipt.data ?? {}),
+                  materialized: { entityIds: materializedEntityIds },
+                },
+              })
+              .where(eq(proposals.id, captureReceipt.id));
+          } catch (err) {
+            logger.warn(
+              { err, userId, proposalId: captureReceipt.id },
+              "capture auto-apply: receipt materialized-ids update failed (capture preserved)"
+            );
+          }
         }
 
         return {

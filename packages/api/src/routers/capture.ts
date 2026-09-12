@@ -2039,17 +2039,17 @@ export const captureRouter = router({
       // (content→document routing, retry-as-item, relation-slug fallback).
 
       // Prefetch valid relation slugs for this workspace (avoids N+1).
-      // Workspace-less callers (hydration) get the fallback only.
+      // Workspace-less callers (hydration) resolve against the pod-wide layer.
       const relDefRepo = new RelationDefRepository(database);
       let validRelationSlugs: Set<string>;
-      if (workspaceId) {
-        try {
-          const allDefs = await relDefRepo.list(workspaceId);
-          validRelationSlugs = new Set(allDefs.map((d) => d.slug));
-        } catch {
-          validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
-        }
-      } else {
+      // `list(null)` is the POD-WIDE base layer (workspace_id IS NULL);
+      // `list(ws)` is that workspace's defs PLUS the base layer. A workspace-less
+      // caller used to get `{relates_to}` alone, so every real default slug it
+      // sent was silently coerced to the fallback.
+      try {
+        const allDefs = await relDefRepo.list(workspaceId ?? null);
+        validRelationSlugs = new Set(allDefs.map((d) => d.slug));
+      } catch {
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 
@@ -3738,14 +3738,14 @@ export const captureRouter = router({
       // EntityUpsertService dedup). tempToReal IS a ref→realId map (ref=tempId).
       const relDefRepo = new RelationDefRepository(database);
       let validRelationSlugs: Set<string>;
-      if (workspaceId) {
-        try {
-          const allDefs = await relDefRepo.list(workspaceId);
-          validRelationSlugs = new Set(allDefs.map((d) => d.slug));
-        } catch {
-          validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
-        }
-      } else {
+      // `list(null)` is the POD-WIDE base layer (workspace_id IS NULL);
+      // `list(ws)` is that workspace's defs PLUS the base layer. A workspace-less
+      // caller used to get `{relates_to}` alone, so every real default slug it
+      // sent was silently coerced to the fallback.
+      try {
+        const allDefs = await relDefRepo.list(workspaceId ?? null);
+        validRelationSlugs = new Set(allDefs.map((d) => d.slug));
+      } catch {
         validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
       }
 

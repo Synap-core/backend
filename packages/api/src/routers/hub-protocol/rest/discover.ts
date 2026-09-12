@@ -15,6 +15,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { resolvePropertyLabel, resolvePropertyOptions } from "@synap/database";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -41,6 +42,144 @@ const DiscoverPropertySchema = z.object({
     .describe("base = global/profile definition; workspace = explicit overlay"),
   workspaceId: z.string().nullable().optional(),
 });
+
+/**
+ * Project ONE effective property def onto the wire shape above.
+ *
+ * Exported (and pure) so the schema-door ⇄ write-validator parity tripwire can
+ * drive the REAL projection instead of hand-building its output — the seam is
+ * the thing that broke, so the seam is what the guard must cross.
+ *
+ * `options` and `displayName` come from the ONE shared resolver
+ * (`resolvePropertyOptions` / `resolvePropertyLabel`, `@synap/database`). Until
+ * 2026-09-12 this block read `constraints.options` / `uiHints.options` /
+ * `uiHints.displayName` — three keys nothing in this codebase writes — while
+ * the seeds write `constraints.enum` and `uiHints.label`. The consequence was
+ * measured on the live pod: the `options` field that `DiscoverPropertySchema`
+ * documents as "Valid values for select/enum types" was ABSENT on every
+ * property of every profile, and every `displayName` was the raw slug. An
+ * agent read `decision`, saw `status` as a free string, wrote `"open"`, and was
+ * rejected by a validator quoting an enum the door never showed it.
+ *
+ * The resolver reads the validator's key (`constraints.enum`) FIRST and keeps
+ * the old spellings as fallbacks, so this is strictly widening: a custom def
+ * already authored with `options` is unaffected.
+ */
+export function toDiscoverProperty(d: Record<string, unknown>) {
+  const constraints =
+    d.constraints && typeof d.constraints === "object"
+      ? (d.constraints as Record<string, unknown>)
+      : undefined;
+  const uiHints =
+    d.uiHints && typeof d.uiHints === "object"
+      ? (d.uiHints as Record<string, unknown>)
+      : undefined;
+  const options = resolvePropertyOptions(d);
+  return {
+    slug: String(d.slug),
+    displayName: resolvePropertyLabel(d),
+    type: String(d.valueType),
+    ...(options?.length ? { options } : {}),
+    required: d.required === true,
+    ...(d.defaultValue !== undefined && d.defaultValue !== null
+      ? { defaultValue: d.defaultValue }
+      : {}),
+    ...(constraints ? { constraints } : {}),
+    ...(typeof uiHints?.linkedProfileSlug === "string"
+      ? { targetProfileSlug: uiHints.linkedProfileSlug }
+      : typeof constraints?.targetProfileSlug === "string"
+        ? { targetProfileSlug: constraints.targetProfileSlug }
+        : {}),
+    schemaScope: (d.workspaceId ? "workspace" : "base") as "workspace" | "base",
+    workspaceId: typeof d.workspaceId === "string" ? d.workspaceId : null,
+  };
+}
+
+/** What the profile schema door returns for one identifier. */
+export type RowSchemaFetchResult = {
+  profile?: { id?: unknown } | null;
+  effectiveProperties?: Array<Record<string, unknown>>;
+};
+
+export type RowSchema =
+  | { status: "resolved"; effectiveProperties: Array<Record<string, unknown>> }
+  | { status: "unavailable"; resolvedProfileId: string };
+
+/**
+ * Resolve ONE listed profile row's schema by that row's OWN identity.
+ *
+ * ── The defect (measured live, 2026-09-12) ──────────────────────────────────
+ * This handler used to fetch every row's schema BY SLUG and cache it BY ID.
+ * Slugs are not unique (migration 0052: `unique(slug)` only for system+shared,
+ * `unique(slug, workspace_id)` for workspace rows), and at the workspace-less
+ * lens `getBySlug` ranks USER < WORKSPACE < SHARED < SYSTEM — so a workspace
+ * twin OUTRANKS the system row. On the founder's pod, 5 of 122 listed slugs
+ * are carried by two rows, and the system `knowledge` row was reported with
+ * its twin's single property instead of its own six — under the system row's
+ * own id and `visibility: "system"`. A caller could not tell it was being lied
+ * to. (Every workspace lens was fine; only the unscoped lens was wrong.)
+ *
+ * ── Why slug first, then id — not id first ─────────────────────────────────
+ * `resolveProfile` DOES accept an id, but its id path is STRICTER than its
+ * slug path: `isAccessible` refuses `scope: "shared"` when there is no
+ * workspace lens, while the slug path admits SHARED unconditionally. The same
+ * pod lists 21 shared profiles at that lens, so switching to id-first would
+ * have turned a wrong answer for 5 rows into a 500 for the whole request.
+ * Slug-then-verify keeps every row that already resolved to itself (117 of
+ * 122) on the path it was on, and pays the id lookup only for a twin.
+ *
+ * ── Why "unavailable" is a value, not an empty schema ──────────────────────
+ * When the slug lands on another row AND the id path refuses this one, the
+ * honest answer is "this door cannot describe this row at this lens" — never
+ * the twin's properties under this row's identity, and never a silent `[]`
+ * that reads as "this type has no properties". Only NOT_FOUND is classified;
+ * any other failure propagates — including an answer that carries NO profile
+ * identity, which is a broken door, not a twin (see `identityOf`).
+ *
+ * The id-path asymmetry itself lives in `profile-resolution-service.ts` and is
+ * deliberately NOT changed here — it is an access decision owned elsewhere.
+ */
+/**
+ * The id of the row the door actually resolved. An answer with no identity is a
+ * CONTRACT VIOLATION, not a twin: classifying it as "another row won" would
+ * withhold a schema for a reason that never happened and print a false hint.
+ */
+function identityOf(result: RowSchemaFetchResult, identifier: string): string {
+  const id = result.profile?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new Error(
+      `profiles.getProfile returned no profile identity for "${identifier}"`
+    );
+  }
+  return id;
+}
+
+export async function resolveRowSchema(
+  row: { id: string; slug: string },
+  fetchProfile: (identifier: string) => Promise<RowSchemaFetchResult>
+): Promise<RowSchema> {
+  const bySlug = await fetchProfile(row.slug);
+  const resolvedProfileId = identityOf(bySlug, row.slug);
+  if (resolvedProfileId === row.id) {
+    return {
+      status: "resolved",
+      effectiveProperties: bySlug.effectiveProperties ?? [],
+    };
+  }
+
+  try {
+    const byId = await fetchProfile(row.id);
+    if (identityOf(byId, row.id) === row.id) {
+      return {
+        status: "resolved",
+        effectiveProperties: byId.effectiveProperties ?? [],
+      };
+    }
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== "NOT_FOUND") throw error;
+  }
+  return { status: "unavailable", resolvedProfileId };
+}
 
 /** Kind + Facets discriminator, surfaced on every profile-listing read. */
 const ProfileKindSchema = z
@@ -124,9 +263,22 @@ const DiscoverProfileSchema = z.object({
   profileKind: ProfileKindSchema.optional(),
   applicableKinds: ApplicableKindsSchema,
   properties: z.array(DiscoverPropertySchema),
+  schemaUnavailable: z
+    .object({
+      reason: z.literal("slug-resolves-to-another-row"),
+      resolvedProfileId: z.string(),
+      hint: z.string(),
+    })
+    .optional()
+    .describe(
+      "Present when this row's schema could not be read by its own identity at this lens. `properties` is then EMPTY BY WITHHOLDING, not because the type has none."
+    ),
   createCommand: z
     .string()
-    .describe("Ready-to-run CLI command template for this profile"),
+    .optional()
+    .describe(
+      "Ready-to-run CLI command template for this profile. ABSENT when `schemaUnavailable` is set: a create command for a type whose schema this response could not show invites exactly the blind write the marker exists to prevent."
+    ),
   entityCount: z.number().int().nonnegative().optional(),
 });
 
@@ -255,60 +407,29 @@ export function registerDiscoverRoutes(app: HubHono): void {
       // validation. This includes inherited required/default metadata and only
       // the explicit workspace's overlays. An absent workspace is the base
       // lens, not an unfiltered/admin read.
-      const schemaByProfileId = new Map<
-        string,
-        { effectiveProperties: Array<Record<string, unknown>> }
-      >();
+      const schemaByProfileId = new Map<string, RowSchema>();
       await Promise.all(
         selectedProfiles.map(async (profile) => {
-          const schema = (await caller.profiles.getProfile({
-            userId,
-            ...(workspaceId ? { workspaceId } : {}),
-            identifier: profile.slug,
-          })) as unknown as {
-            effectiveProperties?: Array<Record<string, unknown>>;
-          };
-          schemaByProfileId.set(profile.id, {
-            effectiveProperties: schema.effectiveProperties ?? [],
-          });
+          schemaByProfileId.set(
+            profile.id,
+            await resolveRowSchema(
+              profile,
+              async (identifier) =>
+                (await caller.profiles.getProfile({
+                  userId,
+                  ...(workspaceId ? { workspaceId } : {}),
+                  identifier,
+                })) as unknown as RowSchemaFetchResult
+            )
+          );
         })
       );
 
       const discoveredProfiles = selectedProfiles.map((p) => {
-        const defs = schemaByProfileId.get(p.id)?.effectiveProperties ?? [];
-        const properties = defs.map((d) => {
-          const constraints =
-            d.constraints && typeof d.constraints === "object"
-              ? (d.constraints as Record<string, unknown>)
-              : undefined;
-          const uiHints =
-            d.uiHints && typeof d.uiHints === "object"
-              ? (d.uiHints as Record<string, unknown>)
-              : undefined;
-          const options =
-            (constraints?.options as string[] | undefined) ??
-            (uiHints?.options as string[] | undefined);
-          return {
-            slug: String(d.slug),
-            displayName:
-              (uiHints?.displayName as string | undefined) ?? String(d.slug),
-            type: String(d.valueType),
-            ...(options?.length ? { options } : {}),
-            required: d.required === true,
-            ...(d.defaultValue !== undefined && d.defaultValue !== null
-              ? { defaultValue: d.defaultValue }
-              : {}),
-            ...(constraints ? { constraints } : {}),
-            ...(typeof uiHints?.linkedProfileSlug === "string"
-              ? { targetProfileSlug: uiHints.linkedProfileSlug }
-              : typeof constraints?.targetProfileSlug === "string"
-                ? { targetProfileSlug: constraints.targetProfileSlug }
-                : {}),
-            schemaScope: d.workspaceId ? "workspace" : "base",
-            workspaceId:
-              typeof d.workspaceId === "string" ? d.workspaceId : null,
-          };
-        });
+        const rowSchema = schemaByProfileId.get(p.id);
+        const defs =
+          rowSchema?.status === "resolved" ? rowSchema.effectiveProperties : [];
+        const properties = defs.map(toDiscoverProperty);
 
         const propExample =
           properties.length > 0
@@ -326,7 +447,23 @@ export function registerDiscoverRoutes(app: HubHono): void {
           profileKind: p.profileKind ?? "kind",
           applicableKinds: p.applicableKinds ?? null,
           properties,
-          createCommand: `synap create entity --profile ${p.slug} --name "<title>"${propExample} --json`,
+          ...(rowSchema?.status === "unavailable"
+            ? {
+                schemaUnavailable: {
+                  reason: "slug-resolves-to-another-row" as const,
+                  resolvedProfileId: rowSchema.resolvedProfileId,
+                  hint: "Another profile row (resolvedProfileId) wins this slug at this lens, and this row could not be read by its own id here, so its properties are withheld instead of being shown from that other row. Do not create entities of this type from this response. If this profile is shared with a workspace, a request with that workspaceId may be able to read it.",
+                },
+              }
+            : {}),
+          // Withheld row ⇒ no create command: handing an agent a ready-to-run
+          // create for a type it was just told it cannot see is the blind write
+          // `schemaUnavailable` exists to prevent.
+          ...(rowSchema?.status === "unavailable"
+            ? {}
+            : {
+                createCommand: `synap create entity --profile ${p.slug} --name "<title>"${propExample} --json`,
+              }),
         };
       });
 

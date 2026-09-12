@@ -724,7 +724,16 @@ export function registerProposalsRoutes(app: HubHono): void {
       const result = await createDevApprovalProposal({
         type: body.type as DevApprovalType,
         payload: body.payload,
-        userId: agentUserId ?? (c.get("userId") as string),
+        // The HUMAN, never the agent. `userId` is the pod user the proposal is
+        // filed FOR — the reviewer the workspace notification path tells, and
+        // the OWNER FLOOR subject (`subjectUserId`, 0248). Hub REST's auth
+        // middleware already splits the two (`userId` = the key's linked human,
+        // `agentUserId` = the acting principal), so `agentUserId ?? userId`
+        // here addressed the gate to the agent that raised it: a workspace-
+        // scoped dev approval then notified NOBODY, because the only recipient
+        // was the machine waiting on the answer. Attribution is unaffected —
+        // it rides `agentUserId` below and `data.sourceId` in the service.
+        userId: c.get("userId") as string,
         workspaceId,
         projectId: body.projectId ?? null,
         agentUserId,
@@ -795,7 +804,17 @@ export function registerProposalsRoutes(app: HubHono): void {
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
-      const userId = resolvedAgentUserId ?? (c.get("userId") as string);
+      // TWO principals, never one. `userId` is the HUMAN the proposal is filed
+      // for — the recipient of the `proposal.created` notification and the
+      // owner-floor subject (`subjectUserId`, 0248). It used to fall back to
+      // the agent, which addressed every workspace-scoped agent proposal to the
+      // machine that raised it: the human was never told a gate was waiting.
+      const userId = c.get("userId") as string;
+      // The ACTING principal — attribution, not subject. Derived explicitly so
+      // `createdBy` and `data.sourceId` keep the agent that this door has always
+      // written (the principal `proposal-source-id-principal` documents for the
+      // agent doors) rather than moving with the corrected `userId`.
+      const actingPrincipalId = resolvedAgentUserId ?? userId;
       const action = inferProposalAction(body.proposalType);
       // sessionId resolution: explicit body field > X-Session-Id header > null
       const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
@@ -813,7 +832,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         source: "intelligence",
         summary: body.summary,
         agentUserId: resolvedAgentUserId ?? null,
-        createdBy: resolvedAgentUserId ?? userId,
+        createdBy: actingPrincipalId,
         threadId: body.channelId ?? null,
         sourceMessageId: body.sourceMessageId ?? null,
         sessionId,
@@ -821,12 +840,12 @@ export function registerProposalsRoutes(app: HubHono): void {
           ? {
               ...body.data,
               source: body.data.source ?? "agent",
-              sourceId: body.data.sourceId ?? userId,
+              sourceId: body.data.sourceId ?? actingPrincipalId,
             }
           : {
               ...body.data,
               source: "agent",
-              sourceId: userId,
+              sourceId: actingPrincipalId,
               changeType: action,
               ...(body.summary ? { summary: body.summary } : {}),
             },

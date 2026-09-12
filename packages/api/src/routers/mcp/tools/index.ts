@@ -884,7 +884,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at', 'belongs_to_project'. Relation defs are WORKSPACE-scoped, so pass `workspaceId` (or call with a workspace focus): without one, no def resolves and the call is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
+          "Create a typed relation between two entities. `type` is NOT a free string: it must name an existing relation-def slug — real ones include 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on', 'blocks', 'created_by', 'works_at', 'belongs_to_project'. The default slugs resolve pod-wide, so no `workspaceId` is needed for them; a workspace may add or override slugs. A slug that names no relation def is rejected. If available to you, check this entity's existing relations first to avoid duplicates. Both endpoints must already be LIVE entities — an id from a still-pending synap_create_entity proposal will fail; to create an entity and its edge together, use synap_capture with `entities` + `relations` instead. May return 'proposed'. Builds the knowledge graph.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2083,7 +2083,7 @@ export const tools = {
           "\n" +
           'EXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ "entities": [ { "ref": "p1", "profileSlug": "person", "title": "Ada Lovelace", "properties": { "email": "ada@acme.com" } }, { "ref": "c1", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "relations": [ { "sourceRef": "p1", "targetRef": "c1", "type": "works_at" } ] }\n' +
           "\n" +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is that relation defs are WORKSPACE-scoped and the capture was placed pod-wide (a project focus alone is not a workspace) — re-send with `workspaceId` if the graph matters.\n' +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
           type: "object",
@@ -2175,7 +2175,8 @@ export const tools = {
                     // NOT a free string, despite what this description said
                     // until 2026-09-07: every edge is created through
                     // `relations.create`, which rejects any slug that is not a
-                    // relation_def of the effective workspace. The old examples
+                    // relation_def of the effective workspace or of the
+                    // pod-wide base layer. The old examples
                     // 'related_to' and 'contact_for' are not defs anywhere —
                     // a model that followed this schema got its edges dropped
                     // into `relationsFailed[]`. Only real slugs may be named
@@ -2183,7 +2184,7 @@ export const tools = {
                     // `__tripwires__/relation-types-in-tool-schemas.test.ts`
                     // holds every one of them to DEFAULT_RELATION_DEFS.
                     description:
-                      "Relation type — an existing relation-def slug, e.g. 'works_at', 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on'. Relation defs are WORKSPACE-scoped: a capture placed pod-wide (no workspace lens — e.g. under a project focus alone) resolves NO def, and its edges come back in `relationsFailed[]` with the graph's status set to `partial`. Pass `workspaceId` when you need the edges to land.",
+                      "Relation type — an existing relation-def slug, e.g. 'works_at', 'relates_to', 'references', 'mentions', 'parent_of', 'depends_on'. The default slugs resolve pod-wide (no `workspaceId` needed); a workspace may add or override slugs. A type that names no def fails ALONE: that edge comes back in `relationsFailed[]` with the graph's status set to `partial`.",
                   },
                 },
                 required: ["sourceRef", "targetRef", "type"],

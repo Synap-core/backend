@@ -2,7 +2,7 @@
  * `playbook_run` step executor — a thin shim over the ONE playbook-run spine
  * reached through the `registerPlaybookRunner` IoC slot.
  */
-import { db, eq, entities } from "@synap/database";
+import { db, and, eq, isNull, entities, events } from "@synap/database";
 import {
   getPlaybookRunner,
   getSessionScheduler,
@@ -40,6 +40,42 @@ import type {
  * correctly instead of being silently forced through the is-agent flow. This
  * shim NO LONGER inlines the A2AI enqueue.
  */
+/**
+ * Back-stamp `events.session_id` on the event that fired this run (0241 column,
+ * 0256 pointer) — the REVERSE edge of `automation_runs.trigger_event_id`.
+ *
+ * With both edges written, the why-spine closes: a session resolves to the fact
+ * that caused it (`metadata.automationChainContext.triggerEventId`) and the
+ * fact resolves to what it produced (`events.session_id`, already indexed and
+ * already read by `graph-service`'s `produced-in` temporal neighbours and by
+ * the signals history feed).
+ *
+ * ONE update, GUARDED ON NULL (`session_id IS NULL`), and best-effort:
+ *   - guarded, because an event that already names a session was produced INSIDE
+ *     that session; overwriting it would replace a first-hand fact with a
+ *     second-hand inference, and a fan-out (one event matching several
+ *     automations) must not have its last writer win.
+ *   - best-effort, because a provenance stamp must never fail a run that has
+ *     already done its work. A failure is logged, not thrown.
+ */
+async function backStampEventSession(
+  triggerEventId: string | undefined,
+  sessionId: string
+): Promise<void> {
+  if (!triggerEventId) return;
+  try {
+    await db
+      .update(events)
+      .set({ sessionId })
+      .where(and(eq(events.id, triggerEventId), isNull(events.sessionId)));
+  } catch (err) {
+    logger.warn(
+      { err, triggerEventId, sessionId },
+      "playbook_run: could not back-stamp events.session_id (provenance only — the run is unaffected)"
+    );
+  }
+}
+
 export async function executePlaybookRun(
   data: {
     playbookId?: string;
@@ -53,6 +89,17 @@ export async function executePlaybookRun(
      * run on an unknown slug rather than quietly using the orchestrator.
      */
     agentType?: string;
+    /**
+     * GOAL OVERRIDE — what THIS node's session is for, in the rule's words
+     * rather than the playbook's. Absent ⇒ the playbook's own `goalTemplate`,
+     * unchanged for every pre-existing node. Declared on
+     * `PlaybookRunNodeDef.data` (schema/automations.ts) and produced by the
+     * rule-sentence grammar's `__goal` key.
+     *
+     * It is swapped in INSIDE `goalResolver` below — one place — so the run and
+     * appointment branches cannot disagree about whose goal a session got.
+     */
+    goalOverride?: string;
     /**
      * WHAT this node materializes at its slot.
      *
@@ -141,7 +188,15 @@ export async function executePlaybookRun(
   // the old `... || raw template` fallback. Hoisted out of the call so BOTH
   // materializations (run and appointment) resolve the goal identically; a second
   // copy of this grammar fork is how the two would drift.
-  const goalResolver = (goalTemplate: string): string | undefined => {
+  const goalResolver = (playbookGoalTemplate: string): string | undefined => {
+    // The NODE's goal wins over the playbook's when the rule states one. Swapped
+    // in here rather than at either call site so the run branch and the
+    // appointment branch resolve the same template through the same grammar
+    // fork below — a second copy of this choice is how the two would drift.
+    const goalTemplate =
+      typeof data.goalOverride === "string" && data.goalOverride.trim() !== ""
+        ? data.goalOverride
+        : playbookGoalTemplate;
     const resolved = resolveTemplate(goalTemplate, context);
     // `resolveTemplate` speaks ONLY {{mustache}}. A goalTemplate authored in
     // the command-template grammar (`@{arg:name:type}`) contains no `{{ }}`,
@@ -174,6 +229,12 @@ export async function executePlaybookRun(
         rootRunId:
           automationContext.rootRunId ?? automationContext.automationRunId,
         chainAutomationIds: automationContext.chainAutomationIds ?? [],
+        // Provenance ride-along (0256): the event that fired the automation
+        // whose run opened this session. Omitted when absent so a cron/manual
+        // run's session carries no empty claim.
+        ...(automationContext.triggerEventId
+          ? { triggerEventId: automationContext.triggerEventId }
+          : {}),
       }
     : undefined;
 
@@ -228,6 +289,11 @@ export async function executePlaybookRun(
       metadata: chainContext ? { automationChainContext: chainContext } : {},
     });
 
+    await backStampEventSession(
+      automationContext?.triggerEventId,
+      scheduled.session.id
+    );
+
     // Same step-output contract downstream nodes already read
     // (steps.<id>.output.{sessionId|status}). `status` is the SESSION's status,
     // deliberately: there is no run, so reporting "running" would be a lie a
@@ -260,8 +326,21 @@ export async function executePlaybookRun(
     idempotentBySubject: true,
     agentType: data.agentType,
     goalResolver,
+    // The `@{arg:...}` half of the goal grammar. `goalResolver` speaks only
+    // {{mustache}} and returns undefined for a pure `@{arg:}` template (saying
+    // "wrong resolver for this grammar"); the spine then substitutes against
+    // `params` — and without this it would substitute the PLAYBOOK's template,
+    // silently discarding the node's goal for exactly the authoring grammar the
+    // command templates use. Handing the spine the override template makes both
+    // grammars resolve the same string.
+    goalTemplateOverride: data.goalOverride,
     chainContext,
   });
+
+  await backStampEventSession(
+    automationContext?.triggerEventId,
+    result.session.id
+  );
 
   // Preserve the step-output contract downstream nodes read
   // (steps.<id>.output.{runId|sessionId|status}, or the reuse shape).

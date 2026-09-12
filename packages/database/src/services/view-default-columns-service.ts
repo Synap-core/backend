@@ -6,27 +6,18 @@
  */
 
 import type { MergedProperty } from "./property-merging-service.js";
+import { resolvePropertyLabel } from "../utils/property-presentation.js";
 
 /**
  * Resolve the human label for a property when generating a column title.
  *
- * Precedence mirrors the frontend `resolvePropertyLabel`
- * (`@synap-core/property-renderer`): `displayName` → `label` → raw slug. The
- * system-profile seeds write `uiHints.label`, so reading `displayName` alone
- * produced raw-slug column headers ("ek_claim" instead of "Claim"). Backend
- * cannot import the frontend helper, so the precedence is inlined here — keep
- * the two in sync.
+ * Precedence (`displayName` → `label` → raw slug) now lives in ONE place,
+ * `utils/property-presentation.ts`. It used to be inlined here under a comment
+ * asking the reader to "keep the two in sync"; by 2026-09-12 there were three
+ * copies of the rule and `discover.ts` — a fourth reader — had only the
+ * `displayName` half, so every label it emitted was the raw slug.
  */
-function resolveColumnTitle(prop: {
-  slug: string;
-  uiHints?: { displayName?: unknown; label?: unknown } | null;
-}): string {
-  const hints = prop.uiHints ?? {};
-  const displayName =
-    typeof hints.displayName === "string" ? hints.displayName.trim() : "";
-  const label = typeof hints.label === "string" ? hints.label.trim() : "";
-  return displayName || label || prop.slug;
-}
+const resolveColumnTitle = resolvePropertyLabel;
 
 /**
  * Column definition for views

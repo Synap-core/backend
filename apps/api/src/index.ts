@@ -2033,6 +2033,8 @@ try {
               await import("@synap/jobs/utils/proactive-post.js");
             const { registerSessionCloser } =
               await import("@synap/jobs/utils/session-close.js");
+            const { registerStageAdvancer } =
+              await import("@synap/jobs/utils/stage-advance.js");
             const { registerServiceHealthNotifier } =
               await import("@synap/jobs/workers/intelligence-health-check.js");
             const api = await import("@synap/api");
@@ -2056,6 +2058,13 @@ try {
             // invariant outright). They now call completeFocusSession through
             // this slot.
             registerSessionCloser((input) => api.completeFocusSession(input));
+            // ONE stage-advance door: the automation `session_update` output
+            // wrote `focus_sessions.current_stage` with a raw UPDATE and resolved
+            // no stage gate, so an automation could advance a run straight past a
+            // `gate: { kind: "human" }` approval. The slot is FAIL-CLOSED —
+            // unregistered it throws rather than advancing ungated — so this
+            // registration is what makes the automation stage-advance work at all.
+            registerStageAdvancer((input) => api.advanceSessionStage(input));
             // ONE agent-wake spine: an automation's `channel_message` with
             // `wakeAgent: true` reaches `triggerAutoRespond` — the SAME door
             // every IS auto-respond uses (`a2ai-one-door` tripwire forbids a

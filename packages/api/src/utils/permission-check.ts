@@ -63,10 +63,9 @@ import {
   isCompositeProposalData,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
-import { emitSideEffects } from "@synap/events";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
-import { notifyPodWideProposal } from "../notifications/notify-pod-wide-proposal.js";
+import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
 import {
   listAgentGovernanceOverrides,
   type AgentGovernanceOverride,
@@ -1743,6 +1742,18 @@ async function evaluatePermission(
               // The claim resolved above, so a session owing TWO documents
               // stamps the one this write was for — not the first of the kind.
               expectedLabel: sessionSlotClaim,
+              // The PROFILE of the entity this write produced. `subjectType` can
+              // only say `entity`, while a slot is declared as `knowledge` /
+              // `task` — without this a `kind: "knowledge"` slot could never be
+              // satisfied by the captures that produce exactly that. Read off
+              // the same gate payload rung 2.6 reads (absent → unchanged).
+              //
+              // DELIBERATELY NOT `readProposalEntityProfileSlug` (the approval
+              // path's reader, satisfy-expected-output.ts): that one is
+              // nested-first over the STORED `proposals.data` envelope, while
+              // `data` here is already the INNER gate payload — so a payload
+              // carrying its own `data` key would be read one level too deep.
+              entityProfileSlug: subjectProfileSlug,
             });
           } catch (err) {
             logger.warn(
@@ -2363,27 +2374,6 @@ async function notifyProposalCreated(
     // Broadcast failure is non-critical.
   });
 
-  emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    subjectId: proposal.id,
-    userId: input.userId,
-    workspaceId: input.workspaceId ?? undefined,
-    data: {
-      proposalStatus: "created",
-      targetType: input.targetType,
-      changeType: input.proposalType,
-      correlationId:
-        typeof input.data.correlationId === "string"
-          ? input.data.correlationId
-          : undefined,
-      requestedEventId:
-        typeof input.data.requestedEventId === "string"
-          ? input.data.requestedEventId
-          : undefined,
-    },
-  });
-
   if (input.workspaceId) {
     NotificationService.fromProposal({
       proposalId: proposal.id,
@@ -2395,22 +2385,46 @@ async function notifyProposalCreated(
         `${input.proposalType} ${input.targetType}`,
       agentUserId: input.agentUserId ?? undefined,
     }).catch(() => {});
-  } else {
-    // Pod-wide proposal (workspaceId === null): no workspace membership to
-    // notify, so route the "needs you" attention to the pod owner + pod admins.
-    // The fan-out itself now lives in ONE place (`notifyPodWideProposal`) shared
-    // with the tighten recommender, which files pod-wide proposals through
-    // `insertPendingProposal` and so never reaches this function. Fire-and-
-    // forget: the helper never throws and logs its own failures non-fatally.
-    void notifyPodWideProposal({
-      proposalId: proposal.id,
-      proposalType: `${input.targetType}.${input.proposalType}`,
-      description:
-        input.notificationDescription ??
-        `${input.proposalType} ${input.targetType}`,
-      agentUserId: input.agentUserId ?? undefined,
-    });
   }
+  // Pod-wide proposal (workspaceId === null): no workspace membership to notify,
+  // so the "needs you" attention goes to the pod owner + pod admins instead —
+  // see the `podWide` arm below.
+
+  // The ONE ordered door: the pod-wide fan-out runs to completion FIRST, then
+  // the `proposal.created` side effect — otherwise that emit's reactor and this
+  // fan-out race the idempotency SELECT and the human gets told twice. A
+  // WORKSPACE proposal passes `podWide: null`: its attention is
+  // `NotificationService.fromProposal` above, and the reactor bails on it.
+  await notifyProposalCreatedOrdered({
+    podWide: input.workspaceId
+      ? null
+      : {
+          proposalId: proposal.id,
+          proposalType: `${input.targetType}.${input.proposalType}`,
+          description:
+            input.notificationDescription ??
+            `${input.proposalType} ${input.targetType}`,
+          agentUserId: input.agentUserId ?? undefined,
+        },
+    sideEffect: {
+      subjectId: proposal.id,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? undefined,
+      data: {
+        proposalStatus: "created",
+        targetType: input.targetType,
+        changeType: input.proposalType,
+        correlationId:
+          typeof input.data.correlationId === "string"
+            ? input.data.correlationId
+            : undefined,
+        requestedEventId:
+          typeof input.data.requestedEventId === "string"
+            ? input.data.requestedEventId
+            : undefined,
+      },
+    },
+  });
 }
 
 export async function createPendingProposal(

@@ -171,3 +171,71 @@ describe("stampSatisfied", () => {
     });
   });
 });
+
+/**
+ * A slot declared in PROFILE vocabulary — `kind: "knowledge"`, `kind: "task"` —
+ * against a change whose `targetType` is the generic `entity`.
+ *
+ * Live defect (2026-09-12): three applied knowledge captures left a
+ * `kind: "knowledge"` slot pending forever, because the only kind the change
+ * could ever present was `entity` and `normalizeObjectKind("knowledge")` is not
+ * `normalizeObjectKind("entity")`. An agent declaring a deliverable in the
+ * vocabulary the pod itself uses for its profiles could never satisfy it.
+ *
+ * The change's kind is therefore its PROFILE when it has one — resolved through
+ * the same `normalizeObjectKind` door, never a local alias table.
+ */
+describe("selectOutputToSatisfy — an entity change carries its PROFILE kind", () => {
+  const profileSlots = (): ExpectedOutput[] => [
+    { kind: "task", label: "Follow-up" },
+    { kind: "knowledge", label: "Lesson" },
+  ];
+
+  it("a knowledge entity satisfies a kind:'knowledge' slot", () => {
+    expect(
+      selectOutputToSatisfy(profileSlots(), "entity", null, "knowledge")
+    ).toBe(1);
+  });
+
+  it("a knowledge entity does NOT satisfy a kind:'task' slot", () => {
+    expect(
+      selectOutputToSatisfy(
+        [{ kind: "task", label: "Follow-up" }],
+        "entity",
+        null,
+        "knowledge"
+      )
+    ).toBe(-1);
+  });
+
+  it("a kind:'entity' slot still takes any entity, profile or not", () => {
+    const list: ExpectedOutput[] = [{ kind: "entity", label: "Client record" }];
+    expect(selectOutputToSatisfy(list, "entity", null, "knowledge")).toBe(0);
+    expect(selectOutputToSatisfy(list, "entity")).toBe(0);
+  });
+
+  it("an entity change with NO profile behaves exactly as today", () => {
+    expect(selectOutputToSatisfy(outputs(), "entity")).toBe(1);
+    expect(selectOutputToSatisfy(profileSlots(), "entity")).toBe(-1);
+  });
+
+  it("the profile never leaks onto a NON-entity change", () => {
+    // A document write that happens to carry a profile slug in its payload is
+    // still a document: the slug is read only when the target IS an entity.
+    expect(
+      selectOutputToSatisfy(profileSlots(), "document", null, "knowledge")
+    ).toBe(-1);
+  });
+
+  it("the SLOT CLAIM still may not cross kinds", () => {
+    // A label match on a `task` slot is not evidence that a knowledge entity is
+    // that deliverable — the claim is dropped and the kind rung decides.
+    const list: ExpectedOutput[] = [
+      { kind: "task", label: "Lesson" },
+      { kind: "knowledge", label: "Lesson" },
+    ];
+    expect(selectOutputToSatisfy(list, "entity", "Lesson", "knowledge")).toBe(
+      1
+    );
+  });
+});
