@@ -1467,6 +1467,15 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "scope_kind",
     addedBy: "0243_renderer_bindings.sql",
   },
+  // Calendar feed tokens (0255) — the store behind the personal ICS feed. New
+  // table; checking the lookup hash confirms the migration ran. Without it the
+  // unauthenticated feed route errors on every poll from a subscribed calendar
+  // client, which retries silently forever.
+  {
+    table: "calendar_feed_tokens",
+    column: "token_lookup_hash",
+    addedBy: "0255_calendar_feed_tokens.sql",
+  },
 ];
 
 export interface SchemaCoherenceResult {

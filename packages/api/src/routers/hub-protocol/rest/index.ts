@@ -98,5 +98,9 @@ export { registerGraphRoutes } from "./graph.js";
 export { registerCentralityRoutes } from "./centrality.js";
 export { registerObservabilityRoutes } from "./observability.js";
 export { registerPublicProjectionRoutes } from "./public-projection.js";
+// Kept as its OWN export statement: check-orphan-routes.mjs recognises a
+// route file only via an `export { register*Routes }` block containing nothing
+// else.
+export { registerCalendarFeedRoutes } from "./calendar-feed.js";
 
 export type { HubHono } from "./_shared.js";

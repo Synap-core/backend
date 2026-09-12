@@ -105,6 +105,7 @@ import {
   registerCentralityRoutes,
   registerObservabilityRoutes,
   registerPublicProjectionRoutes,
+  registerCalendarFeedRoutes,
 } from "./hub-protocol/rest/index.js";
 
 const logger = createLogger({ module: "hub-protocol-rest" });
@@ -246,6 +247,9 @@ app.use(
       "/federation/oidc-config",
       "/mcp/redeem",
       "/mcp/revoke",
+      // Mint/rotate return the plaintext feed URL once — never cache.
+      "/calendar/feed",
+      "/calendar/feed/rotate",
     ],
     // secretBodyPattern uses the default — see middleware source.
   })
@@ -345,6 +349,7 @@ registerObservabilityRoutes(app); // /observability/routing-health — decision/
 // argument for a second door over a `?deps=1` flag on /health.
 registerHealthDependenciesRoutes(app);
 registerPublicProjectionRoutes(app); // /public/projection — UNAUTH facet-scoped public read (skipAuthPaths)
+registerCalendarFeedRoutes(app); // /calendar/feed — personal ICS (GET :token.ics is UNAUTH)
 
 // ── OpenAPI stubs for routes not yet annotated inline ──────────────────────
 //

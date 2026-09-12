@@ -58,7 +58,12 @@ function classKeyGenerator(className: RateLimitClass) {
       return `localhost-bypass-${className}-` + Math.random();
     }
 
-    return buildRateLimitKey(className, c.req.header("Authorization"), ip);
+    return buildRateLimitKey(
+      className,
+      c.req.header("Authorization"),
+      ip,
+      c.req.path
+    );
   };
 }
 
@@ -130,6 +135,18 @@ const crudRateLimiter = rateLimiter({
   ),
 });
 
+const calendarFeedRateLimiter = rateLimiter({
+  windowMs: rateLimitClassConfig.calendar_feed.windowMs,
+  limit: rateLimitClassConfig.calendar_feed.max,
+  standardHeaders: "draft-7",
+  keyGenerator: classKeyGenerator("calendar_feed"),
+  handler: classHandler(
+    "calendar_feed",
+    rateLimitClassConfig.calendar_feed.max,
+    rateLimitClassConfig.calendar_feed.retryAfter
+  ),
+});
+
 /**
  * Multi-class pod-edge rate limiting.
  *
@@ -147,6 +164,8 @@ export const rateLimitMiddleware: MiddlewareHandler = async (c, next) => {
       return aiAgentTurnRateLimiter(c, next);
     case "ai_interactive":
       return aiInteractiveRateLimiter(c, next);
+    case "calendar_feed":
+      return calendarFeedRateLimiter(c, next);
     case "crud":
     default:
       return crudRateLimiter(c, next);

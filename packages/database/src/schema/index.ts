@@ -234,3 +234,6 @@ export * from "./governance-ceilings.js";
 // MIRRORS governance_rules. Used first for GUIDELINES (natural-language intent
 // injected into message.interpret via resolveGuidelines).
 export * from "./config-settings.js";
+
+// Personal ICS calendar-feed tokens (0255) — one live hashed token per user.
+export * from "./calendar-feed-tokens.js";

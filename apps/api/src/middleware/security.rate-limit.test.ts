@@ -40,8 +40,20 @@ describe("classifyRateLimitPath", () => {
     { path: "/v1/chat", expected: "ai_interactive" },
     { path: "/v1/chat/completions", expected: "ai_interactive" },
 
+    // calendar ICS polls (not crud, not /calendar without /feed/)
+    {
+      path: "/api/hub/calendar/feed/abc123.ics",
+      expected: "calendar_feed",
+    },
+    {
+      path: "/api/hub-protocol/calendar/feed/tok.ics",
+      expected: "calendar_feed",
+    },
+
     // crud (default)
     { path: "/api/hub/entities", expected: "crud" },
+    { path: "/api/hub/calendar/feed", expected: "crud" },
+    { path: "/api/hub/calendar/feed/rotate", expected: "crud" },
     { path: "/api/hub/knowledge/ask", expected: "crud" },
     { path: "/trpc/entities.list", expected: "crud" },
     { path: "/api/federation/exchange", expected: "crud" },
@@ -70,6 +82,10 @@ describe("classifyRateLimitPath", () => {
     expect(
       classifyRateLimitPath("/api/hub/messaging/conversations/t1/import")
     ).toBe("crud");
+  });
+
+  it("does not treat /calendar (no /feed/) as calendar_feed", () => {
+    expect(classifyRateLimitPath("/api/hub/calendar")).toBe("crud");
   });
 });
 
@@ -130,6 +146,14 @@ describe("buildRateLimitKey", () => {
     expect(a).not.toBe(b);
     expect(a.startsWith("crud:key:")).toBe(true);
     expect(b.startsWith("import:key:")).toBe(true);
+  });
+
+  it("keys calendar_feed by hashed path token, not IP", () => {
+    const path = "/api/hub/calendar/feed/secret-token-value.ics";
+    const key = buildRateLimitKey("calendar_feed", undefined, ip, path);
+    expect(key.startsWith("calendar_feed:token:")).toBe(true);
+    expect(key).not.toContain("secret-token-value");
+    expect(key).not.toContain(ip);
   });
 });
 

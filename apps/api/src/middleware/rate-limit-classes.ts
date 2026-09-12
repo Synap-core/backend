@@ -13,10 +13,16 @@ import { createHash } from "node:crypto";
  * - import: bulk import surfaces
  * - ai_agent_turn: Discord/channel agent turns (higher AI budget)
  * - ai_interactive: external/OpenAI-compat chat
+ * - calendar_feed: unauth ICS polls (not crud — calendar clients poll)
  * - crud: everything else
  */
 export type RateLimitClass =
-  "free" | "import" | "ai_agent_turn" | "ai_interactive" | "crud";
+  | "free"
+  | "import"
+  | "ai_agent_turn"
+  | "ai_interactive"
+  | "calendar_feed"
+  | "crud";
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value == null || value === "") return fallback;
@@ -52,6 +58,10 @@ export function getRateLimitClassConfig(): Record<
     process.env.RATE_LIMIT_AGENT_TURN_WINDOW_MS,
     aiWindow
   );
+  const calendarFeedWindow = parsePositiveInt(
+    process.env.RATE_LIMIT_CALENDAR_FEED_WINDOW_MS,
+    5 * 60 * 1000
+  );
 
   return {
     import: {
@@ -73,6 +83,11 @@ export function getRateLimitClassConfig(): Record<
       max: parsePositiveInt(process.env.RATE_LIMIT_CRUD_MAX, 500),
       windowMs: crudWindow,
       retryAfter: formatRetryAfter(crudWindow),
+    },
+    calendar_feed: {
+      max: parsePositiveInt(process.env.RATE_LIMIT_CALENDAR_FEED_MAX, 120),
+      windowMs: calendarFeedWindow,
+      retryAfter: formatRetryAfter(calendarFeedWindow),
     },
   };
 }
@@ -130,6 +145,11 @@ export function classifyRateLimitPath(path: string): RateLimitClass {
     return "ai_interactive";
   }
 
+  // calendar ICS polls — token in path, no Bearer. Not crud.
+  if (/\/api\/hub(?:-protocol)?\/calendar\/feed\/[^/]+\.ics$/.test(p)) {
+    return "calendar_feed";
+  }
+
   return "crud";
 }
 
@@ -144,11 +164,23 @@ export function hashBearerToken(token: string): string {
  * Key by API-key material when Authorization: Bearer is present (hashed),
  * else by client IP. Class-prefixed so budgets are independent.
  */
+/** Path token from `/calendar/feed/{token}.ics` — hashed, never logged raw. */
+export function calendarFeedTokenFromPath(path: string): string | null {
+  const p = path.split(/[?#]/, 1)[0] || "/";
+  const m = /\/calendar\/feed\/([^/]+)\.ics$/.exec(p);
+  return m?.[1] ?? null;
+}
+
 export function buildRateLimitKey(
   className: RateLimitClass | string,
   authHeader: string | undefined,
-  ip: string
+  ip: string,
+  path?: string
 ): string {
+  if (className === "calendar_feed" && path) {
+    const token = calendarFeedTokenFromPath(path);
+    if (token) return `calendar_feed:token:${hashBearerToken(token)}`;
+  }
   const auth = authHeader || "";
   // Product lock: only key on Bearer material when header is long enough to be
   // a real key (avoids "Bearer " / "Bearer x" burning a shared empty-hash bucket).

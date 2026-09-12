@@ -4526,3 +4526,25 @@ CREATE INDEX IF NOT EXISTS "renderer_bindings_subject_idx"
 
 CREATE INDEX IF NOT EXISTS "renderer_bindings_source_proposal_idx"
   ON "renderer_bindings" ("source_proposal_id");
+
+-- ---------------------------------------------------------------------------
+-- Calendar feed tokens (0255)
+-- Personal ICS calendar-feed tokens. One live token per user (v1).
+-- Plaintext is shown once at mint/rotate; only sha256 hex is stored.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS "calendar_feed_tokens" (
+  "id"                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"            text NOT NULL,
+  "token_lookup_hash"  text NOT NULL,
+  "token_prefix"       text,
+  "created_at"         timestamptz NOT NULL DEFAULT now(),
+  "last_accessed_at"   timestamptz,
+  "revoked_at"         timestamptz
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "calendar_feed_tokens_user_id_uidx"
+  ON "calendar_feed_tokens" ("user_id");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "calendar_feed_tokens_token_lookup_hash_uidx"
+  ON "calendar_feed_tokens" ("token_lookup_hash");

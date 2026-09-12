@@ -88,7 +88,7 @@ export const hubAuthMiddleware = async (
     // a workspace's opt-in public data. Safe to expose without a key because the
     // handler is default-deny (404 unless settings.publicProjection.enabled ===
     // true), facet-workspace-scoped (never returns pod-wide private entities), and
-    // field-whitelisted. It is the ONLY new unauth path.
+    // field-whitelisted.
     "/public/projection",
     // CP→pod OIDC federation client push — authenticated by the CP's ISSUER
     // SIGNATURE (verifyIssuerJwt against the pinned trusted issuer), not an API
@@ -118,7 +118,11 @@ export const hubAuthMiddleware = async (
     // secret keyId IS the capability) and opened in a browser with no auth
     // header. Matched on the de-prefixed path — boundary-safe (no longer skips
     // a route that merely contains the substring).
-    rel.startsWith("/setup/agent/pending/")
+    rel.startsWith("/setup/agent/pending/") ||
+    // Personal ICS feed — token in the PATH is the capability. Prefix + `.ics`
+    // so GET/POST `/calendar/feed` and POST `/calendar/feed/rotate` still
+    // authenticate. Do not skip `/calendar` itself.
+    (rel.startsWith("/calendar/feed/") && rel.endsWith(".ics"))
   ) {
     return next();
   }
