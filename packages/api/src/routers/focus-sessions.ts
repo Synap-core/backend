@@ -10,14 +10,15 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
-  db,
-  eq,
   and,
-  desc,
-  focusSessions,
-  capabilities,
-  vaultGrants,
   assertGrantScoped,
+  capabilities,
+  db,
+  desc,
+  eq,
+  focusSessions,
+  inArray,
+  vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
 import {
@@ -172,7 +173,27 @@ function slotOwnershipResult(
 // never hand-mirrored: a new `focus_sessions.status` value reaches this filter
 // automatically instead of being silently unfilterable. `"all"` is a filter
 // sentinel, not a stored state.
-const statusFilterSchema = z.enum([...SESSION_STATUSES, "all"]).default("all");
+const statusFilterSchema = z
+  .union([
+    z.enum([...SESSION_STATUSES, "all"]),
+    /**
+     * A SET of statuses, because the alternative is narrowing AFTER the limit.
+     *
+     * ⚠️ MEASURED ON THE LIVE POD. Relay's Work tab shows the sessions that
+     * still want you — the open four plus `stale` and `failed` — which this
+     * filter could not express, so it asked for `"all"` and filtered on the
+     * phone. The limit is applied HERE, before that filter: of 29 `work` rows,
+     * the page of 20 carried 9 visible ones while 14 qualified, so FIVE
+     * sessions that pass the rule never reached the device. Silently: no
+     * error, no "load more", just a working list missing a third of itself.
+     *
+     * This is the same reasoning `sessionKindWhere` already states one file
+     * over — "a page of runs must not consume the 50 slots a person's work
+     * needs" — and it was never applied to the status axis.
+     */
+    z.array(z.enum(SESSION_STATUSES)).nonempty(),
+  ])
+  .default("all");
 
 /** The states a client may write — the ONE list, shared with the Hub REST PATCH door. */
 const updatableStatusSchema = z.enum(UPDATABLE_SESSION_STATUSES);
@@ -282,7 +303,12 @@ function queryUserSessions(
   // read, so the two doors cannot drift into two answers about what a lens means.
   conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
 
-  if (status !== "all") {
+  if (Array.isArray(status)) {
+    // A set never means "match zero": an empty array is refused at the schema
+    // (`.nonempty()`), for the same reason the workspace lens treats `[]` as
+    // "no narrow" — a filter may restrict a floor, never empty it.
+    conditions.push(inArray(focusSessions.status, status));
+  } else if (status !== "all") {
     conditions.push(eq(focusSessions.status, status));
   }
 
