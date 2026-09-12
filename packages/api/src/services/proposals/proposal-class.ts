@@ -49,9 +49,16 @@
  * and no sweeper could ever expire them. One exported constant, imported by every
  * producer and every reader, is the only shape in which they cannot drift.
  *
- * Reads keep working across the rename: the approve-executor registry resolves
- * `run`, `capability/run` and `capability.run` to the same executor, so rows
- * written under the old literal still approve.
+ * Reads keep working across the rename, but NOT because every spelling reaches
+ * one executor — they don't. `resolve()` sends `capability/run` (the legacy
+ * `targetType:"capability"` + `proposalType:"run"`) to the `capability/run`
+ * executor, and `capability.run` to the proposalType-only `capability.run`
+ * executor. What keeps both correct is that `capability.run` hands a TOOL-shaped
+ * payload (`capabilityKind`, no `skillId`) to the same replay `capability/run`
+ * uses. Until that hand-off existed, an approved tool run filed by the
+ * tool-execute door threw "requires skillId" and never executed — while this
+ * comment said otherwise. Pinned behaviourally by
+ * `routers/proposals/__tests__/capability-run-tool-shape.test.ts`.
  *
  * This module imports NOTHING, so importing it can never create a cycle.
  */

@@ -33,6 +33,7 @@ import {
   reportApproved,
   dispatchExternalOnce,
 } from "./shared.js";
+import type { ProposalExecutorArgs } from "../execution-registry.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -40,6 +41,214 @@ const logger = createLogger({
 
 /** Register the capability.run / capability.install / capability.enable / capability/run approve executors. */
 export function registerCapabilityExecutors(): void {
+  // The ONE replay for a capability-run proposal, shared by BOTH keys it can
+  // arrive under. See the capability.run executor below for why.
+  const runCapabilityRunProposal = async ({
+    proposal,
+    userId,
+    input,
+    deps,
+  }: ProposalExecutorArgs) => {
+    const data = (proposal.data ?? {}) as Record<string, unknown>;
+    // Stale-target preflight — before any at-most-once dispatch. Blocks
+    // approving into a workspace the approver has left (phantom/lost-membership)
+    // → the P1 recovery chip, no wasted provider call. See
+    // assertApprovalTargetResolves.
+    const targetFail = await assertApprovalTargetResolves(
+      proposal.workspaceId ?? null,
+      userId
+    );
+    if (targetFail) {
+      throw attachFailureMeta(
+        new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Couldn't apply — ${targetFail.message}.`,
+        }),
+        { errorClass: targetFail.errorClass }
+      );
+    }
+    const capabilityKind = data.capabilityKind as
+      "tool" | "skill" | "command" | undefined;
+    const capabilityId = data.capabilityId as string | undefined;
+
+    if (!capabilityKind || !capabilityId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "capability/run proposal requires capabilityKind and capabilityId in proposal data",
+      });
+    }
+
+    // Guard: only execute once (the run may be an irreversible external write).
+    const [alreadyDone] = await db
+      .select({ status: proposals.status })
+      .from(proposals)
+      .where(eq(proposals.id, input.proposalId));
+    if (alreadyDone?.status === ProposalStatus.APPROVED) {
+      return { success: true, alreadyApproved: true };
+    }
+
+    // Captures the skill/command result so it can be materialized below —
+    // only set on the "skill"/"command" branch; the "tool" branch's own
+    // result handling is untouched (this executor does not persist a `data`
+    // field for it, unchanged from before this wave).
+    let skillRunResult: unknown;
+
+    // Re-enter the SAME execute path the auto path uses. The `alreadyApproved`
+    // bypass (documented above) is set so the chokepoint does NOT re-propose.
+    if (capabilityKind === "tool") {
+      const provider = (data.provider as string | undefined) ?? capabilityId;
+      const method = (data.method as string | undefined) ?? "POST";
+      const path = (data.path as string | undefined) ?? "/";
+
+      // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+      await dispatchExternalOnce(input.proposalId, async () => {
+        const {
+          success: executed,
+          error: providerError,
+          errorClass,
+          providerRef,
+        } = await triggerProviderAction({
+          userId,
+          provider,
+          method,
+          path,
+          body: data.body as Record<string, unknown> | undefined,
+          accountHint: data.accountHint as string | undefined,
+          baseUrlOverride:
+            (data.baseUrlOverride as string | undefined) ?? undefined,
+          workspaceId: (data.workspaceId as string | undefined) ?? undefined,
+          // Replay the caller's run-time connection pick so the approved run
+          // uses the SAME credential that was selected at propose time (not the
+          // capability's default). Persisted into proposal.data at propose time.
+          connectionSelector:
+            (data.connectionSelector as
+              | { connectionId?: string; contextObjectId?: string }
+              | null
+              | undefined) ?? undefined,
+          // BYPASS the capability-execution gate: a human already approved THIS
+          // proposal, so this is the governed Door-2 re-entry — dispatch directly,
+          // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
+          alreadyApproved: true,
+          sourceProposalId: input.proposalId,
+        });
+        if (!executed) {
+          logger.warn(
+            {
+              proposalId: input.proposalId,
+              provider,
+              method,
+              path,
+              providerError,
+            },
+            "capability/run executor failed"
+          );
+          return {
+            delivered: false,
+            reason: providerError,
+            errorClass,
+            providerRef,
+          };
+        }
+        return { delivered: true };
+      });
+    } else if (capabilityKind === "skill" || capabilityKind === "command") {
+      // Was: flip to APPROVED with NO execution ("wired by Wave 3b" never
+      // landed) — an approved skill/command run silently did nothing. Wire
+      // it to the SAME post-gate runner the door + `capability.run` executor
+      // use, so this shape can no longer diverge from either. A distinct
+      // branch from "tool" above — no shared code path, no double-execute.
+      const [skillRow] = await db
+        .select({
+          id: skills.id,
+          name: skills.name,
+          kind: skills.kind,
+          providerSpec: skills.providerSpec,
+        })
+        .from(skills)
+        .where(eq(skills.id, capabilityId))
+        .limit(1);
+
+      if (!skillRow) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `capability/run ${capabilityKind} "${capabilityId}" not found`,
+        });
+      }
+
+      // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
+      await dispatchExternalOnce(input.proposalId, async () => {
+        const runOutcome = await runResolvedSkill(
+          skillRow,
+          (data.input as Record<string, unknown> | undefined) ?? {},
+          {
+            userId,
+            workspaceId: (data.workspaceId as string | undefined) ?? null,
+          }
+        );
+        if (runOutcome.kind !== "run") {
+          const reason =
+            runOutcome.kind === "deny"
+              ? runOutcome.reason
+              : runOutcome.kind === "error" || runOutcome.kind === "not_found"
+                ? runOutcome.message
+                : "unknown";
+          logger.warn(
+            {
+              proposalId: input.proposalId,
+              capabilityKind,
+              capabilityId,
+              reason,
+            },
+            "capability/run executor: skill/command run not delivered"
+          );
+          return {
+            delivered: false,
+            reason,
+            // P1: an `error` outcome from a provider verb carries the scalars.
+            errorClass:
+              runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
+            providerRef:
+              runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
+          };
+        }
+        skillRunResult = runOutcome.result;
+        return { delivered: true };
+      });
+    }
+    // Only the "skill"/"command" branch materializes a result (the "tool"
+    // branch's own result handling is unchanged, pre-existing behavior).
+    const materializedPayload =
+      capabilityKind === "skill" || capabilityKind === "command"
+        ? ({ ...data, runResult: skillRunResult } as unknown as Record<
+            string,
+            unknown
+          >)
+        : null;
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        ...(materializedPayload ? { data: materializedPayload } : {}),
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    // Report to IS telemetry (fire-and-forget — never blocks)
+    reportApproved(deps, proposal, input.proposalId);
+
+    deps.emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return { success: true };
+  };
+
   // ── capability.run (proposalType-only) — AGNOSTIC CAPABILITY LAST-MILE ───────
   // Re-entry for a `propose` verdict from POST /capabilities/execute (and any
   // other capability launcher): approve → run the backing skill through the SAME
@@ -49,8 +258,21 @@ export function registerCapabilityExecutors(): void {
   // Idempotent: skip if already APPROVED.
   registerProposalExecutor({
     key: "capability.run",
-    async execute({ proposal, payload, userId, input, deps }) {
+    async execute(args) {
+      const { proposal, payload, userId, input, deps } = args;
       const data = (proposal.data ?? {}) as Record<string, unknown>;
+      // TWO PAYLOAD SHAPES ARRIVE UNDER THIS ONE KEY. The literal was unified to
+      // CAPABILITY_RUN_PROPOSAL_TYPE ("capability.run"), so the tool-execute door
+      // (external-dispatch.ts) now files `{capabilityKind, capabilityId, provider,
+      // method, path, body}` here too — and resolve() tries the unregistered
+      // "capability/capability.run" first, then lands on THIS proposalType-only
+      // key. This executor only understood the `{skillId, parameters}` shape and
+      // threw "requires skillId", so an approved tool run could never execute.
+      // Hand the tool shape to the replay that already handles it, rather than
+      // copying its at-most-once dispatch here.
+      if (!data.skillId && typeof data.capabilityKind === "string") {
+        return runCapabilityRunProposal(args);
+      }
       // Stale-target preflight — before any at-most-once dispatch. Blocks
       // approving into a workspace the approver has left (phantom/lost-membership)
       // → the P1 recovery chip, no wasted provider call. See
@@ -411,208 +633,7 @@ export function registerCapabilityExecutors(): void {
   //     external caller may supply it.
   registerProposalExecutor({
     key: "capability/run",
-    async execute({ proposal, userId, input, deps }) {
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
-      // Stale-target preflight — before any at-most-once dispatch. Blocks
-      // approving into a workspace the approver has left (phantom/lost-membership)
-      // → the P1 recovery chip, no wasted provider call. See
-      // assertApprovalTargetResolves.
-      const targetFail = await assertApprovalTargetResolves(
-        proposal.workspaceId ?? null,
-        userId
-      );
-      if (targetFail) {
-        throw attachFailureMeta(
-          new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message: `Couldn't apply — ${targetFail.message}.`,
-          }),
-          { errorClass: targetFail.errorClass }
-        );
-      }
-      const capabilityKind = data.capabilityKind as
-        "tool" | "skill" | "command" | undefined;
-      const capabilityId = data.capabilityId as string | undefined;
-
-      if (!capabilityKind || !capabilityId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "capability/run proposal requires capabilityKind and capabilityId in proposal data",
-        });
-      }
-
-      // Guard: only execute once (the run may be an irreversible external write).
-      const [alreadyDone] = await db
-        .select({ status: proposals.status })
-        .from(proposals)
-        .where(eq(proposals.id, input.proposalId));
-      if (alreadyDone?.status === ProposalStatus.APPROVED) {
-        return { success: true, alreadyApproved: true };
-      }
-
-      // Captures the skill/command result so it can be materialized below —
-      // only set on the "skill"/"command" branch; the "tool" branch's own
-      // result handling is untouched (this executor does not persist a `data`
-      // field for it, unchanged from before this wave).
-      let skillRunResult: unknown;
-
-      // Re-enter the SAME execute path the auto path uses. The `alreadyApproved`
-      // bypass (documented above) is set so the chokepoint does NOT re-propose.
-      if (capabilityKind === "tool") {
-        const provider = (data.provider as string | undefined) ?? capabilityId;
-        const method = (data.method as string | undefined) ?? "POST";
-        const path = (data.path as string | undefined) ?? "/";
-
-        // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
-        await dispatchExternalOnce(input.proposalId, async () => {
-          const {
-            success: executed,
-            error: providerError,
-            errorClass,
-            providerRef,
-          } = await triggerProviderAction({
-            userId,
-            provider,
-            method,
-            path,
-            body: data.body as Record<string, unknown> | undefined,
-            accountHint: data.accountHint as string | undefined,
-            baseUrlOverride:
-              (data.baseUrlOverride as string | undefined) ?? undefined,
-            workspaceId: (data.workspaceId as string | undefined) ?? undefined,
-            // Replay the caller's run-time connection pick so the approved run
-            // uses the SAME credential that was selected at propose time (not the
-            // capability's default). Persisted into proposal.data at propose time.
-            connectionSelector:
-              (data.connectionSelector as
-                | { connectionId?: string; contextObjectId?: string }
-                | null
-                | undefined) ?? undefined,
-            // BYPASS the capability-execution gate: a human already approved THIS
-            // proposal, so this is the governed Door-2 re-entry — dispatch directly,
-            // exactly once, without re-proposing (Wave 3a `alreadyApproved` contract).
-            alreadyApproved: true,
-            sourceProposalId: input.proposalId,
-          });
-          if (!executed) {
-            logger.warn(
-              {
-                proposalId: input.proposalId,
-                provider,
-                method,
-                path,
-                providerError,
-              },
-              "capability/run executor failed"
-            );
-            return {
-              delivered: false,
-              reason: providerError,
-              errorClass,
-              providerRef,
-            };
-          }
-          return { delivered: true };
-        });
-      } else if (capabilityKind === "skill" || capabilityKind === "command") {
-        // Was: flip to APPROVED with NO execution ("wired by Wave 3b" never
-        // landed) — an approved skill/command run silently did nothing. Wire
-        // it to the SAME post-gate runner the door + `capability.run` executor
-        // use, so this shape can no longer diverge from either. A distinct
-        // branch from "tool" above — no shared code path, no double-execute.
-        const [skillRow] = await db
-          .select({
-            id: skills.id,
-            name: skills.name,
-            kind: skills.kind,
-            providerSpec: skills.providerSpec,
-          })
-          .from(skills)
-          .where(eq(skills.id, capabilityId))
-          .limit(1);
-
-        if (!skillRow) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: `capability/run ${capabilityKind} "${capabilityId}" not found`,
-          });
-        }
-
-        // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
-        await dispatchExternalOnce(input.proposalId, async () => {
-          const runOutcome = await runResolvedSkill(
-            skillRow,
-            (data.input as Record<string, unknown> | undefined) ?? {},
-            {
-              userId,
-              workspaceId: (data.workspaceId as string | undefined) ?? null,
-            }
-          );
-          if (runOutcome.kind !== "run") {
-            const reason =
-              runOutcome.kind === "deny"
-                ? runOutcome.reason
-                : runOutcome.kind === "error" || runOutcome.kind === "not_found"
-                  ? runOutcome.message
-                  : "unknown";
-            logger.warn(
-              {
-                proposalId: input.proposalId,
-                capabilityKind,
-                capabilityId,
-                reason,
-              },
-              "capability/run executor: skill/command run not delivered"
-            );
-            return {
-              delivered: false,
-              reason,
-              // P1: an `error` outcome from a provider verb carries the scalars.
-              errorClass:
-                runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
-              providerRef:
-                runOutcome.kind === "error"
-                  ? runOutcome.providerRef
-                  : undefined,
-            };
-          }
-          skillRunResult = runOutcome.result;
-          return { delivered: true };
-        });
-      }
-      // Only the "skill"/"command" branch materializes a result (the "tool"
-      // branch's own result handling is unchanged, pre-existing behavior).
-      const materializedPayload =
-        capabilityKind === "skill" || capabilityKind === "command"
-          ? ({ ...data, runResult: skillRunResult } as unknown as Record<
-              string,
-              unknown
-            >)
-          : null;
-
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          ...(materializedPayload ? { data: materializedPayload } : {}),
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true };
-    },
+    execute: runCapabilityRunProposal,
   });
 
   // ── capability / renderer.set ───────────────────────────────────────────────
