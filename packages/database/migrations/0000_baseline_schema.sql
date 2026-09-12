@@ -3112,6 +3112,8 @@ CREATE TABLE IF NOT EXISTS "mcp_servers" (
   "args"          jsonb   NOT NULL DEFAULT '[]',
   "url"           text,
   "env"           jsonb   NOT NULL DEFAULT '{}',
+  "auth"          jsonb,
+  "tool_policy"   jsonb,
   "enabled"       boolean NOT NULL DEFAULT true,
   "approved"      boolean NOT NULL DEFAULT false,
   "status"        text    NOT NULL DEFAULT 'unknown',
@@ -3132,6 +3134,8 @@ ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "command" text;
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "args" jsonb DEFAULT '[]';
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "url" text;
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "env" jsonb DEFAULT '{}';
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "auth" jsonb;
+ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "tool_policy" jsonb;
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "enabled" boolean DEFAULT true;
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "approved" boolean DEFAULT false;
 ALTER TABLE "mcp_servers" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'unknown';

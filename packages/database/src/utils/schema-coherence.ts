@@ -1392,6 +1392,16 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0214_automation_run_path_taken.sql",
   },
   {
+    table: "mcp_servers",
+    column: "auth",
+    addedBy: "0257_mcp_servers_auth_and_tool_policy.sql",
+  },
+  {
+    table: "mcp_servers",
+    column: "tool_policy",
+    addedBy: "0257_mcp_servers_auth_and_tool_policy.sql",
+  },
+  {
     table: "automation_step_runs",
     column: "tokens_used",
     addedBy: "0198_workflow_attribution_spine.sql",
