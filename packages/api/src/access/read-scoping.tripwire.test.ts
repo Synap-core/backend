@@ -560,6 +560,34 @@ describe("read-scoping tripwire — no unguarded workspace-filtered reads", () =
     // Status-enum only, no secret/scope material. Tracked debt; floor by binding
     // the poll to the authenticated key's own id once the handshake allows it.
     "hub-protocol/rest/setup.ts::get /setup/agent/pending/:keyId",
+    // NOT A LEAK — a capability lookup, and the only shape in this allowlist
+    // that is exempt by DESIGN rather than as tracked debt.
+    //
+    // GET /calendar/feed/:token.ics is unauthenticated on purpose: a calendar
+    // client cannot send a header, so the 32-random-byte token in the path IS
+    // the credential. There is no authenticated user to floor the lookup WITH
+    // — the row is what establishes identity. Reading it by
+    // `eq(tokenLookupHash, sha256(token))` is therefore the scope check, not a
+    // bypass of one: without the secret there is no row, and a miss is a flat
+    // 404 with no oracle.
+    //
+    // What makes that safe is the NEXT read, and it is asserted elsewhere
+    // rather than assumed here: the entity query is floored by the ROW's
+    // `userId` (`entityReadVisibleWhere(row.userId)`), never by anything the
+    // caller supplied. `calendar-feed.authz.test.ts` drives the real handler
+    // and asserts the spy is called with the token owner and never with
+    // another user — replacing `row.userId` with a different id turns 2 of them
+    // red (verified). If this entry ever stops being backed by that test, it
+    // stops being justified.
+    //
+    // Boundary, measured while verifying the above: those tests catch the floor
+    // being REPLACED, not being WIDENED. `loadVisibleCalendarEntities(
+    // c.req.query("as") ?? row.userId)` — a caller-supplied override with the
+    // owner as fallback — stayed green, because no fixture sends the param.
+    // A caller-supplied acting identity is the W0 shape the LAST check in this
+    // file hunts, so it is covered there rather than here; do not read these
+    // tests as proof that no query param can influence the floor.
+    "hub-protocol/rest/calendar-feed.ts::get /calendar/feed/:token",
   ]);
 
   it("every Hono GET handler by-id/inArray read of a registered scoped table applies a scope floor", () => {
