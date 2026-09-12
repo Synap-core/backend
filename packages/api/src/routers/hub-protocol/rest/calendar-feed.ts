@@ -17,6 +17,7 @@ import {
   and,
   isNull,
   inArray,
+  desc,
 } from "@synap/database";
 
 import { entityReadVisibleWhere } from "../../entities/helpers.js";
@@ -29,7 +30,50 @@ import {
 } from "../../../utils/calendar-ics.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  hasScope,
+  logger,
+  type HubHono,
+  type HubVariables,
+} from "./_shared.js";
+import type { Context } from "hono";
+
+/**
+ * SECURITY — a personal calendar URL is not something an agent may mint.
+ *
+ * Mint/rotate/revoke are gated only by `hub-protocol.write`, which agent keys
+ * hold. Without this an agent could issue a permanent, unauthenticated,
+ * pod-wide read URL for its human owner (and rotation would silently kill the
+ * owner's real subscription).
+ *
+ * This is a HARD REJECT rather than `checkPermissionOrPropose`, deliberately:
+ * the plaintext token is returned exactly once, synchronously, to whoever made
+ * the call. An approved proposal would hand the secret to the AGENT, not to
+ * the human who approved it — the propose path cannot express this operation
+ * safely. Same shape as `rejectAgentReviewer` in `_shared.ts`, which refuses
+ * agent credentials on proposal review for the same "this is the human's step"
+ * reason.
+ */
+function rejectAgentCredential(
+  c: Context<{ Variables: HubVariables }>,
+  action: "mint" | "rotate" | "revoke"
+): Response | null {
+  const agentUserId = c.get("agentUserId");
+  if (!agentUserId) return null;
+  logger.warn(
+    { agentUserId, action },
+    "agent credential attempted to change a personal calendar feed — blocked"
+  );
+  return c.json(
+    {
+      error:
+        `An agent credential cannot ${action} a calendar feed URL. The feed is ` +
+        "a personal secret and is shown once to the person who asks for it — " +
+        `${action} it from a human session.`,
+    },
+    403
+  );
+}
 
 const FeedStatusSchema = z
   .object({
@@ -113,6 +157,17 @@ async function persistToken(userId: string, token: string) {
   }
 }
 
+/**
+ * Most rows one poll will ever read.
+ *
+ * The feed re-serializes its whole body on every poll (ICS has no incremental
+ * sync) and a client polls every 5-15 minutes, so an unbounded read is a
+ * per-user, per-device memory multiplier. 5000 dated objects inside a
+ * ~13-month window is far past any real pod; a pod that exceeds it is telling
+ * us the window needs to shrink, not that the ceiling should rise.
+ */
+const FEED_ROW_CEILING = 5000;
+
 function asProps(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
@@ -140,7 +195,15 @@ async function loadVisibleCalendarEntities(
         isNull(entities.deletedAt),
         inArray(profiles.slug, [...CALENDAR_PROFILE_SLUGS])
       )
-    );
+    )
+    // A hard ceiling on one poll. The date window that decides what actually
+    // reaches the calendar lives in `buildSynapCalendarIcs` — it cannot be a
+    // SQL predicate, because the date is a JSONB property with four possible
+    // keys and no index. So this LIMIT is a memory bound, not the window:
+    // newest-touched first, so an over-limit pod loses its stalest rows rather
+    // than an arbitrary page.
+    .orderBy(desc(entities.updatedAt))
+    .limit(FEED_ROW_CEILING);
 
   return rows.map((row) => ({
     id: row.id,
@@ -230,6 +293,8 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
+    const blocked = rejectAgentCredential(c, "mint");
+    if (blocked) return blocked;
     const userId = c.get("userId");
     if (!requireUser(userId)) return c.json({ error: "Unauthenticated" }, 401);
 
@@ -260,6 +325,8 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
+    const blocked = rejectAgentCredential(c, "rotate");
+    if (blocked) return blocked;
     const userId = c.get("userId");
     if (!requireUser(userId)) return c.json({ error: "Unauthenticated" }, 401);
 
@@ -278,6 +345,40 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
       "calendar feed rotated"
     );
     return c.json(feedUrls(podHost, token), 200);
+  });
+
+  /**
+   * DELETE /calendar/feed — AUTH. Turn the feed OFF.
+   *
+   * Rotation replaces a leaked URL; it cannot switch the feature off, and until
+   * this existed `revokedAt` was written `null` and nothing else — so the
+   * revoked branch in the reader below was unreachable code and a user who
+   * changed their mind had no way out except deleting the row by hand.
+   *
+   * Revoking is idempotent: no live token is a 200 with `revoked: false`, not a
+   * 404, because "there is nothing to turn off" is the state the caller wanted.
+   */
+  app.delete("/calendar/feed", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const blocked = rejectAgentCredential(c, "revoke");
+    if (blocked) return blocked;
+    const userId = c.get("userId");
+    if (!requireUser(userId)) return c.json({ error: "Unauthenticated" }, 401);
+
+    const existing = await liveTokenFor(userId);
+    if (!existing) return c.json({ revoked: false });
+
+    await db
+      .update(calendarFeedTokens)
+      .set({ revokedAt: new Date() })
+      .where(eq(calendarFeedTokens.id, existing.id));
+    logger.info(
+      { userId, tokenPrefix: existing.tokenPrefix },
+      "calendar feed revoked"
+    );
+    return c.json({ revoked: true });
   });
 
   /**

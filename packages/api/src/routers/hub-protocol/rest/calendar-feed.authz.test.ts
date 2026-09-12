@@ -22,7 +22,15 @@ vi.mock("@synap/database", async (importOriginal) => {
   const selectChain: Record<string, unknown> = {};
   selectChain.from = () => selectChain;
   selectChain.innerJoin = () => selectChain;
-  selectChain.where = (...args: unknown[]) => whereMock(...args);
+  // The read ends `.where(...).orderBy(...).limit(n)`. Keep the chain honest:
+  // `where` records the predicate, and the AWAITED value comes from the end of
+  // the chain — otherwise adding a LIMIT silently turns every row list empty.
+  selectChain.where = (...args: unknown[]) => {
+    const rows = whereMock(...args);
+    return {
+      orderBy: () => ({ limit: () => rows }),
+    };
+  };
   return {
     ...actual,
     calendarFeedTokens: actual.calendarFeedTokens ?? {
@@ -72,6 +80,11 @@ vi.mock("../../entities/helpers.js", async (importOriginal) => {
 const { registerCalendarFeedRoutes } = await import("./calendar-feed.js");
 import type { HubHono, HubVariables } from "./_shared.js";
 
+/** Inside the -30d/+365d feed window, whenever the suite runs. */
+const SOON = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)
+  .toISOString()
+  .slice(0, 10);
+
 const USER_A = "user-a";
 const USER_B = "user-b";
 const TOKEN_A = "token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -106,7 +119,7 @@ describe("GET /calendar/feed/:token.ics — token isolation", () => {
           id: "entity-a",
           title: "Alice deadline",
           preview: null,
-          properties: { dueDate: "2026-07-25" },
+          properties: { dueDate: SOON },
           type: "task",
           profileSlug: "task",
           updatedAt: new Date("2026-07-20T00:00:00.000Z"),
@@ -141,7 +154,7 @@ describe("GET /calendar/feed/:token.ics — token isolation", () => {
           id: "entity-a",
           title: "Only Alice",
           preview: null,
-          properties: { dueDate: "2026-09-12" },
+          properties: { dueDate: SOON },
           type: "task",
           profileSlug: "task",
           updatedAt: new Date(),
@@ -179,5 +192,159 @@ describe("GET /calendar/feed/:token.ics — token isolation", () => {
     const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
     expect(res.status).toBe(404);
     expect(whereMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * THE AUTH SKIP, THROUGH THE REAL MIDDLEWARE.
+ *
+ * The tests above build a bare app and never mount `hubAuthMiddleware`, so
+ * every one of them stays green if the `.endsWith(".ics")` conjunct is deleted
+ * from `_middleware/auth.ts` — the change that would open MINT and ROTATE to
+ * anonymous callers. That is the single most dangerous edit anyone can make to
+ * this feature, and until now no test could see it.
+ *
+ * So this block mounts the real middleware and asserts the BOUNDARY: the `.ics`
+ * read passes without a credential, and the mint/rotate/revoke doors beside it
+ * do not.
+ *
+ * Negative control (verified when written): remove `&& rel.endsWith(".ics")`
+ * from auth.ts and "mint is NOT anonymous" goes red. Remove the whole conjunct
+ * and "the .ics read is anonymous" goes red instead.
+ */
+describe("the unauth skip covers ONLY the .ics read", () => {
+  const authed: string[] = [];
+
+  async function appWithRealAuth() {
+    const { hubAuthMiddleware } = await import("../_middleware/auth.js");
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    // Record whichever requests reach authentication, then stop them there —
+    // we are testing the SKIP decision, not the credential check itself.
+    app.use("*", async (c, next) => {
+      const before = c.req.path;
+      let reached = true;
+      const res = await hubAuthMiddleware(c, async () => {
+        reached = false; // skipped auth entirely
+        await next();
+      });
+      if (reached) authed.push(before);
+      return res;
+    });
+    registerCalendarFeedRoutes(app);
+    return app;
+  }
+
+  beforeEach(() => {
+    authed.length = 0;
+    findFirstMock.mockResolvedValue(null);
+  });
+
+  it("the .ics read is anonymous (no Authorization header, not 401)", async () => {
+    const app = await appWithRealAuth();
+    const res = await app.request(`/api/hub/calendar/feed/${TOKEN_A}.ics`);
+    // 404 because findFirst is null — what matters is that it REACHED the
+    // handler rather than being turned away by auth.
+    expect(res.status).toBe(404);
+    expect(authed).toHaveLength(0);
+  });
+
+  it("mint is NOT anonymous", async () => {
+    const app = await appWithRealAuth();
+    const res = await app.request("/api/hub/calendar/feed", {
+      method: "POST",
+    });
+    expect(res.status).not.toBe(200);
+    expect(authed).toEqual(["/api/hub/calendar/feed"]);
+  });
+
+  it("rotate is NOT anonymous", async () => {
+    const app = await appWithRealAuth();
+    const res = await app.request("/api/hub/calendar/feed/rotate", {
+      method: "POST",
+    });
+    expect(res.status).not.toBe(200);
+    expect(authed).toEqual(["/api/hub/calendar/feed/rotate"]);
+  });
+
+  it("revoke is NOT anonymous", async () => {
+    const app = await appWithRealAuth();
+    const res = await app.request("/api/hub/calendar/feed", {
+      method: "DELETE",
+    });
+    expect(res.status).not.toBe(200);
+    expect(authed).toEqual(["/api/hub/calendar/feed"]);
+  });
+
+  it("a path that merely CONTAINS /calendar/feed/ is not anonymous", async () => {
+    const app = await appWithRealAuth();
+    await app.request("/api/hub/calendar/feed/rotate.ics.json");
+    expect(authed).toEqual(["/api/hub/calendar/feed/rotate.ics.json"]);
+  });
+});
+
+/**
+ * Mint/rotate/revoke are the HUMAN's doors.
+ *
+ * An agent key carries `hub-protocol.write`, so scope alone let it issue a
+ * permanent unauthenticated read URL for its owner — or rotate, silently
+ * killing the owner's real subscription. The plaintext is returned once,
+ * synchronously, so this cannot route through propose: approving would hand
+ * the secret to the agent. Hard reject, same shape as `rejectAgentReviewer`.
+ */
+describe("an agent credential cannot change the feed", () => {
+  function appAs(vars: Partial<HubVariables>): HubHono {
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("*", async (c, next) => {
+      c.set("scopes", ["hub-protocol.read", "hub-protocol.write"]);
+      c.set("userId", USER_A);
+      for (const [k, v] of Object.entries(vars)) {
+        c.set(k as keyof HubVariables, v as never);
+      }
+      await next();
+    });
+    registerCalendarFeedRoutes(app);
+    return app;
+  }
+
+  const doors: Array<[string, string]> = [
+    ["POST", "/calendar/feed"],
+    ["POST", "/calendar/feed/rotate"],
+    ["DELETE", "/calendar/feed"],
+  ];
+
+  it.each(doors)("403s %s %s for an agent credential", async (method, path) => {
+    findFirstMock.mockResolvedValue(null);
+    const app = appAs({ agentUserId: "agent-9" });
+    const res = await app.request(path, { method });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toMatch(/agent credential cannot/i);
+  });
+
+  it("a human session still reaches the handler", async () => {
+    findFirstMock.mockResolvedValue(null);
+    const app = appAs({});
+    // No live token to revoke: 200 { revoked: false }, i.e. it got THROUGH.
+    const res = await app.request("/calendar/feed", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: false });
+  });
+
+  it("revoke writes revokedAt — the feed can actually be turned off", async () => {
+    findFirstMock.mockResolvedValue({
+      id: "feed-a",
+      userId: USER_A,
+      tokenLookupHash: hashToken(TOKEN_A),
+      tokenPrefix: "token-aa",
+      createdAt: new Date(),
+      revokedAt: null,
+    });
+    const app = appAs({});
+    const res = await app.request("/calendar/feed", { method: "DELETE" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ revoked: true });
+    // Reachability: the UPDATE actually ran. Before this door existed,
+    // `revokedAt` was only ever written null and the reader's revoked branch
+    // was unreachable code.
+    expect(updateWhereMock).toHaveBeenCalledTimes(1);
   });
 });

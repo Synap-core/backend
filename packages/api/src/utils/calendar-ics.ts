@@ -128,13 +128,28 @@ function profileOf(entity: CalendarFeedEntity): string {
   return (entity.profileSlug || entity.type || "").toLowerCase();
 }
 
-/** Cancelled tasks are omitted from the feed. Events/meetings are not. */
-export function isCancelledTask(entity: CalendarFeedEntity): boolean {
+/**
+ * A task that no longer wants doing — it must leave the calendar.
+ *
+ * Mirrors relay's `isOpenStatus` (`relay-app/src/lib/task-model.ts`): open is
+ * `todo`, `in-progress`, or ABSENT — an unknown or missing status is open,
+ * because a task nobody has finished is not finished. Everything else (done,
+ * cancelled) is closed.
+ *
+ * This used to filter `cancelled` only, which meant every task you ever ticked
+ * stayed in Apple Calendar forever — and the feed is read-only, so the user
+ * could not delete them. It also disagreed with the phone: relay's Week screen
+ * drops done tasks, so "my week" meant two different sets on two screens.
+ *
+ * Events and meetings are never filtered by status: a meeting that happened is
+ * still a thing that happened, and a calendar is a record of it.
+ */
+export function isClosedTask(entity: CalendarFeedEntity): boolean {
   if (profileOf(entity) !== "task") return false;
   const status = entity.properties?.status;
   if (typeof status !== "string") return false;
   const n = status.trim().toLowerCase();
-  return n === "cancelled" || n === "canceled";
+  return n !== "todo" && n !== "in-progress" && n !== "in_progress" && n !== "";
 }
 
 export function escapeIcsText(value: string): string {
@@ -206,7 +221,7 @@ export function entityToVEvent(
   entity: CalendarFeedEntity,
   podHost: string
 ): VEventInput | null {
-  if (isCancelledTask(entity)) return null;
+  if (isClosedTask(entity)) return null;
   const raw = resolveEntityDateValue(entity);
   const start = resolveEntityDate(entity);
   if (!start || !raw) return null;
@@ -239,10 +254,17 @@ export function entityToVEvent(
     typeof entity.title === "string" && entity.title.trim()
       ? entity.title.trim()
       : "Untitled";
+  // DESCRIPTION is `properties.description` ONLY.
+  //
+  // `entity.preview` is the entity BODY excerpt — the first lines of whatever
+  // the user wrote inside the object. That is note content, not a calendar
+  // field, and this feed is served over an unauthenticated URL that syncs to a
+  // phone, a laptop and any device the calendar account touches. Putting the
+  // body in the event pushed private prose somewhere the user never chose.
   const description =
-    (typeof entity.preview === "string" && entity.preview.trim()) ||
-    (typeof props.description === "string" && props.description.trim()) ||
-    undefined;
+    typeof props.description === "string" && props.description.trim()
+      ? props.description.trim()
+      : undefined;
   const location =
     typeof props.location === "string" && props.location.trim()
       ? props.location.trim()
@@ -304,16 +326,48 @@ export function buildIcsCalendar(
 }
 
 /**
- * Filter cancelled/undated entities and serialize a METHOD:PUBLISH calendar.
+ * How far either side of "now" the feed reaches.
+ *
+ * A subscribed client re-fetches the WHOLE body every poll — there is no
+ * incremental sync in ICS — so an unwindowed feed grows without bound and is
+ * re-serialized ~96x/day per client. Backwards is short (a calendar is for
+ * what is coming; last year's tasks are history you read in the app), forwards
+ * is a year so a dated commitment never silently drops off the end.
+ */
+export const FEED_WINDOW_DAYS_BACK = 30;
+export const FEED_WINDOW_DAYS_AHEAD = 365;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Is `start` inside the feed window around `now`? */
+export function isWithinFeedWindow(start: Date, now: Date): boolean {
+  const from = now.getTime() - FEED_WINDOW_DAYS_BACK * DAY_MS;
+  const to = now.getTime() + FEED_WINDOW_DAYS_AHEAD * DAY_MS;
+  const at = start.getTime();
+  return at >= from && at <= to;
+}
+
+/**
+ * Filter closed/undated/out-of-window entities and serialize a METHOD:PUBLISH
+ * calendar.
+ *
+ * `now` is INJECTED rather than read from the clock so the window is
+ * deterministic under test — the same reason the automation evaluator takes it.
  */
 export function buildSynapCalendarIcs(
   entities: CalendarFeedEntity[],
   podHost: string,
-  opts?: { entityUrl?: (id: string) => string | undefined }
+  opts?: {
+    entityUrl?: (id: string) => string | undefined;
+    now?: Date;
+  }
 ): { ics: string; events: VEventInput[]; maxUpdatedAt: Date | null } {
   const events: VEventInput[] = [];
+  const now = opts?.now ?? new Date();
   let maxUpdatedAt: Date | null = null;
   for (const entity of entities) {
+    const start = resolveEntityDate(entity);
+    if (!start || !isWithinFeedWindow(start, now)) continue;
     const vevent = entityToVEvent(entity, podHost);
     if (!vevent) continue;
     events.push(vevent);
