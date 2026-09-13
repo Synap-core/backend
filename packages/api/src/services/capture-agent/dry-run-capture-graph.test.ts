@@ -19,11 +19,16 @@ import { fileURLToPath } from "url";
 
 const { resolveProfile, validateEntityCreateForProposal } = vi.hoisted(() => ({
   resolveProfile: vi.fn(async (slug: string) =>
-    slug === "file" ? { id: "prof-file", defaultValues: {} } : null
+    slug === "file"
+      ? { id: "prof-file", defaultValues: {} }
+      : slug === "knowledge"
+        ? { id: "prof-knowledge", defaultValues: {} }
+        : null
   ),
   validateEntityCreateForProposal: vi.fn(async () => ({
     valid: false,
     errors: ["'storageKey' is required"],
+    unmodeled: [] as Array<{ key: string; didYouMean?: string }>,
   })),
 }));
 
@@ -83,6 +88,60 @@ describe("dryRunCaptureGraph", () => {
     expect(out.relationsFailed[0].reason).toMatch(
       /Unknown relation type: "related_to".*works_at/
     );
+    expect(out.unmodeledProperties).toEqual([]);
+  });
+
+  it("reports an invented property key — valid, but named with its did-you-mean", async () => {
+    // The first-client bug: `knowledgeform` for `knowledgeForm` passed every
+    // check and was stored as a key nothing reads.
+    validateEntityCreateForProposal.mockImplementationOnce(async () => ({
+      valid: true,
+      errors: [],
+      unmodeled: [{ key: "knowledgeform", didYouMean: "knowledgeForm" }],
+    }));
+    const out = await dryRunCaptureGraph(fakeDb, {
+      userId: "u1",
+      workspaceId: null,
+      entities: [
+        {
+          ref: "k",
+          profileSlug: "knowledge",
+          title: "A lesson",
+          properties: { knowledgeform: "insight" },
+        },
+      ],
+      relations: [],
+    });
+
+    expect(out.invalidEntities).toEqual([]);
+    expect(out.unmodeledProperties).toEqual([
+      {
+        label: "A lesson",
+        profileSlug: "knowledge",
+        unmodeled: [{ key: "knowledgeform", didYouMean: "knowledgeForm" }],
+      },
+    ]);
+  });
+});
+
+describe("reserved kinds are refused at the graph preflight", () => {
+  it("refuses a `project` entity with the floor's own wording, pointing at the plan's project step", async () => {
+    resolveProfile.mockClear();
+    const out = await dryRunCaptureGraph(fakeDb, {
+      userId: "u1",
+      workspaceId: null,
+      entities: [
+        { ref: "p", profileSlug: "project", title: "Acme onboarding" },
+      ],
+      relations: [],
+    });
+    expect(out.invalidEntities).toHaveLength(1);
+    expect(out.invalidEntities[0].errors[0]).toMatch(
+      /^'project' is not an entity kind: projects live in the `projects` TABLE/
+    );
+    expect(out.invalidEntities[0].errors[0]).toMatch(/`projects\[\]` step/);
+    // Refused BEFORE profile resolution — never filed, never resolved.
+    expect(resolveProfile).not.toHaveBeenCalledWith("project", "u1", null);
   });
 });
 
@@ -102,5 +161,22 @@ describe("submitCaptureGraph and the dry run share ONE preflight", () => {
     expect(submitBody.length).toBeGreaterThan(1000);
     expect(submitBody).toContain("await preflightCaptureGraphOperations(");
     expect(submitBody).toContain("await buildCaptureGraphOperations(");
+  });
+
+  it("reaches the PLAN preflight only through that same preflight", () => {
+    // One call site, inside `preflightCaptureGraphOperations` — so a submit, a
+    // dry run and a revision (`validateCompositeOperations`) all run it.
+    expect(src.match(/preflightPlanOperations\(/g) ?? []).toHaveLength(1);
+    const preflightBody = src.slice(
+      src.indexOf("export async function preflightCaptureGraphOperations("),
+      src.indexOf("export async function validateCompositeOperations(")
+    );
+    expect(preflightBody).toContain("await preflightPlanOperations(");
+    const reviseBody = src.slice(
+      src.indexOf("export async function validateCompositeOperations(")
+    );
+    expect(reviseBody.slice(0, 1500)).toContain(
+      "await preflightCaptureGraphOperations("
+    );
   });
 });

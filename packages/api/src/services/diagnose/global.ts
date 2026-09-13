@@ -62,6 +62,11 @@ import {
   summarizeSchemaContract,
   type SchemaContractSignal,
 } from "./schema-contract.js";
+import {
+  readQualityByPromptVersionSignal,
+  summarizeQualityByPromptVersion,
+  type QualityByPromptVersionSignal,
+} from "./prompt-version-quality.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const PENDING_SCAN_LIMIT = 1000;
@@ -125,6 +130,12 @@ export interface GlobalSignals {
    * the same reason: absent means NOT COMPUTED, and no section is emitted.
    */
   schemaContract?: SchemaContractSignal;
+  /**
+   * Review outcomes per intake-run prompt version. Optional: absent means NOT
+   * COMPUTED (no section); `available: false` means the read FAILED (a section
+   * that says so).
+   */
+  qualityByPromptVersion?: QualityByPromptVersionSignal;
 }
 
 /**
@@ -323,6 +334,12 @@ export function summarizeGlobalHealth(
 
   if (signals.schemaContract) {
     sections.push(summarizeSchemaContract(signals.schemaContract));
+  }
+
+  if (signals.qualityByPromptVersion) {
+    sections.push(
+      summarizeQualityByPromptVersion(signals.qualityByPromptVersion)
+    );
   }
 
   // Roll up: worst section wins.
@@ -608,16 +625,18 @@ export async function diagnoseGlobal(params: {
   // this file's counts disagreed with `orient` before. Still independent of
   // `agentActivity` (which depends on `agentRows` from the big Promise.all),
   // so the two awaits run concurrently rather than round-tripping serially.
-  const [agentActivity, reviewQueue, schemaContract] = await Promise.all([
-    Promise.all(
-      agentActivityCounts.map(async (a) => ({
-        ...a,
-        cap: await agentDailyProposalCap(a.agentId),
-      }))
-    ),
-    reviewQueueApproval({ userId, workspaceId }),
-    gatherSchemaContractSignal({ userId, workspaceId }),
-  ]);
+  const [agentActivity, reviewQueue, schemaContract, qualityByPromptVersion] =
+    await Promise.all([
+      Promise.all(
+        agentActivityCounts.map(async (a) => ({
+          ...a,
+          cap: await agentDailyProposalCap(a.agentId),
+        }))
+      ),
+      reviewQueueApproval({ userId, workspaceId }),
+      gatherSchemaContractSignal({ userId, workspaceId }),
+      readQualityByPromptVersionSignal({ userId, workspaceId }),
+    ]);
 
   return summarizeGlobalHealth(
     {
@@ -632,6 +651,7 @@ export async function diagnoseGlobal(params: {
       agentActivity,
       reviewQueue,
       schemaContract,
+      qualityByPromptVersion,
     },
     { workspaceId }
   );

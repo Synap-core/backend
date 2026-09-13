@@ -7,7 +7,9 @@
  * Founder decision: corrections become VERSIONED guideline text, never opaque
  * memory.
  *   - A user's OWN correction ("make this a rule") → a guideline version
- *     DIRECTLY: `recordCorrectionAsGuideline` (the room calls it).
+ *     DIRECTLY: `recordCorrectionAsGuideline`, through the room's door
+ *     `guidelines.recordCorrection`. The same door called by an AGENT key
+ *     files `proposeCorrectionAsGuideline` instead — never a direct write.
  *   - An INFERRED pattern → ONE proposal the user reviews, filed by the
  *     structure-guideline scanner (`packages/jobs/src/workers/
  *     structure-guideline-scanner.ts`); approving it runs
@@ -31,11 +33,14 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  and,
   eq,
+  drizzleSql,
   proposals,
   createGuideline,
   supersedeGuideline,
   findCurrentGuideline,
+  insertPendingProposal,
   GuidelineSupersedeConflictError,
   GUIDELINE_TEXT_MAX,
   STRUCTURE_GUIDELINE_PROPOSAL_TYPE,
@@ -45,6 +50,8 @@ import {
 } from "@synap/database";
 import { profiles, ProposalStatus } from "@synap/database/schema";
 import type { ConfigSetting } from "@synap/database/schema";
+import { createLogger } from "@synap-core/core";
+import { emitSideEffects } from "@synap/events";
 import { isGuidelineSourceKind } from "./source-kind.js";
 import { getWorkspaceRole, isPodAdmin } from "../../utils/workspace-role.js";
 import { mergeProposalRevision } from "../proposals/proposals-service.js";
@@ -119,7 +126,7 @@ export const guidelineVersionDbDeps: GuidelineVersionDeps = {
 /** The rung's ref vocabulary — the same gates the guidelines write door applies. */
 async function assertScope(
   scope: CorrectionGuidelineScope,
-  deps: GuidelineVersionDeps
+  deps: Pick<GuidelineVersionDeps, "kindExists">
 ): Promise<void> {
   const ref = scope.scopeRef ?? null;
   const bad = (message: string) =>
@@ -155,6 +162,18 @@ function assertTextFits(text: string): string {
   return trimmed;
 }
 
+/** The next version's text: the current guideline plus the correction. */
+function appendCorrection(
+  current: CurrentGuideline | null,
+  correction: string
+): string {
+  return assertTextFits(
+    current?.text.trim()
+      ? `${current.text.trim()}\n\n${correction}`
+      : correction
+  );
+}
+
 // ── userStated: a human's own correction ────────────────────────────────────
 
 /**
@@ -177,11 +196,7 @@ export async function recordCorrectionAsGuideline(
   await assertScope(input.scope, deps);
   const correction = assertTextFits(input.text);
   const current = await deps.findCurrent(input.scope, input.userId);
-  const text = assertTextFits(
-    current?.text.trim()
-      ? `${current.text.trim()}\n\n${correction}`
-      : correction
-  );
+  const text = appendCorrection(current, correction);
   const source = input.sourceProposalId
     ? `correction:${input.sourceProposalId}`
     : "correction";
@@ -206,6 +221,174 @@ export async function recordCorrectionAsGuideline(
     }
     throw err;
   }
+}
+
+// ── Agent-stated: the same correction, PROPOSED ─────────────────────────────
+
+const logger = createLogger({ module: "guideline-versions" });
+
+/**
+ * The dedup identity of a correction proposal. Its OWN namespace — never the
+ * scanner's `structureClusterKey` — so a pending stated correction and the
+ * scanner's inferred cluster can never silence each other.
+ *
+ * Stored in `proposals.data` (jsonb), so it must be JSON-text-safe: Postgres
+ * refuses `\u0000` in jsonb (22P05). JSON-encoding the parts keeps them
+ * unambiguous without a NUL separator.
+ */
+export function correctionClusterKey(input: {
+  userId: string;
+  scope: CorrectionGuidelineScope;
+}): string {
+  const { scope } = input;
+  return `correction:${JSON.stringify([
+    input.userId,
+    scope.scopeKind,
+    scope.scopeRef ?? null,
+    scope.workspaceId ?? null,
+  ])}`;
+}
+
+export interface CorrectionProposalDeps extends Pick<
+  GuidelineVersionDeps,
+  "findCurrent" | "kindExists"
+> {
+  /** The id of a still-PENDING proposal already filed under `clusterKey`. */
+  findPendingForCluster(clusterKey: string): Promise<string | null>;
+  fileProposal(input: {
+    data: StructureGuidelineProposalLike;
+    workspaceId: string | null;
+    userId: string;
+    agentUserId: string;
+  }): Promise<string>;
+}
+
+/**
+ * The stored payload. `evidence.windowDays` is ABSENT: one stated correction
+ * has no scan window, and the presenter reads a missing count as "not shown",
+ * never as a fabricated number.
+ */
+type StructureGuidelineProposalLike = Omit<
+  StructureGuidelineProposalData,
+  "evidence"
+> & {
+  evidence: Omit<StructureGuidelineProposalData["evidence"], "windowDays">;
+};
+
+export const correctionProposalDbDeps: CorrectionProposalDeps = {
+  findCurrent: guidelineVersionDbDeps.findCurrent,
+  kindExists: guidelineVersionDbDeps.kindExists,
+  // Same predicate as the scanner's `latestProposalForCluster`
+  // (`data->>'clusterKey'`), narrowed to PENDING: the jobs package owns that
+  // one and api cannot import jobs, and a decided proposal must not block a
+  // new ask.
+  async findPendingForCluster(clusterKey) {
+    const [row] = await db
+      .select({ id: proposals.id })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.proposalType, STRUCTURE_GUIDELINE_PROPOSAL_TYPE),
+          eq(proposals.status, ProposalStatus.PENDING),
+          drizzleSql`${proposals.data}->>'clusterKey' = ${clusterKey}`
+        )
+      )
+      .limit(1);
+    return row?.id ?? null;
+  },
+  async fileProposal({ data, workspaceId, userId, agentUserId }) {
+    // `db` passed explicitly: the one pending-proposal door, on this module's
+    // connection.
+    const { proposal } = await insertPendingProposal(
+      {
+        workspaceId,
+        targetType: "governance",
+        targetId: userId,
+        proposalType: STRUCTURE_GUIDELINE_PROPOSAL_TYPE,
+        data: data as unknown as Record<string, unknown>,
+        createdBy: userId,
+        proposedByUserId: null,
+        // OWNER FLOOR (0248): the human the guideline applies to decides (D1).
+        subjectUserId: userId,
+        agentUserId,
+      },
+      db
+    );
+    void emitSideEffects({
+      subjectType: "proposal",
+      action: "created",
+      subjectId: proposal.id,
+      userId,
+      data: {
+        proposalStatus: "created",
+        targetType: "governance",
+        changeType: STRUCTURE_GUIDELINE_PROPOSAL_TYPE,
+      },
+    }).catch((err) => {
+      logger.warn(
+        { err, proposalId: proposal.id },
+        "correction guideline proposal: emitSideEffects failed (non-fatal)"
+      );
+    });
+    return proposal.id;
+  },
+};
+
+/**
+ * An AGENT asked to make a correction a rule. An agent never records a
+ * guideline: it files the SAME `governance.structure_guideline` proposal the
+ * scanner files, so approval runs `approveStructureGuidelineProposal` with its
+ * audience authority (D1) and rebase-on-conflict (D2) unchanged. The drafted
+ * text is the current version + the correction, exactly what the human path
+ * would have written.
+ */
+export async function proposeCorrectionAsGuideline(
+  input: {
+    /** The HUMAN the agent acts for — the guideline's owner and subject. */
+    userId: string;
+    agentUserId: string;
+    scope: CorrectionGuidelineScope;
+    text: string;
+    sourceProposalId: string;
+  },
+  deps: CorrectionProposalDeps = correctionProposalDbDeps
+): Promise<{ proposalId: string; alreadyProposed: boolean }> {
+  await assertScope(input.scope, deps);
+  const addition = assertTextFits(input.text);
+  // The dedup identity is CHECKED, not just stored: one pending rule proposal
+  // per (human, scope). A repeat call answers the proposal already waiting
+  // instead of filing N for the same decision. (No unique index backs this, so
+  // two concurrent first calls can still both file — accepted, low priority.)
+  const clusterKey = correctionClusterKey(input);
+  const pending = await deps.findPendingForCluster(clusterKey);
+  if (pending) return { proposalId: pending, alreadyProposed: true };
+  const current = await deps.findCurrent(input.scope, input.userId);
+  const data: StructureGuidelineProposalLike = {
+    userId: input.userId,
+    sourceId: input.userId,
+    clusterKey,
+    scopeKind: input.scope.scopeKind,
+    scopeRef: input.scope.scopeRef ?? null,
+    workspaceId: input.scope.workspaceId ?? null,
+    text: appendCorrection(current, addition),
+    addition,
+    supersedesGuidelineId: current?.id ?? null,
+    currentText: current?.text ?? null,
+    evidence: {
+      corrections: 1,
+      proposals: 1,
+      reasonHistogram: {},
+      exampleReasons: [addition.replace(/\s+/g, " ").slice(0, 160)],
+      sampleProposalIds: [input.sourceProposalId],
+    },
+  };
+  const proposalId = await deps.fileProposal({
+    data,
+    workspaceId: data.workspaceId,
+    userId: input.userId,
+    agentUserId: input.agentUserId,
+  });
+  return { proposalId, alreadyProposed: false };
 }
 
 // ── Inferred: the governance.structure_guideline approval ───────────────────

@@ -32,6 +32,10 @@
  */
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import {
+  isObjectNavView,
+  type ObjectNavView,
+} from "@synap-core/types/navigation";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import type { ExpectedOutput } from "@synap/playbooks";
 import type { OwedSlot } from "../focus-sessions/owed-outputs.js";
@@ -43,6 +47,12 @@ export interface SignalTarget {
   /** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
   kind: string;
   id: string;
+  /**
+   * Optional view reading of that object (`'room'` = a session's Intake Room).
+   * Only a member of `OBJECT_NAV_VIEWS` (`@synap-core/types/navigation`) — the
+   * same allowlist the clients re-check with `isObjectNavView`.
+   */
+  view?: ObjectNavView;
 }
 
 export type SignalKind =
@@ -132,6 +142,13 @@ export interface NotificationSignalInput {
   sourceType: string;
   sourceId: string | null;
   createdAt: Date;
+  /**
+   * The row's persisted registry actions (`notifications.actions`). Read ONLY
+   * for a `navigate-object` action's `view`, so a notification that opens a
+   * room from its banner also opens the room from the inbox — one source, the
+   * registry row, never a per-type map here.
+   */
+  actions?: unknown;
 }
 
 /**
@@ -151,16 +168,47 @@ export const NOTIFICATION_TARGET_KIND: Readonly<Record<string, string>> = {
   agent: "run",
   proactive_message: "channel",
   ai_proactive: "channel",
+  // `handoff.continue` (notif-center `requestHandoff`) — sourceId is the session id.
+  session: "session",
 };
 
-/** Object-nav address for a notification, or null when it has none. */
+/**
+ * Object-nav address for a notification, or null when it has none.
+ *
+ * `view` comes from the row's own `navigate-object` action, and only when that
+ * action addresses the SAME kind with no literal id of its own (so it means
+ * this row's `sourceId`) and names an allowlisted view. Anything else — no
+ * action, another kind, another object, an unknown view — yields no view.
+ */
 export function targetFromNotification(
   sourceType: string,
-  sourceId: string | null
+  sourceId: string | null,
+  actions?: unknown
 ): SignalTarget | null {
   if (!sourceId) return null;
   const kind = NOTIFICATION_TARGET_KIND[sourceType];
-  return kind ? { kind, id: sourceId } : null;
+  if (!kind) return null;
+  const view = viewFromActions(actions, kind);
+  return view ? { kind, id: sourceId, view } : { kind, id: sourceId };
+}
+
+function viewFromActions(
+  actions: unknown,
+  kind: string
+): ObjectNavView | undefined {
+  if (!Array.isArray(actions)) return undefined;
+  for (const action of actions) {
+    const handler =
+      typeof action === "object" && action !== null
+        ? (action as { handler?: unknown }).handler
+        : undefined;
+    if (typeof handler !== "object" || handler === null) continue;
+    const h = handler as Record<string, unknown>;
+    if (h.type !== "navigate-object" || h.kind !== kind || h.id !== undefined)
+      continue;
+    if (isObjectNavView(h.view)) return h.view;
+  }
+  return undefined;
 }
 
 /** One cluster → one signal. Title via the vocabulary SSOT, imperative mood
@@ -198,7 +246,7 @@ export function signalFromNotification(row: NotificationSignalInput): Signal {
     title: row.title,
     count: 1,
     occurredAt: row.createdAt,
-    target: targetFromNotification(row.sourceType, row.sourceId),
+    target: targetFromNotification(row.sourceType, row.sourceId, row.actions),
     category: row.category,
   };
 }
@@ -474,7 +522,19 @@ export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `distinct` is the cluster count BEFORE any page slice — `proposals.groups`
+ * `decisions` / `notifications` / `blocked` are the THREE PARTS the badge is
+ * made of, and `needsYou === decisions + notifications + blocked` by
+ * construction (asserted in `signals.union.test.ts`). They exist so a surface
+ * that states the number can also state what it is made of — Governance said
+ * "16 decisions pending" beside a shell badge of 89 and nothing on screen could
+ * reconcile the two. A client must READ each part; deriving one by subtracting
+ * the others from `needsYou` is the drift this shape exists to prevent.
+ *
+ * `distinct` is the cluster count BEFORE any page slice — the same value as
+ * `decisions`, kept under its original name for the clients that already read
+ * it. (Until 2026-09-13 it silently carried the WHOLE total, so a reader of
+ * "distinct clusters" got the union; no client rendered it, which is the only
+ * reason that shipped unnoticed.) `proposals.groups`
  * computes it, and its `scanTruncated` flag says whether it is a total or a
  * FLOOR. That truncation is carried through here rather than being flattened
  * away, so a caller can never render a floor as if it were exact. The owed half
@@ -500,16 +560,22 @@ export function countNeedsYou(args: {
   distinct: number;
   truncated: boolean;
   blocked: number;
+  /** Distinct pending proposal clusters (after the dedupe). */
+  decisions: number;
+  /** Unread notifications that survive the dedupe. */
+  notifications: number;
 } {
-  const notifCount = dedupeNotifications(
+  const decisions = args.distinctClusters;
+  const notifications = dedupeNotifications(
     args.notifications,
     args.clusters
   ).length;
   const blocked = args.owedSlots.length;
-  const total = args.distinctClusters + notifCount + blocked;
   return {
-    needsYou: total,
-    distinct: total,
+    needsYou: decisions + notifications + blocked,
+    distinct: decisions,
+    decisions,
+    notifications,
     truncated:
       args.clustersTruncated ||
       args.notificationsTruncated ||

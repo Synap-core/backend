@@ -487,13 +487,33 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Tool demand — a tool the user needs that Synap cannot connect yet ────
+    {
+      name: "tool.request",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Record that the user needs a TOOL (an app or service) Synap cannot connect yet — call it after market.search finds nothing for that tool, or when you are blocked for lack of it. One deduped tool request per tool name (a repeat is a no-op); an agent call is proposed for the user's review. Returns { status: created|updated|proposed|already-recorded|invalid-name|refused, normalizedKey, entityId, proposalId? }.",
+      parameters: {
+        type: "object",
+        required: ["toolName"],
+        properties: {
+          toolName: { type: "string" },
+          source: {
+            type: "string",
+            enum: ["market_search_miss", "blocked_agent"],
+          },
+        },
+        additionalProperties: false,
+      },
+    },
     // ── Marketplace (Wave 3b) — search/install over cp_catalog_cache ────────
     {
       name: "market.search",
       kind: "builtin",
       scope: "pod",
       description:
-        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to capturing the gap. Read-only.",
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
       parameters: {
         type: "object",
         properties: {

@@ -316,3 +316,47 @@ describe("cluster composition (reasonCounts / attentionFloorCount)", () => {
     expect(ATTENTION_FLOOR_REASONS.has("DAILY_WRITE_CEILING")).toBe(false);
   });
 });
+
+/**
+ * Some LLM agents XML-escape their own MCP/Hub-REST tool-call arguments, so a
+ * plain-text title can arrive stored as e.g. `Intake Doors &amp; Surface
+ * Spec`. Home's Needs-you row title is built from this cluster's
+ * `targetLabel` (`signalFromCluster` → `buildObjectActionTitle`), so a raw
+ * `&amp;` here reaches the same surface `useProposalPresentation` was fixed
+ * for on the proposal-detail side.
+ */
+describe("targetLabel decodes an agent's XML-escaped name/summary", () => {
+  const at = (iso: string) => new Date(iso);
+
+  it("decodes data.name into the cluster's targetLabel", () => {
+    const [c] = collapseProposalsToClusters([
+      {
+        id: "p1",
+        proposalType: "create",
+        targetType: "document",
+        targetId: "doc-1",
+        data: { name: "Intake Doors &amp; Surface Spec" },
+        createdAt: at("2026-01-01T00:00:00Z"),
+        workspaceId: null,
+      },
+    ]);
+    expect(c!.targetLabel).toBe("Intake Doors & Surface Spec");
+  });
+
+  it("falls back to a decoded summary when there is no name", () => {
+    const [c] = collapseProposalsToClusters([
+      {
+        id: "p1",
+        proposalType: "create",
+        targetType: "document",
+        targetId: "doc-1",
+        data: { summary: 'Create Document "Intake Doors &amp; Surface Spec"' },
+        createdAt: at("2026-01-01T00:00:00Z"),
+        workspaceId: null,
+      },
+    ]);
+    expect(c!.targetLabel).toBe(
+      'Create Document "Intake Doors & Surface Spec"'
+    );
+  });
+});

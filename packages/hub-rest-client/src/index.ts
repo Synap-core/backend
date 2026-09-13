@@ -131,6 +131,8 @@ export type {
   SendToChannelInput,
   // Input types — Relations, Threads, Views, Commands
   CreateRelationInput,
+  CreateProjectInput,
+  HubCreateProjectResult,
   CreateThreadInput,
   CreateViewInput,
   UpdateViewInput,

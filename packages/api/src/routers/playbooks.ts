@@ -19,6 +19,7 @@
 import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
@@ -1356,6 +1357,9 @@ export const playbooksRouter = router({
   create: workspaceProcedure
     .input(createInputSchema)
     .mutation(async ({ ctx, input }) => {
+      // Decode an agent's XML-escaped name once, at the one create door —
+      // see `entities/create.ts` for the full rationale.
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1969,6 +1973,7 @@ export const playbooksRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const database = await getDb();
 
       // Owner floor: focus_sessions are owner-private, and promote now WRITES

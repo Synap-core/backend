@@ -72,7 +72,8 @@ export interface CreateNotificationInput {
     | "agent"
     | "system"
     | "inbox_item"
-    | "proactive_message";
+    | "proactive_message"
+    | "session";
   sourceId?: string;
   workspaceUrl?: string;
 
@@ -168,6 +169,14 @@ function resolveChannels(
   if (suppressRealtime) {
     channels.delete("in_app");
     channels.delete("os");
+  }
+
+  // The type's own ceiling wins over any routing rule (registry `channelCeiling`).
+  if (def.channelCeiling) {
+    const allowed = new Set(def.channelCeiling);
+    for (const channel of channels) {
+      if (!allowed.has(channel)) channels.delete(channel);
+    }
   }
 
   return channels;

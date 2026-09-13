@@ -4487,6 +4487,7 @@ CREATE INDEX IF NOT EXISTS "governance_ceilings_source_proposal_idx"
 -- pre-existing rows to reclassify.
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "origin" text;  -- 0240 (playbook | automation | agent — an automation run wearing a session's shape is no longer a JSONB sniff)
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("origin");
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 0262 (short optional name, separate from goal)
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.

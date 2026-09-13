@@ -52,6 +52,7 @@ import {
   httpStatusForTrpcError,
   logger,
   resolveActingContext,
+  resolveActorId,
   type HubHono,
 } from "./_shared.js";
 
@@ -149,7 +150,21 @@ export function registerVaultRoutes(app: HubHono): void {
       );
     }
 
-    const userId = (body.agentUserId as string) ?? (c.get("userId") as string);
+    // The acting HUMAN comes from auth, never the body. The body used to pick
+    // the proposal's user outright (`body.agentUserId ?? userId`, unchecked), so
+    // any write key could file a vault.request — and raise the urgent access
+    // banner — as ANOTHER user. The agent is the body's, else the key's, and
+    // resolveActorId admits only one the caller holds (itself or a linked agent).
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const resolvedAgentUserId =
+      body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+    if ("error" in actorResolution)
+      return c.json({ error: actorResolution.error }, 400);
+    // Who authored the request: the agent when one acts, else the human. The
+    // poll (GET /vault/request/:id) binds createdBy to [userId, key agent].
+    const actorId = actorResolution.actorId;
     // Item 3 Part 3: clamp the RESOLVED workspace (incl. the x-workspace-id
     // header fallback, Escape-C) for a bound service key before the write.
     const workspaceId =
@@ -167,9 +182,9 @@ export function registerVaultRoutes(app: HubHono): void {
       // Resolve the requesting agent's display name so the approval card can
       // show WHO is asking (the proposal only stores agentUserId otherwise).
       let agentName: string | null = null;
-      if (userId) {
+      if (actorId) {
         const agentRow = await db.query.users.findFirst({
-          where: eq(users.id, userId),
+          where: eq(users.id, actorId),
           columns: { name: true },
         });
         agentName = agentRow?.name ?? null;
@@ -185,8 +200,8 @@ export function registerVaultRoutes(app: HubHono): void {
         action: "request",
         source: "intelligence",
         summary,
-        agentUserId: userId ?? null,
-        createdBy: userId ?? null,
+        agentUserId: resolvedAgentUserId ?? null,
+        createdBy: actorId,
         threadId: body.channelId ?? null,
         sourceMessageId: body.sourceMessageId ?? null,
         data: {
@@ -197,7 +212,7 @@ export function registerVaultRoutes(app: HubHono): void {
           ttl,
           requestedBy: "ai",
           source: "agent",
-          sourceId: userId,
+          sourceId: actorId,
           agentName,
         },
       });

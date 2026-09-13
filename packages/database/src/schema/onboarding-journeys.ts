@@ -34,6 +34,9 @@ export interface OnboardingJourneyEvidenceRecord {
   meaningfulEntityIds: string[];
   completedCriteria: string[];
   firstValueAt?: string;
+  /** How many times the journey was restarted (`onboarding.restartJourney`). */
+  restarts?: number;
+  restartedAt?: string;
 }
 
 export const onboardingJourneys = pgTable(

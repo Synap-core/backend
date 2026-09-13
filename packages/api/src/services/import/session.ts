@@ -49,6 +49,12 @@ export interface ImportSessionResolution {
   error?: string;
 }
 
+/** The acting agent carried on an untyped `trpcCtx` — a non-empty string or nothing. */
+function agentUserIdOf(trpcCtx: unknown): string | null {
+  const value = (trpcCtx as { agentUserId?: unknown } | undefined)?.agentUserId;
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 export async function resolveImportSession(
   ctx: OrchestratorContext,
   input: ImportAnalyzeInput,
@@ -113,6 +119,11 @@ export async function resolveImportSession(
     userId: ctx.userId,
     workspaceId: ctx.workspaceId ?? null,
     projectId: ctx.projectId ?? null,
+    // The acting AGENT rides `ctx.trpcCtx` — omitting it labelled every
+    // agent-key import room `origin:"human"` (ensureIntakeSession treats
+    // `origin` as "agent" only when `agentUserId` is set). `trpcCtx` is an
+    // untyped record, so only a non-empty string is an agent id.
+    agentUserId: agentUserIdOf(ctx.trpcCtx),
     door: "import",
     goal,
   });

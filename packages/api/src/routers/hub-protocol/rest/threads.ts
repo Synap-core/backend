@@ -433,8 +433,12 @@ export function registerThreadsRoutes(app: HubHono): void {
       // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
       const acting = await resolveActingContext(c, { userId: body.userId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      // Body wins, else the authenticated key's agent — an agent key that does
+      // not echo its own id must not resolve as the human.
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         acting.userId
       );
       if ("error" in actorResolution)
@@ -442,7 +446,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       const caller = await getCaller(c);
       const result = await caller.linking.linkEntity({
         userId: acting.userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         threadId,
         entityId: body.entityId,
         relationshipType: body.relationshipType ?? "referenced",
@@ -511,8 +515,12 @@ export function registerThreadsRoutes(app: HubHono): void {
       // operator-write IDOR). Mirrors POST /profiles / POST /property-defs.
       const acting = await resolveActingContext(c, { userId: body.userId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      // Body wins, else the authenticated key's agent — an agent key that does
+      // not echo its own id must not resolve as the human.
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         acting.userId
       );
       if ("error" in actorResolution)
@@ -520,7 +528,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       const caller = await getCaller(c);
       const result = await caller.linking.linkDocument({
         userId: acting.userId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         threadId,
         documentId: body.documentId,
         relationshipType: body.relationshipType ?? "referenced",

@@ -25,7 +25,22 @@ import {
   sanitizeDeclaredOutputs,
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
+import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
 import { z } from "zod";
+
+/**
+ * A title from a stored payload: one line, blank ⇒ null, over the column bound
+ * ⇒ null (the payload predates a door that would have refused it; writing it
+ * would throw on the varchar, and a clipped name is a claim nobody made).
+ */
+function storedTitle(value: unknown): string | null {
+  const title = normalizeSessionTitle(typeof value === "string" ? value : null);
+  return title && title.length <= SESSION_TITLE_MAX ? title : null;
+}
 
 const logger = createLogger({
   module: "proposal-approve-executors-focus-session",
@@ -88,6 +103,7 @@ export function registerFocusSessionExecutors(): void {
           // userId = the operator/approver so update/list/complete (scoped by
           // operator userId) can resolve this session.
           userId,
+          title: storedTitle(innerData.title),
           goal,
           templateId: (innerData.templateId as string | undefined) ?? null,
           // Typed origin (migration 0240). Unlike create-session.ts this door
@@ -149,8 +165,11 @@ export function registerFocusSessionExecutors(): void {
       };
 
       // Detour lineage carried through the proposal (parity with
-      // createFocusSession's post-insert step). Owner-floored by the producer
-      // against the APPROVER's userId — which is the session's own owner here.
+      // createFocusSession's post-insert step). WHOSE FLOOR: the principal the
+      // proposal was filed for (`subjectUserId`), never the approver — the
+      // parent id in `data` was authored by the proposer, and flooring on an
+      // approving admin let the edge name the ADMIN's own session. Same rule
+      // as the blockers below and `applyApprovedBlockedBy`.
       // Best-effort by CONTRACT (founder decision, 2026-09-07): this runs AFTER
       // the session row is already committed above, so a lineage-edge failure
       // must never fail the approval — the session exists either way. Without
@@ -158,18 +177,34 @@ export function registerFocusSessionExecutors(): void {
       // a malformed handle) would propagate to `dispatchProposalApproval`,
       // which records the whole approval as a TERMINAL FAILURE and re-throws,
       // even though the session was successfully created.
-      if (created && typeof innerData.parentSessionId === "string") {
+      // Best-effort is not SILENT: a missed edge lands on `refusals`, the
+      // result's documented partial-application channel.
+      const lineageRefusals: string[] = [];
+      if (
+        created &&
+        typeof innerData.parentSessionId === "string" &&
+        !proposal.subjectUserId
+      ) {
+        lineageRefusals.push(
+          `Parent session ${innerData.parentSessionId} was not linked: the proposal records no owner (subject_user_id).`
+        );
+      } else if (created && typeof innerData.parentSessionId === "string") {
         try {
-          await recordSessionSpawn({
+          const spawn = await recordSessionSpawn({
             childSessionId: created.id,
             parentSessionId: innerData.parentSessionId,
-            userId,
+            userId: proposal.subjectUserId as string,
             workspaceId: created.workspaceId,
             suspendedIntent:
               typeof innerData.suspendedIntent === "string"
                 ? innerData.suspendedIntent
                 : null,
           });
+          if (!spawn.linked) {
+            lineageRefusals.push(
+              `Parent session ${innerData.parentSessionId} was not linked (${spawn.reason}): it must exist and belong to the session's owner.`
+            );
+          }
         } catch (err) {
           logger.warn(
             {
@@ -177,8 +212,46 @@ export function registerFocusSessionExecutors(): void {
               sessionId: created.id,
               parentSessionId: innerData.parentSessionId,
             },
-            "recordSessionSpawn failed — session kept, spawned_from edge dropped"
+            "recordSessionSpawn failed — session kept, spawned_from edge not written"
           );
+          lineageRefusals.push(
+            `Parent session ${innerData.parentSessionId} was not linked: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+
+      // Create-time blockers carried through the proposal, written through the
+      // SAME door as the direct path. No `agentUserId`: this approval IS the
+      // human decision. WHOSE FLOOR: the principal the proposal was filed for
+      // (`subjectUserId`), never the approver — the ids in `data` were authored
+      // by the proposer, and flooring on an approving admin would let them name
+      // the admin's sessions (see `applyApprovedBlockedBy`). The new row is the
+      // approver's, so an approver who is not that principal floors out and is
+      // told so, rather than linking across owners.
+      const blockedByIds = Array.isArray(innerData.blockedBySessionIds)
+        ? innerData.blockedBySessionIds.filter(
+            (id): id is string => typeof id === "string"
+          )
+        : [];
+      if (created && blockedByIds.length > 0) {
+        const floorUserId = proposal.subjectUserId;
+        if (!floorUserId) {
+          lineageRefusals.push(
+            `Blockers ${blockedByIds.join(", ")} were not linked: the proposal records no owner (subject_user_id).`
+          );
+        } else {
+          const reports = await addCreateTimeBlockers({
+            sessionId: created.id,
+            blockerSessionIds: blockedByIds,
+            userId: floorUserId,
+          });
+          for (const r of reports) {
+            if (r.status === "failed") {
+              lineageRefusals.push(
+                `Blocker session ${r.blockerSessionId} was not linked (${r.reason})${r.message ? `: ${r.message}` : ""}.`
+              );
+            }
+          }
         }
       }
 
@@ -229,7 +302,11 @@ export function registerFocusSessionExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, effect };
+      return {
+        success: true,
+        effect,
+        ...(lineageRefusals.length > 0 ? { refusals: lineageRefusals } : {}),
+      };
     },
   });
 
@@ -360,6 +437,10 @@ export function registerFocusSessionExecutors(): void {
         }
         if (typeof innerData.goal === "string") {
           set.goal = innerData.goal;
+        }
+        // `null` (or blank) is the CLEAR — same explicit arm as the subject.
+        if (innerData.title === null || typeof innerData.title === "string") {
+          set.title = storedTitle(innerData.title);
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;

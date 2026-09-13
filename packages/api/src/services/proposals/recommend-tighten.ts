@@ -614,6 +614,8 @@ async function recommendTightenForAgent(
 export async function recommendTightenForAllAgents(): Promise<{
   proposalsFiled: number;
   proposalIds: string[];
+  /** Agents whose scan threw (logged per agent) — the cron reports it. */
+  agentsFailed: number;
 }> {
   logger.info("recommend-tighten: starting scan");
   const agents = await listAgentUsers();
@@ -644,5 +646,9 @@ export async function recommendTightenForAllAgents(): Promise<{
     },
     "recommend-tighten: scan complete"
   );
-  return { proposalsFiled: proposalIds.length, proposalIds };
+  return {
+    proposalsFiled: proposalIds.length,
+    proposalIds,
+    agentsFailed: failed,
+  };
 }

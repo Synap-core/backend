@@ -34,9 +34,12 @@ import {
   buildRequestFromProposal,
   buildFallbackTitle,
   isLikelyUUID,
+  isPlanBatch,
   opRef,
   PRIMARY_REF,
 } from "@synap-core/types/proposals";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { planSessionEdges } from "../../services/capture-agent/capture-plan.js";
 import type {
   UpdateRequest,
   ProposalReviewGraph,
@@ -1045,6 +1048,12 @@ export function buildProposalGraph(
     });
   });
 
+  // ── CONNECTED PLAN steps ───────────────────────────────────────────────
+  // Typed nodes + ONE edge list, so no client re-derives parent / blocker
+  // lines from session fields. Additive: a graph with no plan op gets none of
+  // these keys and renders byte-identically.
+  const plan = buildPlanReviewGraph(data, renderedOpIndexes);
+
   // REFUSE a composite whose ops this pipeline cannot fully render — no member
   // may reach a reviewer invisibly (and then apply undeniably).
   assertEveryOperationRendered(data.operations, renderedOpIndexes);
@@ -1062,6 +1071,122 @@ export function buildProposalGraph(
     entityCount: entities.length,
     relationCount: relations.length,
     facetCount,
+    ...plan,
+  };
+}
+
+/**
+ * The CONNECTED-PLAN half of the review graph: typed project / session /
+ * document nodes and ONE session-edge list, derived by `planSessionEdges` —
+ * the same function the preflight validates and the materializer applies, so
+ * a reviewer sees exactly the edges approval would write. Marks every plan op
+ * it renders (the refusal guard's evidence). Returns `{}` for a composite with
+ * no plan op, which keeps an entity/relation graph byte-identical.
+ */
+function buildPlanReviewGraph(
+  data: CompositeProposalData,
+  renderedOpIndexes: Set<number>
+): Partial<ProposalReviewGraph> {
+  if (!isPlanBatch(data.operations)) return {};
+  const projects: NonNullable<ProposalReviewGraph["projects"]> = [];
+  const sessions: NonNullable<ProposalReviewGraph["sessions"]> = [];
+  const documents: NonNullable<ProposalReviewGraph["documents"]> = [];
+  const sessionLabelByRef = new Map<string, string>();
+
+  data.operations.forEach((op, index) => {
+    switch (op.op) {
+      case "create_project":
+        renderedOpIndexes.add(index);
+        projects.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.subjectRef ? { subjectRef: op.subjectRef } : {}),
+          ...(op.subjectEntityId
+            ? { subjectEntityId: op.subjectEntityId }
+            : {}),
+          ...(op.evidence ? { evidence: op.evidence } : {}),
+        });
+        return;
+      case "create_session": {
+        renderedOpIndexes.add(index);
+        const displayTitle = resolveSessionTitle({
+          title: op.title ?? null,
+          goal: op.goal,
+        });
+        sessionLabelByRef.set(op.ref, displayTitle);
+        sessions.push({
+          ref: op.ref,
+          title: op.title ?? null,
+          displayTitle,
+          goal: op.goal,
+          ...(op.projectRef ? { projectRef: op.projectRef } : {}),
+          ...(op.projectId ? { projectId: op.projectId } : {}),
+          ...(op.subjectRef ? { subjectRef: op.subjectRef } : {}),
+          ...(op.subjectEntityId
+            ? { subjectEntityId: op.subjectEntityId }
+            : {}),
+        });
+        return;
+      }
+      case "create_document":
+        renderedOpIndexes.add(index);
+        documents.push({
+          ref: op.ref,
+          title: op.title,
+          ...(op.entityRef ? { entityRef: op.entityRef } : {}),
+          ...(op.entityId ? { entityId: op.entityId } : {}),
+          ...(op.sessionRef ? { sessionRef: op.sessionRef } : {}),
+          ...(op.sessionId ? { sessionId: op.sessionId } : {}),
+          ...(op.expectedLabel ? { expectedLabel: op.expectedLabel } : {}),
+        });
+        return;
+      case "create_link":
+        renderedOpIndexes.add(index);
+        return;
+      default:
+        return;
+    }
+  });
+
+  const endpoint = (end: { ref: string } | { sessionId: string }) =>
+    "ref" in end
+      ? {
+          ref: end.ref,
+          label: sessionLabelByRef.get(end.ref) ?? end.ref,
+        }
+      : {
+          sessionId: end.sessionId,
+          label: `session ${end.sessionId.slice(0, 8)}`,
+        };
+  const links: NonNullable<ProposalReviewGraph["links"]> = planSessionEdges(
+    data.operations
+  ).map((edge, ordinal) => {
+    const from = endpoint(edge.from);
+    const to = endpoint(edge.to);
+    return {
+      type: edge.type,
+      ...("ref" in from
+        ? { fromRef: from.ref }
+        : { fromSessionId: from.sessionId }),
+      ...("ref" in to ? { toRef: to.ref } : { toSessionId: to.sessionId }),
+      fromLabel: from.label,
+      toLabel: to.label,
+      itemRef: `$link${ordinal}`,
+    };
+  });
+
+  return {
+    isPlan: true,
+    planStepCount:
+      projects.length +
+      sessions.length +
+      documents.length +
+      data.operations.filter((op) => op.op === "create_link").length,
+    projects,
+    sessions,
+    documents,
+    links,
   };
 }
 

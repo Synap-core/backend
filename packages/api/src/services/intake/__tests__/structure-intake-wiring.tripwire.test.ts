@@ -91,9 +91,48 @@ describe("capture.structure records its run on every exit", () => {
     const bypassing = returns.filter(
       (r) =>
         !r.startsWith("return finishIntake(") &&
-        r !== "return { ...result, ...echo };"
+        r !== "return { ...result, ...echo };" &&
+        // The ONE exit that records nothing BY DESIGN: the file's bytes were
+        // already analyzed into a run of their own (the "already imported"
+        // ledger) — staging them again would mint a second room for them.
+        r !== "return alreadyImportedAnswer;"
     );
     expect(bypassing).toEqual([]);
+  });
+
+  it("ONE bulk derivation decides the IS vision lane: the caller's flag OR a run already holding a file", () => {
+    // Behaviour of each lane is pinned IS-side (`context.vision-budget.test.ts`).
+    // Cannot see: that the IS client still posts the whole input (it does:
+    // `body: JSON.stringify(input)`) — an older IS simply ignores the field.
+    expect(slice).toContain("let visionBulk = input.bulk === true;");
+    expect(slice).toContain("if (run.count > 0) visionBulk = true;");
+    expect(slice).toMatch(
+      /visionLane: visionBulk \? \("bulk" as const\) : \("single" as const\),/
+    );
+    // Exactly one assignment site each — a second derivation is a fork.
+    expect(slice.match(/visionBulk = /g)).toHaveLength(2);
+  });
+
+  it("the already-imported exit is scoped to THIS workspace and a run still in effect", () => {
+    // Cannot see: that `findKnownSourceHashes` scopes and classifies correctly
+    // (pglite suite). This pins that the procedure ASKS for both.
+    const flat = slice.replace(/\s+/g, " ");
+    expect(flat).toMatch(
+      /await findKnownSourceHashes\(\{ database, userId, hashes: [^}]*, workspaceId: workspaceId \?\? null, \}\)/
+    );
+    expect(flat).toContain(
+      'known.find( (k) => k.status === "analyzed" && k.inEffect )'
+    );
+  });
+
+  it("the already-imported exit is taken only on the ledger's `analyzed` verdict", () => {
+    // Cannot see: that `findKnownSourceHashes` classifies correctly (pglite
+    // suite `known-source-hashes.pglite.test.ts`).
+    expect(slice).toMatch(
+      // Windows measured 2026-09-14: 530 and 990 chars (the workspace/in-effect
+      // scope comment sits before the verdict; the answer's shape after it).
+      /if \(!input\.reanalyze\) \{[\s\S]{0,900}status === "analyzed"[\s\S]{0,1500}return alreadyImportedAnswer;/
+    );
   });
 });
 

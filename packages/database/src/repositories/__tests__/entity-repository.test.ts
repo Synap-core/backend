@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { type EventRepository } from "../event-repository.js";
-import { EntityRepository } from "../entity-repository.js";
+import {
+  EntityRepository,
+  EntityCreateRejectedError,
+} from "../entity-repository.js";
+import { reservedEntityKindReason } from "../../utils/reserved-profile-slugs.js";
 import { ProfileResolutionService } from "../../services/profile-resolution-service.js";
 import { PropertyIndexService } from "../../services/property-index-service.js";
 
@@ -107,29 +111,87 @@ describe("EntityRepository", () => {
       );
     });
 
-    // P1 guardrail (e): a project is a first-class `projects` TABLE row, never
-    // an entity. The generic entity-create door must reject profileSlug
-    // "project" (the pre-0151 ghost-project fossil door) BEFORE any insert.
-    it("rejects a create resolving to the 'project' profile with the project-door guidance", async () => {
-      vi.spyOn(
-        ProfileResolutionService.prototype,
-        "resolveProfile"
-      ).mockResolvedValue({ id: "profile-project", slug: "project" } as any);
+    // Reserved kinds (utils/reserved-profile-slugs.ts): a project is a
+    // first-class `projects` TABLE row, never an entity. The floor refuses on
+    // the RESOLVED kind — so the plural near-miss is refused too — BEFORE any
+    // insert, with the reservation's own wording (never a second copy).
+    it.each(["project", "projects"])(
+      "rejects a create resolving to the reserved '%s' kind with the reservation's wording",
+      async (slug) => {
+        vi.spyOn(
+          ProfileResolutionService.prototype,
+          "resolveProfile"
+        ).mockResolvedValue({ id: `profile-${slug}`, slug } as any);
 
-      await expect(
-        entityRepo.create(
+        const err = await entityRepo
+          .create(
+            {
+              title: "Some Initiative",
+              profileSlug: slug,
+              workspaceId: "workspace-1",
+              userId: "user-1",
+            },
+            "user-1"
+          )
+          .catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(EntityCreateRejectedError);
+        expect((err as Error).message).toBe(reservedEntityKindReason(slug));
+        expect((err as Error).message).toContain("synap_create_project");
+        // Guard fires before the insert — no ghost row is written.
+        expect(mockDb.insert).not.toHaveBeenCalled();
+      }
+    );
+
+    // The discriminating row: a role whose single applicable kind is reserved.
+    // A check keyed on the INPUT profile (the role) passes it; only a check on
+    // the ADAPTED kind refuses. Unrefused, the role path reaches
+    // `db.transaction`, which this mock does not define — a TypeError, not the
+    // reservation error.
+    it("rejects a role adapted onto a reserved kind, checked on the kind it would write", async () => {
+      vi.spyOn(ProfileResolutionService.prototype, "resolveProfile")
+        .mockResolvedValueOnce({
+          id: "role-sponsor",
+          slug: "sponsor",
+          profileKind: "role",
+          applicableKinds: ["project"],
+        } as any)
+        .mockResolvedValueOnce({
+          id: "profile-project",
+          slug: "project",
+          profileKind: "kind",
+        } as any);
+
+      const err = await entityRepo
+        .create(
           {
-            title: "Some Initiative",
-            profileSlug: "project",
-            workspaceId: "workspace-1",
+            title: "Launch",
+            profileSlug: "sponsor",
             userId: "user-1",
+            skipValidation: true,
           },
           "user-1"
         )
-      ).rejects.toThrow(/Projects are not entities/);
+        .catch((e: unknown) => e);
 
-      // Guard fires before the insert — no ghost row is written.
+      expect(err).toBeInstanceOf(EntityCreateRejectedError);
+      expect((err as Error).message).toBe(reservedEntityKindReason("project"));
       expect(mockDb.insert).not.toHaveBeenCalled();
+    });
+
+    it("does not refuse a free kind (the reservation does not over-reach)", async () => {
+      vi.spyOn(
+        ProfileResolutionService.prototype,
+        "resolveProfile"
+      ).mockResolvedValue({ id: "profile-task", slug: "task" } as any);
+
+      const result = await entityRepo.create(
+        { title: "Ship it", profileSlug: "task", userId: "user-1" },
+        "user-1"
+      );
+
+      expect(result.id).toBe("entity-1");
+      expect(mockDb.insert).toHaveBeenCalledTimes(1);
     });
   });
 

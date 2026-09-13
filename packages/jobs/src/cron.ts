@@ -17,6 +17,10 @@ import {
   CP_PROJECT_SYNC_CRON,
 } from "./workers/cp-project-sync.js";
 import {
+  TOOL_DEMAND_FORWARD_QUEUE,
+  TOOL_DEMAND_FORWARD_CRON,
+} from "./workers/tool-demand-forward.js";
+import {
   PAGERANK_CENTRALITY_QUEUE,
   PAGERANK_CENTRALITY_CRON,
 } from "./workers/pagerank-centrality.js";
@@ -28,6 +32,14 @@ import {
   GOVERNANCE_LANE_SCANNER_QUEUE,
   GOVERNANCE_LANE_SCANNER_CRON,
 } from "./workers/governance-lane-scanner.js";
+import {
+  GOVERNANCE_TIGHTEN_SCAN_QUEUE,
+  GOVERNANCE_TIGHTEN_SCAN_CRON,
+} from "./workers/governance-tighten-cron.js";
+import {
+  PROMPT_QUALITY_SCAN_QUEUE,
+  PROMPT_QUALITY_SCAN_CRON,
+} from "./workers/prompt-quality-cron.js";
 import {
   BLOCKED_SLOT_RECURRENCE_QUEUE,
   BLOCKED_SLOT_RECURRENCE_CRON,
@@ -221,6 +233,31 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info("Registered cron: governance.lane-scan (daily at 3:30 AM UTC)");
 
+  // Governance tighten scan (daily at 3:35 AM UTC — after the widen scan).
+  // The tighten recommender was reachable only through a pod-admin verb; files
+  // PENDING governance.tighten_lane / governance.advisory proposals only.
+  await scheduleSafe(
+    boss,
+    GOVERNANCE_TIGHTEN_SCAN_QUEUE,
+    GOVERNANCE_TIGHTEN_SCAN_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: governance.tighten-scan (daily at 3:35 AM UTC)"
+  );
+
+  // Prompt-version quality scan (daily at 3:40 AM UTC). Notifies pod admins
+  // once when a newer intake prompt version is rejected clearly more often.
+  await scheduleSafe(
+    boss,
+    PROMPT_QUALITY_SCAN_QUEUE,
+    PROMPT_QUALITY_SCAN_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: intake.prompt-quality-scan (daily at 3:40 AM UTC)"
+  );
+
   // Blocked-slot recurrence scanner (daily at 3:50 AM UTC — after the
   // librarian archiver at 3:45). Files PENDING governance.work_guideline
   // proposals only; the guideline itself is only ever created by a human
@@ -372,6 +409,15 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: cp-catalog-sync (every 10min)");
   await sendSafe(boss, CP_CATALOG_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-catalog-sync");
+
+  // Tool demand forwarding (D2) — daily; applied demand writes also enqueue it.
+  await scheduleSafe(
+    boss,
+    TOOL_DEMAND_FORWARD_QUEUE,
+    TOOL_DEMAND_FORWARD_CRON,
+    {}
+  );
+  logger.info("Registered cron: tool-demand-forward (daily at 04:17 UTC)");
 
   // CP project directory sync — announce the pod's full project list to the
   // Control Plane every 30 minutes (reconcile), AND once now on startup so a

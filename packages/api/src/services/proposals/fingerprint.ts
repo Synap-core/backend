@@ -23,6 +23,7 @@
  * runs at write time and is unaffected by anything in this file.
  */
 
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import type { PROPOSE_REASON } from "@synap/governance-policy";
 import { proposalClassFields, type ProposalClass } from "./proposal-class.js";
 
@@ -317,10 +318,15 @@ const DEFAULT_SAMPLE_CAP = 20;
  * sentence that already contains it.
  */
 function resolveTargetLabel(row: ProposalFingerprintInput): string {
+  // Decoded here, not in `extractProposalName`/`extractProposalSummary`:
+  // those two also feed `computeProposalFingerprint`'s signature, and
+  // decoding there would change fingerprint grouping for already-clustered
+  // rows. This is presentation only — an agent's XML-escaped `&amp;` in a
+  // stored title/summary must not reach the Needs-you row label raw.
   const name = extractProposalName(row.data);
-  if (name) return name;
+  if (name) return decodeHtmlEntities(name);
   const summary = extractProposalSummary(row.data);
-  if (summary) return summary;
+  if (summary) return decodeHtmlEntities(summary);
   const type = row.targetType || "entity";
   const id = row.targetId ? row.targetId.slice(0, 8) : "";
   return id ? `${type} · ${id}` : type;

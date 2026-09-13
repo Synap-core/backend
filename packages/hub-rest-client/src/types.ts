@@ -1309,6 +1309,43 @@ export interface CreateRelationInput {
   userId?: string;
 }
 
+/**
+ * Create a project (the cross-cutting lens). Mirrors the pod's POST
+ * /api/hub/projects body. An AGENT key must pass `evidenceEntityIds` (≥5
+ * caller-visible entities that belong to it); a human caller may omit it.
+ */
+export interface CreateProjectInput {
+  name: string;
+  description?: string;
+  status?: "active" | "archived" | "completed";
+  workspaceId?: string;
+  settings?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+  evidenceEntityIds?: string[];
+}
+
+/**
+ * POST /api/hub/projects outcome: the created row (201), a pending governance
+ * proposal (202, with its review link), an idempotent reuse of an exact-name
+ * match (200), or a near-duplicate refusal (409) returned as data so the caller
+ * can offer the candidates instead of losing them. A missing-evidence refusal
+ * (400) and every other non-2xx throw HubApiError.
+ */
+export type HubCreateProjectResult =
+  | ({ status?: undefined; id: string; name: string } & Record<string, unknown>)
+  | {
+      status: "proposed";
+      proposalId: string;
+      reviewPath?: string;
+      reviewUrl?: string;
+    }
+  | { status: "deduped"; projectId: string; reusedProjectId: string }
+  | {
+      status: "near_duplicate";
+      error: string;
+      dedupCandidates: Array<Record<string, unknown>>;
+    };
+
 /** Attach an existing role-profile to a primary-kind entity. */
 export interface AttachFacetInput {
   entityId: string;

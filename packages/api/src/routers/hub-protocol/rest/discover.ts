@@ -107,7 +107,19 @@ export type RowSchemaFetchResult = {
 };
 
 export type RowSchema =
-  | { status: "resolved"; effectiveProperties: Array<Record<string, unknown>> }
+  | {
+      status: "resolved";
+      effectiveProperties: Array<Record<string, unknown>>;
+      /**
+       * Set when this row's SLUG resolves to ANOTHER row at this lens, so it
+       * was read by its own id. Its schema is honest — but a write naming the
+       * type by slug (capture `profileSlug`, `create --profile`) lands on, and
+       * is validated against, this other row. Measured live 2026-09-13: the
+       * system `knowledge` row showed `knowledgeForm` required while a lens-less
+       * capture validated against the Pod Admin twin's lone `knowledgeform`.
+       */
+      slugResolvesToProfileId?: string;
+    }
   | { status: "unavailable"; resolvedProfileId: string };
 
 /**
@@ -178,6 +190,7 @@ export async function resolveRowSchema(
       return {
         status: "resolved",
         effectiveProperties: byId.effectiveProperties ?? [],
+        slugResolvesToProfileId: resolvedProfileId,
       };
     }
   } catch (error) {
@@ -229,6 +242,11 @@ const DiscoverQuerySchema = z.object({
 
 /** Summary tier — lightweight, no property schemas, no entity counts. */
 export const DiscoverProfileSummarySchema = z.object({
+  id: z
+    .string()
+    .describe(
+      "This profile row's id. A slug can be held by more than one row, so the id is what tells two same-slug rows apart."
+    ),
   slug: z.string(),
   displayName: z.string(),
   scope: z
@@ -250,6 +268,11 @@ export const DiscoverProfileSummarySchema = z.object({
 
 /** Full tier — includes property schemas + create command. */
 const DiscoverProfileSchema = z.object({
+  id: z
+    .string()
+    .describe(
+      "This profile row's id. A slug can be held by more than one row, so the id is what tells two same-slug rows apart."
+    ),
   slug: z.string(),
   displayName: z.string(),
   scope: z
@@ -278,11 +301,21 @@ const DiscoverProfileSchema = z.object({
     .describe(
       "Present when this row's schema could not be read by its own identity at this lens. `properties` is then EMPTY BY WITHHOLDING, not because the type has none."
     ),
+  slugWritesTo: z
+    .object({
+      reason: z.literal("slug-resolves-to-another-row"),
+      profileId: z.string(),
+      hint: z.string(),
+    })
+    .optional()
+    .describe(
+      "Present when `properties` is this row's own schema but a write that names this slug at this lens lands on ANOTHER row (`profileId`) and is validated against that row's schema instead."
+    ),
   createCommand: z
     .string()
     .optional()
     .describe(
-      "Ready-to-run CLI command template for this profile. ABSENT when `schemaUnavailable` is set: a create command for a type whose schema this response could not show invites exactly the blind write the marker exists to prevent."
+      "Ready-to-run CLI command template for this profile. ABSENT when `schemaUnavailable` or `slugWritesTo` is set: a create command for a type whose schema this response could not show — or whose slug writes to another row — invites exactly the blind write those markers exist to prevent."
     ),
   entityCount: z.number().int().nonnegative().optional(),
 });
@@ -424,6 +457,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
       // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
       if (summary) {
         const summaryProfiles = selectedProfiles.map((p) => ({
+          id: p.id,
           slug: p.slug,
           displayName: p.displayName,
           scope: (p.entityScope === "workspace" ? "workspace" : "pod") as
@@ -480,7 +514,12 @@ export function registerDiscoverRoutes(app: HubHono): void {
           properties.length > 0
             ? ` --props '{"${properties[0].slug}":"value"}'`
             : "";
+        const slugWritesToProfileId =
+          rowSchema?.status === "resolved"
+            ? rowSchema.slugResolvesToProfileId
+            : undefined;
         return {
+          id: p.id,
           slug: p.slug,
           displayName: p.displayName,
           scope: (p.entityScope === "workspace" ? "workspace" : "pod") as
@@ -501,10 +540,19 @@ export function registerDiscoverRoutes(app: HubHono): void {
                 },
               }
             : {}),
-          // Withheld row ⇒ no create command: handing an agent a ready-to-run
-          // create for a type it was just told it cannot see is the blind write
-          // `schemaUnavailable` exists to prevent.
-          ...(rowSchema?.status === "unavailable"
+          ...(slugWritesToProfileId
+            ? {
+                slugWritesTo: {
+                  reason: "slug-resolves-to-another-row" as const,
+                  profileId: slugWritesToProfileId,
+                  hint: "These properties are this row's own, but a write that names this slug at this lens (capture `profileSlug`, `synap create entity --profile`) lands on profile `profileId` and is validated against ITS schema. Pass a workspaceId whose lens resolves this slug to this row before writing this type.",
+                },
+              }
+            : {}),
+          // Withheld row, or a slug that writes elsewhere ⇒ no create command:
+          // handing an agent a ready-to-run create that cannot land on the
+          // schema shown is the blind write both markers exist to prevent.
+          ...(rowSchema?.status === "unavailable" || slugWritesToProfileId
             ? {}
             : {
                 createCommand: `synap create entity --profile ${p.slug} --name "<title>"${propExample} --json`,

@@ -10,6 +10,7 @@
  * Returns immediately — no async event pipeline.
  */
 
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import {
   db,
   proposals,
@@ -3381,7 +3382,7 @@ async function captureEntityPreviousData(
   }
 }
 
-async function resolveProposalTargetName(
+export async function resolveProposalTargetName(
   subjectType: string,
   targetId: string,
   data: Record<string, unknown>
@@ -3429,5 +3430,9 @@ function stringField(
   key: string
 ): string | undefined {
   const value = record[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+  // BACKSTOP for the title seam: an agent that XML-escaped its argument
+  // (`A &amp; B`) must not put the escape into the proposal's display name.
+  return typeof value === "string" && value.trim()
+    ? decodeHtmlEntities(value)
+    : undefined;
 }

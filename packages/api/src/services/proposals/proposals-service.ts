@@ -25,7 +25,10 @@ import {
 import type { ProposalRevision } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
-import { isNestedEnvelope } from "@synap-core/types/proposals";
+import {
+  isCompositeProposalData,
+  isNestedEnvelope,
+} from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 
@@ -477,6 +480,28 @@ export interface MergeProposalRevisionParams {
 export async function mergeProposalRevision(
   params: MergeProposalRevisionParams
 ): Promise<void> {
+  // ── Composite / plan revisions are RE-VALIDATED ─────────────────────────
+  // A revision that replaces `operations` runs the SAME preflight a submit
+  // runs (properties, reserved kinds, relation types, plan refs / cycles /
+  // limits / ownership / evidence). Computed BEFORE the row lock — the
+  // preflight reads through the shared pool, and holding the lock across it
+  // would serialize every reader behind one revise — and REFUSED inside the
+  // lock only after authority passes, so an unauthorized caller still reads
+  // NOT_FOUND and learns nothing about the proposal's shape. `operations` is
+  // replaced wholesale by a revision, so the verdict does not depend on the
+  // stored base a concurrent revise might change.
+  const revisionCheck = await validateRevisedOperations(params);
+  const patch =
+    revisionCheck && params.patch
+      ? {
+          ...params.patch,
+          fields: {
+            ...params.patch.fields,
+            operations: revisionCheck.operations,
+          },
+        }
+      : params.patch;
+
   await db.transaction(async (tx) => {
     const [existing] = await tx
       .select({
@@ -565,9 +590,19 @@ export async function mergeProposalRevision(
     // caller still reads NOT_FOUND and learns nothing from the version).
     assertReviewedRevision(params.expectedRevision, existing.revisionHistory);
 
+    if (revisionCheck && revisionCheck.problems.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          `Revision refused — the revised operations cannot apply, so nothing was changed (the proposal stays pending as it was):\n` +
+          revisionCheck.problems.map((p) => `• ${p}`).join("\n") +
+          `\nSend the FULL corrected operations again.`,
+      });
+    }
+
     const { merged, revision } = computeRevisedEnvelope({
       envelope: (existing.data ?? {}) as Record<string, unknown>,
-      patch: params.patch,
+      patch,
       summary: params.summary,
       reasoning: params.reasoning,
       actorId: params.actorId,
@@ -597,6 +632,53 @@ export async function mergeProposalRevision(
           eq(proposals.status, ProposalStatus.PENDING)
         )
       );
+  });
+}
+
+/**
+ * The re-validation half of a revision that replaces `operations`. Null when
+ * the patch does not touch `operations` (nothing to validate).
+ *
+ * The owner the plan's floors are judged for is the proposal's SUBJECT user —
+ * the principal the proposal was filed for, whose sessions and entities the
+ * steps name — never the reviser, so an admin revising someone's plan cannot
+ * point it at the admin's own sessions.
+ */
+async function validateRevisedOperations(
+  params: MergeProposalRevisionParams
+): Promise<{ problems: string[]; operations: unknown } | null> {
+  const revised = params.patch?.fields?.operations;
+  if (revised === undefined) return null;
+  const [row] = await db
+    .select({
+      workspaceId: proposals.workspaceId,
+      subjectUserId: proposals.subjectUserId,
+      createdBy: proposals.createdBy,
+      data: proposals.data,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, params.proposalId))
+    .limit(1);
+  // Absent row: the locked read below answers NOT_FOUND.
+  if (!row) return null;
+  // Only a composite proposal carries `operations` as its payload.
+  if (!isCompositeProposalData(row.data as never)) return null;
+  const candidate = { operations: revised };
+  if (!isCompositeProposalData(candidate as never)) {
+    return {
+      problems: [
+        "`operations` must be a non-empty array of recognized composite operations (create_entity, create_relation, create_skill, create_automation, create_rule, create_project, create_session, create_document, create_link)",
+      ],
+      operations: revised,
+    };
+  }
+  const { validateCompositeOperations } =
+    await import("../capture-agent/submit-capture-graph.js");
+  return validateCompositeOperations(db, {
+    operations: (candidate as { operations: never }).operations,
+    userId: row.subjectUserId ?? row.createdBy ?? params.actorId ?? "",
+    workspaceId:
+      params.workspaceId !== undefined ? params.workspaceId : row.workspaceId,
   });
 }
 

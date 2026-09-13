@@ -121,11 +121,12 @@ export type OpenDispatch =
 
 /**
  * The `?view=` values a bounce URL may carry onto `synap://open/<type>/<id>`.
- * Mirrors `ObjectNavOptions.view` in the browser's `object-nav.ts` (the ONE
- * route table that reads it) — a session's `'room'` view opens the Intake
- * Room instead of the plain session detail. The two lists can't share a
- * runtime import across repos, so `resolveDeepLink.test.ts` in the browser
- * repo and this file's tests each pin their own side; a new value needs both.
+ * A session's `'room'` view opens the Intake Room instead of the plain
+ * session detail. The SSOT is `OBJECT_NAV_VIEWS` in
+ * `@synap-core/types/navigation` (the pod api, browser and relay all read it).
+ * This is the ONE remaining copy: `apps/api` does not depend on
+ * `@synap-core/types` yet — add that dependency and import it here, and
+ * delete this list. Until then a new value needs both.
  */
 export const OPEN_VIEW_VALUES = ["room"] as const;
 export type OpenViewValue = (typeof OPEN_VIEW_VALUES)[number];

@@ -46,6 +46,7 @@ vi.mock("@synap/jobs/workers/import-corpus-worker.js", () => ({
 // never issue one.
 
 const resolveActingContextMock = vi.fn();
+const resolveActorIdMock = vi.fn();
 const getConfinedWorkspaceMock = vi.fn(
   (_c: unknown, ws?: string) => ws ?? null
 );
@@ -63,6 +64,7 @@ vi.mock("./_shared.js", async (importOriginal) => {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     resolveActingContext: (...args: unknown[]) =>
       resolveActingContextMock(...args),
+    resolveActorId: (...args: unknown[]) => resolveActorIdMock(...args),
   };
 });
 
@@ -107,6 +109,7 @@ async function postEnqueue(app: HubHono, body: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   sendMock.mockResolvedValue(JOB_ID);
+  resolveActorIdMock.mockResolvedValue({ actorId: USER_ID });
   resolveActingContextMock.mockResolvedValue({
     ok: true,
     userId: USER_ID,
@@ -339,6 +342,27 @@ describe("POST /import/enqueue-corpus — thin door onto the existing background
       "import-corpus",
       expect.objectContaining({ workspaceId: CONFINED })
     );
+  });
+
+  it("validates the key's agent through resolveActorId, and refuses one the caller cannot act as before enqueueing", async () => {
+    const AGENT = "agent-x";
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("/*", async (c, next) => {
+      c.set("userId", USER_ID);
+      c.set("scopes", ["hub-protocol.write"]);
+      c.set("agentUserId" as never, AGENT as never);
+      await next();
+    });
+    registerCaptureRoutes(app);
+
+    resolveActorIdMock.mockResolvedValue({
+      error: "Invalid agentUserId — must be a user with userType='agent'",
+    });
+    const res = await postEnqueue(app, validBody());
+
+    expect(res.status).toBe(400);
+    expect(resolveActorIdMock).toHaveBeenCalledWith(AGENT, USER_ID);
+    expect(sendMock).not.toHaveBeenCalled();
   });
 
   it("propagates an acting-context rejection instead of enqueueing", async () => {

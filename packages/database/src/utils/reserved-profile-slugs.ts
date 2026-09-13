@@ -36,19 +36,20 @@
  * slug → the sentence explaining where the concept really lives.
  * Keep every value actionable: name the real home AND the door to use.
  */
+const PROJECT_HOME =
+  "projects live in the `projects` TABLE (schema/projects.ts), not as entities — " +
+  "migration 0151 consolidated them. Create one through the project door " +
+  "(`synap_create_project` / POST /api/hub/projects / `trpc.projects.*`; an " +
+  "agent-authored create needs evidenceEntityIds) — never as an entity profile " +
+  "or a `project` entity. To group work, link entities to an existing project " +
+  "via belongs_to_project.";
+
 const RESERVED_PROFILE_SLUGS: ReadonlyMap<string, string> = new Map([
-  [
-    "project",
-    "projects live in the `projects` TABLE (schema/projects.ts), not as entities — " +
-      "migration 0151 consolidated them. Use the project doors " +
-      "(`trpc.projects.*` / `synap_create_project`) instead of defining an entity profile.",
-  ],
+  ["project", PROJECT_HOME],
   [
     "projects",
-    "projects live in the `projects` TABLE (schema/projects.ts), not as entities — " +
-      "migration 0151 consolidated them. Use the project doors " +
-      "(`trpc.projects.*` / `synap_create_project`) instead of defining an entity profile. " +
-      "(Profile slugs are singular by convention; `projects` is reserved so the " +
+    PROJECT_HOME +
+      " (Profile slugs are singular by convention; `projects` is reserved so the " +
       "plural cannot be used to route around the reservation on `project`.)",
   ],
 ]);
@@ -91,6 +92,27 @@ export function reservedProfileSlugReason(slug: string): string | undefined {
 export function assertProfileSlugNotReserved(slug: string): void {
   const reason = reservedProfileSlugReason(slug);
   if (reason) throw new Error(reason);
+}
+
+/**
+ * The refusal for creating an ENTITY on a reserved slug, or `undefined` if the
+ * kind is free. Same table and wording as the profile refusal — only the
+ * lead-in differs, because the caller did not define a profile, it filed a row.
+ *
+ * Read by exactly two layers, on purpose:
+ *  - `EntityRepository.create` — the floor under every entity write (inline
+ *    create, proposal materializer, workspace definition, imports), checked on
+ *    the RESOLVED kind so an id, a case variant, or a role adapted onto a
+ *    reserved kind cannot slip past it;
+ *  - `entities.create` — the one tRPC door every caller-facing create reaches
+ *    (MCP `synap_create_entity`, hub REST, approve executors), checked BEFORE
+ *    `checkPermissionOrPropose`, so governance never files a proposal that the
+ *    floor will refuse at approve.
+ */
+export function reservedEntityKindReason(slug: string): string | undefined {
+  const reason = RESERVED_PROFILE_SLUGS.get(normalize(slug));
+  if (!reason) return undefined;
+  return `'${slug}' is not an entity kind: ${reason}`;
 }
 
 /** Read-only view of the reservation table, for tests and diagnostics. */

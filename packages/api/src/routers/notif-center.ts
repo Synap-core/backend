@@ -8,11 +8,13 @@
  */
 
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import {
   db,
   notifications,
   notificationPreferences,
+  focusSessions,
   eq,
   and,
   or,
@@ -21,7 +23,9 @@ import {
   inArray,
   isNull,
   lte,
+  gte,
 } from "@synap/database";
+import { NotificationService } from "../notifications/NotificationService.js";
 import { NotificationStatus } from "@synap/database";
 import {
   messagingAccounts,
@@ -30,6 +34,7 @@ import {
 import { MessagingAccountService } from "../services/messaging-account-service.js";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { OBJECT_NAV_VIEWS } from "@synap-core/types/navigation";
 
 /**
  * Flip any DUE snoozes (snoozedUntil now past) back to `unread` for this user,
@@ -49,6 +54,11 @@ async function wakeDueSnoozes(userId: string): Promise<void> {
       )
     );
 }
+
+const HANDOFF_NOTIFICATION_TYPE = "handoff.continue";
+const HANDOFF_TARGET_KINDS = ["session"] as const;
+/** A repeat request for the same target inside this window reuses the unread row. */
+export const HANDOFF_DEDUP_WINDOW_MS = 60_000;
 
 export const notifCenterRouter = router({
   /**
@@ -426,4 +436,101 @@ export const notifCenterRouter = router({
 
     return rows;
   }),
+
+  /**
+   * "Continue on desktop" — ask the caller's OWN desktops to pick up a run.
+   *
+   * Writes one `handoff.continue` notification (in-app only, see the registry
+   * row). Every signed-in desktop is in the `user:<id>` room and gets it live; a
+   * closed desktop finds it unread in the inbox. The answer says the request
+   * was DELIVERED to the pod's notification record — never that a desktop
+   * opened anything, because nothing here can know that.
+   *
+   * - Allowlisted: kind `session`, view `room`. Anything else fails validation.
+   * - Owner floor, same as `focusSessions.get`. Someone else's session and a
+   *   missing one answer the SAME `NOT_FOUND`.
+   * - Dedup: the same target within {@link HANDOFF_DEDUP_WINDOW_MS} reuses the
+   *   still-unread notification, so a double tap does not ring twice.
+   * - A notification the pod did not write (notifications off, category muted,
+   *   write failed) is an error, never a quiet success.
+   */
+  requestHandoff: protectedProcedure
+    .input(
+      z.object({
+        target: z.object({
+          kind: z.enum(HANDOFF_TARGET_KINDS),
+          id: z.string().uuid(),
+        }),
+        view: z.enum(OBJECT_NAV_VIEWS),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      // A handoff is a PERSON asking their own desktop to pick up a run — a
+      // device act. An agent key cannot make that ask on their behalf.
+      if (ctx.agentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Only you can send a run to your desktop — an agent can't ask for this on your behalf.",
+        });
+      }
+
+      const session = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.target.id),
+          eq(focusSessions.userId, userId)
+        ),
+        columns: { id: true, goal: true, workspaceId: true },
+      });
+      if (!session) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Session not found",
+        });
+      }
+
+      const [recent] = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.userId, userId),
+            eq(notifications.type, HANDOFF_NOTIFICATION_TYPE),
+            eq(notifications.sourceType, "session"),
+            eq(notifications.sourceId, session.id),
+            eq(notifications.status, NotificationStatus.UNREAD),
+            gte(
+              notifications.createdAt,
+              new Date(Date.now() - HANDOFF_DEDUP_WINDOW_MS)
+            )
+          )
+        )
+        .orderBy(desc(notifications.createdAt))
+        .limit(1);
+      if (recent) {
+        return { status: "already_sent" as const, notificationId: recent.id };
+      }
+
+      const goal = session.goal.trim();
+      const notificationId = await NotificationService.create({
+        // Literal, not the const: the producer-allowlist scan reads `type: "<t>"`.
+        type: "handoff.continue",
+        userId,
+        workspaceId: session.workspaceId ?? null,
+        sourceType: "session",
+        sourceId: session.id,
+        data: {
+          goal: goal.length > 120 ? `${goal.slice(0, 119)}…` : goal,
+        },
+      });
+      if (!notificationId) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "Your pod didn't send this to your desktop. Notifications may be turned off or muted.",
+        });
+      }
+      return { status: "sent" as const, notificationId };
+    }),
 });

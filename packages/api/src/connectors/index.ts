@@ -23,6 +23,9 @@ import {
   isServerVaultAvailable,
   getDb,
   resolveVaultReferences,
+  CP_RELAY_SOURCE_NAME,
+  readCpRelayCredential,
+  relayKeyExpiry,
 } from "@synap/database";
 import { config, createLogger } from "@synap-core/core";
 
@@ -378,16 +381,10 @@ type CpBrokerResolution =
       error: string;
     };
 
-/**
- * The name the Control Plane seeds its relay credential under — mirrored from
- * the CP's `seedRelaySourceConfig` (synap-control-plane-api
- * services/provisioning/source-config-seed.ts). A `cp-relay` config an admin
- * creates under any other name is never read as the broker credential.
- */
-export const CP_RELAY_SOURCE_NAME = "Synap Relay (CP-managed)";
-
-/** How many recent seeded relay rows are considered when picking the live key. */
-const RELAY_ROW_CANDIDATES = 5;
+// The pod's CP relay credential reader lives in @synap/database (the ONE
+// reader — @synap/jobs needs it too and cannot import @synap/api). Re-exported
+// here under the same names so existing importers are unchanged.
+export { CP_RELAY_SOURCE_NAME, readCpRelayCredential };
 
 /**
  * Is this pod's connection broker the Control Plane? Decided by SERVER env only
@@ -419,44 +416,22 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
   const cpUrl = config.server.controlPlaneUrl;
   if (!cpUrl) return { kind: "not-managed" };
 
-  let relayKey = process.env.CP_RELAY_KEY || process.env.SOURCE_RELAY_KEY;
-  if (!relayKey) {
-    try {
-      // The CP rotates by delivering a fresh seeded row through a create-only
-      // door. Of the most recent SEEDED rows, take the key that lives longest.
-      const rows = await db.query.sourceConfigs.findMany({
-        where: (t, { and, eq }) =>
-          and(
-            eq(t.providerType, "cp-relay"),
-            eq(t.name, CP_RELAY_SOURCE_NAME),
-            eq(t.enabled, true)
-          ),
-        orderBy: (t, { desc }) => [desc(t.createdAt)],
-        limit: RELAY_ROW_CANDIDATES,
-        columns: { config: true, userId: true },
-      });
-      let best: { key: string; exp: number } | null = null;
-      for (const row of rows) {
-        const ref = (row.config as Record<string, unknown> | undefined)
-          ?.relayKey;
-        if (typeof ref !== "string") continue;
-        const resolved = await resolveVaultReferences(
-          { relayKey: ref },
-          row.userId
-        );
-        const key = resolved.relayKey;
-        if (!key) continue;
-        const exp = relayKeyExpiry(key)?.getTime() ?? 0;
-        if (!best || exp > best.exp) best = { key, exp };
-      }
-      relayKey = best?.key;
-    } catch (err) {
-      return {
-        kind: "fault",
-        reason: "db-unavailable",
-        error: `Could not read this pod's control plane credential: ${err instanceof Error ? err.message : String(err)}`,
-      };
-    }
+  let relayKey: string | undefined;
+  try {
+    // This module's handles — the same `db` / vault resolver its callers' seam
+    // tests swap on the barrel (the reader itself lives in @synap/database).
+    relayKey = (
+      await readCpRelayCredential({
+        database: db,
+        resolveVault: resolveVaultReferences,
+      })
+    )?.key;
+  } catch (err) {
+    return {
+      kind: "fault",
+      reason: "db-unavailable",
+      error: `Could not read this pod's control plane credential: ${err instanceof Error ? err.message : String(err)}`,
+    };
   }
   if (!relayKey) {
     return {
@@ -511,20 +486,6 @@ function logBrokerChoiceOnce(result: BrokerResolveResult): void {
     },
     "Connection broker resolved"
   );
-}
-
-/** The `exp` of a JWT, unverified, or null when it cannot be read. */
-function relayKeyExpiry(jwt: string): Date | null {
-  const payload = jwt.split(".")[1];
-  if (!payload) return null;
-  try {
-    const exp = JSON.parse(
-      Buffer.from(payload, "base64url").toString("utf8")
-    )?.exp;
-    return typeof exp === "number" ? new Date(exp * 1000) : null;
-  } catch {
-    return null;
-  }
 }
 
 /**

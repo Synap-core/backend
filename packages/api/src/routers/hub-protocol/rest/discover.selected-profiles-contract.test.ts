@@ -239,4 +239,64 @@ describe("GET /discover?profileSlugs", () => {
     expect(row.properties).toEqual([]); // withheld — NOT the twin's `twin-only`
     expect(row).not.toHaveProperty("createCommand");
   });
+
+  it("shows a row's OWN schema by id, and names the row a slug write lands on — with no create command", async () => {
+    // Live 2026-09-13: the system `knowledge` row (knowledgeForm required) and
+    // a Pod Admin twin (lone `knowledgeform`) both listed, indistinguishable,
+    // while a lens-less capture validated against the twin.
+    const system = {
+      id: "55555555-5555-4555-8555-555555555555",
+      slug: "knowledge",
+      displayName: "Knowledge",
+      entityScope: "pod",
+      scope: "system",
+      profileKind: "kind",
+    };
+    const twin = {
+      ...system,
+      id: "66666666-6666-4666-8666-666666666666",
+      scope: "workspace",
+    };
+    const listProfiles = vi.fn().mockResolvedValue({ profiles: [system] });
+    const getProfile = vi.fn().mockImplementation(({ identifier }) =>
+      identifier === "knowledge"
+        ? Promise.resolve({
+            profile: twin,
+            effectiveProperties: [
+              { slug: "knowledgeform", valueType: "string" },
+            ],
+          })
+        : identifier === system.id
+          ? Promise.resolve({
+              profile: system,
+              effectiveProperties: [
+                { slug: "knowledgeForm", valueType: "string", required: true },
+              ],
+            })
+          : Promise.reject(notFound(identifier))
+    );
+    vi.mocked(getCaller).mockResolvedValue({
+      profiles: { listProfiles, getProfile },
+    } as never);
+
+    const response = await buildApp().request(
+      "/discover?userId=user-1&profileSlugs=knowledge"
+    );
+
+    expect(response.status).toBe(200);
+    const row = (await response.json()).profiles[0];
+    expect(row).toMatchObject({
+      id: system.id,
+      slug: "knowledge",
+      slugWritesTo: {
+        reason: "slug-resolves-to-another-row",
+        profileId: twin.id,
+      },
+    });
+    expect(row.properties.map((p: { slug: string }) => p.slug)).toEqual([
+      "knowledgeForm",
+    ]);
+    expect(row).not.toHaveProperty("schemaUnavailable");
+    expect(row).not.toHaveProperty("createCommand");
+  });
 });

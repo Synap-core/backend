@@ -1260,14 +1260,20 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped.",
         inputSchema: {
           type: "object",
           properties: {
+            title: {
+              type: "string",
+              maxLength: 200,
+              description:
+                "Optional short NAME for the session — one line, a few words (e.g. 'Scraping research'). This is what lists show. Omit it and lists show the goal's first line, clipped.",
+            },
             goal: {
               type: "string",
               description:
-                "ONE short line — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. Put detail, scope, and deliverables in expectedOutputs, never in the goal.",
+                "The OUTCOME — a single outcome-oriented sentence (e.g. 'Research best web-scraping approaches for social media'). NOT a paragraph. The name goes in title; detail, scope, and deliverables go in expectedOutputs; dependencies go in blockedBySessionIds.",
             },
             workspaceId: {
               type: "string",
@@ -1309,7 +1315,14 @@ export const tools = {
               type: "string",
               format: "uuid",
               description:
-                "Optional UUID of the session you are PUSHING FROM — use it when something blocked the work you were doing and this session is the detour to clear it. Records `session --spawned_from--> session` so the chain is recoverable; the parent stays OPEN (closing this one never closes it). Must be a session you own. The child does NOT inherit the parent's governance settings.",
+                "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings.",
+            },
+            blockedBySessionIds: {
+              type: "array",
+              items: { type: "string", format: "uuid" },
+              maxItems: 20,
+              description:
+                "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker closes). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason).",
             },
             suspendedIntent: {
               type: "string",
@@ -1402,7 +1415,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1410,9 +1423,15 @@ export const tools = {
               type: "string",
               description: "The focus session UUID to update.",
             },
+            title: {
+              type: ["string", "null"],
+              maxLength: 200,
+              description:
+                "Rename the session — its short one-line NAME (optional). Pass null to clear it (lists then show the goal's first line).",
+            },
             goal: {
               type: "string",
-              description: "New one-line goal (optional).",
+              description: "New one-line goal — the outcome (optional).",
             },
             status: {
               type: "string",
@@ -1707,7 +1726,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Re-find a focus session — read-only. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
+          "Re-find a focus session — read-only. To CONTINUE a session, read `continuation` first: it is the continuation packet (userMustDecide = owed slots + pending proposals, aiCanDo = open agent deliverables, blockers, outputs, run manifest, rerun, lastCompletion, nextMove). A section with status 'unavailable' failed to load — it is NOT empty. Pass sessionId for a specific session. Omit sessionId only when you have exactly one open session (ambient). If multiple sessions are open, returns multiSession:true + openSessions[] — pass sessionId explicitly (ambient attach is disabled to prevent mis-attribution). Always yours: sessions are scoped to the calling user.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2159,6 +2178,8 @@ export const tools = {
           "• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n" +
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
+          "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
+          'PLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\\n…", "sessionRef": "s1" } ] }\n' +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
           "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
           "\n" +
@@ -2273,6 +2294,108 @@ export const tools = {
                   },
                 },
                 required: ["sourceRef", "targetRef", "type"],
+              },
+            },
+            projects: {
+              type: "array",
+              description:
+                "PLAN: projects to create. `ref` is how sessions/entities point at it (`projectRef`). An agent-proposed project needs ≥5 evidence entities (`evidenceRefs` of entities in this call + `evidenceEntityIds` you can see); below that the step is still filed, MARKED for the reviewer, and never auto-applies.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  subjectRef: {
+                    type: "string",
+                    description:
+                      "Ref of the entity in this call the project is about.",
+                  },
+                  subjectEntityId: { type: "string" },
+                  evidenceRefs: { type: "array", items: { type: "string" } },
+                  evidenceEntityIds: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                },
+                required: ["ref", "name"],
+              },
+            },
+            sessions: {
+              type: "array",
+              description:
+                "PLAN: focus sessions to open. Each `…Ref` names a step in this call; its `…Id` twin names something that already exists (never both). Parent = the spawned_from edge (a parent never auto-closes).",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  title: {
+                    type: "string",
+                    description: "Short one-line name (≤200 chars).",
+                  },
+                  goal: {
+                    type: "string",
+                    description: "The outcome (≤2000 chars). REQUIRED.",
+                  },
+                  parentRef: { type: "string" },
+                  parentSessionId: { type: "string" },
+                  blockedByRefs: { type: "array", items: { type: "string" } },
+                  blockedBySessionIds: {
+                    type: "array",
+                    items: { type: "string" },
+                  },
+                  subjectRef: { type: "string" },
+                  subjectEntityId: { type: "string" },
+                  projectRef: { type: "string" },
+                  projectId: { type: "string" },
+                  expectedOutputs: {
+                    type: "array",
+                    items: { type: "object" },
+                  },
+                },
+                required: ["ref", "goal"],
+              },
+            },
+            documents: {
+              type: "array",
+              description:
+                "PLAN: documents to create (markdown). Attach one as an entity's body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  title: { type: "string" },
+                  content: { type: "string" },
+                  entityRef: { type: "string" },
+                  entityId: { type: "string" },
+                  sessionRef: { type: "string" },
+                  sessionId: { type: "string" },
+                  expectedLabel: {
+                    type: "string",
+                    description:
+                      "The declared output slot of that session this document fulfils (as synap_create_document).",
+                  },
+                },
+                required: ["ref", "title", "content"],
+              },
+            },
+            links: {
+              type: "array",
+              description:
+                "PLAN: session edges. `blocked_by`: from waits on to. `spawned_from`: to is from's parent (from must be a session in this call). Cycles are refused.",
+              items: {
+                type: "object",
+                properties: {
+                  type: {
+                    type: "string",
+                    enum: ["blocked_by", "spawned_from"],
+                  },
+                  fromRef: { type: "string" },
+                  fromSessionId: { type: "string" },
+                  toRef: { type: "string" },
+                  toSessionId: { type: "string" },
+                },
+                required: ["type"],
               },
             },
             summary: {

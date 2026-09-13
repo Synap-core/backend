@@ -392,7 +392,24 @@ describe("discover describes each row by its OWN identity, at every lens", () =>
     expect(result).toEqual({
       status: "resolved",
       effectiveProperties: OWN_SCHEMA["knowledge-system"],
+      // Its schema is its own — AND a slug write at this lens lands on the twin.
+      // Omitting this is the half-truth that let a lens-less capture validate
+      // against `knowledgeform` while discover showed `knowledgeForm` required.
+      slugResolvesToProfileId: "knowledge-twin",
     });
+  });
+
+  it("a row its slug already identifies names no other write target", async () => {
+    const result = await resolveRowSchema(ROWS[4], fakeDoor(null, []));
+    expect(result).toEqual({
+      status: "resolved",
+      effectiveProperties: OWN_SCHEMA["task-system"],
+    });
+    const twinAtItsLens = await resolveRowSchema(
+      ROWS[1],
+      fakeDoor("ws-builder", [])
+    );
+    expect(twinAtItsLens).not.toHaveProperty("slugResolvesToProfileId");
   });
 
   it("a row the id path refuses is WITHHELD with the twin named — not shown as the twin, not a bare []", async () => {

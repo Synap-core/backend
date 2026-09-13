@@ -466,6 +466,13 @@ export function computeCaptureGraphIdempotencyKey(input: {
   }>;
   relations?: Array<{ sourceRef: string; targetRef: string; type: string }>;
   bindings?: unknown[];
+  /**
+   * A connected plan's non-entity steps (sessions / documents / projects /
+   * links). Folded in ONLY when present, so every existing graph keeps its
+   * exact key — and two plans over the same entities but different sessions
+   * can never collapse onto one proposal.
+   */
+  plan?: unknown;
 }): string {
   // Per-entity canonical CONTENT key — deliberately excludes `ref`, an
   // LLM-assigned positional label (t1/t2, e1/e2 by array index) that shifts when
@@ -506,6 +513,7 @@ export function computeCaptureGraphIdempotencyKey(input: {
     // Bindings don't carry stable identity content; their COUNT is enough to
     // distinguish "same graph, extra channel bind" from an exact re-submit.
     bindingCount: (input.bindings ?? []).length,
+    ...(input.plan !== undefined ? { plan: canonicalize(input.plan) } : {}),
   });
 
   return createHash("sha256").update(payload).digest("hex");

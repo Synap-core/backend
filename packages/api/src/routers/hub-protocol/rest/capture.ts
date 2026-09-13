@@ -2,6 +2,7 @@
  * Hub Protocol REST — capture (AI-powered tab clustering, structure, execute)
  */
 
+import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "zod";
 
 import {
@@ -31,6 +32,7 @@ import {
   submitCaptureGraph,
   CaptureGraphValidationError,
 } from "../../../services/capture-agent/submit-capture-graph.js";
+import { CompositePlanApplyError } from "../../../utils/materialize-composite.js";
 import { validateCaptureGraphRefs } from "./_capture-graph-dedup.js";
 import {
   shouldPersistCapturePlan,
@@ -61,10 +63,12 @@ import {
   isUuid,
   uuidPathParam,
   logger,
+  resolveActorId,
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { resolveVerifiedSessionId } from "../_middleware/session.js";
 
 /**
  * Body for POST /import/enqueue-corpus.
@@ -122,15 +126,7 @@ const CorpusJobStatusSchema = z.object({
   output: CorpusJobOutputSchema,
 });
 
-const GRAPH_WRITE_SOURCES = new Set([
-  "intelligence",
-  "agent",
-  "openwebui-pipeline",
-  "extension",
-  "cli",
-  "n8n",
-  "raycast",
-] as const);
+const GRAPH_WRITE_SOURCES = new Set(HUB_WRITE_SOURCES);
 type GraphWriteSource =
   typeof GRAPH_WRITE_SOURCES extends Set<infer T> ? T : never;
 
@@ -164,7 +160,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A HUMAN caller (no agent key) instead gets CONFIRM MODE: the plan is persisted as a pending composite proposal and the response is the submit result — status/proposalId/reviewUrl/summary/entityCount/relationCount/bindingCount/applied/writeReceipt, plus (only when non-empty) pendingDuplicateCandidates, relationsFailed, unmodeledProperties, project and projectCandidate. Two dissimilar payloads share this route, so the 200 schema stays LOOSE — but it now DECLARES the honesty triple (`degraded`, `degradedReason`, `extraction`) that the tRPC door has always forwarded and this one published nowhere. `degradedReason` may be a pod plumbing reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service extraction reason (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type, …) — the latter are CONFIGURATION states, not outages, and must not be reported to a user as something to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -340,6 +336,12 @@ export function registerCaptureRoutes(app: HubHono): void {
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId } = acting;
 
+    // Validated like /graph: an agent may act only as itself or its linked human.
+    const corpusAgentUserId = c.get("agentUserId") as string | undefined;
+    const corpusActor = await resolveActorId(corpusAgentUserId, userId);
+    if ("error" in corpusActor)
+      return c.json({ error: corpusActor.error }, 400);
+
     try {
       // The run room exists BEFORE the job is queued and the job names it, so a
       // session cancel can find a corpus that has not started. The verified
@@ -350,7 +352,9 @@ export function registerCaptureRoutes(app: HubHono): void {
         {
           workspaceId: acting.workspaceId ?? null,
           userId,
-          trpcCtx: {},
+          // Same origin derivation as /import/analyze — a bare `{}` here
+          // always minted an `origin:"human"` room for an agent-key caller.
+          trpcCtx: { agentUserId: corpusAgentUserId ?? null },
         },
         {
           source: body.source as never,
@@ -757,6 +761,9 @@ export function registerCaptureRoutes(app: HubHono): void {
           ...(graph.relationsFailed
             ? { relationsFailed: graph.relationsFailed }
             : {}),
+          ...(graph.unmodeledProperties
+            ? { unmodeledProperties: graph.unmodeledProperties }
+            : {}),
         });
       }
 
@@ -921,10 +928,17 @@ export function registerCaptureRoutes(app: HubHono): void {
       const caller = captureRouter.createCaller(
         ctx as Parameters<typeof captureRouter.createCaller>[0]
       );
-      // Event-mode scoping: forward the active focus session (X-Session-Id) so
-      // captured entities link to it via `session --produced--> entity`. Same
-      // header the entities door reads; absent = unchanged behavior.
-      const sessionId = c.get("sessionId") || undefined;
+      // Event-mode scoping: forward the active focus session so captured
+      // entities link to it via `session --produced--> entity`. The verified
+      // X-Session-Id header wins; otherwise the body's handle (what
+      // /capture/structure returned) — honoured only when the caller OWNS that
+      // session. A body-only caller used to lose the session, so a degraded
+      // salvage landed outside the run the rerun door replaces.
+      const sessionId = await resolveVerifiedSessionId(
+        userId,
+        c.get("sessionId"),
+        body.sessionId
+      );
 
       const result = await caller.execute({
         entities: body.entities,
@@ -991,12 +1005,25 @@ export function registerCaptureRoutes(app: HubHono): void {
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
 
+    // Validated like /graph: an agent may act only as itself or its linked human.
+    const analyzeAgentUserId = c.get("agentUserId") as string | undefined;
+    const analyzeActor = await resolveActorId(analyzeAgentUserId, userId);
+    if ("error" in analyzeActor) {
+      return c.json({ error: analyzeActor.error }, 400);
+    }
+
     try {
       const scopes = c.get("scopes") as string[];
+      // The acting AGENT rides the context: `resolveImportSession` reads it
+      // off `trpcCtx.agentUserId` to derive the minted room's `origin`.
+      // Omitting it labelled every agent-key import room `origin:"human"`.
       const trpcCtx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        workspaceId
+        workspaceId,
+        null,
+        null,
+        analyzeAgentUserId ?? null
       );
       const orchestrator = new ImportOrchestrator({
         workspaceId: workspaceId ?? null,
@@ -1411,11 +1438,48 @@ export function registerCaptureRoutes(app: HubHono): void {
         branchPurpose?: "client-comms" | "team";
         title?: string;
       }>;
+      // CONNECTED PLAN steps — refs share the entity ref namespace; validated
+      // in full (refs, cycles, limits, ownership, evidence) by the core.
+      sessions?: unknown[];
+      documents?: unknown[];
+      projects?: unknown[];
+      links?: unknown[];
       summary?: string;
     } | null;
 
-    if (!body || !Array.isArray(body.entities) || body.entities.length === 0) {
-      return c.json({ error: "entities[] is required (at least one)" }, 400);
+    const planArrays = body
+      ? {
+          sessions: Array.isArray(body.sessions) ? body.sessions : [],
+          documents: Array.isArray(body.documents) ? body.documents : [],
+          projects: Array.isArray(body.projects) ? body.projects : [],
+          links: Array.isArray(body.links) ? body.links : [],
+        }
+      : { sessions: [], documents: [], projects: [], links: [] };
+    const planStepCount = Object.values(planArrays).reduce(
+      (n, items) => n + items.length,
+      0
+    );
+    if (
+      !body ||
+      ((!Array.isArray(body.entities) || body.entities.length === 0) &&
+        planStepCount === 0)
+    ) {
+      return c.json(
+        {
+          error:
+            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[])",
+        },
+        400
+      );
+    }
+    if (!Array.isArray(body.entities)) body.entities = [];
+    for (const [key, items] of Object.entries(planArrays)) {
+      const bad = items.findIndex(
+        (item) => !item || typeof item !== "object" || Array.isArray(item)
+      );
+      if (bad !== -1) {
+        return c.json({ error: `${key}[${bad}] must be an object` }, 400);
+      }
     }
     if (
       body.source &&
@@ -1499,12 +1563,22 @@ export function registerCaptureRoutes(app: HubHono): void {
       }
     }
 
+    // The authenticated key's agent drives AGENT MODE in the core (scored
+    // against the one agent policy; attributed on the pending proposal). This
+    // door never forwarded it, so an agent-key graph ran as the human. Validated
+    // through resolveActorId like every other write door (an agent may act only
+    // as itself or its linked human). No body field: an agent is the KEY's.
+    const graphAgentUserId = c.get("agentUserId") as string | undefined;
+    const graphActor = await resolveActorId(graphAgentUserId, userId);
+    if ("error" in graphActor) return c.json({ error: graphActor.error }, 400);
+
     try {
       // The within-batch dedup, persisted-entity dedup, operations build, and
       // event-backed proposal all live in the shared core so in-process
       // producers (Cal.com webhook/backfill) go through the SAME door path.
       const result = await submitCaptureGraph({
         userId,
+        ...(graphAgentUserId ? { agentUserId: graphAgentUserId } : {}),
         workspaceId,
         ...(body.projectId ? { projectId: body.projectId } : {}),
         ...(body.source ? { source: body.source as GraphWriteSource } : {}),
@@ -1516,6 +1590,13 @@ export function registerCaptureRoutes(app: HubHono): void {
         entities: body.entities,
         relations,
         bindings,
+        ...(planStepCount > 0
+          ? {
+              plan: planArrays as unknown as NonNullable<
+                Parameters<typeof submitCaptureGraph>[0]["plan"]
+              >,
+            }
+          : {}),
         // Caller-supplied summary wins (it is the precise one). When absent,
         // derive a narrative from the provenance the caller DID send rather
         // than dropping straight to the core's entity-count fallback.
@@ -1547,7 +1628,27 @@ export function registerCaptureRoutes(app: HubHono): void {
       // Missing-required-property preflight rejection → 400 (client input fault),
       // message preserved. Nothing was queued.
       if (err instanceof CaptureGraphValidationError) {
-        return c.json({ error: err.message }, 400);
+        return c.json(
+          {
+            error: err.message,
+            ...(err.planProblems.length
+              ? { planProblems: err.planProblems }
+              : {}),
+          },
+          400
+        );
+      }
+      // An agent-mode plan that auto-applied and did NOT apply whole: every
+      // step that landed was compensated; the receipt row is approval_failed.
+      if (err instanceof CompositePlanApplyError) {
+        return c.json(
+          {
+            error: err.message,
+            steps: err.steps,
+            compensation: err.compensation,
+          },
+          422
+        );
       }
       logger.error({ err, userId }, "POST /capture/graph failed");
       return c.json(

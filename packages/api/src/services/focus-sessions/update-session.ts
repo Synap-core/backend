@@ -43,12 +43,18 @@ import {
   type BlockGuidance,
   type BlockedSlotRef,
 } from "./block-guidelines.js";
+import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
 
 export interface UpdateFocusSessionParams {
   sessionId: string;
   /** Operator userId — the scoping floor (stops touching another user's session). */
   userId: string;
   agentUserId?: string;
+  /** Rename. Blank or `null` CLEARS (untitled ⇒ goal's first line is shown). */
+  title?: string | null;
   goal?: string;
   status?: "active" | "paused";
   progress?: number;
@@ -823,6 +829,17 @@ export async function updateFocusSession(
     }
   }
 
+  // A title is ONE line of at most SESSION_TITLE_MAX — refused, never clipped.
+  if (
+    params.title !== undefined &&
+    (normalizeSessionTitle(params.title)?.length ?? 0) > SESSION_TITLE_MAX
+  ) {
+    return {
+      status: "denied",
+      reason: `title must be at most ${SESSION_TITLE_MAX} characters — ONE line naming the session; put the outcome in goal.`,
+    };
+  }
+
   // THE SAME FLOOR for the SUBJECT anchor. The room resolves the subject's
   // live title by bare id, so an unfloored re-point is the identical read
   // oracle one field over. `null` clears and names nothing, so it skips.
@@ -857,6 +874,7 @@ export async function updateFocusSession(
       id: sessionId,
       // Always include goal so summaries resolve even when goal is not changing.
       goal: params.goal !== undefined ? params.goal : existing.goal,
+      ...(params.title !== undefined ? { title: params.title } : {}),
       ...(params.status !== undefined ? { status: params.status } : {}),
       ...(params.progress !== undefined ? { progress: params.progress } : {}),
       ...(params.currentStage !== undefined
@@ -911,6 +929,8 @@ export async function updateFocusSession(
     updatedAt: new Date(),
   };
   if (params.goal !== undefined) set.goal = params.goal;
+  if (params.title !== undefined)
+    set.title = normalizeSessionTitle(params.title);
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;
   if (params.currentStage !== undefined) set.currentStage = params.currentStage;

@@ -3,10 +3,107 @@ import {
   buildContextActions,
   assertJourneyTransition,
   mergeJourneyProgress,
+  planToolsJourneyWrite,
+  resolveCompletionCriterion,
   resolveReadiness,
   resolveTemplateVersion,
+  restartJourneyProgress,
   shouldCountMeaningfulEntity,
 } from "./onboarding.js";
+
+describe("resolveCompletionCriterion", () => {
+  it("lets the POD lens complete on finished setup steps with no data", () => {
+    expect(
+      resolveCompletionCriterion({
+        lensKind: "pod",
+        meaningfulEntityCount: 0,
+        completedActionIds: ["tools"],
+      })
+    ).toBe("pod-setup-steps-completed");
+  });
+
+  it("keeps the data rule for every other lens, and for a pod with no steps", () => {
+    expect(
+      resolveCompletionCriterion({
+        lensKind: "workspace",
+        meaningfulEntityCount: 0,
+        completedActionIds: ["tools"],
+      })
+    ).toBeNull();
+    expect(
+      resolveCompletionCriterion({
+        lensKind: "pod",
+        meaningfulEntityCount: 0,
+        completedActionIds: [],
+      })
+    ).toBeNull();
+    expect(
+      resolveCompletionCriterion({
+        lensKind: "project",
+        meaningfulEntityCount: 2,
+        completedActionIds: [],
+      })
+    ).toBe("meaningful-data-present");
+  });
+});
+
+describe("planToolsJourneyWrite", () => {
+  it("from settings, never creates or activates a journey (no reopened onboarding)", () => {
+    expect(planToolsJourneyWrite("settings", undefined)).toBeNull();
+    expect(planToolsJourneyWrite("settings", "offered")).toBeNull();
+  });
+
+  it("from settings, keeps a live journey's status and current step", () => {
+    for (const status of [
+      "active",
+      "paused",
+      "completed",
+      "dismissed",
+    ] as const) {
+      expect(planToolsJourneyWrite("settings", status)).toEqual({
+        status,
+        setCurrentAction: false,
+      });
+    }
+  });
+
+  it("from onboarding, a new or offered journey becomes active on the tools step", () => {
+    expect(planToolsJourneyWrite("onboarding", undefined)).toEqual({
+      status: "active",
+      setCurrentAction: true,
+    });
+    expect(planToolsJourneyWrite("onboarding", "offered")).toEqual({
+      status: "active",
+      setCurrentAction: true,
+    });
+    expect(planToolsJourneyWrite("onboarding", "completed")).toEqual({
+      status: "completed",
+      setCurrentAction: true,
+    });
+  });
+});
+
+describe("restartJourneyProgress", () => {
+  it("clears steps and the current step, keeps chosen values", () => {
+    const restarted = restartJourneyProgress({
+      currentActionId: "connect",
+      completedActionIds: ["tools", "connect"],
+      values: { tools: [{ name: "Notion" }] },
+    });
+    expect(restarted).toEqual({
+      completedActionIds: [],
+      values: { tools: [{ name: "Notion" }] },
+    });
+    // A restart then resumes from whatever step the client names next.
+    expect(
+      mergeJourneyProgress(restarted, { currentActionId: "tools" })
+    ).toEqual({
+      currentActionId: "tools",
+      completedActionIds: [],
+      values: { tools: [{ name: "Notion" }] },
+    });
+  });
+});
 
 describe("assertJourneyTransition", () => {
   it("allows only explicit lifecycle transitions", () => {

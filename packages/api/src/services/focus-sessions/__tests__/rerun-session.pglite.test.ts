@@ -96,6 +96,7 @@ import {
   recordSessionRunManifest,
 } from "../../intake/record-session-run-manifest.js";
 import type { revertSession } from "../revert-session.js";
+import { listRunSources } from "../run-sources.js";
 
 const USER = "user-1";
 const OTHER = "user-2";
@@ -911,6 +912,104 @@ describe("rerunSession — a rerun is a new session spawned from the previous on
       (first as { sessionId: string }).sessionId
     );
     expect(h.opened).toHaveLength(2);
+  });
+
+  it("W2 scope is part of the dedupe key: 'only the degraded' right after a full rerun is its OWN child; the same scope in any order reuses", async () => {
+    const good = await source({ kind: "text", body: "Call Bob" });
+    const bad = await source({
+      kind: "text",
+      body: "Email Ann",
+      degraded: true,
+    });
+    const other = await source({ kind: "text", body: "Book flight" });
+    const parent = await parentSession({
+      sourceDocumentIds: [good, bad, other],
+    });
+    const { calls, replayers } = recordingReplayers();
+    const base = {
+      sessionId: parent,
+      userId: USER,
+      mode: "add" as const,
+      replayers,
+      now: new Date("2026-09-13T10:00:05Z"),
+    };
+
+    const full = await run(base);
+    const degradedOnly = await run({
+      ...base,
+      scope: { sourceDocumentIds: [bad] },
+    });
+    expect(full).toMatchObject({ ok: true, status: "rerun", reused: false });
+    expect(degradedOnly).toMatchObject({ ok: true, reused: false });
+    expect((degradedOnly as { sessionId: string }).sessionId).not.toBe(
+      (full as { sessionId: string }).sessionId
+    );
+    // The scoped child replayed ONLY the selected source.
+    expect(calls.slice(3).map((c) => c.payload)).toEqual([
+      { text: "Email Ann" },
+    ]);
+
+    const pair = await run({
+      ...base,
+      scope: { sourceDocumentIds: [other, good] },
+    });
+    const pairAgain = await run({
+      ...base,
+      scope: { sourceDocumentIds: [good, other] },
+    });
+    expect(pairAgain).toMatchObject({ ok: true, status: "reused" });
+    expect((pairAgain as { sessionId: string }).sessionId).toBe(
+      (pair as { sessionId: string }).sessionId
+    );
+    expect(h.opened).toHaveLength(3);
+  });
+
+  it("W2 listRunSources lists the rows the plan counts: degraded marked, a deleted source missing, another user's session null", async () => {
+    const good = await source({ kind: "text", body: "Call Bob", path: "a" });
+    const bad = await source({
+      kind: "url",
+      body: "<p>x</p>",
+      url: "https://x.test",
+      path: "b",
+      degraded: true,
+    });
+    const gone = await source({ kind: "text", body: "Old", path: "c" });
+    await q(`update documents set deleted_at = now() where id = $1`, [gone]);
+    const parent = await parentSession({
+      sourceDocumentIds: [good, bad, gone],
+      status: "active",
+    });
+
+    const listed = await listRunSources({
+      sessionId: parent,
+      userId: USER,
+      database: db,
+    });
+    expect(listed).toMatchObject({
+      sessionId: parent,
+      total: 3,
+      missing: [gone],
+      rerunCap: RERUN_MAX_SOURCES,
+    });
+    expect(
+      listed!.sources.map((s) => [s.sourceDocumentId, s.kind, s.degraded])
+    ).toEqual([
+      [good, "text", null],
+      [bad, "url", { reason: "is_invalid_response", at: "t" }],
+    ]);
+    const plan = await run({
+      sessionId: parent,
+      userId: USER,
+      mode: "add",
+      dryRun: true,
+    });
+    expect(plan).toMatchObject({
+      plan: { sources: { degraded: 1, missing: [gone] } },
+    });
+
+    expect(
+      await listRunSources({ sessionId: parent, userId: OTHER, database: db })
+    ).toBeNull();
   });
 
   it("replace withdraws the parent's PENDING proposals through the withdraw door and lists refusals; add leaves them", async () => {

@@ -1127,6 +1127,13 @@ interface Gap {
  */
 const ACKNOWLEDGED_GAPS: Gap[] = [
   {
+    service: "submit-capture-graph",
+    field: "plan",
+    door: "routers/hub-protocol/rest/capture.ts:/capture/structure",
+    reason:
+      "STRUCTURALLY ABSENT — `/capture/structure` builds its graph from the AI structurer's entities + relations and never forwards a `plan` input (no sessions / documents / projects / links on that door), so `submitCaptureGraph` returns no `plan` block there. A connected plan is filed through `/capture/graph` or MCP `synap_capture`, which forward the whole result. If `/capture/structure` ever accepts plan steps, it must forward `plan` and this entry must go.",
+  },
+  {
     service: "ask",
     field: "intent",
     door: "routers/knowledge.ts:answer",

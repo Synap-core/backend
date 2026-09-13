@@ -177,16 +177,22 @@ export class PropertyValidationService {
    * `entities.create` folds `profile.defaultValues` into the properties, then
    * `EntityRepository.create` merges the entity-level `title` before validating
    * (both the kind path and the role-adapter's strict 1a check). Passing
-   * `profileDefaults` + `title` here reproduces that effective bag. Returns just
-   * `{ valid, errors }` — propose-time discards the normalized bag (nothing is
-   * stored yet); the errors already name each missing-required/type violation.
+   * `profileDefaults` + `title` here reproduces that effective bag. Returns
+   * `{ valid, errors, unmodeled }` — propose-time discards the normalized bag
+   * (nothing is stored yet); the errors already name each missing-required/type
+   * violation, and `unmodeled` names the keys the profile does not model, so a
+   * capture can report an invented key BEFORE it is stored verbatim.
    */
   async validateEntityCreateForProposal(
     properties: Record<string, unknown>,
     profileId: string,
     workspaceId?: string | null,
     opts?: { title?: string; profileDefaults?: Record<string, unknown> }
-  ): Promise<{ valid: boolean; errors: string[] }> {
+  ): Promise<{
+    valid: boolean;
+    errors: string[];
+    unmodeled: UnmodeledProperty[];
+  }> {
     const merged: Record<string, unknown> = {
       ...(opts?.profileDefaults ?? {}),
       ...properties,
@@ -200,7 +206,11 @@ export class PropertyValidationService {
       workspaceId,
       { enforceRequired: true }
     );
-    return { valid: result.valid, errors: result.errors };
+    return {
+      valid: result.valid,
+      errors: result.errors,
+      unmodeled: result.unmodeled,
+    };
   }
 
   /**

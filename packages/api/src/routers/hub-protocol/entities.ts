@@ -7,6 +7,7 @@
  * validation, security, and worker infrastructure.
  */
 
+import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -154,17 +155,7 @@ export const entitiesRouter = router({
          * otherwise `"intelligence"`. Connectors and integrations should
          * pass their own source so events carry the correct origin.
          */
-        source: z
-          .enum([
-            "intelligence",
-            "agent",
-            "openwebui-pipeline",
-            "extension",
-            "cli",
-            "n8n",
-            "raycast",
-          ])
-          .optional(),
+        source: z.enum(HUB_WRITE_SOURCES).optional(),
         aiMetadata: z
           .object({
             messageId: z.string().optional(),
@@ -544,17 +535,7 @@ export const entitiesRouter = router({
         properties: z.record(z.string(), z.unknown()).optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
-        source: z
-          .enum([
-            "intelligence",
-            "agent",
-            "openwebui-pipeline",
-            "extension",
-            "cli",
-            "n8n",
-            "raycast",
-          ])
-          .optional(),
+        source: z.enum(HUB_WRITE_SOURCES).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -610,17 +591,7 @@ export const entitiesRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
-        source: z
-          .enum([
-            "intelligence",
-            "agent",
-            "openwebui-pipeline",
-            "extension",
-            "cli",
-            "n8n",
-            "raycast",
-          ])
-          .optional(),
+        source: z.enum(HUB_WRITE_SOURCES).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -667,17 +638,7 @@ export const entitiesRouter = router({
         facetId: z.string().uuid(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
-        source: z
-          .enum([
-            "intelligence",
-            "agent",
-            "openwebui-pipeline",
-            "extension",
-            "cli",
-            "n8n",
-            "raycast",
-          ])
-          .optional(),
+        source: z.enum(HUB_WRITE_SOURCES).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

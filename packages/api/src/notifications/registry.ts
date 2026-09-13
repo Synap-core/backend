@@ -66,6 +66,13 @@ export interface NotificationNavigateObjectHandler {
   kind: string;
   /** Literal object id. Omit ⇒ the notification's own `sourceId`. */
   id?: string;
+  /**
+   * Optional object-nav VIEW reading (`OBJECT_NAV_VIEWS` in
+   * `@synap-core/types/navigation` — `'room'` opens a session's Intake Room).
+   * Literal, never templated; the client re-validates it with
+   * `isObjectNavView` and drops an unknown one.
+   */
+  view?: string;
 }
 
 export interface NotificationDef {
@@ -79,6 +86,12 @@ export interface NotificationDef {
   bodyTemplate: string;
   /** Default delivery channels (user prefs can override) */
   defaultChannels: DeliveryChannel[];
+  /**
+   * The channels this type may EVER go out on, whatever a routing rule says.
+   * Omit ⇒ no ceiling. Exists for a type whose audience is fixed by what it IS:
+   * a phone→desktop handoff pushed back to the phone that sent it is noise.
+   */
+  channelCeiling?: DeliveryChannel[];
   /** Inline action buttons */
   actions?: NotificationActionDef[];
   /** Auto-dismiss after ms. 0 = persistent. */
@@ -173,6 +186,23 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ],
     ttl: 0,
     groupBy: "reason",
+  },
+  {
+    // A newer intake prompt version is rejected clearly more often than the one
+    // before it (same engine + model, minimum sample on both sides). Producer:
+    // `services/intake/prompt-version-regression.ts` (daily cron), once per
+    // regression per pod admin. No action: the prompt lives in the IS and no
+    // pod write reverts it.
+    type: "intake.prompt_version_regression",
+    category: "ai",
+    label: "Prompt quality regression",
+    icon: "trending-down",
+    priority: "normal",
+    titleTemplate: "Prompt {{promptVersion}} is rejected more often",
+    bodyTemplate:
+      "{{newerRejectPct}}% of {{newerDecided}} reviewed proposals rejected vs {{previousRejectPct}}% of {{previousDecided}} for {{previousPromptVersion}} ({{engine}} / {{model}}).",
+    defaultChannels: ["in_app"],
+    ttl: 0,
   },
   {
     type: "ai_request.vault_access",
@@ -699,6 +729,39 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         // `sourceId` is the UNBLOCKED session's id (see the reactor), so no
         // explicit id is needed — the route table resolves it.
         handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * "Continue on desktop" — the person asked, from their phone, for their own
+     * desktop to pick up this run. Producer: `notifCenter.requestHandoff`, which
+     * owner-floors the session first. `sourceId` is the session id.
+     *
+     * In-app ONLY, and capped there (`channelCeiling`): the request came FROM the
+     * phone, so pushing it back to the phone is noise, whatever a routing rule
+     * says. A running desktop receives it over the user room; a closed one finds
+     * it unread in the inbox later. Opening is a click — never automatic.
+     */
+    type: "handoff.continue",
+    category: "system",
+    label: "Continue on desktop",
+    icon: "monitor",
+    priority: "normal",
+    titleTemplate: "Continue on desktop: {{goal}}",
+    // "another device", not "your phone": the door refuses agents, but any
+    // human client (relay, CLI, a second desktop) can call it.
+    bodyTemplate:
+      "Sent from another device. Open the room to pick up this run.",
+    defaultChannels: ["in_app"],
+    channelCeiling: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "open-room",
+        label: "Open room",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "session", view: "room" },
       },
     ],
   },

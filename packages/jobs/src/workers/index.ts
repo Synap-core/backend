@@ -157,6 +157,10 @@ import {
   CP_CATALOG_SYNC_QUEUE,
 } from "./cp-catalog-sync.js";
 import {
+  handleToolDemandForward,
+  TOOL_DEMAND_FORWARD_QUEUE,
+} from "./tool-demand-forward.js";
+import {
   handleCpProjectSync,
   CP_PROJECT_SYNC_QUEUE,
 } from "./cp-project-sync.js";
@@ -185,6 +189,14 @@ import {
   handleGovernanceLaneScan,
   GOVERNANCE_LANE_SCANNER_QUEUE,
 } from "./governance-lane-scanner.js";
+import {
+  handleGovernanceTightenScan,
+  GOVERNANCE_TIGHTEN_SCAN_QUEUE,
+} from "./governance-tighten-cron.js";
+import {
+  handlePromptQualityScan,
+  PROMPT_QUALITY_SCAN_QUEUE,
+} from "./prompt-quality-cron.js";
 import {
   BLOCKED_SLOT_RECURRENCE_QUEUE,
   handleBlockedSlotRecurrenceScan,
@@ -247,6 +259,10 @@ const ALL_QUEUES = [
   // governance.structure_guideline proposals only (same created-queue class as
   // the two scanners above — pinned by queues-are-created.tripwire.test.ts).
   STRUCTURE_GUIDELINE_SCAN_QUEUE,
+  // The daily tighten recommender scan and the prompt-version quality scan —
+  // both run api-side logic through IoC slots (same created-queue class).
+  GOVERNANCE_TIGHTEN_SCAN_QUEUE,
+  PROMPT_QUALITY_SCAN_QUEUE,
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
@@ -283,6 +299,7 @@ const ALL_QUEUES = [
   CAPABILITY_TEMPLATE_SYNC_QUEUE,
   CP_CATALOG_SYNC_QUEUE,
   CP_PROJECT_SYNC_QUEUE,
+  TOOL_DEMAND_FORWARD_QUEUE,
   // Was MISSING while its worker+schedule existed — pg-boss v10 schedule() FK
   // violated → registerCronSchedules aborted → every cron after cal-backfill
   // in cron.ts silently never scheduled (found live 2026-07-12).
@@ -837,6 +854,13 @@ export async function registerAllWorkers(): Promise<void> {
   await boss.work(CP_CATALOG_SYNC_QUEUE, async () => handleCpCatalogSync());
   logger.info("Registered worker: cp-catalog-sync");
 
+  // Tool demand forwarding (D2): normalized tool keys → CP over the relay JWT.
+  // Daily cron + a debounced one-off after each applied demand write.
+  await boss.work(TOOL_DEMAND_FORWARD_QUEUE, async () => {
+    await handleToolDemandForward();
+  });
+  logger.info("Registered worker: tool-demand-forward");
+
   // CP project directory sync (cron: every 30min + on startup + one-off pushes
   // from ProjectRepository mutations). Announces the pod's full project list to
   // the Control Plane `pod_projects` mirror (P4-lite W1). The IoC slot below is
@@ -882,6 +906,20 @@ export async function registerAllWorkers(): Promise<void> {
     handleGovernanceLaneScan()
   );
   logger.info("Registered worker: governance.lane-scan");
+
+  // Governance tighten scan (cron: daily 03:35 UTC — files governance.tighten_lane
+  // / governance.advisory proposals only, via the api-filled slot)
+  await boss.work(GOVERNANCE_TIGHTEN_SCAN_QUEUE, async () => {
+    await handleGovernanceTightenScan();
+  });
+  logger.info("Registered worker: governance.tighten-scan");
+
+  // Prompt-version quality scan (cron: daily 03:40 UTC — notifies pod admins
+  // of a prompt-version regression, via the api-filled slot)
+  await boss.work(PROMPT_QUALITY_SCAN_QUEUE, async () => {
+    await handlePromptQualityScan();
+  });
+  logger.info("Registered worker: intake.prompt-quality-scan");
 
   // Blocked-slot recurrence scanner (cron: daily 03:50 UTC — files
   // governance.work_guideline proposals only; never writes a guideline)

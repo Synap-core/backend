@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { router, podProcedure } from "../trpc.js";
 import {
   projects,
@@ -420,6 +421,10 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Decode an agent's XML-escaped name once, at the one door trpc/hub-rest/
+      // mcp all share (see `input.door` above) — see `entities/create.ts` for
+      // the full rationale.
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const db = await getDb();
       const isAgent = !!ctx.agentUserId;
       const door = input.door ?? "trpc";
@@ -668,6 +673,7 @@ export const projectsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const db = await getDb();
       // Load first: the project's OWN workspace is the gate's subject.
       const target = await loadVisibleProject(db, input.id, ctx.userId);

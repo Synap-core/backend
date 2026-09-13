@@ -33,6 +33,7 @@ import {
   KnowledgeFormConflictError,
   normalizeKnowledgeProperties,
 } from "../utils/knowledge-contract.js";
+import { reservedEntityKindReason } from "../utils/reserved-profile-slugs.js";
 
 /**
  * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
@@ -271,21 +272,6 @@ export class EntityRepository extends BaseRepository<
       );
     }
 
-    // 1a-pre. Ghost-project door (P1 guardrail e). A project is a COMMITMENT
-    // WITH GRAVITY held in the `projects` TABLE — never an entity. Pre-0151
-    // fossils created `project`-profile entities via this generic door, orphan
-    // rows that bypass the projects table AND the (a)–(d) project guardrails
-    // (dedup / provenance / gravity). Block CREATE only — update/read of the
-    // remaining fossils stay allowed (this is the create path; update is
-    // separate). Route the caller to the real project door.
-    if (profile.slug === "project") {
-      throw new EntityCreateRejectedError(
-        "project-is-not-an-entity",
-        "Projects are not entities. Use the project door (MCP synap_create_project / POST /api/hub/projects) — agent creation requires evidenceEntityIds (≥5). To group work, link entities to an existing project via belongs_to_project.",
-        profile.id
-      );
-    }
-
     // 1a-pre-2. File-is-uploaded-bytes door. The `file` kind is ONLY for real
     // uploaded bytes — its identity is a stored `documents` row reached via
     // `documentId`. Authored text is NOT a file: it belongs to a content kind
@@ -396,6 +382,24 @@ export class EntityRepository extends BaseRepository<
       // The role's data lives on the facet; the kind entity carries only the
       // identity columns (title/preview/document).
       data = { ...data, properties: {} };
+    }
+
+    // 1a-post. Reserved-kind door (P1 guardrail e). A project is a COMMITMENT
+    // WITH GRAVITY held in the `projects` TABLE — never an entity. Pre-0151
+    // fossils created `project`-profile entities via this generic door, orphan
+    // rows that bypass the projects table AND the (a)–(d) project guardrails
+    // (dedup / provenance / gravity). Block CREATE only — update/read of the
+    // remaining fossils stay allowed. Checked HERE, on the kind this create
+    // would actually write (after the role adapter swapped it in), so a role
+    // whose applicable kind is reserved cannot route around it. The wording is
+    // the reservation's own (`reservedEntityKindReason`), never a second copy.
+    const reservedKindReason = reservedEntityKindReason(profile.slug);
+    if (reservedKindReason) {
+      throw new EntityCreateRejectedError(
+        "project-is-not-an-entity",
+        reservedKindReason,
+        profile.id
+      );
     }
 
     const profileId: string = profile.id;

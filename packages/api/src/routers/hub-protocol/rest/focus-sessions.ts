@@ -37,6 +37,10 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
+import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import {
@@ -101,6 +105,8 @@ const FocusSessionWireSchema = z.object({
   projectId: z.string().nullable(),
   userId: z.string(),
   correlationId: z.string().nullable(),
+  /** Short optional name; null = untitled (show `resolveSessionTitle`). */
+  title: z.string().nullable(),
   goal: z.string(),
   status: z.string(),
   templateId: z.string().nullable(),
@@ -131,6 +137,8 @@ const CreateBodySchema = z
     workspaceId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
     userId: z.string().min(1),
+    /** Short one-line NAME; `goal` is the outcome. Blank ⇒ untitled. */
+    title: z.string().max(SESSION_TITLE_MAX).optional(),
     goal: z.string().min(1).max(2000),
     correlationId: z.string().optional(),
     templateId: z.string().optional(),
@@ -144,14 +152,21 @@ const CreateBodySchema = z
      */
     subjectEntityId: z.string().uuid().optional(),
     /**
-     * The session this one was PUSHED FROM (a detour). Recorded as
-     * `session --spawned_from--> session`; owner-floored server-side, so an
-     * unowned/unknown parent drops the edge rather than failing the create.
-     * Never a column, never a governance inherit.
+     * This session's PARENT — it is a child: a detour or a planned sub-session.
+     * Recorded as `session --spawned_from--> session`; owner-floored
+     * server-side. An unowned/unknown parent does not fail the create — the
+     * response's `parentLink` reports it. The parent stays open and lists its
+     * children. Never a column, never a governance inherit.
      */
     parentSessionId: z.string().uuid().optional(),
     /** One line describing what the PARENT was about to do, at push time. */
     suspendedIntent: z.string().min(1).max(2000).optional(),
+    /**
+     * Sessions this one waits on — `session --blocked_by--> session` edges,
+     * validated and written through the same door as POST /links, each outcome
+     * reported per id on the response's `blockerLinks`.
+     */
+    blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
   })
   .refine((b) => !!b.workspaceId || !!b.projectId, {
     message: "Provide a workspaceId or a projectId",
@@ -192,6 +207,8 @@ const UpdateBodySchema = z.object({
   progress: z.number().int().min(0).max(100).optional(),
   channelId: z.string().uuid().optional(),
   correlationId: z.string().optional(),
+  // Rename; `null` or blank CLEARS (untitled).
+  title: z.string().max(SESSION_TITLE_MAX).nullable().optional(),
   goal: z.string().min(1).max(2000).optional(),
   agentIds: z.array(z.string()).optional(),
   // APPEND one agent, as against `agentIds` which REPLACES the roster. Routed
@@ -665,10 +682,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
-      // Same projection as tRPC `focusSessions.get`: the rerun door's own rule.
-      const { assessRerunAvailability } =
-        await import("../../../services/focus-sessions/rerun-session.js");
-      return c.json({ ...row, rerun: await assessRerunAvailability(db, row) });
+      // Same projection as tRPC `focusSessions.get` and MCP `synap_get_session`:
+      // the continuation packet, which carries the rerun door's own rule.
+      const { projectContinuationPacket } =
+        await import("../../../services/focus-sessions/continuation-packet.js");
+      const continuation = await projectContinuationPacket(row, {
+        database: db,
+        userId: acting.userId,
+      });
+      return c.json({ ...row, rerun: continuation.rerun, continuation });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.get failed");
       return c.json(
@@ -762,6 +784,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         workspaceId,
         projectId: body.projectId ?? null,
+        title: body.title ?? null,
         goal: body.goal,
         agentUserId,
         correlationId: body.correlationId,
@@ -772,6 +795,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
+        blockedBySessionIds: body.blockedBySessionIds ?? [],
       });
 
       if (result.status === "proposed") {
@@ -786,11 +810,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         });
       }
 
-      return c.json(
-        result.blockGuidelines
-          ? { ...result.session, blockGuidelines: result.blockGuidelines }
-          : result.session
-      );
+      return c.json({
+        ...result.session,
+        ...(result.blockGuidelines
+          ? { blockGuidelines: result.blockGuidelines }
+          : {}),
+        // Edge outcomes, only when asked for — a failed edge is reported here.
+        ...(result.parentLink ? { parentLink: result.parentLink } : {}),
+        ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
+      });
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
       return c.json(
@@ -899,6 +927,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         data: {
           id,
           goal: patch.goal !== undefined ? patch.goal : existing.goal,
+          ...(patch.title !== undefined ? { title: patch.title } : {}),
           ...(patch.status !== undefined ? { status: patch.status } : {}),
           ...(patch.progress !== undefined ? { progress: patch.progress } : {}),
           ...(patch.channelId !== undefined
@@ -986,6 +1015,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       if (patch.correlationId !== undefined)
         set.correlationId = patch.correlationId;
       if (patch.goal !== undefined) set.goal = patch.goal;
+      if (patch.title !== undefined)
+        set.title = normalizeSessionTitle(patch.title);
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       // Merge, never assign — the SAME merge the tRPC and MCP doors use, so a
       // caller that echoes back only the fields it knows about cannot erase a

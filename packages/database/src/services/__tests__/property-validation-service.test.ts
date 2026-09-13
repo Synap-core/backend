@@ -88,6 +88,23 @@ describe("PropertyValidationService.validateEntityCreateForProposal", () => {
     expect(res.valid).toBe(true);
   });
 
+  it("reports an invented key as unmodeled — accepted, never silent", async () => {
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEffectiveProperties"
+    ).mockResolvedValue([prop("knowledgeForm", { required: false })]);
+
+    const res = await svc.validateEntityCreateForProposal(
+      { knowledgeform: "insight" },
+      "p",
+      "ws-1",
+      { title: "A lesson" }
+    );
+
+    expect(res.valid).toBe(true);
+    expect(res.unmodeled.map((u) => u.key)).toEqual(["knowledgeform"]);
+  });
+
   it("does NOT false-flag a required `title` def satisfied by the entity-level title", async () => {
     vi.spyOn(
       ProfileResolutionService.prototype,

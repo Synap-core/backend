@@ -272,9 +272,12 @@ export const signalsRouter = router({
    * Every existing caller passes at most `workspaceId`. The pod-wide count is
    * NO LONGER byte-identical to before: it now includes owed slots, which is the
    * point — a deliverable blocked on you needed you and the badge did not say
-   * so. A client that wants the old proposal+notification badge reads
-   * `needsYou - blocked`; a client that wants the founder-settled badge reads
-   * `blocked`.
+   * so.
+   *
+   * The number ships WITH its parts: `decisions` (distinct pending clusters),
+   * `notifications` (deduped unread) and `blocked` (owed slots), with
+   * `needsYou === decisions + notifications + blocked`. A client reads the part
+   * it needs; it never derives one by subtracting the others from `needsYou`.
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))

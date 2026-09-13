@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { workspaceProcedure, podProcedure } from "../../trpc.js";
 import {
   db,
@@ -91,6 +92,10 @@ export const mutateProcs = {
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Decode an agent's XML-escaped title once, before it reaches the
+      // proposal's stored `data.title` or the eventual update — see
+      // `entities/create.ts` for the full rationale (same seam, update side).
+      if (input.title) input.title = decodeHtmlEntities(input.title);
       const correlationId = randomUUID();
 
       // PROPOSE-TIME VALIDATION: reject an update against a NONEXISTENT entity

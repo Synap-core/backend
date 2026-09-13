@@ -54,6 +54,7 @@ import {
   pgTable,
   uuid,
   text,
+  varchar,
   jsonb,
   integer,
   timestamp,
@@ -138,6 +139,13 @@ export const focusSessions = pgTable(
      * UNIQUE nullable: one session per IS correlation context.
      */
     correlationId: text("correlation_id"),
+    /**
+     * Short optional NAME (one line), separate from `goal` — the outcome, which
+     * may be a paragraph. NULL means untitled: surfaces display the goal's first
+     * line through `resolveSessionTitle` (@synap-core/types/focus-sessions).
+     * Added by 0262_focus_sessions_title.sql.
+     */
+    title: varchar("title", { length: 200 }),
     /** "What are you trying to accomplish?" */
     goal: text("goal").notNull(),
     /** Current lifecycle state. */

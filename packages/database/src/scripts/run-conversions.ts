@@ -30,6 +30,7 @@ import {
   runConversions,
   parseOnlyArgs,
   selectManifestOps,
+  type FieldPlanRow,
 } from "../conversions/index.js";
 
 const argv = process.argv.slice(2);
@@ -81,6 +82,63 @@ function fmtCounts(counts: Record<string, number>): string {
   return parts.length ? parts.join(", ") : "—";
 }
 
+/**
+ * A def's lens: "base" (workspace_id NULL) or the overlay's workspace id. NOT
+ * "pod-wide": a base def is visible wherever its PROFILE is — pod-wide on the
+ * system row, but only one workspace on a workspace twin.
+ */
+function fmtLens(workspaceId: string | null): string {
+  return workspaceId === null ? "base" : workspaceId;
+}
+
+/**
+ * Every field the op moves, re-stamps or leaves behind — the table the operator
+ * reads before `--apply`. Rows come from the engine's own apply statements (see
+ * `FieldPlanRow`), so this is what the apply will do, not an estimate.
+ */
+function printFieldPlan(opKey: string, rows: FieldPlanRow[]) {
+  console.log(`FIELD PLAN — ${opKey} (${rows.length} field(s))`);
+  if (rows.length === 0) {
+    console.log("   no property defs or links change\n");
+    return;
+  }
+  const header =
+    "   " +
+    "ACTION".padEnd(19) +
+    "TABLE".padEnd(19) +
+    "SLUG".padEnd(24) +
+    "FROM LENS".padEnd(38) +
+    "TO LENS".padEnd(38) +
+    "NOTE";
+  console.log(header);
+  for (const row of rows) {
+    const note = row.action.endsWith("-skipped")
+      ? `${row.collidesWith ? `folds with '${row.collidesWith}'; ` : ""}` +
+        `${row.entitiesWithKey ?? 0} entit(ies) hold this key`
+      : "";
+    console.log(
+      "   " +
+        row.action.padEnd(19) +
+        row.table.padEnd(19) +
+        row.slug.padEnd(24) +
+        fmtLens(row.fromWorkspaceId).padEnd(38) +
+        fmtLens(row.toWorkspaceId).padEnd(38) +
+        note
+    );
+  }
+  const left = rows.filter((row) => row.action.endsWith("-skipped"));
+  const scoped = rows.filter((row) => row.action === "restamped");
+  console.log(
+    `   → ${scoped.length} base def(s) re-stamped as workspace overlays; ` +
+      `${left.length} field(s) LEFT BEHIND on the drained row, holding values on ` +
+      `${left.reduce((n, row) => n + (row.entitiesWithKey ?? 0), 0)} entity row(s)` +
+      (left.length
+        ? " — these keys lose their schema once the tail deactivates the row"
+        : "") +
+      "\n"
+  );
+}
+
 async function main() {
   const summary = await runConversions(sql, manifest, {
     dryRun,
@@ -112,6 +170,10 @@ async function main() {
   console.log(
     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
   );
+
+  for (const r of summary.results) {
+    if (r.planDetail) printFieldPlan(r.opKey, r.planDetail);
+  }
 
   if (summary.hadError) {
     console.error("❌ Conversion run stopped at a failing op (see above).");

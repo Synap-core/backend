@@ -25,6 +25,7 @@ export {
 } from "./manifest.js";
 
 export type {
+  FieldPlanRow,
   OpCounts,
   OpStatus,
   OpResult,

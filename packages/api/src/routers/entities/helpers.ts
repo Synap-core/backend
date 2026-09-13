@@ -8,6 +8,7 @@
  * imports the router itself.
  */
 
+import { PROPOSAL_SOURCES } from "@synap-core/types/proposals";
 import { z } from "zod";
 import {
   db,
@@ -330,20 +331,7 @@ export const DEFAULT_ENTITY_BENTO_TEMPLATES: Record<
  * create/update enums so Hub / CLI / connector provenance flows through the
  * governance gate unchanged (`source` is audit-only; it never gates auth).
  */
-export const FACET_SOURCE_ENUM = z
-  .enum([
-    "user",
-    "ai",
-    "intelligence",
-    "system",
-    "agent",
-    "openwebui-pipeline",
-    "extension",
-    "cli",
-    "n8n",
-    "raycast",
-  ])
-  .optional();
+export const FACET_SOURCE_ENUM = z.enum(PROPOSAL_SOURCES).optional();
 
 /**
  * Automation chain-tracking context, mirroring `SideEffectPayload["automationContext"]`.

@@ -49,6 +49,7 @@ import {
 import {
   configSettings,
   profiles,
+  proposals,
   workspaceMembers,
   CONFIG_SCOPE_KINDS,
 } from "@synap/database/schema";
@@ -58,6 +59,12 @@ import { IMPORT_SOURCE_VALUES } from "@synap-core/types";
 // The `sourceKind` vocabulary gate — shared with the Hub read door and the
 // correction paths, so it lives in services and every door imports it downward.
 import { isGuidelineSourceKind } from "../services/guidelines/source-kind.js";
+import {
+  assertCanApproveStructureGuideline,
+  proposeCorrectionAsGuideline,
+  recordCorrectionAsGuideline,
+} from "../services/guidelines/guideline-versions.js";
+import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
 
 /** A profile slug's shape; existence is checked against `profiles` on create. */
 const ENTITY_KIND_REF = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -378,5 +385,96 @@ export const guidelinesRouter = router({
       await assertCanReadGuideline(ctx.userId, existing);
       const versions = await listGuidelineHistory({ db, id: input.id });
       return { versions };
+    }),
+
+  /**
+   * "Make it a rule" — a correction made on ONE proposal becomes guideline
+   * text, so the next run applies it (founder D11).
+   *
+   * Access floor (the service leaves access to its caller):
+   *   - the caller can SEE the proposal (`assertProposalVisibleTo`). A proposal
+   *     that does not exist and one the caller may not see answer the SAME
+   *     NOT_FOUND, so a guessed id learns nothing;
+   *   - scope authority is D1's: `personal` (pod-wide, owner-floored) is the
+   *     caller's own; `workspace` biases every member, so it needs a workspace
+   *     editor/admin (or pod admin).
+   *
+   * An AGENT caller never writes: it files a `governance.structure_guideline`
+   * proposal for the human it acts for, approved under the same D1/D2 rules.
+   *
+   * The scope rung is `default` — the whole of the caller's (or workspace's)
+   * structuring. A narrower rung (source kind / entity kind) is not offered
+   * from the room yet.
+   */
+  recordCorrection: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string().uuid(),
+        text: z.string().trim().min(1).max(GUIDELINE_TEXT_MAX),
+        scope: z.enum(["personal", "workspace"]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        await assertProposalVisibleTo(input.proposalId, ctx.userId);
+      } catch (err) {
+        if (err instanceof TRPCError && err.code === "FORBIDDEN") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Proposal not found",
+          });
+        }
+        throw err;
+      }
+      const proposal = await db.query.proposals.findFirst({
+        where: eq(proposals.id, input.proposalId),
+        columns: { workspaceId: true },
+      });
+      if (!proposal) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Proposal not found",
+        });
+      }
+      if (input.scope === "workspace" && !proposal.workspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This proposal is not in a workspace — make it a rule just for you instead.",
+        });
+      }
+      const scope = {
+        scopeKind: "default" as const,
+        scopeRef: null,
+        workspaceId: input.scope === "workspace" ? proposal.workspaceId : null,
+      };
+
+      // BOTH paths: a proposal the owner floor would refuse on approve must not
+      // be filed at all — a viewer's agent gets the same FORBIDDEN the viewer
+      // gets, instead of a pending row nobody it acts for can ever approve.
+      await assertCanApproveStructureGuideline({
+        userId: ctx.userId,
+        subjectUserId: ctx.userId,
+        workspaceId: scope.workspaceId,
+      });
+
+      if (ctx.agentUserId) {
+        const { proposalId, alreadyProposed } =
+          await proposeCorrectionAsGuideline({
+            userId: ctx.userId,
+            agentUserId: ctx.agentUserId,
+            scope,
+            text: input.text,
+            sourceProposalId: input.proposalId,
+          });
+        return { status: "proposed" as const, proposalId, alreadyProposed };
+      }
+      const { guideline, supersededId } = await recordCorrectionAsGuideline({
+        userId: ctx.userId,
+        scope,
+        text: input.text,
+        sourceProposalId: input.proposalId,
+      });
+      return { status: "saved" as const, guideline, supersededId };
     }),
 });

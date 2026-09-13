@@ -42,6 +42,8 @@ import type { StoredProposalData } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
   isCompositeProposalData,
+  isPlanBatch,
+  normalizeProposalSource,
   isRequestShapedProposalData,
 } from "@synap-core/types/proposals";
 import type {
@@ -67,7 +69,11 @@ import { assertPodAdmin } from "../../trpc.js";
 import type { Context } from "../../context.js";
 import { emitAiCorrection } from "../../utils/ai-feedback-events.js";
 import { AI_KIND } from "../../lib/ai-events.js";
-import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import {
+  CompositePlanApplyError,
+  materializeCompositeGraph,
+} from "../../utils/materialize-composite.js";
+import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
 import {
   buildMaterializedRecord,
@@ -656,8 +662,25 @@ async function applyProposalApprovalInner(
       persistedDisp || clientDisp
         ? { ...(persistedDisp ?? {}), ...(clientDisp ?? {}) }
         : undefined;
+    // A connected PLAN applies whole (founder D3). A per-item reject would
+    // leave a session pointing at a dropped project, a blocker at a dropped
+    // session — so a plan takes no dispositions: ask for the plan to be
+    // REVISED instead (the pending plan is revisable, and every revision is
+    // re-validated), then approve the whole.
+    const isPlanApproval = isPlanBatch(payload.operations);
+    if (
+      isPlanApproval &&
+      dispositions &&
+      Object.values(dispositions).some((d) => d.status !== "accept")
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "This proposal is a connected plan: it applies as a whole, so individual steps cannot be rejected or edited at approval. Ask for the plan to be revised (it stays pending and is re-validated), then approve it.",
+      });
+    }
     const operationsToMaterialize =
-      dispositions && Object.keys(dispositions).length > 0
+      !isPlanApproval && dispositions && Object.keys(dispositions).length > 0
         ? applyGraphDispositions(payload.operations, dispositions)
         : payload.operations;
 
@@ -763,44 +786,103 @@ async function applyProposalApprovalInner(
 
     // Shared materialization: N entities → ref map → M relations.
     // Same logic the user-import (/import/apply) path uses.
-    const materializeResult = await materializeCompositeGraph(
-      reconciledOperations,
-      entityCaller,
-      relationCaller,
-      (err, type) =>
-        logger.warn(
-          { err, type },
-          "composite proposal: relation create failed (entities kept)"
-        ),
-      // Per-op homes (targetWorkspaceId) pin process kinds only — stamped at
-      // import/capture submit via stampScopeAwareHomesOnOps. Do NOT blanket
-      // workspaceScoped: that re-pinned pod identity into the proposal home.
-      // `entityCaller` doubles as facetCaller for op.facets after materialize.
-      {
-        facetCaller: entityCaller,
-        // ── Rule Loop callers (NS1) ─────────────────────────────────────
-        // ONE factory (utils/rule-loop-callers.ts) — every materialize call
-        // site wires the same three canonical doors, re-run as the APPROVER.
-        // Was inline here and NOWHERE else, which is how four other call sites
-        // ended up silently dropping config ops.
-        ...buildRuleLoopCallers({
-          database: db,
-          userId,
-          workspaceId: compositeCtx.workspaceId,
-          auditSource: "rule_loop_approval",
-        }),
-        // Per-op link idempotency keyed by THIS proposal (client-stable): a
-        // retried or double-clicked approval links what the first attempt
-        // created instead of duplicating it — and `import.apply`, now routed
-        // through this door (intake D7), keeps the retry safety it had.
-        idempotency: approvalIdempotency(db, { userId, proposal }),
-        // Graph submitters persist their origin in proposal data. Reuse it
-        // on approval so source attribution survives the proposal boundary.
-        ...(typeof payload.source === "string"
-          ? { source: payload.source }
-          : {}),
-      }
-    );
+    let materializeResult: Awaited<
+      ReturnType<typeof materializeCompositeGraph>
+    >;
+    try {
+      materializeResult = await materializeCompositeGraph(
+        reconciledOperations,
+        entityCaller,
+        relationCaller,
+        (err, type) =>
+          logger.warn(
+            { err, type },
+            "composite proposal: relation create failed (entities kept)"
+          ),
+        // Per-op homes (targetWorkspaceId) pin process kinds only — stamped at
+        // import/capture submit via stampScopeAwareHomesOnOps. Do NOT blanket
+        // workspaceScoped: that re-pinned pod identity into the proposal home.
+        // `entityCaller` doubles as facetCaller for op.facets after materialize.
+        {
+          facetCaller: entityCaller,
+          // ── Connected-plan callers ──────────────────────────────────────
+          // Sessions belong to — and every session edge floors on — the
+          // principal the proposal was filed FOR (`subjectUserId`), never an
+          // approving admin (see utils/plan-callers.ts). Projects and documents
+          // are written as the approver, like their single-object executors.
+          planCallers: buildPlanCallers({
+            database: db,
+            userId,
+            sessionOwnerUserId: proposal.subjectUserId ?? userId,
+            workspaceId: compositeCtx.workspaceId,
+            workspaceRole: compositeCtx.workspaceRole,
+            entityCaller,
+            proposal: {
+              id: proposal.id,
+              sessionId: proposal.sessionId ?? null,
+            },
+          }),
+          // ── Rule Loop callers (NS1) ─────────────────────────────────────
+          // ONE factory (utils/rule-loop-callers.ts) — every materialize call
+          // site wires the same three canonical doors, re-run as the APPROVER.
+          // Was inline here and NOWHERE else, which is how four other call sites
+          // ended up silently dropping config ops.
+          ...buildRuleLoopCallers({
+            database: db,
+            userId,
+            workspaceId: compositeCtx.workspaceId,
+            auditSource: "rule_loop_approval",
+          }),
+          // Per-op link idempotency keyed by THIS proposal (client-stable): a
+          // retried or double-clicked approval links what the first attempt
+          // created instead of duplicating it — and `import.apply`, now routed
+          // through this door (intake D7), keeps the retry safety it had.
+          idempotency: approvalIdempotency(db, { userId, proposal }),
+          // Graph submitters persist their origin in proposal data. Reuse it
+          // on approval so source attribution survives the proposal boundary.
+          // `data.source` carries TWO vocabularies under one name: a graph
+          // submitter's ACTOR provenance (`agent`, `cli`, …) and an import's
+          // FORMAT (`markdown`, `connector_sync`). Only a provenance value may
+          // reach the entity door — anything else normalizes to `user` (the
+          // human who filed / approves it; the agent stays attributed through
+          // `compositeCtx.agentUserId`).
+          ...(typeof payload.source === "string"
+            ? { source: normalizeProposalSource(payload.source) }
+            : {}),
+        }
+      );
+    } catch (err) {
+      if (!(err instanceof CompositePlanApplyError)) throw err;
+      // ALL-OR-NONE failed: every step that had applied was compensated. The
+      // proposal is recorded APPROVAL_FAILED (the actionable queue — a retry is
+      // allowed) with the per-step reasons and what compensation did, so the
+      // reviewer and the agent revising the plan can both see WHY.
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVAL_FAILED,
+          rejectionReason: err.message,
+          data: {
+            ...((proposal.data as Record<string, unknown> | null) ?? {}),
+            planFailure: {
+              at: new Date().toISOString(),
+              by: userId,
+              steps: err.steps,
+              compensation: err.compensation,
+            },
+          } as never,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proposals.id, proposal.id),
+            ne(proposals.status, ProposalStatus.APPROVED)
+          )
+        );
+      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+    }
     const {
       created: createdCount,
       linked,

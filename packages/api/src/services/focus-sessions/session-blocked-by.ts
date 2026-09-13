@@ -46,6 +46,7 @@ import {
 } from "@synap/database";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { UUID_RE } from "./session-metadata.js";
+import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 
 export interface BlockerEdgeInput {
   /** The session that cannot proceed. */
@@ -171,6 +172,113 @@ export async function addSessionBlocker(
   return { linked: true, inserted: inserted.length };
 }
 
+/** What happened to ONE create-time blocker. Reported per id, never folded. */
+export type CreateTimeBlockerReport =
+  | { blockerSessionId: string; status: "linked"; inserted: number }
+  | { blockerSessionId: string; status: "proposed"; proposalId: string }
+  | {
+      blockerSessionId: string;
+      status: "failed";
+      reason: "not_found" | "self_blocker" | "denied" | "error";
+      message?: string;
+    };
+
+/**
+ * Write the `blocked_by` edges a session was CREATED with (`blockedBySessionIds`
+ * on the create doors). AFTER the session row exists, one id at a time, each
+ * outcome reported — a bad handle never fails the create and never vanishes.
+ *
+ * NO SECOND INSERT PATH: every edge is validated by `validateSessionBlocker` and
+ * written by `addSessionBlocker`, exactly as `POST /links` does.
+ *
+ * GOVERNANCE follows the existing `blocked_by` rules:
+ *   - `agentUserId` present (an agent on the DIRECT path) → the same
+ *     `checkPermissionOrPropose` `link/create` judgement `POST /links` makes, in
+ *     the BLOCKED session's workspace, with the human as `userId` and the agent
+ *     attributed. A deferred edge is `proposed`, and its approval is applied by
+ *     `applyApprovedBlockedBy` through the owner floor.
+ *   - absent (a human, or an APPROVED create proposal — the approval is the
+ *     human decision) → written directly, like tRPC `addBlocker`.
+ */
+export async function addCreateTimeBlockers(input: {
+  sessionId: string;
+  blockerSessionIds: readonly string[];
+  /** Owner floor — BOTH sessions of every edge must belong to this user. */
+  userId: string;
+  agentUserId?: string | null;
+}): Promise<CreateTimeBlockerReport[]> {
+  const reports: CreateTimeBlockerReport[] = [];
+  for (const blockerSessionId of [...new Set(input.blockerSessionIds)]) {
+    try {
+      const valid = await validateSessionBlocker({
+        sessionId: input.sessionId,
+        blockerSessionId,
+        userId: input.userId,
+      });
+      if (!valid.ok) {
+        reports.push({
+          blockerSessionId,
+          status: "failed",
+          reason: valid.reason,
+        });
+        continue;
+      }
+      if (input.agentUserId) {
+        const perm = await checkPermissionOrPropose({
+          userId: input.userId,
+          agentUserId: input.agentUserId,
+          workspaceId: valid.workspaceId,
+          subjectType: "link",
+          action: "create",
+          data: {
+            title: "session --blocked_by--> session",
+            fromType: "session",
+            fromId: input.sessionId,
+            toType: "session",
+            toId: blockerSessionId,
+            linkType: "blocked_by",
+          },
+        });
+        if ("denied" in perm && perm.denied) {
+          reports.push({
+            blockerSessionId,
+            status: "failed",
+            reason: "denied",
+            message: perm.reason,
+          });
+          continue;
+        }
+        if ("proposalId" in perm) {
+          reports.push({
+            blockerSessionId,
+            status: "proposed",
+            proposalId: perm.proposalId,
+          });
+          continue;
+        }
+      }
+      const result = await addSessionBlocker({
+        sessionId: input.sessionId,
+        blockerSessionId,
+        userId: input.userId,
+      });
+      reports.push(
+        result.linked
+          ? { blockerSessionId, status: "linked", inserted: result.inserted }
+          : { blockerSessionId, status: "failed", reason: result.reason }
+      );
+    } catch (err) {
+      reports.push({
+        blockerSessionId,
+        status: "failed",
+        reason: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return reports;
+}
+
 /** Remove the `blocked_by` edge. Reports whether an edge was actually there. */
 export async function removeSessionBlocker(
   input: BlockerEdgeInput
@@ -179,8 +287,7 @@ export async function removeSessionBlocker(
     return { removed: false, reason: "self_blocker" };
   }
   if (
-    !(await bothOwned(input.sessionId, input.blockerSessionId, input.userId))
-      .ok
+    !(await bothOwned(input.sessionId, input.blockerSessionId, input.userId)).ok
   )
     return { removed: false, reason: "not_found" };
 

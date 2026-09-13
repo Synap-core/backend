@@ -83,6 +83,41 @@ const captureHandler: McpToolHandler = async (
   const captureRelations = Array.isArray(args.relations)
     ? (args.relations as Array<Record<string, unknown>>)
     : [];
+  // CONNECTED PLAN steps (sessions / documents / projects / links). Each is
+  // shape-checked door-locally (an object), then validated in full — refs,
+  // cycles, limits, ownership, evidence — by the shared preflight.
+  const planArg = (key: "sessions" | "documents" | "projects" | "links") =>
+    Array.isArray(args[key]) ? (args[key] as unknown[]) : [];
+  const capturePlanRaw = {
+    sessions: planArg("sessions"),
+    documents: planArg("documents"),
+    projects: planArg("projects"),
+    links: planArg("links"),
+  };
+  const capturePlanShapeProblems: string[] = [];
+  for (const [key, items] of Object.entries(capturePlanRaw)) {
+    items.forEach((item, i) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        capturePlanShapeProblems.push(`${key}[${i}] must be an object`);
+      }
+    });
+  }
+  const capturePlan = Object.fromEntries(
+    Object.entries(capturePlanRaw).map(([key, items]) => [
+      key,
+      items.filter(
+        (item) => !!item && typeof item === "object" && !Array.isArray(item)
+      ),
+    ])
+  ) as unknown as NonNullable<
+    Parameters<
+      typeof import("../../../services/capture-agent/submit-capture-graph.js").submitCaptureGraph
+    >[0]["plan"]
+  >;
+  const capturePlanStepCount = Object.values(capturePlanRaw).reduce(
+    (n, items) => n + items.length,
+    0
+  );
   const captureProjectId =
     typeof args.projectId === "string" && args.projectId
       ? args.projectId
@@ -130,7 +165,10 @@ const captureHandler: McpToolHandler = async (
   // `global` is the pod-wide RUNBOOK lane — a keyed text doc, not entities.
   // Mixing it with a structured payload has no meaning; say so rather than
   // silently dropping one of the two.
-  if (args.global === true && captureEntities.length > 0) {
+  if (
+    args.global === true &&
+    (captureEntities.length > 0 || capturePlanStepCount > 0)
+  ) {
     return ok({
       error:
         "global:true is the pod-wide runbook lane and takes `text` only. Send the runbook text on its own call, or drop `global` to capture entities[].",
@@ -148,7 +186,7 @@ const captureHandler: McpToolHandler = async (
   // `text` sent ALONGSIDE `entities[]` is not dropped: the structured payload
   // wins (it is the precise one) and the raw text rides along as `rawSource`
   // provenance on the proposal, where the reviewer can see it.
-  if (captureEntities.length > 0) {
+  if (captureEntities.length > 0 || capturePlanStepCount > 0) {
     // Refs must be unique, and every relation ref must name an entity in
     // this call — fail loud, exactly like the HTTP door: a dangling ref would
     // silently drop the link at materialization time.
@@ -176,7 +214,7 @@ const captureHandler: McpToolHandler = async (
     // human sentence (all problems joined); `problems`, `issues` and
     // `declaredRefs` are additive.
     const dryRun = args.validate === true;
-    const problems: string[] = [];
+    const problems: string[] = [...capturePlanShapeProblems];
     for (const e of graphEntities) {
       if (typeof e.profileSlug !== "string" || !e.profileSlug) {
         problems.push(
@@ -240,7 +278,10 @@ const captureHandler: McpToolHandler = async (
     };
 
     // ── REJECT: no-durable-content ───────────────────────────────────────
-    if (!graphEntities.some((e) => hasDurableEntity(e))) {
+    if (
+      capturePlanStepCount === 0 &&
+      !graphEntities.some((e) => hasDurableEntity(e))
+    ) {
       return captureRejected({
         reason: "no-durable-content",
         scope: graphScope,
@@ -261,7 +302,11 @@ const captureHandler: McpToolHandler = async (
     // TITLE SIMILARITY NEVER REJECTS: no `name`/`userScope` is passed here,
     // so only the strong (globally-unique) path of the resolver runs.
     // Same-title-across-kinds stays advisory (crossKindCandidates, below).
-    if (graphEntities.length === 1 && captureRelations.length === 0) {
+    if (
+      graphEntities.length === 1 &&
+      captureRelations.length === 0 &&
+      capturePlanStepCount === 0
+    ) {
       const only = graphEntities[0];
       const onlyProps =
         only.properties &&
@@ -477,6 +522,7 @@ const captureHandler: McpToolHandler = async (
           typeof dryRunCaptureGraph
         >[1]["entities"],
         relations: shapedRelations,
+        ...(capturePlanStepCount > 0 ? { plan: capturePlan } : {}),
       });
       const invalidEntities = [
         ...checked.invalidEntities,
@@ -488,9 +534,11 @@ const captureHandler: McpToolHandler = async (
           ],
         })),
       ];
-      const { relationsFailed } = checked;
+      const { relationsFailed, planProblems, planSteps } = checked;
       const clean =
-        relationsFailed.length === 0 && invalidEntities.length === 0;
+        relationsFailed.length === 0 &&
+        invalidEntities.length === 0 &&
+        planProblems.length === 0;
       return ok({
         status: clean ? "valid" : "invalid",
         dryRun: true,
@@ -502,6 +550,19 @@ const captureHandler: McpToolHandler = async (
         relationCount: checked.relationCount,
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
+        // Connected plan: every structural / ownership problem, and the steps
+        // as they would be filed (a project step's evidence verdict included).
+        ...(planProblems.length ? { planProblems } : {}),
+        ...(planSteps ? { planSteps } : {}),
+        // Advisory, never part of `clean`: these keys WOULD be stored, verbatim
+        // and unread. Named so a misspelled key is fixed before it lands.
+        ...(checked.unmodeledProperties.length
+          ? {
+              unmodeledProperties: checked.unmodeledProperties,
+              unmodeledHint:
+                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given.",
+            }
+          : {}),
         ...(crossKindLinks.length
           ? { links: { proposed: crossKindLinks } }
           : {}),
@@ -562,6 +623,7 @@ const captureHandler: McpToolHandler = async (
           relations: captureRelations as unknown as Parameters<
             typeof computeCaptureGraphIdempotencyKey
           >[0]["relations"],
+          ...(capturePlanStepCount > 0 ? { plan: capturePlan } : {}),
         }
       ).slice(0, 40)}`,
     });
@@ -584,6 +646,9 @@ const captureHandler: McpToolHandler = async (
       relations: captureRelations as unknown as Parameters<
         typeof submitCaptureGraph
       >[0]["relations"],
+      // The connected plan rides the SAME proposal as the entities, filed in
+      // the session above so it is discussable (and revisable) in its room.
+      ...(capturePlanStepCount > 0 ? { plan: capturePlan } : {}),
       // Agent-supplied summary wins (it is the precise one). When the agent
       // sent none, quote the text it DID send rather than letting the core's
       // entity-count fallback stand as the reviewer's only description.

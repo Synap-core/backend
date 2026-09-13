@@ -13,6 +13,8 @@ import {
   BrokerRefusalError,
   resolveBroker,
 } from "../../../connectors/index.js";
+import { readBrokerTrustDiagnostics } from "../../../connectors/broker-trust-diagnostics.js";
+import { isPodAdmin } from "../../../utils/workspace-role.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { materializeConnectorTools } from "../../../connectors/materialize-tools.js";
 import {
@@ -167,6 +169,76 @@ export function registerConnectorsRoutes(app: HubHono): void {
         },
         200
       );
+    }
+  );
+
+  // ── GET /connectors/broker-diagnostics ────────────────────────────────────
+  //
+  // WHY the broker is or is not usable: CP issuer trust, the owner's federated
+  // identity link, relay credential presence + expiry, and the broker's reason.
+  // Pod owners/admins only. Never returns key material. A failed read is a 503,
+  // never a report of absent rows.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/connectors/broker-diagnostics",
+      tags: ["Connectors"],
+      summary: "Non-secret trust diagnostics for the connection broker",
+      responses: {
+        200: {
+          description: "Broker trust diagnostics",
+          content: {
+            "application/json": {
+              schema: z
+                .object({
+                  cpIssuer: z.object({
+                    present: z.boolean(),
+                    status: z
+                      .enum(["pending", "approved", "rejected", "revoked"])
+                      .nullable(),
+                    hasSourceConfigWrite: z.boolean(),
+                  }),
+                  ownerIdentityLink: z.object({ present: z.boolean() }),
+                  relayCredential: z.object({
+                    present: z.boolean(),
+                    validUntil: z.string().nullable(),
+                  }),
+                  broker: z.object({
+                    kind: z.enum(["control-plane", "local"]),
+                    reason: z.string().nullable(),
+                  }),
+                })
+                .openapi("BrokerTrustDiagnostics"),
+            },
+          },
+        },
+        403: {
+          description: "Not a pod owner/admin, or missing scope",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        503: {
+          description: "Diagnostics could not be read",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c): Promise<any> => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.read required" },
+          403
+        );
+      }
+      const userId = c.get("userId") as string;
+      try {
+        if (!(await isPodAdmin(userId))) {
+          return c.json({ error: "Pod admin access required" }, 403);
+        }
+        return c.json(await readBrokerTrustDiagnostics(), 200);
+      } catch (err) {
+        logger.error({ err }, "broker-diagnostics: read failed");
+        return c.json({ error: "Broker diagnostics could not be read" }, 503);
+      }
     }
   );
 

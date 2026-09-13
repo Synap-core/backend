@@ -29,8 +29,19 @@ import { stageIntakeSource } from "./stage-intake-source.js";
 import {
   recordSessionRunManifest,
   type RunGuidelineRef,
+  type RunSourceExtraction,
   type SessionRunManifest,
 } from "./record-session-run-manifest.js";
+
+/**
+ * Keep a file's original bytes when the caller did not say? Photos: yes
+ * (founder default 2026-09-13 — a photo run is reproducible only from its
+ * stored source; "extract text only" is the per-run opt-out). Other files keep
+ * today's rule: their extracted text.
+ */
+export function defaultKeepOriginal(mimeType: string): boolean {
+  return mimeType.startsWith("image/");
+}
 
 const logger = createLogger({ module: "intake/record-structure-intake" });
 
@@ -66,12 +77,27 @@ export interface RecordStructureIntakeInput {
       filename?: string;
       encoding?: "base64" | "utf8";
     };
+    /** Client-declared sha256 of the original asset (the second ledger key). */
+    sourceSha256?: string;
   };
   /** `extraction.text` the IS returned for a file input, when it did. */
   extractedText?: string;
   extractedTextTruncated?: boolean;
   /** Set when the outcome is a degraded fallback (IS or pod reason). */
   degraded?: { reason: string };
+  /**
+   * Keep the file's ORIGINAL bytes. `undefined` → {@link defaultKeepOriginal}
+   * (photos kept: rerun needs the source). `false` = "extract text only" — honoured
+   * even when extraction failed, so a user who declined retention is never
+   * overridden (the echo then says `degradedSourceKept: false`).
+   */
+  keepRaw?: boolean;
+  /** Who read the file (IS `extraction.extractor` + the vision identity). */
+  extraction?: {
+    extractor: string | null;
+    model: string | null;
+    provider: string | null;
+  };
   guidelines: RunGuidelineRef[];
   /** Absent when no guideline read happened (an agent-structured graph). */
   guidelineStatus?: "ok" | "unavailable";
@@ -210,6 +236,7 @@ export async function recordStructureIntake(
   }
 
   const sourceDocumentIds: string[] = [];
+  let fileExtraction: RunSourceExtraction | undefined;
   let attempted = 0;
   const stage = async (
     label: string,
@@ -249,10 +276,17 @@ export async function recordStructureIntake(
       file.content,
       file.encoding === "utf8" ? "utf8" : "base64"
     );
-    // A file whose text was extracted is kept as that text; a file that was
-    // NOT (degraded / nothing extracted) keeps its bytes, or it could never be
-    // re-structured.
-    const keepBytes = Boolean(input.degraded) || !input.extractedText?.trim();
+    // A file that was NOT extracted (degraded / nothing extracted) keeps its
+    // bytes, or it could never be re-structured. An extracted file keeps its
+    // bytes when the caller chose to (photos by default) — else only its text.
+    // An explicit `keepRaw: false` wins over both.
+    const keepBytes =
+      input.keepRaw === false
+        ? false
+        : Boolean(input.degraded) ||
+          !input.extractedText?.trim() ||
+          (input.keepRaw ?? defaultKeepOriginal(file.mimeType));
+    const before = sourceDocumentIds.length;
     await stage("file", {
       kind: "file",
       ...(keepBytes ? {} : { text: input.extractedText }),
@@ -265,8 +299,21 @@ export async function recordStructureIntake(
           ? { extractedTextTruncated: true }
           : {}),
         keepBytes,
+        ...(input.source.sourceSha256
+          ? { sourceSha256: input.source.sourceSha256 }
+          : {}),
       },
     });
+    if (sourceDocumentIds.length > before) {
+      fileExtraction = {
+        sourceDocumentId: sourceDocumentIds[sourceDocumentIds.length - 1]!,
+        extractor: input.extraction?.extractor ?? null,
+        // A degraded outcome: nothing's answer was used, whatever was sent.
+        model: input.degraded ? null : (input.extraction?.model ?? null),
+        provider: input.degraded ? null : (input.extraction?.provider ?? null),
+        originalKept: keepBytes,
+      };
+    }
   }
 
   if (sessionId) {
@@ -277,6 +324,7 @@ export async function recordStructureIntake(
         userId: input.userId,
         patch: {
           sourceDocumentIds,
+          ...(fileExtraction ? { extractions: [fileExtraction] } : {}),
           guidelines: input.guidelines,
           ...(input.guidelineStatus
             ? { guidelineStatus: input.guidelineStatus }

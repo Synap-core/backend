@@ -50,7 +50,24 @@ export interface SessionRunManifest {
   idempotencyNamespace?: string;
   /** Set on a rerun session: which run it replays, and how (`rerunSession`). */
   rerun?: RunRerunLineage;
+  /**
+   * Per FILE source: who read it (the vision model/provider that saw a photo)
+   * and whether its original bytes were kept. UNION by `sourceDocumentId`, the
+   * latest writer for a document wins. The structure `model` above is the one
+   * that STRUCTURED; this is the one that SAW.
+   */
+  extractions?: RunSourceExtraction[];
   updatedAt: string;
+}
+
+export interface RunSourceExtraction {
+  sourceDocumentId: string;
+  /** IS extractor id (`vision`, `pdf-parse`, …); `null` when none reported. */
+  extractor: string | null;
+  /** `null` = no model saw it (degraded, or a non-model extractor). */
+  model: string | null;
+  provider: string | null;
+  originalKept: boolean;
 }
 
 export interface RunRerunLineage {
@@ -174,8 +191,29 @@ export function readSessionRunManifest(
       ? { idempotencyNamespace: r.idempotencyNamespace }
       : {}),
     ...(readRerunLineage(r.rerun) ? { rerun: readRerunLineage(r.rerun) } : {}),
+    ...(Array.isArray(r.extractions)
+      ? { extractions: readSourceExtractions(r.extractions) }
+      : {}),
     updatedAt: typeof r.updatedAt === "string" ? r.updatedAt : "",
   };
+}
+
+function readSourceExtractions(raw: unknown[]): RunSourceExtraction[] {
+  const strOrNull = (v: unknown) => (typeof v === "string" ? v : null);
+  return raw.flatMap((e) => {
+    if (!e || typeof e !== "object") return [];
+    const x = e as Record<string, unknown>;
+    if (typeof x.sourceDocumentId !== "string") return [];
+    return [
+      {
+        sourceDocumentId: x.sourceDocumentId,
+        extractor: strOrNull(x.extractor),
+        model: strOrNull(x.model),
+        provider: strOrNull(x.provider),
+        originalKept: x.originalKept === true,
+      },
+    ];
+  });
 }
 
 function readRerunLineage(raw: unknown): RunRerunLineage | undefined {
@@ -237,6 +275,18 @@ export function mergeRunManifest(
     promptVersion: (pick("promptVersion") as string | undefined) ?? UNKNOWN,
     ...(idempotencyNamespace ? { idempotencyNamespace } : {}),
     ...(rerun ? { rerun } : {}),
+    ...(prior?.extractions?.length || patch.extractions?.length
+      ? {
+          extractions: [
+            // Latest writer for a document wins; first-seen order is kept.
+            ...new Map(
+              [...(prior?.extractions ?? []), ...(patch.extractions ?? [])].map(
+                (e) => [e.sourceDocumentId, e] as const
+              )
+            ).values(),
+          ],
+        }
+      : {}),
     updatedAt: now.toISOString(),
   };
 }

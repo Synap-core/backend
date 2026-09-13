@@ -353,7 +353,10 @@ export class ImportOrchestrator {
       errors: [] as Array<{ path: string; message: string }>,
     };
 
-    const decoded: Array<{ path: string; content: string; mimeType: string }> =
+    // Bytes stay bytes: every file is stored exactly as received. Only a
+    // transformable (text) type is decoded to UTF-8, and only for the transform
+    // — decoding a PNG/PDF to a string and re-encoding it mangles the stored blob.
+    const decoded: Array<{ path: string; bytes: Buffer; mimeType: string }> =
       [];
     let totalBytes = 0;
     for (const item of items) {
@@ -370,7 +373,7 @@ export class ImportOrchestrator {
         const path = sanitizeImportPath(item.path);
         const mimeType =
           item.mimeType || mimeFromPath(path) || "application/octet-stream";
-        decoded.push({ path, content: buf.toString("utf-8"), mimeType });
+        decoded.push({ path, bytes: buf, mimeType });
       } catch (e) {
         stats.errors.push({
           path: item.path,
@@ -391,7 +394,7 @@ export class ImportOrchestrator {
 
     let _fileIndex = 0;
     const _totalFiles = decoded.length;
-    for (const { path, content, mimeType } of decoded) {
+    for (const { path, bytes, mimeType } of decoded) {
       const _idx = _fileIndex++;
       stats.filesReceived++;
       void emitImportFileProgress(
@@ -412,7 +415,7 @@ export class ImportOrchestrator {
       let _fileFailed = false;
       try {
         const storageKey = `imports/${userId}/${batchId}/${path}`;
-        await storage.upload(storageKey, Buffer.from(content, "utf-8"), {
+        await storage.upload(storageKey, bytes, {
           contentType: mimeType,
           metadata: { batchId, workspaceId: workspaceId ?? "" },
         });
@@ -421,6 +424,7 @@ export class ImportOrchestrator {
           stats.filesStoredOnly++;
           continue;
         }
+        const content = bytes.toString("utf-8");
 
         if (mimeType === "application/json" || ext === "json") {
           try {

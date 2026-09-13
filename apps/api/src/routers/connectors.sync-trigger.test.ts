@@ -101,6 +101,16 @@ describe("POST /sync-trigger", () => {
     });
   });
 
+  it("a PUBLIC_URL with a trailing slash verifies against the slash-less audience the CP signs", async () => {
+    process.env.PUBLIC_URL = "https://pod.example.test/";
+    const res = await post({ token: "t" });
+    expect(res.status).toBe(202);
+    expect(h.verify).toHaveBeenCalledWith("t", {
+      pinnedIssuer: "https://cp.example.test",
+      audience: "https://pod.example.test",
+    });
+  });
+
   it("acts on the TOKEN claims, never on body fields", async () => {
     const res = await post({
       token: "t",

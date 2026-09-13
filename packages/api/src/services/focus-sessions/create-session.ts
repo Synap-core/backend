@@ -35,6 +35,14 @@ import {
   findUnreachableOutputRefs,
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
+import {
+  addCreateTimeBlockers,
+  type CreateTimeBlockerReport,
+} from "./session-blocked-by.js";
+import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
 
@@ -68,6 +76,12 @@ export interface CreateFocusSessionParams {
    * the ad-hoc start path so a session can be tied to a person/company/deal.
    */
   subjectEntityId?: string | null;
+  /**
+   * Short optional one-line NAME, separate from `goal` (the outcome). Blank ⇒
+   * null (untitled; surfaces show the goal's first line via
+   * `resolveSessionTitle`). Longer than `SESSION_TITLE_MAX` is refused.
+   */
+  title?: string | null;
   goal: string;
   agentUserId?: string;
   correlationId?: string;
@@ -82,10 +96,12 @@ export interface CreateFocusSessionParams {
    */
   expectedOutputs?: ExpectedOutput[];
   /**
-   * The session this one was PUSHED FROM — a detour. Recorded as
-   * `session --spawned_from--> session` (the edge, never a column: see
-   * `schema/links.ts`). The parent must belong to the same user; an unowned or
-   * unknown parent drops the edge rather than failing the create.
+   * The PARENT of this session — a child is either a detour or a planned
+   * sub-session; both are the ONE edge `session --spawned_from--> session`
+   * (never a column: see `schema/links.ts`). The parent stays open and lists its
+   * children; closing either never closes the other. The parent must belong to
+   * the same user; an unowned or unknown parent does not fail the create, and
+   * the miss is REPORTED on the result as `parentLink` — never a silent drop.
    *
    * The child NEVER inherits the parent's `metadata` — least of all
    * `metadata.governance`, which `deriveSessionForceProposeGovernance` reads to
@@ -98,7 +114,29 @@ export interface CreateFocusSessionParams {
    * Only meaningful together with `parentSessionId`.
    */
   suspendedIntent?: string | null;
+  /**
+   * Sessions this one is BLOCKED BY, declared at birth. Each becomes a
+   * `session --blocked_by--> session` edge through `addCreateTimeBlockers` (the
+   * same validate + write door as `POST /links`), after the row exists; each
+   * outcome is reported per id on `blockerLinks`. On the PROPOSED path they ride
+   * the proposal and are written at approval.
+   */
+  blockedBySessionIds?: string[];
 }
+
+/** What happened to the create-time `spawned_from` edge. */
+export type CreateTimeParentLink =
+  | {
+      status: "linked";
+      parentSessionId: string;
+      suspendedIntentRecorded: boolean;
+    }
+  | {
+      status: "failed";
+      parentSessionId: string;
+      reason: "parent_not_found" | "self_parent" | "error";
+      message?: string;
+    };
 
 export type CreateFocusSessionResult =
   | {
@@ -106,6 +144,10 @@ export type CreateFocusSessionResult =
       session: typeof focusSessions.$inferSelect;
       /** Guidelines for any slot declared already blocked on the human. */
       blockGuidelines?: BlockGuidance;
+      /** Present iff a `parentSessionId` was given. */
+      parentLink?: CreateTimeParentLink;
+      /** Present iff `blockedBySessionIds` was non-empty — one entry per id. */
+      blockerLinks?: CreateTimeBlockerReport[];
     }
   | {
       status: "proposed";
@@ -132,6 +174,7 @@ export async function createFocusSession(
     workspaceId = null,
     projectId: explicitProjectId = null,
     subjectEntityId = null,
+    title: rawTitle = null,
     goal,
     agentUserId,
     correlationId,
@@ -141,7 +184,19 @@ export async function createFocusSession(
     expectedOutputs = [],
     parentSessionId = null,
     suspendedIntent = null,
+    blockedBySessionIds = [],
   } = params;
+
+  // Refused, never truncated: a clipped name is a claim the caller did not make.
+  const title = normalizeSessionTitle(rawTitle);
+  if (title && title.length > SESSION_TITLE_MAX) {
+    throw Object.assign(
+      new Error(
+        `title must be at most ${SESSION_TITLE_MAX} characters — ONE line naming the session; put the outcome in goal.`
+      ),
+      { code: "BAD_REQUEST" }
+    );
+  }
 
   // Idempotency: correlationId returns the existing session for this user,
   // scoped to the same workspace when one is given.
@@ -213,6 +268,8 @@ export async function createFocusSession(
     // when present to keep the persisted data lean.
     data: {
       goal,
+      // Also the proposal's display name (`extractProposalName` reads `title`).
+      ...(title ? { title } : {}),
       templateId,
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
@@ -231,6 +288,8 @@ export async function createFocusSession(
       // `proposals/executors/focus-session.ts` after the row is inserted.
       ...(parentSessionId ? { parentSessionId } : {}),
       ...(suspendedIntent ? { suspendedIntent } : {}),
+      // Same reason: written at approval through `addCreateTimeBlockers`.
+      ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
     },
   });
 
@@ -278,6 +337,7 @@ export async function createFocusSession(
         projectId,
         subjectEntityId,
         userId,
+        title,
         goal,
         correlationId: correlationId ?? null,
         templateId,
@@ -364,31 +424,57 @@ export async function createFocusSession(
     }
   }
 
-  // Detour lineage: `child --spawned_from--> parent` (+ the suspend note on the
+  // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the
   // owner floor and the "never inherit governance" invariant.
   // Best-effort by CONTRACT, not by luck: the session row is already committed,
   // so anything thrown here would hand the caller a 500 over a session that
-  // exists — the exact opposite of "drops the edge rather than failing the
-  // create". The producer returns a result object for the expected misses; this
-  // catch covers the unexpected ones (a malformed handle, a transport blip).
+  // exists. But best-effort is not SILENT: both the producer's expected misses
+  // and the unexpected throws land on `parentLink`, so a caller who asked for a
+  // parent is told whether it got one.
+  let parentLink: CreateTimeParentLink | undefined;
   if (parentSessionId) {
     try {
-      await recordSessionSpawn({
+      const spawn = await recordSessionSpawn({
         childSessionId: sessionOut.id,
         parentSessionId,
         userId,
         workspaceId: sessionOut.workspaceId,
         suspendedIntent,
       });
+      parentLink = spawn.linked
+        ? {
+            status: "linked",
+            parentSessionId,
+            suspendedIntentRecorded: spawn.suspendedIntentRecorded,
+          }
+        : { status: "failed", parentSessionId, reason: spawn.reason };
     } catch (err) {
       logger.warn(
         { err, sessionId: sessionOut.id, parentSessionId },
-        "recordSessionSpawn failed — session kept, spawned_from edge dropped"
+        "recordSessionSpawn failed — session kept, spawned_from edge not written"
       );
+      parentLink = {
+        status: "failed",
+        parentSessionId,
+        reason: "error",
+        message: err instanceof Error ? err.message : String(err),
+      };
     }
   }
+
+  // Create-time blockers, after the row exists, each reported per id. The
+  // governance judgement for an agent caller is the helper's (same as POST /links).
+  const blockerLinks =
+    blockedBySessionIds.length > 0
+      ? await addCreateTimeBlockers({
+          sessionId: sessionOut.id,
+          blockerSessionIds: blockedBySessionIds,
+          userId,
+          agentUserId,
+        })
+      : undefined;
 
   emitHubRealtimeEvent({
     eventType: "focus_session.create.completed",
@@ -417,5 +503,7 @@ export async function createFocusSession(
     status: "created",
     session: sessionOut,
     ...(blockGuidelines ? { blockGuidelines } : {}),
+    ...(parentLink ? { parentLink } : {}),
+    ...(blockerLinks ? { blockerLinks } : {}),
   };
 }

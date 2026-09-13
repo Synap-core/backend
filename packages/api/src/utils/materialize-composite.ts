@@ -14,10 +14,18 @@
  */
 
 import {
+  isPlanBatch,
+  isPlanOperation,
+  normalizeProposalSource,
   registerEntityRef,
   resolveCompositeRef,
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
+import {
+  planSessionEdges,
+  sessionOpsRootFirst,
+  type PlanSessionEdge,
+} from "../services/capture-agent/capture-plan.js";
 import { createLogger } from "@synap-core/core";
 // RELATION_SLUGS is the single source of truth in @synap/database (owned by the
 // governed entity materializer). Imported here so this composite path and the
@@ -288,6 +296,90 @@ export interface MaterializeRuleResult {
   automationIds: string[];
 }
 
+/** Per-op result for a `create_project` op (connected plan). */
+export interface MaterializeProjectResult {
+  ref: string;
+  opIndex: number;
+  projectId: string;
+  /** The project door reused an existing project of the same name — not this run's row. */
+  linked: boolean;
+  /** Subject the run bound to the project, when the step named one. */
+  subjectEntityId?: string;
+}
+
+/** Per-op result for a `create_session` op (connected plan). */
+export interface MaterializeSessionResult {
+  ref: string;
+  opIndex: number;
+  sessionId: string;
+}
+
+/** One session↔session edge a plan applied. */
+export interface MaterializeLinkResult {
+  opIndex: number;
+  type: "blocked_by" | "spawned_from";
+  fromSessionId: string;
+  toSessionId: string;
+  /** As declared (a ref or a real id per side) — the edge's identity in a record. */
+  requested: { from: string; to: string };
+  linkId?: string;
+  /** The edge was already in the graph — not created by this run. */
+  preExisting?: true;
+}
+
+/** Per-op result for a `create_document` op (connected plan). */
+export interface MaterializeDocumentResult {
+  ref: string;
+  opIndex: number;
+  documentId: string;
+  attachedEntityId?: string;
+  recordedOnSessionId?: string;
+}
+
+/** One plan step that did not apply — the per-step reason on `approval_failed`. */
+export interface PlanStepFailure {
+  opIndex: number;
+  ref?: string;
+  op: CompositeProposalOperation["op"];
+  reason: string;
+}
+
+/** What compensation did with the steps that HAD applied before the failure. */
+export interface PlanCompensationReport {
+  /** Rows retired, by kind. */
+  undone: Record<string, string[]>;
+  /** Rows compensation left in place, and why — never silently kept. */
+  notCompensated: Array<{ kind: string; id: string; reason: string }>;
+}
+
+/**
+ * A plan did not apply as a whole. Everything it had applied was handed to
+ * the compensator; `steps` names every failed step, `compensation` what was
+ * undone and what could not be.
+ */
+export class CompositePlanApplyError extends Error {
+  readonly steps: PlanStepFailure[];
+  readonly compensation: PlanCompensationReport;
+  constructor(steps: PlanStepFailure[], compensation: PlanCompensationReport) {
+    const lines = steps.map(
+      (s) =>
+        `• ${s.op}${s.ref ? ` "${s.ref}"` : ""} (#${s.opIndex}): ${s.reason}`
+    );
+    const left = compensation.notCompensated.length;
+    super(
+      `The plan did not apply — ${steps.length} step${steps.length === 1 ? "" : "s"} failed, so every step that had applied was rolled back:\n${lines.join("\n")}` +
+        (left > 0
+          ? `\n${left} row${left === 1 ? "" : "s"} could not be rolled back: ${compensation.notCompensated
+              .map((n) => `${n.kind} ${n.id} (${n.reason})`)
+              .join("; ")}`
+          : "")
+    );
+    this.name = "CompositePlanApplyError";
+    this.steps = steps;
+    this.compensation = compensation;
+  }
+}
+
 export interface MaterializeResult {
   /** Count of entities CREATED (excludes linked existing entities). */
   created: number;
@@ -318,6 +410,11 @@ export interface MaterializeResult {
   automations: MaterializeAutomationResult[];
   /** Rule Loop (NS1): rules created by `create_rule` ops. */
   rules: MaterializeRuleResult[];
+  /** Connected plan: projects, sessions, session edges, documents. Empty otherwise. */
+  projects: MaterializeProjectResult[];
+  sessions: MaterializeSessionResult[];
+  links: MaterializeLinkResult[];
+  documents: MaterializeDocumentResult[];
 }
 
 /**
@@ -376,6 +473,57 @@ export type RuleCreateCaller = {
 export type FacetAttachCaller = {
   attachFacet: (input: any) => Promise<any>;
 };
+
+/**
+ * Connected-plan callers. Each routes to the EXISTING door for its object —
+ * `createFocusSession`, the `projects.create` / `projects.update` router, the
+ * session edge producers (`addSessionBlocker` / `recordSessionSpawn`), the
+ * document door — built by ONE factory (`utils/plan-callers.ts`). Every call
+ * THROWS on anything but a clean apply: inside a plan a skipped step is a
+ * failed plan, never a warning.
+ *
+ * `compensate` is the undo half: it receives everything that DID apply and
+ * retires it through the one undo engine (`revertProposalCreations`). A batch
+ * with a plan op and no `planCallers` is refused before anything is written.
+ */
+export interface PlanCallers {
+  projectCaller: {
+    create: (input: {
+      name: string;
+      description?: string;
+    }) => Promise<{ id: string; linked: boolean }>;
+    setSubject: (input: {
+      projectId: string;
+      subjectEntityId: string;
+    }) => Promise<void>;
+  };
+  sessionCaller: {
+    create: (input: {
+      title: string | null;
+      goal: string;
+      subjectEntityId: string | null;
+      projectId: string | null;
+      expectedOutputs: Array<Record<string, unknown>>;
+    }) => Promise<{ id: string }>;
+  };
+  linkCaller: {
+    create: (input: {
+      type: "blocked_by" | "spawned_from";
+      fromSessionId: string;
+      toSessionId: string;
+    }) => Promise<{ linkId: string | null; preExisting: boolean }>;
+  };
+  documentCaller: {
+    create: (input: {
+      title: string;
+      content: string;
+      entityId: string | null;
+      sessionId: string | null;
+      expectedLabel: string | null;
+    }) => Promise<{ id: string }>;
+  };
+  compensate: (applied: MaterializeResult) => Promise<PlanCompensationReport>;
+}
 
 export interface MaterializeOptions {
   /**
@@ -462,6 +610,50 @@ export interface MaterializeOptions {
   skillCaller?: SkillCreateCaller;
   automationCaller?: AutomationCreateCaller;
   ruleCaller?: RuleCreateCaller;
+  /**
+   * Connected plan (sessions / documents / projects / session edges). Required
+   * the moment a batch carries a plan op — absent ⇒ the batch is refused before
+   * any write, like the Rule Loop callers.
+   */
+  planCallers?: PlanCallers;
+}
+
+/** Internal: stops a plan at its first failed step (never escapes the materializer). */
+class PlanStepAbort extends Error {
+  readonly failure: PlanStepFailure;
+  constructor(failure: PlanStepFailure) {
+    super(failure.reason);
+    this.failure = failure;
+  }
+}
+
+/** The ids a partial result names — what compensation must account for. */
+function appliedRowsOf(
+  result: MaterializeResult
+): Array<{ kind: string; id: string }> {
+  return [
+    ...result.entities
+      .filter((e) => !e.linked)
+      .map((e) => ({ kind: "entity", id: e.entityId })),
+    ...result.relations
+      .filter((r) => r.relationId && !r.preExisting)
+      .map((r) => ({ kind: "relation", id: r.relationId as string })),
+    ...result.facets.map((f) => ({ kind: "facet", id: f.facetId })),
+    ...result.skills.map((s) => ({ kind: "skill", id: s.skillId })),
+    ...result.automations.map((a) => ({
+      kind: "automation",
+      id: a.automationId,
+    })),
+    ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
+    ...result.projects
+      .filter((p) => !p.linked)
+      .map((p) => ({ kind: "project", id: p.projectId })),
+    ...result.sessions.map((s) => ({ kind: "session", id: s.sessionId })),
+    ...result.links
+      .filter((l) => l.linkId && !l.preExisting)
+      .map((l) => ({ kind: "link", id: l.linkId as string })),
+    ...result.documents.map((d) => ({ kind: "document", id: d.documentId })),
+  ];
 }
 
 export async function materializeCompositeGraph(
@@ -499,6 +691,51 @@ export async function materializeCompositeGraph(
         "Refusing rather than skipping: a dropped config op reported as success is how materialization forks on governance state."
     );
   }
+
+  // ── PREFLIGHT — FAIL CLOSED on an unwired PLAN ─────────────────────────
+  // Same rule, same place: a connected plan (sessions / documents / projects /
+  // session edges) reaching a call site that wired no `planCallers` is refused
+  // before anything is written. The peer call sites (text-lane capture, both
+  // import paths) never produce plan ops; if one ever does, it fails loud here
+  // instead of materializing the entities and dropping the plan around them.
+  // The provenance every door write is stamped with. Normalized HERE, once, so
+  // no call site can hand an import FORMAT (`markdown`, `connector_sync`) to a
+  // door whose `source` is the actor vocabulary (`PROPOSAL_SOURCES`) — that
+  // failed approval with a zod `invalid_value`. Absent ⇒ "system".
+  const materializeSource = normalizeProposalSource(
+    options?.source ?? "system"
+  );
+  const planMode = isPlanBatch(operations);
+  const planCallers = options?.planCallers;
+  if (planMode && !planCallers) {
+    const planOp = operations.find(isPlanOperation);
+    throw new Error(
+      `materializeCompositeGraph: batch contains a "${planOp?.op}" plan op but this caller wired no planCallers. ` +
+        "Wire `buildPlanCallers` (utils/plan-callers.ts) at this call site. " +
+        "Refusing before any write: a plan applies whole or not at all."
+    );
+  }
+
+  // ── PLAN MODE: all-or-none ─────────────────────────────────────────────
+  // Outside a plan every pass below keeps its per-op resilience (a failed
+  // relation or facet is reported and skipped). INSIDE a plan a skipped step
+  // breaks the structure the reviewer approved — a session whose blocker never
+  // landed is not "mostly" the plan — so the first failed step stops the run
+  // (`failPlanStep` throws), and everything that had applied is handed to
+  // `planCallers.compensate`. There is no DB transaction across these doors
+  // (each opens its own), so compensation IS the atomicity.
+  let currentOpIndex = -1;
+  const failPlanStep = (opIndex: number, err: unknown): void => {
+    if (!planMode) return;
+    const op = operations[opIndex];
+    const ref = (op as { ref?: unknown } | undefined)?.ref;
+    throw new PlanStepAbort({
+      opIndex,
+      ...(typeof ref === "string" && ref ? { ref } : {}),
+      op: op?.op ?? "create_entity",
+      reason: errorReason(err),
+    });
+  };
 
   // Pass 1 — entities → ref→realId map. An op may LINK an existing entity
   // (existingEntityId) instead of creating one; in that case we register its
@@ -541,430 +778,15 @@ export async function materializeCompositeGraph(
   const skillResults: MaterializeSkillResult[] = [];
   const automationResults: MaterializeAutomationResult[] = [];
   const ruleResults: MaterializeRuleResult[] = [];
-
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (op.op !== "create_skill") continue;
-    if (!options?.skillCaller) {
-      // Unreachable — the fail-closed preflight above already refused this
-      // batch. Kept as a narrowing guard that THROWS (never skips), so the
-      // silent-skip shape cannot come back by way of a refactor.
-      throw new Error(
-        "materializeCompositeGraph: create_skill op reached pass execution with no skillCaller (preflight bypassed)"
-      );
-    }
-    try {
-      const created = await options.skillCaller.create({
-        name: op.name,
-        body: op.body,
-        scope: op.scope,
-        agentTypes: op.agentTypes ?? null,
-      });
-      registerEntityRef(refToRealId, i, op.ref, created.id, false);
-      skillResults.push({ ref: op.ref, opIndex: i, skillId: created.id });
-    } catch (err) {
-      logger.warn(
-        { err, ref: op.ref, name: op.name },
-        "Skipping create_skill op (batch continues)"
-      );
-    }
-  }
-
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (op.op !== "create_automation") continue;
-    if (!options?.automationCaller) {
-      // Unreachable — the fail-closed preflight above already refused this
-      // batch. Kept as a narrowing guard that THROWS (never skips), so the
-      // silent-skip shape cannot come back by way of a refactor.
-      throw new Error(
-        "materializeCompositeGraph: create_automation op reached pass execution with no automationCaller (preflight bypassed)"
-      );
-    }
-    const enabledRequested = op.enabled === true;
-    try {
-      // FORCED DISABLED. Approve-first: an automation never arrives already
-      // running, even when the op says `enabled: true`. The override is
-      // reported on the result rather than swallowed.
-      const created = await options.automationCaller.create({
-        name: op.name,
-        ...(op.description ? { description: op.description } : {}),
-        triggerType: op.triggerType,
-        flowDefinition: op.flowDefinition,
-        enabled: false,
-      });
-      if (enabledRequested) {
-        logger.info(
-          { ref: op.ref, name: op.name, automationId: created.id },
-          "create_automation asked for enabled:true — materialized DISABLED (approve-first)"
-        );
-      }
-      registerEntityRef(refToRealId, i, op.ref, created.id, false);
-      automationResults.push({
-        ref: op.ref,
-        opIndex: i,
-        automationId: created.id,
-        enabledRequested,
-        enabled: false,
-        enabledOverridden: enabledRequested,
-      });
-    } catch (err) {
-      logger.warn(
-        { err, ref: op.ref, name: op.name },
-        "Skipping create_automation op (batch continues)"
-      );
-    }
-  }
-
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (op.op !== "create_entity") continue;
-
-    // Guard (narrow, exact-match): drop a materialized entity whose title OR
-    // profileSlug EXACTLY equals a known relation slug (trimmed, case-insensitive)
-    // — a misclassified edge-type from IS structure/import output. Skip + warn;
-    // NEVER throw, so the rest of a multi-entity batch still materializes.
-    const titleKey = op.title?.trim().toLowerCase();
-    const slugKey = op.profileSlug?.trim().toLowerCase();
-    if (
-      (titleKey && RELATION_SLUGS.has(titleKey)) ||
-      (slugKey && RELATION_SLUGS.has(slugKey))
-    ) {
-      logger.warn(
-        {
-          title: op.title,
-          profileSlug: op.profileSlug,
-          source: options?.source ?? "system",
-        },
-        "Skipping materialized entity: title/type collides with a known relation slug (likely misclassified edge-type from IS structure/import output)"
-      );
-      continue;
-    }
-
-    let realId: string;
-    let linkedExisting = false;
-    let resultProfileSlug = op.profileSlug;
-    let degradedFrom: string | undefined;
-    let propertiesDropped: true | undefined;
-    let contentDropped: true | undefined;
-    let documentId: string | undefined;
-    let propertyDiff: EntityPropertyDiff | undefined;
-    let linkedByRetry: true | undefined;
-    // Operation-keyed idempotency (U1): if this op already materialized under
-    // the caller's stable namespace (a retry), link the prior entity instead of
-    // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
-    // distinct refs, so two same-named entities never collide.
-    const idemExternalId =
-      options?.idempotency && op.ref
-        ? `${options.idempotency.namespace}:${op.ref}`
-        : undefined;
-    let idemHitId: string | null = null;
-    if (
-      options?.idempotency &&
-      idemExternalId &&
-      !op.existingEntityId &&
-      // Only honor a hit from a PRIOR call (a real retry). A hit on a key already
-      // created in THIS call is a within-proposal duplicate ref → do NOT merge.
-      !idemSeenThisCall.has(idemExternalId)
-    ) {
-      idemHitId = await options.idempotency.lookup(
-        options.idempotency.provider,
-        idemExternalId
-      );
-    }
-
-    if (op.existingEntityId) {
-      // `existingEntityId` is normally a real entity UUID, but a chunked import
-      // may link to an entity CREATED in an earlier chunk — in that case it is a
-      // synthetic ref present in the seeded map. Resolve through the seed (no-op
-      // for a real UUID, which is absent from the map).
-      realId = refToRealId[op.existingEntityId] ?? op.existingEntityId;
-      linkedExisting = true;
-    } else if (idemHitId) {
-      // Same namespace + ref seen before → link the prior entity (retry-safe,
-      // no duplicate). Treated exactly like the existingEntityId link branch.
-      realId = idemHitId;
-      linkedExisting = true;
-      if (await options?.idempotency?.ownsRetry?.(idemHitId)) {
-        linkedByRetry = true;
-      }
-      if (idemExternalId) idemSeenThisCall.add(idemExternalId);
-    } else {
-      // Per-op workspace pin (multi-home import graphs): when the op carries
-      // `targetWorkspaceId`, pass it through to entities.create (membership
-      // validated there) and force workspaceScoped so the entity lands in that
-      // workspace even for pod-default profiles. Ops without a pin keep the
-      // caller's ambient flag (proposal.approve path unchanged).
-      const opTargetWorkspaceId = op.targetWorkspaceId;
-      const result = await entityCaller.create({
-        profileSlug: op.profileSlug,
-        title: op.title || "Untitled",
-        description: op.description,
-        properties: op.properties,
-        content: op.content, // long-form body → linked document
-        ...(op.projectId ? { projectId: op.projectId } : {}),
-        ...(opTargetWorkspaceId
-          ? { targetWorkspaceId: opTargetWorkspaceId }
-          : {}),
-        source: options?.source ?? "system",
-        // Explicit workspace-scope request: pin to the target (or ambient)
-        // workspace even for pod-default profiles. Per-op pin forces true;
-        // otherwise imports may set options.workspaceScoped, while proposal
-        // approve leaves it false so pod-default profiles stay global.
-        workspaceScoped: opTargetWorkspaceId
-          ? true
-          : (options?.workspaceScoped ?? false),
-      });
-      realId = (result as { id: string }).id;
-      // A caller may report the ACTUAL profile it created (e.g. capture's
-      // retry-as-note downgrades the slug); prefer it for the response.
-      resultProfileSlug =
-        (result as { profileSlug?: string }).profileSlug ?? op.profileSlug;
-      // Carry caller-reported salvage/downgrade provenance through (additive).
-      degradedFrom = (result as { degradedFrom?: string }).degradedFrom;
-      propertiesDropped = (result as { propertiesDropped?: true })
-        .propertiesDropped;
-      // entities.create resolve-then-merge: a strong-signal dedup returns the
-      // PRE-EXISTING entity with `deduplicated: true` (it enriched properties +
-      // attached roles, but did NOT create a row). Treat it exactly like an
-      // existingEntityId link so revert never DELETES the pre-existing entity and
-      // the created-count stays honest. If this op carried a long-form `content`
-      // body, the merge silently discards it (create only overwrites properties on
-      // a dedup) — flag it so the body isn't lost without a trace.
-      if ((result as { deduplicated?: boolean }).deduplicated === true) {
-        linkedExisting = true;
-        // What the merge overwrote on the matched entity (entities.create
-        // reports it) — the only undoable trace of a merge.
-        const reportedDiff = (result as { propertyDiff?: EntityPropertyDiff })
-          .propertyDiff;
-        if (reportedDiff) propertyDiff = reportedDiff;
-        // B3: entities.create now RECOVERS a dropped body onto the deduped entity
-        // when it safely can (no existing body to clobber) and reports the
-        // residual via `contentDropped`. Prefer that signal; fall back to the old
-        // "any content on a dedup is dropped" heuristic only if an older door
-        // omits it.
-        const reportedDropped = (result as { contentDropped?: boolean })
-          .contentDropped;
-        if (reportedDropped !== undefined) {
-          if (reportedDropped) contentDropped = true;
-        } else if (op.content && op.content.trim().length > 0) {
-          contentDropped = true;
-        }
-      } else {
-        created++;
-        // The body document minted with the entity. Direct-write callers
-        // report it top-level; the entities.create door carries it on the
-        // returned entity row.
-        const reportedDocumentId =
-          (result as { documentId?: unknown }).documentId ??
-          (result as { entity?: { documentId?: unknown } | null }).entity
-            ?.documentId;
-        if (typeof reportedDocumentId === "string") {
-          documentId = reportedDocumentId;
-        }
-      }
-      // Register the op's stable key so a retry under the same namespace links
-      // this entity instead of re-creating it.
-      if (options?.idempotency && idemExternalId) {
-        await options.idempotency.register(
-          realId,
-          options.idempotency.provider,
-          idemExternalId
-        );
-        idemSeenThisCall.add(idemExternalId);
-      }
-    }
-
-    // External records this entity mirrors (a connection sync's Google event,
-    // contact, …) — registered through the same link door on EVERY resolution
-    // path (created, retry-linked, deduped, pinned existing), so an approved
-    // import carries its provider links + url + connection immediately instead
-    // of waiting for a later sync to adopt the entity.
-    if (op.externalLinks && op.externalLinks.length > 0) {
-      if (options?.idempotency) {
-        for (const link of op.externalLinks) {
-          await options.idempotency.register(
-            realId,
-            link.provider,
-            link.externalId,
-            { url: link.url ?? null, connectionId: link.connectionId ?? null }
-          );
-        }
-      } else {
-        logger.warn(
-          { ref: op.ref, count: op.externalLinks.length },
-          "materialize-composite: op declares externalLinks but the caller passed no link door (idempotency) — links NOT registered"
-        );
-      }
-    }
-
-    registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);
-    if (!primaryId) primaryId = realId;
-    entities.push({
-      ref: op.ref,
-      opIndex: i,
-      entityId: realId,
-      profileSlug: resultProfileSlug,
-      linked: linkedExisting,
-      ...(op.targetWorkspaceId ? { workspaceId: op.targetWorkspaceId } : {}),
-      ...(op.projectId ? { projectId: op.projectId } : {}),
-      ...(degradedFrom ? { degradedFrom } : {}),
-      ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
-      ...(contentDropped ? { contentDropped: true as const } : {}),
-      ...(documentId ? { documentId } : {}),
-      ...(propertyDiff ? { propertyDiff } : {}),
-      ...(linkedByRetry ? { linkedByRetry } : {}),
-    });
-
-    // Declared facets are attached in pass 1.5 below (once every create_entity
-    // op has resolved), not here — a facet's `contextRef` may point at an
-    // entity created LATER in this same batch, which pass 1 can't resolve yet.
-    if (op.facets && op.facets.length > 0) {
-      pendingFacetAttaches.push({
-        opIndex: i,
-        ...(op.ref ? { ref: op.ref } : {}),
-        realId,
-        facets: op.facets,
-      });
-    }
-  }
-
-  // Pass 1.5 — declared facets (Kind + Facets), after every create_entity op
-  // has resolved so refToRealId is fully populated: a facet's `contextRef` can
-  // now point at ANY entity in the batch, including one created after it.
-  // Additive — only ops carrying `facets` AND a caller that opted in via
-  // options.facetCaller attach anything. A failed attach is logged and
-  // skipped, never discarding the entity.
-  //
-  // Re-approval idempotency verdict: `FacetRepository.attach` (@synap/database)
-  // catches the unique-index violation on (entityId, profileId, contextEntityId,
-  // workspaceId) and returns the existing live row instead of throwing —
-  // packages/database/src/repositories/facet-repository.ts:194-205. The
-  // `entities.attachFacet` tRPC door (facetCaller here) surfaces that returned
-  // row as its normal `{ status: "attached" }` success response — it never
-  // inspects "was this a fresh insert or a conflict" —
-  // packages/api/src/routers/entities.ts:1993-2046. So a same-(entity, profile,
-  // context, workspace) facet attach replayed twice is already a no-op success,
-  // not an error. In practice a full proposal re-approval can't reach this path
-  // at all: `proposals.approve` rejects any non-PENDING proposal up front
-  // (packages/api/src/routers/proposals.ts:2231-2235, "Already ${status}"), so
-  // this idempotency only matters for a retry WITHIN one approve/import call
-  // (e.g. materialize resumed after a partial failure) — no extra guard needed.
   const facetResults: MaterializeFacetResult[] = [];
-  if (options?.facetCaller) {
-    for (const { opIndex, ref, realId, facets } of pendingFacetAttaches) {
-      for (const facetOp of facets) {
-        try {
-          const contextEntityId = facetOp.contextRef
-            ? resolveCompositeRef(refToRealId, facetOp.contextRef)
-            : undefined;
-          const attached = await options.facetCaller.attachFacet({
-            entityId: realId,
-            profileSlug: facetOp.profileSlug,
-            status: facetOp.status,
-            properties: facetOp.properties,
-            ...(contextEntityId ? { contextEntityId } : {}),
-            source: options?.source ?? "system",
-          });
-          const facetId = (attached as { facetId?: unknown } | undefined)
-            ?.facetId;
-          if (
-            (attached as { status?: string } | undefined)?.status ===
-              "attached" &&
-            typeof facetId === "string"
-          ) {
-            facetResults.push({
-              opIndex,
-              ...(ref ? { ref } : {}),
-              entityId: realId,
-              facetId,
-              profileSlug: facetOp.profileSlug,
-            });
-          }
-        } catch (err) {
-          logger.warn(
-            { err, entityId: realId, profileSlug: facetOp.profileSlug },
-            "Skipping composite facet attach (entity kept)"
-          );
-        }
-      }
-    }
-  }
-
-  // Pass 2 — relations via the shared loop (resolution + create guarded
-  // per-relation; a malformed/failed relation is reported and skipped, never
-  // discarding the entities already created).
-  const relationOps = operations
-    .filter((op) => op.op === "create_relation")
-    .map((op) => {
-      const r = op as Extract<
-        CompositeProposalOperation,
-        { op: "create_relation" }
-      >;
-      return { sourceRef: r.sourceRef, targetRef: r.targetRef, type: r.type };
-    });
+  let relations: MaterializeRelationResult[] = [];
   const relationsFailed: MaterializeRelationFailure[] = [];
-  const relations = await createRelationsFromRefs(
-    relationOps,
-    refToRealId,
-    relationCaller,
-    {
-      resolveRelationType: options?.resolveRelationType,
-      onError: (err, type, refs) => {
-        relationsFailed.push({ ...refs, type, reason: errorReason(err) });
-        onRelationError?.(err, type);
-      },
-      relationExists: options?.idempotency?.relationExists,
-      ownedRelationId: options?.idempotency?.ownedRelationId,
-    }
-  );
+  const projectResults: MaterializeProjectResult[] = [];
+  const sessionResults: MaterializeSessionResult[] = [];
+  const linkResults: MaterializeLinkResult[] = [];
+  const documentResults: MaterializeDocumentResult[] = [];
 
-  // ── Pass 3 — Rule Loop RULE ops (NS1) ──────────────────────────────────
-  // Runs LAST so `factRef` / `behaviourRefs` resolve against the fully
-  // populated map (skills + automations from pass 0, entities from pass 1).
-  // Resolution is `resolveCompositeRef` — the same helper relations use — so a
-  // ref may be an in-batch op ref OR a real UUID for a pre-existing object.
-  for (let i = 0; i < operations.length; i++) {
-    const op = operations[i];
-    if (op.op !== "create_rule") continue;
-    if (!options?.ruleCaller) {
-      // Unreachable — the fail-closed preflight above already refused this
-      // batch. Kept as a narrowing guard that THROWS (never skips), so the
-      // silent-skip shape cannot come back by way of a refactor.
-      throw new Error(
-        "materializeCompositeGraph: create_rule op reached pass execution with no ruleCaller (preflight bypassed)"
-      );
-    }
-    try {
-      const factSkillId = op.factRef
-        ? resolveCompositeRef(refToRealId, op.factRef)
-        : undefined;
-      const automationIds = (op.behaviourRefs ?? []).map((behaviourRef) =>
-        resolveCompositeRef(refToRealId, behaviourRef)
-      );
-      const created = await options.ruleCaller.create({
-        intent: op.intent,
-        scope: op.scope,
-        ...(factSkillId ? { factSkillId } : {}),
-        automationIds,
-      });
-      registerEntityRef(refToRealId, i, op.ref, created.id, false);
-      ruleResults.push({
-        ref: op.ref,
-        opIndex: i,
-        ruleId: created.id,
-        ...(factSkillId ? { factSkillId } : {}),
-        automationIds,
-      });
-    } catch (err) {
-      logger.warn(
-        { err, ref: op.ref },
-        "Skipping create_rule op (batch continues)"
-      );
-    }
-  }
-
-  return {
+  const buildResult = (): MaterializeResult => ({
     created,
     linked: relations.length,
     primaryId,
@@ -976,5 +798,669 @@ export async function materializeCompositeGraph(
     skills: skillResults,
     automations: automationResults,
     rules: ruleResults,
-  };
+    projects: projectResults,
+    sessions: sessionResults,
+    links: linkResults,
+    documents: documentResults,
+  });
+
+  try {
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_skill") continue;
+      currentOpIndex = i;
+      if (!options?.skillCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips), so the
+        // silent-skip shape cannot come back by way of a refactor.
+        throw new Error(
+          "materializeCompositeGraph: create_skill op reached pass execution with no skillCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const created = await options.skillCaller.create({
+          name: op.name,
+          body: op.body,
+          scope: op.scope,
+          agentTypes: op.agentTypes ?? null,
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        skillResults.push({ ref: op.ref, opIndex: i, skillId: created.id });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_skill op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_automation") continue;
+      currentOpIndex = i;
+      if (!options?.automationCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips), so the
+        // silent-skip shape cannot come back by way of a refactor.
+        throw new Error(
+          "materializeCompositeGraph: create_automation op reached pass execution with no automationCaller (preflight bypassed)"
+        );
+      }
+      const enabledRequested = op.enabled === true;
+      try {
+        // FORCED DISABLED. Approve-first: an automation never arrives already
+        // running, even when the op says `enabled: true`. The override is
+        // reported on the result rather than swallowed.
+        const created = await options.automationCaller.create({
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          triggerType: op.triggerType,
+          flowDefinition: op.flowDefinition,
+          enabled: false,
+        });
+        if (enabledRequested) {
+          logger.info(
+            { ref: op.ref, name: op.name, automationId: created.id },
+            "create_automation asked for enabled:true — materialized DISABLED (approve-first)"
+          );
+        }
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        automationResults.push({
+          ref: op.ref,
+          opIndex: i,
+          automationId: created.id,
+          enabledRequested,
+          enabled: false,
+          enabledOverridden: enabledRequested,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_automation op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
+    // ── Plan pass P0 — PROJECTS ─────────────────────────────────────────
+    // First, so an entity (`projectRef`) or a session (`projectRef`) can be
+    // filed into a project this same plan creates. The subject binding waits
+    // for the entities (pass P0b below) — a subject may be an entity the plan
+    // creates.
+    if (planCallers) {
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "create_project") continue;
+        currentOpIndex = i;
+        const project = await planCallers.projectCaller.create({
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, project.id, false);
+        projectResults.push({
+          ref: op.ref,
+          opIndex: i,
+          projectId: project.id,
+          linked: project.linked,
+        });
+      }
+    }
+
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_entity") continue;
+      currentOpIndex = i;
+
+      // Guard (narrow, exact-match): drop a materialized entity whose title OR
+      // profileSlug EXACTLY equals a known relation slug (trimmed, case-insensitive)
+      // — a misclassified edge-type from IS structure/import output. Skip + warn;
+      // NEVER throw, so the rest of a multi-entity batch still materializes.
+      // (Inside a PLAN the skip is a failed step — see PLAN MODE above.)
+      const titleKey = op.title?.trim().toLowerCase();
+      const slugKey = op.profileSlug?.trim().toLowerCase();
+      if (
+        (titleKey && RELATION_SLUGS.has(titleKey)) ||
+        (slugKey && RELATION_SLUGS.has(slugKey))
+      ) {
+        logger.warn(
+          {
+            title: op.title,
+            profileSlug: op.profileSlug,
+            source: materializeSource,
+          },
+          "Skipping materialized entity: title/type collides with a known relation slug (likely misclassified edge-type from IS structure/import output)"
+        );
+        failPlanStep(
+          i,
+          `"${op.title ?? op.profileSlug}" collides with a relation type name and cannot be created as an entity`
+        );
+        continue;
+      }
+
+      // A plan entity filed into a project the SAME plan creates.
+      const opProjectId =
+        op.projectId ??
+        (op.projectRef
+          ? resolveCompositeRef(refToRealId, op.projectRef)
+          : undefined);
+
+      let realId: string;
+      let linkedExisting = false;
+      let resultProfileSlug = op.profileSlug;
+      let degradedFrom: string | undefined;
+      let propertiesDropped: true | undefined;
+      let contentDropped: true | undefined;
+      let documentId: string | undefined;
+      let propertyDiff: EntityPropertyDiff | undefined;
+      let linkedByRetry: true | undefined;
+      // Operation-keyed idempotency (U1): if this op already materialized under
+      // the caller's stable namespace (a retry), link the prior entity instead of
+      // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
+      // distinct refs, so two same-named entities never collide.
+      const idemExternalId =
+        options?.idempotency && op.ref
+          ? `${options.idempotency.namespace}:${op.ref}`
+          : undefined;
+      let idemHitId: string | null = null;
+      if (
+        options?.idempotency &&
+        idemExternalId &&
+        !op.existingEntityId &&
+        // Only honor a hit from a PRIOR call (a real retry). A hit on a key already
+        // created in THIS call is a within-proposal duplicate ref → do NOT merge.
+        !idemSeenThisCall.has(idemExternalId)
+      ) {
+        idemHitId = await options.idempotency.lookup(
+          options.idempotency.provider,
+          idemExternalId
+        );
+      }
+
+      if (op.existingEntityId) {
+        // `existingEntityId` is normally a real entity UUID, but a chunked import
+        // may link to an entity CREATED in an earlier chunk — in that case it is a
+        // synthetic ref present in the seeded map. Resolve through the seed (no-op
+        // for a real UUID, which is absent from the map).
+        realId = refToRealId[op.existingEntityId] ?? op.existingEntityId;
+        linkedExisting = true;
+      } else if (idemHitId) {
+        // Same namespace + ref seen before → link the prior entity (retry-safe,
+        // no duplicate). Treated exactly like the existingEntityId link branch.
+        realId = idemHitId;
+        linkedExisting = true;
+        if (await options?.idempotency?.ownsRetry?.(idemHitId)) {
+          linkedByRetry = true;
+        }
+        if (idemExternalId) idemSeenThisCall.add(idemExternalId);
+      } else {
+        // Per-op workspace pin (multi-home import graphs): when the op carries
+        // `targetWorkspaceId`, pass it through to entities.create (membership
+        // validated there) and force workspaceScoped so the entity lands in that
+        // workspace even for pod-default profiles. Ops without a pin keep the
+        // caller's ambient flag (proposal.approve path unchanged).
+        const opTargetWorkspaceId = op.targetWorkspaceId;
+        const result = await entityCaller.create({
+          profileSlug: op.profileSlug,
+          title: op.title || "Untitled",
+          description: op.description,
+          properties: op.properties,
+          content: op.content, // long-form body → linked document
+          ...(opProjectId ? { projectId: opProjectId } : {}),
+          ...(opTargetWorkspaceId
+            ? { targetWorkspaceId: opTargetWorkspaceId }
+            : {}),
+          source: materializeSource,
+          // Explicit workspace-scope request: pin to the target (or ambient)
+          // workspace even for pod-default profiles. Per-op pin forces true;
+          // otherwise imports may set options.workspaceScoped, while proposal
+          // approve leaves it false so pod-default profiles stay global.
+          workspaceScoped: opTargetWorkspaceId
+            ? true
+            : (options?.workspaceScoped ?? false),
+        });
+        // A door that answers "proposed" did not create anything. Outside a
+        // plan the historic behaviour stands; inside one it is a failed step.
+        if (
+          planMode &&
+          (result as { status?: string } | undefined)?.status === "proposed"
+        ) {
+          failPlanStep(
+            i,
+            "the entity create was routed to a proposal instead of being created"
+          );
+        }
+        realId = (result as { id: string }).id;
+        // A caller may report the ACTUAL profile it created (e.g. capture's
+        // retry-as-note downgrades the slug); prefer it for the response.
+        resultProfileSlug =
+          (result as { profileSlug?: string }).profileSlug ?? op.profileSlug;
+        // Carry caller-reported salvage/downgrade provenance through (additive).
+        degradedFrom = (result as { degradedFrom?: string }).degradedFrom;
+        propertiesDropped = (result as { propertiesDropped?: true })
+          .propertiesDropped;
+        // entities.create resolve-then-merge: a strong-signal dedup returns the
+        // PRE-EXISTING entity with `deduplicated: true` (it enriched properties +
+        // attached roles, but did NOT create a row). Treat it exactly like an
+        // existingEntityId link so revert never DELETES the pre-existing entity and
+        // the created-count stays honest. If this op carried a long-form `content`
+        // body, the merge silently discards it (create only overwrites properties on
+        // a dedup) — flag it so the body isn't lost without a trace.
+        if ((result as { deduplicated?: boolean }).deduplicated === true) {
+          linkedExisting = true;
+          // What the merge overwrote on the matched entity (entities.create
+          // reports it) — the only undoable trace of a merge.
+          const reportedDiff = (result as { propertyDiff?: EntityPropertyDiff })
+            .propertyDiff;
+          if (reportedDiff) propertyDiff = reportedDiff;
+          // B3: entities.create now RECOVERS a dropped body onto the deduped entity
+          // when it safely can (no existing body to clobber) and reports the
+          // residual via `contentDropped`. Prefer that signal; fall back to the old
+          // "any content on a dedup is dropped" heuristic only if an older door
+          // omits it.
+          const reportedDropped = (result as { contentDropped?: boolean })
+            .contentDropped;
+          if (reportedDropped !== undefined) {
+            if (reportedDropped) contentDropped = true;
+          } else if (op.content && op.content.trim().length > 0) {
+            contentDropped = true;
+          }
+        } else {
+          created++;
+          // The body document minted with the entity. Direct-write callers
+          // report it top-level; the entities.create door carries it on the
+          // returned entity row.
+          const reportedDocumentId =
+            (result as { documentId?: unknown }).documentId ??
+            (result as { entity?: { documentId?: unknown } | null }).entity
+              ?.documentId;
+          if (typeof reportedDocumentId === "string") {
+            documentId = reportedDocumentId;
+          }
+        }
+        // Register the op's stable key so a retry under the same namespace links
+        // this entity instead of re-creating it.
+        if (options?.idempotency && idemExternalId) {
+          await options.idempotency.register(
+            realId,
+            options.idempotency.provider,
+            idemExternalId
+          );
+          idemSeenThisCall.add(idemExternalId);
+        }
+      }
+
+      // External records this entity mirrors (a connection sync's Google event,
+      // contact, …) — registered through the same link door on EVERY resolution
+      // path (created, retry-linked, deduped, pinned existing), so an approved
+      // import carries its provider links + url + connection immediately instead
+      // of waiting for a later sync to adopt the entity.
+      if (op.externalLinks && op.externalLinks.length > 0) {
+        if (options?.idempotency) {
+          for (const link of op.externalLinks) {
+            await options.idempotency.register(
+              realId,
+              link.provider,
+              link.externalId,
+              { url: link.url ?? null, connectionId: link.connectionId ?? null }
+            );
+          }
+        } else {
+          logger.warn(
+            { ref: op.ref, count: op.externalLinks.length },
+            "materialize-composite: op declares externalLinks but the caller passed no link door (idempotency) — links NOT registered"
+          );
+        }
+      }
+
+      registerEntityRef(refToRealId, i, op.ref, realId, !primaryId);
+      if (!primaryId) primaryId = realId;
+      entities.push({
+        ref: op.ref,
+        opIndex: i,
+        entityId: realId,
+        profileSlug: resultProfileSlug,
+        linked: linkedExisting,
+        ...(op.targetWorkspaceId ? { workspaceId: op.targetWorkspaceId } : {}),
+        ...(opProjectId ? { projectId: opProjectId } : {}),
+        ...(degradedFrom ? { degradedFrom } : {}),
+        ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
+        ...(contentDropped ? { contentDropped: true as const } : {}),
+        ...(documentId ? { documentId } : {}),
+        ...(propertyDiff ? { propertyDiff } : {}),
+        ...(linkedByRetry ? { linkedByRetry } : {}),
+      });
+
+      // Declared facets are attached in pass 1.5 below (once every create_entity
+      // op has resolved), not here — a facet's `contextRef` may point at an
+      // entity created LATER in this same batch, which pass 1 can't resolve yet.
+      if (op.facets && op.facets.length > 0) {
+        pendingFacetAttaches.push({
+          opIndex: i,
+          ...(op.ref ? { ref: op.ref } : {}),
+          realId,
+          facets: op.facets,
+        });
+      }
+    }
+
+    // Pass 1.5 — declared facets (Kind + Facets), after every create_entity op
+    // has resolved so refToRealId is fully populated: a facet's `contextRef` can
+    // now point at ANY entity in the batch, including one created after it.
+    // Additive — only ops carrying `facets` AND a caller that opted in via
+    // options.facetCaller attach anything. A failed attach is logged and
+    // skipped, never discarding the entity.
+    //
+    // Re-approval idempotency verdict: `FacetRepository.attach` (@synap/database)
+    // catches the unique-index violation on (entityId, profileId, contextEntityId,
+    // workspaceId) and returns the existing live row instead of throwing —
+    // packages/database/src/repositories/facet-repository.ts:194-205. The
+    // `entities.attachFacet` tRPC door (facetCaller here) surfaces that returned
+    // row as its normal `{ status: "attached" }` success response — it never
+    // inspects "was this a fresh insert or a conflict" —
+    // packages/api/src/routers/entities.ts:1993-2046. So a same-(entity, profile,
+    // context, workspace) facet attach replayed twice is already a no-op success,
+    // not an error. In practice a full proposal re-approval can't reach this path
+    // at all: `proposals.approve` rejects any non-PENDING proposal up front
+    // (packages/api/src/routers/proposals.ts:2231-2235, "Already ${status}"), so
+    // this idempotency only matters for a retry WITHIN one approve/import call
+    // (e.g. materialize resumed after a partial failure) — no extra guard needed.
+    if (options?.facetCaller) {
+      for (const { opIndex, ref, realId, facets } of pendingFacetAttaches) {
+        currentOpIndex = opIndex;
+        for (const facetOp of facets) {
+          try {
+            const contextEntityId = facetOp.contextRef
+              ? resolveCompositeRef(refToRealId, facetOp.contextRef)
+              : undefined;
+            const attached = await options.facetCaller.attachFacet({
+              entityId: realId,
+              profileSlug: facetOp.profileSlug,
+              status: facetOp.status,
+              properties: facetOp.properties,
+              ...(contextEntityId ? { contextEntityId } : {}),
+              source: materializeSource,
+            });
+            const facetId = (attached as { facetId?: unknown } | undefined)
+              ?.facetId;
+            if (
+              (attached as { status?: string } | undefined)?.status ===
+                "attached" &&
+              typeof facetId === "string"
+            ) {
+              facetResults.push({
+                opIndex,
+                ...(ref ? { ref } : {}),
+                entityId: realId,
+                facetId,
+                profileSlug: facetOp.profileSlug,
+              });
+            } else if (planMode) {
+              throw new Error(
+                `facet ${facetOp.profileSlug} did not attach (${String((attached as { status?: unknown } | undefined)?.status ?? "no status")})`
+              );
+            }
+          } catch (err) {
+            logger.warn(
+              { err, entityId: realId, profileSlug: facetOp.profileSlug },
+              "Skipping composite facet attach (entity kept)"
+            );
+            failPlanStep(opIndex, err);
+          }
+        }
+      }
+    }
+
+    // ── Plan pass P0b — PROJECT SUBJECTS ───────────────────────────────────
+    // After the entities, so a subject may be an entity this plan creates.
+    if (planCallers) {
+      for (const project of projectResults) {
+        const op = operations[project.opIndex];
+        if (op.op !== "create_project") continue;
+        const subjectEntityId =
+          op.subjectEntityId ??
+          (op.subjectRef
+            ? resolveCompositeRef(refToRealId, op.subjectRef)
+            : undefined);
+        if (!subjectEntityId) continue;
+        currentOpIndex = project.opIndex;
+        // A REUSED project (the door matched an existing one by name) is
+        // somebody's live project: rebinding its subject from this plan would
+        // silently retitle it — the same reason `projects.create` skips the
+        // bind on a dedup. The step fails instead of doing half of itself.
+        if (project.linked) {
+          failPlanStep(
+            project.opIndex,
+            `an active project named "${op.name}" already exists (${project.projectId}); the plan would rebind its subject — rename the project step or drop its subject`
+          );
+        }
+        await planCallers.projectCaller.setSubject({
+          projectId: project.projectId,
+          subjectEntityId,
+        });
+        project.subjectEntityId = subjectEntityId;
+      }
+    }
+
+    // Pass 2 — relations via the shared loop (resolution + create guarded
+    // per-relation; a malformed/failed relation is reported and skipped, never
+    // discarding the entities already created).
+    const relationOpIndexes: number[] = [];
+    const relationOps = operations
+      .map((op, index) => ({ op, index }))
+      .filter(({ op }) => op.op === "create_relation")
+      .map(({ op, index }) => {
+        relationOpIndexes.push(index);
+        const r = op as Extract<
+          CompositeProposalOperation,
+          { op: "create_relation" }
+        >;
+        return { sourceRef: r.sourceRef, targetRef: r.targetRef, type: r.type };
+      });
+    relations = await createRelationsFromRefs(
+      relationOps,
+      refToRealId,
+      relationCaller,
+      {
+        resolveRelationType: options?.resolveRelationType,
+        onError: (err, type, refs) => {
+          relationsFailed.push({ ...refs, type, reason: errorReason(err) });
+          onRelationError?.(err, type);
+        },
+        relationExists: options?.idempotency?.relationExists,
+        ownedRelationId: options?.idempotency?.ownedRelationId,
+      }
+    );
+    if (planMode && relationsFailed.length > 0) {
+      const failed = relationsFailed[0];
+      const at = relationOps.findIndex(
+        (r) =>
+          r.sourceRef === failed.sourceRef &&
+          r.targetRef === failed.targetRef &&
+          r.type === failed.type
+      );
+      failPlanStep(
+        relationOpIndexes[at] ?? relationOpIndexes[0],
+        failed.reason
+      );
+    }
+
+    if (planCallers) {
+      // ── Plan pass P1 — SESSIONS, parents before children ───────────────
+      for (const i of sessionOpsRootFirst(operations)) {
+        const op = operations[i];
+        if (op.op !== "create_session") continue;
+        currentOpIndex = i;
+        const session = await planCallers.sessionCaller.create({
+          title: op.title ?? null,
+          goal: op.goal,
+          subjectEntityId:
+            op.subjectEntityId ??
+            (op.subjectRef
+              ? resolveCompositeRef(refToRealId, op.subjectRef)
+              : null),
+          projectId:
+            op.projectId ??
+            (op.projectRef
+              ? resolveCompositeRef(refToRealId, op.projectRef)
+              : null),
+          expectedOutputs: op.expectedOutputs ?? [],
+        });
+        registerEntityRef(refToRealId, i, op.ref, session.id, false);
+        sessionResults.push({ ref: op.ref, opIndex: i, sessionId: session.id });
+      }
+
+      // ── Plan pass P2 — SESSION EDGES (parent + blockers + link ops) ────
+      // After EVERY session exists, so an edge may point either way in the
+      // plan. One list, derived by the same function the preflight checked.
+      for (const edge of planSessionEdges(operations)) {
+        currentOpIndex = edge.opIndex;
+        const endpoint = (end: PlanSessionEdge["from"]) =>
+          "ref" in end
+            ? resolveCompositeRef(refToRealId, end.ref)
+            : end.sessionId;
+        const fromSessionId = endpoint(edge.from);
+        const toSessionId = endpoint(edge.to);
+        const link = await planCallers.linkCaller.create({
+          type: edge.type,
+          fromSessionId,
+          toSessionId,
+        });
+        linkResults.push({
+          opIndex: edge.opIndex,
+          type: edge.type,
+          fromSessionId,
+          toSessionId,
+          requested: {
+            from: "ref" in edge.from ? edge.from.ref : edge.from.sessionId,
+            to: "ref" in edge.to ? edge.to.ref : edge.to.sessionId,
+          },
+          ...(link.linkId ? { linkId: link.linkId } : {}),
+          ...(link.preExisting ? { preExisting: true as const } : {}),
+        });
+      }
+
+      // ── Plan pass P3 — DOCUMENTS ────────────────────────────────────────
+      // Last of the plan's objects: a document may attach to an entity or be
+      // recorded as a session's output, and nothing in the plan points AT a
+      // document — so a failure here leaves the least to compensate.
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "create_document") continue;
+        currentOpIndex = i;
+        const entityId =
+          op.entityId ??
+          (op.entityRef
+            ? resolveCompositeRef(refToRealId, op.entityRef)
+            : null);
+        const sessionId =
+          op.sessionId ??
+          (op.sessionRef
+            ? resolveCompositeRef(refToRealId, op.sessionRef)
+            : null);
+        const document = await planCallers.documentCaller.create({
+          title: op.title,
+          content: op.content,
+          entityId,
+          sessionId,
+          expectedLabel: op.expectedLabel ?? null,
+        });
+        registerEntityRef(refToRealId, i, op.ref, document.id, false);
+        documentResults.push({
+          ref: op.ref,
+          opIndex: i,
+          documentId: document.id,
+          ...(entityId ? { attachedEntityId: entityId } : {}),
+          ...(sessionId ? { recordedOnSessionId: sessionId } : {}),
+        });
+      }
+    }
+
+    // ── Pass 3 — Rule Loop RULE ops (NS1) ──────────────────────────────────
+    // Runs LAST so `factRef` / `behaviourRefs` resolve against the fully
+    // populated map (skills + automations from pass 0, entities from pass 1).
+    // Resolution is `resolveCompositeRef` — the same helper relations use — so a
+    // ref may be an in-batch op ref OR a real UUID for a pre-existing object.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_rule") continue;
+      currentOpIndex = i;
+      if (!options?.ruleCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips), so the
+        // silent-skip shape cannot come back by way of a refactor.
+        throw new Error(
+          "materializeCompositeGraph: create_rule op reached pass execution with no ruleCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const factSkillId = op.factRef
+          ? resolveCompositeRef(refToRealId, op.factRef)
+          : undefined;
+        const automationIds = (op.behaviourRefs ?? []).map((behaviourRef) =>
+          resolveCompositeRef(refToRealId, behaviourRef)
+        );
+        const created = await options.ruleCaller.create({
+          intent: op.intent,
+          scope: op.scope,
+          ...(factSkillId ? { factSkillId } : {}),
+          automationIds,
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        ruleResults.push({
+          ref: op.ref,
+          opIndex: i,
+          ruleId: created.id,
+          ...(factSkillId ? { factSkillId } : {}),
+          automationIds,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref },
+          "Skipping create_rule op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+  } catch (err) {
+    // Outside a plan a throw keeps its historic meaning: it propagates, and
+    // whatever landed before it stays (the per-op resilience above is what
+    // limits that). Inside a plan, nothing is allowed to half-land.
+    if (!planMode || !planCallers) throw err;
+    const failedOp = operations[currentOpIndex];
+    const failedRef = (failedOp as { ref?: unknown } | undefined)?.ref;
+    const failure: PlanStepFailure =
+      err instanceof PlanStepAbort
+        ? err.failure
+        : {
+            opIndex: currentOpIndex,
+            ...(typeof failedRef === "string" && failedRef
+              ? { ref: failedRef }
+              : {}),
+            op: failedOp?.op ?? "create_entity",
+            reason: errorReason(err),
+          };
+    const applied = buildResult();
+    let compensation: PlanCompensationReport;
+    try {
+      compensation = await planCallers.compensate(applied);
+    } catch (compensateErr) {
+      // The undo itself failed: name EVERY applied row as not compensated
+      // rather than reporting a clean rollback that did not happen.
+      logger.error(
+        { err: compensateErr, failure },
+        "materializeCompositeGraph: plan compensation failed — applied rows remain"
+      );
+      compensation = {
+        undone: {},
+        notCompensated: appliedRowsOf(applied).map((row) => ({
+          ...row,
+          reason: `compensation failed: ${errorReason(compensateErr)}`,
+        })),
+      };
+    }
+    throw new CompositePlanApplyError([failure], compensation);
+  }
+
+  return buildResult();
 }

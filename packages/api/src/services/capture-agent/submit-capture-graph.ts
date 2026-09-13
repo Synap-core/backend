@@ -44,10 +44,27 @@ import {
   ProfileResolutionService,
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
+  reservedEntityKindReason,
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
-import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import {
+  type HubWriteSource,
+  isPlanBatch,
+  type CompositeProposalOperation,
+  type CompositeCreateDocumentOp,
+  type CompositeCreateLinkOp,
+  type CompositeCreateProjectOp,
+  type CompositeCreateSessionOp,
+  type PlanProjectEvidence,
+} from "@synap-core/types/proposals";
+import { buildPlanCallers } from "../../utils/plan-callers.js";
+import { preflightPlanOperations } from "./capture-plan-preflight.js";
+import {
+  planStepSummaries,
+  type CapturePlanProblem,
+  type PlanStepSummary,
+} from "./capture-plan.js";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import {
   createEventBackedProposal,
@@ -97,6 +114,19 @@ export interface CaptureGraphInvalidEntity {
 }
 
 /**
+ * A create_entity op carrying property keys its profile does not model. They
+ * are still STORED verbatim (the validator's flexible-schema tolerance), so
+ * this is advisory, never a rejection. A capture used to accept them in
+ * silence — that is how `knowledgeform` (for `knowledgeForm`) reached a pod as
+ * a key nothing reads. Same entries the entity doors put on their receipt.
+ */
+export interface CaptureGraphUnmodeledEntity {
+  label: string;
+  profileSlug: string;
+  unmodeled: Array<{ key: string; didYouMean?: string }>;
+}
+
+/**
  * A capture graph carried a `create_entity` op that CANNOT materialize — a
  * required property is missing (or a value fails its type/constraint). A graph
  * is atomic, so the WHOLE graph is rejected and NOTHING is queued: the failure
@@ -108,8 +138,17 @@ export interface CaptureGraphInvalidEntity {
  */
 export class CaptureGraphValidationError extends Error {
   readonly invalidEntities: CaptureGraphInvalidEntity[];
-  constructor(invalidEntities: CaptureGraphInvalidEntity[]) {
+  /** Plan structure / ownership problems (connected plans only). */
+  readonly planProblems: CapturePlanProblem[];
+  constructor(
+    invalidEntities: CaptureGraphInvalidEntity[],
+    planProblems: CapturePlanProblem[] = []
+  ) {
     const n = invalidEntities.length;
+    const planLines = planProblems.map(
+      (p) =>
+        `• plan step ${p.op}${p.ref ? ` "${p.ref}"` : ""} (#${p.opIndex}): ${p.message}`
+    );
     const lines = invalidEntities.map((e) => {
       const needsArtifact = e.errors.some((m) =>
         /'storageKey' is required/.test(m)
@@ -120,11 +159,105 @@ export class CaptureGraphValidationError extends Error {
       return `• "${e.label}" (${e.profileSlug}): ${e.errors.join("; ")}${hint}`;
     });
     super(
-      `Capture rejected — ${n} entit${n === 1 ? "y" : "ies"} can't be created as described, so nothing was queued:\n${lines.join("\n")}\nFix or drop the flagged entit${n === 1 ? "y" : "ies"} and resubmit.`
+      n > 0
+        ? `Capture rejected — ${n} entit${n === 1 ? "y" : "ies"} can't be created as described, so nothing was queued:\n${[...lines, ...planLines].join("\n")}\nFix or drop the flagged entit${n === 1 ? "y" : "ies"} and resubmit.`
+        : `Plan rejected — ${planProblems.length} problem${planProblems.length === 1 ? "" : "s"}, so nothing was queued:\n${planLines.join("\n")}\nFix every step above and resubmit.`
     );
     this.name = "CaptureGraphValidationError";
     this.invalidEntities = invalidEntities;
+    this.planProblems = planProblems;
   }
+}
+
+/**
+ * A connected PLAN riding a capture graph: the non-entity steps, each with a
+ * `ref` in the SAME namespace as `entities[].ref`. Shapes are the composite
+ * ops minus their discriminant (see `CompositeCreateSessionOp` et al.).
+ */
+export interface CapturePlanInput {
+  sessions?: Array<Omit<CompositeCreateSessionOp, "op">>;
+  documents?: Array<Omit<CompositeCreateDocumentOp, "op">>;
+  /** `evidence` is server-stamped; a caller-supplied one is ignored. */
+  projects?: Array<Omit<CompositeCreateProjectOp, "op" | "evidence">>;
+  links?: Array<Omit<CompositeCreateLinkOp, "op">>;
+}
+
+/** One plan step on a submit receipt — self-describing for the reviewer/agent. */
+export interface CapturePlanStepReceipt extends PlanStepSummary {
+  /**
+   * `pending`: nothing exists yet, `id` is null — ids are assigned when the
+   * plan applies, and are then read off the proposal's
+   * `data.materialized.byOp[ref]`. `applied`: `id` is the live row.
+   */
+  state: "pending" | "applied";
+  id: string | null;
+  /** `create_project` only: the pod's evidence verdict. */
+  evidence?: PlanProjectEvidence;
+}
+
+/** True when a plan input carries any step. */
+export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
+  return (
+    (plan?.sessions?.length ?? 0) +
+      (plan?.documents?.length ?? 0) +
+      (plan?.projects?.length ?? 0) +
+      (plan?.links?.length ?? 0) >
+    0
+  );
+}
+
+/**
+ * Rewire plan refs that pointed at an entity the within-batch collapse dropped
+ * onto its survivor — the same rewrite relations get, so no ref dangles.
+ */
+function rewritePlanEntityRefs(
+  plan: CapturePlanInput | undefined,
+  rewrites: Record<string, string>
+): CapturePlanInput | undefined {
+  if (!plan || Object.keys(rewrites).length === 0) return plan;
+  const r = (ref: string | undefined) =>
+    ref === undefined ? undefined : (rewrites[ref] ?? ref);
+  return {
+    ...plan,
+    sessions: plan.sessions?.map((s) => ({
+      ...s,
+      ...(s.subjectRef ? { subjectRef: r(s.subjectRef) } : {}),
+    })),
+    documents: plan.documents?.map((d) => ({
+      ...d,
+      ...(d.entityRef ? { entityRef: r(d.entityRef) } : {}),
+    })),
+    projects: plan.projects?.map((p) => ({
+      ...p,
+      ...(p.subjectRef ? { subjectRef: r(p.subjectRef) } : {}),
+      ...(p.evidenceRefs
+        ? {
+            evidenceRefs: [
+              ...new Set(p.evidenceRefs.map((x) => r(x) as string)),
+            ],
+          }
+        : {}),
+    })),
+  };
+}
+
+/** Receipt steps for a set of ops — pending (ids null) unless `ids` names them. */
+function planStepReceipts(
+  operations: CompositeProposalOperation[],
+  idsByOpIndex?: Map<number, string>
+): CapturePlanStepReceipt[] {
+  return planStepSummaries(operations).map((step) => {
+    const op = operations[step.opIndex];
+    const id = idsByOpIndex?.get(step.opIndex) ?? null;
+    return {
+      ...step,
+      state: idsByOpIndex ? "applied" : "pending",
+      id,
+      ...(op.op === "create_project" && op.evidence
+        ? { evidence: op.evidence }
+        : {}),
+    };
+  });
 }
 
 export interface SubmitCaptureGraphInput {
@@ -152,14 +285,7 @@ export interface SubmitCaptureGraphInput {
    */
   projectName?: string | null;
   /** Origin signal carried through the proposal into entity materialization. */
-  source?:
-    | "intelligence"
-    | "agent"
-    | "openwebui-pipeline"
-    | "extension"
-    | "cli"
-    | "n8n"
-    | "raycast";
+  source?: HubWriteSource;
   sourceMessageId?: string;
   /**
    * Channel/thread that originated this graph — the SAME field name +
@@ -195,6 +321,12 @@ export interface SubmitCaptureGraphInput {
   entities: CaptureGraphEntity[];
   relations?: CaptureGraphRelation[];
   bindings?: CaptureGraphBinding[];
+  /**
+   * A connected plan (sessions / documents / projects / session edges) filed
+   * in the SAME proposal as the entities — one reviewable unit that applies
+   * all-or-none. Refs share the entity ref namespace.
+   */
+  plan?: CapturePlanInput;
   summary?: string;
 }
 
@@ -207,6 +339,20 @@ export interface SubmitCaptureGraphResult {
   summary: string;
   /** True when the graph was materialized immediately (agent-mode auto-apply). */
   applied: boolean;
+  /**
+   * Connected plan only: every step (entities and relations included), with
+   * its ref, kind and label. Pending steps carry `id: null` — ids exist only
+   * once the plan applies. Omitted for a graph with no plan step.
+   */
+  plan?: { steps: CapturePlanStepReceipt[] };
+  /** The session this proposal was filed in (its room is where it is discussed). */
+  sessionId?: string | null;
+  /**
+   * ADVISORY: entities whose properties carry keys their profile does not
+   * model (stored verbatim, not queryable), with a `didYouMean` when a real
+   * property is close. Omitted when every key is modelled.
+   */
+  unmodeledProperties?: CaptureGraphUnmodeledEntity[];
   /**
    * ADVISORY in-flight-duplicate warnings: incoming graph entities whose STRONG
    * signal (email/phone/url/handle) collides with a create_entity op in the
@@ -298,16 +444,23 @@ export async function buildCaptureGraphOperations(
     relations: CaptureGraphRelation[];
     projectId: string | null;
     workspaceId: string | null;
+    plan?: CapturePlanInput;
   }
 ): Promise<CompositeProposalOperation[]> {
   const { entities: graphEntities, relations, workspaceId } = input;
   const resolvedProjectId = input.projectId;
+  const plan = input.plan;
   const operations: CompositeProposalOperation[] = [
     ...graphEntities.map((e) => ({
       op: "create_entity" as const,
       ref: e.ref,
       profileSlug: e.profileSlug,
-      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+      // A plan's own project wins over the call-level project pin.
+      ...(e.projectRef
+        ? { projectRef: e.projectRef }
+        : resolvedProjectId
+          ? { projectId: resolvedProjectId }
+          : {}),
       title: e.title ?? e.ref,
       ...(e.description ? { description: e.description } : {}),
       ...(e.content ? { content: e.content } : {}),
@@ -325,6 +478,29 @@ export async function buildCaptureGraphOperations(
       targetRef: r.targetRef,
       type: r.type,
     })),
+    // ── Connected plan steps ─────────────────────────────────────────────
+    // `evidence` is dropped here and stamped by the preflight — never trusted.
+    ...(plan?.projects ?? []).map(
+      ({
+        evidence: _ignored,
+        ...p
+      }: Omit<CompositeCreateProjectOp, "op"> & {
+        evidence?: unknown;
+      }) => ({ op: "create_project" as const, ...p })
+    ),
+    ...(plan?.sessions ?? []).map((sess) => ({
+      op: "create_session" as const,
+      ...sess,
+      // The call-level project pin files a session that names none.
+      ...(!sess.projectRef && !sess.projectId && resolvedProjectId
+        ? { projectId: resolvedProjectId }
+        : {}),
+    })),
+    ...(plan?.documents ?? []).map((d) => ({
+      op: "create_document" as const,
+      ...d,
+    })),
+    ...(plan?.links ?? []).map((l) => ({ op: "create_link" as const, ...l })),
   ];
 
   // Scope-aware homes (shared with import): stamp process kinds into the graph
@@ -346,6 +522,9 @@ export async function buildCaptureGraphOperations(
  * `submitCaptureGraph` throws `CaptureGraphValidationError` on
  * `invalidEntities`; the dry run reports them.
  *
+ * `unmodeledProperties` lists ops carrying keys their profile does not model —
+ * advisory, reported by both the dry run and the submit result.
+ *
  * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
  * Submit does NOT reject on it (a cold profile lens can fail open, and
  * unknown-slug graphs are a separate guard); the dry run reports it.
@@ -357,16 +536,36 @@ export async function preflightCaptureGraphOperations(
   workspaceId: string | null
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
+  unmodeledProperties: CaptureGraphUnmodeledEntity[];
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
+  /** Connected plan: every structure / ownership problem (empty otherwise). */
+  planProblems: CapturePlanProblem[];
+  /** The ops to file — plan `create_project` steps carry the stamped evidence. */
+  operations: CompositeProposalOperation[];
 }> {
   const unresolvedProfiles: Array<{ label: string; profileSlug: string }> = [];
   const profileResolution = new ProfileResolutionService(database);
   const propertyValidation = new PropertyValidationService(profileResolution);
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
+  const unmodeledProperties: CaptureGraphUnmodeledEntity[] = [];
   for (const op of operations) {
     if (op.op !== "create_entity") continue;
     // Linking an existing entity materializes nothing new — no props to check.
     if (op.existingEntityId) continue;
+    // RESERVED KINDS (e.g. `project`) are refused HERE, with the floor's own
+    // wording — not filed as a proposal that `entities.create` refuses at
+    // approve. A project is a plan step, never an entity.
+    const reservedReason = reservedEntityKindReason(op.profileSlug);
+    if (reservedReason) {
+      invalidEntities.push({
+        label: op.title || op.ref || op.profileSlug,
+        profileSlug: op.profileSlug,
+        errors: [
+          `${reservedReason} In a capture, send it as a \`projects[]\` step instead (a plan step, filed in the same proposal).`,
+        ],
+      });
+      continue;
+    }
     const profile = await profileResolution.resolveProfile(
       op.profileSlug,
       userId,
@@ -387,7 +586,7 @@ export async function preflightCaptureGraphOperations(
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
     if (op.content) propsToCheck.content = op.content;
-    const { valid, errors } =
+    const { valid, errors, unmodeled } =
       await propertyValidation.validateEntityCreateForProposal(
         propsToCheck,
         profile.id,
@@ -405,8 +604,83 @@ export async function preflightCaptureGraphOperations(
         errors,
       });
     }
+    if (unmodeled.length > 0) {
+      unmodeledProperties.push({
+        label: op.title || op.ref || op.profileSlug,
+        profileSlug: op.profileSlug,
+        unmodeled,
+      });
+    }
   }
-  return { invalidEntities, unresolvedProfiles };
+  // CONNECTED PLAN: ref integrity, cycles, limits, ownership of every named
+  // session/entity/project, and the project evidence verdict — the SAME check
+  // on submit, on the dry run, and on every revision of a pending plan.
+  if (isPlanBatch(operations)) {
+    const plan = await preflightPlanOperations(database, operations, userId);
+    return {
+      invalidEntities,
+      unmodeledProperties,
+      unresolvedProfiles,
+      planProblems: plan.problems,
+      operations: plan.operations,
+    };
+  }
+  return {
+    invalidEntities,
+    unmodeledProperties,
+    unresolvedProfiles,
+    planProblems: [],
+    operations,
+  };
+}
+
+/**
+ * Validate a composite's STORED operations — the check a revision of a pending
+ * graph or plan must pass (`mergeProposalRevision`). The SAME preflight a
+ * submit runs (property validation, reserved kinds, plan refs / cycles /
+ * limits / ownership / evidence) plus relation types through the one relation
+ * vocabulary validator. Every problem at once, as sentences; `operations` is
+ * the version to store (plan project steps carry the pod's evidence verdict).
+ */
+export async function validateCompositeOperations(
+  database: CaptureGraphDb,
+  input: {
+    operations: CompositeProposalOperation[];
+    userId: string;
+    workspaceId: string | null;
+  }
+): Promise<{ problems: string[]; operations: CompositeProposalOperation[] }> {
+  const { invalidEntities, planProblems, operations } =
+    await preflightCaptureGraphOperations(
+      database,
+      input.operations,
+      input.userId,
+      input.workspaceId
+    );
+  const problems = [
+    ...invalidEntities.map(
+      (e) => `"${e.label}" (${e.profileSlug}): ${e.errors.join("; ")}`
+    ),
+    ...planProblems.map(
+      (p) =>
+        `${p.op}${p.ref ? ` "${p.ref}"` : ""} (#${p.opIndex}): ${p.message}`
+    ),
+  ];
+  const validateRelationType = await loadRelationTypeValidator(
+    database,
+    input.workspaceId
+  );
+  operations.forEach((op, index) => {
+    if (op.op !== "create_relation") return;
+    try {
+      validateRelationType(op.type);
+    } catch (err) {
+      problems.push(
+        `create_relation (#${index}) ${op.sourceRef} -> ${op.targetRef}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  });
+  return { problems, operations };
 }
 
 /**
@@ -426,32 +700,44 @@ export async function dryRunCaptureGraph(
     workspaceId: string | null;
     entities: CaptureGraphEntity[];
     relations: CaptureGraphRelation[];
+    plan?: CapturePlanInput;
   }
 ): Promise<{
   invalidEntities: CaptureGraphInvalidEntity[];
+  unmodeledProperties: CaptureGraphUnmodeledEntity[];
   unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
   relationsFailed: MaterializeRelationFailure[];
   entityCount: number;
   relationCount: number;
+  /** Connected plan only (empty otherwise). */
+  planProblems: CapturePlanProblem[];
+  /** Connected plan only: the steps as they would be filed (pending). */
+  planSteps?: CapturePlanStepReceipt[];
 }> {
   const collapsed = collapseDuplicateEntities(
     input.entities,
     input.relations,
     []
   );
-  const operations = await buildCaptureGraphOperations(database, {
+  const builtOperations = await buildCaptureGraphOperations(database, {
     entities: collapsed.entities,
     relations: collapsed.relations,
     projectId: null,
     workspaceId: input.workspaceId,
+    plan: rewritePlanEntityRefs(input.plan, collapsed.refRewrites),
   });
-  const { invalidEntities, unresolvedProfiles } =
-    await preflightCaptureGraphOperations(
-      database,
-      operations,
-      input.userId,
-      input.workspaceId
-    );
+  const {
+    invalidEntities,
+    unmodeledProperties,
+    unresolvedProfiles,
+    planProblems,
+    operations,
+  } = await preflightCaptureGraphOperations(
+    database,
+    builtOperations,
+    input.userId,
+    input.workspaceId
+  );
   const validateRelationType = await loadRelationTypeValidator(
     database,
     input.workspaceId
@@ -471,10 +757,15 @@ export async function dryRunCaptureGraph(
   }
   return {
     invalidEntities,
+    unmodeledProperties,
     unresolvedProfiles,
     relationsFailed,
     entityCount: collapsed.entities.length,
     relationCount: collapsed.relations.length,
+    planProblems,
+    ...(isPlanBatch(operations)
+      ? { planSteps: planStepReceipts(operations) }
+      : {}),
   };
 }
 
@@ -554,6 +845,10 @@ export async function submitCaptureGraph(
   const graphEntities = collapsed.entities;
   const relations = collapsed.relations;
   const bindings = collapsed.bindings;
+  // A plan's refs to a collapsed duplicate follow it onto the survivor.
+  const planInput = hasPlanSteps(input.plan)
+    ? rewritePlanEntityRefs(input.plan, collapsed.refRewrites)
+    : undefined;
 
   // WORKSPACE PLACEMENT (routing fix): `workspaceId` null here means the caller
   // supplied no explicit lens/focus (see `input.workspaceId ?? ctx.workspaceId ??
@@ -590,9 +885,19 @@ export async function submitCaptureGraph(
   const bindingNote = bindings.length
     ? `, ${bindings.length} channel bind${bindings.length === 1 ? "" : "s"}`
     : "";
+  const planNote = planInput
+    ? [
+        [planInput.projects?.length ?? 0, "project"],
+        [planInput.sessions?.length ?? 0, "session"],
+        [planInput.documents?.length ?? 0, "document"],
+      ]
+        .filter(([n]) => (n as number) > 0)
+        .map(([n, noun]) => `, ${n} ${noun}${n === 1 ? "" : "s"}`)
+        .join("")
+    : "";
   const summary =
     input.summary ??
-    `Proposed graph: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${bindingNote}`;
+    `Proposed ${planInput ? "plan" : "graph"}: ${graphEntities.length} entit${graphEntities.length === 1 ? "y" : "ies"}, ${relations.length} link${relations.length === 1 ? "" : "s"}${planNote}${bindingNote}`;
   const source = input.source ?? "intelligence";
 
   // ── RE-SUBMIT IDEMPOTENCY (piece 1a) ──────────────────────────────────────
@@ -619,6 +924,7 @@ export async function submitCaptureGraph(
       entities: graphEntities,
       relations,
       bindings,
+      ...(planInput ? { plan: planInput } : {}),
     });
   try {
     const prior = await findPriorCaptureGraphProposal(db, {
@@ -648,6 +954,10 @@ export async function submitCaptureGraph(
         reviewUrl: priorReviewUrl,
         summary,
         applied: priorApplied,
+        ...(isPlanBatch(priorOps)
+          ? { plan: { steps: planStepReceipts(priorOps) } }
+          : {}),
+        sessionId: prior.sessionId ?? input.sessionId ?? null,
         ...(projectCandidate ? { projectCandidate } : {}),
         ...(projectOutcome ? { project: projectOutcome } : {}),
         writeReceipt: {
@@ -723,13 +1033,13 @@ export async function submitCaptureGraph(
   }
 
   // Ops + scope-aware homes: the ONE builder, shared with the dry run.
-  const operations = await buildCaptureGraphOperations(db, {
+  const builtOperations = await buildCaptureGraphOperations(db, {
     entities: graphEntities,
     relations,
     projectId: resolvedProjectId,
     workspaceId,
+    ...(planInput ? { plan: planInput } : {}),
   });
-  const homes = computeImportHomes(operations);
 
   // ── PREFLIGHT: never queue what can't materialize ────────────────────────
   // Required-property validation runs only at MATERIALIZE (EntityRepository.
@@ -739,16 +1049,24 @@ export async function submitCaptureGraph(
   // SAME `validateProperties` the materializer runs — so an un-materializable
   // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
   // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
-  const { invalidEntities } = await preflightCaptureGraphOperations(
-    db,
-    operations,
-    userId,
-    workspaceId
-  );
-  if (invalidEntities.length > 0) {
+  const { invalidEntities, unmodeledProperties, planProblems, operations } =
+    await preflightCaptureGraphOperations(
+      db,
+      builtOperations,
+      userId,
+      workspaceId
+    );
+  if (invalidEntities.length > 0 || planProblems.length > 0) {
     // Rejected BEFORE any proposal is filed — pending-proposal-one-door untouched.
-    throw new CaptureGraphValidationError(invalidEntities);
+    throw new CaptureGraphValidationError(invalidEntities, planProblems);
   }
+  const homes = computeImportHomes(operations);
+  const isPlan = isPlanBatch(operations);
+  // A project step below the agent evidence floor is shown to a human with
+  // its marker — it can never be auto-applied past that human.
+  const planNeedsReview = operations.some(
+    (op) => op.op === "create_project" && op.evidence?.belowAgentFloor === true
+  );
 
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the
   // re-submit idempotency lookup, which needs them); not re-declared here.
@@ -834,7 +1152,7 @@ export async function submitCaptureGraph(
   // bindings force the pending path: they are applied by the approve flow AFTER
   // materialization, so an auto-apply that skipped them would silently drop the
   // binds.
-  if (input.agentUserId && bindings.length === 0) {
+  if (input.agentUserId && bindings.length === 0 && !planNeedsReview) {
     const keys = captureGraphEventKeys(operations);
     let allAutoApprove = keys.length > 0;
     for (const {
@@ -1017,6 +1335,21 @@ export async function submitCaptureGraph(
                 // The composite ctx's `attachFacet` door — same governance context,
                 // so a policy-approved graph attaches facets directly.
                 facetCaller: entityCaller,
+                // Connected-plan callers — the SAME doors approval wires, with
+                // the capturing human as the sessions' owner (auto-apply has no
+                // separate approver).
+                planCallers: buildPlanCallers({
+                  database: db,
+                  userId,
+                  sessionOwnerUserId: userId,
+                  workspaceId,
+                  workspaceRole: membershipRole,
+                  entityCaller,
+                  proposal: {
+                    id: captureReceipt?.id ?? null,
+                    sessionId: input.sessionId ?? null,
+                  },
+                }),
                 // Rule Loop callers — the SAME three canonical doors proposal
                 // approval wires. Without them a config op in an auto-applied
                 // graph would be silently dropped here while the identical graph
@@ -1084,6 +1417,31 @@ export async function submitCaptureGraph(
           reviewUrl: undefined,
           summary,
           applied: true,
+          ...(isPlan
+            ? {
+                plan: {
+                  steps: planStepReceipts(
+                    operations,
+                    new Map<number, string>([
+                      ...materialized.entities.map(
+                        (e) => [e.opIndex, e.entityId] as [number, string]
+                      ),
+                      ...materialized.projects.map(
+                        (p) => [p.opIndex, p.projectId] as [number, string]
+                      ),
+                      ...materialized.sessions.map(
+                        (x) => [x.opIndex, x.sessionId] as [number, string]
+                      ),
+                      ...materialized.documents.map(
+                        (d) => [d.opIndex, d.documentId] as [number, string]
+                      ),
+                    ])
+                  ),
+                },
+              }
+            : {}),
+          sessionId: input.sessionId ?? null,
+          ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
           ...(pendingDuplicateCandidates.length > 0
             ? { pendingDuplicateCandidates }
             : {}),
@@ -1173,6 +1531,9 @@ export async function submitCaptureGraph(
     reviewUrl,
     summary,
     applied: false,
+    ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
+    sessionId: input.sessionId ?? null,
+    ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
     ...(pendingDuplicateCandidates.length > 0
       ? { pendingDuplicateCandidates }
       : {}),

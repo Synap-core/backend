@@ -47,6 +47,11 @@ export type ProposalRevertPlan =
       automationIds: string[];
       ruleIds: string[];
       propertyDiffs: EntityPropertyDiff[];
+      /** Connected plan rows — optional so every older plan literal still types. */
+      sessionIds?: string[];
+      projectIds?: string[];
+      linkIds?: string[];
+      projectSubjectIds?: Record<string, string>;
     }
   | { kind: "restore-delete"; entityId: string }
   /**
@@ -211,18 +216,9 @@ export function planProposalRevert(
   }
 
   if (isCreate) {
-    const record = (materialized ?? {}) as CompleteMaterializedRecord;
-    const plan = {
-      kind: "delete-creations" as const,
-      entityIds: [...(record.entityIds ?? [])],
-      relationIds: [...(record.relationIds ?? [])],
-      documentIds: [...(record.documentIds ?? [])],
-      facetIds: [...(record.facetIds ?? [])],
-      skillIds: [...(record.skillIds ?? [])],
-      automationIds: [...(record.automationIds ?? [])],
-      ruleIds: [...(record.ruleIds ?? [])],
-      propertyDiffs: [...(record.propertyDiffs ?? [])],
-    };
+    const plan = creationsPlanFromRecord(
+      (materialized ?? {}) as CompleteMaterializedRecord
+    );
     const isEmpty = () =>
       plan.entityIds.length === 0 &&
       plan.relationIds.length === 0 &&
@@ -231,7 +227,10 @@ export function planProposalRevert(
       plan.skillIds.length === 0 &&
       plan.automationIds.length === 0 &&
       plan.ruleIds.length === 0 &&
-      plan.propertyDiffs.length === 0;
+      plan.propertyDiffs.length === 0 &&
+      (plan.sessionIds?.length ?? 0) === 0 &&
+      (plan.projectIds?.length ?? 0) === 0 &&
+      (plan.linkIds?.length ?? 0) === 0;
 
     // Fallback for branches whose created id IS the proposal target and which
     // therefore may not have stamped `materialized` (generic `.validated` entity
@@ -262,6 +261,32 @@ export function planProposalRevert(
   return {
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
+  };
+}
+
+/**
+ * The `delete-creations` plan for a materialized record — shared by
+ * `planProposalRevert` (undo an approved proposal) and a connected plan's
+ * COMPENSATION (undo what a failed plan had applied), so both undo from the
+ * same record the same way.
+ */
+export function creationsPlanFromRecord(
+  record: CompleteMaterializedRecord
+): Extract<ProposalRevertPlan, { kind: "delete-creations" }> {
+  return {
+    kind: "delete-creations",
+    entityIds: [...(record.entityIds ?? [])],
+    relationIds: [...(record.relationIds ?? [])],
+    documentIds: [...(record.documentIds ?? [])],
+    facetIds: [...(record.facetIds ?? [])],
+    skillIds: [...(record.skillIds ?? [])],
+    automationIds: [...(record.automationIds ?? [])],
+    ruleIds: [...(record.ruleIds ?? [])],
+    propertyDiffs: [...(record.propertyDiffs ?? [])],
+    sessionIds: [...(record.sessionIds ?? [])],
+    projectIds: [...(record.projectIds ?? [])],
+    linkIds: [...(record.linkIds ?? [])],
+    projectSubjectIds: { ...(record.projectSubjectIds ?? {}) },
   };
 }
 

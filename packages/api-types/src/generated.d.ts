@@ -159,6 +159,9 @@ export interface OnboardingJourneyEvidenceRecord {
 	meaningfulEntityIds: string[];
 	completedCriteria: string[];
 	firstValueAt?: string;
+	/** How many times the journey was restarted (`onboarding.restartJourney`). */
+	restarts?: number;
+	restartedAt?: string;
 }
 /**
  * A user-provided argument collected at run time (from @{arg:NAME:type} or legacy {argument}).
@@ -2576,7 +2579,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "automation" | "playbook";
+			data: "playbook" | "automation" | "agent" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2591,7 +2594,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "automation" | "playbook";
+			$type: "playbook" | "automation" | "agent" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2650,6 +2653,28 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		title: import("drizzle-orm/pg-core").PgColumn<{
+			name: "title";
+			tableName: "focus_sessions";
+			dataType: "string";
+			columnType: "PgVarchar";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			length: 200;
+		}>;
 		goal: import("drizzle-orm/pg-core").PgColumn<{
 			name: "goal";
 			tableName: "focus_sessions";
@@ -2675,7 +2700,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4661,6 +4686,16 @@ export type RevertTarget = {
 } | {
 	kind: "project";
 	id: string;
+	/**
+	 * The subject the SAME work bound to it — its `project --targets-->
+	 * entity` edge is the project's own, not a use by something else.
+	 */
+	subjectEntityId?: string;
+}
+/** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
+ | {
+	kind: "link";
+	id: string;
 }
 /** One property a merge overwrote on a pre-existing entity. */
  | {
@@ -4859,6 +4894,26 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+export interface KnownSourceHash {
+	/** The hash as ASKED (matched against either ledger key). */
+	hash: string;
+	sessionId: string | null;
+	documentId: string;
+	/**
+	 * `analyzed` — structuring ran on it. `kept_unanalyzed` — stored with a
+	 * degraded marker (vision down, budget): the bytes are on the pod, but
+	 * nothing was extracted, so re-sending it re-analyzes rather than dedups.
+	 */
+	status: "analyzed" | "kept_unanalyzed";
+	/**
+	 * The run still stands: its session holds a pending or applied proposal.
+	 * False once every proposal was reverted / rejected / withdrawn / expired
+	 * (an undone run), or when the run filed nothing at all.
+	 */
+	inEffect: boolean;
+	/** The workspace the source was captured into (`null` = pod-wide). */
+	workspaceId: string | null;
+}
 /**
  * View Query Types
  *
@@ -4976,18 +5031,24 @@ declare const EVENT_ACTIONS: readonly [
 	"restore"
 ];
 export type EventAction = (typeof EVENT_ACTIONS)[number];
-/**
- * Universal Update Request
- *
- * The standard envelope for all change requests in the system.
- * This object is stored in the `proposals` table (as part of StoredProposalData)
- * and passed in events. changeType aligns with EventAction for event-sourced flow.
- */
+declare const PROPOSAL_SOURCES: readonly [
+	"user",
+	"ai",
+	"system",
+	"intelligence",
+	"agent",
+	"openwebui-pipeline",
+	"extension",
+	"cli",
+	"n8n",
+	"raycast"
+];
+export type ProposalSource = (typeof PROPOSAL_SOURCES)[number];
 export interface UpdateRequest {
 	/** Unique ID for this specific request */
 	requestId: string;
-	/** Who initiated the change? */
-	source: "user" | "ai" | "system" | "intelligence" | "agent" | "openwebui-pipeline" | "extension" | "cli" | "n8n" | "raycast";
+	/** Who initiated the change? One of {@link PROPOSAL_SOURCES}. */
+	source: ProposalSource;
 	/**
 	 * THE FIFTH "WHO" — and the only one whose principal DEPENDS ON THE DOOR.
 	 *
@@ -5193,6 +5254,68 @@ export interface ProposalReviewGraph {
 	relationCount: number;
 	/** Count of newly-attached roles (`isNew`) across all entities. */
 	facetCount: number;
+	/**
+	 * CONNECTED PLAN — present ONLY when the composite carries plan ops
+	 * (`create_project` / `create_session` / `create_document` / `create_link`).
+	 * Additive: an entity/relation graph has none of these keys. A plan applies
+	 * WHOLE, so a surface showing `isPlan` offers no per-item reject — the
+	 * reviewer asks for a revision instead.
+	 */
+	isPlan?: true;
+	/** Number of plan steps (projects + sessions + documents + links). */
+	planStepCount?: number;
+	projects?: Array<{
+		ref: string;
+		name: string;
+		description?: string;
+		/** In-graph entity ref (`entities[].ref`) the project is about. */
+		subjectRef?: string;
+		subjectEntityId?: string;
+		/** The pod's evidence verdict — `belowAgentFloor` is the reviewer marker. */
+		evidence?: PlanProjectEvidence;
+	}>;
+	sessions?: Array<{
+		ref: string;
+		/** As proposed (may be null). */
+		title: string | null;
+		/** The ONE display name (`resolveSessionTitle`) — never re-derive it. */
+		displayTitle: string;
+		goal: string;
+		/** In-graph project ref (`projects[].ref`) or an existing project id. */
+		projectRef?: string;
+		projectId?: string;
+		/** In-graph entity ref (`entities[].ref`) or an existing entity id. */
+		subjectRef?: string;
+		subjectEntityId?: string;
+	}>;
+	documents?: Array<{
+		ref: string;
+		title: string;
+		/** Attached as this entity's body (in-graph ref or existing id). */
+		entityRef?: string;
+		entityId?: string;
+		/** Recorded as this session's output (in-graph ref or existing id). */
+		sessionRef?: string;
+		sessionId?: string;
+		expectedLabel?: string;
+	}>;
+	/**
+	 * EVERY session↔session edge — a session's `parentRef` / `blockedByRefs` and
+	 * the `create_link` ops, folded by ONE derivation (`planSessionEdges`). Draw
+	 * edges from here only; never from session fields.
+	 */
+	links?: Array<{
+		type: PlanLinkType;
+		/** `sessions[].ref` when the endpoint is in this graph, else the existing id. */
+		fromRef?: string;
+		fromSessionId?: string;
+		toRef?: string;
+		toSessionId?: string;
+		fromLabel: string;
+		toLabel: string;
+		/** Stable per-item address: `$linkN` in derivation order. */
+		itemRef: string;
+	}>;
 }
 export interface ProposalReviewModel {
 	summary: string;
@@ -5222,6 +5345,12 @@ export interface CompositeCreateEntityOp {
 	profileSlug: string;
 	/** Existing project to file the created entity into at materialization. */
 	projectId?: string;
+	/**
+	 * PLAN: the `ref` of a `create_project` op in this batch — the entity is
+	 * filed into that project once it materializes. Never together with
+	 * `projectId`.
+	 */
+	projectRef?: string;
 	/**
 	 * Pin this entity to a specific workspace at materialization (multi-home
 	 * import graphs). When set, materializeCompositeGraph passes it through to
@@ -5349,7 +5478,104 @@ export interface CompositeCreateRuleOp {
 	/** Refs (or real ids) of the BEHAVIOUR halves — `create_automation` ops. */
 	behaviourRefs?: string[];
 }
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp;
+/**
+ * ── Connected PLAN ops ──────────────────────────────────────────────────────
+ *
+ * A plan is the composite graph extended with the objects that are NOT
+ * entities: focus sessions, documents, projects, and the session↔session edges
+ * between them. An agent proposes the whole connected structure as ONE
+ * reviewable unit, referencing not-yet-existing objects by `ref` exactly like
+ * the entity/relation ops do. A batch carrying ANY of these ops applies
+ * ALL-OR-NONE: every step is materialized, or every step already applied is
+ * compensated through the one undo engine and the proposal is marked
+ * `approval_failed` with per-step reasons (see `materializeCompositeGraph`).
+ *
+ * Ref kinds are enforced at propose time (and on every revision): a
+ * `projectRef` must name a `create_project` op, a `subjectRef` a
+ * `create_entity` op, a session ref a `create_session` op. Each `…Ref` has an
+ * `…Id` twin for an object that already exists; never both.
+ */
+export interface CompositeCreateSessionOp {
+	op: "create_session";
+	/** Stable handle for this session within the plan (e.g. "s1"). */
+	ref: string;
+	/** Short one-line name (≤ SESSION_TITLE_MAX). */
+	title?: string | null;
+	/** The outcome. Required. */
+	goal: string;
+	/** Parent = the `spawned_from` edge (a detour or planned sub-session). */
+	parentRef?: string;
+	parentSessionId?: string;
+	/** `blocked_by` edges declared at birth. */
+	blockedByRefs?: string[];
+	blockedBySessionIds?: string[];
+	/** The entity this session is about (a `create_entity` ref or a real id). */
+	subjectRef?: string;
+	subjectEntityId?: string;
+	/** The project it belongs to (a `create_project` ref or a real id). */
+	projectRef?: string;
+	projectId?: string;
+	/** Declared deliverables — sanitized by the session door at apply time. */
+	expectedOutputs?: Array<Record<string, unknown>>;
+}
+export interface CompositeCreateDocumentOp {
+	op: "create_document";
+	ref: string;
+	title: string;
+	/** Markdown body. */
+	content: string;
+	/** Attach as that entity's body (`entities.documentId`), as `synap_create_document({ entityId })` does. */
+	entityRef?: string;
+	entityId?: string;
+	/** Record as that session's output (the session artifact ledger). */
+	sessionRef?: string;
+	sessionId?: string;
+	/** The declared output slot of that session this document claims (as `synap_create_document`). */
+	expectedLabel?: string;
+}
+/** The pod's evidence verdict on a `create_project` step, stamped at propose/revise time. */
+export interface PlanProjectEvidence {
+	/** In-plan entity refs + existing, caller-visible evidence entities. */
+	counted: number;
+	/** The agent floor a direct `projects.create` enforces. */
+	minimum: number;
+	/**
+	 * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
+	 * visible to the reviewer with this marker, and an agent-mode plan carrying
+	 * it can never auto-apply.
+	 */
+	belowAgentFloor: boolean;
+}
+export interface CompositeCreateProjectOp {
+	op: "create_project";
+	ref: string;
+	name: string;
+	description?: string;
+	/** The real-world thing the project is about (`project --targets--> entity`). */
+	subjectRef?: string;
+	subjectEntityId?: string;
+	/** Plan entity refs that count as the project's evidence. */
+	evidenceRefs?: string[];
+	/** Existing entities that count as evidence (must be visible). */
+	evidenceEntityIds?: string[];
+	/** Server-stamped — any caller-supplied value is overwritten. */
+	evidence?: PlanProjectEvidence;
+}
+declare const PLAN_LINK_TYPES: readonly [
+	"blocked_by",
+	"spawned_from"
+];
+export type PlanLinkType = (typeof PLAN_LINK_TYPES)[number];
+export interface CompositeCreateLinkOp {
+	op: "create_link";
+	/** `from --blocked_by--> to` (from waits on to) · `from --spawned_from--> to` (to is from's parent). */
+	type: PlanLinkType;
+	fromRef?: string;
+	fromSessionId?: string;
+	toRef?: string;
+	toSessionId?: string;
+}
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -5599,20 +5825,6 @@ export interface ImportAnalysisPlan {
 	warnings: string[];
 	overallConfidence: number;
 }
-export interface IntakeEcho {
-	/** The session this run ACTUALLY belongs to (null only when minting failed). */
-	sessionId: string | null;
-	intake: {
-		status: "recorded" | "partial" | "failed";
-		sessionSource: "provided" | "minted" | "failed";
-		/** A session handle was sent but a different (verified/minted) one was used. */
-		requestedSessionIgnored: boolean;
-		sourceDocumentIds: string[];
-		/** Present only for a degraded outcome: was the input kept for re-structure? */
-		degradedSourceKept?: boolean;
-		errors?: string[];
-	};
-}
 /**
  * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
  *
@@ -5656,6 +5868,20 @@ export interface CaptureUpdateResult {
 	proposalId?: string;
 	reviewUrl?: string;
 	reason?: string;
+}
+export interface IntakeEcho {
+	/** The session this run ACTUALLY belongs to (null only when minting failed). */
+	sessionId: string | null;
+	intake: {
+		status: "recorded" | "partial" | "failed";
+		sessionSource: "provided" | "minted" | "failed";
+		/** A session handle was sent but a different (verified/minted) one was used. */
+		requestedSessionIgnored: boolean;
+		sourceDocumentIds: string[];
+		/** Present only for a degraded outcome: was the input kept for re-structure? */
+		degradedSourceKept?: boolean;
+		errors?: string[];
+	};
 }
 /**
  * Route suggestions — the router's SUGGEST half (intake plan §3.5 / W6, B15).
@@ -5724,6 +5950,46 @@ export type RouteSuggestionsEcho = {
 } | {
 	status: "failed";
 	error: string;
+};
+export type DedupCandidate = {
+	entityId: string;
+	title: string;
+	profileSlug: string;
+	score: number;
+};
+export type DegradedCaptureReason = "is_auth_error" | "is_invalid_response" | "is_empty_result";
+/**
+ * A degraded reason as it may arrive OFF THE WIRE. The Intelligence Service
+ * emits its own extraction-honesty reasons (`vision_provider_not_configured`,
+ * `pdf_scanned_needs_ocr`, …) which are strictly MORE specific than this pod's
+ * three plumbing reasons, and it may add new ones without this union knowing.
+ * Widening here is what lets an IS reason survive instead of being replaced by
+ * a generic pod one — see the empty-result guard in `structure`.
+ */
+export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {});
+declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown): {
+	proposals: {
+		tempId: string;
+		profileSlug: string;
+		title: string;
+		description: string | undefined;
+		properties: {
+			content: string;
+		};
+		confidence: number;
+	}[];
+	relations: Array<{
+		sourceTempId: string;
+		targetTempId: string;
+		relationType: string;
+	}>;
+	followUp: string | StructuredFollowUp | null;
+	targetWorkspaceId: string | null;
+	targetProjectId: string | null;
+	formSpec: null;
+	dedupCandidates: Record<string, DedupCandidate[]>;
+	degraded: true;
+	degradedReason: DegradedCaptureReasonOrUnknown;
 };
 /**
  * ONE door from an AI/IS failure to the words a user reads.
@@ -6257,6 +6523,12 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	entityDocumentIds?: string[];
 	/** What merges overwrote on PRE-EXISTING entities, with prior values. */
 	propertyDiffs?: EntityPropertyDiff[];
+	/** Connected plan: focus sessions, projects and session edges created by the run. */
+	sessionIds?: string[];
+	projectIds?: string[];
+	linkIds?: string[];
+	/** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
+	projectSubjectIds?: Record<string, string>;
 	/** ISO time the record was last stamped. */
 	stampedAt?: string;
 	/**
@@ -6270,7 +6542,7 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 }
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "create_entity" | "create_relation" | "create_skill" | "create_automation" | "create_rule";
+	op: "create_entity" | "create_relation" | "create_skill" | "create_automation" | "create_rule" | "create_session" | "create_document" | "create_project" | "create_link";
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -6279,6 +6551,10 @@ export interface MaterializedOpRecord {
 	skillId?: string;
 	automationId?: string;
 	ruleId?: string;
+	sessionId?: string;
+	projectId?: string;
+	documentId?: string;
+	linkId?: string;
 	/** Set when THIS op was reverted on its own (`proposals.revert` with `opKey`). */
 	revertedAt?: string;
 	revertedBy?: string;
@@ -7938,7 +8214,13 @@ export interface HealthSection {
 	 * twins of system kinds, outstanding retirements. Present only when
 	 * computed (see `GlobalSignals.schemaContract`).
 	 */
-	 | "schema_contract";
+	 | "schema_contract"
+	/**
+	 * Intake runs grouped by run-manifest prompt version: review outcomes and
+	 * newer-vs-previous regressions. Present only when computed (see
+	 * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.
+	 */
+	 | "quality_by_prompt_version";
 	status: HealthStatus;
 	/** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
 	headline: string;
@@ -8724,6 +9006,39 @@ export interface EnrichmentResult {
 	confidence: number;
 	data: Record<string, unknown>;
 }
+/**
+ * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
+ * broker connections, as non-secret facts.
+ *
+ * The relay credential reaches the pod through `POST /api/admin/source-configs`,
+ * which refuses when the CP issuer is not approved with `source-config:write` or
+ * the CP subject has no federated identity link (`admin-source-configs.ts`).
+ * Those refusals live only in the CP's log; this read answers the same
+ * questions on the pod, from the same tables and the same credential reader the
+ * broker uses.
+ *
+ * NEVER returns key material, tokens or vault refs: presence, status, expiry and
+ * the broker's reason enum only. A failed read THROWS — callers answer it as an
+ * error, never as a report of absent rows.
+ */
+export interface BrokerTrustDiagnostics {
+	cpIssuer: {
+		present: boolean;
+		status: "pending" | "approved" | "rejected" | "revoked" | null;
+		hasSourceConfigWrite: boolean;
+	};
+	ownerIdentityLink: {
+		present: boolean;
+	};
+	relayCredential: {
+		present: boolean;
+		validUntil: string | null;
+	};
+	broker: {
+		kind: "control-plane" | "local";
+		reason: string | null;
+	};
+}
 export interface SourceProviderCapabilities {
 	/** True when the provider honors and returns cursors across fetches. */
 	supportsCursor: boolean;
@@ -8882,6 +9197,21 @@ export type RemoveBlockerResult = {
 	removed: false;
 	reason: "not_found" | "self_blocker" | "no_edge";
 };
+/** What happened to ONE create-time blocker. Reported per id, never folded. */
+export type CreateTimeBlockerReport = {
+	blockerSessionId: string;
+	status: "linked";
+	inserted: number;
+} | {
+	blockerSessionId: string;
+	status: "proposed";
+	proposalId: string;
+} | {
+	blockerSessionId: string;
+	status: "failed";
+	reason: "not_found" | "self_blocker" | "denied" | "error";
+	message?: string;
+};
 /** Both directions of the dependency edge for one session. */
 export interface SessionEdges {
 	/** Sessions this one is waiting on (outbound `blocked_by`). */
@@ -9029,6 +9359,7 @@ export interface SessionCancelRecord extends SessionCancelOutcome {
 	/** `stopping`: committed with the cancel, stop not yet run. `done`: outcome recorded. */
 	state: "stopping" | "done";
 }
+export type IntakeSourceKind = "text" | "url" | "file" | "import_item";
 export type RerunMode = "replace" | "add";
 export type RerunItemOutcome = "proposed" | "applied" | "deduplicated" | "not_structured" | "needs_input" | "failed";
 export interface RerunItemResult {
@@ -9127,6 +9458,180 @@ export type RerunSessionResult = {
 	revert?: RerunRevertSummary | RerunRevertNotRun;
 	items: RerunItemResult[];
 	counts: Record<RerunItemOutcome, number>;
+};
+export interface RunSourceRow {
+	sourceDocumentId: string;
+	title: string;
+	kind: IntakeSourceKind;
+	/** Structuring did not run on it (spend guard, IS down) — kept for re-structure. */
+	degraded: {
+		reason: string;
+		at: string;
+	} | null;
+	/** A later structure of the same source cleared its degraded marker. */
+	restructuredAt: string | null;
+	filename: string | null;
+	url: string | null;
+}
+export interface RunSources {
+	sessionId: string;
+	sources: RunSourceRow[];
+	/** In the manifest, but the document is gone (deleted / not the caller's). */
+	missing: string[];
+	/** Every source id the manifest holds, listed or not. */
+	total: number;
+	/** The rerun door's cap, so a selection can say it before the dry run does. */
+	rerunCap: number;
+}
+export type StructureAgainRefusal = "not_found" | "no_text" | "mint_failed" | "source_not_kept";
+export type StructureAgainResult = {
+	ok: false;
+	reason: StructureAgainRefusal;
+	message: string;
+} | {
+	ok: true;
+	/** The same request already started this run: nothing was replayed again. */
+	status: "reused";
+	sessionId: string;
+	entityId: string;
+} | ({
+	ok: true;
+	status: "structured";
+	sessionId: string;
+	entityId: string;
+	sourceDocumentId: string;
+	/** False when the manifest could not record the source (rerun can't see it). */
+	manifestRecorded: boolean;
+} & Omit<RerunItemResult, "sourceDocumentIds" | "door">);
+export type PacketSection<T> = {
+	status: "ok";
+	total: number;
+	items: T[];
+} | {
+	status: "unavailable";
+	reason: string;
+};
+export interface PacketSlotItem {
+	label: string;
+	kind: string;
+	blockedReason?: string;
+	why?: string;
+	owedSince?: string;
+	/** Agent type the slot was delegated to, when it was. */
+	delegatedTo?: string;
+}
+export interface PacketProposalItem {
+	id: string;
+	/** Imperative — what approving it WILL do. */
+	title: string;
+	proposalType: string;
+	createdAt: string | null;
+}
+export interface PacketOutputItem {
+	kind: string;
+	refId: string;
+	title: string;
+	state?: "working" | "kept" | "swept";
+	/** The declared deliverable this output satisfies, when one matched. */
+	expectedLabel?: string;
+}
+/** A child session — `child --spawned_from--> this`. */
+export interface PacketChildItem {
+	id: string;
+	/** Display name via `resolveSessionTitle` — title, else the goal's first line. */
+	title: string;
+	status: string;
+	statusLabel: string;
+}
+export type NextMoveKind = "owed_slot" | "pending_proposal" | "agent_slot" | "ready_to_close" | "none" | "unknown";
+export interface ContinuationNextMove {
+	kind: NextMoveKind;
+	/** Who acts: the person, the AI, or nobody. */
+	actor: "user" | "ai" | "none";
+	/** One line naming the move. */
+	label: string;
+	/** One line saying why this is the move. */
+	reason: string;
+	/** The proposal id, for `pending_proposal`. */
+	proposalId?: string;
+}
+export interface ContinuationPacket {
+	version: 1;
+	session: {
+		id: string;
+		/** The stored name, `null` when untitled. */
+		title: string | null;
+		/** What to show: `resolveSessionTitle` — the ONE rule relay and browser share. */
+		displayTitle: string;
+		goal: string;
+		status: string;
+		statusLabel: string;
+		kind: SessionKind;
+		currentStage: string | null;
+		progress: number | null;
+	};
+	userMustDecide: {
+		owedSlots: PacketSection<PacketSlotItem>;
+		pendingProposals: PacketSection<PacketProposalItem>;
+	};
+	aiCanDo: PacketSection<PacketSlotItem>;
+	blockers: PacketSection<PacketSlotItem>;
+	outputs: PacketSection<PacketOutputItem>;
+	/**
+	 * Child sessions (detours and planned sub-sessions), oldest first. A parent
+	 * never auto-closes: it shows these, and closing stays explicit.
+	 */
+	children: PacketSection<PacketChildItem>;
+	/**
+	 * The session this one was spawned from (`this --spawned_from--> parent`).
+	 * `session: null` means NO parent; a failed read is `unavailable`, never
+	 * folded into "no parent".
+	 */
+	parent: {
+		status: "ok";
+		session: PacketChildItem | null;
+	} | {
+		status: "unavailable";
+		reason: string;
+	};
+	/**
+	 * Sessions this one waits on (`this --blocked_by--> blocker`), closed ones
+	 * included — `status` says which still block. Distinct from `blockers`,
+	 * which is owed SLOTS, not session edges.
+	 */
+	blockedBy: PacketSection<PacketChildItem>;
+	/** `null` when the session recorded no run manifest. */
+	run: {
+		sourcesCount: number;
+		engine: string;
+		model: string | null;
+		provider?: string | null;
+		promptVersion: string;
+		guidelines: Array<{
+			id: string;
+			version: number;
+		}>;
+		guidelineStatus?: "ok" | "unavailable";
+	} | null;
+	rerun: RerunAvailability;
+	/** `null` when the session never recorded a completion/verification. */
+	lastCompletion: {
+		closedAt: string | null;
+		summary?: string;
+		unfinishedOutputs?: number;
+	} | null;
+	nextMove: ContinuationNextMove;
+}
+/** What happened to the create-time `spawned_from` edge. */
+export type CreateTimeParentLink = {
+	status: "linked";
+	parentSessionId: string;
+	suspendedIntentRecorded: boolean;
+} | {
+	status: "failed";
+	parentSessionId: string;
+	reason: "parent_not_found" | "self_parent" | "error";
+	message?: string;
 };
 /** One owed deliverable, with just enough of its session to be actionable. */
 export interface OwedSlot {
@@ -9372,6 +9877,15 @@ export interface ActionDescriptor {
 	label: string;
 	description?: string;
 	placement: "primary" | "secondary" | "overflow";
+}
+export interface RecordedTool {
+	name: string;
+	key: string | null;
+	state: "connect" | "install" | "wanted";
+	status: "created" | "existing" | "proposed" | "selected" | "invalid-name" | "refused";
+	toolRequestId: string | null;
+	proposalId?: string;
+	reviewUrl?: string;
 }
 /** One agent's standing in the pod-wide trust grid — REAL lifetime totals. */
 export interface AgentStanding {
@@ -9927,11 +10441,21 @@ export interface IntegrationRoutingRule {
 	channelId: string | null;
 	lastRunAt: string | null;
 }
+declare const OBJECT_NAV_VIEWS: readonly [
+	"room"
+];
+export type ObjectNavView = (typeof OBJECT_NAV_VIEWS)[number];
 /** What a signal points AT — an object-nav address the browser can dispatch. */
 export interface SignalTarget {
 	/** An `objectNavTarget` kind: `proposal`, `channel`, `entity`, `automation`… */
 	kind: string;
 	id: string;
+	/**
+	 * Optional view reading of that object (`'room'` = a session's Intake Room).
+	 * Only a member of `OBJECT_NAV_VIEWS` (`@synap-core/types/navigation`) — the
+	 * same allowlist the clients re-check with `isObjectNavView`.
+	 */
+	view?: ObjectNavView;
 }
 export type SignalKind = 
 /** A collapsed group of identical-shape pending proposals. */
@@ -10262,6 +10786,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		knownSourceHashes: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				hashes: string[];
+			};
+			output: {
+				known: KnownSourceHash[];
+				maxItemsPerRun: number;
+			};
+			meta: object;
+		}>;
 		structure: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				text?: string | undefined;
@@ -10285,8 +10819,32 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				anchorEntityId?: string | undefined;
 				sessionId?: string | undefined;
 				dedupMode?: "title" | "both" | "semantic" | undefined;
+				keepRaw?: boolean | undefined;
+				reanalyze?: boolean | undefined;
+				sourceSha256?: string | undefined;
+				bulk?: boolean | undefined;
 			};
-			output: ({
+			output: {
+				proposals: ReturnType<typeof buildDegradedCaptureFallback>["proposals"];
+				relations: ReturnType<typeof buildDegradedCaptureFallback>["relations"];
+				followUp: string | StructuredFollowUp | null;
+				targetWorkspaceId: string | null;
+				targetProjectId: string | null;
+				formSpec: null;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				degraded: false;
+				sessionId: string | null;
+				alreadyImported: {
+					sessionId: string | null;
+					documentId: string;
+					fileSha256: string;
+				};
+			} | ({
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -10571,6 +11129,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				threadId?: string | undefined;
 				sourceMessageId?: string | undefined;
 				propose?: boolean | undefined;
+				sourceDocumentId?: string | undefined;
+				sourceSha256?: string | undefined;
 				anchorEntityId?: string | undefined;
 			};
 			output: {
@@ -13821,6 +14381,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					ruleIds?: string[];
 					entityDocumentIds?: string[];
 					propertyDiffs?: EntityPropertyDiff[];
+					sessionIds?: string[];
+					projectIds?: string[];
+					linkIds?: string[];
+					projectSubjectIds?: Record<string, string>;
 					stampedAt?: string;
 					byOp?: Record<string, MaterializedOpRecord>;
 					entityIds?: string[];
@@ -18987,7 +19551,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								srcdoc?: string | undefined;
 								rendererType?: "external" | "native" | "iframe-srcdoc" | undefined;
 								external?: boolean | undefined;
-								placement?: "main" | "side" | "floating" | "modal" | "popover" | "embed" | undefined;
+								placement?: "side" | "main" | "floating" | "modal" | "popover" | "embed" | undefined;
 								displayMode?: "medium" | "full" | "compact" | undefined;
 								props?: Record<string, unknown> | undefined;
 								title?: string | undefined;
@@ -19593,7 +20157,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "graph" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "graph" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -20614,7 +21178,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "link" | "relations" | "progress" | "text" | "checkbox" | "tag" | "badge" | "avatar" | "currency";
+								type: "number" | "link" | "date" | "relations" | "progress" | "text" | "checkbox" | "tag" | "badge" | "avatar" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -20728,7 +21292,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						fieldMapping: Record<string, {
 							slot: string;
 							renderer?: {
-								type: "number" | "date" | "link" | "relations" | "progress" | "text" | "checkbox" | "tag" | "badge" | "avatar" | "currency";
+								type: "number" | "link" | "date" | "relations" | "progress" | "text" | "checkbox" | "tag" | "badge" | "avatar" | "currency";
 								variant?: string | undefined;
 								size?: string | undefined;
 								format?: string | undefined;
@@ -23148,6 +23712,42 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		recordCorrection: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				text: string;
+				scope: "workspace" | "personal";
+			};
+			output: {
+				status: "proposed";
+				proposalId: string;
+				alreadyProposed: boolean;
+				guideline?: undefined;
+				supersededId?: undefined;
+			} | {
+				status: "saved";
+				guideline: {
+					id: string;
+					workspaceId: string | null;
+					version: number;
+					createdAt: Date;
+					createdBy: string;
+					source: string;
+					shape: MessageShapePredicate | null;
+					scopeKind: "sourceKind" | "channel" | "shape" | "channelType" | "default" | "bridge" | "workKind" | "entityKind";
+					revokedAt: Date | null;
+					capabilityId: string | null;
+					key: string;
+					value: Record<string, unknown> | GuidelineValue;
+					scopeRef: string | null;
+					supersedesId: string | null;
+				};
+				supersededId: string | null;
+				proposalId?: undefined;
+				alreadyProposed?: undefined;
+			};
+			meta: object;
+		}>;
 	}>>;
 	mcpServers: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -24750,6 +25350,23 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			}[];
 			meta: object;
 		}>;
+		requestHandoff: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				target: {
+					kind: "session";
+					id: string;
+				};
+				view: "room";
+			};
+			output: {
+				status: "already_sent";
+				notificationId: string;
+			} | {
+				status: "sent";
+				notificationId: string;
+			};
+			meta: object;
+		}>;
 	}>>;
 	proactive: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -25022,6 +25639,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				issuerUrl: string;
 				isBuiltIn: boolean;
 			}[];
+			meta: object;
+		}>;
+		brokerDiagnostics: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: BrokerTrustDiagnostics;
 			meta: object;
 		}>;
 		approve: import("@trpc/server").TRPCMutationProcedure<{
@@ -26924,6 +27546,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -26971,6 +27594,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -27036,6 +27660,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -27075,6 +27700,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -27149,6 +27775,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -27194,6 +27821,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: RerunSessionResult;
 			meta: object;
 		}>;
+		runSources: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: RunSources;
+			meta: object;
+		}>;
+		structureAgain: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				entityId: string;
+			};
+			output: StructureAgainResult;
+			meta: object;
+		}>;
 		revertConversion: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
@@ -27223,9 +27864,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				triage: TriageProjection;
 				kind: "run" | "receipt" | "work";
 				rerun: RerunAvailability;
+				continuation: ContinuationPacket;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -27259,6 +27902,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -27285,6 +27929,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				goal: string;
 				workspaceId?: string | null | undefined;
+				title?: string | null | undefined;
+				parentSessionId?: string | undefined;
+				blockedBySessionIds?: string[] | undefined;
 				templateId?: string | undefined;
 				expectedOutputs?: {
 					kind: string;
@@ -27318,9 +27965,12 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectEntityId?: string | null | undefined;
 			};
 			output: {
+				blockerLinks?: CreateTimeBlockerReport[] | undefined;
+				parentLink?: CreateTimeParentLink | undefined;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -27361,6 +28011,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				progress?: number | undefined;
 				channelId?: string | undefined;
 				correlationId?: string | undefined;
+				title?: string | null | undefined;
 				goal?: string | undefined;
 				agentIds?: string[] | undefined;
 				expectedOutputs?: {
@@ -27396,6 +28047,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -27427,6 +28079,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				userId: string;
 				workspaceId: string | null;
+				title: string | null;
 				correlationId: string | null;
 				createdAt: Date;
 				updatedAt: Date;
@@ -28135,6 +28788,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -28246,6 +28900,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					id: string;
 					userId: string;
 					workspaceId: string | null;
+					title: string | null;
 					correlationId: string | null;
 					createdAt: Date;
 					updatedAt: Date;
@@ -29080,6 +29735,55 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | null;
 			meta: object;
 		}>;
+		restartJourney: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				templateVersion?: string | undefined;
+				firstActionId?: string | undefined;
+			};
+			output: {
+				id: string;
+				userId: string;
+				lens: {
+					kind: "pod";
+				} | {
+					kind: "workspace";
+					workspaceId: string;
+				} | {
+					kind: "project";
+					projectId: string;
+				} | {
+					kind: "project_workspace";
+					projectId: string;
+					workspaceId: string;
+				};
+				lensKey: string;
+				templateVersion: string;
+				status: OnboardingJourneyStatus;
+				progress: OnboardingJourneyProgressRecord;
+				evidence: OnboardingJourneyEvidenceRecord;
+				offeredAt: string;
+				startedAt: string | null;
+				pausedAt: string | null;
+				completedAt: string | null;
+				dismissedAt: string | null;
+				createdAt: string;
+				updatedAt: string;
+			} | null;
+			meta: object;
+		}>;
 		dismissJourney: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				lens: {
@@ -29184,6 +29888,49 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: string;
 				updatedAt: string;
 			} | null;
+			meta: object;
+		}>;
+		recordTools: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				tools: {
+					name: string;
+					state: "wanted" | "connect" | "install";
+					providerKey?: string | undefined;
+				}[];
+				origin?: "settings" | "onboarding" | undefined;
+			};
+			output: {
+				recorded: RecordedTool[];
+				journey: {
+					id: string;
+					userId: string;
+					lens: {
+						kind: "pod";
+					} | {
+						kind: "workspace";
+						workspaceId: string;
+					} | {
+						kind: "project";
+						projectId: string;
+					} | {
+						kind: "project_workspace";
+						projectId: string;
+						workspaceId: string;
+					};
+					lensKey: string;
+					templateVersion: string;
+					status: OnboardingJourneyStatus;
+					progress: OnboardingJourneyProgressRecord;
+					evidence: OnboardingJourneyEvidenceRecord;
+					offeredAt: string;
+					startedAt: string | null;
+					pausedAt: string | null;
+					completedAt: string | null;
+					dismissedAt: string | null;
+					createdAt: string;
+					updatedAt: string;
+				} | null;
+			};
 			meta: object;
 		}>;
 	}>>;
@@ -29433,6 +30180,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				distinct: number;
 				truncated: boolean;
 				blocked: number;
+				decisions: number;
+				notifications: number;
 			};
 			meta: object;
 		}>;

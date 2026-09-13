@@ -62,6 +62,25 @@ export interface ScorecardProposalRow {
 }
 
 /**
+ * A revision is a HUMAN CORRECTION only when no agent made it (B21): the entry
+ * names an acting agent when an agent key revised it on a human's behalf
+ * (`computeRevisedEnvelope`), and some doors record the agent itself as `by`
+ * (`subjectAgentId`, when scoring one agent). An unattributed entry
+ * (`by: null`) claims no actor and is not counted. LIMIT: entries written
+ * before the acting agent was recorded carry only the human owner in `by` and
+ * still count — history cannot be re-split.
+ *
+ * THE one rule — the prompt-version quality report imports it.
+ */
+export function isHumanRevision(
+  rev: unknown,
+  subjectAgentId?: string
+): boolean {
+  const r = rev as { by?: string | null; actingAgentUserId?: string | null };
+  return !r.actingAgentUserId && !!r.by && r.by !== subjectAgentId;
+}
+
+/**
  * PURE scorecard math over a set of an agent's proposals. DB-free so it is
  * unit-testable: hand it rows, get back counts + rates + the rejection
  * histogram + a duplicate rate (share of rows in a same-shape cluster > 1).
@@ -115,19 +134,9 @@ export function computeAgentScorecard(
       default:
         break;
     }
-    // A revision is a HUMAN CORRECTION only when no agent made it (B21): the
-    // entry names an acting agent when an agent key revised it on a human's
-    // behalf (`computeRevisedEnvelope`), and some doors record the agent itself
-    // as `by`. An unattributed entry (`by: null`) claims no actor and is not
-    // counted. LIMIT: entries written before the acting agent was recorded carry
-    // only the human owner in `by` and still count — history cannot be re-split.
     if (
       Array.isArray(r.revisionHistory) &&
-      r.revisionHistory.some((rev) => {
-        const actingAgent = (rev as { actingAgentUserId?: string | null })
-          .actingAgentUserId;
-        return !actingAgent && !!rev.by && rev.by !== opts.agentId;
-      })
+      r.revisionHistory.some((rev) => isHumanRevision(rev, opts.agentId))
     ) {
       revised += 1;
     }

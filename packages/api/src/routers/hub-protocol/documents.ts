@@ -7,6 +7,7 @@
  */
 
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { randomUUID } from "crypto";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -90,6 +91,11 @@ export const documentsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Decode an agent's XML-escaped title once, at the one door both MCP
+      // (synap_create_document) and Hub REST call through — see
+      // `entities/create.ts` for the full rationale.
+      const decodedTitle = decodeHtmlEntities(input.title);
+      if (decodedTitle !== input.title) input.title = decodedTitle;
       const userId = ctx.userId!;
       const documentId = randomUUID();
       // Prefer explicit agentUserId from request; API key owner is a system account.

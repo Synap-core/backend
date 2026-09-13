@@ -52,6 +52,7 @@ const PGLITE_SERIAL = [
   "src/conversions/engine.integration.test.ts",
   "src/conversions/merge-cross-scope.test.ts",
   "src/conversions/move-base-property-to-facet.test.ts",
+  "src/conversions/dedupe-field-plan.pglite.test.ts",
 ];
 
 const shared = {

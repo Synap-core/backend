@@ -216,7 +216,11 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     }
     const userId = acting.userId;
     const workspaceId = acting.workspaceId;
-    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    // Body wins, else the authenticated key's agent — an agent key that does not
+    // echo its own id must not resolve as the human (ungoverned + unattributed).
+    const resolvedAgentUserId =
+      body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
 
@@ -225,7 +229,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         await import("../../../utils/permission-check.js");
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: body.agentUserId,
+        agentUserId: resolvedAgentUserId,
         workspaceId,
         subjectType: "cell",
         action: "create",
@@ -239,7 +243,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           config: body.config ?? {},
           isTemplate: body.isTemplate ?? false,
           sourceDocumentId: body.sourceDocumentId,
-          agentUserId: body.agentUserId,
+          agentUserId: resolvedAgentUserId,
         },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,
@@ -268,8 +272,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           name: body.name,
           isTemplate: body.isTemplate ?? false,
           sourceDocumentId: body.sourceDocumentId,
-          createdByKind: body.agentUserId ? "agent" : "user",
-          trustLevel: body.agentUserId ? "generated" : "trusted",
+          createdByKind: resolvedAgentUserId ? "agent" : "user",
+          trustLevel: resolvedAgentUserId ? "generated" : "trusted",
         })
         .returning();
 
@@ -334,7 +338,11 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     }
     const userId = acting.userId;
     const workspaceId = acting.workspaceId;
-    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    // Body wins, else the authenticated key's agent — an agent key that does not
+    // echo its own id must not resolve as the human (ungoverned + unattributed).
+    const resolvedAgentUserId =
+      body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
 
@@ -343,7 +351,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         await import("../../../utils/permission-check.js");
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: body.agentUserId,
+        agentUserId: resolvedAgentUserId,
         workspaceId,
         subjectType: "cell",
         action: "create",
@@ -355,7 +363,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           html: body.html,
           userId,
           workspaceId,
-          agentUserId: body.agentUserId,
+          agentUserId: resolvedAgentUserId,
         },
         reasoning: body.reasoning,
         sourceMessageId: body.sourceMessageId,
@@ -432,8 +440,8 @@ export function registerCellInstancesRoutes(app: HubHono): void {
           name: body.name,
           isTemplate: false,
           sourceDocumentId: document.id,
-          createdByKind: body.agentUserId ? "agent" : "user",
-          trustLevel: body.agentUserId ? "generated" : "trusted",
+          createdByKind: resolvedAgentUserId ? "agent" : "user",
+          trustLevel: resolvedAgentUserId ? "generated" : "trusted",
         })
         .returning();
 
@@ -498,7 +506,11 @@ export function registerCellInstancesRoutes(app: HubHono): void {
     }
     const userId = acting.userId;
     const workspaceId = acting.workspaceId;
-    const actorResolution = await resolveActorId(body.agentUserId, userId);
+    // Body wins, else the authenticated key's agent — an agent key that does not
+    // echo its own id must not resolve as the human (ungoverned + unattributed).
+    const resolvedAgentUserId =
+      body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+    const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
     if ("error" in actorResolution)
       return c.json({ error: actorResolution.error }, 400);
 
@@ -507,7 +519,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         await import("../../../utils/permission-check.js");
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: body.agentUserId,
+        agentUserId: resolvedAgentUserId,
         workspaceId,
         subjectType: "cell",
         action: "update",

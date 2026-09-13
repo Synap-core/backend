@@ -2049,6 +2049,10 @@ try {
               await import("@synap/jobs/workers/broken-automation-cron.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
+            const { registerTightenRecommender } =
+              await import("@synap/jobs/workers/governance-tighten-cron.js");
+            const { registerPromptVersionRegressionScanner } =
+              await import("@synap/jobs/workers/prompt-quality-cron.js");
             const { registerSessionRecapRunner } =
               await import("@synap/jobs/workers/session-recap.js");
             const { registerSignalRouter } =
@@ -2126,6 +2130,15 @@ try {
                 : api.runScheduledConnectionSyncs(data.reason ?? "cron")
             );
             registerEventEndRunner(() => api.runEventEnd());
+            // Learning loop: the tighten recommender (was verb-only) and the
+            // prompt-version regression scan run on daily crons. Both slots
+            // are fail-closed — unregistered, the job throws.
+            registerTightenRecommender(() =>
+              api.recommendTightenForAllAgents()
+            );
+            registerPromptVersionRegressionScanner(() =>
+              api.notifyPromptVersionRegressions()
+            );
             // ONE cron, two reasons to walk the pending table. `scanStale`
             // detects a workspace that disappeared; `expireLapsed` detects time
             // passing. Separate detections, deliberately sharing the 6h tick

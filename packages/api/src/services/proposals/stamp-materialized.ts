@@ -49,6 +49,12 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   entityDocumentIds?: string[];
   /** What merges overwrote on PRE-EXISTING entities, with prior values. */
   propertyDiffs?: EntityPropertyDiff[];
+  /** Connected plan: focus sessions, projects and session edges created by the run. */
+  sessionIds?: string[];
+  projectIds?: string[];
+  linkIds?: string[];
+  /** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
+  projectSubjectIds?: Record<string, string>;
   /** ISO time the record was last stamped. */
   stampedAt?: string;
   /**
@@ -68,7 +74,11 @@ export interface MaterializedOpRecord {
     | "create_relation"
     | "create_skill"
     | "create_automation"
-    | "create_rule";
+    | "create_rule"
+    | "create_session"
+    | "create_document"
+    | "create_project"
+    | "create_link";
   entityId?: string;
   linked?: boolean;
   relationId?: string;
@@ -77,6 +87,10 @@ export interface MaterializedOpRecord {
   skillId?: string;
   automationId?: string;
   ruleId?: string;
+  sessionId?: string;
+  projectId?: string;
+  documentId?: string;
+  linkId?: string;
   /** Set when THIS op was reverted on its own (`proposals.revert` with `opKey`). */
   revertedAt?: string;
   revertedBy?: string;
@@ -108,8 +122,26 @@ export function relationOpKey(op: {
 
 type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
   Partial<
-    Pick<MaterializeResult, "facets" | "skills" | "automations" | "rules">
+    Pick<
+      MaterializeResult,
+      | "facets"
+      | "skills"
+      | "automations"
+      | "rules"
+      | "projects"
+      | "sessions"
+      | "links"
+      | "documents"
+    >
   >;
+
+/** The `byOp` key of a plan session edge (a link op has no ref). */
+export function linkOpKey(link: {
+  requested: { from: string; to: string };
+  type: string;
+}): string {
+  return `${link.requested.from}->${link.requested.to}:${link.type}`;
+}
 
 function unique(ids: Iterable<string>): string[] {
   return [...new Set(ids)];
@@ -152,9 +184,49 @@ export function buildMaterializedRecord(
       ),
       ...(extra?.propertyDiffs ?? []),
     ],
+    ...planRecordFields(result),
     byOp: buildByOp(result),
   };
   return record;
+}
+
+/**
+ * A connected plan's rows. Present ONLY when the run carried plan results, so
+ * an entity/relation graph's record keeps exactly the shape it always had.
+ */
+function planRecordFields(
+  result: RecordSource
+): Partial<CompleteMaterializedRecord> {
+  const sessions = result.sessions ?? [];
+  const projects = result.projects ?? [];
+  const links = result.links ?? [];
+  const documents = result.documents ?? [];
+  if (
+    sessions.length + projects.length + links.length + documents.length ===
+    0
+  ) {
+    return {};
+  }
+  // A project the door REUSED (exact-name match) is not this run's row.
+  const ownProjects = projects.filter((p) => !p.linked);
+  return {
+    sessionIds: unique(sessions.map((s) => s.sessionId)),
+    projectIds: unique(ownProjects.map((p) => p.projectId)),
+    linkIds: unique(
+      links
+        .filter((l) => !l.preExisting && l.linkId)
+        .map((l) => l.linkId as string)
+    ),
+    projectSubjectIds: Object.fromEntries(
+      ownProjects.flatMap((p) =>
+        p.subjectEntityId ? [[p.projectId, p.subjectEntityId]] : []
+      )
+    ),
+    // Plan documents are standalone rows (not entity bodies): revert deletes
+    // them through the governed document door, exactly like a document-create
+    // proposal's own `documentIds`.
+    documentIds: unique(documents.map((d) => d.documentId)),
+  };
 }
 
 function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
@@ -199,6 +271,27 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const r of result.rules ?? []) {
     byOp[r.ref] = { op: "create_rule", ruleId: r.ruleId };
+  }
+  for (const p of result.projects ?? []) {
+    byOp[p.ref] = {
+      op: "create_project",
+      projectId: p.projectId,
+      linked: p.linked,
+    };
+  }
+  for (const s of result.sessions ?? []) {
+    byOp[s.ref] = { op: "create_session", sessionId: s.sessionId };
+  }
+  for (const d of result.documents ?? []) {
+    byOp[d.ref] = { op: "create_document", documentId: d.documentId };
+  }
+  // An edge has no ref of its own — keyed by what it asked for, like a relation.
+  for (const l of result.links ?? []) {
+    byOp[linkOpKey(l)] = {
+      op: "create_link",
+      ...(l.linkId ? { linkId: l.linkId } : {}),
+      ...(l.preExisting ? { preExisting: true } : {}),
+    };
   }
   return byOp;
 }
@@ -263,6 +356,9 @@ const ID_FIELDS = [
   "automationIds",
   "ruleIds",
   "entityDocumentIds",
+  "sessionIds",
+  "projectIds",
+  "linkIds",
 ] as const satisfies ReadonlyArray<keyof CompleteMaterializedRecord>;
 
 /** Union two records. Keeps any fields a record carries that this module does not own (e.g. `merge`). */

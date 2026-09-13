@@ -16,6 +16,7 @@ import {
   confineWorkspaceOrForbidden,
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   mayActAsUser,
   resolveActingContext,
@@ -175,9 +176,12 @@ export function registerRelationsRoutes(app: HubHono): void {
       // Capture agent so relation.create auto-approves (its explicit
       // autoApproveFor covers it); a body-supplied agentUserId still wins, and a
       // non-capture caller keeps its own agent identity (normal governance).
+      // That identity is the body's, else the authenticated key's agent: an
+      // agent key that does not echo its own id must not resolve as the human
+      // (ungoverned + unattributed — the relates_to edges seen live 2026-09-13).
       const resolvedAgentUserId = await resolveCaptureActorUserId(
         c,
-        body.agentUserId
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined)
       );
       const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)
@@ -202,9 +206,11 @@ export function registerRelationsRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err }, "createRelation failed");
+      // Classify, never a blanket 500: an endpoint still pending as a proposal
+      // is NOT_FOUND, an unknown relation slug BAD_REQUEST, a floor FORBIDDEN.
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -261,9 +267,16 @@ export function registerRelationsRoutes(app: HubHono): void {
       effectiveWorkspaceId = acting.workspaceId ?? undefined;
     }
     try {
-      const actorId = body.agentUserId || userId;
+      // Body wins, else the authenticated key's agent (same shape as POST).
+      // Validated through resolveActorId like every other write door — the
+      // body id used to reach getCaller unchecked.
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+      const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
       const caller = await getCaller(c, {
-        userId: actorId,
+        userId: actorResolution.actorId,
         workspaceId: effectiveWorkspaceId,
         sourceMessageId: body.sourceMessageId,
       });
@@ -271,7 +284,7 @@ export function registerRelationsRoutes(app: HubHono): void {
         userId,
         workspaceId: effectiveWorkspaceId,
         relationId,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
       return c.json(result);
@@ -279,7 +292,7 @@ export function registerRelationsRoutes(app: HubHono): void {
       logger.error({ err, relationId }, "deleteRelation failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
       );
     }
   });

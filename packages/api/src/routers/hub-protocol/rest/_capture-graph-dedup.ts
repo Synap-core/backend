@@ -24,6 +24,12 @@ export interface CaptureGraphEntity {
   properties?: Record<string, unknown>;
   existingEntityId?: string;
   /**
+   * PLAN: the `ref` of a `projects[]` step in the same call — the entity is
+   * filed into the project that step creates. Threaded to the composite
+   * `create_entity` op's `projectRef`.
+   */
+  projectRef?: string;
+  /**
    * Optional per-entity process home (multi-home capture, parity with import).
    * Pod-scope kinds should omit this — identity is not a folder.
    */
@@ -223,6 +229,13 @@ export function collapseDuplicateEntities(
   entities: CaptureGraphEntity[];
   relations: CaptureGraphRelation[];
   bindings: CaptureGraphBinding[];
+  /**
+   * dropped ref → surviving ref, for every collapsed duplicate. Callers whose
+   * OTHER payload points at entity refs (a plan's subjectRef / entityRef /
+   * evidenceRefs) rewrite through it so no ref dangles. Empty when nothing
+   * collapsed.
+   */
+  refRewrites: Record<string, string>;
 } {
   const keyToCanonicalRef = new Map<string, string>();
   const droppedRefToCanonicalRef = new Map<string, string>();
@@ -268,6 +281,7 @@ export function collapseDuplicateEntities(
       entities: survivingEntities,
       relations: [...relations],
       bindings: [...bindings],
+      refRewrites: {},
     };
   }
 
@@ -292,5 +306,6 @@ export function collapseDuplicateEntities(
     entities: survivingEntities,
     relations: rewrittenRelations,
     bindings: rewrittenBindings,
+    refRewrites: Object.fromEntries(droppedRefToCanonicalRef),
   };
 }

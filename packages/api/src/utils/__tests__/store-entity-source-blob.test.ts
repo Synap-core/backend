@@ -70,6 +70,7 @@ vi.mock("../permission-check.js", () => ({
 
 import {
   storeEntitySourceBlob,
+  gateAndAttachStagedSourceBlob,
   attachSourceBlob,
   discardSourceBlob,
   discardProposalSourceBlob,
@@ -526,6 +527,103 @@ describe("cross-tenant refusal", () => {
  * source-blob meaning, or a genuine long-form body arriving via dedup is
  * silently discarded (the B3 regression, reintroduced).
  */
+describe("a run's staged intake source — linked, never re-uploaded, never discarded", () => {
+  // `capture.execute` reuses the photo `capture.structure` kept for the run
+  // (decision C). One blob per file: the link must not upload, and a proposal
+  // ending (reject / deny) must not delete the run's only copy.
+  const RUN_SOURCE = {
+    documentId: "doc-run",
+    storageKey: "users/u1/entity/intake-abc.jpg",
+    storageUrl: "mem://users/u1/entity/intake-abc.jpg",
+    size: 12,
+    mimeType: "image/jpeg",
+    filename: "IMG_1.jpg",
+  };
+  const runDocRow = {
+    id: "doc-run",
+    userId: "u1",
+    storageKey: RUN_SOURCE.storageKey,
+    metadata: { intakeSource: { version: 1, kind: "file", sessionId: "s1" } },
+  };
+
+  beforeEach(() => {
+    uploadMock.mockReset();
+    storageDeleteMock.mockReset();
+    docCreateMock.mockReset();
+    docDeleteMock.mockReset();
+    entityUpdateMock.mockReset();
+    checkPermissionOrProposeMock.mockReset();
+    checkPermissionOrProposeMock.mockResolvedValue({ granted: true });
+  });
+
+  it("links the staged source to the entity WITHOUT uploading or creating a document", async () => {
+    const { db } = makeDb([{ id: "e1" }], runDocRow as never);
+    const result = await gateAndAttachStagedSourceBlob({
+      database: db,
+      userId: "u1",
+      entityId: "e1",
+      staged: RUN_SOURCE,
+    });
+    expect(result).toMatchObject({ status: "stored", documentId: "doc-run" });
+    expect(uploadMock).not.toHaveBeenCalled();
+    expect(docCreateMock).not.toHaveBeenCalled();
+    expect(entityUpdateMock).toHaveBeenCalledWith(
+      "e1",
+      {
+        properties: expect.objectContaining({
+          sourceFileDocumentId: "doc-run",
+          sourceFileMimeType: "image/jpeg",
+          sourceFileName: "IMG_1.jpg",
+        }),
+      },
+      "u1"
+    );
+    expect(checkPermissionOrProposeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("a DENIED attach keeps the run's source (no object delete, no row delete)", async () => {
+    checkPermissionOrProposeMock.mockResolvedValue({
+      denied: true,
+      reason: "not allowed",
+    });
+    const { db } = makeDb([], runDocRow as never);
+    await expect(
+      gateAndAttachStagedSourceBlob({
+        database: db,
+        userId: "u1",
+        entityId: "e1",
+        staged: RUN_SOURCE,
+      })
+    ).rejects.toBeInstanceOf(SourceBlobDeniedError);
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(docDeleteMock).not.toHaveBeenCalled();
+  });
+
+  it("a terminal proposal's discard keeps an intake source, but still deletes a proposal-owned blob", async () => {
+    const run = makeDb([], runDocRow as never);
+    await discardSourceBlob({
+      database: run.db,
+      userId: "u1",
+      staged: RUN_SOURCE,
+    });
+    expect(storageDeleteMock).not.toHaveBeenCalled();
+    expect(docDeleteMock).not.toHaveBeenCalled();
+
+    const owned = makeDb([], {
+      id: "doc-1",
+      userId: "u1",
+      storageKey: "users/u1/entity/e1.wav",
+    });
+    await discardSourceBlob({
+      database: owned.db,
+      userId: "u1",
+      staged: { documentId: "doc-1", storageKey: "users/u1/entity/e1.wav" },
+    });
+    expect(storageDeleteMock).toHaveBeenCalledWith("users/u1/entity/e1.wav");
+    expect(docDeleteMock).toHaveBeenCalledWith("doc-1", "u1");
+  });
+});
+
 describe("entityBodyDocumentIdFrom", () => {
   it("returns the body document when the entity has one", () => {
     expect(

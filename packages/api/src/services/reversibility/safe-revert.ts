@@ -68,7 +68,17 @@ export type RevertTarget =
   /** A rule is a `skills` row; kept distinct so outcomes name it as a rule. */
   | { kind: "rule"; id: string }
   | { kind: "playbook"; id: string }
-  | { kind: "project"; id: string }
+  | {
+      kind: "project";
+      id: string;
+      /**
+       * The subject the SAME work bound to it — its `project --targets-->
+       * entity` edge is the project's own, not a use by something else.
+       */
+      subjectEntityId?: string;
+    }
+  /** A `links` row (a plan's `blocked_by` / `spawned_from` edge). Deleted, like a relation. */
+  | { kind: "link"; id: string }
   /** One property a merge overwrote on a pre-existing entity. */
   | {
       kind: "property";
@@ -141,6 +151,13 @@ export interface SafeRevertOptions {
   sourceProposalId?: string | null;
   /** The session the work ran in — its `produced` edges to retired entities go too. */
   sessionId?: string | null;
+  /**
+   * Sessions the same work created and ALREADY retired through the one close
+   * door. A session's terminal status is never stamped here (that door owns
+   * it, `session-terminal-one-door` tripwire); these are only excluded from
+   * the "something else uses the project" check.
+   */
+  ownSessionIds?: string[];
   /** The session's subject entity — the edge a project spawn wrote to it is its own. */
   subjectEntityId?: string | null;
   /** The enclosing multi-proposal pass, when there is one (see `RevertPass`). */
@@ -169,6 +186,13 @@ interface InspectContext {
   sourceProposalId: string | null;
   relationIds: string[];
   facetIds: string[];
+  /**
+   * Sessions the SAME work created and has already retired through the one
+   * close door (`completeFocusSession`) — not a "use" of a project it retires.
+   */
+  sessionIds: string[];
+  /** Links retired by THIS undo — never a "use" of a project it also retires. */
+  linkIds: string[];
   sessionId: string | null;
   subjectEntityId: string | null;
   pass: RevertPass | null;
@@ -443,27 +467,34 @@ async function inspectProject(
   if (ctx.sessionId) {
     otherSessionConditions.push(ne(focusSessions.id, ctx.sessionId));
   }
+  // Sessions this SAME undo retires (a plan's own sessions) are not a use.
+  if (ctx.sessionIds.length > 0) {
+    otherSessionConditions.push(not(inArray(focusSessions.id, ctx.sessionIds)));
+  }
   const [otherSessions] = await reader
     .select({ n: count() })
     .from(focusSessions)
     .where(and(...otherSessionConditions));
   if ((otherSessions?.n ?? 0) > 0) return inUse;
+  const otherLinkConditions = [
+    eq(links.toType, "project"),
+    eq(links.toId, id),
+    ne(links.linkType, "promoted_to"),
+  ];
+  if (ctx.linkIds.length > 0) {
+    otherLinkConditions.push(not(inArray(links.id, ctx.linkIds)));
+  }
   const [otherLinks] = await reader
     .select({ n: count() })
     .from(links)
-    .where(
-      and(
-        eq(links.toType, "project"),
-        eq(links.toId, id),
-        ne(links.linkType, "promoted_to")
-      )
-    );
+    .where(and(...otherLinkConditions));
   if ((otherLinks?.n ?? 0) > 0) return inUse;
   const outboundConditions = [
     eq(links.fromType, "project"),
     eq(links.fromId, id),
   ];
-  if (ctx.subjectEntityId) {
+  const ownSubjectEntityId = target.subjectEntityId ?? ctx.subjectEntityId;
+  if (ownSubjectEntityId) {
     // Exclude the subject edge the spawn itself wrote — counting it made every
     // spawn from a subject-bound session unrevertable.
     outboundConditions.push(
@@ -471,7 +502,7 @@ async function inspectProject(
         and(
           eq(links.linkType, "targets"),
           eq(links.toType, "entity"),
-          eq(links.toId, ctx.subjectEntityId)
+          eq(links.toId, ownSubjectEntityId)
         )!
       )
     );
@@ -487,6 +518,20 @@ async function inspectProject(
     .where(eq(projects.id, id))
     .for("update");
   if (!row || row.status !== "active") return inUse;
+  return null;
+}
+
+async function inspectLink(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "link" }>
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({ id: links.id })
+    .from(links)
+    .where(eq(links.id, target.id))
+    .for("update");
+  // Hard-deleted like a relation: absent means nothing left to undo.
+  if (!row) return skip(target, "already_reverted", "the link is already gone");
   return null;
 }
 
@@ -540,6 +585,8 @@ async function inspect(
       return inspectPlaybook(reader, target);
     case "project":
       return inspectProject(reader, target, ctx);
+    case "link":
+      return inspectLink(reader, target);
     case "property":
     case "entity_body":
       return inspectProperty(reader, target);
@@ -549,6 +596,7 @@ async function inspect(
 /** Links go before the rows they connect; property restores before any delete. */
 const APPLY_ORDER: Record<RevertTarget["kind"], number> = {
   relation: 0,
+  link: 0,
   facet: 1,
   property: 2,
   entity_body: 3,
@@ -649,6 +697,9 @@ async function apply(
         .set({ status: "archived", updatedAt: now })
         .where(eq(projects.id, target.id));
       return;
+    case "link":
+      await tx.delete(links).where(eq(links.id, target.id));
+      return;
   }
 }
 
@@ -663,6 +714,8 @@ export async function safeRevert(
       t.kind === "relation" ? [t.id] : []
     ),
     facetIds: opts.targets.flatMap((t) => (t.kind === "facet" ? [t.id] : [])),
+    sessionIds: opts.ownSessionIds ?? [],
+    linkIds: opts.targets.flatMap((t) => (t.kind === "link" ? [t.id] : [])),
     sessionId: opts.sessionId ?? null,
     subjectEntityId: opts.subjectEntityId ?? null,
     pass: opts.touchedByPass ?? null,

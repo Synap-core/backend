@@ -42,6 +42,7 @@ import {
   type db as DbType,
 } from "@synap/database";
 import { stageSourceBlob } from "../../utils/store-entity-source-blob.js";
+import { fileSha256Of } from "./known-source-hashes.js";
 
 export const INTAKE_SOURCE_METADATA_KEY = "intakeSource";
 
@@ -58,6 +59,17 @@ export interface IntakeSourceMetadata {
   path?: string;
   filename?: string;
   mimeType?: string;
+  /**
+   * Plain sha256 of the file BYTES (no kind/path folded in, unlike
+   * `contentHash`) — the "already imported" ledger key
+   * (`known-source-hashes.ts`). Set for every file source, kept or text-only.
+   */
+  fileSha256?: string;
+  /**
+   * Client-declared sha256 of the ORIGINAL asset, when the client re-encoded
+   * before sending (a re-encode is not byte-stable). Second ledger key.
+   */
+  sourceSha256?: string;
   degraded?: { reason: string; at: string };
   restructuredAt?: string;
 }
@@ -83,6 +95,8 @@ export interface StageIntakeSourceInput {
     extractedTextTruncated?: boolean;
     /** Store the ORIGINAL bytes (degraded / re-structurable), not only text. */
     keepBytes: boolean;
+    /** Client-declared sha256 of the original asset (64 hex), when re-encoded. */
+    sourceSha256?: string;
   };
   /** Structuring did not run — the source is kept for re-structure. */
   degraded?: { reason: string };
@@ -198,6 +212,12 @@ export async function stageIntakeSource(
     ...(input.path ? { path: input.path } : {}),
     ...(input.file?.filename ? { filename: input.file.filename } : {}),
     ...(input.file?.mimeType ? { mimeType: input.file.mimeType } : {}),
+    ...(input.file?.buffer?.length
+      ? { fileSha256: fileSha256Of(input.file.buffer) }
+      : {}),
+    ...(input.file?.sourceSha256
+      ? { sourceSha256: input.file.sourceSha256.toLowerCase() }
+      : {}),
     ...(input.degraded
       ? { degraded: { reason: input.degraded.reason, at: now } }
       : {}),

@@ -2056,7 +2056,7 @@ const marketSearchHandler: BuiltinVerbHandler = async (params) => {
     return {
       entries: [],
       message:
-        "Nothing matched the marketplace either. Tell the user exactly what's missing — never fabricate a result. You can offer to capture the gap as a note/observation for later.",
+        'Nothing matched the marketplace either. Tell the user exactly what\'s missing — never fabricate a result. If what\'s missing is a TOOL the user uses (an app or service Synap cannot connect yet), record it once with synap_run_capability({ verbId: "tool.request", parameters: { toolName: "<the tool\'s name>" } }): one deduped tool request per tool, reviewed by the user, which tells Synap what to integrate next. Do not capture it as a note.',
     };
   }
 
@@ -2094,6 +2094,44 @@ const marketInstallParams = z.object({
   // unchanged (fallback).
   definition: z.record(z.string(), z.unknown()).optional(),
 });
+
+/**
+ * tool.request — record demand for a tool Synap cannot connect yet, through the
+ * ONE door `recordToolDemand` (normalize → resolve the existing tool_request →
+ * governed create/update). An agent run carries `agentUserId`, so the entity
+ * door proposes; an operator run writes. A WRITE verb: it flows through the
+ * full capability gate (absent from READ_ONLY_BUILTIN_VERBS).
+ */
+// STRICT: a tool name and where the demand came from — any other field (e.g. a
+// provider key or free text) is refused, never stored, since demand is forwarded.
+const toolRequestParams = z
+  .object({
+    toolName: z.string().trim().min(1).max(200),
+    source: z.enum(["market_search_miss", "blocked_agent"]).optional(),
+  })
+  .strict();
+
+const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = toolRequestParams.parse(params);
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const { recordToolDemand } =
+    await import("../tool-demand/record-tool-demand.js");
+  // tool_request is a pod-scope kind: no workspace lens, so no membership read.
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: null,
+    workspaceRole: undefined,
+  } as unknown as Context);
+  return recordToolDemand({
+    caller,
+    userId: ctx.userId,
+    toolName: input.toolName,
+    source: input.source ?? "market_search_miss",
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+  });
+};
 
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
@@ -2758,6 +2796,8 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Tool demand — a tool the user needs that Synap cannot connect yet.
+  "tool.request": toolRequestHandler,
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
@@ -2822,6 +2862,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "tool.request": toolRequestParams,
   "connector.health_check": connectorHealthCheckParams,
   "channel.ingest": channelIngestParams,
   "messaging.send": messagingSendParams,

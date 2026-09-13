@@ -338,6 +338,13 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("denied")).toBe("Rejected");
   });
 
+  it("names the three tool-demand states (tool_request.tr_status)", () => {
+    // `wanted` rides the humanize fallback; only `installable` needs a row.
+    expect(resolveStatusLabel("wanted")).toBe("Wanted");
+    expect(resolveStatusLabel("installable")).toBe("Ready to install");
+    expect(resolveStatusLabel("connected")).toBe("Connected");
+  });
+
   it("settles the failed/stale renderings for LIFECYCLE states", () => {
     expect(resolveStatusLabel("failed")).toBe("Failed");
     // Deliberately the neutral word: `stale` is overloaded across three domains

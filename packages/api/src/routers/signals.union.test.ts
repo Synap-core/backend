@@ -117,7 +117,11 @@ describe("needs-you union", () => {
       owedTruncated: false,
     });
     expect(counted.needsYou).toBe(2);
-    expect(counted.distinct).toBe(2);
+    // `distinct` is the CLUSTER count (it used to carry the union total and
+    // this line pinned that); the notification is its own part.
+    expect(counted.distinct).toBe(1);
+    expect(counted.decisions).toBe(1);
+    expect(counted.notifications).toBe(1);
   });
 
   it("orders the union newest-first across both sources", () => {
@@ -161,7 +165,14 @@ describe("needs-you union", () => {
         owedSlots: [],
         owedTruncated: false,
       })
-    ).toEqual({ needsYou: 0, distinct: 0, truncated: false, blocked: 0 });
+    ).toEqual({
+      needsYou: 0,
+      distinct: 0,
+      truncated: false,
+      blocked: 0,
+      decisions: 0,
+      notifications: 0,
+    });
   });
 
   it("carries truncation through rather than flattening it to an exact total", () => {
@@ -327,6 +338,35 @@ describe("owed slots in the needs-you union", () => {
       owedTruncated: false,
     });
     expect(counted.needsYou).toBe(listed.length);
+  });
+
+  it("breaks the number into its three parts, and the parts SUM to it", () => {
+    // Governance said "16 decisions pending" beside a shell badge of 89 with
+    // nothing on screen to reconcile them. The count now carries the parts; a
+    // client reads each one and never derives a part by subtraction.
+    const clusters = [cluster()];
+    const counted = countNeedsYou({
+      distinctClusters: 4,
+      clustersTruncated: false,
+      clusters,
+      notifications: [
+        notif({ id: "n-keep", sourceType: "connector", sourceId: "c-1" }),
+        // Dropped by the dedupe — must NOT reach `notifications`.
+        notif({ id: "n-prop", sourceType: "proposal", sourceId: "prop-1" }),
+      ],
+      notificationsTruncated: false,
+      owedSlots: [owed({ sessionId: "a" }), owed({ sessionId: "b" })],
+      owedTruncated: false,
+    });
+    expect(counted.decisions).toBe(4);
+    expect(counted.notifications).toBe(1);
+    expect(counted.blocked).toBe(2);
+    expect(counted.needsYou).toBe(
+      counted.decisions + counted.notifications + counted.blocked
+    );
+    // `distinct` means distinct CLUSTERS, not the union total it used to carry.
+    expect(counted.distinct).toBe(counted.decisions);
+    expect(counted.distinct).not.toBe(counted.needsYou);
   });
 
   it("a truncated owed page makes the number a FLOOR", () => {

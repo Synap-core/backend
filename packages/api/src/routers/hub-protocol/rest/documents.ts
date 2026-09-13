@@ -123,8 +123,12 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
       // Item 3 Part 3: positively pin a bound service key to its workspace.
       const workspaceId = getConfinedWorkspace(c, acting.workspaceId) ?? null;
+      // Body wins, else the authenticated key's agent — an agent key that does
+      // not echo its own id must not resolve as the human.
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
       const actorResolution = await resolveActorId(
-        body.agentUserId,
+        resolvedAgentUserId,
         acting.userId
       );
       if ("error" in actorResolution)
@@ -144,7 +148,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         content: body.content ?? "",
         type: body.type ?? "markdown",
         reasoning: body.reasoning,
-        ...(body.agentUserId ? { agentUserId: body.agentUserId } : {}),
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
       return c.json(result);

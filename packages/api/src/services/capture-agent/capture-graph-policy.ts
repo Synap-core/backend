@@ -91,6 +91,30 @@ export function captureGraphEventKeys(
       add({ subjectType: "automation", action: "create" });
     } else if (op.op === "create_rule") {
       add({ subjectType: "rule", action: "create" });
+    } else if (op.op === "create_session") {
+      // The SAME keys the direct session door judges: `createFocusSession`
+      // gates `focus_session.create`, and a create-time blocker is judged as
+      // `link.create` by `addCreateTimeBlockers` (the parent edge is not
+      // separately governed there, so it is not here).
+      add({ subjectType: "focus_session", action: "create" });
+      if (
+        (op.blockedByRefs?.length ?? 0) > 0 ||
+        (op.blockedBySessionIds?.length ?? 0) > 0
+      ) {
+        add({ subjectType: "link", action: "create" });
+      }
+    } else if (op.op === "create_project") {
+      add({ subjectType: "project", action: "create" });
+    } else if (op.op === "create_document") {
+      add({ subjectType: "document", action: "create" });
+      // Attaching it as an entity's body is a governed entity update on the
+      // direct door (`synap_create_document` → `entities.update`).
+      if (op.entityRef || op.entityId) {
+        add({ subjectType: "entity", action: "update" });
+      }
+    } else if (op.op === "create_link") {
+      // `POST /links` judges every edge as `link.create`.
+      add({ subjectType: "link", action: "create" });
     } else {
       // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
       // wave removed: an op arm this function does not recognise produced NO

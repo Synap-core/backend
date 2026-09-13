@@ -92,7 +92,13 @@ export interface HealthSection {
      * twins of system kinds, outstanding retirements. Present only when
      * computed (see `GlobalSignals.schemaContract`).
      */
-    | "schema_contract";
+    | "schema_contract"
+    /**
+     * Intake runs grouped by run-manifest prompt version: review outcomes and
+     * newer-vs-previous regressions. Present only when computed (see
+     * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.
+     */
+    | "quality_by_prompt_version";
   status: HealthStatus;
   /** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
   headline: string;

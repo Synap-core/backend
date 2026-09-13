@@ -97,6 +97,10 @@
       "types": "./dist/proposals/index.d.ts",
       "import": "./dist/proposals/index.js"
     },
+    "./text": {
+      "types": "./dist/text/index.d.ts",
+      "import": "./dist/text/index.js"
+    },
     "./vault": {
       "types": "./dist/vault/index.d.ts",
       "import": "./dist/vault/index.js"
@@ -124,6 +128,14 @@
     "./guidelines": {
       "types": "./dist/guidelines/index.d.ts",
       "import": "./dist/guidelines/index.js"
+    },
+    "./tools": {
+      "types": "./dist/tools/index.d.ts",
+      "import": "./dist/tools/index.js"
+    },
+    "./navigation": {
+      "types": "./dist/navigation/index.d.ts",
+      "import": "./dist/navigation/index.js"
     },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",

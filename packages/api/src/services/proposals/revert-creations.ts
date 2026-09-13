@@ -85,6 +85,15 @@ export function revertTargetsFromPlan(
     ...plan.ruleIds.map((id) => ({ kind: "rule" as const, id })),
     ...plan.automationIds.map((id) => ({ kind: "automation" as const, id })),
     ...plan.skillIds.map((id) => ({ kind: "skill" as const, id })),
+    // A connected plan's non-entity rows (absent on every older record).
+    ...(plan.linkIds ?? []).map((id) => ({ kind: "link" as const, id })),
+    ...(plan.projectIds ?? []).map((id) => ({
+      kind: "project" as const,
+      id,
+      ...(plan.projectSubjectIds?.[id]
+        ? { subjectEntityId: plan.projectSubjectIds[id] }
+        : {}),
+    })),
   ];
 }
 
@@ -145,6 +154,9 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
       | "skillIds"
       | "automationIds"
       | "ruleIds"
+      | "sessionIds"
+      | "projectIds"
+      | "linkIds"
     >
   > = {
     entityIds: [],
@@ -153,6 +165,9 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
     skillIds: [],
     automationIds: [],
     ruleIds: [],
+    sessionIds: [],
+    projectIds: [],
+    linkIds: [],
   };
   for (const target of reverted) {
     switch (target.kind) {
@@ -184,8 +199,13 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
       case "entity_body":
         diffFor(target.entityId).bodyDocumentId = target.documentId;
         break;
-      case "playbook":
+      case "link":
+        record.linkIds.push(target.id);
+        break;
       case "project":
+        record.projectIds.push(target.id);
+        break;
+      case "playbook":
         break;
     }
   }
@@ -203,6 +223,11 @@ export async function revertProposalCreations(args: {
   userId: string;
   /** The enclosing session revert, when there is one (see `RevertPass`). */
   pass?: RevertPass | null;
+  /**
+   * Sessions the caller ALREADY retired through the one close door (a failed
+   * plan's compensation) — excluded from the project in-use check.
+   */
+  ownSessionIds?: string[];
   /**
    * Write the proposal's own record in the SAME transaction as the undo. A
    * throw (e.g. a lost compare-and-set) rolls the whole undo back.
@@ -267,6 +292,7 @@ export async function revertProposalCreations(args: {
     sourceProposalId: proposal.id,
     sessionId: proposal.sessionId,
     touchedByPass: args.pass ?? null,
+    ...(args.ownSessionIds ? { ownSessionIds: args.ownSessionIds } : {}),
     ...(writeInTransaction
       ? {
           alsoInTransaction: (tx, inner) =>

@@ -333,6 +333,16 @@ describe("resolveBroker — which relay credential", () => {
     expect(r).toMatchObject({ ok: false, reason: "broker-credential-missing" });
     if (!r.ok) expect(r.error).toMatch(/credential expired on \d{4}-/);
   });
+
+  it("a seeded relay row whose vault reference does not resolve is a FAULT, never 'credential missing'", async () => {
+    h.controlPlaneUrl = CP;
+    h.relayRows = [seededRow("vault://sealed/value", "2026-09-01")];
+    // No `vaultValues` entry: the mocked resolver maps it to "" exactly as
+    // `resolveVaultReferences` does for an unavailable vault or missing secret.
+    const r = await resolveBroker("nango");
+    expect(r).toMatchObject({ ok: false, reason: "db-unavailable" });
+    if (!r.ok) expect(r.error).toMatch(/vault reference unresolved/);
+  });
 });
 
 describe("migrateNangoEnvToVault on a brokered pod", () => {

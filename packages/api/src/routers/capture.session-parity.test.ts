@@ -123,12 +123,38 @@ describe("both doors reach the same verified handle", () => {
   });
 
   it("capture.execute resolves the handle through the one door, once", () => {
-    expect(captureSrc).toContain(
+    // Scoped to execute's OWN body: `capture.structure` legitimately verifies
+    // the same handle for its run-cap pre-check, so a file-wide count would
+    // read that second VERIFIED call as the defect.
+    const start = captureSrc.indexOf("\n  execute: podProcedure");
+    const end = captureSrc.indexOf("\n  executeWithSchema: podProcedure");
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const executeSrc = captureSrc.slice(start, end);
+    expect(executeSrc).toContain(
       "const sessionId = await resolveVerifiedSessionId("
     );
-    // Exactly ONE call site — a second, unverified read of the body field is
-    // the whole defect coming back.
-    expect(captureSrc.match(/resolveVerifiedSessionId\(/g)?.length).toBe(1);
+    // Exactly ONE call site inside execute — a second, unverified read of the
+    // body field is the whole defect coming back.
+    expect(executeSrc.match(/resolveVerifiedSessionId\(/g)?.length).toBe(1);
+  });
+
+  it("every file-wide read of the body handle goes through the verified door", () => {
+    // Each `resolveVerifiedSessionId(` call passes `input.sessionId` as an
+    // argument; any OTHER raw read must be one of the known safe forwards.
+    const calls = captureSrc.match(/resolveVerifiedSessionId\(/g)?.length ?? 0;
+    expect(calls).toBeGreaterThanOrEqual(1);
+    const rawReads = captureSrc
+      .split("\n")
+      .filter((l) => /input\.sessionId/.test(l) && !/^\s*\/\//.test(l));
+    const knownSafe = rawReads.filter(
+      (l) =>
+        /^\s*input\.sessionId,?\s*$/.test(l) || // an argument to the verified door
+        /input\.sessionId \?\? ctx\.sessionId \?\? null/.test(l) || // execute's requested handle, verified next line
+        /bodyHandle: input\.sessionId \?\? null/.test(l) // structure's intake run verifies bodyHandle
+    );
+    expect(rawReads.length).toBeGreaterThan(0);
+    expect(rawReads).toEqual(knownSafe);
   });
 
   it("no raw input.sessionId survives downstream of that resolution", () => {

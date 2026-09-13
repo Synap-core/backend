@@ -87,22 +87,53 @@ export const PROPOSAL_REJECTION_REASON_LABELS: Record<
  * This object is stored in the `proposals` table (as part of StoredProposalData)
  * and passed in events. changeType aligns with EventAction for event-sourced flow.
  */
+/**
+ * WHO initiated a change — the ACTOR-PROVENANCE vocabulary, the ONE list.
+ *
+ * Every zod enum that accepts a `source` for a write derives from this const
+ * (or from {@link HUB_WRITE_SOURCES}, its external-caller subset). A hand copy
+ * is how `data.source` came to carry TWO vocabularies under one name: import
+ * proposals stamp an IMPORT FORMAT there (`markdown`, `connector_sync`), and
+ * forwarding that into the entity door failed approval with a zod error. A
+ * value from any other vocabulary goes through {@link normalizeProposalSource}
+ * before it reaches a door.
+ */
+export const PROPOSAL_SOURCES = [
+  "user",
+  "ai",
+  "system",
+  "intelligence",
+  "agent",
+  "openwebui-pipeline",
+  "extension",
+  "cli",
+  "n8n",
+  "raycast",
+] as const;
+export type ProposalSource = (typeof PROPOSAL_SOURCES)[number];
+
+/**
+ * The sources an EXTERNAL caller (Hub Protocol / REST) may claim. Deliberately
+ * excludes `user`, `ai` and `system`: those name first-party principals a key
+ * holder must not be able to assert about itself.
+ */
+export const HUB_WRITE_SOURCES = [
+  "intelligence",
+  "agent",
+  "openwebui-pipeline",
+  "extension",
+  "cli",
+  "n8n",
+  "raycast",
+] as const satisfies ReadonlyArray<ProposalSource>;
+export type HubWriteSource = (typeof HUB_WRITE_SOURCES)[number];
+
 export interface UpdateRequest {
   /** Unique ID for this specific request */
   requestId: string;
 
-  /** Who initiated the change? */
-  source:
-    | "user"
-    | "ai"
-    | "system"
-    | "intelligence"
-    | "agent"
-    | "openwebui-pipeline"
-    | "extension"
-    | "cli"
-    | "n8n"
-    | "raycast";
+  /** Who initiated the change? One of {@link PROPOSAL_SOURCES}. */
+  source: ProposalSource;
   /**
    * THE FIFTH "WHO" — and the only one whose principal DEPENDS ON THE DOOR.
    *
@@ -314,6 +345,68 @@ export interface ProposalReviewGraph {
   relationCount: number;
   /** Count of newly-attached roles (`isNew`) across all entities. */
   facetCount: number;
+  /**
+   * CONNECTED PLAN — present ONLY when the composite carries plan ops
+   * (`create_project` / `create_session` / `create_document` / `create_link`).
+   * Additive: an entity/relation graph has none of these keys. A plan applies
+   * WHOLE, so a surface showing `isPlan` offers no per-item reject — the
+   * reviewer asks for a revision instead.
+   */
+  isPlan?: true;
+  /** Number of plan steps (projects + sessions + documents + links). */
+  planStepCount?: number;
+  projects?: Array<{
+    ref: string;
+    name: string;
+    description?: string;
+    /** In-graph entity ref (`entities[].ref`) the project is about. */
+    subjectRef?: string;
+    subjectEntityId?: string;
+    /** The pod's evidence verdict — `belowAgentFloor` is the reviewer marker. */
+    evidence?: PlanProjectEvidence;
+  }>;
+  sessions?: Array<{
+    ref: string;
+    /** As proposed (may be null). */
+    title: string | null;
+    /** The ONE display name (`resolveSessionTitle`) — never re-derive it. */
+    displayTitle: string;
+    goal: string;
+    /** In-graph project ref (`projects[].ref`) or an existing project id. */
+    projectRef?: string;
+    projectId?: string;
+    /** In-graph entity ref (`entities[].ref`) or an existing entity id. */
+    subjectRef?: string;
+    subjectEntityId?: string;
+  }>;
+  documents?: Array<{
+    ref: string;
+    title: string;
+    /** Attached as this entity's body (in-graph ref or existing id). */
+    entityRef?: string;
+    entityId?: string;
+    /** Recorded as this session's output (in-graph ref or existing id). */
+    sessionRef?: string;
+    sessionId?: string;
+    expectedLabel?: string;
+  }>;
+  /**
+   * EVERY session↔session edge — a session's `parentRef` / `blockedByRefs` and
+   * the `create_link` ops, folded by ONE derivation (`planSessionEdges`). Draw
+   * edges from here only; never from session fields.
+   */
+  links?: Array<{
+    type: PlanLinkType;
+    /** `sessions[].ref` when the endpoint is in this graph, else the existing id. */
+    fromRef?: string;
+    fromSessionId?: string;
+    toRef?: string;
+    toSessionId?: string;
+    fromLabel: string;
+    toLabel: string;
+    /** Stable per-item address: `$linkN` in derivation order. */
+    itemRef: string;
+  }>;
 }
 
 export interface ProposalReviewModel {
@@ -420,6 +513,12 @@ export interface CompositeCreateEntityOp {
   profileSlug: string;
   /** Existing project to file the created entity into at materialization. */
   projectId?: string;
+  /**
+   * PLAN: the `ref` of a `create_project` op in this batch — the entity is
+   * filed into that project once it materializes. Never together with
+   * `projectId`.
+   */
+  projectRef?: string;
   /**
    * Pin this entity to a specific workspace at materialization (multi-home
    * import graphs). When set, materializeCompositeGraph passes it through to
@@ -549,18 +648,150 @@ export interface CompositeCreateRuleOp {
   behaviourRefs?: string[];
 }
 
+/**
+ * ── Connected PLAN ops ──────────────────────────────────────────────────────
+ *
+ * A plan is the composite graph extended with the objects that are NOT
+ * entities: focus sessions, documents, projects, and the session↔session edges
+ * between them. An agent proposes the whole connected structure as ONE
+ * reviewable unit, referencing not-yet-existing objects by `ref` exactly like
+ * the entity/relation ops do. A batch carrying ANY of these ops applies
+ * ALL-OR-NONE: every step is materialized, or every step already applied is
+ * compensated through the one undo engine and the proposal is marked
+ * `approval_failed` with per-step reasons (see `materializeCompositeGraph`).
+ *
+ * Ref kinds are enforced at propose time (and on every revision): a
+ * `projectRef` must name a `create_project` op, a `subjectRef` a
+ * `create_entity` op, a session ref a `create_session` op. Each `…Ref` has an
+ * `…Id` twin for an object that already exists; never both.
+ */
+export interface CompositeCreateSessionOp {
+  op: "create_session";
+  /** Stable handle for this session within the plan (e.g. "s1"). */
+  ref: string;
+  /** Short one-line name (≤ SESSION_TITLE_MAX). */
+  title?: string | null;
+  /** The outcome. Required. */
+  goal: string;
+  /** Parent = the `spawned_from` edge (a detour or planned sub-session). */
+  parentRef?: string;
+  parentSessionId?: string;
+  /** `blocked_by` edges declared at birth. */
+  blockedByRefs?: string[];
+  blockedBySessionIds?: string[];
+  /** The entity this session is about (a `create_entity` ref or a real id). */
+  subjectRef?: string;
+  subjectEntityId?: string;
+  /** The project it belongs to (a `create_project` ref or a real id). */
+  projectRef?: string;
+  projectId?: string;
+  /** Declared deliverables — sanitized by the session door at apply time. */
+  expectedOutputs?: Array<Record<string, unknown>>;
+}
+
+export interface CompositeCreateDocumentOp {
+  op: "create_document";
+  ref: string;
+  title: string;
+  /** Markdown body. */
+  content: string;
+  /** Attach as that entity's body (`entities.documentId`), as `synap_create_document({ entityId })` does. */
+  entityRef?: string;
+  entityId?: string;
+  /** Record as that session's output (the session artifact ledger). */
+  sessionRef?: string;
+  sessionId?: string;
+  /** The declared output slot of that session this document claims (as `synap_create_document`). */
+  expectedLabel?: string;
+}
+
+/** The pod's evidence verdict on a `create_project` step, stamped at propose/revise time. */
+export interface PlanProjectEvidence {
+  /** In-plan entity refs + existing, caller-visible evidence entities. */
+  counted: number;
+  /** The agent floor a direct `projects.create` enforces. */
+  minimum: number;
+  /**
+   * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
+   * visible to the reviewer with this marker, and an agent-mode plan carrying
+   * it can never auto-apply.
+   */
+  belowAgentFloor: boolean;
+}
+
+export interface CompositeCreateProjectOp {
+  op: "create_project";
+  ref: string;
+  name: string;
+  description?: string;
+  /** The real-world thing the project is about (`project --targets--> entity`). */
+  subjectRef?: string;
+  subjectEntityId?: string;
+  /** Plan entity refs that count as the project's evidence. */
+  evidenceRefs?: string[];
+  /** Existing entities that count as evidence (must be visible). */
+  evidenceEntityIds?: string[];
+  /** Server-stamped — any caller-supplied value is overwritten. */
+  evidence?: PlanProjectEvidence;
+}
+
+/** The edges a plan may declare — both are session↔session `links` types. */
+export const PLAN_LINK_TYPES = ["blocked_by", "spawned_from"] as const;
+export type PlanLinkType = (typeof PLAN_LINK_TYPES)[number];
+
+export interface CompositeCreateLinkOp {
+  op: "create_link";
+  /** `from --blocked_by--> to` (from waits on to) · `from --spawned_from--> to` (to is from's parent). */
+  type: PlanLinkType;
+  fromRef?: string;
+  fromSessionId?: string;
+  toRef?: string;
+  toSessionId?: string;
+}
+
 export type CompositeProposalOperation =
   | CompositeCreateEntityOp
   | CompositeCreateRelationOp
   | CompositeCreateSkillOp
   | CompositeCreateAutomationOp
-  | CompositeCreateRuleOp;
+  | CompositeCreateRuleOp
+  | CompositeCreateSessionOp
+  | CompositeCreateDocumentOp
+  | CompositeCreateProjectOp
+  | CompositeCreateLinkOp;
+
+/** The op kinds that make a composite a PLAN (all-or-none on apply). */
+export const PLAN_OPERATION_KINDS = [
+  "create_session",
+  "create_document",
+  "create_project",
+  "create_link",
+] as const;
+
+export type CompositePlanOperation =
+  | CompositeCreateSessionOp
+  | CompositeCreateDocumentOp
+  | CompositeCreateProjectOp
+  | CompositeCreateLinkOp;
+
+export function isPlanOperation(
+  op: CompositeProposalOperation
+): op is CompositePlanOperation {
+  return (PLAN_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
+/** True when the batch carries any plan op — it then applies all-or-none. */
+export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
+  return operations.some(isPlanOperation);
+}
 
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
-   * Ordered list of operations. The FIRST op MUST be a create_entity (the
-   * primary entity); remaining ops are create_relation that may reference the
-   * primary via PRIMARY_REF.
+   * Ordered list of operations. No op kind has to come first: the entity ops
+   * that exist are addressed by `ref` / `$opN` (`PRIMARY_REF` still names the
+   * FIRST create_entity op, wherever it sits), and a Rule Loop or plan batch
+   * may carry no entity at all. Apply order is fixed by the materializer's
+   * passes, never by array position.
    */
   operations: CompositeProposalOperation[];
   /** Optional provenance carried alongside the operations. */
@@ -852,7 +1083,8 @@ export function isCompositeProposalData(
         o.op === "create_relation" ||
         o.op === "create_skill" ||
         o.op === "create_automation" ||
-        o.op === "create_rule")
+        o.op === "create_rule" ||
+        isPlanOperation(o))
   );
 }
 
@@ -1030,21 +1262,17 @@ export function buildRequestFromProposal(row: Proposal): UpdateRequest {
   };
 }
 
-function normalizeProposalSource(source: unknown): UpdateRequest["source"] {
-  switch (source) {
-    case "ai":
-    case "system":
-    case "intelligence":
-    case "agent":
-    case "openwebui-pipeline":
-    case "extension":
-    case "cli":
-    case "n8n":
-    case "raycast":
-      return source;
-    default:
-      return "user";
-  }
+/**
+ * Any value → a member of {@link PROPOSAL_SOURCES}. A value from another
+ * vocabulary (an import format like `markdown`, an unknown string, nothing)
+ * becomes `"user"`: the human who filed or approved it is the actor.
+ */
+export function normalizeProposalSource(source: unknown): ProposalSource {
+  return typeof source === "string" &&
+    (PROPOSAL_SOURCES as readonly string[]).includes(source) &&
+    source !== "user"
+    ? (source as ProposalSource)
+    : "user";
 }
 
 // Display utilities (pure, browser-safe)

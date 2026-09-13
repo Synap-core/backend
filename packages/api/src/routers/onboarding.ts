@@ -25,6 +25,11 @@ import type {
   WorkspaceSettings,
 } from "@synap/database";
 import { podProcedure, router } from "../trpc.js";
+import { normalizeToolName } from "@synap-core/types/tools";
+import {
+  recordToolDemand,
+  type RecordToolDemandResult,
+} from "../services/tool-demand/record-tool-demand.js";
 import { accessScopeWhere, projectLensWhere } from "../utils/project-scope.js";
 import {
   ownerPrivateVisibleWhere,
@@ -378,6 +383,10 @@ function meaningfulEntityWhere(userId: string, lens: OnboardingLens) {
 
   return and(
     isNull(entities.deletedAt),
+    // A tool request records a wish, not first value — and onboarding's own
+    // tools step writes them, so counting them would let setup satisfy the
+    // data rule with its own side effect.
+    drizzleSql`${entities.type} <> 'tool_request'`,
     drizzleSql`COALESCE(
       ${entities.systemData}->>${ONBOARDING_SCAFFOLD_SYSTEM_DATA_KEY},
       'false'
@@ -459,6 +468,98 @@ export function assertJourneyTransition(
   }
 }
 
+/**
+ * Which completion rule a journey satisfies, or null when none does.
+ *
+ * Every lens completes when it holds meaningful data. The POD lens also
+ * completes when setup steps were done — the pod journey is a restartable
+ * utility (tools, connections), and a new user who finished it may legitimately
+ * have no entities yet.
+ */
+export function resolveCompletionCriterion(input: {
+  lensKind: OnboardingLens["kind"];
+  meaningfulEntityCount: number;
+  completedActionIds: readonly string[];
+}): "meaningful-data-present" | "pod-setup-steps-completed" | null {
+  if (input.meaningfulEntityCount > 0) return "meaningful-data-present";
+  if (input.lensKind === "pod" && input.completedActionIds.length > 0) {
+    return "pod-setup-steps-completed";
+  }
+  return null;
+}
+
+export interface RecordedTool {
+  name: string;
+  key: string | null;
+  state: "connect" | "install" | "wanted";
+  status:
+    | "created"
+    | "existing"
+    | "proposed"
+    | "selected"
+    | "invalid-name"
+    | "refused";
+  toolRequestId: string | null;
+  proposalId?: string;
+  reviewUrl?: string;
+}
+
+/**
+ * How `recordTools` may write the pod journey, or null for no journey write.
+ *
+ * From onboarding the user is IN the journey: a new or offered journey
+ * becomes active and the current step is the tools step. From settings the
+ * journey is not the user's context: a live journey (active, paused,
+ * completed, dismissed) keeps its status and current step and only stores the
+ * selection. With no journey or an offered one, no write happens at all:
+ * creating or activating a row would reopen onboarding on the next launch, and
+ * `offered → offered` is not a legal transition.
+ */
+export function planToolsJourneyWrite(
+  origin: "onboarding" | "settings",
+  existing: JourneyStatus | undefined
+): { status: JourneyStatus; setCurrentAction: boolean } | null {
+  if (origin === "onboarding") {
+    return {
+      status: !existing || existing === "offered" ? "active" : existing,
+      setCurrentAction: true,
+    };
+  }
+  if (!existing || existing === "offered") return null;
+  return { status: existing, setCurrentAction: false };
+}
+
+/** The `recordTools` row for a tool whose demand went through `recordToolDemand`. */
+export function toRecordedTool(
+  name: string,
+  state: RecordedTool["state"],
+  result: RecordToolDemandResult
+): RecordedTool {
+  const status: RecordedTool["status"] =
+    result.status === "already-recorded" || result.status === "updated"
+      ? "existing"
+      : result.status;
+  return {
+    name,
+    key: result.normalizedKey,
+    state,
+    status,
+    toolRequestId: result.entityId,
+    ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+    ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
+  };
+}
+
+/**
+ * Progress for a restart: completed steps and the current step are cleared,
+ * values (e.g. the tools already chosen) are kept so the utility pre-fills.
+ */
+export function restartJourneyProgress(
+  previous: OnboardingJourneyProgressRecord | undefined
+): OnboardingJourneyProgressRecord {
+  return { completedActionIds: [], values: { ...(previous?.values ?? {}) } };
+}
+
 export function shouldCountMeaningfulEntity(input: {
   createdByKind: "human" | "ai_agent" | "system" | null;
   systemData: unknown;
@@ -484,6 +585,8 @@ async function saveJourney(input: {
   status: JourneyStatus;
   progress?: Partial<OnboardingJourneyProgressRecord>;
   evidence?: OnboardingJourneyEvidenceRecord;
+  /** Start over from ANY status (only with status "active"). */
+  restart?: boolean;
 }) {
   const db = await getDb();
   const workspaceContext = await assertLensAccess(input.userId, input.lens);
@@ -515,14 +618,37 @@ async function saveJourney(input: {
       .limit(1)
       .for("update");
 
-    assertJourneyTransition(existing?.status, input.status);
+    const restarting = input.restart === true && input.status === "active";
+    if (!restarting) assertJourneyTransition(existing?.status, input.status);
     const now = new Date();
-    const progress = mergeJourneyProgress(existing?.progress, input.progress);
-    const evidence = input.evidence ??
-      existing?.evidence ?? {
-        meaningfulEntityIds: [],
-        completedCriteria: [],
-      };
+    const progress = mergeJourneyProgress(
+      restarting
+        ? restartJourneyProgress(existing?.progress)
+        : existing?.progress,
+      input.progress
+    );
+    const priorEvidence = existing?.evidence ?? {
+      meaningfulEntityIds: [],
+      completedCriteria: [],
+    };
+    // Restart history survives every later evidence write (e.g. completion).
+    const restartHistory = {
+      ...(priorEvidence.restarts !== undefined
+        ? { restarts: priorEvidence.restarts }
+        : {}),
+      ...(priorEvidence.restartedAt !== undefined
+        ? { restartedAt: priorEvidence.restartedAt }
+        : {}),
+    };
+    const evidence: OnboardingJourneyEvidenceRecord = restarting
+      ? {
+          ...priorEvidence,
+          restarts: (priorEvidence.restarts ?? 0) + 1,
+          restartedAt: now.toISOString(),
+        }
+      : input.evidence
+        ? { ...restartHistory, ...input.evidence }
+        : priorEvidence;
 
     if (input.status === "completed" && !hasCompletionEvidence(evidence)) {
       throw new TRPCError({
@@ -688,6 +814,33 @@ export const onboardingRouter = router({
       })
     ),
 
+  /**
+   * Start the caller's OWN journey over, from ANY status (completed, dismissed,
+   * paused, active, offered, or none yet) → active. Completed steps are
+   * cleared, the current step becomes `firstActionId` (absent when not given),
+   * `completedAt` is cleared, and chosen values (e.g. the tools list) are kept.
+   * History is kept: `startedAt` stays, `evidence.restarts` counts up and
+   * `evidence.restartedAt` is stamped.
+   */
+  restartJourney: podProcedure
+    .input(
+      journeyIdentitySchema.extend({
+        firstActionId: z.string().min(1).max(200).optional(),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      saveJourney({
+        userId: ctx.userId,
+        lens: input.lens,
+        templateVersion: input.templateVersion,
+        status: "active",
+        restart: true,
+        ...(input.firstActionId
+          ? { progress: { currentActionId: input.firstActionId } }
+          : {}),
+      })
+    ),
+
   dismissJourney: podProcedure
     .input(journeyIdentitySchema)
     .mutation(({ ctx, input }) =>
@@ -707,16 +860,34 @@ export const onboardingRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      await assertLensAccess(ctx.userId, input.lens);
+      const workspaceContext = await assertLensAccess(ctx.userId, input.lens);
       const db = await getDb();
-      const [countRow] = await db
-        .select({ value: count() })
-        .from(entities)
-        .where(meaningfulEntityWhere(ctx.userId, input.lens));
-      if (Number(countRow?.value ?? 0) === 0) {
+      const [countRow, existing] = await Promise.all([
+        db
+          .select({ value: count() })
+          .from(entities)
+          .where(meaningfulEntityWhere(ctx.userId, input.lens)),
+        findJourney(
+          ctx.userId,
+          input.lens,
+          resolveTemplateVersion(input.templateVersion, workspaceContext)
+        ),
+      ]);
+      const criterion = resolveCompletionCriterion({
+        lensKind: input.lens.kind,
+        meaningfulEntityCount: Number(countRow[0]?.value ?? 0),
+        completedActionIds: [
+          ...(existing?.progress.completedActionIds ?? []),
+          ...(input.progress?.completedActionIds ?? []),
+        ],
+      });
+      if (!criterion) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Completion requires meaningful data in this context",
+          message:
+            input.lens.kind === "pod"
+              ? "Completion requires a finished setup step or meaningful data"
+              : "Completion requires meaningful data in this context",
         });
       }
 
@@ -729,13 +900,94 @@ export const onboardingRouter = router({
         evidence: {
           meaningfulEntityIds: [],
           completedCriteria: Array.from(
-            new Set([
-              ...(input.evidence?.completedCriteria ?? []),
-              "meaningful-data-present",
-            ])
+            new Set([...(input.evidence?.completedCriteria ?? []), criterion])
           ),
           firstValueAt: new Date().toISOString(),
         },
       });
+    }),
+
+  /**
+   * The tools list: record demand for every tool marked `wanted` (one deduped
+   * `tool_request` per tool, through the governed entity door) and store the
+   * user's FULL current selection on the pod journey (`progress.values.tools`)
+   * as `planToolsJourneyWrite` decides. From onboarding, a new or merely
+   * offered journey becomes active. From settings, the journey's lifecycle and
+   * current step are never touched, so recording a tool never reopens onboarding.
+   */
+  recordTools: podProcedure
+    .input(
+      z.object({
+        tools: z
+          .array(
+            z.object({
+              name: z.string().trim().min(1).max(200),
+              providerKey: z.string().trim().min(1).max(100).optional(),
+              /**
+               * connect = a connector exists; install = the catalog has it;
+               * wanted = Synap cannot connect it yet (the only state that
+               * records demand).
+               */
+              state: z.enum(["connect", "install", "wanted"]),
+            })
+          )
+          .min(1)
+          .max(100),
+        /** Where the list is shown: inside onboarding, or anywhere else. */
+        origin: z.enum(["onboarding", "settings"]).default("onboarding"),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const lens: OnboardingLens = { kind: "pod" };
+      const existing = await findJourney(ctx.userId, lens, "1");
+      const plan = planToolsJourneyWrite(input.origin, existing?.status);
+
+      const { entitiesRouter } = await import("./entities.js");
+      const caller = entitiesRouter.createCaller(
+        ctx as Parameters<typeof entitiesRouter.createCaller>[0]
+      );
+      const recorded: RecordedTool[] = [];
+      for (const tool of input.tools) {
+        if (tool.state !== "wanted") {
+          recorded.push({
+            name: tool.name,
+            key: normalizeToolName(tool.name),
+            state: tool.state,
+            status: "selected",
+            toolRequestId: null,
+          });
+          continue;
+        }
+        const result = await recordToolDemand({
+          caller,
+          userId: ctx.userId,
+          toolName: tool.name,
+          source: input.origin,
+        });
+        recorded.push(toRecordedTool(tool.name, tool.state, result));
+      }
+
+      const journey = plan
+        ? await saveJourney({
+            userId: ctx.userId,
+            lens,
+            status: plan.status,
+            progress: {
+              ...(plan.setCurrentAction ? { currentActionId: "tools" } : {}),
+              values: {
+                tools: input.tools.map((tool) => ({
+                  name: tool.name,
+                  key: normalizeToolName(tool.name),
+                  ...(tool.providerKey
+                    ? { providerKey: tool.providerKey }
+                    : {}),
+                  state: tool.state,
+                })),
+              },
+            },
+          })
+        : serializeJourney(existing);
+
+      return { recorded, journey };
     }),
 });

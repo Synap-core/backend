@@ -53,7 +53,53 @@ export async function renderProposalForPrompt(
           ? `use existing ${String(op.profileSlug)}`
           : `create ${String(op.profileSlug)}`;
         const ref = op.ref ? ` (ref ${String(op.ref)})` : "";
-        lines.push(`- ${label}: "${String(op.title ?? "")}"${ref}`);
+        const project = op.projectRef
+          ? ` in project ${String(op.projectRef)}`
+          : "";
+        lines.push(`- ${label}: "${String(op.title ?? "")}"${ref}${project}`);
+      } else if (op.op === "create_project") {
+        const evidence = op.evidence as
+          | { counted?: number; minimum?: number; belowAgentFloor?: boolean }
+          | undefined;
+        const marker = evidence?.belowAgentFloor
+          ? ` [evidence below agent floor: ${evidence.counted}/${evidence.minimum}]`
+          : "";
+        lines.push(
+          `- create project: "${String(op.name ?? "")}" (ref ${String(op.ref)})${marker}`
+        );
+      } else if (op.op === "create_session") {
+        const edges = [
+          op.parentRef || op.parentSessionId
+            ? `parent ${String(op.parentRef ?? op.parentSessionId)}`
+            : null,
+          ...((op.blockedByRefs as string[] | undefined) ?? []).map(
+            (r) => `blocked by ${r}`
+          ),
+          ...((op.blockedBySessionIds as string[] | undefined) ?? []).map(
+            (r) => `blocked by ${r}`
+          ),
+          op.projectRef || op.projectId
+            ? `project ${String(op.projectRef ?? op.projectId)}`
+            : null,
+          op.subjectRef || op.subjectEntityId
+            ? `about ${String(op.subjectRef ?? op.subjectEntityId)}`
+            : null,
+        ].filter(Boolean);
+        lines.push(
+          `- create session: "${String(op.title ?? op.goal ?? "")}" (ref ${String(op.ref)})${edges.length ? ` — ${edges.join(", ")}` : ""}`
+        );
+      } else if (op.op === "create_document") {
+        const on =
+          op.entityRef || op.entityId
+            ? ` as body of ${String(op.entityRef ?? op.entityId)}`
+            : "";
+        lines.push(
+          `- create document: "${String(op.title ?? "")}" (ref ${String(op.ref)})${on}`
+        );
+      } else if (op.op === "create_link") {
+        lines.push(
+          `- link session ${String(op.fromRef ?? op.fromSessionId)} --[${String(op.type)}]--> ${String(op.toRef ?? op.toSessionId)}`
+        );
       }
     }
   }

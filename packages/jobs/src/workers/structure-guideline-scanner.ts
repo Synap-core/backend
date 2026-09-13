@@ -277,12 +277,23 @@ export interface StructureCorrectionCluster {
   corrections: StructureCorrection[];
 }
 
+/**
+ * THE cluster identity — the ONE derivation both the insert (`data.clusterKey`)
+ * and the dedup lookup (`data->>'clusterKey'`) use.
+ *
+ * A JSON array, never a NUL-joined string: the key is stored in a jsonb column,
+ * and Postgres jsonb REFUSES `\u0000` (22P05 "unsupported Unicode escape
+ * sequence") — the NUL-joined key made every filing throw, swallowed by the
+ * per-cluster catch, so the scanner could never file a proposal. JSON encoding
+ * is also collision-safe by construction (no separator a value could contain),
+ * and keeps an absent ref (`null`) distinct from an empty one.
+ */
 export function structureClusterKey(c: {
   userId: string;
   scopeKind: string;
   scopeRef: string | null;
 }): string {
-  return `${c.userId}\0${c.scopeKind}\0${c.scopeRef ?? ""}`;
+  return JSON.stringify([c.userId, c.scopeKind, c.scopeRef ?? null]);
 }
 
 /** Group corrections per (user, rung, ref). No threshold here — see `qualifies`. */
@@ -570,17 +581,22 @@ const dbDeps: StructureGuidelineScanDeps = {
     }),
 
   async fileProposal(data) {
-    const { proposal } = await insertPendingProposal({
-      workspaceId: data.workspaceId,
-      targetType: "governance",
-      targetId: data.userId,
-      proposalType: STRUCTURE_GUIDELINE_PROPOSAL_TYPE,
-      data: data as unknown as Record<string, unknown>,
-      createdBy: data.userId,
-      proposedByUserId: null,
-      // OWNER FLOOR (0248): the human whose corrections these are decides.
-      subjectUserId: data.userId,
-    });
+    const { proposal } = await insertPendingProposal(
+      {
+        workspaceId: data.workspaceId,
+        targetType: "governance",
+        targetId: data.userId,
+        proposalType: STRUCTURE_GUIDELINE_PROPOSAL_TYPE,
+        data: data as unknown as Record<string, unknown>,
+        createdBy: data.userId,
+        proposedByUserId: null,
+        // OWNER FLOOR (0248): the human whose corrections these are decides.
+        subjectUserId: data.userId,
+      },
+      // The SAME handle the dedup lookup reads through — explicit, so the filing
+      // and its lookup can never be on two different connections.
+      db
+    );
 
     void emitSideEffects({
       subjectType: "proposal",

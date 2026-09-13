@@ -22,10 +22,21 @@ import {
   verifyCpJwtWithTrust,
   enqueueConnectionSync,
   reconcileLiveConnections,
+  readBrokerTrustDiagnostics,
 } from "@synap/api";
 import { config, createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "connectors-router" });
+
+/**
+ * The audience a CP token must carry: PUBLIC_URL without trailing slashes —
+ * the same spelling as `podAudience` in the source-config and federation
+ * doors, so every CP→pod door accepts the same `aud`.
+ */
+function podAudience(): string | null {
+  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+  return value || null;
+}
 
 export const connectorsRouter = new Hono();
 
@@ -54,6 +65,65 @@ async function findConnectionRow(
 }
 
 // ---------------------------------------------------------------------------
+// GET /broker-diagnostics — CP reads WHY this pod's broker is (un)usable
+// ---------------------------------------------------------------------------
+
+/** Same bound as the source-config door: a short-lived assertion, never a standing credential. */
+const MAX_DIAGNOSTICS_ASSERTION_LIFETIME_SECONDS = 300;
+
+const BrokerDiagnosticsClaimsSchema = z
+  .object({
+    type: z.literal("pod_trust_diagnostics"),
+    iss: z.string().min(1),
+    /** The CP subject a relay delivery for this pod would carry. */
+    sub: z.string().min(1),
+    // jsonwebtoken checks `exp` only when present, so both are required here.
+    iat: z.number(),
+    exp: z.number(),
+  })
+  .refine(
+    (c) => c.exp - c.iat <= MAX_DIAGNOSTICS_ASSERTION_LIFETIME_SECONDS,
+    "assertion lifetime too long"
+  );
+
+connectorsRouter.get("/broker-diagnostics", async (c) => {
+  const token = c.req
+    .header("authorization")
+    ?.match(/^Bearer\s+(.+)$/i)?.[1]
+    ?.trim();
+  if (!token) return c.json({ error: "Missing Bearer token" }, 401);
+
+  const podPublicUrl = podAudience();
+  if (!podPublicUrl) {
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  // An unapproved or unknown CP issuer is refused here, so a 401 from this door
+  // is itself the signal that the pod does not trust the CP.
+  const payload = await verifyCpJwtWithTrust<Record<string, unknown>>(token, {
+    pinnedIssuer: config.server.controlPlaneUrl,
+    audience: podPublicUrl,
+  });
+  const claims = BrokerDiagnosticsClaimsSchema.safeParse(payload);
+  if (!payload || !claims.success) {
+    return c.json({ error: "Invalid or expired token" }, 401);
+  }
+
+  try {
+    return c.json(
+      await readBrokerTrustDiagnostics({
+        issuerUrl: claims.data.iss,
+        issuerSubject: claims.data.sub,
+      }),
+      200
+    );
+  } catch (err) {
+    logger.error({ err }, "broker-diagnostics: read failed");
+    return c.json({ error: "Broker diagnostics could not be read" }, 503);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /sync-trigger — CP webhook poke → enqueue the connection sync
 // ---------------------------------------------------------------------------
 
@@ -72,7 +142,7 @@ connectorsRouter.post("/sync-trigger", async (c) => {
     return c.json({ error: "Invalid request body" }, 400);
   }
 
-  const podPublicUrl = process.env.PUBLIC_URL;
+  const podPublicUrl = podAudience();
   if (!podPublicUrl) {
     logger.error(
       "sync-trigger refused: PUBLIC_URL not configured — audience check is mandatory"

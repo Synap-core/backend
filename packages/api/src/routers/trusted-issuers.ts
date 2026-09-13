@@ -5,12 +5,18 @@ import { TrustedIssuerService, db, eq, and } from "@synap/database";
 import { apiKeys, trustedIssuers } from "@synap/database/schema";
 import { trustedIssuerCapabilitiesSchema } from "./trusted-issuer-capabilities.js";
 import { normalizeIssuerUrl } from "../utils/issuer-url-safety.js";
+import { readBrokerTrustDiagnostics } from "../connectors/broker-trust-diagnostics.js";
 
 export const trustedIssuersRouter = router({
   list: podAdminProcedure.query(async () => {
     const svc = new TrustedIssuerService();
     return svc.list();
   }),
+
+  /** Non-secret broker trust diagnostics (same reader as the Hub REST door). */
+  brokerDiagnostics: podAdminProcedure.query(async () =>
+    readBrokerTrustDiagnostics()
+  ),
 
   approve: podAdminProcedure
     .input(

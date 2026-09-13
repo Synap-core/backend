@@ -10,6 +10,7 @@
  * normalizes the shape and emits the canonical wire form.
  */
 
+import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import { z } from "@hono/zod-openapi";
 import { projectKnowledgeProperties } from "@synap/database";
 
@@ -107,15 +108,7 @@ export const CreateEntityRequestSchema = z
         "The proposing agent's rationale for this action, surfaced in the proposal inbox."
       ),
     source: z
-      .enum([
-        "intelligence",
-        "agent",
-        "openwebui-pipeline",
-        "extension",
-        "cli",
-        "n8n",
-        "raycast",
-      ])
+      .enum(HUB_WRITE_SOURCES)
       .optional()
       .describe("Origin signal for downstream attribution."),
     sourceMessageId: z

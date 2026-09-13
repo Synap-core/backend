@@ -63,6 +63,7 @@ import {
   documentVersions,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
 import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import type { Context } from "../../types/context.js";
@@ -94,7 +95,7 @@ const logger = createLogger({ module: "rerun-session" });
 /** No unbounded replay: a rerun re-structures at most this many sources. */
 export const RERUN_MAX_SOURCES = 25;
 /** `capture.structure` text cap; a longer body is replayed as a text file. */
-const STRUCTURE_TEXT_MAX = 8000;
+export const STRUCTURE_TEXT_MAX = 8000;
 /** `capture.structure` html cap. */
 const STRUCTURE_HTML_MAX = 50_000;
 
@@ -526,9 +527,11 @@ export async function rerunSession(args: {
           ? "import"
           : "capture",
       goal: `${resolveActionLabel("rerun", "imperative")} · ${parent.goal}`,
-      // A double-click is ONE rerun: the same parent + mode + user inside the
-      // window reuses the child `ensureIntakeSession` already minted.
-      correlationKey: `rerun:${parent.id}:${args.mode}:${args.userId}:${Math.floor(
+      // A double-click is ONE rerun: the same parent + mode + SCOPE + user inside
+      // the window reuses the child `ensureIntakeSession` already minted. The
+      // scope is part of the key: "rerun only the degraded sources" right after
+      // a full rerun is a different request, never that rerun's child.
+      correlationKey: `rerun:${parent.id}:${args.mode}:${rerunScopeKey(asked ? selectedIds : null)}:${args.userId}:${Math.floor(
         (args.now ?? new Date()).getTime() / RERUN_DEDUPE_WINDOW_MS
       )}`,
       parentSessionId: parent.id,
@@ -755,8 +758,21 @@ async function settle(
   }
 }
 
+/**
+ * The scope part of the rerun dedupe key: `all` for the whole run, else a hash
+ * of the selected source ids (sorted — the order a host sends them in is not a
+ * different request).
+ */
+export function rerunScopeKey(selectedIds: readonly string[] | null): string {
+  if (!selectedIds) return "all";
+  return createHash("sha256")
+    .update([...selectedIds].sort().join(","))
+    .digest("hex")
+    .slice(0, 16);
+}
+
 /** A stored source's row: what it is and where it lives — no body. */
-interface SourceRow {
+export interface SourceRow {
   sourceDocumentId: string;
   door: "capture" | "import";
   degraded: boolean;
@@ -769,7 +785,12 @@ interface SourceRow {
   };
 }
 
-async function loadSourceRows(
+/**
+ * The run's stored source rows (owner-floored, deleted excluded), in manifest
+ * order. Shared by the rerun plan and the room's source list
+ * (`listRunSources`), so `degraded` / `missing` mean the same in both.
+ */
+export async function loadSourceRows(
   database: typeof db,
   userId: string,
   ids: string[]
@@ -987,98 +1008,127 @@ export function importSourceForPath(path: string): "csv" | "json" | "markdown" {
   return "markdown";
 }
 
+/** The caller's ctx, re-pointed at the room a replay files into. */
+function replayContext(
+  userId: string,
+  agentUserId: string | null,
+  callerContext: Context | undefined,
+  a: RerunReplayArgs
+) {
+  return {
+    ...(callerContext ?? { db, authenticated: true, userId }),
+    userId,
+    workspaceId: a.workspaceId,
+    // The room this replay files into (owned: minted by the caller).
+    sessionId: a.childSessionId,
+    ...(agentUserId ? { agentUserId } : {}),
+  };
+}
+
+/**
+ * ONE capture source through the real capture door: `capture.structure` →
+ * `submitCaptureGraph`, filed into `a.childSessionId`. Exported so every door
+ * that re-structures stored text (rerun, "Structure again") replays through the
+ * same path rather than a second pipeline.
+ */
+export async function replayCaptureSource(
+  source: Extract<RerunSource, { door: "capture" }>,
+  a: RerunReplayArgs,
+  who: {
+    userId: string;
+    agentUserId: string | null;
+    callerContext: Context | undefined;
+  }
+): Promise<Omit<RerunItemResult, "sourceDocumentIds" | "door">> {
+  const { userId, agentUserId } = who;
+  const ctx = replayContext(userId, agentUserId, who.callerContext, a);
+  const [{ captureRouter }, toGraph, submit, narrative, { openLink }] =
+    await Promise.all([
+      import("../../routers/capture.js"),
+      import("../capture-agent/capture-structure-to-graph.js"),
+      import("../capture-agent/submit-capture-graph.js"),
+      import("../capture-agent/capture-narrative.js"),
+      import("../../utils/deep-links.js"),
+    ]);
+  const caller = captureRouter.createCaller(
+    ctx as Parameters<typeof captureRouter.createCaller>[0]
+  );
+  const result = await caller.structure({
+    ...source.input,
+    // A replay re-analyzes ON PURPOSE: bypass the already-analyzed ledger
+    // (W4b) — a stored photo/file would otherwise come back not_structured.
+    reanalyze: true,
+    sessionId: a.childSessionId,
+  });
+  const plan =
+    result as unknown as import("../capture-agent/capture-structure-to-graph.js").CaptureStructureLike;
+  if (!toGraph.shouldPersistCapturePlan(plan)) {
+    const r = result as {
+      followUp?: unknown;
+      degraded?: unknown;
+      degradedReason?: unknown;
+    };
+    if (r.followUp) {
+      return {
+        outcome: "needs_input",
+        reason: "the structurer asked a question instead of proposing",
+      };
+    }
+    return {
+      outcome: "not_structured",
+      reason:
+        typeof r.degradedReason === "string"
+          ? r.degradedReason
+          : r.degraded === true
+            ? "degraded"
+            : "nothing to propose",
+    };
+  }
+  const { entities, relations } = toGraph.captureStructureToGraph(plan);
+  const targetWorkspaceId =
+    typeof (result as { targetWorkspaceId?: unknown }).targetWorkspaceId ===
+    "string"
+      ? (result as { targetWorkspaceId: string }).targetWorkspaceId
+      : a.workspaceId;
+  const narrativeSummary = narrative.buildCaptureNarrativeSummary({
+    sourceLabel: resolveActionLabel("rerun", "imperative"),
+    instruction: source.input.text,
+    sourceUrl: source.input.url,
+  });
+  const graph = await submit.submitCaptureGraph({
+    userId,
+    ...(agentUserId ? { agentUserId } : {}),
+    workspaceId: targetWorkspaceId,
+    ...(a.projectId ? { projectId: a.projectId } : {}),
+    sessionId: a.childSessionId,
+    entities,
+    relations,
+    rawSource: {
+      ...(source.input.text ? { rawText: source.input.text } : {}),
+      ...(source.input.url ? { sourceUrl: source.input.url } : {}),
+      idempotencyKey: `${a.idempotencyNamespace}:${source.sourceDocumentId}`,
+    },
+    // undefined only when neither text nor url is known (a file source).
+    summary: narrativeSummary,
+  });
+  return {
+    outcome: graph.writeReceipt.state === "pending" ? "proposed" : "applied",
+    ...(graph.proposalId ? { proposalId: graph.proposalId } : {}),
+    ...(graph.proposalId && graph.writeReceipt.state === "pending"
+      ? { reviewUrl: graph.reviewUrl ?? openLink(graph.proposalId) }
+      : {}),
+  };
+}
+
 /** The real intake doors — the same ones a first run goes through. */
 function defaultReplayers(
   userId: string,
   agentUserId: string | null,
   callerContext: Context | undefined
 ): RerunReplayers {
-  const ctxFor = (a: RerunReplayArgs) => ({
-    ...(callerContext ?? { db, authenticated: true, userId }),
-    userId,
-    workspaceId: a.workspaceId,
-    // The child room this replay files into (owned: minted above).
-    sessionId: a.childSessionId,
-    ...(agentUserId ? { agentUserId } : {}),
-  });
-
   return {
-    capture: async (source, a) => {
-      const [{ captureRouter }, toGraph, submit, narrative, { openLink }] =
-        await Promise.all([
-          import("../../routers/capture.js"),
-          import("../capture-agent/capture-structure-to-graph.js"),
-          import("../capture-agent/submit-capture-graph.js"),
-          import("../capture-agent/capture-narrative.js"),
-          import("../../utils/deep-links.js"),
-        ]);
-      const caller = captureRouter.createCaller(
-        ctxFor(a) as Parameters<typeof captureRouter.createCaller>[0]
-      );
-      const result = await caller.structure({
-        ...source.input,
-        sessionId: a.childSessionId,
-      });
-      const plan =
-        result as unknown as import("../capture-agent/capture-structure-to-graph.js").CaptureStructureLike;
-      if (!toGraph.shouldPersistCapturePlan(plan)) {
-        const r = result as {
-          followUp?: unknown;
-          degraded?: unknown;
-          degradedReason?: unknown;
-        };
-        if (r.followUp) {
-          return {
-            outcome: "needs_input",
-            reason: "the structurer asked a question instead of proposing",
-          };
-        }
-        return {
-          outcome: "not_structured",
-          reason:
-            typeof r.degradedReason === "string"
-              ? r.degradedReason
-              : r.degraded === true
-                ? "degraded"
-                : "nothing to propose",
-        };
-      }
-      const { entities, relations } = toGraph.captureStructureToGraph(plan);
-      const targetWorkspaceId =
-        typeof (result as { targetWorkspaceId?: unknown }).targetWorkspaceId ===
-        "string"
-          ? (result as { targetWorkspaceId: string }).targetWorkspaceId
-          : a.workspaceId;
-      const narrativeSummary = narrative.buildCaptureNarrativeSummary({
-        sourceLabel: resolveActionLabel("rerun", "imperative"),
-        instruction: source.input.text,
-        sourceUrl: source.input.url,
-      });
-      const graph = await submit.submitCaptureGraph({
-        userId,
-        ...(agentUserId ? { agentUserId } : {}),
-        workspaceId: targetWorkspaceId,
-        ...(a.projectId ? { projectId: a.projectId } : {}),
-        sessionId: a.childSessionId,
-        entities,
-        relations,
-        rawSource: {
-          ...(source.input.text ? { rawText: source.input.text } : {}),
-          ...(source.input.url ? { sourceUrl: source.input.url } : {}),
-          idempotencyKey: `${a.idempotencyNamespace}:${source.sourceDocumentId}`,
-        },
-        // undefined only when neither text nor url is known (a file source).
-        summary: narrativeSummary,
-      });
-      return {
-        outcome:
-          graph.writeReceipt.state === "pending" ? "proposed" : "applied",
-        ...(graph.proposalId ? { proposalId: graph.proposalId } : {}),
-        ...(graph.proposalId && graph.writeReceipt.state === "pending"
-          ? { reviewUrl: graph.reviewUrl ?? openLink(graph.proposalId) }
-          : {}),
-      };
-    },
+    capture: (source, a) =>
+      replayCaptureSource(source, a, { userId, agentUserId, callerContext }),
     import: async (items, a) => {
       const { ImportOrchestrator } = await import("../import-orchestrator.js");
       // The caller groups by adapter, so every item here shares this one.
@@ -1086,7 +1136,7 @@ function defaultReplayers(
       const orchestrator = new ImportOrchestrator({
         workspaceId: a.workspaceId,
         userId,
-        trpcCtx: ctxFor(a),
+        trpcCtx: replayContext(userId, agentUserId, callerContext, a),
         sessionId: a.childSessionId,
         projectId: a.projectId,
       });

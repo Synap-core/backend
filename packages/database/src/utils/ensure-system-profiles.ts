@@ -485,6 +485,16 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "uo_validated", required: false, displayOrder: 3 },
     ],
   },
+  // Tool Request — tr_* properties. ONE deduped demand record per tool name
+  // (the natural key is `tr_normalized_key`; `recordToolDemand` is the door).
+  {
+    profileSlug: "tool_request",
+    propertySlugs: [
+      { slug: "tr_normalized_key", required: true, displayOrder: 0 },
+      { slug: "tr_status", required: true, displayOrder: 1 },
+      { slug: "tr_sources", required: false, displayOrder: 2 },
+    ],
+  },
 ];
 
 export interface EnsureSystemProfilesResult {
@@ -582,6 +592,8 @@ export const SYSTEM_PROFILE_SLUGS: ReadonlySet<string> = new Set([
   "knowledge",
   "report",
   "user_observation",
+  // Demand signal — a tool the user uses that Synap cannot connect yet
+  "tool_request",
 ]);
 
 /**
@@ -1338,6 +1350,25 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         constraints: {},
         uiHints: { label: "User confirmed", inputType: "checkbox" },
       },
+      // ── Tool Request (tr_*) ─────────────────────────────────────────────
+      {
+        slug: "tr_normalized_key",
+        valueType: PropertyValueType.STRING,
+        constraints: { minLength: 1, maxLength: 100 },
+        uiHints: { label: "Tool key", inputType: "text", required: true },
+      },
+      {
+        slug: "tr_status",
+        valueType: PropertyValueType.STRING,
+        constraints: { enum: ["wanted", "installable", "connected"] },
+        uiHints: { label: "Status", inputType: "select", required: true },
+      },
+      {
+        slug: "tr_sources",
+        valueType: PropertyValueType.ARRAY,
+        constraints: {},
+        uiHints: { label: "Requested from", inputType: "tags" },
+      },
     ];
 
     for (const propDef of capturePropertyDefs) {
@@ -1586,6 +1617,17 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
             "AI-inferred observations about the user: preferences, habits, working style",
         },
       },
+      // Tool Request — demand for a tool Synap cannot connect yet.
+      {
+        slug: "tool_request",
+        displayName: "Tool Request",
+        uiHints: {
+          icon: "plug-zap",
+          color: "#0EA5E9",
+          description:
+            "A tool you use that Synap cannot connect yet — one record per tool, so Synap knows what to integrate next",
+        },
+      },
     ];
 
     // Coherence tripwire: SYSTEM_PROFILE_SLUGS is the SSOT consumed by template
@@ -1627,6 +1669,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       "knowledge",
       "user_observation",
       "file",
+      "tool_request",
     ]);
 
     // First pass: create all profiles without parent links

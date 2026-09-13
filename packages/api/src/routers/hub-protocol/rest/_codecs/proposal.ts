@@ -194,6 +194,22 @@ export const ProposalBasicSchema = z
     correlationId: z.string().nullable(),
     sessionId: z.string().nullable(),
     agentUserId: z.string().nullable(),
+    materializedIds: z
+      .record(
+        z.string(),
+        z.object({
+          op: z.string(),
+          id: z.string(),
+          linked: z.literal(true).optional(),
+          revertedAt: z.string().optional(),
+        })
+      )
+      .optional()
+      .describe(
+        "Applied composites / plans only: op ref → the real id that op produced " +
+          "(`linked` = an existing row it reused; `revertedAt` = undone since). " +
+          "Absent until the proposal applies — refs never map to guessed ids."
+      ),
     summary: z
       .string()
       .optional()
@@ -216,6 +232,52 @@ export type ProposalBasic = z.infer<typeof ProposalBasicSchema>;
  * (`data.quality.summary` / `data.summary`). Absent ⇒ the field is omitted; we
  * never emit an empty string and never fabricate a sentence.
  */
+/** Upper bound on `materializedIds` entries on a BASIC row — a list stays bounded. */
+export const PROPOSAL_MATERIALIZED_IDS_MAX = 200;
+
+const BY_OP_ID_KEYS = [
+  "entityId",
+  "sessionId",
+  "projectId",
+  "documentId",
+  "relationId",
+  "linkId",
+  "skillId",
+  "automationId",
+  "ruleId",
+] as const;
+
+/**
+ * ref → the REAL id each op of an applied composite produced, lifted from the
+ * record the materializer stamps (`data.materialized.byOp`). This is how an
+ * agent that filed a plan by REF reads the ids once it applies: before
+ * approval there is no record, so the key is absent — never a guessed id.
+ * Bounded by {@link PROPOSAL_MATERIALIZED_IDS_MAX}.
+ */
+function materializedIdsOf(
+  data: Record<string, unknown>
+): ProposalBasic["materializedIds"] | undefined {
+  const byOp = (data.materialized as { byOp?: unknown } | undefined)?.byOp;
+  if (!byOp || typeof byOp !== "object") return undefined;
+  const out: NonNullable<ProposalBasic["materializedIds"]> = {};
+  let count = 0;
+  for (const [ref, entry] of Object.entries(byOp as Record<string, unknown>)) {
+    if (count >= PROPOSAL_MATERIALIZED_IDS_MAX) break;
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const idKey = BY_OP_ID_KEYS.find((k) => typeof e[k] === "string");
+    if (!idKey || typeof e.op !== "string") continue;
+    out[ref] = {
+      op: e.op,
+      id: e[idKey] as string,
+      ...(e.linked === true || e.preExisting === true ? { linked: true } : {}),
+      ...(typeof e.revertedAt === "string" ? { revertedAt: e.revertedAt } : {}),
+    };
+    count++;
+  }
+  return count > 0 ? out : undefined;
+}
+
 export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
   const data = (row.data ?? {}) as Record<string, unknown>;
   const quality = (data.quality ?? {}) as Record<string, unknown>;
@@ -224,6 +286,7 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
     typeof raw === "string" && raw.length > 0
       ? raw.slice(0, PROPOSAL_SUMMARY_MAX)
       : undefined;
+  const materializedIds = materializedIdsOf(data);
   return {
     id: row.id as string,
     proposalType: row.proposalType as string,
@@ -236,6 +299,7 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
     sessionId: (row.sessionId ?? null) as string | null,
     agentUserId: (row.agentUserId ?? null) as string | null,
     ...(summary ? { summary } : {}),
+    ...(materializedIds ? { materializedIds } : {}),
     // Class + lifetime travel with the BASIC row: the ephemeral countdown is a
     // list-row affordance ("this expires in 6h"), and a caller that can only
     // see it after fetching the full payload cannot triage a queue.

@@ -543,6 +543,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0136_focus_sessions_project.sql",
   },
 
+  // focus_sessions — short optional name, separate from goal (0262)
+  {
+    table: "focus_sessions",
+    column: "title",
+    addedBy: "0262_focus_sessions_title.sql",
+  },
+
   // The Process Plane — typed tier discriminators (0240)
   {
     table: "focus_sessions",

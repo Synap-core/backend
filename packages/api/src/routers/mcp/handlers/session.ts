@@ -18,6 +18,7 @@ import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
 import type { ExpectedOutput } from "@synap/playbooks";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
+import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
   SESSION_KINDS,
   attachSessionKind,
@@ -124,6 +125,30 @@ export const sessionHandlers: McpHandlerMap = {
           "parentSessionId must be a session UUID (the id of a session you own that you are pushing FROM).",
       });
     }
+    // Same advisory-schema reason: a title is ONE line, and the blockers are
+    // session handles — refused here in words, not as a varchar or uuid error.
+    if (
+      args.title !== undefined &&
+      args.title !== null &&
+      (typeof args.title !== "string" || args.title.length > SESSION_TITLE_MAX)
+    ) {
+      return ok({
+        error: `title must be a string of at most ${SESSION_TITLE_MAX} characters — ONE line naming the session; put the outcome in goal.`,
+      });
+    }
+    const blockedByArg = args.blockedBySessionIds;
+    if (
+      blockedByArg !== undefined &&
+      blockedByArg !== null &&
+      (!Array.isArray(blockedByArg) ||
+        blockedByArg.length > 20 ||
+        !blockedByArg.every((id) => typeof id === "string" && UUID_RE.test(id)))
+    ) {
+      return ok({
+        error:
+          "blockedBySessionIds must be an array of at most 20 session UUIDs — sessions you own that this one waits on.",
+      });
+    }
     const suspendedIntentArg = args.suspendedIntent;
     if (
       suspendedIntentArg !== undefined &&
@@ -149,6 +174,7 @@ export const sessionHandlers: McpHandlerMap = {
       workspaceId: args.workspaceId as string | undefined,
       projectId: args.projectId as string | undefined,
       subjectEntityId: args.subjectEntityId as string | undefined,
+      title: typeof args.title === "string" ? args.title : null,
       goal: args.goal as string,
       agentUserId,
       correlationId: args.correlationId as string | undefined,
@@ -162,6 +188,10 @@ export const sessionHandlers: McpHandlerMap = {
       expectedOutputs: slots.expectedOutputs,
       parentSessionId: args.parentSessionId as string | undefined,
       suspendedIntent: args.suspendedIntent as string | undefined,
+      // Validated above (array of UUIDs), so this narrows nothing unchecked.
+      blockedBySessionIds: Array.isArray(blockedByArg)
+        ? (blockedByArg as string[])
+        : [],
     });
     return ok(result);
   },
@@ -370,8 +400,13 @@ export const sessionHandlers: McpHandlerMap = {
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE
     // projection, shared with the tRPC `focusSessions.get`.
+    // The continuation packet — the SAME projection tRPC `focusSessions.get`
+    // returns (founder decision D4: always included on a session read).
+    const { projectContinuationPacket } =
+      await import("../../../services/focus-sessions/continuation-packet.js");
     return ok({
       session: await withParentSessionId(session),
+      continuation: await projectContinuationPacket(session, { userId }),
       ...(ambient?.ambiguous
         ? {
             inferred: true,
@@ -494,6 +529,13 @@ export const sessionHandlers: McpHandlerMap = {
       sessionId: args.sessionId as string,
       userId,
       agentUserId,
+      // NARROWED like `subjectEntityId` below: `null` CLEARS, a string renames,
+      // anything else leaves the title alone. The length bound is the service's.
+      ...(args.title === null
+        ? { title: null }
+        : typeof args.title === "string"
+          ? { title: args.title }
+          : {}),
       goal: args.goal as string | undefined,
       status: args.status as "active" | "paused" | undefined,
       progress: args.progress as number | undefined,

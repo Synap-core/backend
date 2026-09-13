@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { storage } from "@synap/storage";
@@ -345,6 +346,9 @@ export const viewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Decode an agent's XML-escaped name once, at the one create door —
+      // see `entities/create.ts` for the full rationale.
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const correlationId = randomUUID();
       const { randomUUID: genId } = await import("crypto");
       const reservedViewId = input.id ?? genId();
@@ -1476,6 +1480,7 @@ export const viewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      if (input.name) input.name = decodeHtmlEntities(input.name);
       const view = await db.query.views.findFirst({
         where: eq(views.id, input.id),
       });

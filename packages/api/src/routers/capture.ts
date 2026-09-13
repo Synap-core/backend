@@ -25,6 +25,16 @@ import {
   structureSourceKind,
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
+import {
+  KNOWN_SOURCE_HASHES_MAX,
+  PHOTO_RUN_MAX_ITEMS,
+  countRunFileSources,
+  fileSha256Of,
+  findKnownSourceHashes,
+  findRunStagedSource,
+  runFullMessage,
+} from "../services/intake/known-source-hashes.js";
+import { gateAndAttachStagedSourceBlob } from "../utils/store-entity-source-blob.js";
 import { loadRouteSuggestions } from "../services/routing/load-route-suggestions.js";
 import {
   recordSessionRunManifest,
@@ -912,6 +922,30 @@ export const captureRouter = router({
       };
     }),
 
+  // ── knownSourceHashes (the "already imported" ledger) ───────────────────
+  //
+  // Which of these file hashes (plain sha256 of the bytes) has the CALLER
+  // already brought in, and into which run. Owner-floored: another user's
+  // import of the same bytes reads as unknown. A phone asks this before
+  // uploading a camera-roll selection, so no photo is analyzed twice.
+  knownSourceHashes: podProcedure
+    .input(
+      z.object({
+        hashes: z
+          .array(z.string().regex(/^[0-9a-fA-F]{64}$/))
+          .max(KNOWN_SOURCE_HASHES_MAX),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const known = await findKnownSourceHashes({
+        database: await getDb(),
+        userId,
+        hashes: input.hashes,
+      });
+      return { known, maxItemsPerRun: PHOTO_RUN_MAX_ITEMS };
+    }),
+
   // ── structure (multi-entity extraction + dedup) ────────────────────────
 
   /**
@@ -978,6 +1012,34 @@ export const captureRouter = router({
          * "both" (default) = run both and keep the MAX score per candidate.
          */
         dedupMode: z.enum(["title", "semantic", "both"]).default("both"),
+        /**
+         * Keep the file's ORIGINAL bytes as the run's source. Absent → photos
+         * kept, other files keep their extracted text (`defaultKeepOriginal`).
+         * `false` = "extract text only".
+         */
+        keepRaw: z.boolean().optional(),
+        /**
+         * Analyze a file even when its bytes were already analyzed for this
+         * user. Without it such a file answers `alreadyImported` and no IS
+         * call is made (the "already imported" ledger). Rerun sets it.
+         */
+        reanalyze: z.boolean().optional(),
+        /**
+         * sha256 of the ORIGINAL asset when the client re-encoded before
+         * sending (relay: HEIC→JPEG, 2048px). A second ledger key, so a
+         * camera-roll scan recognises the photo without re-encoding it.
+         */
+        sourceSha256: z
+          .string()
+          .regex(/^[0-9a-fA-F]{64}$/)
+          .optional(),
+        /**
+         * This file is ONE item of a multi-item batch. Bulk vision takes the
+         * `vision_bulk` spend lane (sheds before background work); a single
+         * interactive photo stays on the capture ordering. A call into a run
+         * that already holds a file source is bulk whatever this says.
+         */
+        bulk: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1001,6 +1063,88 @@ export const captureRouter = router({
       // the repo query falls back to SYSTEM + USER-scope profiles only — exactly
       // what a workspace-less user should see.
       const database = await getDb();
+
+      // ── The "already imported" ledger + the per-run file cap ─────────────
+      // BEFORE any IS call: re-sending bytes this user already analyzed must
+      // cost nothing, and a run over its cap must be told to split, never
+      // silently stop. A degraded copy is not "analyzed" — re-sending it
+      // re-analyzes. `reanalyze` (rerun) bypasses the ledger, never the cap.
+      // THE one bulk derivation: the caller's flag, or a run already holding a
+      // file source. Decides the IS vision spend lane below.
+      let visionBulk = input.bulk === true;
+      if (input.file) {
+        const fileSha256 = fileSha256Of(
+          Buffer.from(
+            input.file.content,
+            input.file.encoding === "utf8" ? "utf8" : "base64"
+          )
+        );
+        const sourceSha256 = input.sourceSha256?.toLowerCase();
+        if (!input.reanalyze) {
+          // Scoped: the SAME workspace this capture lands in, and a run whose
+          // work still stands. A photo imported into another workspace, or into
+          // a run that was undone (or filed nothing), is analyzed afresh.
+          const known = await findKnownSourceHashes({
+            database,
+            userId,
+            hashes: sourceSha256 ? [fileSha256, sourceSha256] : [fileSha256],
+            workspaceId: workspaceId ?? null,
+          });
+          const analyzed = known.find(
+            (k) => k.status === "analyzed" && k.inEffect
+          );
+          if (analyzed) {
+            // Same shape as a plan with nothing in it, plus where it lives.
+            const alreadyImportedAnswer = {
+              proposals: [] as ReturnType<
+                typeof buildDegradedCaptureFallback
+              >["proposals"],
+              relations: [] as ReturnType<
+                typeof buildDegradedCaptureFallback
+              >["relations"],
+              followUp: null as string | StructuredFollowUp | null,
+              targetWorkspaceId: null as string | null,
+              targetProjectId: null as string | null,
+              formSpec: null,
+              dedupCandidates: {} as Record<string, DedupCandidate[]>,
+              degraded: false as const,
+              sessionId: analyzed.sessionId,
+              alreadyImported: {
+                sessionId: analyzed.sessionId,
+                documentId: analyzed.documentId,
+                fileSha256,
+              },
+            };
+            return alreadyImportedAnswer;
+          }
+        }
+        const runSessionId = await resolveVerifiedSessionId(
+          userId,
+          ctx.sessionId,
+          input.sessionId
+        );
+        if (runSessionId) {
+          const run = await countRunFileSources({
+            database,
+            userId,
+            sessionId: runSessionId,
+            fileSha256,
+            ...(sourceSha256 ? { sourceSha256 } : {}),
+          });
+          if (run.count > 0) visionBulk = true;
+          // Read-then-stage, not locked: two PARALLEL uploads into one run can
+          // both pass at count 24 and land 26. Relay and desktop send one file
+          // at a time, so the cap holds for them; a session-row lock across the
+          // staging write (in `finishIntake`, after the IS call) is a follow-up.
+          if (!run.containsHash && run.count >= PHOTO_RUN_MAX_ITEMS) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: runFullMessage(run.count),
+            });
+          }
+        }
+      }
+
       const profileService = new ProfileResolutionService(database);
       const accessibleProfiles = await profileService.getAccessibleProfiles(
         userId,
@@ -1239,8 +1383,14 @@ export const captureRouter = router({
         const r = result as {
           degraded?: unknown;
           degradedReason?: unknown;
-          extraction?: { text?: unknown; textTruncated?: unknown };
+          extraction?: {
+            text?: unknown;
+            textTruncated?: unknown;
+            extractor?: unknown;
+            metadata?: { visionModel?: unknown; visionProvider?: unknown };
+          };
         };
+        const str = (v: unknown) => (typeof v === "string" ? v : null);
         const echo = await recordStructureIntake({
           database,
           userId,
@@ -1258,7 +1408,20 @@ export const captureRouter = router({
             url: input.url,
             html: input.html,
             file: input.file,
+            ...(input.file && input.sourceSha256
+              ? { sourceSha256: input.sourceSha256 }
+              : {}),
           },
+          ...(input.keepRaw !== undefined ? { keepRaw: input.keepRaw } : {}),
+          ...(input.file && r.extraction
+            ? {
+                extraction: {
+                  extractor: str(r.extraction.extractor),
+                  model: str(r.extraction.metadata?.visionModel),
+                  provider: str(r.extraction.metadata?.visionProvider),
+                },
+              }
+            : {}),
           ...(typeof r.extraction?.text === "string"
             ? {
                 extractedText: r.extraction.text,
@@ -1371,6 +1534,9 @@ export const captureRouter = router({
           routingMemory,
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },
+        // Which IS spend lane a photo's vision call reserves on (`visionBulk`
+        // above). Rides in the POST body; an older IS ignores it.
+        visionLane: visionBulk ? ("bulk" as const) : ("single" as const),
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
@@ -1959,6 +2125,12 @@ export const captureRouter = router({
          * the ORIGINAL source blob is stored and linked to the primary created
          * entity. Default (absent/false) = today's extract-and-discard behavior:
          * the binary is dropped and only the extracted entities are kept.
+         *
+         * EXCEPTION (decision C): when the run ALREADY holds this file's
+         * original bytes (`capture.structure` kept them — found by
+         * `sourceDocumentId` or by hash), ABSENT means "link that source": it
+         * costs no upload. Only an explicit `false` withholds the link. So a
+         * hub/MCP caller that omits keepRaw on a photo run gets the link too.
          */
         keepRaw: z.boolean().optional(),
         /**
@@ -2062,6 +2234,19 @@ export const captureRouter = router({
          * write, byte-identical for every existing caller.
          */
         propose: z.boolean().optional(),
+        /**
+         * The run source `capture.structure` staged for this capture (its
+         * `intake.sourceDocumentIds`). When the run holds that file's original
+         * bytes, execute LINKS it to the created entity instead of uploading a
+         * second copy — so a photo client need not re-send `file`. Checked
+         * against the owner and the run; a foreign id reads as none.
+         */
+        sourceDocumentId: z.string().uuid().optional(),
+        /** sha256 of the ORIGINAL asset — the other way to find the run source. */
+        sourceSha256: z
+          .string()
+          .regex(/^[0-9a-fA-F]{64}$/)
+          .optional(),
         /**
          * The existing entity this capture updates (the anchor). Validated for a
          * clear error in propose mode; routing keys off each entity op's
@@ -2204,6 +2389,43 @@ export const captureRouter = router({
             : {}),
         },
       };
+      // ── The run's staged source (decision C) ─────────────────────────────
+      // `capture.structure` already kept this file's original bytes as the
+      // run's source. Link THAT document as provenance rather than uploading a
+      // second copy; the upload below is only the fallback for a capture whose
+      // run holds no such source (execute without structure). An explicit
+      // `keepRaw: false` still means "no file on the entity". A failed lookup
+      // is logged and falls back to the upload — a duplicate, never a lost file.
+      let attachRunSource: StagedSourceBlob | null = null;
+      if (
+        runSessionId &&
+        input.keepRaw !== false &&
+        (input.sourceDocumentId || input.sourceSha256 || input.file)
+      ) {
+        try {
+          attachRunSource = await findRunStagedSource({
+            database,
+            userId,
+            sessionId: runSessionId,
+            ...(input.sourceDocumentId
+              ? { sourceDocumentId: input.sourceDocumentId }
+              : {}),
+            ...(input.sourceSha256 ? { sourceSha256: input.sourceSha256 } : {}),
+            ...(input.file
+              ? {
+                  fileSha256: fileSha256Of(
+                    Buffer.from(input.file.content, "base64")
+                  ),
+                }
+              : {}),
+          });
+        } catch (err) {
+          logger.error(
+            { err, userId, sessionId: runSessionId },
+            "capture.execute: run source lookup failed — falling back to uploading the file"
+          );
+        }
+      }
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
@@ -2354,8 +2576,11 @@ export const captureRouter = router({
         //
         // Best-effort, exactly like the direct path: a storage hiccup must never
         // cost the user their proposals.
-        let stagedCaptureFile: StagedSourceBlob | undefined;
-        if (input.keepRaw && input.file) {
+        // The run's own source when it has one (no second upload); its discard
+        // on reject/deny is a no-op — `discardSourceBlob` keeps intake sources.
+        let stagedCaptureFile: StagedSourceBlob | undefined =
+          attachRunSource ?? undefined;
+        if (!stagedCaptureFile && input.keepRaw && input.file) {
           try {
             stagedCaptureFile = await stageSourceBlob({
               database,
@@ -3556,7 +3781,7 @@ export const captureRouter = router({
         | { status: "denied"; entityId: string; reason: string }
         | { status: "failed"; entityId: string }
         | undefined;
-      if (input.keepRaw && input.file) {
+      if ((input.keepRaw && input.file) || attachRunSource) {
         // Primary = first freshly created (non-linked) entity, else first overall.
         const primary =
           created.find((c) => !c.linked) ?? created[0] ?? undefined;
@@ -3567,26 +3792,36 @@ export const captureRouter = router({
             // Still best-effort: never fail the capture on a storage hiccup.
             // Zod on file.content still caps ~5MB base64 for this path; bulk
             // audio should use the Hub multipart source-file door instead.
-            const buffer = Buffer.from(input.file.content, "base64");
-            const stored = await storeEntitySourceBlob({
-              database,
-              userId,
-              entityId: primary.entityId,
-              buffer,
-              mimeType: input.file.mimeType,
-              filename: input.file.filename,
-              workspaceId: workspaceId ?? null,
-              // Persist the caller's already-extracted text as the stored
-              // document's v1 body, so the kept binary is visible to the
-              // embedding worker / retrieval join / Typesense instead of being
-              // an empty document beside an entity.
-              ...(input.file.extractedText
-                ? { extractedText: input.file.extractedText }
-                : {}),
-              ...(input.file.extractedTextTruncated
-                ? { extractedTextTruncated: true }
-                : {}),
-            });
+            const stored = attachRunSource
+              ? // The run already holds these bytes: link, don't re-upload.
+                await gateAndAttachStagedSourceBlob({
+                  database,
+                  userId,
+                  entityId: primary.entityId,
+                  staged: attachRunSource,
+                  workspaceId: workspaceId ?? null,
+                  correlationId: captureId,
+                  ...(runSessionId ? { sessionId: runSessionId } : {}),
+                })
+              : await storeEntitySourceBlob({
+                  database,
+                  userId,
+                  entityId: primary.entityId,
+                  buffer: Buffer.from(input.file!.content, "base64"),
+                  mimeType: input.file!.mimeType,
+                  filename: input.file!.filename,
+                  workspaceId: workspaceId ?? null,
+                  // Persist the caller's already-extracted text as the stored
+                  // document's v1 body, so the kept binary is visible to the
+                  // embedding worker / retrieval join / Typesense instead of being
+                  // an empty document beside an entity.
+                  ...(input.file!.extractedText
+                    ? { extractedText: input.file!.extractedText }
+                    : {}),
+                  ...(input.file!.extractedTextTruncated
+                    ? { extractedTextTruncated: true }
+                    : {}),
+                });
             sourceFile =
               stored.status === "proposed"
                 ? {

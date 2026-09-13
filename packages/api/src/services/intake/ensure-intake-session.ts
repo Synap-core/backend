@@ -79,6 +79,12 @@ export interface EnsureIntakeSessionInput {
    * parent` (openRunSession's edge). Ignored for a provided session.
    */
   parentSessionId?: string | null;
+  /**
+   * The entity this run is ABOUT ("Structure again" on a note): a MINTED
+   * session records it as `subject_entity_id` (openRunSession's column, which
+   * also feeds the project placement ladder). Ignored for a provided session.
+   */
+  subjectEntityId?: string | null;
 }
 
 interface RequestEcho {
@@ -194,6 +200,9 @@ export async function ensureIntakeSession(
       origin: input.agentUserId ? "agent" : "human",
       ...(input.parentSessionId
         ? { parentSessionId: input.parentSessionId }
+        : {}),
+      ...(input.subjectEntityId
+        ? { subjectEntityId: input.subjectEntityId }
         : {}),
       source: `intake:${input.door}`,
       extraMetadata: {

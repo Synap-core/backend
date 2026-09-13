@@ -8,7 +8,9 @@
  *   - Each op is idempotent; the `_conversions` ledger records applied op keys
  *     (`error IS NULL AND dry_run = false`) and the engine skips them next time.
  *   - `dryRun` (the default at the CLI) computes per-op counts WITHOUT writing
- *     anything — not to the target tables and not to the ledger.
+ *     anything — not to the target tables and not to the ledger. For mergeInto
+ *     and dedupeProfileRows the dry run IS the apply, run in a transaction that
+ *     always rolls back (planByRollback), and it also returns the field plan.
  *   - A real run records one ledger row per op (with its counts). If an op
  *     throws, the failure is recorded (`error` set) in its own statement, the
  *     run stops at that op, and the summary flags it so the CLI exits non-zero.
@@ -37,6 +39,47 @@ import {
   buildValueMapJson,
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
+import { foldPropertyKey } from "../services/did-you-mean.js";
+
+/**
+ * One FIELD-level line of what a repoint does (or did) to a property def or a
+ * profile→def link. Produced by the SAME statements the apply runs (their
+ * RETURNING rows + the decisions that feed them) — a dry run executes the apply
+ * inside a transaction that always rolls back, so the plan cannot drift from
+ * what `--apply` will do.
+ *
+ *   - `moved`             def/link now on the canonical row, lens unchanged.
+ *   - `restamped`         a BASE def of a workspace-scoped source row, moved as
+ *                         THAT workspace's overlay (otherwise it would go pod-wide).
+ *   - `collision-skipped` a canonical field visible in the same lens folds to the
+ *                         same key (`foldPropertyKey`) — NOT moved; stays on the
+ *                         drained row, so values under this key lose their schema.
+ *   - `ambiguous-skipped` two source defs fold to the same key in overlapping
+ *                         lenses — neither moved (no winner is derivable).
+ *   - `widen-skipped`     a workspace-scoped source row's link to a def that is
+ *                         visible pod-wide — moving it would add the field to the
+ *                         canonical row in EVERY workspace. NOT moved.
+ */
+export interface FieldPlanRow {
+  table: "property_defs" | "profile_properties";
+  slug: string;
+  /** The source profile row the def/link sits on. */
+  fromProfileId: string;
+  /** The def's workspace lens before the op (NULL = base / pod-wide). */
+  fromWorkspaceId: string | null;
+  /** The def's workspace lens after the op (for skipped rows: unchanged). */
+  toWorkspaceId: string | null;
+  action:
+    | "moved"
+    | "restamped"
+    | "collision-skipped"
+    | "ambiguous-skipped"
+    | "widen-skipped";
+  /** The canonical (or sibling) slug a skipped row folds together with. */
+  collidesWith?: string;
+  /** Skipped rows only: live entities on the source row whose properties hold `slug`. */
+  entitiesWithKey?: number;
+}
 
 /** Per-op tally. Every field optional — an op reports only what it touched. */
 export interface OpCounts {
@@ -87,6 +130,12 @@ export interface OpResult {
    * `/status/release` pending list) never re-derives it from the op type.
    */
   deferReason?: "destructive-tail" | "defer-at-boot";
+  /**
+   * mergeInto / dedupeProfileRows only: the field-level plan (dry run) or record
+   * (apply) of every property def and link the op moves, restamps or leaves
+   * behind. See `FieldPlanRow`. Not ledgered — the ledger stores counts only.
+   */
+  planDetail?: FieldPlanRow[];
 }
 
 export interface RunOptions {
@@ -311,17 +360,30 @@ export async function runConversions(
 
     try {
       if (options.dryRun) {
-        const counts = await computeCounts(sql, op, options);
-        results.push({
-          opKey: op.opKey,
-          op: op.op,
-          slug,
-          status: "dry-run",
-          counts,
-        });
+        if (opCarriesFieldPlan(op)) {
+          const { counts, planDetail } = await planByRollback(sql, op, options);
+          results.push({
+            opKey: op.opKey,
+            op: op.op,
+            slug,
+            status: "dry-run",
+            counts,
+            planDetail,
+          });
+        } else {
+          const counts = await computeCounts(sql, op, options);
+          results.push({
+            opKey: op.opKey,
+            op: op.op,
+            slug,
+            status: "dry-run",
+            counts,
+          });
+        }
       } else {
+        const plan: FieldPlanRow[] = [];
         const counts = await sql.begin(async (tx) => {
-          const c = await applyOp(tx as unknown as Sql, op, options);
+          const c = await applyOp(tx as unknown as Sql, op, options, plan);
           await recordLedger(tx as unknown as Sql, op.opKey, c, null);
           return c;
         });
@@ -332,6 +394,7 @@ export async function runConversions(
           slug,
           status: isNoop ? "noop" : "applied",
           counts: counts as OpCounts,
+          ...(opCarriesFieldPlan(op) ? { planDetail: plan } : {}),
         });
       }
     } catch (err: any) {
@@ -392,7 +455,8 @@ async function recordLedger(
 async function applyOp(
   tx: Sql,
   op: ConversionOp,
-  options: RunOptions
+  options: RunOptions,
+  plan: FieldPlanRow[] = []
 ): Promise<OpCounts> {
   switch (op.op) {
     case "declareKind":
@@ -404,9 +468,9 @@ async function applyOp(
     case "convertToKind":
       return applyConvertToKind(tx, op);
     case "mergeInto":
-      return applyMergeInto(tx, op, options.destructiveTail);
+      return applyMergeInto(tx, op, options.destructiveTail, plan);
     case "dedupeProfileRows":
-      return applyDedupeProfileRows(tx, op, options.destructiveTail);
+      return applyDedupeProfileRows(tx, op, options.destructiveTail, plan);
     case "reconcileEntityScope":
       return applyReconcileEntityScope(tx, op);
     case "remapPropertyValues":
@@ -776,7 +840,8 @@ async function countStrandedSourceRows(
 async function applyMergeIntoCrossScope(
   tx: Sql,
   op: MergeIntoOp,
-  destructiveTail: boolean
+  destructiveTail: boolean,
+  plan: FieldPlanRow[]
 ): Promise<OpCounts> {
   const counts: OpCounts = {
     entitiesRepointed: 0,
@@ -804,39 +869,23 @@ async function applyMergeIntoCrossScope(
   }
 
   for (const from of op.fromSlugs) {
-    // profile_properties first (its property_def_id must still resolve), then
-    // property_defs, then entities, then facets, then views. Each collision-skips.
-    const pp = await tx`
-      UPDATE profile_properties pp
-      SET profile_id = ${canonicalId}
-      FROM profiles src
-      WHERE pp.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
-        AND NOT EXISTS (
-          SELECT 1 FROM profile_properties pp2
-          WHERE pp2.profile_id = ${canonicalId}
-            AND pp2.property_def_id = pp.property_def_id
-        )
+    // property_defs + profile_properties (lens re-stamped, fold-aware collision
+    // guard — see repointFieldsOntoCanonical), then entities, then facets, then
+    // views.
+    const sources = await tx<
+      Array<{ id: string; workspace_id: string | null }>
+    >`
+      SELECT id, workspace_id FROM profiles
+      WHERE slug = ${from} AND id <> ${canonicalId}
     `;
-    counts.profilePropertiesRepointed! += pp.count ?? 0;
-
-    // A BASE def (workspace_id NULL) on a WORKSPACE-scoped source row was only
-    // ever visible inside that workspace. Landing it as a base def on the
-    // pod-wide row would leak it into every OTHER workspace's `client`/`lead`,
-    // so re-stamp it as that workspace's OVERLAY. An existing overlay keeps its
-    // own workspace_id. The collision guard compares the POST-move lens.
-    const pd = await tx`
-      UPDATE property_defs pd
-      SET profile_id = ${canonicalId},
-          workspace_id = COALESCE(pd.workspace_id, src.workspace_id)
-      FROM profiles src
-      WHERE pd.profile_id = src.id AND src.slug = ${from} AND src.id <> ${canonicalId}
-        AND NOT EXISTS (
-          SELECT 1 FROM property_defs pd2
-          WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
-            AND pd2.workspace_id IS NOT DISTINCT FROM COALESCE(pd.workspace_id, src.workspace_id)
-        )
-    `;
-    counts.propertyDefsRepointed! += pd.count ?? 0;
+    const fields = await repointFieldsOntoCanonical(tx, {
+      canonicalId,
+      sources,
+      restampBaseDefs: true,
+      plan,
+    });
+    counts.propertyDefsRepointed! += fields.defsMoved;
+    counts.profilePropertiesRepointed! += fields.linksMoved;
 
     const ent = await tx`
       UPDATE entities e
@@ -896,10 +945,11 @@ async function applyMergeIntoCrossScope(
 async function applyMergeInto(
   tx: Sql,
   op: MergeIntoOp,
-  destructiveTail: boolean
+  destructiveTail: boolean,
+  plan: FieldPlanRow[]
 ): Promise<OpCounts> {
   if (op.intoScope === "shared") {
-    return applyMergeIntoCrossScope(tx, op, destructiveTail);
+    return applyMergeIntoCrossScope(tx, op, destructiveTail, plan);
   }
 
   const counts: OpCounts = {
@@ -911,36 +961,37 @@ async function applyMergeInto(
   };
 
   for (const from of op.fromSlugs) {
-    // profile_properties first (its property_def_id must still resolve), then
-    // property_defs, then entities, then views. Each collision-skips.
-    const pp = await tx`
-      UPDATE profile_properties pp
-      SET profile_id = k.id
+    // property_defs + profile_properties first, then entities, then views.
+    // Same-scope: the canonical `k` shares the source's scope AND workspace, so
+    // a def keeps its own lens (no re-stamp) — the fold-aware guard still holds.
+    const pairs = await tx<
+      Array<{ id: string; workspace_id: string | null; k_id: string }>
+    >`
+      SELECT src.id, src.workspace_id, k.id AS k_id
       FROM profiles src
       JOIN profiles k ON k.slug = ${op.intoSlug} AND k.scope = src.scope
         AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
-      WHERE pp.profile_id = src.id AND src.slug = ${from} AND src.id <> k.id
-        AND NOT EXISTS (
-          SELECT 1 FROM profile_properties pp2
-          WHERE pp2.profile_id = k.id AND pp2.property_def_id = pp.property_def_id
-        )
+      WHERE src.slug = ${from} AND src.id <> k.id
     `;
-    counts.profilePropertiesRepointed! += pp.count ?? 0;
-
-    const pd = await tx`
-      UPDATE property_defs pd
-      SET profile_id = k.id
-      FROM profiles src
-      JOIN profiles k ON k.slug = ${op.intoSlug} AND k.scope = src.scope
-        AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
-      WHERE pd.profile_id = src.id AND src.slug = ${from} AND src.id <> k.id
-        AND NOT EXISTS (
-          SELECT 1 FROM property_defs pd2
-          WHERE pd2.profile_id = k.id AND pd2.slug = pd.slug
-            AND pd2.workspace_id IS NOT DISTINCT FROM pd.workspace_id
-        )
-    `;
-    counts.propertyDefsRepointed! += pd.count ?? 0;
+    const byCanonical = new Map<
+      string,
+      Array<{ id: string; workspace_id: string | null }>
+    >();
+    for (const p of pairs) {
+      const list = byCanonical.get(p.k_id) ?? [];
+      list.push({ id: p.id, workspace_id: p.workspace_id });
+      byCanonical.set(p.k_id, list);
+    }
+    for (const [kId, sources] of byCanonical) {
+      const fields = await repointFieldsOntoCanonical(tx, {
+        canonicalId: kId,
+        sources,
+        restampBaseDefs: false,
+        plan,
+      });
+      counts.propertyDefsRepointed! += fields.defsMoved;
+      counts.profilePropertiesRepointed! += fields.linksMoved;
+    }
 
     const ent = await tx`
       UPDATE entities e
@@ -982,6 +1033,314 @@ async function applyMergeInto(
   return counts;
 }
 
+/** Two lenses overlap unless both are workspace-stamped and differ (NULL = every workspace). */
+function lensesOverlap(a: string | null, b: string | null): boolean {
+  return a === null || b === null || a === b;
+}
+
+async function countEntitiesWithKey(
+  tx: Sql,
+  profileId: string,
+  key: string
+): Promise<number> {
+  const r = await tx<Array<{ n: number }>>`
+    SELECT COUNT(*)::int AS n FROM entities
+    WHERE profile_id = ${profileId} AND deleted_at IS NULL
+      AND properties ? ${key}::text
+  `;
+  return r[0]?.n ?? 0;
+}
+
+/**
+ * THE field repoint shared by dedupeProfileRows and both mergeInto paths: move
+ * the source rows' property_defs, then their profile→def links, onto ONE
+ * canonical profile — without widening any field's lens and without creating a
+ * second field that folds to a key the canonical already shows.
+ *
+ * Why decisions are made in JS: the collision rule is FOLD-equality
+ * (`foldPropertyKey` — the one fold the seeder and did-you-mean share), and a
+ * SQL re-spelling of it would be a second fold that can drift. The writes are
+ * then `UPDATE … WHERE id = ANY(decided ids) RETURNING`, and the plan rows are
+ * built from those RETURNING rows — so a rolled-back dry run reports exactly
+ * what the apply does.
+ *
+ * Rules, in order:
+ *   1. Post-move lens of a source def = `restampBaseDefs`
+ *      ? COALESCE(def.workspace_id, source.workspace_id)   (canonical is wider:
+ *        a workspace twin's BASE def becomes that workspace's OVERLAY)
+ *      : def.workspace_id                                   (same-scope merge).
+ *   2. collision-skipped — some field the canonical already shows (a def it owns
+ *      OR a def it links) folds to the same key in an overlapping lens. A base
+ *      def overlaps every lens. `knowledgeform` vs `knowledgeForm` collides; so
+ *      does an exact `status` overlay over a canonical base `status`. The def is
+ *      NOT moved: it stays on the drained row and the operator sees it.
+ *   3. ambiguous-skipped — two remaining source defs fold together in
+ *      overlapping post-move lenses (e.g. two system-scope twins both carrying a
+ *      base `type`). No winner is derivable, so neither moves (and the unique
+ *      index on (slug, profile_id[, workspace_id]) is never hit mid-op).
+ *   4. Links: a link to a MOVED def moves; a link to a SKIPPED def stays with it.
+ *      A link to a def the sources do not own (a global def, another profile's
+ *      def) is itself checked: fold collision → collision-skipped; and when
+ *      `restampBaseDefs` and the source row is workspace-stamped but the def is
+ *      visible pod-wide → widen-skipped (a link has no lens of its own, so moving
+ *      it would add the field to the canonical in EVERY workspace). A def linked
+ *      by several sources moves once.
+ *
+ * Plan rows: one per source-OWNED def (its link rides with it), plus one per
+ * link to a def the sources do not own. NOT covered: a moved link to a foreign
+ * def folding together with a moved source-owned def of the same source row
+ * (both were already visible side by side on that row, so no new pair is made).
+ */
+async function repointFieldsOntoCanonical(
+  tx: Sql,
+  args: {
+    canonicalId: string;
+    sources: Array<{ id: string; workspace_id: string | null }>;
+    restampBaseDefs: boolean;
+    plan: FieldPlanRow[];
+  }
+): Promise<{ defsMoved: number; linksMoved: number }> {
+  const { canonicalId, sources, restampBaseDefs, plan } = args;
+  const sourceIds = sources.map((s) => s.id);
+  const sourceWs = new Map(sources.map((s) => [s.id, s.workspace_id]));
+
+  // Every field the canonical already shows: defs it owns + defs it links.
+  const canonicalFields = await tx<
+    Array<{ id: string; slug: string; workspace_id: string | null }>
+  >`
+    SELECT pd.id, pd.slug, pd.workspace_id FROM property_defs pd
+    WHERE pd.profile_id = ${canonicalId}
+    UNION
+    SELECT pd.id, pd.slug, pd.workspace_id FROM profile_properties pp
+    JOIN property_defs pd ON pd.id = pp.property_def_id
+    WHERE pp.profile_id = ${canonicalId}
+  `;
+  const canonicalHit = (
+    fold: string,
+    lens: string | null,
+    exceptDefId?: string
+  ) =>
+    canonicalFields.find(
+      (f) =>
+        f.id !== exceptDefId &&
+        foldPropertyKey(f.slug) === fold &&
+        lensesOverlap(f.workspace_id, lens)
+    );
+
+  const sourceDefs = await tx<
+    Array<{
+      id: string;
+      slug: string;
+      workspace_id: string | null;
+      profile_id: string;
+    }>
+  >`
+    SELECT id, slug, workspace_id, profile_id FROM property_defs
+    WHERE profile_id = ANY(${sourceIds}::uuid[])
+    ORDER BY slug, id
+  `;
+  const candidates = sourceDefs.map((d) => ({
+    ...d,
+    fold: foldPropertyKey(d.slug),
+    lens: restampBaseDefs
+      ? (d.workspace_id ?? sourceWs.get(d.profile_id) ?? null)
+      : d.workspace_id,
+  }));
+
+  const rows: FieldPlanRow[] = [];
+  const skippedDefIds = new Set<string>();
+  const skipDef = async (
+    c: (typeof candidates)[number],
+    action: "collision-skipped" | "ambiguous-skipped",
+    collidesWith: string
+  ) => {
+    skippedDefIds.add(c.id);
+    rows.push({
+      table: "property_defs",
+      slug: c.slug,
+      fromProfileId: c.profile_id,
+      fromWorkspaceId: c.workspace_id,
+      toWorkspaceId: c.workspace_id,
+      action,
+      collidesWith,
+      entitiesWithKey: await countEntitiesWithKey(tx, c.profile_id, c.slug),
+    });
+  };
+
+  // (2) collision with a field the canonical already shows.
+  const remaining: typeof candidates = [];
+  for (const c of candidates) {
+    const hit = canonicalHit(c.fold, c.lens);
+    if (hit) await skipDef(c, "collision-skipped", hit.slug);
+    else remaining.push(c);
+  }
+  // (3) ambiguity among the defs that would otherwise move.
+  const moveIds: string[] = [];
+  for (const c of remaining) {
+    const sibling = remaining.find(
+      (o) => o.id !== c.id && o.fold === c.fold && lensesOverlap(o.lens, c.lens)
+    );
+    if (sibling) await skipDef(c, "ambiguous-skipped", sibling.slug);
+    else moveIds.push(c.id);
+  }
+
+  const lensExpr = restampBaseDefs
+    ? tx`COALESCE(pd.workspace_id, src.workspace_id)`
+    : tx`pd.workspace_id`;
+  const movedDefs = await tx<
+    Array<{ id: string; slug: string; workspace_id: string | null }>
+  >`
+    UPDATE property_defs pd
+    SET profile_id = ${canonicalId}, workspace_id = ${lensExpr}
+    FROM profiles src
+    WHERE pd.profile_id = src.id AND pd.id = ANY(${moveIds}::uuid[])
+    RETURNING pd.id, pd.slug, pd.workspace_id
+  `;
+  const before = new Map(sourceDefs.map((d) => [d.id, d]));
+  for (const m of movedDefs) {
+    const b = before.get(m.id);
+    rows.push({
+      table: "property_defs",
+      slug: m.slug,
+      fromProfileId: b?.profile_id ?? "",
+      fromWorkspaceId: b?.workspace_id ?? null,
+      toWorkspaceId: m.workspace_id,
+      action:
+        (b?.workspace_id ?? null) === null && m.workspace_id !== null
+          ? "restamped"
+          : "moved",
+    });
+  }
+
+  // (4) links — read AFTER the def move, so workspace_id is the post-move lens.
+  const links = await tx<
+    Array<{
+      profile_id: string;
+      property_def_id: string;
+      slug: string;
+      workspace_id: string | null;
+    }>
+  >`
+    SELECT pp.profile_id, pp.property_def_id, pd.slug, pd.workspace_id
+    FROM profile_properties pp
+    JOIN property_defs pd ON pd.id = pp.property_def_id
+    WHERE pp.profile_id = ANY(${sourceIds}::uuid[])
+      AND NOT EXISTS (
+        SELECT 1 FROM profile_properties pp2
+        WHERE pp2.profile_id = ${canonicalId}
+          AND pp2.property_def_id = pp.property_def_id
+      )
+    ORDER BY pd.slug, pp.profile_id
+  `;
+  const linkProfileIds: string[] = [];
+  const linkDefIds: string[] = [];
+  const foreignMoves = new Map<string, (typeof links)[number]>();
+  for (const l of links) {
+    if (linkDefIds.includes(l.property_def_id)) continue; // moves once
+    const owned = before.has(l.property_def_id);
+    if (owned) {
+      if (skippedDefIds.has(l.property_def_id)) continue; // stays with its def
+      linkProfileIds.push(l.profile_id);
+      linkDefIds.push(l.property_def_id);
+      continue;
+    }
+    const srcWs = sourceWs.get(l.profile_id) ?? null;
+    const hit = canonicalHit(
+      foldPropertyKey(l.slug),
+      l.workspace_id,
+      l.property_def_id
+    );
+    const widens = restampBaseDefs && srcWs !== null && l.workspace_id === null;
+    if (hit || widens) {
+      rows.push({
+        table: "profile_properties",
+        slug: l.slug,
+        fromProfileId: l.profile_id,
+        fromWorkspaceId: l.workspace_id,
+        toWorkspaceId: l.workspace_id,
+        action: hit ? "collision-skipped" : "widen-skipped",
+        ...(hit ? { collidesWith: hit.slug } : {}),
+        entitiesWithKey: await countEntitiesWithKey(tx, l.profile_id, l.slug),
+      });
+      continue;
+    }
+    linkProfileIds.push(l.profile_id);
+    linkDefIds.push(l.property_def_id);
+    foreignMoves.set(l.property_def_id, l);
+  }
+
+  const movedLinks = await tx<Array<{ property_def_id: string }>>`
+    UPDATE profile_properties pp
+    SET profile_id = ${canonicalId}
+    FROM unnest(${linkProfileIds}::uuid[], ${linkDefIds}::uuid[])
+      AS m(profile_id, property_def_id)
+    WHERE pp.profile_id = m.profile_id AND pp.property_def_id = m.property_def_id
+    RETURNING pp.property_def_id
+  `;
+  for (const m of movedLinks) {
+    const l = foreignMoves.get(m.property_def_id);
+    if (!l) continue; // a source-owned def's link — its def row speaks for it
+    rows.push({
+      table: "profile_properties",
+      slug: l.slug,
+      fromProfileId: l.profile_id,
+      fromWorkspaceId: l.workspace_id,
+      toWorkspaceId: l.workspace_id,
+      action: "moved",
+    });
+  }
+
+  plan.push(...rows);
+  return { defsMoved: movedDefs.length, linksMoved: movedLinks.length };
+}
+
+/** The ops whose dry run is the apply itself, rolled back (see planByRollback). */
+function opCarriesFieldPlan(
+  op: ConversionOp
+): op is MergeIntoOp | DedupeProfileRowsOp {
+  return op.op === "mergeInto" || op.op === "dedupeProfileRows";
+}
+
+class DryRunRollback extends Error {
+  constructor(
+    readonly counts: OpCounts,
+    readonly planDetail: FieldPlanRow[]
+  ) {
+    super("conversion dry run: rolling back");
+  }
+}
+
+/**
+ * Dry run DERIVED from the apply: run the exact apply statements inside a
+ * transaction that ALWAYS rolls back, and return their counts + field plan. A
+ * separately hand-written count query is how the dedupe dry run came to report
+ * entities/facets while silently omitting every def and link it moved.
+ *
+ * Cost of the choice: the dry run takes the apply's row locks for the life of
+ * the transaction and needs write privileges; it still commits nothing.
+ */
+async function planByRollback(
+  sql: Sql,
+  op: MergeIntoOp | DedupeProfileRowsOp,
+  options: RunOptions
+): Promise<{ counts: OpCounts; planDetail: FieldPlanRow[] }> {
+  try {
+    await sql.begin(async (tx) => {
+      const plan: FieldPlanRow[] = [];
+      const counts = await applyOp(tx as unknown as Sql, op, options, plan);
+      throw new DryRunRollback(counts, plan);
+    });
+  } catch (err) {
+    if (err instanceof DryRunRollback) {
+      return { counts: err.counts, planDetail: err.planDetail };
+    }
+    throw err;
+  }
+  throw new Error(
+    `planByRollback '${op.opKey}': the dry-run transaction completed without rolling back`
+  );
+}
+
 /**
  * Resolve the canonical (surviving) profile id for a same-slug dedup, and the
  * ids of the active duplicates to drain into it. `system` prefers the
@@ -1014,7 +1373,8 @@ async function resolveDedupTarget(
 async function applyDedupeProfileRows(
   tx: Sql,
   op: DedupeProfileRowsOp,
-  destructiveTail: boolean
+  destructiveTail: boolean,
+  plan: FieldPlanRow[]
 ): Promise<OpCounts> {
   const counts: OpCounts = {
     entitiesRepointed: 0,
@@ -1032,35 +1392,22 @@ async function applyDedupeProfileRows(
   );
   if (!canonicalId) return {}; // no active row for the slug — nothing to dedupe.
 
-  // profile_properties first (its property_def_id must still resolve), then
-  // property_defs, then entities, then facets, then views. Each collision-skips.
-  const pp = await tx`
-    UPDATE profile_properties pp
-    SET profile_id = ${canonicalId}
-    FROM profiles src
-    WHERE pp.profile_id = src.id AND src.slug = ${op.slug}
-      AND src.is_active = true AND src.id <> ${canonicalId}
-      AND NOT EXISTS (
-        SELECT 1 FROM profile_properties pp2
-        WHERE pp2.profile_id = ${canonicalId}
-          AND pp2.property_def_id = pp.property_def_id
-      )
+  // property_defs + profile_properties first, then entities, then facets, then
+  // views. The canonical is (usually) the pod-wide system row while a duplicate
+  // may be a WORKSPACE twin: its base defs are re-stamped as that workspace's
+  // overlays, exactly like the cross-scope merge — never landed pod-wide.
+  const sources = await tx<Array<{ id: string; workspace_id: string | null }>>`
+    SELECT id, workspace_id FROM profiles
+    WHERE slug = ${op.slug} AND is_active = true AND id <> ${canonicalId}
   `;
-  counts.profilePropertiesRepointed! += pp.count ?? 0;
-
-  const pd = await tx`
-    UPDATE property_defs pd
-    SET profile_id = ${canonicalId}
-    FROM profiles src
-    WHERE pd.profile_id = src.id AND src.slug = ${op.slug}
-      AND src.is_active = true AND src.id <> ${canonicalId}
-      AND NOT EXISTS (
-        SELECT 1 FROM property_defs pd2
-        WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
-          AND pd2.workspace_id IS NOT DISTINCT FROM pd.workspace_id
-      )
-  `;
-  counts.propertyDefsRepointed! += pd.count ?? 0;
+  const fields = await repointFieldsOntoCanonical(tx, {
+    canonicalId,
+    sources,
+    restampBaseDefs: true,
+    plan,
+  });
+  counts.propertyDefsRepointed! += fields.defsMoved;
+  counts.profilePropertiesRepointed! += fields.linksMoved;
 
   // entities.type already equals the (shared) slug — only the profile_id fk moves.
   const ent = await tx`
@@ -1325,9 +1672,9 @@ export async function computeCounts(
       return n > 0 ? { entitiesRepointed: n } : {};
     }
     case "mergeInto":
-      return computeMergeCounts(sql, op, options.destructiveTail);
     case "dedupeProfileRows":
-      return computeDedupeCounts(sql, op, options.destructiveTail);
+      // Derived, not mirrored: the apply itself, rolled back.
+      return (await planByRollback(sql, op, options)).counts;
     case "reconcileEntityScope": {
       const r = op.slug
         ? await sql<Array<{ n: number }>>`
@@ -1400,207 +1747,6 @@ export async function computeCounts(
     case "extractNonEntity":
       return {};
   }
-}
-
-async function computeDedupeCounts(
-  sql: Sql,
-  op: DedupeProfileRowsOp,
-  destructiveTail: boolean
-): Promise<OpCounts> {
-  const { canonicalId, otherCount } = await resolveDedupTarget(
-    sql,
-    op.slug,
-    op.canonical ?? "system"
-  );
-  if (!canonicalId || otherCount === 0) return {};
-
-  const counts: OpCounts = {};
-  const ent = await sql<Array<{ n: number }>>`
-    SELECT COUNT(*)::int AS n FROM entities e
-    JOIN profiles src ON src.id = e.profile_id AND src.slug = ${op.slug}
-      AND src.is_active = true AND src.id <> ${canonicalId}
-  `;
-  if (ent[0]?.n) counts.entitiesRepointed = ent[0].n;
-
-  const fac = await sql<Array<{ n: number }>>`
-    SELECT COUNT(*)::int AS n FROM entity_facets f
-    JOIN profiles src ON src.id = f.profile_id AND src.slug = ${op.slug}
-      AND src.is_active = true AND src.id <> ${canonicalId}
-    WHERE f.deleted_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM entity_facets f2
-        WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
-          AND f2.deleted_at IS NULL
-          AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
-              = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
-          AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
-              = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
-      )
-  `;
-  if (fac[0]?.n) counts.facetsRepointed = fac[0].n;
-
-  if (destructiveTail) counts.profilesDeactivated = otherCount;
-  return counts;
-}
-
-/** Dry-run mirror of applyMergeIntoCrossScope — counts only, writes nothing. */
-async function computeMergeCrossScopeCounts(
-  sql: Sql,
-  op: MergeIntoOp,
-  destructiveTail: boolean
-): Promise<OpCounts> {
-  const counts: OpCounts = {
-    entitiesRepointed: 0,
-    facetsRepointed: 0,
-    propertyDefsRepointed: 0,
-    profilePropertiesRepointed: 0,
-    viewsRewritten: 0,
-    profilesDeactivated: 0,
-  };
-  const canonicalId = await resolveSharedCanonicalId(sql, op.intoSlug);
-  // A dry run never ledgers anything, so a missing canonical is reported as an
-  // empty tally rather than thrown — the apply path is where it must be loud.
-  if (!canonicalId) return {};
-
-  for (const from of op.fromSlugs) {
-    const ent = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM entities e
-      JOIN profiles src ON src.id = e.profile_id AND src.slug = ${from}
-        AND src.id <> ${canonicalId}
-    `;
-    counts.entitiesRepointed! += ent[0]?.n ?? 0;
-
-    const fac = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM entity_facets f
-      JOIN profiles src ON src.id = f.profile_id AND src.slug = ${from}
-        AND src.id <> ${canonicalId}
-      WHERE f.deleted_at IS NULL
-        AND NOT EXISTS (
-          SELECT 1 FROM entity_facets f2
-          WHERE f2.entity_id = f.entity_id AND f2.profile_id = ${canonicalId}
-            AND f2.deleted_at IS NULL
-            AND COALESCE(f2.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
-                = COALESCE(f.context_entity_id, '00000000-0000-0000-0000-000000000000'::uuid)
-            AND COALESCE(f2.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
-                = COALESCE(f.workspace_id, '00000000-0000-0000-0000-000000000000'::uuid)
-        )
-    `;
-    counts.facetsRepointed! += fac[0]?.n ?? 0;
-
-    const pd = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM property_defs pd
-      JOIN profiles src ON src.id = pd.profile_id AND src.slug = ${from}
-        AND src.id <> ${canonicalId}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM property_defs pd2
-        WHERE pd2.profile_id = ${canonicalId} AND pd2.slug = pd.slug
-          AND pd2.workspace_id IS NOT DISTINCT FROM COALESCE(pd.workspace_id, src.workspace_id)
-      )
-    `;
-    counts.propertyDefsRepointed! += pd[0]?.n ?? 0;
-
-    const pp = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM profile_properties pp
-      JOIN profiles src ON src.id = pp.profile_id AND src.slug = ${from}
-        AND src.id <> ${canonicalId}
-      WHERE NOT EXISTS (
-        SELECT 1 FROM profile_properties pp2
-        WHERE pp2.profile_id = ${canonicalId} AND pp2.property_def_id = pp.property_def_id
-      )
-    `;
-    counts.profilePropertiesRepointed! += pp[0]?.n ?? 0;
-
-    const vw = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM views v
-      JOIN profiles src ON src.slug = ${from} AND src.id <> ${canonicalId}
-        AND v.scope_profile_ids @> ARRAY[src.id]
-    `;
-    counts.viewsRewritten! += vw[0]?.n ?? 0;
-
-    if (destructiveTail) {
-      const dc = await sql<Array<{ n: number }>>`
-        SELECT COUNT(*)::int AS n FROM profiles src
-        WHERE src.slug = ${from} AND src.is_active = true AND src.id <> ${canonicalId}
-      `;
-      counts.profilesDeactivated! += dc[0]?.n ?? 0;
-    }
-  }
-  return counts;
-}
-
-async function computeMergeCounts(
-  sql: Sql,
-  op: MergeIntoOp,
-  destructiveTail: boolean
-): Promise<OpCounts> {
-  if (op.intoScope === "shared") {
-    return computeMergeCrossScopeCounts(sql, op, destructiveTail);
-  }
-
-  const counts: OpCounts = {
-    entitiesRepointed: 0,
-    propertyDefsRepointed: 0,
-    profilePropertiesRepointed: 0,
-    viewsRewritten: 0,
-    profilesDeactivated: 0,
-  };
-  for (const from of op.fromSlugs) {
-    const ent = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM entities e
-      JOIN profiles src ON src.id = e.profile_id AND src.slug = ${from}
-      WHERE EXISTS (
-        SELECT 1 FROM profiles k WHERE k.slug = ${op.intoSlug} AND k.scope = src.scope
-          AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id AND k.id <> src.id
-      )
-    `;
-    counts.entitiesRepointed! += ent[0]?.n ?? 0;
-
-    const pd = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM property_defs pd
-      JOIN profiles src ON src.id = pd.profile_id AND src.slug = ${from}
-      JOIN profiles k ON k.slug = ${op.intoSlug} AND k.scope = src.scope
-        AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id AND k.id <> src.id
-      WHERE NOT EXISTS (
-        SELECT 1 FROM property_defs pd2 WHERE pd2.profile_id = k.id AND pd2.slug = pd.slug
-          AND pd2.workspace_id IS NOT DISTINCT FROM pd.workspace_id
-      )
-    `;
-    counts.propertyDefsRepointed! += pd[0]?.n ?? 0;
-
-    const pp = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM profile_properties pp
-      JOIN profiles src ON src.id = pp.profile_id AND src.slug = ${from}
-      JOIN profiles k ON k.slug = ${op.intoSlug} AND k.scope = src.scope
-        AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id AND k.id <> src.id
-      WHERE NOT EXISTS (
-        SELECT 1 FROM profile_properties pp2 WHERE pp2.profile_id = k.id AND pp2.property_def_id = pp.property_def_id
-      )
-    `;
-    counts.profilePropertiesRepointed! += pp[0]?.n ?? 0;
-
-    const vw = await sql<Array<{ n: number }>>`
-      SELECT COUNT(*)::int AS n FROM views v
-      JOIN profiles src ON src.slug = ${from} AND v.scope_profile_ids @> ARRAY[src.id]
-      WHERE EXISTS (
-        SELECT 1 FROM profiles k WHERE k.slug = ${op.intoSlug} AND k.scope = src.scope
-          AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id AND k.id <> src.id
-      )
-    `;
-    counts.viewsRewritten! += vw[0]?.n ?? 0;
-
-    if (destructiveTail) {
-      const dc = await sql<Array<{ n: number }>>`
-        SELECT COUNT(*)::int AS n FROM profiles src
-        WHERE src.slug = ${from} AND src.is_active = true
-          AND EXISTS (
-            SELECT 1 FROM profiles k WHERE k.slug = ${op.intoSlug} AND k.scope = src.scope
-              AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id AND k.id <> src.id
-          )
-      `;
-      counts.profilesDeactivated! += dc[0]?.n ?? 0;
-    }
-  }
-  return counts;
 }
 
 /**

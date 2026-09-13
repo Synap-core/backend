@@ -36,6 +36,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../../../lib/auth-redirect";
@@ -48,6 +49,8 @@ import {
 import type { StatusKind } from "../../components/status-pill";
 import { useFocusRow } from "../../components/use-focus-row";
 import { formatRelative } from "./format";
+import { BROKER_TRUST_QUERY_KEY } from "./broker-trust";
+import { BrokerTrustPanel } from "./broker-trust-panel";
 
 type IssuerStatus = "pending" | "approved" | "rejected" | "revoked";
 
@@ -190,10 +193,12 @@ export function IssuersSection() {
   useFocusRow({ ready: !list.isLoading });
 
   const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
 
   const approve = trpc.trustedIssuers.approve.useMutation({
     onSuccess: () => {
       void utils.trustedIssuers.list.invalidate();
+      void queryClient.invalidateQueries({ queryKey: BROKER_TRUST_QUERY_KEY });
       addToast({ title: "Issuer approved", color: "success" });
     },
     onError: (err) => {
@@ -270,6 +275,9 @@ export function IssuersSection() {
   }, [issuers]);
 
   const [approveTarget, setApproveTarget] = useState<IssuerLike | null>(null);
+  const [approveScopes, setApproveScopes] = useState<
+    TrustedIssuerScope[] | undefined
+  >(undefined);
   const [rejectTarget, setRejectTarget] = useState<IssuerLike | null>(null);
   const [revokeTarget, setRevokeTarget] = useState<IssuerLike | null>(null);
 
@@ -284,6 +292,20 @@ export function IssuersSection() {
 
   return (
     <div className="flex flex-col gap-4">
+      <BrokerTrustPanel
+        issuers={issuers}
+        onApprove={(issuerId, scopes) => {
+          const issuer = issuers.find((i) => i.id === issuerId);
+          if (!issuer) return;
+          setApproveScopes(
+            scopes.filter((s): s is TrustedIssuerScope =>
+              ISSUER_SCOPES.some((known) => known.value === s)
+            )
+          );
+          setApproveTarget(issuer);
+        }}
+      />
+
       {/* Filter chips */}
       <div className="flex flex-wrap items-center gap-2">
         {FILTER_ORDER.map((f) => {
@@ -352,11 +374,16 @@ export function IssuersSection() {
       {approveTarget && (
         <ApproveModal
           issuer={approveTarget}
+          initialScopes={approveScopes}
           isPending={approve.isPending}
-          onClose={() => setApproveTarget(null)}
+          onClose={() => {
+            setApproveTarget(null);
+            setApproveScopes(undefined);
+          }}
           onConfirm={async (allowedScopes) => {
             await approve.mutateAsync({ id: approveTarget.id, allowedScopes });
             setApproveTarget(null);
+            setApproveScopes(undefined);
           }}
         />
       )}
@@ -493,11 +520,15 @@ function IssuerRow({
 
 function ApproveModal({
   issuer,
+  initialScopes,
   isPending,
   onClose,
   onConfirm,
 }: {
   issuer: IssuerLike;
+  /** Pre-selected scopes; `approve` REPLACES the issuer's scopes, so a fix
+   * that adds one scope passes the issuer's current scopes plus that one. */
+  initialScopes?: TrustedIssuerScope[];
   isPending: boolean;
   onClose: () => void;
   onConfirm: (scopes: TrustedIssuerScope[]) => void | Promise<void>;
@@ -506,8 +537,9 @@ function ApproveModal({
     defaultOpen: true,
     onClose,
   });
-  const [selected, setSelected] =
-    useState<TrustedIssuerScope[]>(DEFAULT_SCOPES);
+  const [selected, setSelected] = useState<TrustedIssuerScope[]>(
+    initialScopes ?? DEFAULT_SCOPES
+  );
 
   function toggle(s: TrustedIssuerScope) {
     setSelected((prev) =>

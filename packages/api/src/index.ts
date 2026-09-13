@@ -338,6 +338,10 @@ export {
 } from "./services/event-sync/connection-sync.js";
 export { reconcileLiveConnections } from "./services/capabilities/capability-nango-sync.js";
 export { scanStaleProposals } from "./services/proposals/scan-stale-proposals.js";
+// Exported for @synap/jobs' learning-loop IoC slots (governance-tighten-cron,
+// prompt-quality-cron): jobs cannot import this package statically.
+export { recommendTightenForAllAgents } from "./services/proposals/recommend-tighten.js";
+export { notifyPromptVersionRegressions } from "./services/intake/prompt-version-regression.js";
 export {
   expireLapsedProposals,
   expireSessionEphemerals,
@@ -427,3 +431,7 @@ export type { ConnectionSelector } from "./connectors/external-dispatch.js";
 // Nango's API shape (connection_id ≠ end_user.id) belongs in the connector, not
 // in routes — apps/api's Nango webhook needs it to attribute a sync correctly.
 export { NangoConnector } from "./connectors/NangoConnector.js";
+export {
+  readBrokerTrustDiagnostics,
+  type BrokerTrustDiagnostics,
+} from "./connectors/broker-trust-diagnostics.js";

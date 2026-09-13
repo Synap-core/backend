@@ -423,6 +423,13 @@ export const CaptureExecuteRequestSchema = z
     aiWorkspaceId: z.string().uuid().nullish(),
     aiWorkspaceConfidence: z.number().nullish(),
     aiWorkspaceReason: z.string().nullish(),
+    /**
+     * The run session to file this execute into — the `sessionId`
+     * `/capture/structure` returned (a degraded salvage included), so the rerun
+     * door can find the result. `X-Session-Id` wins; a body handle is honoured
+     * only when the caller owns that session.
+     */
+    sessionId: z.string().uuid().optional(),
   })
   .openapi("CaptureExecuteRequest");
 

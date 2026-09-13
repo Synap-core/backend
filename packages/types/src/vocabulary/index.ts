@@ -420,6 +420,10 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   connected: "Connected",
   disconnected: "Not connected",
   unavailable: "Not available",
+  // tool demand (`tool_request.tr_status`): `installable` = the catalog now
+  // covers a tool that was wanted. `wanted` needs no row (it humanizes to
+  // "Wanted"); `connected` is shared with the row above.
+  installable: "Ready to install",
   // ⚠️ OVERLOADED TOKEN — deliberately rendered as the neutral word.
   // `stale` means three different things in this product: a session the reaper
   // gave up on (progress), a sync that is out of date (freshness), and a broken

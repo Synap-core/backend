@@ -627,7 +627,7 @@ export async function discardSourceBlob(input: {
   // failure: the blob it pointed at cannot be orphaned by us.
   const doc = await database.query.documents.findFirst({
     where: eq(documentsTable.id, staged.documentId),
-    columns: { id: true, userId: true, storageKey: true },
+    columns: { id: true, userId: true, storageKey: true, metadata: true },
   });
   if (!doc) {
     logger.info(
@@ -638,6 +638,19 @@ export async function discardSourceBlob(input: {
   }
   if (userId !== null && doc.userId !== userId) {
     throw new SourceBlobOwnershipError(staged.documentId, userId);
+  }
+  // A RUN's intake source (`stageIntakeSource`) belongs to the run — its room,
+  // rerun and undo read it — not to the proposal that borrowed it as
+  // provenance (`capture.execute` reuses it instead of uploading a second
+  // copy). A rejected / withdrawn / expired / denied proposal must not delete
+  // the run's only copy of the user's photo.
+  const meta = doc.metadata as Record<string, unknown> | null | undefined;
+  if (meta && typeof meta === "object" && meta.intakeSource) {
+    logger.info(
+      { userId, documentId: staged.documentId },
+      "discardSourceBlob: kept — the document is a run's intake source, not proposal-owned"
+    );
+    return;
   }
   const ownerId = doc.userId;
 
@@ -692,6 +705,35 @@ export async function storeEntitySourceBlob(
       : {}),
   });
 
+  return gateAndAttachStagedSourceBlob({
+    database: input.database,
+    userId: input.userId,
+    entityId: input.entityId,
+    staged,
+    workspaceId: input.workspaceId ?? null,
+    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+  });
+}
+
+/**
+ * Gate → attach|discard for a blob that is ALREADY staged. The second half of
+ * `storeEntitySourceBlob`, exported so a caller holding a staged document —
+ * `capture.execute` reusing the source `capture.structure` kept for the run —
+ * links it WITHOUT uploading the bytes a second time. Same governance gate,
+ * same ownership-checked attach; a DENY discards (which keeps a run's intake
+ * source, see `discardSourceBlob`).
+ */
+export async function gateAndAttachStagedSourceBlob(input: {
+  database: typeof DbType;
+  userId: string;
+  entityId: string;
+  staged: StagedSourceBlob;
+  workspaceId?: string | null;
+  correlationId?: string;
+  sessionId?: string;
+}): Promise<StoreEntitySourceBlobResult> {
+  const { staged } = input;
   const perm: PermissionResult = await checkPermissionOrPropose({
     userId: input.userId,
     workspaceId: input.workspaceId ?? null,

@@ -32,6 +32,10 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
+  normalizeSessionTitle,
+  SESSION_TITLE_MAX,
+} from "@synap-core/types/focus-sessions";
+import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
@@ -98,6 +102,7 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   attachSessionParticipants,
   withSessionParticipants,
@@ -878,6 +883,55 @@ export const focusSessionsRouter = router({
       return result;
     }),
 
+  /**
+   * A run's stored sources ("What came in") — the rows the rerun plan counts,
+   * so a room can select some and pass their ids to `rerun({ scope })`.
+   * Owner-floored; a failed read throws (never an empty list).
+   */
+  runSources: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const { listRunSources } =
+        await import("../services/focus-sessions/run-sources.js");
+      const result = await listRunSources({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
+    }),
+
+  /**
+   * STRUCTURE AGAIN — run an entity's text (title + preview + content) through
+   * the capture door as a NEW intake run whose subject is that entity. The
+   * source is kept on the run before structuring, so Rerun works from there.
+   * Returns the run's `sessionId` for the host to open its room. A refusal
+   * (no text, source not kept…) RETURNS `{ ok: false, reason, message }`; only
+   * an entity the caller cannot read throws.
+   */
+  structureAgain: protectedProcedure
+    .use(aiRateLimitMiddleware)
+    .input(z.object({ entityId: z.string().uuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const { structureAgain } =
+        await import("../services/intake/structure-again.js");
+      const result = await structureAgain({
+        entityId: input.entityId,
+        userId: requireUserId(ctx.userId),
+        agentUserId: ctx.agentUserId ?? null,
+        callerContext: ctx,
+      });
+      if (!result.ok && result.reason === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: result.message });
+      }
+      return result;
+    }),
+
   revertConversion: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -937,16 +991,22 @@ export const focusSessionsRouter = router({
         row,
         requireUserId(ctx.userId)
       );
-      // Whether this run can be rerun right now — the rerun door's OWN rule
-      // (`assessRerunAvailability`), so a surface never re-derives it.
-      const { assessRerunAvailability } =
-        await import("../services/focus-sessions/rerun-session.js");
-      const rerun = await assessRerunAvailability(db, row);
+      // The continuation packet (`continuation-packet.ts`) — the SAME projection
+      // MCP `synap_get_session` and Hub `GET /focus-sessions/:id` return. It
+      // carries the rerun door's OWN rule (`assessRerunAvailability`), so
+      // `rerun` is read from it rather than computed a second time.
+      const { projectContinuationPacket } =
+        await import("../services/focus-sessions/continuation-packet.js");
+      const continuation = await projectContinuationPacket(row, {
+        database: db,
+        userId: requireUserId(ctx.userId),
+      });
       return withParentSessionId({
         ...staffed,
         triage: projectTriage(row),
         kind: projectSessionKind(row),
-        rerun,
+        rerun: continuation.rerun,
+        continuation,
       });
     }),
 
@@ -983,7 +1043,17 @@ export const focusSessionsRouter = router({
         // A session can start on the personal floor. Space and project are
         // optional associations, not a required parent hierarchy.
         workspaceId: z.string().nullish(),
+        /** Short one-line NAME; `goal` is the outcome. Blank ⇒ untitled. */
+        title: z.string().max(SESSION_TITLE_MAX).nullish(),
         goal: z.string().min(1).max(2000),
+        /**
+         * The PARENT — this session is its child (a detour or a planned
+         * sub-session). The parent stays open and lists its children. A miss
+         * is reported on `parentLink`, never silently dropped.
+         */
+        parentSessionId: z.string().uuid().optional(),
+        /** Sessions this one waits on — `blocked_by` edges, reported per id. */
+        blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
         templateId: z.string().optional(),
         expectedOutputs: z.array(expectedOutputItemSchema).default([]),
         channelId: z.string().uuid().optional(),
@@ -1029,16 +1099,24 @@ export const focusSessionsRouter = router({
         workspaceId: input.workspaceId ?? null,
         projectId: input.projectId ?? null,
         subjectEntityId: input.subjectEntityId ?? null,
+        title: input.title ?? null,
         goal: input.goal,
         templateId: input.templateId ?? null,
         expectedOutputs: input.expectedOutputs,
         channelId: input.channelId ?? null,
         agentIds: input.agentIds,
+        parentSessionId: input.parentSessionId ?? null,
+        blockedBySessionIds: input.blockedBySessionIds ?? [],
       });
       if (result.status !== "created") {
         throw new TRPCError({ code: "FORBIDDEN", message: result.message });
       }
-      return result.session as FocusSession;
+      // Edge outcomes ride the returned row, only when they were asked for.
+      return {
+        ...(result.session as FocusSession),
+        ...(result.parentLink ? { parentLink: result.parentLink } : {}),
+        ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
+      };
     }),
 
   /**
@@ -1087,6 +1165,8 @@ export const focusSessionsRouter = router({
         progress: z.number().int().min(0).max(100).optional(),
         channelId: z.string().uuid().optional(),
         correlationId: z.string().optional(),
+        /** Rename; `null` or blank CLEARS (untitled). */
+        title: z.string().max(SESSION_TITLE_MAX).nullable().optional(),
         goal: z.string().min(1).max(2000).optional(),
         agentIds: z.array(z.string()).optional(),
         expectedOutputs: z.array(expectedOutputItemSchema).optional(),
@@ -1144,6 +1224,8 @@ export const focusSessionsRouter = router({
       if (patch.correlationId !== undefined)
         set.correlationId = patch.correlationId;
       if (patch.goal !== undefined) set.goal = patch.goal;
+      if (patch.title !== undefined)
+        set.title = normalizeSessionTitle(patch.title);
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       // Merge, never assign: the surfaces that patch this list read it, edit
       // one slot, and send the whole array back — so a wholesale assignment
@@ -1190,6 +1272,8 @@ export const focusSessionsRouter = router({
           };
           if (patch.progress !== undefined) extra.progress = patch.progress;
           if (patch.goal !== undefined) extra.goal = patch.goal;
+          if (patch.title !== undefined)
+            extra.title = normalizeSessionTitle(patch.title);
           if (patch.subjectEntityId !== undefined)
             extra.subjectEntityId = patch.subjectEntityId;
           if (patch.expectedOutputs !== undefined)

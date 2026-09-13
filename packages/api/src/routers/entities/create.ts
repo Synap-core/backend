@@ -9,7 +9,9 @@
  * import with `entities.ts` resolves fine.
  */
 
+import { PROPOSAL_SOURCES } from "@synap-core/types/proposals";
 import { z } from "zod";
+import { decodeHtmlEntities } from "@synap-core/types/text";
 import { podProcedure } from "../../trpc.js";
 import {
   eq,
@@ -44,6 +46,7 @@ import {
   buildWeakEntityDedupMessage,
   buildWeakDedupCause,
   ENTITY_JUNK_TITLE_CODE,
+  reservedEntityKindReason,
 } from "@synap/database";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
@@ -102,20 +105,7 @@ export const createProcs = {
          * legacy AI gate only branches on "ai"/"intelligence"; everything else
          * falls through to the agentUserId / role-based path.
          */
-        source: z
-          .enum([
-            "user",
-            "ai",
-            "intelligence",
-            "system",
-            "agent",
-            "openwebui-pipeline",
-            "extension",
-            "cli",
-            "n8n",
-            "raycast",
-          ])
-          .optional(),
+        source: z.enum(PROPOSAL_SOURCES).optional(),
         /** AI reasoning for proposals */
         reasoning: z.string().optional(),
         /** Agent user ID when action is performed by an AI agent */
@@ -200,6 +190,15 @@ export const createProcs = {
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // Some LLM agents XML-escape their own MCP/Hub-REST tool-call arguments,
+      // so a plain-text title like `R&D Notes` can arrive as `R&amp;D Notes`.
+      // Decode ONCE, here, before dedup matching, `checkPermissionOrPropose`
+      // (whose stored `data.title` becomes the pending proposal's display
+      // name), and the eventual insert all read `input.title` — this is the
+      // one door both MCP (`mcp/handlers/entity.ts`) and Hub REST
+      // (`hub-protocol/rest/entities.ts`) call through. A no-op for a human's
+      // literal "R&D" (no well-formed entity sequence to match).
+      if (input.title) input.title = decodeHtmlEntities(input.title);
       // Strong `external_id` identity anchor (opaque connector id, `provider:id`).
       // Not derived from any property, so `extractIdentitySignals` can't produce
       // it — build it once here and fold it into both the dedup lookup and the
@@ -303,6 +302,20 @@ export const createProcs = {
           code: "BAD_REQUEST",
           message:
             "A `file` entity must be backed by an uploaded document (use the upload door — synap upload / POST /api/hub/entities/files). Authored text should be a content kind (note/article/…); its body becomes a document automatically.",
+        });
+      }
+
+      // Reserved-kind guard (API entry). `project` lives in the `projects` TABLE
+      // behind the project door. Refuse BEFORE identity dedup and
+      // `checkPermissionOrPropose` — otherwise governance files an agent's
+      // create as a proposal that `EntityRepository.create` (the floor, which
+      // backstops this on the resolved kind) will refuse at approve. Same
+      // wording as the floor: the reservation's own.
+      const reservedKindReason = reservedEntityKindReason(profileSlug);
+      if (reservedKindReason) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: reservedKindReason,
         });
       }
 

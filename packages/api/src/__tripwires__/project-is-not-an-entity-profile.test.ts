@@ -6,6 +6,7 @@ import {
   reservedProfileSlugReason,
   assertProfileSlugNotReserved,
   reservedProfileSlugs,
+  reservedEntityKindReason,
 } from "@synap/database";
 
 /**
@@ -243,6 +244,25 @@ describe("tripwire: `project` is not an entity profile", () => {
     );
     expect(() => assertProfileSlugNotReserved("projects")).toThrow();
     expect(() => assertProfileSlugNotReserved("task")).not.toThrow();
+  });
+
+  it("reservedEntityKindReason refuses an ENTITY on a reserved kind, from the same table", () => {
+    // The entity refusal (EntityRepository.create + entities.create) reads the
+    // same table: one wording, two lead-ins, never a drifting second copy.
+    for (const slug of ["project", "projects", " Project "]) {
+      const reason = reservedEntityKindReason(slug);
+      expect(reason, slug).toBeDefined();
+      expect(reason).toContain("is not an entity kind");
+      expect(reason).toContain(
+        reservedProfileSlugReason(slug)!.replace(
+          `Profile slug '${slug}' is reserved: `,
+          ""
+        )
+      );
+    }
+    for (const free of ["task", "project-note", "projection"]) {
+      expect(reservedEntityKindReason(free), free).toBeUndefined();
+    }
   });
 
   // ── Property 2: every write path calls the guard ───────────────────────────

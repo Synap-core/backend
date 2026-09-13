@@ -197,6 +197,8 @@ import type {
   HubGovernanceResult,
   CreateThreadInput,
   CreateRelationInput,
+  CreateProjectInput,
+  HubCreateProjectResult,
   AttachFacetInput,
   HubAttachFacetResult,
   CreateViewInput,
@@ -684,6 +686,39 @@ export class HubRestClient {
     );
   }
 
+  // ─── Projects ─────────────────────────────────────────────────────────────
+
+  /**
+   * Create a project. Governed: an agent key may get `proposed` (with
+   * `reviewUrl`), or `deduped` when an exact-name project already exists. A
+   * near-duplicate (409) comes back as `near_duplicate` with its
+   * `dedupCandidates`, not as a throw. Agent keys must pass `evidenceEntityIds`.
+   * The pod reads the acting user from the key, so no userId is sent. Placement
+   * is a write decision: the client default workspace is NOT stamped, and an
+   * omitted workspace means pod-wide.
+   */
+  async createProject(
+    input: CreateProjectInput
+  ): Promise<HubCreateProjectResult> {
+    const res = await this.requestRaw("POST", "/api/hub/projects", input);
+    if (res.status === 409) {
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        dedupCandidates?: Array<Record<string, unknown>>;
+      };
+      if (Array.isArray(body.dedupCandidates)) {
+        return {
+          status: "near_duplicate",
+          error: body.error ?? "A similar project already exists",
+          dedupCandidates: body.dedupCandidates,
+        };
+      }
+      throw new HubApiError(body.error ?? "Conflict", 409, body);
+    }
+    if (!res.ok) throw await this.toHubError(res);
+    return this.parseBody<HubCreateProjectResult>(res);
+  }
+
   // ─── Unified Search ───────────────────────────────────────────────────────
 
   /**
@@ -723,8 +758,9 @@ export class HubRestClient {
    * Get all relations for an entity — inbound and outbound.
    * Use to discover connections before graph traversal.
    *
-   * Note: The backend GET /relations requires both userId and workspaceId.
-   * This method resolves userId automatically; workspaceId falls back to client default.
+   * This method resolves userId automatically; workspaceId falls back to the
+   * client default. Without any workspace the pod reads pod-wide (every
+   * accessible workspace + pod globals); a workspace narrows to that lens.
    */
   async getRelations(
     entityId: string,
@@ -732,8 +768,8 @@ export class HubRestClient {
   ): Promise<HubRelation[]> {
     const userId = await this.resolveUserId();
     const wsId = options?.workspaceId ?? this.workspaceId;
-    if (!wsId) throw new Error("workspaceId is required for getRelations");
-    const params = new URLSearchParams({ userId, workspaceId: wsId, entityId });
+    const params = new URLSearchParams({ userId, entityId });
+    if (wsId) params.set("workspaceId", wsId);
     const result = await this.request<
       HubRelation[] | HubListResponse<HubRelation>
     >("GET", `/api/hub/relations?${params}`);
@@ -747,16 +783,17 @@ export class HubRestClient {
    * "works_at", "references"). An unknown slug is rejected, and the error lists
    * the valid slugs; `GET /api/hub/discover` returns them as `relationTypes`.
    * Goes through governance — may return "proposed".
+   * workspaceId is optional: without one the pod derives the workspace from the
+   * two endpoints.
    */
   async createRelation(
     input: CreateRelationInput
   ): Promise<HubGovernanceResult> {
     const userId = input.userId ?? (await this.resolveUserId());
     const wsId = input.workspaceId ?? this.workspaceId;
-    if (!wsId) throw new Error("workspaceId is required for createRelation");
     return this.request<HubGovernanceResult>("POST", "/api/hub/relations", {
       userId,
-      workspaceId: wsId,
+      ...(wsId ? { workspaceId: wsId } : {}),
       sourceEntityId: input.sourceEntityId,
       targetEntityId: input.targetEntityId,
       type: input.type,
@@ -1465,15 +1502,17 @@ export class HubRestClient {
 
   // ─── Capabilities & teaching substrate ───────────────────────────────────
 
-  /** Flat capability read-model. Prefer getCapabilityCatalog() for presentation. */
+  /**
+   * Flat capability read-model. Prefer getCapabilityCatalog() for presentation.
+   * Without a workspace the pod reads pod-wide (merged across accessible
+   * workspaces).
+   */
   async listCapabilities(options?: {
     workspaceId?: string;
   }): Promise<HubCapability[]> {
     const workspaceId = options?.workspaceId ?? this.workspaceId;
-    if (!workspaceId) {
-      throw new Error("workspaceId is required for listCapabilities");
-    }
-    const params = new URLSearchParams({ workspaceId });
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspaceId", workspaceId);
     const result = await this.request<{ capabilities: HubCapability[] }>(
       "GET",
       `/api/hub/capabilities?${params}`
