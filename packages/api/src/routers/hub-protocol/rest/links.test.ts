@@ -25,6 +25,9 @@ const USER_ID = "user-1";
 
 const workspaceRowsById = new Map<string, { id: string } | undefined>();
 const membershipByWsId = new Map<string, { role: string } | null>();
+// The BLOCKED session's own workspace, keyed by session id — what the
+// blocked_by branch stamps on the edge (see the describe block below).
+const focusSessionWorkspaceById = new Map<string, string>();
 
 vi.mock("@synap/database", () => {
   return {
@@ -41,6 +44,19 @@ vi.mock("@synap/database", () => {
             return id ? workspaceRowsById.get(id) : undefined;
           }),
         },
+        focusSessions: {
+          // The route ANDs `eq(focusSessions.id, fromId)` with
+          // `eq(focusSessions.userId, userId)` — same `ids` encoding, so
+          // `ids[0]` is the session id being looked up.
+          findFirst: vi.fn(async ({ where }: { where: unknown }) => {
+            const cond = where as { ids?: string[] };
+            const sessionId = cond.ids?.[0];
+            const workspaceId = sessionId
+              ? focusSessionWorkspaceById.get(sessionId)
+              : undefined;
+            return workspaceId !== undefined ? { workspaceId } : undefined;
+          }),
+        },
       },
     },
     eq: vi.fn((_col: unknown, val: unknown) => ({ ids: [val as string] })),
@@ -52,6 +68,7 @@ vi.mock("@synap/database", () => {
       async (_db: unknown, workspaceId: string) =>
         membershipByWsId.get(workspaceId) ?? null
     ),
+    focusSessions: { id: "id", userId: "user_id", workspaceId: "workspace_id" },
   };
 });
 
@@ -75,6 +92,9 @@ vi.mock("../../../utils/permission-check.js", () => ({
 // service's own; this file tests that the HANDLER consults it, before
 // governance, and applies through the dedicated producer.
 const sessionOwners = new Map<string, string>();
+// Edges the producer reports as already existing (`inserted: 0`) — keyed
+// `${sessionId}::${blockerSessionId}`. Absent ⇒ a fresh insert (`inserted: 1`).
+const existingEdges = new Set<string>();
 
 vi.mock(
   "../../../services/focus-sessions/session-blocked-by.js",
@@ -101,9 +121,9 @@ vi.mock(
       ),
       addSessionBlocker: vi.fn(async (i: Parameters<typeof floor>[0]) => {
         const v = floor(i);
-        return v.ok
-          ? { linked: true }
-          : { linked: false, reason: v.reason };
+        if (!v.ok) return { linked: false, reason: v.reason };
+        const key = `${i.sessionId}::${i.blockerSessionId}`;
+        return { linked: true, inserted: existingEdges.has(key) ? 0 : 1 };
       }),
     };
   }
@@ -116,9 +136,13 @@ vi.mock("./_shared.js", () => ({
   logger: { error: vi.fn(), warn: vi.fn() },
   resolveActingContext: (...args: unknown[]) =>
     resolveActingContextMock(...args),
-  resolveActorId: vi.fn(async (_agentUserId: unknown, userId: string) => ({
-    actorId: userId,
-  })),
+  // Mirrors the real resolver's shape: an agentUserId, when supplied,
+  // resolves to itself as the actor; otherwise the actor IS the human.
+  resolveActorId: vi.fn(
+    async (agentUserId: string | undefined, userId: string) => ({
+      actorId: agentUserId ?? userId,
+    })
+  ),
 }));
 
 // Imports must come AFTER vi.mock (ESM hoisting handles this).
@@ -240,13 +264,19 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
   const MY_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const MY_OTHER_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
   const VICTIM_SESSION = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  // The blocked session's OWN workspace — deliberately different from the
+  // request-stamped CONSUMER_WS, so a test asserting the wrong one fails.
+  const SESSION_WS = "33333333-3333-4333-8333-333333333333";
 
   beforeEach(() => {
     vi.clearAllMocks();
     sessionOwners.clear();
+    existingEdges.clear();
+    focusSessionWorkspaceById.clear();
     sessionOwners.set(MY_SESSION, USER_ID);
     sessionOwners.set(MY_OTHER_SESSION, USER_ID);
     sessionOwners.set(VICTIM_SESSION, "victim-user");
+    focusSessionWorkspaceById.set(MY_SESSION, SESSION_WS);
     resolveActingContextMock.mockResolvedValue({
       ok: true,
       userId: USER_ID,
@@ -319,7 +349,7 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     expect(calls.createLink).not.toHaveBeenCalled();
   });
 
-  it("applies a same-owner edge through addSessionBlocker (from = blocked, to = blocker), never raw createLink", async () => {
+  it("applies a same-owner edge through addSessionBlocker (from = blocked, to = blocker), stamped with the BLOCKED session's own workspace, never raw createLink", async () => {
     const res = await postLinks(buildTestApp(), {
       workspaceId: CONSUMER_WS,
       fromType: "session",
@@ -330,16 +360,88 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     });
 
     expect(res.status).toBe(200);
-    expect((await res.json()).status).toBe("created");
+    const json = await res.json();
+    expect(json).toEqual({
+      status: "created",
+      link: null,
+      blockedBy: { inserted: 1 },
+    });
     const calls = await writeCalls();
     expect(calls.checkPermissionOrPropose).toHaveBeenCalledTimes(1);
+    // SESSION_WS (the blocked session's own workspace), NOT CONSUMER_WS (the
+    // request-stamped workspace) — aligning with tRPC `focusSessions.addBlocker`.
     expect(calls.addSessionBlocker).toHaveBeenCalledWith({
       sessionId: MY_SESSION,
       blockerSessionId: MY_OTHER_SESSION,
       userId: USER_ID,
-      workspaceId: CONSUMER_WS,
+      workspaceId: SESSION_WS,
     });
     expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
+  it("reports an already-existing edge with inserted: 0", async () => {
+    existingEdges.add(`${MY_SESSION}::${MY_OTHER_SESSION}`);
+
+    const res = await postLinks(buildTestApp(), {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_OTHER_SESSION,
+      linkType: "blocked_by",
+    });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      status: "created",
+      link: null,
+      blockedBy: { inserted: 0 },
+    });
+  });
+
+  it("refuses metadata sent with blocked_by, before governance, writing nothing", async () => {
+    const res = await postLinks(buildTestApp(), {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_OTHER_SESSION,
+      linkType: "blocked_by",
+      metadata: { note: "should be refused" },
+    });
+
+    expect(res.status).toBe(400);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(calls.addSessionBlocker).not.toHaveBeenCalled();
+    expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
+  it("governs an agent-attributed blocked_by with userId = the human and agentUserId = the agent, never the agent as userId", async () => {
+    const AGENT_USER_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+    const res = await postLinks(buildTestApp(), {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_OTHER_SESSION,
+      linkType: "blocked_by",
+      agentUserId: AGENT_USER_ID,
+    });
+
+    expect(res.status).toBe(200);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        agentUserId: AGENT_USER_ID,
+      })
+    );
+    // The producer's ownership floor must ALSO stay on the human, not the agent.
+    expect(calls.addSessionBlocker).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID })
+    );
   });
 
   it("floors on the authenticated principal, not a caller-supplied userId", async () => {

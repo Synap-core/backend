@@ -32,7 +32,14 @@ import {
 } from "../../../services/focus-sessions/session-blocked-by.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
-import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  isNull,
+  getWorkspaceMembership,
+  focusSessions,
+} from "@synap/database";
 import { workspaces } from "@synap/database/schema";
 
 // Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
@@ -116,6 +123,19 @@ const BLOCKER_REFUSALS = {
   not_found: { status: 404, error: "Session not found" },
 } as const;
 
+/**
+ * `blocked_by` success response. `addSessionBlocker` writes through the
+ * dedicated producer, not `createLink`, so there is no created row to hand
+ * back cheaply — but `link: null` alone is indistinguishable from the
+ * generic-door's pre-existing "created, but nothing came back" shape.
+ * `inserted` makes the three outcomes tell-apart-able: `1` = a new edge, `0`
+ * = the edge already existed (idempotent conflict), and neither ever appears
+ * on a failure response (those return non-200 with `error`).
+ */
+function blockedByCreatedResponse(inserted: number) {
+  return { status: "created" as const, link: null, blockedBy: { inserted } };
+}
+
 const CreateLinkRequestSchema = z.object({
   userId: z.string().optional(),
   workspaceId: z.string().uuid().optional(),
@@ -142,7 +162,8 @@ export function registerLinksRoutes(app: HubHono): void {
     },
     responses: {
       200: {
-        description: "Created link, or a proposal when governance defers",
+        description:
+          "Created link, or a proposal when governance defers. For `blocked_by`, `link` is always null (there is no row to hand back through the dedicated producer) and `blockedBy.inserted` distinguishes a new edge (1) from an already-existing one (0).",
         schema: z.object({ status: z.string() }).passthrough(),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -229,6 +250,16 @@ export function registerLinksRoutes(app: HubHono): void {
           400
         );
       }
+      // `addSessionBlocker` always writes `metadata: {}` — no real caller
+      // (IS, CLI, browser) sends metadata with blocked_by today, so refusing
+      // it is not a behaviour cut; forwarding it would need a producer change
+      // outside this door, and silently dropping it is not an option.
+      if (parsed.data.metadata !== undefined) {
+        return c.json(
+          { error: "blocked_by links do not support metadata" },
+          400
+        );
+      }
       const valid = await validateSessionBlocker({
         sessionId: parsed.data.fromId,
         blockerSessionId: parsed.data.toId,
@@ -247,8 +278,19 @@ export function registerLinksRoutes(app: HubHono): void {
       const actorId = actorResolution.actorId;
 
       // Governance: apply directly OR generate a reviewable proposal.
+      //
+      // `userId` MUST be the acting human (the same identity ownership was
+      // validated against above, and what `proposals.subjectUserId` stamps at
+      // propose time — see `applyApprovedBlockedBy`, which floors approval on
+      // that column). `actorId` is the agent when the caller supplied one;
+      // passing it as `userId` instead of `agentUserId` makes governance treat
+      // the agent AS the user, so a proposal it files is stamped to an agent
+      // that owns no sessions — `applyApprovedBlockedBy` then refuses every
+      // approval of it. Mirrors the split every other Hub REST door uses
+      // (e.g. `runs.ts`): `agentUserId` only when it differs from the human.
       const perm = await checkPermissionOrPropose({
-        userId: actorId,
+        userId,
+        agentUserId: actorId !== userId ? actorId : undefined,
         workspaceId,
         subjectType: "link",
         action: "create",
@@ -271,18 +313,32 @@ export function registerLinksRoutes(app: HubHono): void {
       }
 
       if (isBlockedBy) {
+        // Stamp the BLOCKED session's own workspace, not the request's — the
+        // same field tRPC `focusSessions.addBlocker` reads before calling this
+        // producer. `GET /links` filters by the edge's stamped workspace, so
+        // the two doors must agree or the same edge is visible to different
+        // audiences depending which door created it. `validateSessionBlocker`
+        // above already floored ownership, so this row exists and is ours.
+        const blockedSession = await db.query.focusSessions.findFirst({
+          where: and(
+            eq(focusSessions.id, parsed.data.fromId),
+            eq(focusSessions.userId, userId)
+          ),
+          columns: { workspaceId: true },
+        });
+
         // `from --blocked_by--> to` ≡ addBlocker(sessionId: from, blocker: to).
         const result = await addSessionBlocker({
           sessionId: parsed.data.fromId,
           blockerSessionId: parsed.data.toId,
           userId,
-          workspaceId,
+          workspaceId: blockedSession?.workspaceId ?? null,
         });
         if (!result.linked) {
           const refusal = BLOCKER_REFUSALS[result.reason];
           return c.json({ error: refusal.error }, refusal.status);
         }
-        return c.json({ status: "created", link: null });
+        return c.json(blockedByCreatedResponse(result.inserted));
       }
 
       const created = await createLink({
