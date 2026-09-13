@@ -309,17 +309,63 @@ export function buildDigestSummary(
 }
 
 /**
+ * Key types trusted to act on behalf of ANY pod user via a request `userId`.
+ * `apiKeyId` alone is NOT that signal — the auth middleware sets it for EVERY
+ * bearer key, so gating on it let any agent key name any victim.
+ *   - `is_internal`: the CP-JWT-gated Intelligence Service key. Its operator
+ *     floor normally arrives via X-Delegated-Operator-Id, but a client built
+ *     without that header authenticates as the "system" sentinel and must still
+ *     be able to name the operator whose turn it is processing.
+ *   - `system`: pod-admin-minted pod-wide service key (api-keys.ts createSystemKey).
+ *   - `service`: product-neutral integrator key (POST /setup/service), owned by a
+ *     human and workspace-confined at the shared door.
+ * `hub_inbound` (agent) and `user_pat` keys are deliberately absent.
+ */
+const OVERRIDE_KEY_TYPES: ReadonlySet<string> = new Set([
+  "is_internal",
+  "system",
+  "service",
+]);
+
+/**
+ * The ONE rule for whether a hub REST caller may act as `requestedUserId`
+ * (a body/query `userId`). A caller may always name an identity it HOLDS:
+ *   - no `requestedUserId`, or the authenticated user itself → allowed;
+ *   - its own agent principal (`c.get("agentUserId")`) → allowed. This keeps the
+ *     CLI `--pod` provisioning profile working (it sends the agent user's id while
+ *     the linked human is the authenticated user). Whether such writes SHOULD be
+ *     agent-owned rather than human-owned is an open product decision — this
+ *     clause preserves today's behaviour, it is not an endorsement of it;
+ *   - anyone else → only an OVERRIDE_KEY_TYPES bearer. A session caller never
+ *     may, and a bearer with no `keyType` fails CLOSED (the column is NOT NULL, so
+ *     a missing value means the context was not built by the auth middleware).
+ * Use this instead of any inline `!!c.get("apiKeyId")` identity decision.
+ */
+export function mayActAsUser(
+  c: { get: (k: string) => unknown },
+  requestedUserId: string | null | undefined
+): boolean {
+  const authUserId = c.get("userId") as string | undefined;
+  if (!authUserId) return false;
+  if (!requestedUserId || requestedUserId === authUserId) return true;
+  const agentUserId = c.get("agentUserId") as string | undefined;
+  if (agentUserId && requestedUserId === agentUserId) return true;
+  if (!c.get("apiKeyId")) return false;
+  const keyType = c.get("keyType");
+  if (typeof keyType !== "string" || !keyType) return false;
+  return OVERRIDE_KEY_TYPES.has(keyType);
+}
+
+/**
  * Resolve the TRUSTED acting identity + workspace for a hub-protocol REST request.
  *
  * SECURITY — closes a cross-tenant IDOR. The auth middleware already resolves the
  * authoritative acting user into `c.get("userId")`: a Kratos session identity, or
  * an API-key's delegated user (X-External-User-Id mapping / child key). Handlers
- * MUST NOT let a body-supplied `userId` pick a different identity. Rules:
- *   - Session-token (human) callers — `c.get("apiKeyId")` is undefined: a body
- *     `userId`, if present, MUST equal the authenticated user, else 403. A human
- *     can never act as someone else by editing the request body.
- *   - API-key (service/infra) callers — `apiKeyId` set: may pass `body.userId`
- *     for on-behalf-of (trusted infra; workspace-scoped keys are header-pinned).
+ * MUST NOT let a body-supplied `userId` pick a different identity. The rule lives
+ * in `mayActAsUser` (above): a caller may name itself or its own agent principal;
+ * only an `is_internal` / `system` / `service` key may name anyone else; a
+ * mismatch is a 403.
  * Then the workspace is bound to that identity: if `body.workspaceId` is given it
  * is membership-checked for the RESOLVED user (no cross-workspace write); if
  * omitted, the write is POD-PERSONAL — `workspaceId` is `null` (an owner-personal
@@ -340,20 +386,14 @@ export async function resolveActingContext(
   const authUserId = c.get("userId") as string | undefined;
   if (!authUserId) return { ok: false, status: 403, error: "Unauthenticated" };
 
-  const isServiceKey = !!c.get("apiKeyId");
-  let userId: string;
-  if (isServiceKey) {
-    userId = body.userId ?? authUserId;
-  } else {
-    if (body.userId && body.userId !== authUserId) {
-      return {
-        ok: false,
-        status: 403,
-        error: "userId does not match the authenticated session",
-      };
-    }
-    userId = authUserId;
+  if (!mayActAsUser(c, body.userId)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "userId does not match the authenticated session",
+    };
   }
+  const userId = body.userId ?? authUserId;
 
   const workspaceId = body.workspaceId;
   if (!workspaceId) {

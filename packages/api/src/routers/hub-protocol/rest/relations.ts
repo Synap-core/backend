@@ -17,6 +17,7 @@ import {
   getCaller,
   hasScope,
   logger,
+  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   type HubHono,
@@ -241,15 +242,14 @@ export function registerRelationsRoutes(app: HubHono): void {
     if (!requestedWorkspaceId) {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      const isServiceKey = !!c.get("apiKeyId");
       const claimed = body.userId ?? queryUserId;
-      if (!isServiceKey && claimed && claimed !== authUserId) {
+      if (!mayActAsUser(c, claimed)) {
         return c.json(
           { error: "userId does not match the authenticated session" },
           403
         );
       }
-      userId = isServiceKey ? (claimed ?? authUserId) : authUserId;
+      userId = claimed ?? authUserId;
       effectiveWorkspaceId = undefined;
     } else {
       const acting = await resolveActingContext(c, {

@@ -66,6 +66,7 @@ import {
   getUserAccessibleWorkspaceIds,
   hasScope,
   logger,
+  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   uuidPathParam,
@@ -681,14 +682,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // (the access check below verifies THIS user against the entity's workspace).
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && query.userId && query.userId !== authUserId) {
+    if (!mayActAsUser(c, query.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (query.userId ?? authUserId) : authUserId;
+    const userId = query.userId ?? authUserId;
     try {
       const result = await db.query.entities.findFirst({
         where: and(
@@ -1068,14 +1068,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     if (isPodWide && !body.workspaceId) {
       const authUserId = c.get("userId") as string | undefined;
       if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-      const isServiceKey = !!c.get("apiKeyId");
-      if (!isServiceKey && body.userId && body.userId !== authUserId) {
+      if (!mayActAsUser(c, body.userId)) {
         return c.json(
           { error: "userId does not match the authenticated session" },
           403
         );
       }
-      userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+      userId = body.userId ?? authUserId;
       effectiveWorkspaceId = null;
     } else {
       // Reached when an explicit body.workspaceId is present, or the profile is
@@ -1388,14 +1387,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // route below.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+    if (!mayActAsUser(c, body.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    const userId = body.userId ?? authUserId;
 
     try {
       // Resolve + verify the TARGET entity is visible to the acting user, and
@@ -1851,14 +1849,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     // attachments route.
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && bodyUserId && bodyUserId !== authUserId) {
+    if (!mayActAsUser(c, bodyUserId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (bodyUserId ?? authUserId) : authUserId;
+    const userId = bodyUserId ?? authUserId;
 
     if (!bodyWorkspaceId) {
       return c.json({ error: "workspaceId is required" }, 400);
@@ -2019,14 +2016,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+    if (!mayActAsUser(c, body.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    const userId = body.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -2191,14 +2187,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && q.userId && q.userId !== authUserId) {
+    if (!mayActAsUser(c, q.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
+    const userId = q.userId ?? authUserId;
 
     try {
       const target = await db.query.entities.findFirst({
@@ -2460,14 +2455,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+    if (!mayActAsUser(c, body.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -2555,14 +2549,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const body = c.req.valid("json");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && body.userId && body.userId !== authUserId) {
+    if (!mayActAsUser(c, body.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (body.userId ?? authUserId) : authUserId;
+    const userId = body.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
@@ -2632,14 +2625,13 @@ export function registerEntitiesRoutes(app: HubHono): void {
     const q = c.req.valid("query");
     const authUserId = c.get("userId") as string | undefined;
     if (!authUserId) return c.json({ error: "Unauthenticated" }, 403);
-    const isServiceKey = !!c.get("apiKeyId");
-    if (!isServiceKey && q.userId && q.userId !== authUserId) {
+    if (!mayActAsUser(c, q.userId)) {
       return c.json(
         { error: "userId does not match the authenticated session" },
         403
       );
     }
-    const userId = isServiceKey ? (q.userId ?? authUserId) : authUserId;
+    const userId = q.userId ?? authUserId;
     try {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId = q.agentUserId ?? ctxAgentUserId;

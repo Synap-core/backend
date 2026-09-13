@@ -53,24 +53,40 @@ const REST_DIR = join(process.cwd(), "src/routers/hub-protocol/rest");
  * identity flow instead. Only remove entries (as routes get fixed).
  */
 const ALLOWLIST: Record<string, string> = {
-  // ── SAFE — inline equivalent of resolveActingContext ──────────────────────
-  // These three predate the extracted `resolveActingContext` helper and hand-rolled
-  // the identical rule inline: a session caller's body.userId is checked against
-  // (never allowed to override) the authenticated userId; only a service key may
-  // pass it on-behalf-of. Functionally equivalent, just not routed through the
-  // named function. TODO: migrate to `resolveActingContext` for consistency, but
-  // not a live IDOR.
-  "entities.ts::attachEntityRoute":
-    "SAFE — inlines the session/service-key identity pin (authUserId + isServiceKey guard) equivalent to resolveActingContext; predates the helper.",
-  "entities.ts::attachFacetRoute":
-    "SAFE — inlines the same session/service-key identity pin as attachEntityRoute; predates the helper.",
-  "entities.ts::/files":
-    "SAFE — both the multipart and JSON branches inline the same session/service-key identity pin before use; predates the helper.",
-  "entities.ts::updateEntityRoute":
-    "SAFE (PATCH) — inlines the same session/service-key identity pin (authUserId + isServiceKey guard, body.userId rejected unless it matches the session or the caller is a service key) as attachEntityRoute; predates the helper.",
-  "entities.ts::updateFacetRoute":
-    "SAFE (PATCH) — inlines the same session/service-key identity pin as updateEntityRoute/attachFacetRoute; predates the helper.",
+  // (empty) The five entities.ts "SAFE — inline equivalent" entries were retired
+  // on 2026-09-13: their inline `!!c.get("apiKeyId")` check was NOT equivalent —
+  // it let every bearer key (agent keys included) name any user. They now route
+  // through `mayActAsUser`, the predicate `resolveActingContext` itself uses.
 };
+
+/**
+ * A handler binds identity through the ONE rule if it calls the full door
+ * (`resolveActingContext`) or the predicate that door delegates to
+ * (`mayActAsUser`). Both live in `rest/_shared.ts`.
+ */
+function bindsIdentity(clean: string): boolean {
+  return /\b(?:resolveActingContext|mayActAsUser)\s*\(/.test(clean);
+}
+
+/** An identity decision keyed on "has an api key id" — the retired defect shape. */
+const INLINE_APIKEY_IDENTITY_RE =
+  /!!\s*c\.get\(\s*["']apiKeyId["']\s*\)|\bisServiceKey\b/;
+
+function walkTs(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walkTs(p));
+    else if (
+      e.isFile() &&
+      e.name.endsWith(".ts") &&
+      !e.name.endsWith(".test.ts") &&
+      !e.name.endsWith(".d.ts")
+    )
+      out.push(p);
+  }
+  return out;
+}
 
 function balancedEnd(
   src: string,
@@ -343,12 +359,12 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     expect(nonPostHandlers.length).toBeGreaterThan(30);
   });
 
-  it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext", () => {
+  it("no un-allowlisted hub REST mutating handler reads body.userId without resolveActingContext / mayActAsUser", () => {
     const offenders: string[] = [];
     for (const h of allHandlers) {
       const clean = stripComments(h.bodyText);
       const hasBodyUserId = readsBodyUserId(clean);
-      const hasActingContext = /resolveActingContext\s*\(/.test(clean);
+      const hasActingContext = bindsIdentity(clean);
       if (!hasBodyUserId || hasActingContext) continue;
       const key = `${h.file}::${h.label}`;
       if (ALLOWLIST[key]) continue;
@@ -363,5 +379,53 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
     );
     const stale = Object.keys(ALLOWLIST).filter((k) => !scannedKeys.has(k));
     expect(stale).toEqual([]);
+  });
+});
+
+/**
+ * TRIPWIRE — no hub-protocol router may decide identity on "the caller has an
+ * api key id". The auth middleware sets `apiKeyId` for EVERY bearer key, so that
+ * check silently made every agent key a trusted on-behalf-of service: ten inline
+ * copies (entities.ts ×9, relations.ts ×1) plus the shared helper did exactly
+ * that until 2026-09-13. The rule now lives ONLY in `mayActAsUser` (rest/_shared.ts).
+ *
+ * Scans every non-test `.ts` under routers/hub-protocol (recursive, derived — a
+ * new file joins by existing). It does NOT see a differently-spelled equivalent
+ * (e.g. `c.get("apiKeyId") !== undefined`, or reading apiKeyId into a variable
+ * first); the doc-comment in _shared.ts that names the pattern is excluded by
+ * comment stripping.
+ */
+describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", () => {
+  const HUB_DIR = join(process.cwd(), "src/routers/hub-protocol");
+  const sources = walkTs(HUB_DIR).map((p) => ({
+    rel: p.slice(HUB_DIR.length + 1),
+    clean: stripComments(readFileSync(p, "utf8")),
+  }));
+
+  it("the scan is alive: the regex bites on literal samples and the file set is plausible", () => {
+    expect(
+      INLINE_APIKEY_IDENTITY_RE.test(`const isServiceKey = !!c.get("apiKeyId");`)
+    ).toBe(true);
+    expect(INLINE_APIKEY_IDENTITY_RE.test(`!!c.get( 'apiKeyId' )`)).toBe(true);
+    expect(
+      INLINE_APIKEY_IDENTITY_RE.test(`checkHubRateLimit(c.get("apiKeyId"), "x")`)
+    ).toBe(false);
+    expect(sources.length).toBeGreaterThan(50);
+    expect(sources.some((s) => s.rel === "rest/entities.ts")).toBe(true);
+  });
+
+  it("the predicate is actually in use (non-vacuity: the retired sites route through it)", () => {
+    const calls = (rel: string) =>
+      (sources.find((s) => s.rel === rel)?.clean.match(/\bmayActAsUser\s*\(/g) ??
+        []).length;
+    expect(calls("rest/entities.ts")).toBeGreaterThanOrEqual(9);
+    expect(calls("rest/relations.ts")).toBeGreaterThanOrEqual(1);
+  });
+
+  it("no router decides identity on !!c.get(\"apiKeyId\") / isServiceKey", () => {
+    const offenders = sources
+      .filter((s) => INLINE_APIKEY_IDENTITY_RE.test(s.clean))
+      .map((s) => s.rel);
+    expect(offenders).toEqual([]);
   });
 });
