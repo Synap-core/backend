@@ -93,6 +93,7 @@ import {
   registerKeysRoutes,
   registerAiProvidersRoutes,
   registerFocusSessionsRoutes,
+  registerGuidelinesRoutes,
   registerAgentSkillsRoutes,
   registerRulesRoutes,
   registerUiRoutes,
@@ -331,6 +332,7 @@ registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC fede
 registerKeysRoutes(app); // /keys/rotate-cli
 registerAiProvidersRoutes(app); // /ai-providers
 registerFocusSessionsRoutes(app); // /focus-sessions*
+registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list)
 registerUiRoutes(app); // /ui/focus

@@ -64,6 +64,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
+import { REMEDIABLE_BLOCKED_REASONS } from "@synap/playbooks";
 
 const logger = createLogger({ module: "blocked-slot-recurrence-scanner" });
 
@@ -123,10 +124,11 @@ const MIN_SESSIONS = 2;
 const WINDOW_DAYS = 30;
 
 /**
- * The reasons a remedy proposal is even meaningful. See the header for why the
- * other four are excluded — each exclusion is a decision, not an oversight.
+ * The reasons a remedy proposal is even meaningful. The SSOT is
+ * `@synap/playbooks`, beside `BLOCKED_REASONS`; re-exported so this module's
+ * callers keep one import. See the header for why the other four are excluded.
  */
-export const REMEDIABLE_BLOCKED_REASONS = ["capability", "credential"] as const;
+export { REMEDIABLE_BLOCKED_REASONS };
 
 /** Bound on sessions scanned per pass, mirroring the lane scanner's SCAN_LIMIT. */
 const SCAN_LIMIT = 2000;

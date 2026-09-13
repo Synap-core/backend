@@ -37,6 +37,12 @@ import {
   isOutputRefVisible,
   unreachableOutputRefError,
 } from "./assert-output-ref-visible.js";
+import {
+  guidanceForBlockedSlots,
+  newlyBlockedSlots,
+  type BlockGuidance,
+  type BlockedSlotRef,
+} from "./block-guidelines.js";
 
 export interface UpdateFocusSessionParams {
   sessionId: string;
@@ -114,6 +120,12 @@ export type UpdateFocusSessionResult =
        * moves on believing the work is delivered.
        */
       completeOutput?: CompleteOutputOutcome;
+      /**
+       * Standing guidelines for any slot this patch newly handed to the human
+       * (`block-guidelines.ts`). Absent when nothing was blocked or nothing
+       * applies.
+       */
+      blockGuidelines?: BlockGuidance;
     };
 
 type OutputItem = ExpectedOutput;
@@ -931,6 +943,8 @@ export async function updateFocusSession(
   // Captured out of the transaction so the RETURN can report it — see the
   // `completeOutput` field on UpdateFocusSessionResult.
   let completeOutputOutcome: CompleteOutputOutcome | undefined;
+  // Diffed against the LOCKED base, so only blocks this patch declared count.
+  let blockedByThisPatch: BlockedSlotRef[] = [];
 
   const [updated] = await db.transaction(async (tx) => {
     if (mutatesOutputs) {
@@ -949,6 +963,7 @@ export async function updateFocusSession(
       });
       set.expectedOutputs = applied.outputs;
       completeOutputOutcome = applied.completeOutput;
+      blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
     }
     return tx
       .update(focusSessions)
@@ -989,9 +1004,17 @@ export async function updateFocusSession(
     if (advance.paused) gatedStatus = "paused";
   }
 
+  // After the write: a guideline annotates the block, it never gates it.
+  const blockGuidelines = await guidanceForBlockedSlots({
+    userId,
+    workspaceId: existing.workspaceId ?? null,
+    slots: blockedByThisPatch,
+  });
+
   return {
     status: "updated",
     session: gatedStatus ? { ...updated, status: gatedStatus } : updated,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
+    ...(blockGuidelines ? { blockGuidelines } : {}),
   };
 }

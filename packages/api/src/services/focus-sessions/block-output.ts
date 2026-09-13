@@ -49,6 +49,10 @@ import {
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { updateExpectedOutputsLocked } from "./delegate-output.js";
 import { reconcileOwedSince } from "./update-session.js";
+import {
+  guidanceForBlockedSlots,
+  type BlockGuidance,
+} from "./block-guidelines.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -99,6 +103,11 @@ export type BlockExpectedOutputResult =
       /** The DECLARED label (the slot's own casing), never the caller's. */
       expectedLabel: string;
       kind: string;
+      /**
+       * Block only: standing guidelines for this kind of block
+       * (`block-guidelines.ts`). Absent when nothing applies.
+       */
+      blockGuidelines?: BlockGuidance;
     };
 
 /**
@@ -111,14 +120,14 @@ async function loadSlot(
   expectedLabel: string
 ): Promise<
   | { ok: false; result: BlockExpectedOutputResult }
-  | { ok: true; slot: ExpectedOutput }
+  | { ok: true; slot: ExpectedOutput; workspaceId: string | null }
 > {
   const session = await db.query.focusSessions.findFirst({
     where: and(
       eq(focusSessions.id, sessionId),
       eq(focusSessions.userId, userId)
     ),
-    columns: { id: true, expectedOutputs: true },
+    columns: { id: true, expectedOutputs: true, workspaceId: true },
   });
   if (!session) return { ok: false, result: { status: "not_found" } };
 
@@ -133,7 +142,7 @@ async function loadSlot(
   if (slot.status === "done") {
     return { ok: false, result: { status: "already_done" } };
   }
-  return { ok: true, slot };
+  return { ok: true, slot, workspaceId: session.workspaceId ?? null };
 }
 
 export async function blockExpectedOutput(
@@ -178,7 +187,26 @@ export async function blockExpectedOutput(
   );
   if (!stamped) return { status: "not_found" };
 
-  return { status: "blocked", expectedLabel: slot.label, kind: slot.kind };
+  // AFTER the stamp: guidance annotates a block that has already landed; it
+  // never decides whether the block happens.
+  const blockGuidelines = await guidanceForBlockedSlots({
+    userId: params.userId,
+    workspaceId: loaded.workspaceId,
+    slots: [
+      {
+        label: slot.label,
+        owner: "human",
+        blockedReason: params.blockedReason,
+      },
+    ],
+  });
+
+  return {
+    status: "blocked",
+    expectedLabel: slot.label,
+    kind: slot.kind,
+    ...(blockGuidelines ? { blockGuidelines } : {}),
+  };
 }
 
 export async function unblockExpectedOutput(

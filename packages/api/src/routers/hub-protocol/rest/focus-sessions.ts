@@ -57,7 +57,11 @@ import {
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
-import { BLOCKED_REASONS } from "@synap/playbooks";
+import {
+  guidanceForBlockedSlots,
+  newlyBlockedSlots,
+} from "../../../services/focus-sessions/block-guidelines.js";
+import { BLOCKED_REASONS, type ExpectedOutput } from "@synap/playbooks";
 import {
   blockExpectedOutput,
   unblockExpectedOutput,
@@ -470,7 +474,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     description:
       "Stamps `owner: 'human'` + `blockedReason` + `why` + `owedSince` on the " +
       "named slot. The slot stays `pending` — declaring that you cannot do the " +
-      "work is the opposite of having done it.",
+      "work is the opposite of having done it. When a standing guideline " +
+      "covers this kind of block, `blockGuidelines` carries its text.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: BlockOutputBodySchema,
@@ -482,6 +487,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ok: z.boolean(),
           expectedLabel: z.string(),
           kind: z.string(),
+          blockGuidelines: z.unknown().optional(),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -774,7 +780,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         });
       }
 
-      return c.json(result.session);
+      return c.json(
+        result.blockGuidelines
+          ? { ...result.session, blockGuidelines: result.blockGuidelines }
+          : result.session
+      );
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
       return c.json(
@@ -1083,7 +1093,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         },
       });
 
-      return c.json(updated);
+      // The safety net every block door carries (`block-guidelines.ts`): the
+      // IS appends a slot through THIS wholesale array, so a guideline covering
+      // the block it just declared must ride back on this response.
+      const blockGuidelines =
+        patch.expectedOutputs !== undefined
+          ? await guidanceForBlockedSlots({
+              userId,
+              workspaceId: existing.workspaceId ?? null,
+              slots: newlyBlockedSlots(
+                existing.expectedOutputs as ExpectedOutput[] | null,
+                set.expectedOutputs as ExpectedOutput[] | undefined
+              ),
+            })
+          : undefined;
+
+      return c.json(
+        blockGuidelines ? { ...updated, blockGuidelines } : updated
+      );
     } catch (err) {
       // A WRITE-AUTHORITY refusal is a CALLER error, not a server fault. The
       // slot floor throws `TRPCError(BAD_REQUEST)` naming the slot and the
@@ -1517,6 +1544,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ok: true as const,
               expectedLabel: result.expectedLabel,
               kind: result.kind,
+              ...(result.blockGuidelines
+                ? { blockGuidelines: result.blockGuidelines }
+                : {}),
             });
         }
       } catch (err) {

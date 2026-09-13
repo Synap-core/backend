@@ -87,6 +87,7 @@ export { registerFederationRoutes } from "./federation.js";
 export { registerKeysRoutes } from "./keys.js";
 export { registerAiProvidersRoutes } from "./ai-providers.js";
 export { registerFocusSessionsRoutes } from "./focus-sessions.js";
+export { registerGuidelinesRoutes } from "./guidelines.js";
 export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";
 export { registerArtifactsRoutes } from "./artifacts.js";

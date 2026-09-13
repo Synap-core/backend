@@ -432,6 +432,11 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.completeOutput
             ? { completeOutput: result.completeOutput }
             : {}),
+          // Same reason as `completeOutput`: a guideline covering the block
+          // this patch declared must reach the agent that declared it.
+          ...(result.blockGuidelines
+            ? { blockGuidelines: result.blockGuidelines }
+            : {}),
         });
     }
     // Defensive: an unhandled decision must NOT fall through — every

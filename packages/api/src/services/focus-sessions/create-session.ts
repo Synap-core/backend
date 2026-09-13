@@ -23,6 +23,11 @@ import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sanitizeDeclaredOutputs } from "./update-session.js";
+import {
+  guidanceForBlockedSlots,
+  newlyBlockedSlots,
+  type BlockGuidance,
+} from "./block-guidelines.js";
 // STATIC — see the note on the same import in `update-session.ts`: there is no
 // cycle here, the `await import()` this replaces stated no reason, and
 // `block-output.ts` has always imported this module statically.
@@ -96,7 +101,12 @@ export interface CreateFocusSessionParams {
 }
 
 export type CreateFocusSessionResult =
-  | { status: "created"; session: typeof focusSessions.$inferSelect }
+  | {
+      status: "created";
+      session: typeof focusSessions.$inferSelect;
+      /** Guidelines for any slot declared already blocked on the human. */
+      blockGuidelines?: BlockGuidance;
+    }
   | {
       status: "proposed";
       proposalId: string;
@@ -393,5 +403,19 @@ export async function createFocusSession(
     },
   });
 
-  return { status: "created", session: sessionOut };
+  // A slot can be born blocked; the same safety net as every other block door.
+  const blockGuidelines = await guidanceForBlockedSlots({
+    userId,
+    workspaceId: sessionOut.workspaceId ?? null,
+    slots: newlyBlockedSlots(
+      [],
+      sessionOut.expectedOutputs as ExpectedOutput[] | null
+    ),
+  });
+
+  return {
+    status: "created",
+    session: sessionOut,
+    ...(blockGuidelines ? { blockGuidelines } : {}),
+  };
 }

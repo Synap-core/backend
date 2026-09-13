@@ -203,6 +203,28 @@ export const BLOCKED_REASONS = [
 export type BlockedReason = (typeof BLOCKED_REASONS)[number];
 
 /**
+ * The blockers a standing GUIDELINE can meaningfully remedy — the subset of
+ * {@link BLOCKED_REASONS} the blocked-slot recurrence scanner (@synap/jobs)
+ * proposes a `governance.work_guideline` for. Lives beside the closed set so a
+ * surface that presents those proposals reads the same answer the scanner does.
+ *
+ * Each exclusion is a decision, not an oversight:
+ *   - `permission` — a recurrence proposal for it is the agent arguing for its
+ *     own power; one over-broad approval propagates silently. Its remedy
+ *     already has a door (`governance.widen_lane`).
+ *   - `policy`     — the remedy is editing a rule a human already wrote.
+ *   - `decision` / `physical` — honestly terminal: a human has to choose, or
+ *     act in the world. Proposing a remedy would manufacture busywork.
+ */
+export const REMEDIABLE_BLOCKED_REASONS = [
+  "capability",
+  "credential",
+] as const satisfies ReadonlyArray<BlockedReason>;
+
+export type RemediableBlockedReason =
+  (typeof REMEDIABLE_BLOCKED_REASONS)[number];
+
+/**
  * WHY an expected output stopped being owed without being delivered. Closed, so
  * a new retirement path is a visible edit here rather than a free-text string
  * every reader has to guess at — the same shape as {@link BLOCKED_REASONS}.
