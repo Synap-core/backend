@@ -174,6 +174,43 @@ function requireUser(userId: string | undefined): userId is string {
   return typeof userId === "string" && userId.length > 0;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The ETag must cover everything the body depends on, not just
+ * `maxUpdatedAt`. The body is also a function of `now`: `buildSynapCalendarIcs`
+ * windows to [-FEED_WINDOW_DAYS_BACK, +FEED_WINDOW_DAYS_AHEAD] around it, so a
+ * task can enter or leave the rendered feed purely because time passed, with
+ * NO entity `updatedAt` changing — a tag keyed on `maxUpdatedAt` alone would
+ * then match forever while the body silently goes stale (an event that aged
+ * out of the trailing window would never disappear for a client trusting the
+ * 304).
+ *
+ * Fix: fold in a day-granularity bucket of `now`. The window boundaries move
+ * in whole days (both constants are day counts), so this guarantees the tag
+ * changes at least once a day even with zero writes — bounding the staleness
+ * this ETag can hide to under 24h — while still returning a stable tag for
+ * the (overwhelmingly common) case of repeated polls within the same day and
+ * no new writes.
+ */
+function computeFeedEtag(tagSource: Date, now: Date): string {
+  const dayBucket = Math.floor(now.getTime() / DAY_MS);
+  return `"${tagSource.getTime().toString(16)}-${dayBucket.toString(16)}"`;
+}
+
+/**
+ * RFC 9110 §8.8.3.2 — If-None-Match uses WEAK comparison (ignore any `W/`
+ * prefix) and MAY be a comma-separated list or `*`.
+ */
+function ifNoneMatchHits(header: string | undefined, etag: string): boolean {
+  if (!header) return false;
+  const trimmed = header.trim();
+  if (trimmed === "*") return true;
+  const strip = (tag: string) => tag.trim().replace(/^W\//, "");
+  const ours = strip(etag);
+  return trimmed.split(",").some((candidate) => strip(candidate) === ours);
+}
+
 async function liveTokenFor(userId: string) {
   return db.query.calendarFeedTokens.findFirst({
     where: and(
@@ -526,18 +563,26 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
     }
 
     const visible = await loadOwnedCalendarEntities(row.userId);
+    const now = new Date();
     const { ics, maxUpdatedAt } = buildSynapCalendarIcs(
       visible,
       resolveUidNamespace(),
-      { entityUrl: (id) => openLink(id) }
+      { entityUrl: (id) => openLink(id), now }
     );
     const tagSource = maxUpdatedAt ?? row.createdAt ?? new Date(0);
-    const etag = `"${tagSource.getTime().toString(16)}"`;
+    const etag = computeFeedEtag(tagSource, now);
+    const cacheHeaders = {
+      "Cache-Control": "private, max-age=300",
+      ETag: etag,
+    };
+
+    if (ifNoneMatchHits(c.req.header("If-None-Match"), etag)) {
+      return c.body(null, 304, cacheHeaders);
+    }
 
     return c.body(ics, 200, {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Cache-Control": "private, max-age=300",
-      ETag: etag,
+      ...cacheHeaders,
     });
   });
 }

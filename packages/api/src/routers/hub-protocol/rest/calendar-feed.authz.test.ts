@@ -596,3 +596,218 @@ describe("UID does not depend on the hostname the client asked through", () => {
     expect(Number(/^SEQUENCE:(\d+)\r?$/m.exec(body)![1])).toBeGreaterThan(0);
   });
 });
+
+/**
+ * Conditional GET — the whole payoff of computing an ETag at all.
+ *
+ * `calendar_feed` exists to be polled every 5-15 minutes per client; without
+ * a 304 path the ETag was decorative and every poll re-downloaded the full
+ * body forever.
+ */
+describe("GET /calendar/feed/:token.ics — conditional GET (If-None-Match)", () => {
+  function armFeed() {
+    findFirstMock.mockResolvedValue({
+      id: "feed-a",
+      userId: USER_A,
+      tokenLookupHash: hashToken(TOKEN_A),
+      tokenPrefix: TOKEN_A.slice(0, 8),
+      createdAt: new Date("2026-07-01T00:00:00.000Z"),
+      lastAccessedAt: null,
+      revokedAt: null,
+    });
+    whereMock.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: "entity-a",
+          title: "Alice deadline",
+          preview: null,
+          properties: { dueDate: SOON },
+          type: "task",
+          profileSlug: "task",
+          updatedAt: new Date("2026-07-20T00:00:00.000Z"),
+        },
+      ])
+    );
+  }
+
+  async function firstEtag(): Promise<string> {
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    expect(res.status).toBe(200);
+    return res.headers.get("etag")!;
+  }
+
+  it("a first GET returns 200 with a body and an ETag", async () => {
+    armFeed();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("etag")).toBeTruthy();
+    expect((await res.text()).length).toBeGreaterThan(0);
+  });
+
+  it("a second GET with the matching ETag returns 304 with no body", async () => {
+    armFeed();
+    const etag = await firstEtag();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": etag },
+    });
+    expect(res.status).toBe(304);
+    expect(await res.text()).toBe("");
+    // A 304 MUST still carry ETag + Cache-Control.
+    expect(res.headers.get("etag")).toBe(etag);
+    expect(res.headers.get("cache-control")).toContain("max-age=300");
+  });
+
+  it("a GET with a non-matching ETag returns 200", async () => {
+    armFeed();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": '"deadbeef-0"' },
+    });
+    expect(res.status).toBe(200);
+    expect((await res.text()).length).toBeGreaterThan(0);
+  });
+
+  it("accepts a comma-separated If-None-Match list", async () => {
+    armFeed();
+    const etag = await firstEtag();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": `"bogus-0", ${etag}` },
+    });
+    expect(res.status).toBe(304);
+  });
+
+  it("accepts a weak-prefixed echo of our (strong) tag", async () => {
+    armFeed();
+    const etag = await firstEtag();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": `W/${etag}` },
+    });
+    expect(res.status).toBe(304);
+  });
+
+  it("If-None-Match: * always matches", async () => {
+    armFeed();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": "*" },
+    });
+    expect(res.status).toBe(304);
+  });
+
+  it("lastAccessedAt is still written on a 304 (a conditional GET is still a poll)", async () => {
+    armFeed();
+    const etag = await firstEtag();
+    updateWhereMock.mockClear();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": etag },
+    });
+    expect(res.status).toBe(304);
+    expect(updateWhereMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * THE THING THE DAY-BUCKET WAS FOR — proves the staleness bound, not just the
+ * 304 mechanics above.
+ *
+ * The feed body depends on `now` (the -30d/+365d rolling window), so an entity
+ * can enter/leave the rendered feed with ZERO `updatedAt` change. Without a
+ * clock component in the tag, this whole suite passes even if the day bucket
+ * is deleted from `computeFeedEtag` — asserted below by mutation.
+ *
+ * Fixed clock via `vi.setSystemTime`, because the handler computes `now`
+ * internally (`new Date()`) — there is no injection seam, so moving the clock
+ * is the only way to cross a day boundary deterministically.
+ */
+describe("GET /calendar/feed/:token.ics — ETag reflects the calendar day", () => {
+  // Fixed data, never touched between calls: the whole point is that NOTHING
+  // about the row or the entity changes — only the clock moves.
+  const DAY1 = new Date("2026-08-01T10:00:00.000Z");
+  const SAME_DAY_LATER = new Date("2026-08-01T15:00:00.000Z");
+  const DAY2 = new Date("2026-08-02T10:00:00.000Z");
+  const FIXED_UPDATED_AT = new Date("2026-07-20T00:00:00.000Z");
+
+  function armFixedFeed() {
+    findFirstMock.mockResolvedValue({
+      id: "feed-a",
+      userId: USER_A,
+      tokenLookupHash: hashToken(TOKEN_A),
+      tokenPrefix: TOKEN_A.slice(0, 8),
+      createdAt: new Date("2026-07-01T00:00:00.000Z"),
+      lastAccessedAt: null,
+      revokedAt: null,
+    });
+    whereMock.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: "entity-a",
+          title: "Alice deadline",
+          preview: null,
+          properties: { dueDate: "2026-08-05" }, // within window on both DAY1 and DAY2
+          type: "task",
+          profileSlug: "task",
+          updatedAt: FIXED_UPDATED_AT,
+        },
+      ])
+    );
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("changes across a day boundary with zero writes, and a stale tag no longer 304s", async () => {
+    armFixedFeed();
+    const app = buildApp();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(DAY1);
+    const resDay1 = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    expect(resDay1.status).toBe(200);
+    const etagDay1 = resDay1.headers.get("etag")!;
+    expect(etagDay1).toBeTruthy();
+
+    vi.setSystemTime(DAY2);
+    const resDay2 = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    expect(resDay2.status).toBe(200);
+    const etagDay2 = resDay2.headers.get("etag")!;
+
+    // The staleness bound: no write happened, but the calendar day did, so
+    // the tag MUST differ.
+    expect(etagDay1).not.toBe(etagDay2);
+
+    // The user-facing consequence: a client that cached DAY1's tag must be
+    // served a fresh body on DAY2, never a 304 — that is what stops a
+    // subscribed calendar freezing while entities age out of the window.
+    const staleCheck = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": etagDay1 },
+    });
+    expect(staleCheck.status).toBe(200);
+  });
+
+  it("stays stable within the same day with no writes, and still 304s", async () => {
+    armFixedFeed();
+    const app = buildApp();
+
+    vi.useFakeTimers();
+    vi.setSystemTime(DAY1);
+    const first = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    const etag = first.headers.get("etag")!;
+
+    // Same calendar day, hours later, still no write.
+    vi.setSystemTime(SAME_DAY_LATER);
+    const second = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { "If-None-Match": etag },
+    });
+    // Without this, a suite could pass with a tag that changes on EVERY
+    // request — which would silently restore the bandwidth bug this feature
+    // exists to fix.
+    expect(second.status).toBe(304);
+  });
+});
