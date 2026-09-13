@@ -8,7 +8,7 @@
  * write executed (and was governed) AS the victim.
  *
  * A key may name exactly the identities it holds (itself, its own agent
- * principal); only `is_internal` / `system` / `service` may name anyone; a
+ * principal); only `is_internal` / `system` may name anyone; a
  * bearer context with no `keyType` fails closed.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -67,7 +67,24 @@ describe("resolveActingContext — body.userId is bound to identities the caller
     expect(r).toMatchObject({ ok: false, status: 403 });
   });
 
-  it.each(["service", "system", "is_internal"])(
+  it("service key naming a different user → 403 (self-mintable via /setup/service)", async () => {
+    const r = await resolveActingContext(
+      ctx({ userId: HUMAN, apiKeyId: "key-3", keyType: "service" }),
+      { userId: VICTIM }
+    );
+    expect(r).toMatchObject({ ok: false, status: 403 });
+    expect(membership).not.toHaveBeenCalled();
+  });
+
+  it("sub-token end-user naming the parent key's agent principal → 403", async () => {
+    const r = await resolveActingContext(
+      ctx({ ...agentKey, userId: VICTIM, externalUserId: "ext-1", parentKeyId: "key-1" }),
+      { userId: AGENT }
+    );
+    expect(r).toMatchObject({ ok: false, status: 403 });
+  });
+
+  it.each(["system", "is_internal"])(
     "allowlisted %s key naming a different user → acts as that user",
     async (keyType) => {
       const r = await resolveActingContext(
@@ -86,7 +103,7 @@ describe("resolveActingContext — body.userId is bound to identities the caller
   it("allowlisted key's on-behalf-of user is still membership-checked for a workspace write", async () => {
     membership.mockResolvedValue(null);
     const r = await resolveActingContext(
-      ctx({ userId: HUMAN, apiKeyId: "key-3", keyType: "service" }),
+      ctx({ userId: HUMAN, apiKeyId: "key-3", keyType: "system" }),
       { userId: VICTIM, workspaceId: WS }
     );
     expect(r).toMatchObject({ ok: false, status: 403 });

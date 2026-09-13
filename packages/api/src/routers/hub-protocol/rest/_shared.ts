@@ -316,15 +316,18 @@ export function buildDigestSummary(
  *     floor normally arrives via X-Delegated-Operator-Id, but a client built
  *     without that header authenticates as the "system" sentinel and must still
  *     be able to name the operator whose turn it is processing.
- *   - `system`: pod-admin-minted pod-wide service key (api-keys.ts createSystemKey).
- *   - `service`: product-neutral integrator key (POST /setup/service), owned by a
- *     human and workspace-confined at the shared door.
- * `hub_inbound` (agent) and `user_pat` keys are deliberately absent.
+ *   - `system`: pod-admin-minted pod-wide service key (api-keys.ts createSystemKey,
+ *     a `podAdminProcedure`).
+ * `hub_inbound` (agent), `user_pat` and `service` keys are deliberately absent.
+ * A `service` key is SELF-MINTABLE: `POST /setup/service` accepts any human-owned
+ * `hub-protocol.write` key, and `resolveActingContext` never applies the key's
+ * workspace binding to a no-workspace write — so trusting it here let any key
+ * holder mint one and name any pod user. The tRPC door (`guard.ts`
+ * `assertMayActAs`) already refused it for the same reason.
  */
 const OVERRIDE_KEY_TYPES: ReadonlySet<string> = new Set([
   "is_internal",
   "system",
-  "service",
 ]);
 
 /**
@@ -349,7 +352,14 @@ export function mayActAsUser(
   if (!authUserId) return false;
   if (!requestedUserId || requestedUserId === authUserId) return true;
   const agentUserId = c.get("agentUserId") as string | undefined;
-  if (agentUserId && requestedUserId === agentUserId) return true;
+  // Under a resolved sub-token the caller is the EXTERNAL end-user; `agentUserId`
+  // is still the parent key's agent, an identity that end-user does not hold.
+  if (
+    agentUserId &&
+    !c.get("externalUserId") &&
+    requestedUserId === agentUserId
+  )
+    return true;
   if (!c.get("apiKeyId")) return false;
   const keyType = c.get("keyType");
   if (typeof keyType !== "string" || !keyType) return false;
@@ -364,7 +374,7 @@ export function mayActAsUser(
  * an API-key's delegated user (X-External-User-Id mapping / child key). Handlers
  * MUST NOT let a body-supplied `userId` pick a different identity. The rule lives
  * in `mayActAsUser` (above): a caller may name itself or its own agent principal;
- * only an `is_internal` / `system` / `service` key may name anyone else; a
+ * only an `is_internal` / `system` key may name anyone else; a
  * mismatch is a 403.
  * Then the workspace is bound to that identity: if `body.workspaceId` is given it
  * is membership-checked for the RESOLVED user (no cross-workspace write); if
@@ -717,7 +727,7 @@ export async function getCaller(
   // tools like the CLI) — we simply never honor it and log the discrepancy.
   //
   // INTENTIONAL ASYMMETRY: the sibling `resolveActingContext` (used by WRITE
-  // routes) DOES honor a service-key body.userId. Reads here do not — read
+  // routes) DOES honor an is_internal/system-key body.userId. Reads here do not — read
   // scoping rides on the auth middleware's identity remap (is_internal→operator,
   // agent-key→linkedUserId), already the correct floor, so a read never needs the
   // route to re-pick the user and allowing it would re-open the cross-user read

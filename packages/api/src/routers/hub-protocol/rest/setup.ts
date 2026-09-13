@@ -347,6 +347,23 @@ async function authenticateServiceSetupRequest(
     // Path 4: any human-owned `hub-protocol.write` key can mint a service key
     // owned by itself (the key's userId becomes the service key's owner).
     if (keyRecord?.isActive && keyRecord.scope.includes("hub-protocol.write")) {
+      // An AGENT key may not: the minted `service` key carries no linked human
+      // and no agent shaping, so minting would launder the agent's attribution
+      // into a key the governance membrane no longer reads as the agent's.
+      // Is-agent comes from the ONE door (key principal's userType), never keyType.
+      const identity = await resolveKeyIdentity(keyRecord);
+      if (identity.isAgent) {
+        return {
+          ok: false,
+          response: c.json(
+            {
+              error:
+                "An agent key cannot mint a service key. Mint it with the human's session or personal access token.",
+            },
+            403
+          ),
+        };
+      }
       return {
         ok: true,
         authMethod: "api_key_surface",

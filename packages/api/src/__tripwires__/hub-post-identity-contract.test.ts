@@ -394,6 +394,14 @@ describe("tripwire: hub REST mutating routes bind identity via resolveActingCont
  * (e.g. `c.get("apiKeyId") !== undefined`, or reading apiKeyId into a variable
  * first); the doc-comment in _shared.ts that names the pattern is excluded by
  * comment stripping.
+ *
+ * BLIND SPOT — READ doors (measured 2026-09-13, not guarded here): a GET handler
+ * that reads `?userId` (`query.userId`, `c.req.query("userId")`) and feeds it to
+ * a visibility predicate is NOT scanned. It could not be derived honestly: most
+ * such reads only forward the value into a tRPC procedure that floors on
+ * `ctx.userId` or strict `assertMayActAs`, and a regex cannot tell that
+ * forwarding from a direct predicate. `GET /threads` (threads.ts
+ * `channelVisibilityWhere(query.userId)`) was the live instance.
  */
 describe("tripwire: no inline apiKeyId identity decision outside mayActAsUser", () => {
   const HUB_DIR = join(process.cwd(), "src/routers/hub-protocol");

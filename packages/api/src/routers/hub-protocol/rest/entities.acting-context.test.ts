@@ -74,10 +74,20 @@ describe("DELETE /facets/{facetId} — identity bound by the real mayActAsUser",
     expect(getCaller).toHaveBeenCalledWith(expect.anything(), { userId: AGENT });
   });
 
-  it("a service key may still act on behalf of another user", async () => {
+  it("a self-mintable service key naming another user → 403", async () => {
     getCaller.mockClear();
     const res = await detach(
       makeApp({ ...agentKey, keyType: "service", agentUserId: undefined }),
+      VICTIM
+    );
+    expect(res.status).toBe(403);
+    expect(getCaller).not.toHaveBeenCalled();
+  });
+
+  it("a system key may still act on behalf of another user", async () => {
+    getCaller.mockClear();
+    const res = await detach(
+      makeApp({ ...agentKey, keyType: "system", agentUserId: undefined }),
       VICTIM
     );
     expect(res.status).toBe(200);
