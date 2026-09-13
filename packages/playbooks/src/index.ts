@@ -634,6 +634,16 @@ export interface PlaybookSchedule {
 export type PlaybookScheduleMode = "run" | "appointment";
 
 /**
+ * The closed mode set as a VALUE — the write door's zod enum
+ * (`packages/api/src/schemas/playbook-schedule.ts`) is derived from this, so the
+ * door can never accept a mode the type does not declare.
+ */
+export const PLAYBOOK_SCHEDULE_MODES: readonly PlaybookScheduleMode[] = [
+  "run",
+  "appointment",
+];
+
+/**
  * The stored `schedule.mode` → the `playbook_run` flow-node's `mode` field, which
  * is what the automation executor actually branches on. ONE place reads the
  * unknown-valued JSONB and decides, so the flow builder and any future reader

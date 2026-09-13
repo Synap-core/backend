@@ -57,6 +57,7 @@ import {
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -196,13 +197,13 @@ const linkEndpointTypeSchema = z.enum([
   "participant",
 ]);
 
-// The richer JSONB shapes (params/inputStrategy/channelSpec/expectedOutputs/
-// schedule) conform to @synap/playbooks contracts; stored loosely and validated
-// at the domain boundary, so accept them as open JSON here.
+// The richer JSONB shapes (params/inputStrategy/channelSpec/expectedOutputs)
+// conform to @synap/playbooks contracts; stored loosely and validated at the
+// domain boundary, so accept them as open JSON here. `stages` and `schedule`
+// are the exceptions — validated by their own schemas (../schemas/).
 const jsonRecord = z.record(z.string(), z.unknown());
-const jsonValue: z.ZodType<unknown> = z.unknown();
 
-const createInputSchema = z.object({
+export const createInputSchema = z.object({
   /** AI attribution — set by AI callers so the governance gate runs the agent ladder. */
   agentUserId: z.string().uuid().optional(),
   source: z.string().optional(),
@@ -222,7 +223,8 @@ const createInputSchema = z.object({
    */
   stages: playbookStagesSchema.optional(),
   subjectProfile: jsonRecord.optional(),
-  schedule: jsonValue.optional(),
+  /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
+  schedule: playbookScheduleInputSchema.optional(),
   /**
    * Free-form playbook metadata (persisted to `playbooks.metadata`). Carries the
    * propose-only governance marker for unattended maintenance playbooks:
@@ -274,7 +276,8 @@ export const updateInputSchema = z.object({
   /** See `createInputSchema.stages` — validated, `category` required. */
   stages: playbookStagesSchema.optional(),
   subjectProfile: jsonRecord.optional(),
-  schedule: jsonValue.optional(),
+  /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
+  schedule: playbookScheduleInputSchema.optional(),
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
