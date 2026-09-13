@@ -91,17 +91,31 @@ async function bothOwned(
 }
 
 /**
+ * The producer's floor, exposed so a GENERIC door (`POST /api/hub/links`) can
+ * refuse an edge BEFORE governance turns it into a proposal. The same check
+ * `addSessionBlocker` applies — one floor, one place; never re-derive the
+ * ownership query at a call site.
+ */
+export async function validateSessionBlocker(
+  input: Pick<BlockerEdgeInput, "sessionId" | "blockerSessionId" | "userId">
+): Promise<{ ok: true } | { ok: false; reason: "not_found" | "self_blocker" }> {
+  if (input.sessionId === input.blockerSessionId) {
+    return { ok: false, reason: "self_blocker" };
+  }
+  if (!(await bothOwned(input.sessionId, input.blockerSessionId, input.userId)))
+    return { ok: false, reason: "not_found" };
+  return { ok: true };
+}
+
+/**
  * Record that `sessionId` is blocked by `blockerSessionId`.
  * Idempotent — a repeat insert is a no-op.
  */
 export async function addSessionBlocker(
   input: BlockerEdgeInput
 ): Promise<BlockerEdgeResult> {
-  if (input.sessionId === input.blockerSessionId) {
-    return { linked: false, reason: "self_blocker" };
-  }
-  if (!(await bothOwned(input.sessionId, input.blockerSessionId, input.userId)))
-    return { linked: false, reason: "not_found" };
+  const valid = await validateSessionBlocker(input);
+  if (!valid.ok) return { linked: false, reason: valid.reason };
 
   await db
     .insert(links)

@@ -26,6 +26,10 @@ import {
   createLink,
   getLinksFor,
 } from "../../../services/links/links-service.js";
+import {
+  addSessionBlocker,
+  validateSessionBlocker,
+} from "../../../services/focus-sessions/session-blocked-by.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
@@ -101,6 +105,17 @@ const LINK_TYPES = [
   "blocked_by",
 ] as const;
 
+/**
+ * Refusals from the `blocked_by` floor. `not_found` is 404 for BOTH a missing
+ * session and one owned by someone else: the floor cannot tell them apart, and
+ * a 403 for "exists but not yours" would turn this door into an existence
+ * oracle for other users' session ids.
+ */
+const BLOCKER_REFUSALS = {
+  self_blocker: { status: 400, error: "A session cannot be blocked by itself" },
+  not_found: { status: 404, error: "Session not found" },
+} as const;
+
 const CreateLinkRequestSchema = z.object({
   userId: z.string().optional(),
   workspaceId: z.string().uuid().optional(),
@@ -132,6 +147,7 @@ export function registerLinksRoutes(app: HubHono): void {
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Session not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -199,6 +215,31 @@ export function registerLinksRoutes(app: HubHono): void {
       }
     }
 
+    // `blocked_by` has a dedicated producer (`addSessionBlocker`) whose floor —
+    // session endpoints, no self-edge, BOTH sessions owned by the caller — is
+    // what makes its owner-blind readers safe. A raw edge from this door would
+    // let an agent point its session at a stranger's and have the unblock
+    // reactor notify it with the stranger's session title. Validate BEFORE
+    // governance, or an invalid edge becomes a proposal that approval writes.
+    const isBlockedBy = parsed.data.linkType === "blocked_by";
+    if (isBlockedBy) {
+      if (parsed.data.fromType !== "session" || parsed.data.toType !== "session") {
+        return c.json(
+          { error: "blocked_by links must connect two sessions" },
+          400
+        );
+      }
+      const valid = await validateSessionBlocker({
+        sessionId: parsed.data.fromId,
+        blockerSessionId: parsed.data.toId,
+        userId,
+      });
+      if (!valid.ok) {
+        const refusal = BLOCKER_REFUSALS[valid.reason];
+        return c.json({ error: refusal.error }, refusal.status);
+      }
+    }
+
     try {
       const actorResolution = await resolveActorId(body.agentUserId, userId);
       if ("error" in actorResolution)
@@ -227,6 +268,21 @@ export function registerLinksRoutes(app: HubHono): void {
       }
       if ("proposalId" in perm) {
         return c.json({ status: "proposed", proposalId: perm.proposalId });
+      }
+
+      if (isBlockedBy) {
+        // `from --blocked_by--> to` ≡ addBlocker(sessionId: from, blocker: to).
+        const result = await addSessionBlocker({
+          sessionId: parsed.data.fromId,
+          blockerSessionId: parsed.data.toId,
+          userId,
+          workspaceId,
+        });
+        if (!result.linked) {
+          const refusal = BLOCKER_REFUSALS[result.reason];
+          return c.json({ error: refusal.error }, refusal.status);
+        }
+        return c.json({ status: "created", link: null });
       }
 
       const created = await createLink({

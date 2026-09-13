@@ -218,6 +218,38 @@ describe("(3) materialized subject", () => {
   });
 });
 
+// ── (3b) blocked_by MUST NOT REACH THE RAW LINK MATERIALIZER ─────────────────
+
+describe("(3b) link/create blocked_by", () => {
+  function blockedByArgs(): Args {
+    const a = args("link", "create");
+    (a.payload as { data: Record<string, unknown> }).data = {
+      fromType: "session",
+      fromId: "attacker-session",
+      toType: "session",
+      toId: "victim-session",
+      linkType: "blocked_by",
+    };
+    return a;
+  }
+
+  it("is refused before any .validated event or status flip", async () => {
+    await expect(catchAll().execute(blockedByArgs())).rejects.toThrow(
+      /blocked_by/
+    );
+    expect(auditCalls).toHaveLength(0);
+    expect(dbUpdates).toHaveLength(0);
+  });
+
+  it("other link types still hand off to the materializer", async () => {
+    const a = blockedByArgs();
+    (a.payload as { data: Record<string, unknown> }).data.linkType = "about";
+    const result = await catchAll().execute(a);
+    expect(result.effect?.applied).toBe("deferred");
+    expect(auditCalls).toHaveLength(1);
+  });
+});
+
 // ── (4) ANTI-DRIFT: the mirrored subject set vs the WORKER'S OWN SOURCE ──────
 
 const MATERIALIZER = join(process.cwd(), "../jobs/src/workers/materializer.ts");

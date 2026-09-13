@@ -164,6 +164,28 @@ export function registerCatchAllExecutor(): void {
 
         const subjectId = (eventPayload.id as string) || proposal.targetId;
 
+        // `link/create` hands off to the materializer's `materializeLink`, which
+        // inserts the edge RAW. For `blocked_by` that skips the owner floor of
+        // `addSessionBlocker` (session endpoints, no self-edge, both sessions
+        // owned by one user) — the floor its owner-blind readers depend on. A
+        // proposal filed before `POST /links` validated, or whose sessions
+        // changed hands since, would otherwise land a cross-user edge. Refused
+        // before any event is appended; the dedicated door writes it.
+        if (
+          targetType === "link" &&
+          changeType === "create" &&
+          eventPayload.linkType === "blocked_by"
+        ) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              `Approval for '${doorKey}' refused: a blocked_by link is only ` +
+              `written by the session blocker door (focusSessions.addBlocker / ` +
+              `POST /api/hub/links), which floors both sessions on their owner. ` +
+              `Nothing was applied.`,
+          });
+        }
+
         // ── THE HONESTY GATE ────────────────────────────────────────────────
         // Reaching here means NO executor claimed this door. The only thing
         // this branch can do is append a `.validated` event, which the

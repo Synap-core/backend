@@ -71,6 +71,44 @@ vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: vi.fn(async () => ({ status: "applied" })),
 }));
 
+// Session owner per id — drives the floor below. The floor's SQL is the
+// service's own; this file tests that the HANDLER consults it, before
+// governance, and applies through the dedicated producer.
+const sessionOwners = new Map<string, string>();
+
+vi.mock(
+  "../../../services/focus-sessions/session-blocked-by.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../services/focus-sessions/session-blocked-by.js")
+      >();
+    const floor = (i: {
+      sessionId: string;
+      blockerSessionId: string;
+      userId: string;
+    }) =>
+      i.sessionId === i.blockerSessionId
+        ? ({ ok: false, reason: "self_blocker" } as const)
+        : sessionOwners.get(i.sessionId) === i.userId &&
+            sessionOwners.get(i.blockerSessionId) === i.userId
+          ? ({ ok: true } as const)
+          : ({ ok: false, reason: "not_found" } as const);
+    return {
+      ...actual,
+      validateSessionBlocker: vi.fn(async (i: Parameters<typeof floor>[0]) =>
+        floor(i)
+      ),
+      addSessionBlocker: vi.fn(async (i: Parameters<typeof floor>[0]) => {
+        const v = floor(i);
+        return v.ok
+          ? { linked: true }
+          : { linked: false, reason: v.reason };
+      }),
+    };
+  }
+);
+
 const resolveActingContextMock = vi.fn();
 
 vi.mock("./_shared.js", () => ({
@@ -195,5 +233,128 @@ describe("POST /links — workspace-endpoint membership", () => {
     });
 
     expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /links — blocked_by goes through the session blocker floor", () => {
+  const MY_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const MY_OTHER_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const VICTIM_SESSION = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionOwners.clear();
+    sessionOwners.set(MY_SESSION, USER_ID);
+    sessionOwners.set(MY_OTHER_SESSION, USER_ID);
+    sessionOwners.set(VICTIM_SESSION, "victim-user");
+    resolveActingContextMock.mockResolvedValue({
+      ok: true,
+      userId: USER_ID,
+      workspaceId: CONSUMER_WS,
+      role: "editor",
+    });
+  });
+
+  async function writeCalls() {
+    const { createLink } = await import(
+      "../../../services/links/links-service.js"
+    );
+    const { addSessionBlocker } = await import(
+      "../../../services/focus-sessions/session-blocked-by.js"
+    );
+    const { checkPermissionOrPropose } = await import(
+      "../../../utils/permission-check.js"
+    );
+    return {
+      createLink: vi.mocked(createLink),
+      addSessionBlocker: vi.mocked(addSessionBlocker),
+      checkPermissionOrPropose: vi.mocked(checkPermissionOrPropose),
+    };
+  }
+
+  it("refuses a cross-owner edge with 404, before governance, writing nothing", async () => {
+    const res = await postLinks(buildTestApp(), {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: VICTIM_SESSION,
+      linkType: "blocked_by",
+    });
+
+    expect(res.status).toBe(404);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(calls.createLink).not.toHaveBeenCalled();
+    expect(calls.addSessionBlocker).not.toHaveBeenCalled();
+  });
+
+  it("refuses a self-edge with 400", async () => {
+    const res = await postLinks(buildTestApp(), {
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_SESSION,
+      linkType: "blocked_by",
+    });
+
+    expect(res.status).toBe(400);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
+  it("refuses a non-session endpoint with 400", async () => {
+    const res = await postLinks(buildTestApp(), {
+      fromType: "entity",
+      fromId: "entity-1",
+      toType: "session",
+      toId: MY_SESSION,
+      linkType: "blocked_by",
+    });
+
+    expect(res.status).toBe(400);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
+  it("applies a same-owner edge through addSessionBlocker (from = blocked, to = blocker), never raw createLink", async () => {
+    const res = await postLinks(buildTestApp(), {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_OTHER_SESSION,
+      linkType: "blocked_by",
+    });
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe("created");
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).toHaveBeenCalledTimes(1);
+    expect(calls.addSessionBlocker).toHaveBeenCalledWith({
+      sessionId: MY_SESSION,
+      blockerSessionId: MY_OTHER_SESSION,
+      userId: USER_ID,
+      workspaceId: CONSUMER_WS,
+    });
+    expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
+  it("floors on the authenticated principal, not a caller-supplied userId", async () => {
+    const res = await postLinks(buildTestApp(), {
+      userId: "victim-user",
+      fromType: "session",
+      fromId: VICTIM_SESSION,
+      toType: "session",
+      toId: MY_SESSION,
+      linkType: "blocked_by",
+    });
+
+    // resolveActingContext binds USER_ID; the body's userId must not reach the floor.
+    expect(res.status).toBe(404);
+    const calls = await writeCalls();
+    expect(calls.addSessionBlocker).not.toHaveBeenCalled();
   });
 });
