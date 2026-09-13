@@ -10,6 +10,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
+  type SQL,
   and,
   assertGrantScoped,
   capabilities,
@@ -17,6 +18,7 @@ import {
   desc,
   eq,
   focusSessions,
+  ilike,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -24,7 +26,12 @@ import {
   withParentSessionId,
   attachParentSessionIds,
 } from "../services/focus-sessions/parent-lineage.js";
-import { sessionStatusConditions } from "../services/focus-sessions/session-status-filter.js";
+import {
+  sessionStatusConditions,
+  type StatusSinceWindows,
+} from "../services/focus-sessions/session-status-filter.js";
+import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
+import { escapeLikePattern } from "../utils/like-pattern.js";
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
   isTerminalSessionStatus,
@@ -195,6 +202,20 @@ const statusFilterSchema = z
   ])
   .default("all");
 
+/**
+ * Per-status recency windows: admit `stale` / `closed` rows whose last activity
+ * (`coalesce(closedAt, updatedAt)`) is at or after the given instant, ORed with
+ * `status`. A status already selected ignores its window. Shared by `list` and
+ * `browse` so the two doors cannot interpret a window differently. See
+ * `services/focus-sessions/session-status-filter.ts`.
+ */
+const statusSinceSchema = z
+  .object({
+    stale: z.string().datetime({ offset: true }).optional(),
+    closed: z.string().datetime({ offset: true }).optional(),
+  })
+  .optional();
+
 /** The states a client may write — the ONE list, shared with the Hub REST PATCH door. */
 const updatableStatusSchema = z.enum(UPDATABLE_SESSION_STATUSES);
 
@@ -287,17 +308,37 @@ const sessionLinksRouter = router({
  *     exposureLensWhere); `null`/`undefined`/`[]` → no narrow.
  * An empty array never narrows (never matches-zero); a lens can only restrict.
  */
-function queryUserSessions(
-  userId: string | null | undefined,
-  { workspaceLens, projectLens }: ResolvedScope,
-  status: z.infer<typeof statusFilterSchema>,
-  limit: number,
-  lens: SessionLens = "default",
-  kind: SessionKindFilter = "work",
-  flow: { playbookId?: string; automationId?: string } = {},
-  closedSince?: string
-) {
-  const conditions = [eq(focusSessions.userId, requireUserId(userId))];
+/** Everything that decides WHICH sessions a list door returns. */
+interface SessionListQuery {
+  userId: string | null | undefined;
+  scope: ResolvedScope;
+  status: z.infer<typeof statusFilterSchema>;
+  lens?: SessionLens;
+  kind?: SessionKindFilter;
+  flow?: { playbookId?: string; automationId?: string };
+  statusSince?: StatusSinceWindows;
+  /** Case-insensitive substring match on the session goal. */
+  q?: string;
+}
+
+/**
+ * The WHERE clause for a session list, shared by `list` and `browse`.
+ *
+ * Split out of `queryUserSessions` when `browse` arrived, so the two doors
+ * cannot drift into two answers about which sessions match: they differ only
+ * in ordering and paging, never in what is selected.
+ */
+function sessionListConditions({
+  userId,
+  scope: { workspaceLens, projectLens },
+  status,
+  lens = "default",
+  kind = "work",
+  flow = {},
+  statusSince,
+  q,
+}: SessionListQuery): SQL[] {
+  const conditions: SQL[] = [eq(focusSessions.userId, requireUserId(userId))];
 
   // Both lenses narrow within the user's own rows (the floor is userId above).
   // The APPLICATION lives in `sessionScopeConditions` — shared with the owed-slot
@@ -307,7 +348,7 @@ function queryUserSessions(
   // STATUS (and the recently-closed window) — a WHERE clause, never a
   // post-filter, for the reason the triage and kind lenses below give. See
   // `session-status-filter.ts` for why the time window lives here too.
-  conditions.push(...sessionStatusConditions(status, closedSince));
+  conditions.push(...sessionStatusConditions(status, statusSince));
 
   // TRIAGE LENS — applied as a WHERE clause, never as a post-filter. A page is
   // `limit`-capped in SQL, so filtering after the fact would let unaccepted
@@ -338,12 +379,68 @@ function queryUserSessions(
     conditions.push(sessionAutomationWhere(flow.automationId));
   }
 
+  // SEARCH — a WHERE clause like every other narrowing here. Searching the
+  // rows of an already-limited page would miss every match past the limit,
+  // which is the defect this door exists to avoid.
+  const term = q?.trim();
+  if (term) {
+    conditions.push(ilike(focusSessions.goal, `%${escapeLikePattern(term)}%`));
+  }
+
+  return conditions;
+}
+
+/** `list`: newest-started first, capped. Unchanged ordering for its consumers. */
+function queryUserSessions(query: SessionListQuery, limit: number) {
   return db
     .select()
     .from(focusSessions)
-    .where(and(...conditions))
+    .where(and(...sessionListConditions(query)))
     .orderBy(desc(focusSessions.startedAt))
     .limit(limit);
+}
+
+/**
+ * The derived fields EVERY session list row carries — lineage, triage, kind and
+ * participants — applied in one place so `list` and `browse` return the same row
+ * shape. Written once when `browse` arrived: a projection added to one door and
+ * not the other is how a field ends up "present on the wire, populated by
+ * nobody" on half the surfaces.
+ */
+async function projectSessionRows(
+  sessions: FocusSession[],
+  userId: string | null | undefined
+) {
+  // Derived lineage for the whole page in ONE query (never N+1, never a
+  // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
+  const withLineage = await attachParentSessionIds(sessions);
+  // `triage` is projected onto EVERY row in EVERY lens (it is pure — no
+  // query), so no consumer ever re-derives the predicate from origin +
+  // metadata + status. That re-derivation is exactly how a second, drifting
+  // copy of a rule gets written.
+  const withTriage = attachTriage(withLineage);
+  // `kind` rides along on EVERY row in EVERY lens, same contract as
+  // `triage`: pure, no query, and the one place the predicate is decided.
+  const withKind = attachSessionKind(withTriage);
+  // WHO worked here — one shared derivation with `get` (see
+  // `services/focus-sessions/participants.ts`), so a list row and a detail
+  // page can never name different agents for the same session.
+  //
+  // UNCONDITIONAL, not behind a flag like `edges`. The cost is two indexed
+  // reads for the whole page (`idx_proposals_session_id`, then one
+  // `users` lookup that is SKIPPED when the page has no participants), and
+  // the alternative is worse in kind rather than in degree: an opt-in flag
+  // leaves the DEFAULT answer wrong, which is exactly why every consumer
+  // reached past this door for the raw `agentIds` invite list instead. A
+  // field present on the type and populated only under a flag nobody sets
+  // is the "declared on the wire, populated by nobody" shape this codebase
+  // keeps paying for. `triage`, `kind` and `parentSessionId` ride along the
+  // same way and for the same reason.
+  const withParticipants = await attachSessionParticipants(
+    withKind,
+    requireUserId(userId)
+  );
+  return withParticipants;
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -382,17 +479,12 @@ export const focusSessionsRouter = router({
         projectId: ScopeFilterShape.projectId,
         status: statusFilterSchema,
         /**
-         * Also return `closed` sessions concluded at or after this instant
-         * (`coalesce(closedAt, updatedAt)`), OR'd with `status`. Ignored when
-         * `status` is `"all"` or already selects `closed`.
-         *
-         * Exists so a surface showing "still wants you + closed today" can
-         * narrow BOTH halves in SQL. Sending `closed` in the set and filtering
-         * the window on the device let sessions closed long ago fill the page
-         * and push qualifying rows past the limit — measured on the live pod
-         * as 11 rendered of 19 qualifying. See `session-status-filter.ts`.
+         * Admit `stale` / `closed` rows by recency, ORed with `status`, in SQL.
+         * Fetching them by status and filtering the window on the device let
+         * long-concluded rows fill the page — measured on the live pod as 11
+         * rendered of 19 qualifying. See `session-status-filter.ts`.
          */
-        closedSince: z.string().datetime({ offset: true }).optional(),
+        statusSince: statusSinceSchema,
         limit: z.number().int().min(1).max(50).default(20),
         /**
          * Also project the dependency edges for the page. TWO kinds, on the
@@ -436,44 +528,21 @@ export const focusSessionsRouter = router({
       // "present when `edges: true`", which is the true contract.
       const scope = resolveScope(ctx, input);
       const sessions = await queryUserSessions(
-        ctx.userId,
-        scope,
-        input.status,
-        input.limit,
-        input.lens,
-        input.kind,
-        { playbookId: input.playbookId, automationId: input.automationId },
-        input.closedSince
+        {
+          userId: ctx.userId,
+          scope,
+          status: input.status,
+          lens: input.lens,
+          kind: input.kind,
+          flow: {
+            playbookId: input.playbookId,
+            automationId: input.automationId,
+          },
+          statusSince: input.statusSince,
+        },
+        input.limit
       );
-      // Derived lineage for the whole page in ONE query (never N+1, never a
-      // second store) — mirrors `synap_list_sessions` (mcp/handlers/session.ts).
-      const withLineage = await attachParentSessionIds(sessions);
-      // `triage` is projected onto EVERY row in EVERY lens (it is pure — no
-      // query), so no consumer ever re-derives the predicate from origin +
-      // metadata + status. That re-derivation is exactly how a second, drifting
-      // copy of a rule gets written.
-      const withTriage = attachTriage(withLineage);
-      // `kind` rides along on EVERY row in EVERY lens, same contract as
-      // `triage`: pure, no query, and the one place the predicate is decided.
-      const withKind = attachSessionKind(withTriage);
-      // WHO worked here — one shared derivation with `get` (see
-      // `services/focus-sessions/participants.ts`), so a list row and a detail
-      // page can never name different agents for the same session.
-      //
-      // UNCONDITIONAL, not behind a flag like `edges`. The cost is two indexed
-      // reads for the whole page (`idx_proposals_session_id`, then one
-      // `users` lookup that is SKIPPED when the page has no participants), and
-      // the alternative is worse in kind rather than in degree: an opt-in flag
-      // leaves the DEFAULT answer wrong, which is exactly why every consumer
-      // reached past this door for the raw `agentIds` invite list instead. A
-      // field present on the type and populated only under a flag nobody sets
-      // is the "declared on the wire, populated by nobody" shape this codebase
-      // keeps paying for. `triage`, `kind` and `parentSessionId` ride along the
-      // same way and for the same reason.
-      const withParticipants = await attachSessionParticipants(
-        withKind,
-        requireUserId(ctx.userId)
-      );
+      const withParticipants = await projectSessionRows(sessions, ctx.userId);
       if (!input.edges) return withParticipants;
       // Second batch projection, ONE more links query for the whole page.
       const withEdges = await attachSessionEdges(withParticipants);
@@ -481,6 +550,68 @@ export const focusSessionsRouter = router({
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.
       return attachSessionOutputDependencies(withEdges, ctx.userId);
+    }),
+  /**
+   * BROWSE — the full, searchable, paged session list behind "See all".
+   *
+   * `list` feeds home surfaces: newest-started first, capped at 50, returning a
+   * bare array that browser's SessionsApp and PodHomeApp type their caches on.
+   * A collection screen needs three things `list` cannot give without breaking
+   * those consumers: text search, paging past the cap, and "is there more".
+   * This door adds exactly those and reuses the SAME WHERE clause
+   * (`sessionListConditions`) and the SAME row projection
+   * (`projectSessionRows`), so the two cannot disagree about which sessions
+   * match or what a row contains.
+   *
+   * Ordered by LAST ACTIVITY (`updatedAt`), not by start: a person scanning
+   * everything wants what moved recently, and ordering by start is exactly how
+   * a session begun long ago but closed today fell off `list`'s page. `id` is
+   * the tie-break, so offset paging never repeats or skips a row between pages.
+   *
+   * Every filter — status, windows, kind, lens, search — is a WHERE clause
+   * applied BEFORE the limit. Filtering a fetched page is the bug this codebase
+   * has now shipped twice on this table.
+   */
+  browse: protectedProcedure
+    .input(
+      paginatedInput.extend({
+        workspaceId: ScopeFilterShape.workspaceId,
+        projectId: ScopeFilterShape.projectId,
+        status: statusFilterSchema,
+        statusSince: statusSinceSchema,
+        lens: sessionLensSchema,
+        kind: sessionKindFilterSchema,
+        q: z.string().trim().max(200).optional(),
+        limit: z.number().int().min(1).max(100).default(30),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = resolveScope(ctx, input);
+      const rows = await db
+        .select()
+        .from(focusSessions)
+        .where(
+          and(
+            ...sessionListConditions({
+              userId: ctx.userId,
+              scope,
+              status: input.status,
+              lens: input.lens,
+              kind: input.kind,
+              statusSince: input.statusSince,
+              q: input.q,
+            })
+          )
+        )
+        .orderBy(desc(focusSessions.updatedAt), desc(focusSessions.id))
+        // One extra row tells `buildPaginatedResponse` whether there is more.
+        .limit(input.limit + 1)
+        .offset(input.offset);
+      const { items, pagination } = buildPaginatedResponse(rows, input);
+      return {
+        items: await projectSessionRows(items, ctx.userId),
+        pagination,
+      };
     }),
 
   /**

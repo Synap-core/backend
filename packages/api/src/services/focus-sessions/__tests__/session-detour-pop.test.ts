@@ -62,7 +62,68 @@ function procedureBody(src: string, name: string): string {
   const next = rest.search(
     /^ {2}\w+: (?:protected|workspace|public|admin)Procedure$/m
   );
-  return next === -1 ? rest : rest.slice(0, next);
+  // A body also ENDS at the first column-0 line — the router's closing `});`.
+  // Procedure lines are always indented. Without this stop, the LAST procedure
+  // in a router ran to end of FILE and swallowed every top-level function
+  // declared below the router; a fixture caught it, the real router was spared
+  // only because `close` is not its final entry.
+  const routerEnd = rest.search(/^\S/m);
+  const cuts = [next, routerEnd].filter((i) => i !== -1);
+  return cuts.length === 0 ? rest : rest.slice(0, Math.min(...cuts));
+}
+
+/**
+ * Every top-level function in a router file, by name → its source text. A body
+ * runs from its declaration to the next top-level declaration of any kind.
+ */
+function localFunctions(src: string): Map<string, string> {
+  const map = new Map<string, string>();
+  const decl = /^(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*[(<]/gm;
+  const boundary =
+    /^(?:export\s+)?(?:async\s+function|function|const|let|type|interface|class)\s/gm;
+  for (const m of src.matchAll(decl)) {
+    boundary.lastIndex = m.index! + 1;
+    const next = boundary.exec(src);
+    map.set(m[1]!, src.slice(m.index!, next ? next.index : src.length));
+  }
+  return map;
+}
+
+/**
+ * A procedure's body PLUS the source of every LOCAL function it reaches,
+ * transitively.
+ *
+ * WHY THE HOP. `procedureBody` alone reads only the procedure's own lines, so
+ * it was blind to code a procedure reaches through a helper in the same file.
+ * That cut both ways, and one of them was a hole this file exists to close:
+ *   - when `browse` arrived, `attachParentSessionIds` moved from `list`'s body
+ *     into the shared `projectSessionRows` helper, and the self-check below
+ *     went red on correct code;
+ *   - worse, a CLOSE procedure could reach a parent through such a helper while
+ *     "the close PROCEDURES reach no parent" stayed green — the cascade this
+ *     tripwire is named for, hidden one function away.
+ *
+ * Boundary, stated: it follows functions DECLARED IN THE ROUTER FILE only.
+ * Imported services are out of reach, which is why `complete-session.ts` is
+ * checked as a whole file below.
+ */
+function reachableSource(src: string, name: string): string {
+  const fns = localFunctions(src);
+  const seen = new Set<string>();
+  let out = procedureBody(src, name);
+  const queue = [out];
+  while (queue.length > 0) {
+    const chunk = queue.pop()!;
+    for (const m of chunk.matchAll(/\b(\w+)\s*\(/g)) {
+      const callee = m[1]!;
+      if (seen.has(callee) || !fns.has(callee)) continue;
+      seen.add(callee);
+      const body = fns.get(callee)!;
+      out += "\n" + body;
+      queue.push(body);
+    }
+  }
+  return out;
 }
 
 describe("detour pop", () => {
@@ -71,8 +132,34 @@ describe("detour pop", () => {
     // Both doors that flip a session to a terminal status: the status-closed
     // funnel inside `update`, and the canonical `close`.
     for (const name of ["update", "close"]) {
-      expect(procedureBody(src, name), name).not.toMatch(LINEAGE);
+      expect(reachableSource(src, name), name).not.toMatch(LINEAGE);
     }
+  });
+
+  it("the extractor FOLLOWS a procedure into the local helpers it calls", () => {
+    // Proves the hop on a fixture, so the check cannot quietly stop following
+    // and still pass: the direct slice must be blind, the reachable source
+    // must see through the helper, and a procedure that reaches no helper must
+    // stay clean.
+    const fixture = [
+      "export const r = router({",
+      "  list: protectedProcedure",
+      "    .query(async () => { return project(rows); }),",
+      "  close: protectedProcedure",
+      "    .mutation(async () => { return tidy(); }),",
+      "});",
+      "",
+      "async function project(rows) {",
+      "  return attachParentSessionIds(rows);",
+      "}",
+      "",
+      "function tidy() {",
+      "  return 1;",
+      "}",
+    ].join("\n");
+    expect(procedureBody(fixture, "list")).not.toMatch(LINEAGE);
+    expect(reachableSource(fixture, "list")).toMatch(LINEAGE);
+    expect(reachableSource(fixture, "close")).not.toMatch(LINEAGE);
   });
 
   it("the extractor actually sees lineage where lineage exists", () => {
@@ -82,7 +169,7 @@ describe("detour pop", () => {
     // read-only projections and are SUPPOSED to match.
     const src = readFileSync(ROUTER, "utf8");
     for (const name of ["list", "get"]) {
-      expect(procedureBody(src, name), name).toMatch(LINEAGE);
+      expect(reachableSource(src, name), name).toMatch(LINEAGE);
     }
   });
 
