@@ -40,6 +40,11 @@
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
     },
+    "./dates": {
+      "types": "./dist/dates/index.d.ts",
+      "import": "./dist/dates/index.js",
+      "require": "./dist/dates/index.js"
+    },
     "./entities": {
       "types": "./dist/entities/index.d.ts",
       "import": "./dist/entities/index.js"

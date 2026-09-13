@@ -1,11 +1,30 @@
 /**
  * Hand-rolled ICS calendar feed (no extra npm dep).
  *
- * Date placement copies the calendar-view fallback
- * (`dueDate → startDate → startTime → date`; never `createdAt`) and the
- * date-only local-day parser. Copied rather than imported: calendar-view
- * pulls Svelte.
+ * Date placement (`dueDate → startDate → startTime → date`; never `createdAt`)
+ * and the date-only local-day parser live in `@synap-core/types/dates` — the
+ * ONE door, shared with relay, spatial-ui and the calendar view. They are
+ * re-exported here so the existing import sites keep working; do NOT re-inline
+ * a local copy, that is exactly the drift this package removed.
  */
+
+import {
+  getProperty,
+  resolveEntityDateValue,
+  isDateOnlyShaped,
+  parseEntityDate,
+  resolveEntityDate,
+  entityDateHasTime,
+} from "@synap-core/types/dates";
+
+export {
+  getProperty,
+  resolveEntityDateValue,
+  isDateOnlyShaped,
+  parseEntityDate,
+  resolveEntityDate,
+  entityDateHasTime,
+};
 
 export const CALENDAR_PROFILE_SLUGS = ["task", "event", "meeting"] as const;
 
@@ -17,110 +36,6 @@ export interface CalendarFeedEntity {
   type?: string | null;
   profileSlug?: string | null;
   updatedAt?: Date | string | null;
-}
-
-/** Walk a dotted path (e.g. "properties.date") off an object, with a default. */
-export function getProperty(
-  obj: unknown,
-  path: string,
-  defaultValue?: unknown
-): unknown {
-  const keys = path.split(".");
-  let current: unknown = obj;
-  for (const key of keys) {
-    if (current == null || typeof current !== "object") return defaultValue;
-    current = (current as Record<string, unknown>)[key];
-  }
-  return current === undefined ? defaultValue : current;
-}
-
-/**
- * RAW placement value: optional `dateField`, then dueDate → startDate →
- * startTime → date. Falsy → null. `createdAt` is not a fallback.
- */
-export function resolveEntityDateValue(
-  entity: unknown,
-  dateField?: string
-): unknown {
-  let startVal = dateField ? getProperty(entity, dateField) : undefined;
-  if (!startVal) {
-    startVal =
-      getProperty(entity, "properties.dueDate") ||
-      getProperty(entity, "properties.startDate") ||
-      getProperty(entity, "properties.startTime") ||
-      getProperty(entity, "properties.date");
-  }
-  return startVal || null;
-}
-
-/** Date-only: plain Y-M-D, or an ISO / Date whose time is exactly 00:00:00.000. */
-export function isDateOnlyShaped(value: string | number | Date): boolean {
-  if (value instanceof Date) {
-    return (
-      value.getHours() === 0 &&
-      value.getMinutes() === 0 &&
-      value.getSeconds() === 0 &&
-      value.getMilliseconds() === 0
-    );
-  }
-  if (typeof value === "string") {
-    if (!value.includes("T") && !/\d{2}:\d{2}/.test(value)) return true;
-    return /T00:00(?::00(?:\.0+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(value);
-  }
-  return false;
-}
-
-/**
- * Parse a date property onto the intended LOCAL day. Date-only values land
- * at local midnight so they never shift a day west of UTC.
- */
-export function parseEntityDate(
-  value: string | number | Date | null | undefined
-): Date | null {
-  if (value === null || value === undefined || value === "") return null;
-
-  if (isDateOnlyShaped(value)) {
-    if (value instanceof Date) return value;
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value));
-    if (m) {
-      const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-      return isNaN(d.getTime()) ? null : d;
-    }
-  }
-
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
-}
-
-export function resolveEntityDate(
-  entity: unknown,
-  dateField?: string
-): Date | null {
-  const startVal = resolveEntityDateValue(entity, dateField);
-  if (!startVal) return null;
-  if (
-    typeof startVal === "string" ||
-    typeof startVal === "number" ||
-    startVal instanceof Date
-  ) {
-    return parseEntityDate(startVal);
-  }
-  return parseEntityDate(String(startVal));
-}
-
-export function entityDateHasTime(
-  raw: unknown,
-  isAllDay: boolean = false
-): boolean {
-  if (isAllDay) return false;
-  if (
-    typeof raw !== "string" &&
-    typeof raw !== "number" &&
-    !(raw instanceof Date)
-  ) {
-    return false;
-  }
-  return !isDateOnlyShaped(raw);
 }
 
 function profileOf(entity: CalendarFeedEntity): string {
