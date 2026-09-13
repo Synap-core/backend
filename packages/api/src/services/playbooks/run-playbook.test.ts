@@ -4,6 +4,7 @@ import {
   buildRunSessionMetadata,
   buildDefinitionSnapshot,
   IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+  IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
   type RunChainContext,
 } from "./run-playbook.js";
 import type { Playbook } from "@synap/database/schema";
@@ -177,23 +178,27 @@ describe("IDEMPOTENCY_TERMINAL_SESSION_STATUSES (subject-idempotency reuse gate)
   // the states that mean a run is still IN FLIGHT (reuse → no re-dispatch) vs
   // TERMINALLY done (a fresh run is allowed again). The idempotency-by-subject
   // check reuses a session iff its status is NOT in the terminal set.
-  const IN_FLIGHT = [
-    "active",
-    "paused",
-    "stale",
-    "forming",
-    "scheduled",
-  ] as const;
+  // `scheduled` is neither: an appointment has executed nothing, so it is not
+  // reused (see IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES) — but it is not
+  // terminal either.
+  const IN_FLIGHT = ["active", "paused", "stale", "forming"] as const;
   const TERMINAL = ["closed", "failed", "cancelled"] as const;
 
   it("treats NO in-flight state as terminal, so a stuck/aged subject is REUSED (Stellar-runaway regression)", () => {
     // Regression: keying reuse on 'active' alone re-spawned a fresh run daily once
     // the focus-session reaper aged the session active→'stale'. 'stale' (and
-    // paused/forming/scheduled) must NOT count as terminal — otherwise the next
-    // daily cron re-dispatches a duplicate run for the same subject.
+    // paused/forming) must NOT count as terminal — otherwise the next daily cron
+    // re-dispatches a duplicate run for the same subject.
     for (const status of IN_FLIGHT) {
       expect(IDEMPOTENCY_TERMINAL_SESSION_STATUSES).not.toContain(status);
+      expect(IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES).not.toContain(status);
     }
+  });
+
+  it("does not reuse a scheduled appointment, and stays a superset of the terminal set", () => {
+    expect([...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES].sort()).toEqual(
+      [...TERMINAL, "scheduled"].sort()
+    );
   });
 
   it("lists EXACTLY the terminal states, so a properly-closed subject is eligible again (no permanent lockout)", () => {

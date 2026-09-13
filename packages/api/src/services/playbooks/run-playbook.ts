@@ -42,6 +42,7 @@ import {
   ChannelType,
   ChannelScope,
   ChannelStatus,
+  FocusSessionStatus,
 } from "@synap/database/schema";
 import type {
   ChannelSpec,
@@ -278,17 +279,34 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
  * aged out of 'active'. The focus-session reaper flips an idle session
  * active/paused → 'stale' at 24h (focus-session-reaper.ts), and the playbook-run
  * reaper later force-fails its orphaned run and flips the session → 'closed'
- * (playbook-run-reaper.ts). Reusing across EVERY non-terminal state (active,
- * paused, stale, forming, scheduled) means a stuck/in-flight subject is not
- * re-dispatched daily; only once the run is terminally failed/closed — session
- * in ('closed' | 'failed' | 'cancelled') — is a new run allowed, so a subject
- * always has a legitimate path back to eligibility and is never permanently
- * locked out. Exported so a test can lock the SHAPE of this decision.
+ * (playbook-run-reaper.ts). Reusing across every IN-FLIGHT state (active,
+ * paused, stale, forming) means a stuck/in-flight subject is not re-dispatched
+ * daily; only once the run is terminally failed/closed — session in ('closed' |
+ * 'failed' | 'cancelled') — is a new run allowed, so a subject always has a
+ * legitimate path back to eligibility and is never permanently locked out.
+ * Exported so a test can lock the SHAPE of this decision.
  */
 export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = [
   "closed",
   "failed",
   "cancelled",
+] as const;
+
+/**
+ * The statuses subject-idempotency must NOT reuse: the terminal set above, plus
+ * `scheduled`.
+ *
+ * `scheduled` is not terminal, but it is not in flight either — it is an
+ * APPOINTMENT (`materializeScheduledSession`): a person's future slot that has
+ * executed nothing. Reusing it returned `{ run: null, reused: true }` — a run
+ * that reads as handled and never ran — and because an unopened appointment
+ * rolls forward and stays `scheduled`, it could suppress that subject's run for
+ * weeks. Appointments do not need this reuse to avoid duplicates: the
+ * scheduler enforces one open appointment per calendar with its own lookup.
+ */
+export const IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES = [
+  ...IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+  FocusSessionStatus.SCHEDULED,
 ] as const;
 
 /** Max runs a single `query`/`rotating` fan-out may spawn (safety bound). */
@@ -461,7 +479,7 @@ async function executeSingleRun(
   // subject already exists, REUSE it rather than starting a duplicate. This makes
   // a playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
   // client has a session): start-if-missing, no-op-if-present. Reuse spans every
-  // non-terminal state (see IDEMPOTENCY_TERMINAL_SESSION_STATUSES) so a stuck
+  // in-flight state (see IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES) so a stuck
   // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in;
   // manual runs leave `idempotentBySubject` false so each click starts fresh.
   if (input.idempotentBySubject && input.subjectId) {
@@ -469,13 +487,15 @@ async function executeSingleRun(
       where: and(
         eq(focusSessions.playbookId, playbook.id),
         eq(focusSessions.subjectEntityId, input.subjectId),
-        // Reuse ANY non-terminal session (active/paused/stale/forming/scheduled),
-        // not just 'active': a stuck subject whose session the focus-session
-        // reaper aged active→'stale' must NOT re-spawn a fresh run on the next
-        // daily cron. Once the playbook-run reaper force-fails the run and closes
-        // the session (→ closed|failed|cancelled), a new run is allowed again.
+        // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
+        // 'active': a stuck subject whose session the focus-session reaper aged
+        // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
+        // Once the playbook-run reaper force-fails the run and closes the
+        // session (→ closed|failed|cancelled), a new run is allowed again. A
+        // `scheduled` appointment is never reused: it has executed nothing, so
+        // it must not stand in for a run.
         notInArray(focusSessions.status, [
-          ...IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+          ...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
         ])
       ),
       orderBy: [desc(focusSessions.startedAt)],
