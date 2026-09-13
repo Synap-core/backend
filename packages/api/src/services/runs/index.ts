@@ -16,6 +16,7 @@ import {
   and,
   or,
   eq,
+  ne,
   isNull,
   gt,
   lt,
@@ -181,7 +182,9 @@ function sessionStatus(s: string): RunStatus {
     // a terminal, non-success end-state → cancelled.
     case "stale":
       return "cancelled";
-    // active / paused / forming / scheduled are all "still going" for a run view.
+    // active / paused / forming are "still going" for a run view. `scheduled`
+    // never reaches this mapper: an appointment has executed nothing, so it is
+    // not a run at all and `listSessionRuns` excludes it at the query.
     default:
       return "running";
   }
@@ -240,7 +243,8 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
 function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
   switch (status) {
     case "running":
-      return ["active", "paused", "forming", "scheduled"];
+      // No `scheduled`: an appointment is not a run (see listSessionRuns).
+      return ["active", "paused", "forming"];
     case "completed":
       return ["closed"];
     case "failed":
@@ -1066,6 +1070,12 @@ async function listSessionRuns(
         // exclusion. That divergence is the whole reason the predicate is
         // derived in one place.
         sessionKindWhere("work"),
+        // An APPOINTMENT (`scheduled`) is work — `sessionKindWhere` says so on
+        // purpose — but it is not a run: it waits for a person and has executed
+        // nothing. Without this, a weekly appointment materialised on Monday
+        // shows in the feed (and `synap diagnose`) as a RUNNING run. Appointments
+        // have their own surface (relay's session board), not the run ledger.
+        ne(focusSessions.status, "scheduled"),
         statusValues ? inArray(focusSessions.status, statusValues) : undefined,
         scope.workspaceId
           ? eq(focusSessions.workspaceId, scope.workspaceId)
