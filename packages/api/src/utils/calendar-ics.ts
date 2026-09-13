@@ -213,11 +213,40 @@ export interface VEventInput {
   description?: string;
   location?: string;
   lastModified?: string;
+  sequence: number;
+}
+
+/**
+ * SEQUENCE epoch — 2020-01-01T00:00:00Z, in ms.
+ *
+ * RFC 5545 §3.8.7.4 SEQUENCE is an INTEGER, and §3.3.8 caps that at
+ * 2147483647. Seconds-since-1970 is already 1.7e9 and overflows in 2038, so
+ * the counter is rebased on a recent epoch: today it is ~2.1e8 and grows
+ * ~3.2e7/year, which leaves the range good for ~60 more years.
+ */
+const SEQUENCE_EPOCH_MS = Date.UTC(2020, 0, 1);
+
+/**
+ * A monotonic revision number for one item, derived from `updatedAt`.
+ *
+ * Some clients only re-render an already-known UID when SEQUENCE INCREASES —
+ * LAST-MODIFIED alone is advisory. There is no revision column and we do not
+ * want one: `updatedAt` already moves on every write, which is exactly the
+ * event SEQUENCE is meant to signal.
+ *
+ * Granularity is one second. Two edits inside the same second share a
+ * SEQUENCE; LAST-MODIFIED and the changed body still differ, so the worst case
+ * is a client that redraws lazily, never a wrong value.
+ */
+export function icsSequence(updated: Date | null): number {
+  if (!updated) return 0;
+  const secs = Math.floor((updated.getTime() - SEQUENCE_EPOCH_MS) / 1000);
+  return secs > 0 ? secs : 0;
 }
 
 export function entityToVEvent(
   entity: CalendarFeedEntity,
-  podHost: string
+  uidNamespace: string
 ): VEventInput | null {
   if (isClosedTask(entity)) return null;
   const raw = resolveEntityDateValue(entity);
@@ -226,7 +255,7 @@ export function entityToVEvent(
 
   const props = asRecord(entity.properties);
   const allDay = props.isAllDay === true || !entityDateHasTime(raw, false);
-  const uid = `${entity.id}@${podHost}`;
+  const uid = `${entity.id}@${uidNamespace}`;
   const updated =
     entity.updatedAt != null
       ? parseEntityDate(entity.updatedAt as never)
@@ -277,6 +306,7 @@ export function entityToVEvent(
     description: description || undefined,
     location,
     lastModified: updated ? formatIcsUtc(updated) : undefined,
+    sequence: icsSequence(updated),
   };
 }
 
@@ -288,6 +318,7 @@ export function veventLines(event: VEventInput, url?: string): string[] {
     event.dtstartLine,
   ];
   if (event.dtendLine) lines.push(event.dtendLine);
+  lines.push(`SEQUENCE:${event.sequence}`);
   if (event.lastModified) lines.push(`LAST-MODIFIED:${event.lastModified}`);
   lines.push(`SUMMARY:${escapeIcsText(event.summary)}`);
   if (event.description) {
@@ -301,17 +332,37 @@ export function veventLines(event: VEventInput, url?: string): string[] {
   return lines;
 }
 
+/**
+ * Polling cadence we SUGGEST to clients. A hint, and nothing more.
+ *
+ * RFC 7986 §5.7 calls REFRESH-INTERVAL a suggested MINIMUM, not a contract;
+ * `X-PUBLISHED-TTL` is Microsoft's older spelling of the same suggestion.
+ * Apple's Calendar appears to ignore both (it keeps its own per-subscription
+ * "Refresh" setting), and Google documents neither and exposes no server-side
+ * influence over its poll rate. They are emitted because they are two correct
+ * lines that some clients do read — not because they control anything.
+ */
+export const FEED_REFRESH_HINT = "PT1H";
+
 export function buildIcsCalendar(
   events: VEventInput[],
   opts?: { calName?: string; entityUrl?: (uid: string) => string | undefined }
 ): string {
+  // X-WR-CALNAME is what Apple/Google actually name the subscription with;
+  // without it Apple names it after the URL, putting the feed SECRET in the
+  // sidebar. RFC 7986 §5.1 NAME is the standard spelling of the same thing —
+  // both are emitted, with the same value, so no client has to guess.
+  const calName = escapeIcsText(opts?.calName ?? "Synap");
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
     "PRODID:-//Synap//Calendar Feed//EN",
     "CALSCALE:GREGORIAN",
     "METHOD:PUBLISH",
-    `X-WR-CALNAME:${escapeIcsText(opts?.calName ?? "Synap")}`,
+    `X-WR-CALNAME:${calName}`,
+    `NAME:${calName}`,
+    `REFRESH-INTERVAL;VALUE=DURATION:${FEED_REFRESH_HINT}`,
+    `X-PUBLISHED-TTL:${FEED_REFRESH_HINT}`,
   ];
   for (const event of events) {
     const uidEntityId = event.uid.split("@")[0] ?? "";
@@ -352,7 +403,7 @@ export function isWithinFeedWindow(start: Date, now: Date): boolean {
  */
 export function buildSynapCalendarIcs(
   entities: CalendarFeedEntity[],
-  podHost: string,
+  uidNamespace: string,
   opts?: {
     entityUrl?: (id: string) => string | undefined;
     now?: Date;
@@ -364,7 +415,7 @@ export function buildSynapCalendarIcs(
   for (const entity of entities) {
     const start = resolveEntityDate(entity);
     if (!start || !isWithinFeedWindow(start, now)) continue;
-    const vevent = entityToVEvent(entity, podHost);
+    const vevent = entityToVEvent(entity, uidNamespace);
     if (!vevent) continue;
     events.push(vevent);
     const updated =

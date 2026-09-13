@@ -97,14 +97,66 @@ function isoOrNull(d: Date | null | undefined): string | null {
   return d ? d.toISOString() : null;
 }
 
-function resolvePodHost(hostHeader: string | undefined): string {
-  const fromEnv = process.env.PUBLIC_URL?.replace(/^https?:\/\//i, "").replace(
-    /\/$/,
-    ""
+function publicUrlHost(): string | undefined {
+  return (
+    process.env.PUBLIC_URL?.replace(/^https?:\/\//i, "").replace(/\/$/, "") ||
+    undefined
   );
+}
+
+/**
+ * The host to PRINT in a freshly minted feed URL. Request-derived on purpose:
+ * whoever is minting wants a URL on the hostname they are talking to.
+ *
+ * This is a rendering concern only. It must never reach a UID — see
+ * `resolveUidNamespace`.
+ */
+function resolvePodHost(hostHeader: string | undefined): string {
+  const fromEnv = publicUrlHost();
   if (fromEnv) return fromEnv;
   const raw = hostHeader || "localhost";
   return raw.split(",")[0]!.trim();
+}
+
+/**
+ * Fallback right-hand side of a UID when `PUBLIC_URL` is unset.
+ *
+ * `.invalid` is reserved by RFC 2606 §2 precisely so a synthetic name can
+ * never collide with a real host. Global uniqueness does not depend on it
+ * anyway: the left-hand side is `entities.id`, a v4 UUID.
+ */
+const UID_NAMESPACE_FALLBACK = "synap.invalid";
+
+/**
+ * The right-hand side of every VEVENT UID. **Never request-derived.**
+ *
+ * RFC 5545 §3.8.4.7: a UID identifies the ITEM, not the rendering of it. When
+ * this was `resolvePodHost(host header)`, a pod reachable at two hostnames
+ * emitted two different UIDs for the same object — which a calendar client
+ * reads as delete-plus-create, losing the user's local colour and alert
+ * overrides and, if both URLs are subscribed, showing a phantom duplicate.
+ *
+ * Measured exposure at the time of the fix: LOW but real. `deploy/docker-
+ * compose.yml` declares `PUBLIC_URL: ${PUBLIC_URL:?...}`, so a composed pod
+ * cannot boot without it, and `deploy/Caddyfile` serves the API on exactly one
+ * site block (`{$DOMAIN}`) — one deployed pod, one hostname. The request-
+ * derived branch therefore only ever fired for a pod run outside compose
+ * (local dev), and would have fired the day a second hostname was added.
+ *
+ * `PUBLIC_URL` is what this reuses because it is the only pod-identifying
+ * value available synchronously — the same value `deep-links.ts` already
+ * treats as the pod's identity. There is no immutable pod id to prefer: the
+ * Control-Plane `podId` lives in a workspace `settings` JSONB row
+ * (`routers/provision.ts:425`), needs an async DB read, and is absent on every
+ * self-hosted pod.
+ *
+ * ⚠️ ONE-TIME COST: this changes the UID scheme, so every already-subscribed
+ * client will delete its existing events and re-create them once. That is
+ * worth paying now, while approximately nobody is subscribed, and is never
+ * worth paying later — do not change this string again.
+ */
+function resolveUidNamespace(): string {
+  return publicUrlHost() ?? UID_NAMESPACE_FALLBACK;
 }
 
 function feedUrls(
@@ -473,13 +525,12 @@ export function registerCalendarFeedRoutes(app: HubHono): void {
       );
     }
 
-    const podHost = resolvePodHost(
-      c.req.header("x-forwarded-host") || c.req.header("host")
-    );
     const visible = await loadOwnedCalendarEntities(row.userId);
-    const { ics, maxUpdatedAt } = buildSynapCalendarIcs(visible, podHost, {
-      entityUrl: (id) => openLink(id),
-    });
+    const { ics, maxUpdatedAt } = buildSynapCalendarIcs(
+      visible,
+      resolveUidNamespace(),
+      { entityUrl: (id) => openLink(id) }
+    );
     const tagSource = maxUpdatedAt ?? row.createdAt ?? new Date(0);
     const etag = `"${tagSource.getTime().toString(16)}"`;
 

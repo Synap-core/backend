@@ -3,8 +3,10 @@ import {
   buildSynapCalendarIcs,
   entityToVEvent,
   escapeIcsText,
+  FEED_REFRESH_HINT,
   foldIcsLine,
   formatIcsDateOnly,
+  icsSequence,
   isClosedTask,
   isWithinFeedWindow,
   parseEntityDate,
@@ -103,13 +105,58 @@ describe("ICS builder — timed UTC", () => {
 });
 
 describe("ICS builder — UID stable", () => {
-  it("UID is {entity.id}@{podHost} and identical across rebuilds", () => {
+  it("UID is {entity.id}@{uidNamespace} and identical across rebuilds", () => {
     const e = entity();
     const a = build([e]);
     const b = build([e]);
     expect(a.ics).toContain(`UID:${e.id}@${HOST}`);
     expect(a.events[0]?.uid).toBe(b.events[0]?.uid);
     expect(entityToVEvent(e, HOST)?.uid).toBe(`${e.id}@${HOST}`);
+  });
+});
+
+/**
+ * SEQUENCE — RFC 5545 §3.8.7.4. Some clients only re-render a known UID when
+ * this INCREASES, so it must (a) reach the body and (b) actually move when the
+ * item is edited.
+ *
+ * Negative controls, both run and both confirmed RED, with the mutated line
+ * grepped each time before believing the result:
+ *  - delete `SEQUENCE:${event.sequence}` from `veventLines` → "reaches the
+ *    body", "moves when updatedAt moves" and "0 when undated" all go red.
+ *  - make `icsSequence` return a constant 1 → "moves when updatedAt moves"
+ *    goes red on its own.
+ */
+describe("SEQUENCE reaches the body and increases with updatedAt", () => {
+  it("emits SEQUENCE on the event", () => {
+    const { ics } = build([entity({ updatedAt: "2026-07-20T00:00:00.000Z" })]);
+    expect(ics).toMatch(/^SEQUENCE:\d+\r?$/m);
+  });
+
+  it("a later updatedAt yields a STRICTLY GREATER value", () => {
+    const older = build([entity({ updatedAt: "2026-07-20T10:00:00.000Z" })]);
+    const newer = build([entity({ updatedAt: "2026-07-20T10:05:00.000Z" })]);
+    const read = (ics: string) =>
+      Number(/^SEQUENCE:(\d+)\r?$/m.exec(ics)?.[1]);
+    expect(read(newer.ics)).toBeGreaterThan(read(older.ics));
+    expect(read(older.ics)).toBeGreaterThan(0);
+  });
+
+  it("stays inside the RFC 5545 INTEGER range", () => {
+    const { ics } = build([entity({ updatedAt: "2026-07-20T00:00:00.000Z" })]);
+    expect(Number(/^SEQUENCE:(\d+)\r?$/m.exec(ics)![1])).toBeLessThan(
+      2147483647
+    );
+  });
+
+  it("an entity with no updatedAt gets 0, never a negative or NaN", () => {
+    const { ics, events } = build([entity()]);
+    expect(events[0]?.sequence).toBe(0);
+    expect(ics).toContain("SEQUENCE:0");
+  });
+
+  it("a pre-epoch updatedAt clamps to 0 rather than going negative", () => {
+    expect(icsSequence(new Date("1999-01-01T00:00:00.000Z"))).toBe(0);
   });
 });
 
@@ -217,6 +264,44 @@ describe("ICS envelope", () => {
     expect(ics).toContain("X-WR-CALNAME:Synap");
     expect(ics.startsWith("BEGIN:VCALENDAR")).toBe(true);
     expect(ics.trimEnd().endsWith("END:VCALENDAR")).toBe(true);
+  });
+
+  /**
+   * NAME (RFC 7986 §5.1) beside X-WR-CALNAME.
+   *
+   * Line-anchored, because `X-WR-CALNAME:Synap` CONTAINS the substring
+   * `NAME:Synap` — a naive `toContain("NAME:Synap")` passes with the NAME line
+   * deleted. Verified: with the `NAME:` push removed, the anchored assertion
+   * goes red and the substring one stays green.
+   *
+   * Negative control (run, and the deletion grepped before believing it):
+   * remove `` `NAME:${calName}` `` from buildIcsCalendar → this test red, the
+   * X-WR-CALNAME test above still green.
+   */
+  it("emits RFC 7986 NAME with the same value as X-WR-CALNAME", () => {
+    const { ics } = build([entity()]);
+    expect(ics).toMatch(/^NAME:Synap\r?$/m);
+    expect(ics).toMatch(/^X-WR-CALNAME:Synap\r?$/m);
+  });
+
+  /**
+   * Refresh hints. These are SUGGESTIONS — RFC 7986 §5.7 calls
+   * REFRESH-INTERVAL a suggested minimum, Apple appears to ignore both, and
+   * Google documents neither. The test asserts only that the two lines are
+   * emitted and well-formed; it makes no claim about client behaviour.
+   *
+   * Negative control: remove either push → this goes red on that line alone.
+   */
+  it("emits REFRESH-INTERVAL and X-PUBLISHED-TTL as ISO-8601 durations", () => {
+    const { ics } = build([entity()]);
+    expect(ics).toMatch(/^REFRESH-INTERVAL;VALUE=DURATION:PT\d+[HMD]\r?$/m);
+    expect(ics).toMatch(/^X-PUBLISHED-TTL:PT\d+[HMD]\r?$/m);
+    // Same value in both spellings, or a client reading one disagrees with a
+    // client reading the other.
+    const refresh = /^REFRESH-INTERVAL;VALUE=DURATION:(\S+?)\r?$/m.exec(ics)![1];
+    const ttl = /^X-PUBLISHED-TTL:(\S+?)\r?$/m.exec(ics)![1];
+    expect(refresh).toBe(ttl);
+    expect(refresh).toBe(FEED_REFRESH_HINT);
   });
 });
 

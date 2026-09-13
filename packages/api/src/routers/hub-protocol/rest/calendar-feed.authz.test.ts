@@ -8,7 +8,7 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hashToken } from "../../../utils/share-token.js";
 
 const { findFirstMock, whereMock, updateWhereMock, entityReadVisibleWhereSpy } =
@@ -488,5 +488,111 @@ describe("the feed read predicate — owner-scoped, google-excluded", () => {
     // The provider string the gcal import actually writes. `"google-calendar"`
     // exists only in comments and would match zero rows.
     expect(boundValue(excl[0]!, params)).toBe("google");
+  });
+});
+
+/**
+ * THE UID IS A PROPERTY OF THE ITEM, NOT OF THE URL YOU ASKED THROUGH.
+ *
+ * RFC 5545 §3.8.4.7: a UID identifies the item. The right-hand side used to be
+ * `resolvePodHost(host header)`, so a pod reachable at two hostnames emitted
+ * two UIDs for one object — which a calendar client reads as delete-plus-
+ * create: local colour and alert overrides lost, and a phantom duplicate if
+ * both URLs are subscribed.
+ *
+ * This drives the REAL route and reads the UID out of the REAL body, so it
+ * asserts the value that ARRIVES — not that a helper exists. `resolveUidName-
+ * space` is module-private on purpose; there is no seam to hand-build past.
+ *
+ * Negative control (run; the mutation grepped in the source before believing
+ * the green/red either way): restore `buildSynapCalendarIcs(visible,
+ * resolvePodHost(c.req.header("x-forwarded-host") || c.req.header("host")),
+ * …)` and "identical UID across two hostnames" goes RED, printing the two
+ * different UIDs; the rest of this file stays green.
+ *
+ * MEASURED COVERAGE BOUNDARY. Under that same mutation the second case
+ * ("uses PUBLIC_URL when set") stays GREEN — `resolvePodHost` also prefers
+ * PUBLIC_URL, so the two functions are indistinguishable while it is set. The
+ * ONLY discriminating input is a request whose host differs from the
+ * configured origin with PUBLIC_URL UNSET; that is why the first case deletes
+ * the variable rather than relying on the ambient environment. Do not "tidy"
+ * the delete away.
+ */
+describe("UID does not depend on the hostname the client asked through", () => {
+  const ENTITY_ID = "11111111-1111-4111-8111-111111111111";
+
+  function armOneEvent() {
+    findFirstMock.mockResolvedValue({
+      id: "feed-a",
+      userId: USER_A,
+      tokenLookupHash: hashToken(TOKEN_A),
+      tokenPrefix: TOKEN_A.slice(0, 8),
+      createdAt: new Date("2026-07-01T00:00:00.000Z"),
+      lastAccessedAt: null,
+      revokedAt: null,
+    });
+    whereMock.mockImplementation(() =>
+      Promise.resolve([
+        {
+          id: ENTITY_ID,
+          title: "Deadline",
+          preview: null,
+          properties: { dueDate: SOON },
+          type: "task",
+          profileSlug: "task",
+          updatedAt: new Date("2026-07-20T00:00:00.000Z"),
+        },
+      ])
+    );
+  }
+
+  async function uidVia(host: string): Promise<string> {
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`, {
+      headers: { host },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    const uid = /^UID:(.+?)\r?$/m.exec(body)?.[1];
+    // Non-vacuity: an empty body would make every equality below trivially
+    // true, so fail loudly if no UID line was found at all.
+    expect(uid, `no UID line in body for host=${host}`).toBeTruthy();
+    return uid!;
+  }
+
+  const ORIGINAL_PUBLIC_URL = process.env.PUBLIC_URL;
+  afterEach(() => {
+    if (ORIGINAL_PUBLIC_URL === undefined) delete process.env.PUBLIC_URL;
+    else process.env.PUBLIC_URL = ORIGINAL_PUBLIC_URL;
+  });
+
+  it("identical UID across two hostnames when PUBLIC_URL is unset", async () => {
+    delete process.env.PUBLIC_URL;
+    armOneEvent();
+    const viaDefault = await uidVia("pod.antoine.synap.live");
+    const viaCustom = await uidVia("calendar.antoine.example");
+    expect(viaDefault).toBe(viaCustom);
+    // And it is the reserved synthetic namespace, not either request host.
+    expect(viaDefault).toBe(`${ENTITY_ID}@synap.invalid`);
+    expect(viaDefault).not.toContain("synap.live");
+    expect(viaCustom).not.toContain("antoine.example");
+  });
+
+  it("uses PUBLIC_URL when set, still ignoring the request host", async () => {
+    process.env.PUBLIC_URL = "https://pod.antoine.synap.live/";
+    armOneEvent();
+    const viaCustom = await uidVia("calendar.antoine.example");
+    expect(viaCustom).toBe(`${ENTITY_ID}@pod.antoine.synap.live`);
+    expect(await uidVia("pod.antoine.synap.live")).toBe(viaCustom);
+  });
+
+  it("SEQUENCE reaches the real response body too", async () => {
+    delete process.env.PUBLIC_URL;
+    armOneEvent();
+    const app = buildApp();
+    const res = await app.request(`/calendar/feed/${TOKEN_A}.ics`);
+    const body = await res.text();
+    expect(body).toMatch(/^SEQUENCE:\d+\r?$/m);
+    expect(Number(/^SEQUENCE:(\d+)\r?$/m.exec(body)![1])).toBeGreaterThan(0);
   });
 });
