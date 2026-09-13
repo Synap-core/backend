@@ -395,7 +395,7 @@ export const connectorsRouter = router({
     // same mirror source `connections` annotates its rows from (idempotent;
     // re-applies only while a provider tool has no verbs yet).
     const pendingInstall = await mirrorObservedConnections(
-      ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
+      ctx,
       resolved.broker,
       listed.connections
     );
@@ -437,7 +437,7 @@ export const connectorsRouter = router({
       });
     }
     const pendingInstall = await mirrorObservedConnections(
-      ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
+      ctx,
       broker,
       listed.connections
     );
@@ -472,10 +472,7 @@ export const connectorsRouter = router({
       const broker = await requireBroker();
       // Delegate to the ONE shared materializer (also used by the Hub-REST
       // connect door) so the browser and the CLI/agent take identical paths.
-      const { synced, toolIds } = await materializeConnectorTools(
-        ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
-        broker
-      );
+      const { synced, toolIds } = await materializeConnectorTools(ctx, broker);
       return { synced, toolIds };
     }),
 
@@ -1101,9 +1098,9 @@ export const connectorsRouter = router({
         throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message });
       }
 
-      // LOCKED W4 behavior: enrichment results unify onto the governed import
-      // sink (reviewable proposal), like Nango records. Opt-in via `landInPod`
-      // so the existing inline-merge caller is unchanged when the flag is unset.
+      // Enrichment results land through the governed import sink (a reviewable
+      // proposal). Opt-in via `landInPod`; without the flag the inline-merge
+      // caller's behaviour is unchanged.
       let proposalId: string | null = null;
       if (input.landInPod) {
         const workspaceId = await resolveImportWorkspaceId(
@@ -1171,7 +1168,7 @@ export const connectorsRouter = router({
           authenticated: false,
           error: "DSN or API key not configured",
         };
-      // TODO(W3/W4): becomes a capability cast (Credentialed/probe()).
+      // TODO: becomes a capability cast (Credentialed/probe()).
       const result = await (connector as UnipileConnector).probe();
       return { configured: true, ...result };
     }
@@ -1310,10 +1307,6 @@ export const connectorsRouter = router({
 
   /**
    * Sync status per connection × kind, from the ONE sync door.
-   *
-   * Replaces the old read off `entity_external_links`, which matched the user by
-   * a `{userId}:{podId}:{provider}` connection-id prefix that Connect-flow
-   * connections (Nango-generated ids) never carry — so it was always empty.
    * `lastSyncedAt` / `entityCount` are kept for existing connector cards.
    */
   syncStatus: protectedProcedure.query(async ({ ctx }) => {
@@ -1382,7 +1375,13 @@ export const connectorsRouter = router({
       if (!outcome.ok) {
         throw new TRPCError({ code: "NOT_FOUND", message: outcome.error });
       }
-      return { enqueued: true as const, count: outcome.count };
+      // A debounced connection already has a sync queued or running — a normal
+      // state, reported in `debounced`, never thrown. Only real failures throw.
+      return {
+        enqueued: outcome.queued > 0,
+        count: outcome.queued,
+        debounced: outcome.debounced,
+      };
     }),
 
   /**

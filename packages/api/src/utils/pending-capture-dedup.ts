@@ -632,3 +632,38 @@ export async function findPriorCaptureGraphProposal(
     .limit(1);
   return rows[0] ?? null;
 }
+
+/**
+ * A REJECTED connection-sync import of the same content, connection and kinds.
+ * A sync re-reads the same records every run, so without this a declined graph
+ * is filed again on the next tick; with it, a rejection holds until the content
+ * changes. The content key is the one `import.graph` proposals are stamped with
+ * (`data.idempotencyKey`). Owner-floored: sync imports are filed as the
+ * connection's owner.
+ */
+export async function findRejectedConnectionSyncImport(
+  database: typeof db,
+  params: {
+    userId: string;
+    idempotencyKey: string;
+    connectionId: string;
+    kinds: string[];
+  }
+): Promise<{ id: string } | null> {
+  const [row] = await database
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.createdBy, params.userId),
+        eq(proposals.status, ProposalStatus.REJECTED),
+        eq(proposals.proposalType, "import.graph"),
+        drizzleSql`${proposals.data} ->> 'idempotencyKey' = ${params.idempotencyKey}`,
+        drizzleSql`${proposals.data} -> 'connectionSync' ->> 'connectionId' = ${params.connectionId}`,
+        drizzleSql`${proposals.data} -> 'connectionSync' -> 'kinds' = ${JSON.stringify(params.kinds)}::jsonb`
+      )
+    )
+    .orderBy(desc(proposals.createdAt))
+    .limit(1);
+  return row ?? null;
+}

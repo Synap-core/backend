@@ -248,7 +248,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
         connectionId: c.connection_id,
         provider: c.provider_config_key,
         userId,
-        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+        createdAt: c.created_at ? new Date(c.created_at) : null,
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
         hasError: Array.isArray(c.errors) && c.errors.length > 0,
       },
@@ -404,7 +404,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
         connectionId: c.connection_id,
         provider: c.provider_config_key,
         userId,
-        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+        createdAt: c.created_at ? new Date(c.created_at) : null,
         lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
         hasError: Array.isArray(c.errors) && c.errors.length > 0,
       }));
@@ -830,7 +830,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
   }
 
   /**
-   * Canonical W4 read seam. Maps a `sync` read request onto `fetchRecords` and
+   * Canonical read seam. Maps a `sync` read request onto `fetchRecords` and
    * normalizes each Nango record to a `ReadRecord` for the unified import sink.
    * Mismatched request kinds throw (a Nango connector only services sync reads).
    */

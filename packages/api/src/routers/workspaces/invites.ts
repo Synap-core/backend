@@ -38,6 +38,7 @@ import { randomBytes } from "crypto";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { materializePodAdminsIntoWorkspace } from "../../utils/workspace-role.js";
 import { auditLog } from "../../utils/audit-log.js";
+import { disconnectAllUserConnections } from "../../services/capabilities/capability-nango-sync.js";
 import { getBoss } from "@synap/events";
 import { kratosAdmin } from "@synap/auth";
 import { config } from "@synap-core/core";
@@ -493,6 +494,18 @@ export const inviteProcedures = {
           columns: { workspaceId: true },
         });
         if (!hasAnyMembership) {
+          // The account's connections go before the account does.
+          try {
+            await disconnectAllUserConnections(staleUser.id);
+          } catch (err) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `The existing account for this email still has connections that could not be removed, so it was not replaced: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+              cause: err,
+            });
+          }
           try {
             await kratosAdmin.deleteIdentity({ id: staleUser.id });
           } catch {
@@ -1180,6 +1193,18 @@ export const inviteProcedures = {
           columns: { workspaceId: true },
         });
         if (!remainingMembership) {
+          // The person's connections go before the person does.
+          try {
+            await disconnectAllUserConnections(input.userId);
+          } catch (err) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: `Removed from every workspace, but the account was kept because its connections could not be removed: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+              cause: err,
+            });
+          }
           try {
             await kratosAdmin.deleteIdentity({ id: input.userId });
           } catch (err) {

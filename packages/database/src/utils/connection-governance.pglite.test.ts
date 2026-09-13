@@ -19,7 +19,11 @@ import {
   isConnectionSyncProposal,
   resolveConnectionSyncDecision,
   disableConnectionAutoRule,
+  retireConnectionRules,
   readConnectionSync,
+  ensureConnectionAutoRule,
+  ensureConnectionReviewRule,
+  applyConnectionSyncApproval,
 } from "./connection-governance.js";
 
 let pg: PGlite;
@@ -62,6 +66,13 @@ beforeAll(async () => {
       proposal_type text NOT NULL,
       data jsonb NOT NULL,
       status text NOT NULL DEFAULT 'pending'
+    );
+  `);
+  // `secrets` — only what the approval hook's owner check reads.
+  await pg.exec(`
+    CREATE TABLE secrets (
+      id text PRIMARY KEY,
+      user_id text NOT NULL
     );
   `);
   db = drizzle(pg);
@@ -269,17 +280,17 @@ describe("resolveConnectionSyncDecision — the real scope / principal / lifecyc
   });
 });
 
-describe("disableConnectionAutoRule — revokes only this connection+scope's auto rules", () => {
-  it("leaves propose rules, other scopes and other connections untouched", async () => {
+describe("disableConnectionAutoRule — revokes every auto rule the resolver reads for the scope", () => {
+  it("a workspace disable revokes this workspace's AND the pod's auto rules; propose rules, other workspaces and other connections stay", async () => {
     await pg.exec(`DELETE FROM governance_rules`);
-    const target = await rule({
+    const wsAuto = await rule({
       scope: "workspace",
       workspaceId: WS,
       verdict: "auto",
     });
+    const podAuto = await rule({ scope: "pod", verdict: "auto" });
     await rule({ scope: "workspace", workspaceId: WS, verdict: "propose" });
     await rule({ scope: "workspace", workspaceId: OTHER_WS, verdict: "auto" });
-    await rule({ scope: "pod", verdict: "auto" });
     await rule({
       scope: "workspace",
       workspaceId: WS,
@@ -287,18 +298,207 @@ describe("disableConnectionAutoRule — revokes only this connection+scope's aut
       target: "conn-other",
     });
 
-    await expect(
-      disableConnectionAutoRule({
-        db,
-        userId: "u1",
-        workspaceId: WS,
-        connectionId: CONN,
-      })
-    ).resolves.toEqual({ revokedRuleIds: [target] });
+    const { revokedRuleIds } = await disableConnectionAutoRule({
+      db,
+      userId: "u1",
+      workspaceId: WS,
+      connectionId: CONN,
+    });
+    expect([...revokedRuleIds].sort()).toEqual([wsAuto, podAuto].sort());
 
     const active = await pg.query<{ n: number }>(
       `SELECT count(*)::int AS n FROM governance_rules WHERE revoked_at IS NULL`
     );
-    expect(active.rows[0]!.n).toBe(4);
+    expect(active.rows[0]!.n).toBe(3);
+  });
+
+  it("keep-syncing OFF on a workspace sync with only a POD-scope auto rule: the next decision proposes", async () => {
+    await pg.exec(`DELETE FROM governance_rules`);
+    await rule({ scope: "pod", verdict: "auto" });
+    const scope = { db, userId: "u1", workspaceId: WS, connectionId: CONN };
+    await expect(resolveConnectionSyncDecision(scope)).resolves.toMatchObject({
+      verdict: "auto",
+    });
+
+    await disableConnectionAutoRule(scope);
+
+    await expect(resolveConnectionSyncDecision(scope)).resolves.toEqual({
+      verdict: "propose",
+      source: "none",
+    });
+  });
+
+  it("a pod-wide disable leaves workspace-scope rules alone (the pod-wide resolver never reads them)", async () => {
+    await pg.exec(`DELETE FROM governance_rules`);
+    const podAuto = await rule({ scope: "pod", verdict: "auto" });
+    await rule({ scope: "workspace", workspaceId: WS, verdict: "auto" });
+    await expect(
+      disableConnectionAutoRule({
+        db,
+        userId: "u1",
+        workspaceId: null,
+        connectionId: CONN,
+      })
+    ).resolves.toEqual({ revokedRuleIds: [podAuto] });
+  });
+});
+
+describe("retireConnectionRules — a gone connection keeps no active rule", () => {
+  it("revokes every rule of the named connections in every scope and verdict; other connections untouched", async () => {
+    await pg.exec(`DELETE FROM governance_rules`);
+    const retired = [
+      await rule({ scope: "workspace", workspaceId: WS, verdict: "auto" }),
+      await rule({
+        scope: "workspace",
+        workspaceId: OTHER_WS,
+        verdict: "propose",
+      }),
+      await rule({ scope: "pod", verdict: "auto" }),
+      await rule({ scope: "pod", verdict: "auto", target: "conn-2" }),
+    ];
+    const kept = await rule({
+      scope: "pod",
+      verdict: "auto",
+      target: "conn-kept",
+    });
+
+    const { revokedRuleIds } = await retireConnectionRules({
+      db,
+      connectionIds: [CONN, "conn-2"],
+    });
+    expect([...revokedRuleIds].sort()).toEqual([...retired].sort());
+
+    const active = await pg.query<{ id: string }>(
+      `SELECT id FROM governance_rules WHERE revoked_at IS NULL`
+    );
+    expect(active.rows.map((r) => r.id)).toEqual([kept]);
+    await expect(
+      retireConnectionRules({ db, connectionIds: [] })
+    ).resolves.toEqual({ revokedRuleIds: [] });
+  });
+});
+
+describe("keep syncing OFF is a review rule naming the import — durable against the async approval hook", () => {
+  const IMPORT_1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+  const IMPORT_2 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+
+  async function freshConnection() {
+    await pg.exec(`DELETE FROM governance_rules; DELETE FROM secrets;`);
+    await pg.query(`INSERT INTO secrets (id, user_id) VALUES ($1, 'u1')`, [
+      CONN,
+    ]);
+  }
+
+  async function activeRules() {
+    const r = await pg.query<{
+      verdict: string;
+      scope_kind: string;
+      source_proposal_id: string | null;
+    }>(
+      `SELECT verdict, scope_kind, source_proposal_id FROM governance_rules
+       WHERE target_pattern = $1 AND revoked_at IS NULL ORDER BY created_at`,
+      [CONN]
+    );
+    return r.rows;
+  }
+
+  const approvedImport = (id: string) => ({
+    id,
+    proposalType: "import.graph",
+    workspaceId: null,
+    data: {
+      operations: [],
+      connectionSync: { connectionId: CONN, keepSyncing: true },
+    },
+  });
+
+  it("OFF revokes the auto rules the scope reads and keeps ONE review rule naming the import; same import is idempotent, a newer import replaces it", async () => {
+    await freshConnection();
+    await rule({ scope: "workspace", workspaceId: WS, verdict: "auto" });
+    await rule({ scope: "pod", verdict: "auto" });
+    const scope = { db, userId: "u1", workspaceId: WS, connectionId: CONN };
+
+    await expect(
+      ensureConnectionReviewRule({ ...scope, sourceProposalId: IMPORT_1 })
+    ).resolves.toMatchObject({ created: true });
+    expect(await activeRules()).toEqual([
+      {
+        verdict: "propose",
+        scope_kind: "workspace",
+        source_proposal_id: IMPORT_1,
+      },
+    ]);
+
+    await expect(
+      ensureConnectionReviewRule({ ...scope, sourceProposalId: IMPORT_1 })
+    ).resolves.toMatchObject({ created: false });
+    expect(await activeRules()).toHaveLength(1);
+
+    await ensureConnectionReviewRule({ ...scope, sourceProposalId: IMPORT_2 });
+    expect(await activeRules()).toEqual([
+      {
+        verdict: "propose",
+        scope_kind: "workspace",
+        source_proposal_id: IMPORT_2,
+      },
+    ]);
+  });
+
+  it("the approval hook does not mint an auto rule for an import the owner already turned off", async () => {
+    await freshConnection();
+    await ensureConnectionReviewRule({
+      db,
+      userId: "u1",
+      workspaceId: null,
+      connectionId: CONN,
+      sourceProposalId: IMPORT_1,
+    });
+
+    await expect(
+      applyConnectionSyncApproval({
+        db,
+        proposal: approvedImport(IMPORT_1),
+        userId: "u1",
+      })
+    ).resolves.toEqual({ applied: false, skipped: "keep-syncing-off" });
+    expect(await activeRules()).toEqual([
+      { verdict: "propose", scope_kind: "pod", source_proposal_id: IMPORT_1 },
+    ]);
+  });
+
+  it("a review rule from an OLDER import does not block a new approval: auto is minted, the stale rule revoked", async () => {
+    await freshConnection();
+    await ensureConnectionReviewRule({
+      db,
+      userId: "u1",
+      workspaceId: null,
+      connectionId: CONN,
+      sourceProposalId: IMPORT_1,
+    });
+
+    await expect(
+      applyConnectionSyncApproval({
+        db,
+        proposal: approvedImport(IMPORT_2),
+        userId: "u1",
+      })
+    ).resolves.toMatchObject({ applied: true, created: true });
+    expect(await activeRules()).toEqual([
+      { verdict: "auto", scope_kind: "pod", source_proposal_id: IMPORT_2 },
+    ]);
+  });
+
+  it("OFF then ON: auto wins", async () => {
+    await freshConnection();
+    const scope = { db, userId: "u1", workspaceId: null, connectionId: CONN };
+    await ensureConnectionReviewRule({ ...scope, sourceProposalId: IMPORT_1 });
+    await ensureConnectionAutoRule({ ...scope, sourceProposalId: IMPORT_1 });
+
+    expect(await activeRules()).toEqual([
+      { verdict: "auto", scope_kind: "pod", source_proposal_id: IMPORT_1 },
+    ]);
+    await expect(
+      resolveConnectionSyncDecision({ ...scope })
+    ).resolves.toMatchObject({ verdict: "auto" });
   });
 });

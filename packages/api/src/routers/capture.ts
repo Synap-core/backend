@@ -1279,6 +1279,7 @@ export const captureRouter = router({
           guidelineStatus: structureContext.guidelineStatus,
           runFacts: runFactsFromStructureMeta(run.meta, {
             podDegraded: run.podDegraded,
+            degraded: r.degraded === true,
           }),
         });
         return { ...result, ...echo };

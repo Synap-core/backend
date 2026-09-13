@@ -53,10 +53,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       h.ensured.push(input);
       return { ruleId: "rule-1", created: true };
     }),
-    disableConnectionAutoRule: vi.fn(async (input: Record<string, unknown>) => {
-      h.disabled.push(input);
-      return { revokedRuleIds: ["rule-1"] };
-    }),
+    ensureConnectionReviewRule: vi.fn(
+      async (input: Record<string, unknown>) => {
+        h.disabled.push(input);
+        return { ruleId: "rule-review", created: true };
+      }
+    ),
   };
 });
 
@@ -106,6 +108,7 @@ describe("setConnectionKeepSyncing", () => {
     expect(r).toEqual({ ok: true, enabled: true, ruleId: "rule-1" });
     expect(h.ensured).toEqual([
       {
+        db: expect.anything(),
         userId: "user-1",
         workspaceId: "ws-9",
         connectionId: "row-mine",
@@ -124,9 +127,27 @@ describe("setConnectionKeepSyncing", () => {
     });
     expect(r).toEqual({ ok: true, enabled: false });
     expect(h.disabled).toEqual([
-      { userId: "user-1", workspaceId: null, connectionId: "row-mine" },
+      {
+        db: expect.anything(),
+        userId: "user-1",
+        workspaceId: null,
+        connectionId: "row-mine",
+        sourceProposalId: "prop-1",
+      },
     ]);
     expect(h.ensured).toEqual([]);
+  });
+
+  it("turning it off before any import was approved is refused — no rule without lineage", async () => {
+    h.approved = [];
+    expect(
+      await setConnectionKeepSyncing({
+        userId: "user-1",
+        connectionId: "row-mine",
+        enabled: false,
+      })
+    ).toMatchObject({ ok: false, reason: "no_approved_import" });
+    expect(h.disabled).toEqual([]);
   });
 
   it("ANOTHER user's connection is not_found — neither on nor off touches a rule", async () => {

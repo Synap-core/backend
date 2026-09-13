@@ -37,16 +37,20 @@ const h = vi.hoisted(() => ({
   createCapabilityFromDefinitionCalls: [] as Array<unknown>,
   /** Proposal ids the governed template apply files instead of installing. */
   applyProposals: [] as string[],
+  /** Pending `capability.create` proposals for the template's address. */
+  pendingInstallRows: [] as Array<{ id: string }>,
 }));
 
-const { toolsTable, capabilitiesTable } = vi.hoisted(() => ({
+const { toolsTable, capabilitiesTable, proposalsTable } = vi.hoisted(() => ({
   toolsTable: { __table: "tools" },
   capabilitiesTable: { __table: "capabilities" },
+  proposalsTable: { __table: "proposals" },
 }));
 
 vi.mock("@synap/database/schema", () => ({
   tools: toolsTable,
   capabilities: capabilitiesTable,
+  proposals: proposalsTable,
 }));
 
 vi.mock("@synap/database", () => ({
@@ -61,6 +65,7 @@ vi.mock("@synap/database", () => ({
             if (table === capabilitiesTable) {
               return h.existingContainerRow ? [h.existingContainerRow] : [];
             }
+            if (table === proposalsTable) return h.pendingInstallRows;
             return [];
           },
         }),
@@ -80,6 +85,7 @@ vi.mock("@synap/database", () => ({
   eq: vi.fn((a, b) => ({ op: "eq", a, b })),
   and: vi.fn((...c) => ({ op: "and", c })),
   isNull: vi.fn((a) => ({ op: "isNull", a })),
+  drizzleSql: vi.fn(() => ({ op: "sql" })),
 }));
 
 vi.mock("@synap-core/core", () => ({
@@ -177,6 +183,7 @@ beforeEach(() => {
   h.templateByKey = {};
   h.createCapabilityFromDefinitionCalls.length = 0;
   h.applyProposals = [];
+  h.pendingInstallRows = [];
 });
 
 describe("materializeConnectorTools — bare provider tool gets a container", () => {
@@ -276,6 +283,29 @@ describe("materializeConnectorTools — bare provider tool gets a container", ()
     ]);
   });
 
+  it("a poll while the install is already pending runs NO governed apply and reports the pending proposals", async () => {
+    h.templateByKey["nango-google"] = {
+      key: "nango-google",
+      name: "Google",
+      skills: [],
+    };
+    h.pendingInstallRows = [{ id: "prop-container" }];
+    const connector = connectorFor([
+      { uniqueKey: "google", displayName: "Google" },
+    ]);
+
+    const first = await materializeConnectorTools(ctx, connector);
+    const second = await materializeConnectorTools(ctx, connector);
+
+    expect(h.createCapabilityFromDefinitionCalls).toHaveLength(0);
+    for (const result of [first, second]) {
+      expect(result.applied).toEqual([]);
+      expect(result.pendingInstall).toEqual([
+        { provider: "google", proposalIds: ["prop-container"] },
+      ]);
+    }
+  });
+
   it("an apply that installs directly reports no pendingInstall (positive control)", async () => {
     h.templateByKey["nango-google"] = {
       key: "nango-google",
@@ -342,7 +372,7 @@ describe("pendingInstall reaches the client's connection rows", () => {
   });
 });
 
-describe("pendingInstall reaches the client's providers rows (S-6)", () => {
+describe("pendingInstall reaches the client's providers rows", () => {
   it("a pending provider is NOT connected and carries its proposal ids; others are untouched", async () => {
     const { annotateProviderPendingInstall } =
       await import("./materialize-tools.js");

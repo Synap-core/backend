@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 /**
  * `resolveNangoCall` — which connection one `nango://` verb call runs as.
  *
- * Every verb page of a sync used to list ALL of the user's connections (and, on
- * the CP, the whole shared environment). A pinned account is now read BY ID:
+ * A verb page must not list ALL of the user's connections (and, on the CP, the
+ * whole shared environment). A pinned account is read BY ID:
  *  - a hint that is the connection's whole id resolves without any list;
  *  - a by-id miss falls back to list + pick, so a substring hint still resolves
  *    and a hint matching nothing is still the `hint_mismatch` refusal;

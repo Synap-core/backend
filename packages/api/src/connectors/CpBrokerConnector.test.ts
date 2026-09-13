@@ -108,6 +108,26 @@ describe("CpBrokerConnector.listConnectionsResult — fault ≠ empty", () => {
       Authorization: "Bearer relay-jwt",
     });
   });
+
+  it("a row the broker reports without createdAt keeps createdAt null — never 'now'", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json({
+          connections: [
+            {
+              connectionId: "conn-undated",
+              provider: "google",
+              createdAt: null,
+            },
+          ],
+        })
+      )
+    );
+    const r = await broker.listConnectionsResult("user-1");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.connections[0]!.createdAt).toBeNull();
+  });
 });
 
 describe("CpBrokerConnector — refusals and idempotency", () => {

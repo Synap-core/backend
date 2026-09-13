@@ -60,7 +60,10 @@ import {
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { emitSideEffects, getBoss } from "@synap/events";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import {
+  humanizeToken,
+  resolveObjectNounPlural,
+} from "@synap-core/types/vocabulary";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
   acquireLease,
@@ -70,8 +73,10 @@ import {
   proposalStatus,
   readKindState,
   readOwnedConnectionIds,
+  renewLease,
   resolveSyncConnections,
   resolveSyncTool,
+  type KindStateKey,
   type KindSyncState,
 } from "./sync-state-store.js";
 import { scopeSyncStatusToUser } from "../../connectors/sync-status-scope.js";
@@ -82,6 +87,8 @@ import {
   resolveNoticeChannelId,
 } from "../connection-health/notify-connector-unhealthy.js";
 import { submitSyncGraphToImport } from "../connector-import-bridge.js";
+import { importGraphIdempotencyKey } from "../import/structuring.js";
+import { findRejectedConnectionSyncImport } from "../../utils/pending-capture-dedup.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emptySyncGraph,
@@ -202,6 +209,8 @@ class KindRun {
   counts: SyncCounts;
   proposalId: string | undefined;
   error: string | undefined;
+  /** The read stopped at `itemLimit` with records still unread. */
+  truncated = false;
 
   constructor(
     readonly handler: SyncKindHandler,
@@ -217,6 +226,11 @@ class KindRun {
     this.phase = phase;
     await patchKindState(this.ctx, { ...patch, phase, counts: this.counts });
     if (changed) await emitProgress(this);
+  }
+
+  /** Extend the lease at a page boundary, so a long read is not taken over. */
+  renew(): Promise<void> {
+    return renewLease(this.ctx);
   }
 
   /** Terminal phase: stamp lastRunAt, release the lease. */
@@ -246,7 +260,7 @@ class KindRun {
       await notifyConnectorUnhealthy({
         connectorKey: this.ctx.provider,
         connectorName: humanizeToken(this.ctx.provider),
-        reconnectHint: "Reconnect it in the app (Settings → Connectors).",
+        reconnectHint: "Reconnect it in the app (Settings → Connections).",
         userId: this.ctx.owner,
         workspaceId: this.ctx.workspaceId,
         watermarkToolId: this.ctx.toolId,
@@ -310,26 +324,37 @@ function readWindow(run: KindRun, mode: "initial" | "steady"): ReadWindow {
   };
 }
 
-/** Read every page up to `itemLimit` and fold them into one graph. */
-async function readAll(run: KindRun, window: ReadWindow): Promise<SyncGraph> {
+/**
+ * Read pages from `pageToken` until `itemLimit` (per call) or the last page and
+ * fold them into one graph. `nextPageToken` is non-null when the limit stopped
+ * the read with records still unread.
+ */
+async function readAll(
+  run: KindRun,
+  window: ReadWindow,
+  pageToken: string | null = null
+): Promise<{ graph: SyncGraph; nextPageToken: string | null }> {
   const graph = emptySyncGraph();
   const limit = run.ctx.kindConfig.itemLimit;
-  let pageToken: string | null = null;
+  let fetched = 0;
   do {
-    const remaining = limit - run.counts.fetched;
+    const remaining = limit - fetched;
     const page = await run.handler.fetchPage(run.ctx, {
       ...window,
       pageToken,
       pageSize: remaining,
     });
     const items = page.items.slice(0, remaining);
+    fetched += items.length;
     run.counts.fetched += items.length;
     const mapped = run.handler.mapItems(items);
     run.counts.skipped += mapped.skipped;
     mergeSyncGraph(graph, mapped.graph);
     pageToken = page.nextPageToken;
-  } while (pageToken && run.counts.fetched < limit);
-  return graph;
+    if (pageToken && fetched < limit) await run.renew();
+  } while (pageToken && fetched < limit);
+  run.truncated = pageToken !== null;
+  return { graph, nextPageToken: pageToken };
 }
 
 // ── Writing ──────────────────────────────────────────────────────────────────────
@@ -366,10 +391,11 @@ export async function buildSyncGraphOperations(
   ctx: SyncKindContext
 ): Promise<{
   operations: CompositeProposalOperation[];
-  existingRefs: Set<string>;
+  /** ref → the entity it already matches in the pod. */
+  existingIds: Map<string, string>;
 }> {
   const operations: CompositeProposalOperation[] = [];
-  const existingRefs = new Set<string>();
+  const existingIds = new Map<string, string>();
   for (const e of graph.entities) {
     const existingId =
       (await linkIdempotency(ctx.owner, e.identity.source).lookup(
@@ -378,7 +404,7 @@ export async function buildSyncGraphOperations(
       )) ??
       (await findExistingAcross(handlers, e, ctx)) ??
       (await strongIdentityMatch(e, ctx.owner));
-    if (existingId) existingRefs.add(e.ref);
+    if (existingId) existingIds.set(e.ref, existingId);
     operations.push({
       op: "create_entity",
       ref: e.ref,
@@ -406,7 +432,63 @@ export async function buildSyncGraphOperations(
       targetRef: r.targetRef,
     });
   }
-  return { operations, existingRefs };
+  return { operations, existingIds };
+}
+
+/**
+ * File a graph for review as ONE `import.graph` — unless the owner already
+ * REJECTED this exact graph for this connection and kinds. A sync re-reads the
+ * same records every run; a declined import is not asked again until its
+ * content changes. Returns the proposal id, or null when nothing was filed.
+ */
+async function fileSyncProposal(
+  ctx: SyncKindContext,
+  kinds: string[],
+  operations: CompositeProposalOperation[],
+  summary: string,
+  keepSyncing: boolean
+): Promise<string | null> {
+  const idempotencyKey = importGraphIdempotencyKey({
+    workspaceId: ctx.workspaceId,
+    operations,
+  });
+  if (idempotencyKey) {
+    const rejected = await findRejectedConnectionSyncImport(db, {
+      userId: ctx.owner,
+      idempotencyKey,
+      connectionId: ctx.connectionId,
+      kinds,
+    });
+    if (rejected) return null;
+  }
+  const { proposalId } = await submitSyncGraphToImport({
+    userId: ctx.owner,
+    workspaceId: ctx.workspaceId,
+    operations,
+    summary,
+    connectionSync: {
+      connectionId: ctx.connectionId,
+      provider: ctx.provider,
+      kinds,
+      keepSyncing,
+    },
+  });
+  return proposalId;
+}
+
+/**
+ * Where a finished read leaves the kind's window. An exhausted read moves the
+ * cursor to the run's start. A read the item limit stopped keeps the cursor and
+ * stores the next page, so the next run resumes it with the same `since` —
+ * moving the cursor would skip every unread record.
+ */
+function windowCheckpoint(
+  runStartedAt: string,
+  nextPageToken: string | null
+): KindSyncState {
+  return nextPageToken
+    ? { runStartedAt, pageToken: nextPageToken }
+    : { cursor: runStartedAt, runStartedAt: null, pageToken: null };
 }
 
 async function strongIdentityMatch(
@@ -641,18 +723,23 @@ async function runAuto(run: KindRun): Promise<void> {
   let pageToken: string | null = resuming ? run.state.pageToken! : null;
 
   const gate = makeWriteGate(run.ctx);
-  let filedProposalId: string | undefined;
+  // Writes the rule did not auto-approve, gathered across pages and filed as
+  // ONE proposal for the run.
+  const deferred = emptySyncGraph();
+  // The item budget is per call: a run resuming a truncated read reads a fresh
+  // `itemLimit`, while `counts` keep adding up until the cursor moves.
+  let fetched = 0;
 
   await run.advance("fetching", { runStartedAt, pageToken, error: null });
   do {
-    const remaining = limit - run.counts.fetched;
-    if (remaining <= 0) break;
+    const remaining = limit - fetched;
     const page = await run.handler.fetchPage(run.ctx, {
       ...window,
       pageToken,
       pageSize: remaining,
     });
     const items = page.items.slice(0, remaining);
+    fetched += items.length;
     run.counts.fetched += items.length;
     const mapped = run.handler.mapItems(items);
     run.counts.skipped += mapped.skipped;
@@ -671,45 +758,41 @@ async function runAuto(run: KindRun): Promise<void> {
       tallyProfile(into, slug, "created", t.created);
       tallyProfile(into, slug, "merged", t.merged);
     }
-    // Writes the rule did not auto-approve are filed for review BEFORE this
-    // page is checkpointed — a resumed run never re-reads a landed page, so
-    // deferring them past the checkpoint would lose them.
-    if (
-      landed.deferred.entities.length > 0 ||
-      landed.deferred.relations.length > 0
-    ) {
-      const { operations } = await buildSyncGraphOperations(
-        landed.deferred,
-        [run.handler],
-        run.ctx
-      );
-      const { proposalId } = await submitSyncGraphToImport({
-        userId: run.ctx.owner,
-        workspaceId: run.ctx.workspaceId,
-        operations,
-        summary: syncProposalSummary([run], "steady"),
-        connectionSync: {
-          connectionId: run.ctx.connectionId,
-          provider: run.ctx.provider,
-          kinds: [run.ctx.kind],
-          keepSyncing: false,
-        },
-      });
-      filedProposalId = proposalId;
-      run.proposalId = proposalId;
-    }
+    mergeSyncGraph(deferred, landed.deferred);
     pageToken = page.nextPageToken;
-    // Checkpoint AFTER the page landed: a crash replays at most this page.
-    if (pageToken && run.counts.fetched < limit) {
+    // Checkpoint AFTER the page landed, and only while nothing is held for
+    // review: a resumed run never re-reads a checkpointed page, so a deferred
+    // write behind a checkpoint would be lost. A crash re-reads from the last
+    // checkpoint, and landed writes match their external link again.
+    const holding =
+      deferred.entities.length > 0 || deferred.relations.length > 0;
+    if (pageToken && fetched < limit && !holding) {
       await run.advance("fetching", { runStartedAt, pageToken });
     }
-  } while (pageToken && run.counts.fetched < limit);
+    if (pageToken && fetched < limit) await run.renew();
+  } while (pageToken && fetched < limit);
+  run.truncated = pageToken !== null;
+
+  let filedProposalId: string | null = null;
+  if (deferred.entities.length > 0 || deferred.relations.length > 0) {
+    const { operations } = await buildSyncGraphOperations(
+      deferred,
+      [run.handler],
+      run.ctx
+    );
+    filedProposalId = await fileSyncProposal(
+      run.ctx,
+      [run.ctx.kind],
+      operations,
+      syncProposalSummary([run], "steady"),
+      false
+    );
+    if (filedProposalId) run.proposalId = filedProposalId;
+  }
 
   // Writes held for review make this run's outcome a review, not a clean sync.
   await run.finish(filedProposalId ? "review_ready" : "synced", {
-    cursor: runStartedAt,
-    runStartedAt: null,
-    pageToken: null,
+    ...windowCheckpoint(runStartedAt, pageToken),
     error: null,
     ...(filedProposalId ? { proposalId: filedProposalId } : {}),
   });
@@ -723,32 +806,61 @@ async function runGroupedProposal(
   runs: KindRun[],
   mode: "initial" | "steady"
 ): Promise<void> {
-  const runStartedAt = new Date().toISOString();
+  const now = new Date().toISOString();
   const graph = emptySyncGraph();
   const refKind = new Map<string, KindRun>();
   const read: KindRun[] = [];
+  /** Per kind: the window start it keeps, and the page it stopped before. */
+  const window = new Map<
+    KindRun,
+    { runStartedAt: string; nextPageToken: string | null }
+  >();
 
   for (const run of runs) {
     try {
+      // A steady read the item limit stopped resumes its page with its window.
+      const resume =
+        mode === "steady" && run.state.pageToken && run.state.runStartedAt
+          ? {
+              pageToken: run.state.pageToken,
+              runStartedAt: run.state.runStartedAt,
+            }
+          : null;
+      const runStartedAt = resume?.runStartedAt ?? now;
       await run.advance("fetching", { runStartedAt, error: null });
-      const kindGraph = await readAll(run, readWindow(run, mode));
+      const { graph: kindGraph, nextPageToken } = await readAll(
+        run,
+        readWindow(run, mode),
+        resume?.pageToken ?? null
+      );
       for (const e of kindGraph.entities) {
         if (!refKind.has(e.ref)) refKind.set(e.ref, run);
       }
       mergeSyncGraph(graph, kindGraph);
       read.push(run);
+      // The first import is a bounded read by design: its cursor moves even
+      // when truncated, and its summary says the window was not covered.
+      window.set(run, {
+        runStartedAt,
+        nextPageToken: mode === "steady" ? nextPageToken : null,
+      });
     } catch (err) {
       await run.fail(err);
     }
   }
   if (read.length === 0) return;
 
+  const checkpoint = (run: KindRun) => {
+    const w = window.get(run)!;
+    return windowCheckpoint(w.runStartedAt, w.nextPageToken);
+  };
+
   for (const run of read) await run.advance("mapping");
   const ctx = read[0]!.ctx;
   const handlers = read.map((r) => r.handler);
 
   try {
-    const { operations, existingRefs } = await buildSyncGraphOperations(
+    const { operations, existingIds } = await buildSyncGraphOperations(
       graph,
       handlers,
       ctx
@@ -756,51 +868,56 @@ async function runGroupedProposal(
     for (const e of graph.entities) {
       const owner = refKind.get(e.ref);
       if (!owner) continue;
-      const outcome = existingRefs.has(e.ref) ? "merged" : "created";
+      const outcome = existingIds.has(e.ref) ? "merged" : "created";
       owner.counts[outcome] += 1;
       tallyProfile((owner.counts.byProfile ??= {}), e.profileSlug, outcome);
     }
 
-    const nothingNew =
-      graph.entities.every((e) => existingRefs.has(e.ref)) &&
-      graph.relations.length === 0;
-    if (nothingNew) {
-      for (const run of read) {
-        await run.finish("synced", {
-          cursor: runStartedAt,
-          proposalId: null,
-          pageToken: null,
-          error: null,
-        });
-      }
-      return;
+    // New = an entity with no match, or an edge between matched entities that
+    // does not exist yet. A re-read of records already in the pod (every
+    // contact re-emits its `works_at`) is not new.
+    const relationIdem = linkIdempotency(ctx.owner, ctx.provider);
+    let newRelations = 0;
+    for (const r of graph.relations) {
+      const sourceId = existingIds.get(r.sourceRef);
+      const targetId = existingIds.get(r.targetRef);
+      const exists =
+        !!sourceId &&
+        !!targetId &&
+        (sourceId === targetId ||
+          (await relationIdem.relationExists(sourceId, targetId, r.type)));
+      if (!exists) newRelations += 1;
     }
+    const nothingNew =
+      graph.entities.every((e) => existingIds.has(e.ref)) && newRelations === 0;
 
     const kinds = read.map((r) => r.ctx.kind);
-    const { proposalId } = await submitSyncGraphToImport({
-      userId: ctx.owner,
-      workspaceId: ctx.workspaceId,
-      operations,
-      summary: syncProposalSummary(read, mode),
-      connectionSync: {
-        connectionId: ctx.connectionId,
-        provider: ctx.provider,
-        kinds,
-        keepSyncing: mode === "initial",
-      },
-    });
+    const proposalId = nothingNew
+      ? null
+      : await fileSyncProposal(
+          ctx,
+          kinds,
+          operations,
+          syncProposalSummary(read, mode),
+          mode === "initial"
+        );
     for (const run of read) {
-      run.proposalId = proposalId;
-      await run.finish("review_ready", {
-        cursor: runStartedAt,
+      if (proposalId) run.proposalId = proposalId;
+      await run.finish(proposalId ? "review_ready" : "synced", {
+        ...checkpoint(run),
         proposalId,
-        pageToken: null,
         error: null,
       });
     }
   } catch (err) {
     for (const run of read) await run.fail(err);
   }
+}
+
+/** "a", "a and b", "a, b and c". */
+function listSentence(parts: readonly string[]): string {
+  if (parts.length <= 1) return parts.join("");
+  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
 function syncProposalSummary(
@@ -810,18 +927,25 @@ function syncProposalSummary(
   const provider = humanizeToken(runs[0]!.ctx.provider);
   const created = runs.reduce((n, r) => n + r.counts.created, 0);
   const merged = runs.reduce((n, r) => n + r.counts.merged, 0);
-  const kinds = runs.map((r) => humanizeToken(r.ctx.kind)).join(", ");
+  // Kind nouns inside a sentence: the vocabulary plural, lowercased, as the
+  // connectors model phrases them ("Brings events and contacts").
+  const kindNoun = (r: KindRun) =>
+    resolveObjectNounPlural(r.ctx.kind).toLowerCase();
+  const kinds = listSentence(runs.map(kindNoun));
   const days = Math.max(...runs.map((r) => r.ctx.kindConfig.windowDays));
+  // A read the item limit stopped does not cover its window — never claim it does.
+  const truncated = runs
+    .filter((r) => r.truncated)
+    .map((r) => `${kindNoun(r)} (${r.ctx.kindConfig.itemLimit} records)`);
   const scope =
-    mode === "initial"
-      ? `first ${provider} sync, last ${days} days`
-      : `${provider} sync`;
-  const summary = `${created} new and ${merged} matching records from ${kinds} (${scope})`;
-  // Approving a first import also turns on the connection's automatic sync, so
-  // the proposal the user reviews says so.
-  return mode === "initial"
-    ? `${summary}. Approving also keeps ${provider} syncing automatically. You can turn this off in Settings → Connections.`
-    : summary;
+    mode === "steady"
+      ? `${provider} sync`
+      : truncated.length === 0
+        ? `first ${provider} sync, last ${days} days`
+        : `first ${provider} sync; reading stopped at the limit for ${listSentence(truncated)}, so it does not cover all of the last ${days} days`;
+  // Consent to keep syncing is carried by `data.connectionSync`, which clients
+  // render as its own row and switch — never repeated in this text.
+  return `${created} new and ${merged} matching records from ${kinds} (${scope})`;
 }
 
 // ── Runner ───────────────────────────────────────────────────────────────────────
@@ -972,8 +1096,12 @@ export async function runConnectionSync(opts: {
       }
     }
 
-    for (const run of [...initial, ...steady]) {
+    const ran = [...initial, ...steady];
+    for (const run of ran) {
       kinds[run.ctx.kind] = run.result();
+    }
+    if (ran.length > 0) {
+      await recordRunCompleted(opts.provider, conn, workspaceId, ran);
     }
     out.push({ connectionId: conn.id, kinds });
   }
@@ -983,6 +1111,51 @@ export async function runConnectionSync(opts: {
     "connection sync run complete"
   );
   return { provider: opts.provider, connections: out };
+}
+
+/**
+ * `connector_sync.complete.completed` — ONE fact per connection per run, once
+ * every kind that ran has finished. It is a run fact, not a mirrored write, so
+ * it carries no `origin` and event automations fire on it without opting in.
+ * `counts.created` / `counts.merged` of a kind in `review_ready` are proposed,
+ * not yet written.
+ */
+async function recordRunCompleted(
+  provider: string,
+  conn: { id: string; userId: string },
+  workspaceId: string | null,
+  runs: KindRun[]
+): Promise<void> {
+  const sum = (key: "fetched" | "created" | "merged" | "skipped") =>
+    runs.reduce((n, r) => n + r.counts[key], 0);
+  const proposalIds = [
+    ...new Set(
+      runs.map((r) => r.proposalId).filter((id): id is string => !!id)
+    ),
+  ];
+  await recordDomainMutation({
+    subjectType: "connector_sync",
+    action: "complete",
+    subjectId: conn.id,
+    userId: conn.userId,
+    workspaceId,
+    source: "connection_sync",
+    data: {
+      provider,
+      connectionId: conn.id,
+      syncStatus: runs.some((r) => r.phase === "failed") ? "error" : "success",
+      kinds: Object.fromEntries(
+        runs.map((r) => [r.ctx.kind, r.phase ?? "failed"])
+      ),
+      counts: {
+        fetched: sum("fetched"),
+        created: sum("created"),
+        merged: sum("merged"),
+        skipped: sum("skipped"),
+      },
+      ...(proposalIds.length > 0 ? { proposalIds } : {}),
+    },
+  });
 }
 
 /** Scheduled tick: every sync-enabled tool row of every registered provider. */
@@ -1029,6 +1202,14 @@ export async function runScheduledConnectionSyncs(
 // ── Enqueue and status ───────────────────────────────────────────────────────────
 
 /**
+ * What an enqueue did. `debounced` = pg-boss refused the job because this
+ * provider + connection already had one (queued, running, or finished) inside
+ * the debounce window — no new run was queued.
+ */
+export type EnqueueConnectionSyncResult =
+  { queued: true; jobId: string } | { queued: false; reason: "debounced" };
+
+/**
  * Enqueue a sync run. Duplicate triggers for the same provider + connection
  * inside the debounce window collapse into one job; a run already in flight is
  * guarded by the per-kind lease. Throws when the queue is unavailable.
@@ -1038,34 +1219,90 @@ export async function enqueueConnectionSync(input: {
   connectionId?: string;
   workspaceId?: string | null;
   reason: SyncTriggerReason;
-}): Promise<void> {
+}): Promise<EnqueueConnectionSyncResult> {
   const boss = getBoss();
-  const jobId = await boss.send(
-    CONNECTION_SYNC_QUEUE,
-    {
-      provider: input.provider,
-      ...(input.connectionId ? { connectionId: input.connectionId } : {}),
-      ...(input.workspaceId !== undefined
-        ? { workspaceId: input.workspaceId }
-        : {}),
-      reason: input.reason,
-    },
-    {
-      singletonKey: `${input.provider}:${input.connectionId ?? input.workspaceId ?? "pod"}`,
-      singletonSeconds: ENQUEUE_DEBOUNCE_SECONDS,
-    }
-  );
-  // null = the singleton window already holds a job: either still queued (and
-  // already marked) or finished (marking now would leave `fetching` stuck).
-  if (!jobId) return;
+  // Mark BEFORE the send: a job cannot start before its mark has landed, so a
+  // fast run's terminal phase is never overwritten by a late `fetching`.
+  const marked: QueuedMark[] = [];
   try {
-    await markQueued(input);
+    await markQueued(input, marked);
   } catch (err) {
-    // The job IS enqueued and its runner writes the real phase; a failed mark
-    // must not report the enqueue itself as failed.
+    // The runner writes the real phase; a failed mark must not stop the enqueue.
     logger.error(
       { err, provider: input.provider, connectionId: input.connectionId },
       "connection sync: queued-phase mark failed"
+    );
+  }
+  let jobId: string | null;
+  try {
+    jobId = await boss.send(
+      CONNECTION_SYNC_QUEUE,
+      {
+        provider: input.provider,
+        ...(input.connectionId ? { connectionId: input.connectionId } : {}),
+        ...(input.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+        reason: input.reason,
+      },
+      {
+        singletonKey: `${input.provider}:${input.connectionId ?? input.workspaceId ?? "pod"}`,
+        singletonSeconds: ENQUEUE_DEBOUNCE_SECONDS,
+      }
+    );
+  } catch (err) {
+    await restoreQueued(input.provider, marked);
+    throw err;
+  }
+  // null = the window already holds a job (queued, running or finished): no run
+  // was queued for this mark, so each kind gets back the phase it had.
+  if (!jobId) {
+    await restoreQueued(input.provider, marked);
+    return { queued: false, reason: "debounced" };
+  }
+  return { queued: true, jobId };
+}
+
+/** A kind's state before the queued mark — what a send that queued nothing restores. */
+interface QueuedMark {
+  key: KindStateKey;
+  phase: SyncPhase | null;
+  error: string | null;
+  lastRunAt: string | null;
+}
+
+/**
+ * Give each marked kind back its previous phase and error. A kind a run has
+ * touched since the mark (phase moved, a new `lastRunAt`, or a held lease) keeps
+ * what that run wrote. Failures are logged: the enqueue outcome stands.
+ */
+async function restoreQueued(
+  provider: string,
+  marked: QueuedMark[]
+): Promise<void> {
+  if (marked.length === 0) return;
+  try {
+    const tool = await resolveSyncTool({
+      provider,
+      toolId: marked[0]!.key.toolId,
+    });
+    for (const m of marked) {
+      const now = readKindState(tool?.metadata, m.key.kind, m.key.connectionId);
+      const leased =
+        !!now.leaseUntil && Date.parse(now.leaseUntil) > Date.now();
+      if (
+        now.phase !== "fetching" ||
+        (now.lastRunAt ?? null) !== m.lastRunAt ||
+        leased
+      ) {
+        continue;
+      }
+      await patchKindState(m.key, { phase: m.phase, error: m.error });
+    }
+  } catch (err) {
+    logger.error(
+      { err, provider },
+      "connection sync: restoring the pre-enqueue phase failed"
     );
   }
 }
@@ -1075,12 +1312,16 @@ export async function enqueueConnectionSync(input: {
  * the runner's own state store, so a status read right after connect shows the
  * run instead of a null phase. A kind held on a PENDING review keeps
  * `review_ready`: the runner reads it to skip, and overwriting it would re-file.
+ * Each kind's prior state is pushed to `marked` before it is overwritten.
  */
-async function markQueued(input: {
-  provider: string;
-  connectionId?: string;
-  workspaceId?: string | null;
-}): Promise<void> {
+async function markQueued(
+  input: {
+    provider: string;
+    connectionId?: string;
+    workspaceId?: string | null;
+  },
+  marked: QueuedMark[]
+): Promise<void> {
   const tool = await resolveSyncTool(input);
   const syncCfg = (tool?.metadata as ProviderToolMetadata | null | undefined)
     ?.sync;
@@ -1100,23 +1341,23 @@ async function markQueued(input: {
       ) {
         continue;
       }
-      await patchKindState(
-        { toolId: tool.id, kind: handler.kind, connectionId: conn.id },
-        { phase: "fetching", error: null }
-      );
+      const key = {
+        toolId: tool.id,
+        kind: handler.kind,
+        connectionId: conn.id,
+      };
+      marked.push({
+        key,
+        phase: state.phase ?? null,
+        error: state.error ?? null,
+        lastRunAt: state.lastRunAt ?? null,
+      });
+      await patchKindState(key, { phase: "fetching", error: null });
     }
   }
 }
 
-/**
- * The wire shape of one sync-status row — schema-first so every consumer
- * (Hub REST `GET /connectors/sync-status`, and any future door) derives its
- * response contract from HERE instead of hand-copying the field list. A
- * hand-copied response schema already drifted once (it shipped without
- * `workspaceId`, which exists below) — deriving is what stops the next field
- * (e.g. a per-profile counts breakdown, or a "keep syncing" flag) from
- * silently failing to reach a caller that re-declared the shape by hand.
- */
+/** Wire shape of a sync-status row; every door derives its response from it. */
 export const ConnectionSyncStatusSchema = z.object({
   provider: z.string(),
   connectionId: z.string().optional(),
@@ -1132,11 +1373,8 @@ export const ConnectionSyncStatusSchema = z.object({
   /** Slugs whose entities carry a source-app url ("open where it lives"). */
   openableProfileSlugs: z.array(z.string()),
   lastRunAt: z.string().optional(),
-  // "not_connected": the tool row has sync enabled but no live connection to
-  // run it against — distinct from `failed` (a run started and errored) and
-  // from a provider-level fault, which never reaches this enum at all (see
-  // `no_connection`'s own `RunConnectionSyncResult.reason`, a sibling shape).
-  // Mirrors `SyncPhase` (sync-kind-registry.ts) exactly now that both declare it.
+  // `SyncPhase`, as literals (zod-openapi needs them). "not_connected" = sync
+  // is on but no live connection backs it; `failed` = a run started and errored.
   phase: z
     .enum([
       "fetching",
@@ -1153,7 +1391,7 @@ export const ConnectionSyncStatusSchema = z.object({
       created: z.number(),
       merged: z.number(),
       skipped: z.number(),
-      /** Per-profile created/merged breakdown. Absent on state written before it existed. */
+      /** Per-profile created/merged breakdown; absent on older state. */
       byProfile: z
         .record(
           z.string(),
@@ -1164,12 +1402,8 @@ export const ConnectionSyncStatusSchema = z.object({
     .optional(),
   proposalId: z.string().optional(),
   /**
-   * The "keep syncing automatically" setting this connection was approved
-   * under — always present (populated on every row by the producer), so a
-   * client can render "auto-syncing" vs "review each time" without a second
-   * read. `available` = this connection has an approved first import (the
-   * same predicate `setKeepSyncing` uses) — the toggle has nothing to flip
-   * until then.
+   * "Keep syncing automatically", on every row. `available` = the connection
+   * has an approved first import (the predicate `setKeepSyncing` uses).
    */
   keepSyncing: z.object({
     enabled: z.boolean(),
@@ -1179,8 +1413,6 @@ export const ConnectionSyncStatusSchema = z.object({
   error: z.string().optional(),
 });
 
-// `phase` above is deliberately `z.enum([...])`, not `z.custom<SyncPhase>()` —
-// zod-openapi needs the literal values to emit real OpenAPI.
 export type ConnectionSyncStatus = z.infer<
   typeof ConnectionSyncStatusSchema
 > & {
@@ -1188,13 +1420,7 @@ export type ConnectionSyncStatus = z.infer<
   counts?: SyncCounts;
 };
 
-// Compile-time STRICT EQUALITY between the schema's `phase` enum and
-// `SyncPhase` (sync-kind-registry.ts) — catches drift in EITHER direction,
-// not just "the schema is missing a value" (the old one-way `extends` check
-// this replaces): an extra literal the schema declares that `SyncPhase` does
-// NOT would previously type-check silently (a wider schema enum still
-// satisfies a narrower `phase?: SyncPhase`), which is exactly the failure
-// mode a "derive, don't hand-copy" schema must not have.
+// Compile-time equality with `SyncPhase`, in both directions.
 type SchemaPhase = NonNullable<
   z.infer<typeof ConnectionSyncStatusSchema>["phase"]
 >;
@@ -1203,18 +1429,10 @@ type _PhaseParity = [SchemaPhase] extends [SyncPhase]
     ? true
     : never
   : never;
-// A parity break makes this assignment fail to compile (`never` is not
-// assignable to `true`) — the build stops, it does not quietly drift.
 const _phaseParity: _PhaseParity = true;
 void _phaseParity;
 
-/**
- * A row before `keepSyncing` is computed (the field the row-assembly loop in
- * `getConnectionSyncStatus` hasn't derived yet — `withKeepSyncing` adds it in
- * one pass afterward, batching the connection-rule + approved-import lookups).
- * `keepSyncing` is required on the published `ConnectionSyncStatus`, so the
- * intermediate accumulator needs its own type rather than a premature cast.
- */
+/** A status row before `keepSyncing` is computed. */
 export type ConnectionSyncStatusDraft = Omit<
   ConnectionSyncStatus,
   "keepSyncing"

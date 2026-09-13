@@ -7,7 +7,7 @@
  *   - an agent-scoped rule the caller doesn't own is denied
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
 const POD_ADMIN_WS_ID = "99999999-9999-4999-8999-999999999999";
@@ -234,5 +234,61 @@ describe("governanceRules.create gating", () => {
     });
 
     expect(result.rule).toMatchObject({ id: "rule-1" });
+  });
+});
+
+describe("governanceRules.revoke — a connection rule is the owner's consent", () => {
+  const CONNECTION_ID = "secret-row-1";
+  const connectionRule = {
+    id: "33333333-3333-4333-8333-333333333333",
+    principalKind: "any",
+    agentUserId: null,
+    scopeKind: "workspace",
+    workspaceId: WORKSPACE_ID,
+    targetKind: "connection",
+    targetPattern: CONNECTION_ID,
+    verdict: "auto",
+    revokedAt: null,
+  };
+
+  function given(opts: { podAdmin: boolean; connectionOwner: string | null }) {
+    (db.query.workspaces as unknown as { findFirst: unknown }).findFirst =
+      async () => (opts.podAdmin ? { id: POD_ADMIN_WS_ID } : undefined);
+    setMembership(async () => ({ role: "admin" }));
+    (db.query.governanceRules as unknown as { findFirst: unknown }).findFirst =
+      async () => connectionRule;
+    (db.query as unknown as Record<string, unknown>).secrets = {
+      findFirst: async () =>
+        opts.connectionOwner ? { userId: opts.connectionOwner } : undefined,
+    };
+    return vi.spyOn(db, "update");
+  }
+
+  // Restored even when an assertion throws, so no spy carries calls across cases.
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("a pod admin cannot revoke another member's connection rule", async () => {
+    const update = given({ podAdmin: true, connectionOwner: OWNER_ID });
+    await expect(
+      caller(POD_ADMIN_ID).revoke({ id: connectionRule.id })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("the connection's owner revokes it", async () => {
+    const update = given({ podAdmin: false, connectionOwner: OWNER_ID });
+    const result = await caller(OWNER_ID).revoke({ id: connectionRule.id });
+    expect(result.rule).toMatchObject({ id: "rule-1" });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it("a rule whose connection row does not exist is NOT_FOUND, not revoked", async () => {
+    const update = given({ podAdmin: true, connectionOwner: null });
+    await expect(
+      caller(POD_ADMIN_ID).revoke({ id: connectionRule.id })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(update).not.toHaveBeenCalled();
   });
 });

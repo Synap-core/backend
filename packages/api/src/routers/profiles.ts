@@ -22,6 +22,7 @@ import {
   ProfileRepository,
   ProfilePropertyRepository,
   ProfileResolutionService,
+  readUserRendererChoice,
   ProfileScope,
   ViewRepository,
   WorkspaceRepository,
@@ -1303,6 +1304,17 @@ export const profilesRouter = router({
         collection: null,
       };
 
+      // The caller's own explicit choice for this kind's detail ("Open in"),
+      // which `sources` cannot express: after an unbind it reads the same as a
+      // user who never chose. A reconnect must not overwrite a non-null choice.
+      const userChoice = ctx.userId
+        ? await readUserRendererChoice(db, {
+            userId: ctx.userId,
+            subjectKind: profileSlug,
+            contentKind: "entity-detail",
+          })
+        : null;
+
       if (input.contentKind) {
         const target = await resolutionService.getEffectiveRendererWithSource(
           profileSlug,
@@ -1314,6 +1326,7 @@ export const profilesRouter = router({
           ...base,
           [input.contentKind]: target.ref,
           sources: { ...baseSources, [input.contentKind]: target.source },
+          userChoice,
         };
       }
 
@@ -1355,6 +1368,7 @@ export const profilesRouter = router({
           "entity-profile": entityProfile.source,
           collection: collection.source,
         },
+        userChoice,
       };
     }),
 

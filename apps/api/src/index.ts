@@ -723,6 +723,9 @@ function applyOpenDispatch(
     // The device discriminator is a link-BUILD-time query param, not a UA
     // sniff — see OPEN_CLIENT_PARAM in open-dispatch.ts for why.
     client: c.req.query(OPEN_CLIENT_PARAM),
+    // `?view=` addresses a READING of the object (a session's Intake Room).
+    // `dispatchOpen` allowlists it; an unrecognised value is dropped there.
+    view: c.req.query("view"),
   });
   // Same URL 302s or 200s by User-Agent — never let a CDN cache the bot bounce
   // for a human (or the reverse). `?client=` is part of the URL, so it varies

@@ -9,9 +9,9 @@
  *   B. Stellar grant deadlines      — the SAME `type='event'` rows tagged
  *                                     `properties.source==='stellar'`
  *
- * Google Calendar no longer pushes to Discord DIRECTLY: `run-gcal-import.ts`
- * imports Google events into Synap `event` entities FIRST (same tick, before
- * this pass), so they mirror through source A like any other event.
+ * Google Calendar events reach Discord only as Synap `event` entities: the
+ * connection sync imports them first, so they mirror through source A like any
+ * other event.
  *
  * Each event's location is the Google Meet link (when present) else the physical
  * address; the full address / details ride in the Discord event `description`.

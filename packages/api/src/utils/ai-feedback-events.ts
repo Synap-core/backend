@@ -26,8 +26,30 @@ import {
   CAPTURE_TRACE_KIND,
 } from "../lib/ai-events.js";
 import { createLogger } from "@synap-core/core";
+import { db, isConnectionSyncProposal } from "@synap/database";
 
 const logger = createLogger({ module: "ai-feedback-events" });
+
+/**
+ * Whether a correction targets a connection-sync import (`data.connectionSync`).
+ * Its operations come from a deterministic provider mapper, not a model, so
+ * rejecting them corrects no AI decision.
+ *
+ * A whole-proposal reject names the proposal as `subjectId`. A per-item reject
+ * names only the item; its `correlationId` is the proposal's correlation column
+ * or, when that is empty (a sync import leaves it empty), the proposal id — so
+ * either id may be the proposal. Each check is a primary-key read, and an id
+ * that is not a uuid is answered without a query.
+ */
+async function correctsConnectionSyncImport(
+  subjectId: string,
+  correlationId: string
+): Promise<boolean> {
+  return (
+    (await isConnectionSyncProposal(subjectId, db)) ||
+    (await isConnectionSyncProposal(correlationId, db))
+  );
+}
 
 /**
  * Record an AI decision (e.g. a capture-routing pick). `correlationId` becomes
@@ -82,6 +104,22 @@ export async function emitAiCorrection(opts: {
   agentUserId?: string | null;
   data: Record<string, unknown> & { kind: string; correlationId: string };
 }): Promise<void> {
+  try {
+    if (
+      await correctsConnectionSyncImport(
+        opts.subjectId,
+        opts.data.correlationId
+      )
+    ) {
+      return;
+    }
+  } catch (err) {
+    // Unknown is not "not a sync import": the correction is recorded as before.
+    logger.warn(
+      { err, subjectId: opts.subjectId },
+      "ai_correction: could not tell whether the subject is a connection-sync import; recording it"
+    );
+  }
   try {
     await auditLog({
       subjectType: AI_CORRECTION,

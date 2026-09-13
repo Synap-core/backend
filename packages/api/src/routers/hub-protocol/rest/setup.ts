@@ -57,6 +57,7 @@ import {
   toRegistrationTrace,
 } from "../../../services/external-registration.js";
 import { provisionSurfaceAgentKey } from "../../../services/agent-identity-service.js";
+import { disconnectAllUserConnections } from "../../../services/capabilities/capability-nango-sync.js";
 import {
   API_KEY_SCOPES,
   isValidScope,
@@ -1866,6 +1867,11 @@ export function registerSetupRoutes(app: HubHono): void {
 
         if (isStale) {
           try {
+            // The stale account's connections go before the account does; a
+            // failure lands in the cleanup error below.
+            if (existingUser) {
+              await disconnectAllUserConnections(existingUser.id);
+            }
             await kratosAdmin.deleteIdentity({ id: kratosIdentityId! });
             if (existingUser) {
               await db.delete(users).where(eq(users.id, existingUser.id));

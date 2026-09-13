@@ -4287,6 +4287,19 @@ export interface ProjectDedupCandidate {
 	score: number;
 }
 /**
+ * A user's own explicit choice for one kind's content, read from their
+ * binding HISTORY, revoked rows included:
+ *   - `"source"` — their latest binding is live and opens the source app;
+ *   - `"synap"`  — their latest binding is live and renders in Synap, or they
+ *     unbound it (a tombstone with nothing newer: rebinding always inserts a
+ *     newer row, so a revoked latest row is an explicit unbind);
+ *   - `null`     — they never bound this kind.
+ *
+ * Resolution sources cannot answer this: after an unbind the ladder falls to
+ * the profile or default rung exactly as for someone who never chose.
+ */
+export type UserRendererChoice = "source" | "synap" | null;
+/**
  * Column definition for views
  */
 export interface ViewColumn {
@@ -6111,7 +6124,8 @@ export interface SyncConnectorConnection {
 	connectionId: string;
 	provider: string;
 	userId: string;
-	createdAt: Date;
+	/** Null when the broker did not report it — unknown, never "now". */
+	createdAt: Date | null;
 	lastSyncAt?: Date;
 	/**
 	 * The broker reports this connection as errored (e.g. its refresh token died,
@@ -6422,7 +6436,7 @@ declare const OperationalEventTypes: {
 		readonly type: "connector_sync.complete.completed";
 		readonly label: "Connector synced";
 		readonly domain: "Connectors";
-		readonly description: "A connector finished a sync run.";
+		readonly description: "A connection finished a sync run \u2014 once per connection per run. Data: provider, connectionId, syncStatus ('success' | 'error'), kinds (phase per kind), counts {fetched, created, merged, skipped}, proposalIds when the run filed an import for review.";
 		readonly filterKeys: [
 			"provider",
 			"syncStatus"
@@ -22118,6 +22132,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					"entity-profile": ProfileRendererSource | null;
 					collection: ProfileRendererSource | null;
 				};
+				userChoice: UserRendererChoice;
 				"entity-detail": RendererRef | null;
 				"entity-card": RendererRef | null;
 				"entity-profile": RendererRef | null;
@@ -24544,8 +24559,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				provider?: string | undefined;
 			};
 			output: {
-				enqueued: true;
+				enqueued: boolean;
 				count: number;
+				debounced: number;
 			};
 			meta: object;
 		}>;

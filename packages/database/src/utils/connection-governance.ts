@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { decideAgentPolicy } from "@synap/governance-policy";
 import { db as sharedDb } from "../client-pg.js";
 import { governanceRules } from "../schema/governance-rules.js";
@@ -92,6 +92,18 @@ function exactScope(workspaceId: string | null) {
 }
 
 /**
+ * The scopes whose rules decide a sync of `workspaceId`: that workspace's AND
+ * the pod's for a workspace sync, the pod's alone for a pod-wide one. The
+ * resolver and `disableConnectionAutoRule` both read it, so turning a
+ * connection off revokes every rule that could still turn it on.
+ */
+function resolvableScopes(workspaceId: string | null) {
+  return workspaceId
+    ? or(exactScope(null), exactScope(workspaceId))
+    : exactScope(null);
+}
+
+/**
  * Should a steady-state sync write from this connection auto-apply or propose?
  *
  * No active rule ⇒ `propose` (source `none`) — never the default whitelist: the
@@ -117,9 +129,7 @@ export async function resolveConnectionSyncDecision(
       and(
         activeRule(),
         connectionRules(connectionId),
-        workspaceId
-          ? or(exactScope(null), exactScope(workspaceId))
-          : exactScope(null)
+        resolvableScopes(workspaceId)
       )
     );
 
@@ -173,6 +183,38 @@ export interface EnsureConnectionAutoRuleInput extends ConnectionScopeInput {
 export async function ensureConnectionAutoRule(
   input: EnsureConnectionAutoRuleInput
 ): Promise<{ ruleId: string; created: boolean }> {
+  return ensureConnectionRule(input, "auto");
+}
+
+/**
+ * "Keep syncing automatically" turned OFF for an approved import: withdraw every
+ * `auto` rule the resolver would read for this scope, and record the choice as
+ * an explicit `propose` rule whose lineage is the import the user reviewed.
+ *
+ * The explicit rule is what makes OFF durable against the asynchronous approval
+ * hook: `applyConnectionSyncApproval` does not mint an `auto` rule for an import
+ * that already carries a `propose` rule naming it. A `propose` rule earned from
+ * an OLDER import does not block a new approval — minting `auto` revokes it.
+ *
+ * Idempotent (`created: false` when this import's `propose` rule is active), and
+ * serialized with `ensureConnectionAutoRule` under the same per-connection lock.
+ */
+export async function ensureConnectionReviewRule(
+  input: EnsureConnectionAutoRuleInput
+): Promise<{ ruleId: string; created: boolean }> {
+  return ensureConnectionRule(input, "propose");
+}
+
+/**
+ * The one mint of a connection rule. Under the per-connection advisory lock: an
+ * active rule of this verdict in this scope is kept (for `propose`, only when it
+ * names the same import); otherwise every active rule in the scope is revoked
+ * and the new one inserted, so the store never holds two verdicts at once.
+ */
+async function ensureConnectionRule(
+  input: EnsureConnectionAutoRuleInput,
+  verdict: "auto" | "propose"
+): Promise<{ ruleId: string; created: boolean }> {
   const db = input.db ?? sharedDb;
   const { userId, workspaceId, connectionId, sourceProposalId } = input;
   const thisScope = and(
@@ -186,13 +228,34 @@ export async function ensureConnectionAutoRule(
       sql`SELECT pg_advisory_xact_lock(hashtext(${`governance:connection:${connectionId}`}))`
     );
 
+    if (verdict === "propose") {
+      // OFF withdraws every auto rule that could still turn the sync on,
+      // including a pod-scope one a workspace sync also reads.
+      await revokeActiveRules(
+        tx,
+        and(
+          connectionRules(connectionId),
+          resolvableScopes(workspaceId),
+          eq(governanceRules.verdict, "auto")
+        )
+      );
+    }
+
     const active = await tx
-      .select({ id: governanceRules.id, verdict: governanceRules.verdict })
+      .select({
+        id: governanceRules.id,
+        verdict: governanceRules.verdict,
+        sourceProposalId: governanceRules.sourceProposalId,
+      })
       .from(governanceRules)
       .where(thisScope);
 
-    const existingAuto = active.find((r) => r.verdict === "auto");
-    if (existingAuto) return { ruleId: existingAuto.id, created: false };
+    const existing = active.find(
+      (r) =>
+        r.verdict === verdict &&
+        (verdict === "auto" || r.sourceProposalId === sourceProposalId)
+    );
+    if (existing) return { ruleId: existing.id, created: false };
 
     if (active.length > 0) {
       await tx
@@ -209,7 +272,7 @@ export async function ensureConnectionAutoRule(
         workspaceId,
         targetKind: "connection",
         targetPattern: connectionId,
-        verdict: "auto",
+        verdict,
         sourceProposalId,
         createdBy: authoredCreatedBy(userId),
       })
@@ -217,7 +280,7 @@ export async function ensureConnectionAutoRule(
 
     if (!inserted) {
       throw new Error(
-        `ensureConnectionAutoRule: insert returned no row for connection ${connectionId}`
+        `ensureConnectionRule: insert returned no row for connection ${connectionId}`
       );
     }
     return { ruleId: inserted.id, created: true };
@@ -226,24 +289,55 @@ export async function ensureConnectionAutoRule(
 
 /**
  * "Keep syncing automatically" turned OFF: revoke every active `auto` rule for
- * this connection in this scope. With no rule, the next sync proposes. Returns
- * the revoked ids (empty = nothing was active — a fact, not a failure).
+ * this connection that the resolver would read for this scope (a workspace
+ * sync's workspace AND pod rules). With no rule left, the next sync proposes.
+ * Returns the revoked ids (empty = nothing was active — a fact, not a failure).
  */
 export async function disableConnectionAutoRule(
   input: ConnectionScopeInput
 ): Promise<{ revokedRuleIds: string[] }> {
-  const db = input.db ?? sharedDb;
+  return revokeActiveRules(
+    input.db ?? sharedDb,
+    and(
+      connectionRules(input.connectionId),
+      resolvableScopes(input.workspaceId),
+      eq(governanceRules.verdict, "auto")
+    )
+  );
+}
+
+/**
+ * A connection that is gone (disconnected, revoked, or its owner deleted):
+ * revoke EVERY active rule that targets it, in every scope and with either
+ * verdict — none of them can govern anything any more. Returns the revoked ids.
+ *
+ * Kept apart from `disableConnectionAutoRule` on purpose: that one answers "stop
+ * auto-applying for this sync scope" (auto verdicts, the resolver's scope set);
+ * this one is scope- and verdict-less. Both revoke through `revokeActiveRules`.
+ */
+export async function retireConnectionRules(input: {
+  db?: DbHandle;
+  connectionIds: string[];
+}): Promise<{ revokedRuleIds: string[] }> {
+  if (input.connectionIds.length === 0) return { revokedRuleIds: [] };
+  return revokeActiveRules(
+    input.db ?? sharedDb,
+    and(
+      eq(governanceRules.targetKind, "connection"),
+      inArray(governanceRules.targetPattern, input.connectionIds)
+    )
+  );
+}
+
+/** The ONE revoke of connection rules: soft-revokes the ACTIVE rows matching `where`. */
+async function revokeActiveRules(
+  db: Pick<DbHandle, "update">,
+  where: SQL | undefined
+): Promise<{ revokedRuleIds: string[] }> {
   const rows = await db
     .update(governanceRules)
     .set({ revokedAt: new Date() })
-    .where(
-      and(
-        activeRule(),
-        connectionRules(input.connectionId),
-        exactScope(input.workspaceId),
-        eq(governanceRules.verdict, "auto")
-      )
-    )
+    .where(and(activeRule(), where))
     .returning({ id: governanceRules.id });
   return { revokedRuleIds: rows.map((r) => r.id) };
 }
@@ -342,6 +436,23 @@ export async function applyConnectionSyncApproval(input: {
   if (conn.userId !== userId) {
     return { applied: false, skipped: "not-connection-owner" };
   }
+
+  // The owner turned keep-syncing OFF for THIS import before this hook ran: the
+  // explicit review rule naming it stands. One earned from an older import does
+  // not — minting below revokes it.
+  const [declined] = await db
+    .select({ id: governanceRules.id })
+    .from(governanceRules)
+    .where(
+      and(
+        activeRule(),
+        connectionRules(cs.connectionId),
+        eq(governanceRules.verdict, "propose"),
+        eq(governanceRules.sourceProposalId, proposal.id)
+      )
+    )
+    .limit(1);
+  if (declined) return { applied: false, skipped: "keep-syncing-off" };
 
   const { ruleId, created } = await ensureConnectionAutoRule({
     db,

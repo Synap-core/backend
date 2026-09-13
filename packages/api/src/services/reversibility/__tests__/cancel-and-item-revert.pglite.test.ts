@@ -353,6 +353,19 @@ describe("cancel is cancel — the close door stops what is still in flight", ()
       status: "pending",
       data: { operations: [] },
     });
+    // The cancel's OWN governance receipt: an auto-approved focus_session.update
+    // targeting this session, filed into it. It is the cancel, not run output —
+    // listing it as "finished, revert to undo" was the live defect.
+    await client.query(
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, created_at)
+       values ($1, $2, 'auto_approved', 'focus_session.update', 'focus_session', $3, $4::jsonb, now())`,
+      [
+        randomUUID(),
+        sessionId,
+        sessionId,
+        JSON.stringify({ id: sessionId, status: "cancelled" }),
+      ]
+    );
 
     const result = await cancelSession({
       sessionId,

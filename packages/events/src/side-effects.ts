@@ -4,8 +4,6 @@
  * Enqueues async side-effect jobs (search indexing, notifications, etc.)
  * after successful synchronous CRUD operations.
  *
- * Replaces the old Inngest-based event forwarding for side-effects.
- *
  * The individual reactions live in the reactor registry (reactors.ts). Each is
  * registered once at module load; `emitSideEffects` iterates them in
  * registration order. Adding a new reaction = `registerReactor(...)`, never an
@@ -61,7 +59,7 @@ export interface SideEffectPayload {
    * ⚠️ A TOP-LEVEL field, and it must NEVER be moved into `data`.
    * `resolveAutomationEventFingerprintId` reads `data.eventId` FIRST, so a
    * per-event unique id there would give every event a unique fingerprint and
-   * silently disable the D5 exactly-once claim that the `stableJsonHash`
+   * silently disable the exactly-once claim that the `stableJsonHash`
    * fallback provides — turning a dedupe guarantee off as a side effect of
    * adding provenance. Pinned by
    * `automation-trigger-matcher.fingerprint-provenance.test.ts`.
@@ -72,15 +70,16 @@ export interface SideEffectPayload {
    * `"sync"` = a bulk mirror of an external source (a connection sync run, or the
    * approval of its grouped import proposal). Absent = an ordinary write.
    *
-   * Read by exactly ONE consumer: the automation-trigger matcher, which skips
-   * event automations for a sync-origin payload unless the automation opted in
-   * (`triggerConfig.includeSyncOrigin === true`) — a 200-contact first sync must
-   * not fan out 200 enrollment runs. Every other reactor (search index,
-   * embedding, webhooks, …) ignores it, so mirrored records stay searchable.
+   * A 200-contact first sync must not fan out 200 of anything. Consumers:
+   *   - the automation-trigger matcher skips event automations unless the
+   *     automation opted in (`triggerConfig.includeSyncOrigin === true`);
+   *   - outbound webhook delivery and cross-thread notifications skip it
+   *     (`SKIPS_SYNC_ORIGIN`). A webhook subscription has no opt-in field.
+   * Search index and embedding ignore it, so mirrored records stay searchable.
    * Pinned by `__tests__/side-effects.sync-origin.test.ts`.
    *
    * TOP-LEVEL, never `data.origin`: `data` is the automation-visible payload and
-   * feeds the D5 event fingerprint.
+   * feeds the event fingerprint.
    */
   origin?: "sync";
 }
@@ -147,9 +146,16 @@ const entityEmbeddingReactor: Reactor = {
   },
 };
 
-// 3. Webhook delivery (runs for every emit)
+/** Reactors that do not react to a sync-origin (bulk mirror) write. */
+export const SKIPS_SYNC_ORIGIN = [
+  "webhook-delivery",
+  "cross-thread-notify",
+] as const;
+
+// 3. Webhook delivery (every emit except a sync-origin write)
 const webhookDeliveryReactor: Reactor = {
   id: "webhook-delivery",
+  match: (payload) => payload.origin !== "sync",
   async handler(payload, { boss }) {
     await boss.send("webhook-delivery", {
       eventType: `${payload.subjectType}.${payload.action}.completed`,
@@ -161,12 +167,13 @@ const webhookDeliveryReactor: Reactor = {
   },
 };
 
-// 4. Cross-thread notifications (for entity/document updates)
+// 4. Cross-thread notifications (for entity/document updates, not sync writes)
 const crossThreadNotifyReactor: Reactor = {
   id: "cross-thread-notify",
   match: (payload) =>
     (payload.subjectType === "entity" || payload.subjectType === "document") &&
-    payload.action === "update",
+    payload.action === "update" &&
+    payload.origin !== "sync",
   async handler(payload, { boss }) {
     await boss.send("cross-thread-notify", {
       subjectType: payload.subjectType,
@@ -318,10 +325,8 @@ registerReactor(connectionSyncApprovalReactor);
  * the CRUD response. pg-boss handles retries automatically.
  *
  * Error semantics: reactors run sequentially in registration order, each in
- * its OWN try/catch. A throwing reactor is logged (with its id) and skipped —
- * it can no longer starve the reactors after it (before this, ONE shared
- * try/catch meant reactor 1 throwing aborted embedding + automation enqueues,
- * the 2026-07-16 silent-failure shape). Ordering is otherwise unchanged.
+ * its OWN try/catch. A throwing reactor is logged (with its id) and skipped, so
+ * it cannot starve the reactors after it.
  */
 export async function emitSideEffects(
   payload: SideEffectPayload

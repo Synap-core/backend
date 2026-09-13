@@ -1,5 +1,5 @@
 /**
- * Operation-keyed idempotency for composite materialization (U1).
+ * Operation-keyed idempotency for composite materialization.
  *
  * Makes entity materialization idempotent ON RETRY without merging distinct
  * same-named entities and without a DB transaction (the injected-caller
@@ -15,11 +15,13 @@
  * to the already-created entities instead of re-creating them. This preserves
  * "same name = different entity".
  *
- * Storage reuses `entity_external_links` (provider, externalId) — the exact
- * dedup mechanism `EntityUpsertService` uses for re-imports. The lookup only
- * links to an entity when THIS (provider, externalId) row already exists, which
- * only happens if the same caller created it — so there is no cross-tenant link
- * risk.
+ * Storage reuses `entity_external_links`, unique on (provider, externalId,
+ * nangoConnectionId) — the same rows `EntityUpsertService` dedups re-imports
+ * on. One external record can hold a row per connection, so the key alone does
+ * not scope a hit to the caller: the lookup resolves only onto a live entity
+ * the caller owns, or a row stamped by one of the caller's own connections.
+ * `register` never takes a key from a live entity; it re-points only a row
+ * whose entity was soft-deleted.
  */
 
 import {
@@ -85,7 +87,7 @@ export interface EntityLinkIdempotency {
 
 /**
  * Build the idempotency hooks for a materialization, keyed in
- * `entity_external_links` by (provider, externalId). `namespace` MUST be a
+ * `entity_external_links` by (provider, externalId, connection). `namespace` MUST be a
  * client-stable id (proposalId / capture idempotencyKey) so a retry reproduces
  * the same external ids and links instead of re-creating. `userId` scopes the
  * relation-existence check to the tenant.
@@ -179,7 +181,7 @@ export function makeExternalLinkIdempotency(
         .limit(1);
       return existing?.entityId ?? null;
     },
-    // Mirrors entity-upsert-service.ts:178 — idempotent insert. A key held by a
+    // Idempotent insert, as in EntityUpsertService. A key held by a
     // LIVE entity is left alone (the DoNothing behaviour). A key still pointing
     // at a SOFT-DELETED entity is re-pointed at the fresh one — otherwise the
     // lookup above would miss on every later retry and each retry would create

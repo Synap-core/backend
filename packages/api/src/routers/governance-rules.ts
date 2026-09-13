@@ -190,6 +190,30 @@ async function assertCanManageRule(
   }
 }
 
+/**
+ * A connection rule widens (or narrows) what a connection may write without
+ * review — only the connection's owner gives or withdraws that consent, so
+ * `create` and `revoke` both require it.
+ */
+async function assertOwnsConnection(
+  userId: string,
+  connectionId: string
+): Promise<void> {
+  const conn = await db.query.secrets.findFirst({
+    where: eq(secrets.id, connectionId),
+    columns: { userId: true },
+  });
+  if (!conn) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Connection not found" });
+  }
+  if (conn.userId !== userId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "You do not own this connection — cannot manage its rules",
+    });
+  }
+}
+
 const CreateInputSchema = z
   .object({
     principalKind: z.enum(["agent", "any"]),
@@ -509,26 +533,8 @@ export const governanceRulesRouter = router({
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCanManageRule(ctx.userId, input);
-
-      // A connection rule widens (or narrows) what a connection may write without
-      // review — only the connection's owner can give that consent.
       if (input.targetKind === "connection") {
-        const conn = await db.query.secrets.findFirst({
-          where: eq(secrets.id, input.targetPattern),
-          columns: { userId: true },
-        });
-        if (!conn) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Connection not found",
-          });
-        }
-        if (conn.userId !== ctx.userId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "You do not own this connection — cannot manage its rules",
-          });
-        }
+        await assertOwnsConnection(ctx.userId, input.targetPattern);
       }
 
       const [rule] = await db
@@ -549,9 +555,8 @@ export const governanceRulesRouter = router({
           // PROVENANCE (display only, never an enforcement input): this is the
           // ONLY door where a HUMAN authors a rule directly, so it is the only
           // one allowed to stamp the `user:` namespace. The settings mirror
-          // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>` — the
-          // two used to be indistinguishable bare user ids, which made a
-          // machine-minted grant read as "I authored this deliberately".
+          // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>`, so a
+          // machine-minted grant never reads as deliberately authored.
           createdBy: authoredCreatedBy(ctx.userId),
           expiresAt: input.expiresAt ?? null,
         })
@@ -579,6 +584,9 @@ export const governanceRulesRouter = router({
       }
 
       await assertCanManageRule(ctx.userId, existing);
+      if (existing.targetKind === "connection") {
+        await assertOwnsConnection(ctx.userId, existing.targetPattern);
+      }
 
       const [rule] = await db
         .update(governanceRules)

@@ -260,6 +260,22 @@ describe("a text capture with no session", () => {
     });
   });
 
+  it("a DEGRADED answer from an IS without meta is recorded as degraded, not unknown", () => {
+    // The live incident: a budget-refused capture's manifest read engine
+    // "unknown" because the deployed IS predates `meta` — erasing the one fact
+    // the outcome carried.
+    expect(runFactsFromStructureMeta(undefined, { degraded: true })).toEqual({
+      engine: "degraded",
+      model: null,
+      provider: null,
+      promptVersion: "unknown",
+    });
+    // …while an IS that DID send meta is still recorded verbatim.
+    expect(runFactsFromStructureMeta(IS_META, { degraded: true })).toEqual(
+      IS_META
+    );
+  });
+
   it("an older IS (no meta) is recorded as unknown, never guessed", () => {
     expect(runFactsFromStructureMeta(undefined)).toEqual({
       engine: "unknown",

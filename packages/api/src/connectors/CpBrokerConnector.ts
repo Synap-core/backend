@@ -167,7 +167,7 @@ export class CpBrokerConnector implements ConnectionBroker {
       connectionId: c.connectionId,
       provider: c.provider,
       userId,
-      createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
+      createdAt: c.createdAt ? new Date(c.createdAt) : null,
       lastSyncAt: c.lastFetchedAt ? new Date(c.lastFetchedAt) : undefined,
       hasError: c.hasError === true,
     }));
@@ -216,7 +216,7 @@ export class CpBrokerConnector implements ConnectionBroker {
         connectionId: c.connectionId,
         provider: c.provider,
         userId,
-        createdAt: c.createdAt ? new Date(c.createdAt) : new Date(),
+        createdAt: c.createdAt ? new Date(c.createdAt) : null,
         lastSyncAt: c.lastFetchedAt ? new Date(c.lastFetchedAt) : undefined,
         hasError: c.hasError === true,
       },
@@ -300,8 +300,8 @@ export class CpBrokerConnector implements ConnectionBroker {
     });
     if (!sent.ok) throw new Error(sent.error);
     if (sent.status === 200) return;
-    // 404 = not in THIS user's namespace. Nothing was revoked: never report it
-    // as done (an admin revoking a member's connection used to "succeed" here).
+    // 404 = not in THIS user's namespace. Nothing was revoked, so it is never
+    // reported as done.
     if (sent.status === 404) {
       throw new BrokerConnectionNotFoundError(
         `Connection ${connectionId} is not among this user's connections — nothing was revoked`

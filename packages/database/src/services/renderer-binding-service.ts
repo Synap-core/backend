@@ -30,7 +30,7 @@
  * the same tombstone-not-DELETE choice `governance_rules` made.
  */
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "../schema/index.js";
 
@@ -132,6 +132,53 @@ function assertBindingShape(key: RendererBindingKey): void {
  */
 export function activeRendererBindingWhere() {
   return isNull(rendererBindings.revokedAt);
+}
+
+/**
+ * A user's own explicit choice for one kind's content, read from their
+ * binding HISTORY, revoked rows included:
+ *   - `"source"` — their latest binding is live and opens the source app;
+ *   - `"synap"`  — their latest binding is live and renders in Synap, or they
+ *     unbound it (a tombstone with nothing newer: rebinding always inserts a
+ *     newer row, so a revoked latest row is an explicit unbind);
+ *   - `null`     — they never bound this kind.
+ *
+ * Resolution sources cannot answer this: after an unbind the ladder falls to
+ * the profile or default rung exactly as for someone who never chose.
+ */
+export type UserRendererChoice = "source" | "synap" | null;
+
+export async function readUserRendererChoice(
+  db: Db,
+  input: {
+    userId: string;
+    subjectKind: string;
+    contentKind: ProfileRendererContentKind;
+  }
+): Promise<UserRendererChoice> {
+  const [latest] = await db
+    .select({
+      ref: rendererBindings.ref,
+      revokedAt: rendererBindings.revokedAt,
+    })
+    .from(rendererBindings)
+    .where(
+      and(
+        eq(rendererBindings.scopeKind, "user"),
+        eq(rendererBindings.userId, input.userId),
+        eq(rendererBindings.subjectKind, input.subjectKind),
+        isNull(rendererBindings.subjectId),
+        eq(rendererBindings.contentKind, input.contentKind)
+      )
+    )
+    .orderBy(
+      desc(rendererBindings.createdAt),
+      sql`${rendererBindings.revokedAt} IS NOT NULL`
+    )
+    .limit(1);
+  if (!latest) return null;
+  if (latest.revokedAt) return "synap";
+  return latest.ref?.kind === "source-app" ? "source" : "synap";
 }
 
 function activeRowWhere(key: RendererBindingKey) {

@@ -344,7 +344,12 @@ export async function stopSessionWork(args: {
           inArray(proposals.status, [
             ProposalStatus.APPROVED,
             ProposalStatus.AUTO_APPROVED,
-          ])
+          ]),
+          // Not run output: a `focus_session.update` on THIS session — the
+          // cancel's own governance receipt among them — is the close itself.
+          // Listing it as "finished, revert to undo" told the user to undo the
+          // cancel in order to undo the run.
+          drizzleSql`not (${proposals.targetType} = 'focus_session' and ${proposals.targetId} = ${session.id})`
         )
       );
     out.finished = applied.map((p) => ({

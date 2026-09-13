@@ -9,12 +9,11 @@
  * connector up by `type` OR fan out over a CAPABILITY (`forCapability`) without
  * a `provider === "..."` ladder.
  *
- * Capabilities are DETECTED from the connector's existing method surface
- * (W2 is behavior-preserving — methods are NOT renamed yet; W3/W4 canonicalize
- * `fetchRecords`/`enrich`/`getMessages` → `read` and
- * `sendMessage`/`proxyRequest`/`triggerAction` → `push`). The marker interfaces
- * below describe the CURRENT surfaces; the guards key off the methods that exist
- * today.
+ * Capabilities are DETECTED from the connector's method surface: the pull verbs
+ * `fetchRecords`/`enrich`/`getMessages` sit behind the canonical `read`, and
+ * `sendMessage`/`proxyRequest`/`triggerAction` are the push surfaces. The marker
+ * interfaces below describe those surfaces; the guards key off the methods that
+ * exist.
  *
  * NOTE: the `mcp://` scheme is NOT modelled here. MCP servers are bridged
  * separately by the `mcp://` scheme handler in `external-dispatch.ts`
@@ -24,11 +23,11 @@
 /** The capability family a connector belongs to. */
 export type ConnectorKind = "sync" | "enrichment" | "messaging";
 
-// ── The unified READ contract (W4) ───────────────────────────────────────────
+// ── The unified READ contract ────────────────────────────────────────────────
 //
 // The three pull verbs (`fetchRecords`/`enrich`/`getMessages`) all do the same
 // shape of work: take a request describing WHAT to pull, hit an upstream, return
-// a list of records. W4 canonicalizes that as ONE `read(req) → ReadResult` whose
+// a list of records. That is canonicalized as ONE `read(req) → ReadResult` whose
 // records are normalized to `ReadRecord` so the import sink is connector-agnostic.
 //
 // The request is discriminated by `kind` (the originating family), so a single
@@ -67,9 +66,7 @@ export interface MessagingReadRequest {
 }
 
 export type ReadRequest =
-  | SyncReadRequest
-  | EnrichmentReadRequest
-  | MessagingReadRequest;
+  SyncReadRequest | EnrichmentReadRequest | MessagingReadRequest;
 
 /**
  * ONE normalized record every pull produces. `externalId` is the stable
@@ -121,7 +118,7 @@ export interface Credentialed extends BaseConnector {
 }
 
 /**
- * Can READ records from the upstream. W4 adds the CANONICAL `read(req)` seam;
+ * Can READ records from the upstream. `read(req)` is the CANONICAL seam;
  * the three legacy verbs (`fetchRecords` · `enrich` · `getMessages`) remain as
  * thin adapters that `read()` delegates to, so callers dispatch via `read()`
  * (or `readViaConnector()` below) without a per-family branch.
@@ -141,7 +138,7 @@ export interface Readable extends BaseConnector {
  * `proxyRequest`/`triggerAction` (Nango generic HTTP proxy + named action).
  */
 export interface Pushable extends BaseConnector {
-  // W3/W4: these collapse into a single `push(req)`.
+  // Candidates to collapse into a single `push(req)`.
   sendMessage?: (...args: unknown[]) => Promise<unknown>;
   proxyRequest?: (...args: unknown[]) => Promise<unknown>;
   triggerAction?: (...args: unknown[]) => Promise<unknown>;
@@ -212,8 +209,8 @@ export class ConnectorRegistry {
   }
 
   /**
-   * Return every registered connector matching a capability guard. Generalizes
-   * the old per-family helpers (enrichment's `forCapability`, sync's `list`).
+   * Return every registered connector matching a capability guard — one lookup
+   * for every family (enrichment, sync, messaging).
    * Note: does NOT filter on `isConfigured` — messaging descriptors are
    * resolved per-call, so configuration is a resolve-time concern. Callers that
    * need "live only" filter the result.

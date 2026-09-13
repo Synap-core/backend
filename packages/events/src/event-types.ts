@@ -184,7 +184,8 @@ export const OperationalEventTypes = {
     type: "connector_sync.complete.completed",
     label: "Connector synced",
     domain: "Connectors",
-    description: "A connector finished a sync run.",
+    description:
+      "A connection finished a sync run — once per connection per run. Data: provider, connectionId, syncStatus ('success' | 'error'), kinds (phase per kind), counts {fetched, created, merged, skipped}, proposalIds when the run filed an import for review.",
     filterKeys: ["provider", "syncStatus"],
   },
 

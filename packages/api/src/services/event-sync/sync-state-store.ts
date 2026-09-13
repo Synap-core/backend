@@ -15,6 +15,7 @@ import {
   secrets,
   links,
   proposals,
+  users,
   eq,
   and,
   isNull,
@@ -35,7 +36,7 @@ export interface KindSyncState {
   runStartedAt?: string | null;
   /** Next page of an interrupted steady run; null when none is pending. */
   pageToken?: string | null;
-  phase?: SyncPhase;
+  phase?: SyncPhase | null;
   lastRunAt?: string;
   counts?: SyncCounts;
   proposalId?: string | null;
@@ -125,6 +126,13 @@ export async function acquireLease(key: KindStateKey): Promise<unknown | null> {
   return rows.length > 0 ? (rows[0]!.metadata ?? {}) : null;
 }
 
+/** Extend a held lease, so a long run is not taken over while it is still working. */
+export async function renewLease(key: KindStateKey): Promise<void> {
+  await patchKindState(key, {
+    leaseUntil: new Date(Date.now() + LEASE_MS).toISOString(),
+  });
+}
+
 export interface SyncToolRow {
   id: string;
   createdBy: string;
@@ -180,7 +188,10 @@ export async function resolveSyncTool(opts: {
   return resolveTool(opts.provider, isProviderSyncEnabled, opts.workspaceId);
 }
 
-/** The live connections (secrets rows) of the tool's capability. */
+/**
+ * The live connections (secrets rows) of the tool's capability. A row whose
+ * owner no longer exists never runs: a sync writes as its owner.
+ */
 export async function resolveSyncConnections(
   toolId: string,
   pinnedConnectionId: string | undefined
@@ -204,11 +215,54 @@ export async function resolveSyncConnections(
     .where(
       and(
         eq(drizzleSql`${secrets.capabilityId}::text`, edge.capabilityId),
-        isNotNull(secrets.accountHint),
-        isNull(secrets.deletedAt),
-        drizzleSql`COALESCE(${secrets.connectionState}, 'connected') <> 'disconnected'`,
+        runnableConnection(),
         ...(pinnedConnectionId ? [eq(secrets.id, pinnedConnectionId)] : [])
       )
+    );
+}
+
+/**
+ * A registry row a sync may run: a live, connected pointer whose owner still
+ * exists. Every connection resolver reads this ONE predicate.
+ */
+function runnableConnection() {
+  return and(
+    isNotNull(secrets.accountHint),
+    isNull(secrets.deletedAt),
+    drizzleSql`COALESCE(${secrets.connectionState}, 'connected') <> 'disconnected'`,
+    drizzleSql`EXISTS (SELECT 1 FROM ${users} WHERE ${users.id} = ${secrets.userId})`
+  );
+}
+
+/**
+ * Remove the run state of connections that are gone from every provider tool
+ * and every kind (`metadata.sync.kinds.<kind>.connections.<id>`). Config keys
+ * beside the state (`enabled`, `windowDays`, …) are left as they are.
+ */
+export async function clearConnectionSyncState(
+  connectionIds: string[]
+): Promise<void> {
+  if (connectionIds.length === 0) return;
+  const ids = drizzleSql`ARRAY[${drizzleSql.join(
+    connectionIds.map((id) => drizzleSql`${id}`),
+    drizzleSql`, `
+  )}]::text[]`;
+  const kinds = drizzleSql`jsonb_each(${tools.metadata}#>'{sync,kinds}') AS e(k, v)`;
+  await db
+    .update(tools)
+    .set({
+      metadata: drizzleSql`jsonb_set(${tools.metadata}, '{sync,kinds}', (
+        SELECT jsonb_object_agg(k, CASE
+          WHEN jsonb_typeof(v->'connections') = 'object'
+            THEN jsonb_set(v, '{connections}', (v->'connections') - ${ids})
+          ELSE v END)
+        FROM ${kinds}))`,
+    })
+    .where(
+      drizzleSql`jsonb_typeof(${tools.metadata}#>'{sync,kinds}') = 'object'
+        AND EXISTS (SELECT 1 FROM ${kinds}
+          WHERE jsonb_typeof(v->'connections') = 'object'
+            AND jsonb_exists_any(v->'connections', ${ids}))`
     );
 }
 

@@ -19,6 +19,8 @@ const h = vi.hoisted(() => ({
   /** connectionId → the providers whose sync tool that row resolves to. */
   syncToolFor: {} as Record<string, string[]>,
   enqueued: [] as Array<Record<string, unknown>>,
+  /** connectionIds whose enqueue lands inside the debounce window. */
+  debounced: new Set<string>(),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => ({
@@ -60,6 +62,9 @@ vi.mock("../event-sync/sync-state-store.js", async (importOriginal) => ({
 vi.mock("../event-sync/connection-sync.js", () => ({
   enqueueConnectionSync: vi.fn(async (input: Record<string, unknown>) => {
     h.enqueued.push(input);
+    return h.debounced.has(input.connectionId as string)
+      ? { queued: false, reason: "debounced" }
+      : { queued: true, jobId: `job-${String(input.connectionId)}` };
   }),
 }));
 
@@ -95,6 +100,7 @@ beforeEach(() => {
     "row-deleted": ["google"],
   };
   h.enqueued = [];
+  h.debounced = new Set();
 });
 
 describe("enqueueManualConnectionSync", () => {
@@ -104,7 +110,7 @@ describe("enqueueManualConnectionSync", () => {
       userId: "user-1",
       connectionId: "row-mine",
     });
-    expect(r).toEqual({ ok: true, count: 1 });
+    expect(r).toEqual({ ok: true, queued: 1, debounced: 0 });
     expect(h.enqueued).toEqual([
       {
         provider: "google",
@@ -165,11 +171,35 @@ describe("enqueueManualConnectionSync", () => {
       userId: "user-1",
       provider: "google",
     });
-    expect(r).toEqual({ ok: true, count: 2 });
+    expect(r).toEqual({ ok: true, queued: 2, debounced: 0 });
     expect(h.enqueued.map((e) => e.connectionId)).toEqual([
       "row-mine",
       "row-mine-2",
     ]);
+  });
+
+  it("a target inside the debounce window is reported as debounced, never counted as queued", async () => {
+    h.rows.push({
+      id: "row-mine-2",
+      userId: "user-1",
+      capabilityId: "cap-google",
+      deletedAt: null,
+    });
+    h.debounced = new Set(["row-mine"]);
+    expect(
+      await enqueueManualConnectionSync({
+        userId: "user-1",
+        provider: "google",
+      })
+    ).toEqual({ ok: true, queued: 1, debounced: 1 });
+
+    h.debounced = new Set(["row-mine", "row-mine-2"]);
+    expect(
+      await enqueueManualConnectionSync({
+        userId: "user-1",
+        provider: "google",
+      })
+    ).toEqual({ ok: true, queued: 0, debounced: 2 });
   });
 
   it("a multi-provider capability: the provider is the one the row's sync tool resolves under, not the first key", async () => {
@@ -180,7 +210,7 @@ describe("enqueueManualConnectionSync", () => {
       userId: "user-1",
       connectionId: "row-mine",
     });
-    expect(r).toEqual({ ok: true, count: 1 });
+    expect(r).toEqual({ ok: true, queued: 1, debounced: 0 });
     expect(h.enqueued).toEqual([
       {
         provider: "notion",

@@ -17,6 +17,8 @@
  * a new targetKind/principalKind is ever added there.
  */
 
+import { humanizeToken } from "@synap-core/types/vocabulary";
+
 export interface GovernanceRuleRow {
   id: string;
   principalKind: "agent" | "any";
@@ -56,6 +58,29 @@ export interface HumanizeTargetOptions {
    * unresolved → "A connection". The raw uuid is never shown.
    */
   connectionLabel?: (connectionId: string) => string | undefined;
+}
+
+/** One row of `trpc.connectors.allConnections` — only the fields this file reads. */
+export interface AllConnectionsRow {
+  registryConnectionId: string;
+  providerId: string | null;
+}
+
+/**
+ * Build the `connectionLabel` lookup `humanizeTarget` needs, from
+ * `connectors.allConnections`. Keyed by `registryConnectionId` — the id a
+ * "connection" rule's `targetPattern` actually holds (the registry row id,
+ * not the broker's own `connectionId`/accountHint on the same row).
+ */
+export function buildConnectionLabelLookup(
+  rows: readonly AllConnectionsRow[]
+): (connectionId: string) => string | undefined {
+  const map = new Map<string, string>();
+  for (const r of rows) {
+    if (r.providerId)
+      map.set(r.registryConnectionId, humanizeToken(r.providerId));
+  }
+  return (connectionId: string) => map.get(connectionId);
 }
 
 /** targetKind → a readable description of what the rule matches. */

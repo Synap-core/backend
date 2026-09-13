@@ -14,16 +14,13 @@
  *   `.completed`, NOT `.validated` — `.validated` would silently miss every
  *   auto-approved / direct write.
  *
- * NODE TYPES ARE DERIVED, NEVER HAND-LISTED (dogfooded 2026-09-12, D5).
- *   `nodeTypes` used to be a hand-written object literal, and it fell behind the
- *   executor: it documented TEN of the twenty-three types `FLOW_NODE_TYPES`
- *   accepts, silently omitting `playbook_run` and `capability` among others. An
- *   agent authoring a flow from this door (the ONLY machine-readable description
- *   of the DSL) therefore could not emit a playbook step at all — the grammar
- *   accepted it, the reference denied it existed.
- *   The map below is now keyed by `FLOW_NODE_TYPES` through a `Record<…>` whose
- *   key type is the union itself, so a node type added to the executor and not
- *   documented here FAILS THE BUILD. Do not replace this with a plain object.
+ * NODE TYPES ARE DERIVED, NEVER HAND-LISTED.
+ *   This door is the only machine-readable description of the flow DSL, so a
+ *   node type the executor accepts but this reference omits cannot be authored
+ *   by an agent at all. The map below is keyed by `FLOW_NODE_TYPES` through a
+ *   `Record<…>` whose key type is the union itself, so a node type added to the
+ *   executor and not documented here FAILS THE BUILD. Do not replace this with a
+ *   plain object.
  */
 
 import { FLOW_NODE_TYPES } from "../../../services/automations/validate-flow.js";

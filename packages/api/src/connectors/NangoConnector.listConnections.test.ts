@@ -5,11 +5,11 @@ import { NangoConnector } from "./NangoConnector.js";
  * Behavioral coverage for `listConnectionsResult` — the typed, paginated read
  * that the connection reconciler's DESTRUCTIVE removal branch depends on.
  *
- * The bug this guards (caught in review): the old `listConnections` returned
- * `[]` on any Nango HTTP error AND read only page 1, so a transient 429 or a
- * paginated-out connection looked identical to "revoked" and the reconciler
- * soft-deleted live pointer rows. These tests prove fault ≠ empty and that
- * every page is walked — no DB, just a stubbed `fetch`.
+ * The failure this guards: a list that returns `[]` on any Nango HTTP error, or
+ * reads only page 1, makes a transient 429 or a paginated-out connection look
+ * identical to "revoked", and the reconciler soft-deletes live pointer rows.
+ * These tests prove fault ≠ empty and that every page is walked — no DB, just a
+ * stubbed `fetch`.
  */
 
 const connector = new NangoConnector({

@@ -5,6 +5,7 @@
  * Replaces Inngest cron functions.
  */
 
+import type PgBoss from "pg-boss";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -79,13 +80,23 @@ const logger = createLogger({ module: "cron-scheduler" });
  * 2026-07-12 — cp-catalog-sync and friends never ran). Log loud, keep going.
  */
 async function scheduleSafe(
-  boss: { schedule: (n: string, c: string, d: object) => Promise<unknown> },
+  boss: {
+    schedule: (
+      n: string,
+      c: string,
+      d: object,
+      o?: PgBoss.ScheduleOptions
+    ) => Promise<unknown>;
+  },
   name: string,
   cron: string,
-  data: object = {}
+  data: object = {},
+  options?: PgBoss.ScheduleOptions
 ): Promise<void> {
   try {
-    await boss.schedule(name, cron, data);
+    await (options
+      ? boss.schedule(name, cron, data, options)
+      : boss.schedule(name, cron, data));
   } catch (err) {
     logger.error(
       { err, queue: name },
@@ -317,9 +328,15 @@ export async function registerCronSchedules(): Promise<void> {
   // Connection sync steady tick (every 30 min) — the scheduled job carries no
   // provider, so the runner walks every sync-enabled provider connection
   // (first run → one grouped import proposal; steady → the connection's rule).
-  await scheduleSafe(boss, CONNECTION_SYNC_RUN_QUEUE, CONNECTION_SYNC_CRON, {
-    reason: "cron",
-  });
+  // One tick job per 30-min slot, however many schedulers fire it. A walk still
+  // running when the next tick starts is guarded by the per-kind lease, not here.
+  await scheduleSafe(
+    boss,
+    CONNECTION_SYNC_RUN_QUEUE,
+    CONNECTION_SYNC_CRON,
+    { reason: "cron" },
+    { singletonKey: "connection-sync-cron", singletonSeconds: 30 * 60 }
+  );
   logger.info("Registered cron: connection-sync-run (every 30min)");
 
   // Stale-proposal scan (every 6h — pending proposals whose target workspace the

@@ -24,8 +24,7 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Ban, ShieldCheck } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
-import { humanizeToken } from "@synap-core/types/vocabulary";
+import { useMemo, useState } from "react";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
 import {
@@ -34,6 +33,7 @@ import {
   ResourceRowSkeleton,
 } from "../../../components/resource-row";
 import {
+  buildConnectionLabelLookup,
   type GovernanceRuleRow,
   humanizePrincipal,
   humanizeScope,
@@ -73,16 +73,9 @@ export function GovernanceRulesPanel({
   const connectionsQuery = trpc.connectors.allConnections.useQuery(undefined, {
     enabled: rules.some((r) => r.targetKind === "connection"),
   });
-  const providerById = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const c of connectionsQuery.data ?? []) {
-      map.set(c.connectionId, humanizeToken(c.providerId));
-    }
-    return map;
-  }, [connectionsQuery.data]);
-  const connectionLabel = useCallback(
-    (connectionId: string) => providerById.get(connectionId),
-    [providerById]
+  const connectionLabel = useMemo(
+    () => buildConnectionLabelLookup(connectionsQuery.data ?? []),
+    [connectionsQuery.data]
   );
 
   const revokeMutation = trpc.governanceRules.revoke.useMutation({

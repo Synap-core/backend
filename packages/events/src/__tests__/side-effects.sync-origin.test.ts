@@ -1,11 +1,13 @@
 /**
- * A sync-origin emit is still INDEXED and EMBEDDED, and
- * still reaches the automation matcher carrying `origin` so the matcher (not a
- * reactor) decides who skips.
+ * A sync-origin emit is still INDEXED and EMBEDDED, still reaches the
+ * automation matcher carrying `origin` (the matcher decides which automations
+ * skip), and does NOT enqueue outbound webhook delivery or cross-thread
+ * notifications.
  *
- * The reactor set is DERIVED from the live registry, not hand-listed: every
- * registered reactor must make the same match decision with and without
- * `origin: "sync"`. A reactor that learns to skip sync writes goes red here.
+ * The reactor set is DERIVED from the live registry: every registered reactor
+ * either makes the same match decision with and without `origin: "sync"`, or is
+ * named in `SKIPS_SYNC_ORIGIN` and skips it. A reactor that starts skipping sync
+ * writes without being named, or a named one that stops skipping, goes red.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -28,7 +30,8 @@ vi.mock("@synap-core/core", () => ({
   config: { server: { vectorSearchEnabled: true } },
 }));
 
-const { emitSideEffects, getReactors } = await import("../side-effects.js");
+const { emitSideEffects, getReactors, SKIPS_SYNC_ORIGIN } =
+  await import("../side-effects.js");
 
 const BASE = {
   subjectType: "entity",
@@ -71,17 +74,41 @@ describe("emitSideEffects — origin: 'sync'", () => {
     expect("origin" in job).toBe(false);
   });
 
-  it("no registered reactor changes its match decision because of origin", () => {
+  it("a sync write enqueues no outbound webhook delivery or cross-thread notify; an ordinary update enqueues both", async () => {
+    await emitSideEffects({ ...BASE, action: "update", origin: "sync" });
+    expect(queuesSent()).not.toContain("webhook-delivery");
+    expect(queuesSent()).not.toContain("cross-thread-notify");
+    expect(queuesSent()).toContain("search-index");
+
+    send.mockClear();
+    await emitSideEffects({ ...BASE, action: "update" });
+    expect(queuesSent()).toContain("webhook-delivery");
+    expect(queuesSent()).toContain("cross-thread-notify");
+  });
+
+  it("only the reactors named in SKIPS_SYNC_ORIGIN change their match decision because of origin", () => {
     const reactors = getReactors();
-    // Non-vacuity: the registry this scan walks is the real one.
+    const ids = reactors.map((r) => r.id);
+    // Non-vacuity: the registry this scan walks is the real one, and every
+    // named skipper is registered.
     expect(reactors.length).toBeGreaterThanOrEqual(7);
-    expect(reactors.map((r) => r.id)).toContain("search-index");
-    for (const r of reactors) {
-      if (!r.match) continue;
-      expect(
-        r.match({ ...BASE, origin: "sync" }),
-        `reactor ${r.id} must not skip sync writes`
-      ).toBe(r.match({ ...BASE }));
+    expect(ids).toContain("search-index");
+    for (const id of SKIPS_SYNC_ORIGIN) expect(ids).toContain(id);
+
+    const skippers = new Set<string>(SKIPS_SYNC_ORIGIN);
+    for (const action of ["create", "update"]) {
+      const plain = { ...BASE, action };
+      for (const r of reactors) {
+        const withSync = r.match ? r.match({ ...plain, origin: "sync" }) : true;
+        const without = r.match ? r.match(plain) : true;
+        if (skippers.has(r.id)) {
+          expect(withSync, `reactor ${r.id} must skip sync writes`).toBe(false);
+        } else {
+          expect(withSync, `reactor ${r.id} must not skip sync writes`).toBe(
+            without
+          );
+        }
+      }
     }
   });
 });

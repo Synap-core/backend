@@ -17,10 +17,11 @@
  * tool already carries verbs.
  */
 
-import { db, eq, and, isNull } from "@synap/database";
+import { db, eq, and, isNull, drizzleSql } from "@synap/database";
 import {
   tools,
   capabilities as capabilitiesTable,
+  proposals,
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { createCapabilityFromDefinition } from "../services/capabilities/create-from-definition.js";
@@ -211,6 +212,29 @@ export function annotateProviderPendingInstall<
 }
 
 /**
+ * The pending install of a family template: the governed apply files the
+ * template's container as a `capability.create` proposal carrying its address
+ * (`templateKey`). While one is pending the install waits on review, so it is
+ * not applied again.
+ */
+async function findPendingTemplateInstall(
+  templateKey: string
+): Promise<string[]> {
+  const rows = await db
+    .select({ id: proposals.id })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, "capability.create"),
+        eq(proposals.status, "pending"),
+        drizzleSql`${proposals.data} ->> 'templateKey' = ${templateKey}`
+      )
+    )
+    .limit(20);
+  return rows.map((r) => r.id);
+}
+
+/**
  * Materialize the acting user's connected providers into pod-wide tool rows and
  * apply each provider's family template. `ctx` must be a tRPC-compatible caller
  * context (carries `userId`; used to drive the GOVERNED toolsRouter caller).
@@ -355,6 +379,13 @@ export async function materializeConnectorTools(
       // Apply only when the tool has NO verbs yet, so a re-connect / window-focus
       // re-sync never re-applies (no duplicate skills/grants).
       if (hasVerbs) continue;
+      // Every providers/connections poll reaches here while an install waits on
+      // review; reporting the pending proposals keeps the poll from re-filing it.
+      const pending = await findPendingTemplateInstall(templateKey);
+      if (pending.length > 0) {
+        pendingInstall.push({ provider, proposalIds: pending });
+        continue;
+      }
       // Pod-wide apply: no workspace lens (the connected provider tool is
       // pod-wide). The acting user owns the seeded vault/grants.
       const applyCtx = { ...ctx, workspaceId: null } as unknown as Context;

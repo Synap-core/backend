@@ -4,6 +4,7 @@ import {
   inferOpenTypeFromId,
   isSafeOpenId,
   isMobileClient,
+  isOpenViewValue,
   isUnfurlBot,
   OPEN_CLIENT_MOBILE,
   podAdminTarget,
@@ -313,5 +314,72 @@ describe("dispatchOpen — ?client=mobile", () => {
         client: OPEN_CLIENT_MOBILE,
       })
     ).toEqual({ action: "bounce", deep: `synap://open/view/${ID}` });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `?view=` forwarding onto the bounce deep link.
+// ---------------------------------------------------------------------------
+
+describe("isOpenViewValue", () => {
+  it("accepts only the allowlisted value", () => {
+    expect(isOpenViewValue("room")).toBe(true);
+    expect(isOpenViewValue("evil")).toBe(false);
+    expect(isOpenViewValue("")).toBe(false);
+    expect(isOpenViewValue(undefined)).toBe(false);
+    expect(isOpenViewValue(null)).toBe(false);
+  });
+});
+
+describe("dispatchOpen — ?view= forwarding", () => {
+  it("session + mobile + view=room → bounce carries ?view=room", () => {
+    expect(
+      dispatchOpen({
+        type: "session",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        client: OPEN_CLIENT_MOBILE,
+        view: "room",
+      })
+    ).toEqual({
+      action: "bounce",
+      deep: `synap://open/session/${ID}?view=room`,
+    });
+  });
+
+  it("an unrecognised view is DROPPED — same bounce as no view at all", () => {
+    const withEvilView = dispatchOpen({
+      type: "session",
+      id: ID,
+      userAgent: HUMAN,
+      adminBase: ADMIN,
+      client: OPEN_CLIENT_MOBILE,
+      view: "evil",
+    });
+    const withNoView = dispatchOpen({
+      type: "session",
+      id: ID,
+      userAgent: HUMAN,
+      adminBase: ADMIN,
+      client: OPEN_CLIENT_MOBILE,
+    });
+    expect(withEvilView).toEqual(withNoView);
+    expect(withEvilView).toEqual({
+      action: "bounce",
+      deep: `synap://open/session/${ID}`,
+    });
+  });
+
+  it("view is never appended to a pod-admin redirect (desktop entity/view/proposal)", () => {
+    expect(
+      dispatchOpen({
+        type: "entity",
+        id: ID,
+        userAgent: HUMAN,
+        adminBase: ADMIN,
+        view: "room",
+      })
+    ).toEqual({ action: "redirect", url: `${ADMIN}/open/entity/${ID}` });
   });
 });

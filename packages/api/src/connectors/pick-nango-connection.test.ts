@@ -42,6 +42,19 @@ describe("pickNangoConnection", () => {
     expect(pick).toEqual({ ok: true, connection: WORK });
   });
 
+  it("no hint → a connection with no reported creation time is never taken as the newest", () => {
+    const undated: SyncConnectorConnection = {
+      ...conn("conn-undated-ccc333", "2026-01-01T00:00:00.000Z"),
+      createdAt: null,
+    };
+    expect(
+      pickNangoConnection([undated, PERSONAL], "google", undefined)
+    ).toEqual({ ok: true, connection: PERSONAL });
+    expect(
+      pickNangoConnection([PERSONAL, undated], "google", undefined)
+    ).toEqual({ ok: true, connection: PERSONAL });
+  });
+
   it("no connection for the provider → no_connection (distinct from a mismatch)", () => {
     expect(pickNangoConnection([PERSONAL], "notion", undefined)).toEqual({
       ok: false,

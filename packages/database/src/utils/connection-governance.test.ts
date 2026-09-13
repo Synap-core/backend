@@ -261,8 +261,9 @@ describe("applyConnectionSyncApproval (the approval hook)", () => {
   const CS = { connectionId: "conn-1", provider: "google", kinds: ["contact"] };
 
   it("approving a keep-syncing import mints exactly one auto rule", async () => {
-    // select 1: secrets owner; select 2: active rules (none)
-    const f = makeDb([[{ userId: "user-1" }], []]);
+    // select 1: secrets owner; select 2: a review rule naming this import
+    // (none); select 3: active rules (none)
+    const f = makeDb([[{ userId: "user-1" }], [], []]);
     const out = await applyConnectionSyncApproval({
       db: f.handle,
       proposal: importProposal({ ...CS, keepSyncing: true }),
@@ -275,6 +276,7 @@ describe("applyConnectionSyncApproval (the approval hook)", () => {
   it("re-approving (replay) is idempotent — no second rule", async () => {
     const f = makeDb([
       [{ userId: "user-1" }],
+      [],
       [{ id: "rule-new", verdict: "auto" }],
     ]);
     const out = await applyConnectionSyncApproval({

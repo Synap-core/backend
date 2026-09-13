@@ -994,7 +994,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
                     z.object({
                       connectionId: z.string(),
                       provider: z.string(),
-                      createdAt: z.string(),
+                      createdAt: z.string().nullable(),
                     })
                   ),
                 })
@@ -1048,7 +1048,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
             connections: filtered.map((conn) => ({
               connectionId: conn.connectionId,
               provider: conn.provider,
-              createdAt: conn.createdAt.toISOString(),
+              createdAt: conn.createdAt?.toISOString() ?? null,
             })),
           },
           200

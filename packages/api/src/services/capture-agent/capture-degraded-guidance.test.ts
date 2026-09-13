@@ -53,6 +53,26 @@ describe("degraded reason → permanence class", () => {
     expect(isDegradedReasonRetryable("is_invalid_response")).toBe(true);
   });
 
+  it.each(["llm_budget_exceeded", "extraction_error: BudgetExceededError"])(
+    "%s is a BUDGET state — not retryable now, but not unknown/permanent",
+    (reason) => {
+      expect(classifyDegradedReason(reason)).toBe("budget");
+      expect(isDegradedReasonRetryable(reason)).toBe(false);
+      const msg = describeDegradedForAgent(reason);
+      expect(msg).toContain(reason);
+      expect(msg).toMatch(/monthly LLM token budget/);
+      expect(msg).toMatch(/NOT permanent/);
+      expect(msg).not.toMatch(/did not say why/);
+      expect(msg.toLowerCase()).not.toContain("temporar");
+    }
+  );
+
+  it("an unrelated extraction_error is still UNKNOWN (the budget match is exact)", () => {
+    expect(classifyDegradedReason("extraction_error: TypeError")).toBe(
+      "unknown"
+    );
+  });
+
   it("is_empty_result is UNKNOWN, never transient", () => {
     // `is_empty_result` is the pod's last-resort "we don't know why" label.
     // Classifying it transient is precisely the defect: it tells a caller to

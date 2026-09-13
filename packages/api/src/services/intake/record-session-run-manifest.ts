@@ -82,7 +82,7 @@ const UNKNOWN = "unknown";
  */
 export function runFactsFromStructureMeta(
   meta: StructureRunMeta | undefined | null,
-  opts: { podDegraded?: boolean } = {}
+  opts: { podDegraded?: boolean; degraded?: boolean } = {}
 ): Pick<SessionRunManifest, "engine" | "model" | "provider" | "promptVersion"> {
   if (meta) {
     return {
@@ -92,7 +92,11 @@ export function runFactsFromStructureMeta(
       promptVersion: meta.promptVersion,
     };
   }
-  if (opts.podDegraded) {
+  // `degraded`: the outcome itself is degraded but the IS sent no `meta` (an IS
+  // build that predates it). No plan was produced, so no model's answer was
+  // used — the same facts the IS's own degraded meta reports. Recording
+  // "unknown" here erased the one thing the outcome DID say.
+  if (opts.podDegraded || opts.degraded) {
     return {
       engine: "degraded",
       model: null,

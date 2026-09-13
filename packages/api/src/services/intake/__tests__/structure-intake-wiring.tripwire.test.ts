@@ -76,6 +76,17 @@ describe("capture.structure records its run on every exit", () => {
     expect(slice).toContain("await recordStructureIntake(");
   });
 
+  it("finishIntake derives the run facts from the OUTCOME's degraded flag, not only meta", () => {
+    // Every door (tRPC, Hub REST `caller.structure`, MCP `captureCaller.structure`)
+    // exits through finishIntake, so this one line is what makes a degraded run
+    // without IS meta record `engine: "degraded"` instead of "unknown".
+    // Cannot see: whether `r` is still the finishIntake result (a rename would
+    // have to keep the literal to pass).
+    expect(slice).toMatch(
+      /runFactsFromStructureMeta\(run\.meta, \{\s*podDegraded: run\.podDegraded,\s*degraded: r\.degraded === true,\s*\}\)/
+    );
+  });
+
   it("no exit bypasses finishIntake", () => {
     const bypassing = returns.filter(
       (r) =>

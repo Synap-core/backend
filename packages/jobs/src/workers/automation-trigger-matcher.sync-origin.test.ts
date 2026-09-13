@@ -45,7 +45,8 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     query: {
       focusSessions: { findFirst: () => Promise.resolve(null) },

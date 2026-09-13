@@ -14,66 +14,56 @@ export const connectorsSchemaRouter = new Hono();
 
 const CONNECTOR_SCHEMA = {
   overview:
-    "Nango-powered connector sync. Connects external services → imports records as pod entities. Bidirectional via Hub REST /connectors/actions.",
+    "Connections mirror an external account into pod entities. OAuth tokens are held by the connection broker (the Synap Control Plane); the pod's connection sync reads through it. The first sync of a connection files ONE import proposal for review; later syncs follow the connection's keep-syncing rule.",
   supportedProviders: {
-    "google-calendar": {
-      imports: ["event"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    "google-contacts": {
-      imports: ["contact"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    "google-mail": {
-      imports: ["note (emails)"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    github: {
-      imports: ["repository", "task (issues)"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    notion: {
-      imports: ["document (pages)"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    linear: {
-      imports: ["task (issues)"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    slack: {
-      imports: ["note (messages)"],
-      triggerEvent: "connector_sync.complete.completed",
-    },
-    hubspot: {
-      imports: ["contact", "task (deals)"],
+    google: {
+      syncKinds: {
+        event: "Calendar events → event, person, company",
+        "email.thread": "Gmail correspondents → person, company",
+        contact: "Google Contacts → person, company",
+      },
       triggerEvent: "connector_sync.complete.completed",
     },
   },
   cliCommands: {
-    "synap connect [service]":
-      "Open OAuth flow to connect a service. Without [service] shows all available.",
-    "synap connectors list":
-      "List available providers and which are connected.",
-    "synap connectors sync <provider>":
-      "Trigger a manual sync for a connected provider.",
-    "synap connectors disconnect <provider>": "Revoke a connection.",
-    "synap connectors schema --write-context":
-      "Write this schema to .claude/CONNECTOR_CONTEXT.md for AI context.",
+    "synap connect-service [service]":
+      "Connect an external service; omit [service] to pick from connectable services.",
+    "synap cap connect [name]":
+      "Connect a service through its capability; omit [name] to pick from connectable services.",
+    "synap cap disconnect <name>":
+      "Disconnect a capability's service (capability name or provider id).",
+    "synap cap sync-status [provider]":
+      "Sync status per provider × kind × connection (phase, counts, errors).",
+    "synap sync status [provider]": "Alias of `synap cap sync-status`.",
+    "synap tools connect <service>":
+      "Connect a credential to a tool (OAuth via the connection broker, or vault).",
+    "synap tools list": "List available tools and their connection status.",
+    "synap tools sync <provider>":
+      "Trigger a manual sync for a connected tool.",
+    "synap tools disconnect <provider>": "Revoke a tool's connection.",
+    "synap tools schema":
+      "Fetch this schema (--json, or --write-context for AI context).",
   },
   hubRestEndpoints: {
     "GET /api/hub/connectors/providers":
       "List providers with connection status",
-    "POST /api/hub/connectors/session":
-      "Get OAuth URL. Body: { providerId?, workspaceId? }. Returns { redirectUrl, sessionToken }.",
+    "GET /api/hub/connectors/sync-status":
+      "Sync status per provider × kind × connection (phase, counts, keepSyncing)",
+    "POST /api/hub/connectors/connect": "Start connecting a provider",
+    "POST /api/hub/connectors/session": "Get an OAuth connect session",
+    "GET /api/hub/connectors/connections/:provider":
+      "List the caller's connections for a provider",
     "DELETE /api/hub/connectors/connections/:connectionId":
       "Revoke a connection",
-    "POST /api/hub/connectors/actions":
-      "Trigger a Nango action (external write). Body: { connectionId, providerConfigKey, actionName, input? }",
+    "POST /api/hub/connectors/disconnect": "Revoke a connection",
+    "POST /api/hub/connectors/tool-execute":
+      "Run a connection tool verb (external read or write)",
   },
   automationIntegration: {
-    description: "Use automation triggers to react to sync events",
+    description:
+      "React to a finished connection sync. Emitted once per connection per run. Data: provider, connectionId, syncStatus ('success' | 'error'), kinds (phase per kind), counts, proposalIds. Writes a sync mirrors carry origin 'sync' and skip event automations unless the automation sets triggerConfig.includeSyncOrigin: true.",
     example:
-      "trigger: event, eventPattern: connector_sync.complete.completed, filters: { provider: 'github' } → run automation when GitHub sync completes",
+      "trigger: event, eventPattern: connector_sync.complete.completed, filters: { provider: 'google', syncStatus: 'error' } → run automation when a Google sync fails",
   },
   aiUsage: {
     description: "The IS can propose connections by generating an OAuth URL",

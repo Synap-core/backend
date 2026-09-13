@@ -27,7 +27,8 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
-vi.mock("@synap/database", () => ({
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   applyConnectionSyncApprovalForProposal: (input: unknown) => {
     h.calls.push(input);
     return h.impl(input);

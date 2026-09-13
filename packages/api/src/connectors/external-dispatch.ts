@@ -60,7 +60,7 @@ const logger = createLogger({ module: "external-dispatch" });
  * Mirror a dispatched call's auth outcome onto the connection-health store
  * (`secrets.connection_state` keyed by `accountHint` = the Nango connectionId).
  *
- * This is the W-B1 reactive health signal — a REUSE of the dispatch
+ * This is the reactive health signal — a REUSE of the dispatch
  * `errorClass:"auth"` classification, NOT a probe (providers give no proactive
  * expiry signal; you only learn on the next call). A single auth failure can be a
  * concurrent-refresh race, so we flip to `needs_reauth` only at the
@@ -284,12 +284,12 @@ export type NangoConnectionPick =
  * Pick the Nango connection for a provider from the user's live connections.
  * Honors an explicit `accountHint` (matched as a substring of the connectionId,
  * e.g. the exact connection a registry row pins); with no hint, the
- * most-recently-created.
+ * most-recently-created. A connection with no reported creation time is never
+ * taken as the newest: it sorts after every dated one.
  *
  * A hint that matches NOTHING is a refusal (`hint_mismatch`), never a fallback:
  * the caller pinned a specific account, and silently running the call as a
- * DIFFERENT account (the old `?? matching[0]`) acts on data the caller never
- * chose.
+ * DIFFERENT account acts on data the caller never chose.
  */
 export function pickNangoConnection(
   connections: SyncConnectorConnection[],
@@ -307,7 +307,9 @@ export function pickNangoConnection(
   return {
     ok: true,
     connection: [...matching].sort(
-      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+      (a, b) =>
+        (b.createdAt?.getTime() ?? -Infinity) -
+        (a.createdAt?.getTime() ?? -Infinity)
     )[0]!,
   };
 }
@@ -1674,9 +1676,8 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
 
   // (1) Resolve the MCP server config — SCOPED + DETERMINISTIC.
   //     Scope to pod-wide rows (null workspaceId, always allowed) OR a row
-  //     belonging to the acting workspace ONLY. This blocks the cross-workspace
-  //     match the old `or(isNull(workspaceId), enabled=true)` predicate allowed
-  //     (which matched ANY enabled workspace's server). Order nulls-first so the
+  //     belonging to the acting workspace ONLY — never another workspace's
+  //     enabled server. Order nulls-first so the
   //     pick is deterministic when both a pod-wide and a workspace row share the
   //     slug, then enforce enabled + approved below.
   const [server] = await db
@@ -1853,9 +1854,9 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
     };
   }
 
-  // The IS now exposes POST /api/mcp/call (it owns the MCP client). A 404 from
-  // it is therefore a genuine "tool/endpoint not found at the IS" — surface it
-  // as an upstream-unavailable 502, NOT the old misleading 501-not-implemented.
+  // The IS exposes POST /api/mcp/call (it owns the MCP client). A 404 from it is
+  // therefore a genuine "tool/endpoint not found at the IS" — surface it as an
+  // upstream-unavailable 502, never 501-not-implemented.
   if (res.status === 404) {
     return {
       success: false,
@@ -2120,7 +2121,7 @@ export async function triggerProviderAction(
     }
 
     if (decision.decision === "propose") {
-      // The previously-ungoverned door now PRODUCES a reviewable proposal that,
+      // The door PRODUCES a reviewable proposal that,
       // on approval, re-enters this same impl (Door 2) with `alreadyApproved`.
       // We carry the full provider call in `data` so the executor can replay it.
       // A workspace is NOT required — a null-workspace proposal routes to the
@@ -2261,7 +2262,7 @@ export async function triggerProviderAction(
     }
   }
 
-  // W-B1 — mirror this call's AUTH outcome onto the connection-health store so the
+  // Mirror this call's AUTH outcome onto the connection-health store so the
   // catalog's "connected" means USABLE. Only auth-class failures move the counter
   // (a provider/transient 500 is not a credential problem); a success clears it.
   // Fire-and-forget: health is eventually-consistent and must not add latency.

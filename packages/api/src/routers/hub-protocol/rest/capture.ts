@@ -600,12 +600,16 @@ export function registerCaptureRoutes(app: HubHono): void {
       // The verified `X-Session-Id` (sessionMiddleware) is the room this
       // structure call files into; absent/unowned → `capture.structure` mints
       // one and returns its id as `sessionId`.
+      // The agent credential rides into the caller context: `capture.structure`
+      // records the run room from `ctx.agentUserId` (origin + attribution).
+      // Omitting it labelled every agent-key capture room `origin:"human"`.
       const ctx = await createHubProtocolCallerContext(
         userId,
         scopes,
         workspaceId,
         null,
-        (c.get("sessionId") as string | undefined) ?? null
+        (c.get("sessionId") as string | undefined) ?? null,
+        (c.get("agentUserId") as string | undefined) ?? null
       );
       const caller = captureRouter.createCaller(
         ctx as Parameters<typeof captureRouter.createCaller>[0]

@@ -49,6 +49,7 @@ import {
   setDynamicCorsOrigins,
 } from "../utils/cors-cache.js";
 import { getTrustedIssuerSeedHealth } from "../utils/startup-health.js";
+import { disconnectAllUserConnections } from "../services/capabilities/capability-nango-sync.js";
 import { kratosAdmin } from "@synap/auth";
 
 const execAsync = promisify(execCb);
@@ -1561,6 +1562,9 @@ export const systemRouter = router({
    * Hard-delete a user and cascade their pod-side artifacts.
    *
    * Cascades:
+   *   - connections: revoked at the broker, registry rows detached, their
+   *     governance rules and sync state retired — before anything is deleted,
+   *     so a failure keeps the user and the deletion can be retried
    *   - workspace memberships
    *   - agent users created by the target (users with
    *     agentMetadata.createdByUserId === target.id; users.user_type='agent')
@@ -1627,6 +1631,20 @@ export const systemRouter = router({
             });
           }
         }
+      }
+
+      // Connections live outside the pod database (the broker grant), so they
+      // are removed first and outside the transaction.
+      try {
+        await disconnectAllUserConnections(input.userId);
+      } catch (err) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Could not remove this user's connections, so the user was not deleted: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+          cause: err,
+        });
       }
 
       // All cascades + the user delete in one transaction so a partial failure

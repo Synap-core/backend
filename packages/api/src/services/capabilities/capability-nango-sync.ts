@@ -22,10 +22,12 @@ import {
   and,
   eq,
   isNull,
+  isNotNull,
   inArray,
   encryptServerSide,
   ensureConnectionAutoRule,
-  disableConnectionAutoRule,
+  ensureConnectionReviewRule,
+  retireConnectionRules,
 } from "@synap/database";
 import {
   secrets,
@@ -34,6 +36,7 @@ import {
   tools,
 } from "@synap/database/schema";
 import {
+  clearConnectionSyncState,
   findApprovedConnectionImport,
   resolveSyncTool,
 } from "../event-sync/sync-state-store.js";
@@ -197,17 +200,21 @@ export async function syncNangoConnectionsToRegistry(
   //    a known-but-now-gone connection — never rows we simply didn't mirror.
   const orphanHints = [...known].filter((h) => !liveHints.has(h));
   if (orphanHints.length > 0) {
+    const orphaned = and(
+      eq(secrets.capabilityId, capabilityId),
+      eq(secrets.userId, actorUserId),
+      inArray(secrets.accountHint, orphanHints),
+      isNull(secrets.deletedAt)
+    );
+    const orphans = await db
+      .select({ id: secrets.id })
+      .from(secrets)
+      .where(orphaned);
+    await retireConnectionRows(orphans.map((r) => r.id));
     const removed = await db
       .update(secrets)
       .set({ deletedAt: new Date(), isDefault: false })
-      .where(
-        and(
-          eq(secrets.capabilityId, capabilityId),
-          eq(secrets.userId, actorUserId),
-          inArray(secrets.accountHint, orphanHints),
-          isNull(secrets.deletedAt)
-        )
-      )
+      .where(orphaned)
       .returning({ id: secrets.id });
 
     if (removed.length > 0) {
@@ -505,15 +512,11 @@ export async function setConnectionKeepSyncing(input: {
   if (!synced) return notFound;
 
   const scope = {
+    db,
     userId: input.userId,
     workspaceId: synced.tool.workspaceId ?? null,
     connectionId: row.id,
   };
-
-  if (!input.enabled) {
-    await disableConnectionAutoRule(scope);
-    return { ok: true, enabled: false };
-  }
 
   const approved = await findApprovedConnectionImport(row.id);
   if (!approved) {
@@ -521,9 +524,21 @@ export async function setConnectionKeepSyncing(input: {
       ok: false,
       reason: "no_approved_import",
       error:
-        "Automatic syncing turns on once this connection's first import has been approved.",
+        "Automatic syncing can be changed once this connection's first import has been approved.",
     };
   }
+
+  if (!input.enabled) {
+    // An explicit review rule naming the approved import, not just a revoke:
+    // the approval hook may not have minted its auto rule yet, and it must not
+    // mint one for an import the owner already turned off.
+    await ensureConnectionReviewRule({
+      ...scope,
+      sourceProposalId: approved.id,
+    });
+    return { ok: true, enabled: false };
+  }
+
   const { ruleId } = await ensureConnectionAutoRule({
     ...scope,
     sourceProposalId: approved.id,
@@ -532,7 +547,12 @@ export async function setConnectionKeepSyncing(input: {
 }
 
 export type ManualSyncOutcome =
-  | { ok: true; count: number }
+  /**
+   * `queued` = targets a new run was queued for; `debounced` = targets whose
+   * provider + connection already had a run inside the debounce window, so
+   * nothing new was queued for them.
+   */
+  | { ok: true; queued: number; debounced: number }
   | { ok: false; reason: "not_found"; error: string };
 
 /**
@@ -595,16 +615,21 @@ export async function enqueueManualConnectionSync(input: {
         : `You have no "${input.provider}" connection to sync`,
     };
   }
-  // A queue fault throws — "sync requested" is never claimed when it was not.
+  // A queue fault throws, and a debounced target is not counted as queued —
+  // "sync requested" is never claimed when it was not.
+  let queued = 0;
+  let debounced = 0;
   for (const t of targets) {
-    await enqueueConnectionSync({
+    const result = await enqueueConnectionSync({
       provider: t.provider,
       connectionId: t.connectionId,
       workspaceId: null,
       reason: "manual",
     });
+    if (result.queued) queued++;
+    else debounced++;
   }
-  return { ok: true, count: targets.length };
+  return { ok: true, queued, debounced };
 }
 
 export type DisconnectOwnedOutcome =
@@ -656,62 +681,156 @@ export async function disconnectOwnedConnection(input: {
 }
 
 /**
- * Directly clean up the connection-registry footprint of a single revoked Nango
- * connection — called by the disconnect doors right after `revokeConnection`, so
- * a user-initiated disconnect takes effect immediately instead of waiting for
- * the lazy reconciler's next pass.
+ * What a gone connection leaves behind besides its registry rows: its
+ * governance rules (no longer able to govern anything) and its run state on the
+ * provider tools. Cleared BEFORE the rows are soft-deleted, so a failure leaves
+ * the rows live and a retry finds them again.
+ */
+async function retireConnectionRows(rowIds: string[]): Promise<void> {
+  if (rowIds.length === 0) return;
+  await retireConnectionRules({ connectionIds: rowIds });
+  await clearConnectionSyncState(rowIds);
+}
+
+/**
+ * Directly clean up the footprint of a single revoked broker connection —
+ * called by the disconnect doors right after `revokeConnection`, so a
+ * user-initiated disconnect takes effect immediately instead of waiting for the
+ * lazy reconciler's next pass.
  *
- * Soft-deletes every pointer row whose `account_hint` is this connectionId (the
- * `is_default` binding included) across all capabilities. Does NOT delete the
- * pod-wide `nango://provider` tool row: it may still serve other connections or
- * users, and the catalog derives its connected/disconnected state live from
- * Nango anyway. Best-effort — never throws into the caller.
+ * For every pointer row whose `account_hint` is this connectionId (the
+ * `is_default` binding included) across all capabilities: retires its rules
+ * and run state, marks its entity links disconnected, then soft-deletes the row.
+ * Does NOT delete the pod-wide `nango://provider` tool row: it may still serve
+ * other connections or users. A failure throws — the caller must not report a
+ * clean disconnect that did not happen.
  */
 export async function detachNangoConnectionRegistry(
   connectionId: string
 ): Promise<void> {
-  try {
-    const removed = await db
-      .update(secrets)
-      .set({ deletedAt: new Date(), isDefault: false })
-      .where(
-        and(eq(secrets.accountHint, connectionId), isNull(secrets.deletedAt))
-      )
-      .returning({ id: secrets.id });
-    if (removed.length > 0) {
-      logger.info(
-        { connectionId, count: removed.length },
-        "Disconnect cleaned up connection-registry pointer rows"
-      );
-    }
+  const rows = await db
+    .select({ id: secrets.id })
+    .from(secrets)
+    .where(
+      and(eq(secrets.accountHint, connectionId), isNull(secrets.deletedAt))
+    );
+  await detachRegistryRows(
+    rows.map((r) => r.id),
+    [connectionId]
+  );
+}
 
-    // Mark any entities sourced from this connection as disconnected, so
-    // "last synced" / source badges stop showing it as live. The sync door
-    // stamps links with the registry ROW id; links written before it carry the
-    // broker's connection id — both identify this connection.
+/**
+ * The detach itself, for rows the caller has ALREADY scoped: retire their rules
+ * and run state, mark their entity links disconnected, then soft-delete them.
+ *
+ * The sync door stamps links with the registry ROW id; links written before it
+ * carry the broker's connection id, so a caller that proved which broker
+ * connection this is passes it in `brokerConnectionIds`. A caller that only
+ * knows row ids passes none — an account hint is free text for vault
+ * connections and may name another user's link.
+ */
+async function detachRegistryRows(
+  rowIds: string[],
+  brokerConnectionIds: string[]
+): Promise<void> {
+  await retireConnectionRows(rowIds);
+
+  const linkKeys = [...brokerConnectionIds, ...rowIds];
+  if (linkKeys.length > 0) {
     const linkRows = await db
       .update(entityExternalLinks)
       .set({ status: "disconnected", disconnectedAt: new Date() })
       .where(
         and(
-          inArray(entityExternalLinks.nangoConnectionId, [
-            connectionId,
-            ...removed.map((r) => r.id),
-          ]),
+          inArray(entityExternalLinks.nangoConnectionId, linkKeys),
           eq(entityExternalLinks.status, "active")
         )
       )
       .returning({ id: entityExternalLinks.id });
     if (linkRows.length > 0) {
       logger.info(
-        { connectionId, count: linkRows.length },
+        { count: linkRows.length },
         "Disconnect marked entity external links disconnected"
       );
     }
-  } catch (err) {
-    logger.warn(
-      { err, connectionId },
-      "detachNangoConnectionRegistry failed (best-effort)"
+  }
+
+  if (rowIds.length > 0) {
+    await db
+      .update(secrets)
+      .set({ deletedAt: new Date(), isDefault: false })
+      .where(inArray(secrets.id, rowIds));
+    logger.info(
+      { count: rowIds.length },
+      "Disconnect cleaned up connection-registry pointer rows"
     );
   }
+}
+
+export interface UserConnectionsRemoved {
+  /** Connections revoked at the broker. */
+  revoked: number;
+  /** Registry connections detached whose broker connection was already gone. */
+  detached: number;
+}
+
+/**
+ * Remove every connection a user holds — run before a user is deleted, so a
+ * deleted person's accounts stop syncing and their broker grants are revoked.
+ *
+ * Each connection still in the user's broker list goes through
+ * `disconnectOwnedConnection` (revoke, then detach). Registry rows whose
+ * connection the broker no longer reports are then detached. Any failure
+ * throws — an unreadable broker, a failed revoke, a failed cleanup — so the
+ * caller keeps the user and the removal can be retried; rows are only
+ * soft-deleted once their cleanup succeeded, so a retry resumes where it
+ * stopped. A pod with no broker configured has nothing to revoke and only
+ * detaches.
+ */
+export async function disconnectAllUserConnections(
+  userId: string
+): Promise<UserConnectionsRemoved> {
+  let revoked = 0;
+  const resolved = await resolveBroker("nango");
+  if (resolved.ok) {
+    const listed = await resolved.broker.listConnectionsResult(userId);
+    if (!listed.ok) {
+      throw new Error(
+        `Could not list the user's connections (${listed.reason}): ${listed.error}`
+      );
+    }
+    for (const c of listed.connections) {
+      const outcome = await disconnectOwnedConnection({
+        broker: resolved.broker,
+        userId,
+        connectionId: c.connectionId,
+      });
+      if (outcome.ok) revoked++;
+      // not_found = revoked in between; its rows are detached below.
+      else if (outcome.reason !== "not_found") throw new Error(outcome.error);
+    }
+  } else if (resolved.reason !== "not-configured") {
+    throw new Error(
+      `The connection broker is unavailable (${resolved.reason}): ${resolved.error}`
+    );
+  }
+
+  // Detached by ROW id under this user's floor, never by account hint: a hint
+  // is free text for vault connections and can match another user's rows.
+  const leftover = await db
+    .select({ id: secrets.id })
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.userId, userId),
+        isNotNull(secrets.accountHint),
+        isNull(secrets.deletedAt)
+      )
+    );
+  await detachRegistryRows(
+    leftover.map((r) => r.id),
+    []
+  );
+  return { revoked, detached: leftover.length };
 }

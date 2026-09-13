@@ -590,6 +590,28 @@ describe("rerunSession — a rerun is a new session spawned from the previous on
         replayers,
       })
     ).toMatchObject({ ok: false, reason: "replace_is_a_human_decision" });
+    // The DRY RUN refuses too — a confirm is never shown for a refused action.
+    expect(
+      await run({
+        sessionId: parent,
+        userId: USER,
+        mode: "replace",
+        agentUserId: "agent-1",
+        dryRun: true,
+        replayers,
+      })
+    ).toMatchObject({ ok: false, reason: "replace_is_a_human_decision" });
+    // …while an agent's ADD dry run is still a normal plan.
+    expect(
+      await run({
+        sessionId: parent,
+        userId: USER,
+        mode: "add",
+        agentUserId: "agent-1",
+        dryRun: true,
+        replayers,
+      })
+    ).toMatchObject({ ok: true, status: "dry_run" });
     expect(calls).toHaveLength(0);
     expect(h.opened).toHaveLength(0);
   });

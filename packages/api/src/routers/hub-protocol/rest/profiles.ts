@@ -518,6 +518,12 @@ export function registerProfilesRoutes(app: HubHono): void {
           "entity-detail": z.record(z.string(), z.unknown()).nullable(),
           "entity-profile": z.record(z.string(), z.unknown()).nullable(),
           collection: z.record(z.string(), z.unknown()).nullable(),
+          userChoice: z
+            .enum(["source", "synap"])
+            .nullable()
+            .describe(
+              "The caller's explicit choice for entity-detail: 'source' (open in the source app), 'synap' (render in Synap, including after unbinding), null (never chose)."
+            ),
         }),
       },
       400: { description: "Missing required query param", schema: ErrorSchema },

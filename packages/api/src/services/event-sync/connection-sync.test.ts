@@ -34,7 +34,18 @@ const h = vi.hoisted(() => ({
   lookup: vi.fn(),
   record: vi.fn(),
   dbUpdate: vi.fn(),
+  findRejected: vi.fn(),
+  relationExists: vi.fn(),
+  renewLease: vi.fn(),
 }));
+
+vi.mock("../../utils/pending-capture-dedup.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("../../utils/pending-capture-dedup.js")
+    >();
+  return { ...actual, findRejectedConnectionSyncImport: h.findRejected };
+});
 
 vi.mock("../../utils/domain-mutation.js", async (importOriginal) => {
   const actual =
@@ -56,14 +67,26 @@ vi.mock("./sync-state-store.js", async (importOriginal) => {
       },
     },
   });
+  // The tool row as the store holds it: config plus each kind's current state.
+  const toolMetadata = () => {
+    const kinds: Record<string, unknown> = { ...h.sync.kinds };
+    for (const [kind, state] of Object.entries(h.state)) {
+      kinds[kind] = {
+        ...((kinds[kind] as object) ?? {}),
+        connections: { "conn-1": state },
+      };
+    }
+    return { sync: { ...h.sync, kinds } };
+  };
   return {
     ...actual,
     resolveSyncTool: vi.fn(async () => ({
       id: "tool-1",
       createdBy: "creator",
       workspaceId: "ws-1",
-      metadata: { sync: h.sync },
+      metadata: toolMetadata(),
     })),
+    renewLease: h.renewLease,
     resolveSyncConnections: vi.fn(async () => h.connections),
     readOwnedConnectionIds: vi.fn(async () => h.owned),
     findApprovedConnectionImport: h.findApproved,
@@ -100,7 +123,8 @@ vi.mock("../../utils/entity-link-idempotency.js", () => ({
     lookup: (provider: string, externalId: string) =>
       h.lookup(provider, externalId),
     register: h.register,
-    relationExists: async () => false,
+    relationExists: (s: string, t: string, type: string) =>
+      h.relationExists(s, t, type),
   }),
 }));
 
@@ -159,6 +183,8 @@ import {
   CONNECTION_SYNC_QUEUE,
 } from "./connection-sync.js";
 import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import { importGraphIdempotencyKey } from "../import/structuring.js";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { ProposalStatus } from "@synap/database/schema";
 
 // ── Recorded verb results (post-responseShape) ─────────────────────────────────
@@ -294,6 +320,15 @@ beforeEach(() => {
   h.lookup.mockResolvedValue(null);
   h.decision.mockResolvedValue({ verdict: "propose", source: "none" });
   h.findApproved.mockResolvedValue(null);
+  h.findRejected.mockResolvedValue(null);
+  h.relationExists.mockResolvedValue(false);
+  h.send.mockResolvedValue(undefined);
+  h.renewLease.mockImplementation(async (key: { kind: string }) => {
+    h.state[key.kind] = {
+      ...(h.state[key.kind] ?? {}),
+      leaseUntil: new Date(Date.now() + 60_000).toISOString(),
+    };
+  });
   scriptVerbs();
 });
 
@@ -1056,12 +1091,13 @@ describe("enqueueConnectionSync", () => {
     h.state["email.thread"] = { phase: "failed", error: "old" };
     h.proposalStatus.mockResolvedValue(ProposalStatus.PENDING);
 
-    await enqueueConnectionSync({
+    const result = await enqueueConnectionSync({
       provider: "google",
       connectionId: "conn-1",
       reason: "connect",
     });
 
+    expect(result).toEqual({ queued: true, jobId: "job-1" });
     expect(h.state["email.thread"]).toMatchObject({
       phase: "fetching",
       error: null,
@@ -1070,14 +1106,72 @@ describe("enqueueConnectionSync", () => {
     expect(h.state.contact).toBeUndefined();
   });
 
-  it("a deduped send (the window already holds a job) marks nothing", async () => {
+  it("a deduped send (the window already holds a job) reports NOT queued and gives each kind back the phase it had", async () => {
+    h.sync.kinds = { contact: { enabled: false } };
+    h.state.event = {
+      phase: "failed",
+      error: "old",
+      lastRunAt: "2026-09-12T00:00:00.000Z",
+    };
     h.send.mockResolvedValue(null);
+    const result = await enqueueConnectionSync({
+      provider: "google",
+      connectionId: "conn-1",
+      reason: "manual",
+    });
+    expect(result).toEqual({ queued: false, reason: "debounced" });
+    expect(h.state.event).toMatchObject({ phase: "failed", error: "old" });
+    // A kind that had never run is back to no phase, not stuck on `fetching`.
+    expect(h.state["email.thread"]?.phase ?? null).toBeNull();
+  });
+
+  it("a run that finishes while the job is being sent keeps its terminal phase — the queued mark never lands after it", async () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    h.send.mockImplementation(async () => {
+      // The worker picks the job up and finishes before send() returns.
+      h.state.event = {
+        ...(h.state.event ?? {}),
+        phase: "synced",
+        error: null,
+        lastRunAt: "2026-09-13T18:00:00.000Z",
+        leaseUntil: null,
+      };
+      return "job-1";
+    });
+    const result = await enqueueConnectionSync({
+      provider: "google",
+      connectionId: "conn-1",
+      reason: "connect",
+    });
+    expect(result).toEqual({ queued: true, jobId: "job-1" });
+    expect(h.state.event).toMatchObject({ phase: "synced" });
+  });
+
+  it("a debounced send never undoes a phase a run wrote after the mark", async () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    h.state.event = { phase: "failed", error: "old" };
+    h.send.mockImplementation(async () => {
+      // The job already in the window finishes during this send.
+      h.state.event = {
+        ...(h.state.event ?? {}),
+        phase: "synced",
+        error: null,
+        lastRunAt: "2026-09-13T18:00:00.000Z",
+      };
+      return null;
+    });
     await enqueueConnectionSync({
       provider: "google",
       connectionId: "conn-1",
       reason: "webhook",
     });
-    expect(h.state).toEqual({});
+    expect(h.state.event).toMatchObject({ phase: "synced", error: null });
   });
 });
 
@@ -1202,14 +1296,16 @@ describe("getConnectionSyncStatus — keepSyncing, computed server-side", () => 
 });
 
 describe("first-import consent on the proposal the user reviews", () => {
-  const CONSENT =
-    "Approving also keeps Google syncing automatically. You can turn this off in Settings → Connections.";
-
-  it("the first import's summary says approving keeps Google syncing automatically", async () => {
+  it("consent rides on data.connectionSync only — the summary never repeats it", async () => {
     await runConnectionSync({ provider: "google", reason: "connect" });
     expect(h.submit).toHaveBeenCalledTimes(1);
-    expect(h.submit.mock.calls[0]![0].connectionSync.keepSyncing).toBe(true);
-    expect(h.submit.mock.calls[0]![0].summary).toContain(CONSENT);
+    const input = h.submit.mock.calls[0]![0];
+    expect(input.connectionSync.keepSyncing).toBe(true);
+    // Non-vacuity: this IS the first-import summary.
+    expect(input.summary).toContain("(first Google sync, last 90 days)");
+    expect(input.summary).not.toContain("syncing automatically");
+    expect(input.summary).not.toContain("Approving");
+    expect(input.summary).not.toContain("Settings → Connections");
   });
 
   it("a steady review (keepSyncing false) never claims approval turns automatic syncing on", async () => {
@@ -1224,6 +1320,315 @@ describe("first-import consent on the proposal the user reviews", () => {
     expect(h.submit.mock.calls[0]![0].summary).not.toContain(
       "syncing automatically"
     );
+  });
+});
+
+describe("a read the item limit stops never skips a record", () => {
+  const CURSOR = "2026-09-10T00:00:00.000Z";
+  beforeEach(() => {
+    // CAL_PAGE_1 holds ev1 and points at CAL_PAGE_2 (ev2): a limit of 1 stops
+    // the read with a page still unread.
+    h.sync.kinds = {
+      event: { itemLimit: 1 },
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    h.state.event = { phase: "synced", cursor: CURSOR };
+  });
+
+  it("steady auto: run 1 lands ev1 and keeps the cursor; run 2 resumes the page, lands ev2, then moves the cursor", async () => {
+    h.decision.mockResolvedValue({ verdict: "auto", source: "rule" });
+
+    await runConnectionSync({ provider: "google" });
+    const startedAt = h.state.event!.runStartedAt as string;
+    expect(h.state.event).toMatchObject({ phase: "synced", cursor: CURSOR });
+    expect(h.state.event!.pageToken).toEqual(expect.any(String));
+    expect(typeof startedAt).toBe("string");
+
+    await runConnectionSync({ provider: "google" });
+
+    const landedEvents = h.upsert.mock.calls
+      .map((c) => c[0] as { profileSlug: string; externalId: string })
+      .filter((i) => i.profileSlug === "event")
+      .map((i) => i.externalId);
+    expect(landedEvents).toEqual(["ev1", "ev2"]);
+    const cal = callsOf("calendar_list");
+    expect(cal.map((p) => p.pageToken ?? null)).toEqual([null, "cal-p2"]);
+    expect(cal.map((p) => p.updatedMin)).toEqual([CURSOR, CURSOR]);
+    expect(h.state.event).toMatchObject({
+      phase: "synced",
+      cursor: startedAt,
+      pageToken: null,
+      runStartedAt: null,
+    });
+  });
+
+  it("steady propose: run 2 files the NEXT page (ev2), not the first page again", async () => {
+    await runConnectionSync({ provider: "google" });
+    expect(h.state.event).toMatchObject({ cursor: CURSOR });
+    expect(h.state.event!.pageToken).toEqual(expect.any(String));
+    const startedAt = h.state.event!.runStartedAt as string;
+    // The owner reviews run 1's proposal; run 2 is then free to read on.
+    h.proposalStatus.mockResolvedValue(ProposalStatus.APPROVED);
+
+    await runConnectionSync({ provider: "google" });
+
+    const eventRefs = h.submit.mock.calls.map((c) =>
+      (c[0].operations as Array<{ op: string; ref?: string }>)
+        .filter((o) => o.op === "create_entity" && o.ref?.startsWith("event:"))
+        .map((o) => o.ref)
+    );
+    expect(eventRefs).toEqual([["event:ev1"], ["event:ev2"]]);
+    expect(h.state.event).toMatchObject({ cursor: startedAt, pageToken: null });
+  });
+});
+
+describe("steady propose — contacts re-read every run", () => {
+  const CURSOR = "2026-09-10T00:00:00.000Z";
+  beforeEach(() => {
+    h.sync.kinds = {
+      event: { enabled: false },
+      "email.thread": { enabled: false },
+    };
+    h.state.contact = { phase: "synced", cursor: CURSOR };
+  });
+
+  it("records already in the pod, whose works_at edge already exists, file nothing", async () => {
+    h.lookup.mockImplementation(async (p: string, x: string) => `id:${p}:${x}`);
+    h.relationExists.mockResolvedValue(true);
+
+    const res = await runConnectionSync({ provider: "google" });
+
+    // Reachability: the edge between two matched entities was checked.
+    expect(h.relationExists).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      "works_at"
+    );
+    expect(h.submit).not.toHaveBeenCalled();
+    expect(res.connections?.[0]?.kinds.contact).toMatchObject({
+      phase: "synced",
+    });
+  });
+
+  it("the same records with a works_at edge that does NOT exist yet are filed", async () => {
+    h.lookup.mockImplementation(async (p: string, x: string) => `id:${p}:${x}`);
+    await runConnectionSync({ provider: "google" });
+    expect(h.submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a graph the owner REJECTED is not filed again on the next run — until its content changes", async () => {
+    await runConnectionSync({ provider: "google" });
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    const filed = h.submit.mock.calls[0]![0];
+    const rejectedKey = importGraphIdempotencyKey({
+      workspaceId: "ws-1",
+      operations: filed.operations,
+    });
+    expect(rejectedKey).toEqual(expect.any(String));
+
+    // The owner rejects it.
+    h.proposalStatus.mockResolvedValue(ProposalStatus.REJECTED);
+    h.findRejected.mockImplementation(
+      async (
+        _db: unknown,
+        p: { idempotencyKey: string; connectionId: string; kinds: string[] }
+      ) =>
+        p.idempotencyKey === rejectedKey &&
+        p.connectionId === "conn-1" &&
+        JSON.stringify(p.kinds) === JSON.stringify(["contact"])
+          ? { id: "prop-1" }
+          : null
+    );
+
+    const res = await runConnectionSync({ provider: "google" });
+    expect(h.findRejected).toHaveBeenCalled();
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    expect(res.connections?.[0]?.kinds.contact).toMatchObject({
+      phase: "synced",
+    });
+    expect(h.state.contact).toMatchObject({
+      phase: "synced",
+      proposalId: null,
+    });
+
+    // A new contact changes the content: it is asked again.
+    scriptVerbs({
+      contacts_list: () =>
+        run({
+          ...CONTACTS_PAGE,
+          count: 2,
+          contacts: [
+            ...CONTACTS_PAGE.contacts,
+            {
+              resourceName: "people/c2",
+              names: [{ displayName: "Ana Lima" }],
+              emailAddresses: [{ value: "ana@acme-corp.io" }],
+            },
+          ],
+        }),
+    });
+    await runConnectionSync({ provider: "google" });
+    expect(h.submit).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("steady auto — writes held for review across pages", () => {
+  it("files ONE proposal for the run, not one per page", async () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    h.state.event = { phase: "synced", cursor: "2026-09-10T00:00:00.000Z" };
+    h.decision.mockImplementation(
+      async (input: { subjectType?: string; action?: string }) =>
+        input.subjectType === "entity" && input.action === "create"
+          ? { verdict: "propose", source: "rule", ruleId: "r1" }
+          : { verdict: "auto", source: "rule", ruleId: "r1" }
+    );
+
+    const res = await runConnectionSync({ provider: "google" });
+
+    // Two calendar pages, each with writes the rule held back.
+    expect(callsOf("calendar_list")).toHaveLength(2);
+    expect(h.submit).toHaveBeenCalledTimes(1);
+    const refs = (
+      h.submit.mock.calls[0]![0].operations as Array<{
+        op: string;
+        ref?: string;
+      }>
+    )
+      .filter((o) => o.op === "create_entity")
+      .map((o) => o.ref);
+    expect(refs).toEqual(expect.arrayContaining(["event:ev1", "event:ev2"]));
+    expect(res.connections?.[0]?.kinds.event).toMatchObject({
+      phase: "review_ready",
+      proposalId: "prop-1",
+    });
+  });
+});
+
+describe("connector_sync.complete — one run-completion fact per connection", () => {
+  const completions = () =>
+    h.record.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((r) => r.subjectType === "connector_sync");
+
+  it("records ONE completion once every kind finished, without a sync origin", async () => {
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    expect(completions()).toHaveLength(1);
+    const [done] = completions();
+    expect(done).toMatchObject({
+      subjectType: "connector_sync",
+      action: "complete",
+      subjectId: "conn-1",
+      userId: "u1",
+      workspaceId: "ws-1",
+      data: {
+        provider: "google",
+        connectionId: "conn-1",
+        syncStatus: "success",
+        kinds: {
+          event: "review_ready",
+          "email.thread": "review_ready",
+          contact: "review_ready",
+        },
+        proposalIds: ["prop-1"],
+      },
+    });
+    expect(done!.origin).toBeUndefined();
+    expect((done!.data as { counts: { fetched: number } }).counts.fetched).toBe(
+      4
+    );
+  });
+
+  it("a failed kind reports syncStatus error", async () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    scriptVerbs({
+      calendar_list: () => ({ kind: "error", message: "boom" }),
+    });
+    await runConnectionSync({ provider: "google" });
+    expect(completions()).toHaveLength(1);
+    expect(completions()[0]!.data).toMatchObject({
+      syncStatus: "error",
+      kinds: { event: "failed" },
+    });
+  });
+
+  it("a run where every kind only waited on review records no completion", async () => {
+    for (const kind of ["event", "email.thread", "contact"]) {
+      h.state[kind] = {
+        phase: "review_ready",
+        proposalId: "prop-1",
+        cursor: "2026-09-01T00:00:00.000Z",
+      };
+    }
+    h.proposalStatus.mockResolvedValue("pending");
+    await runConnectionSync({ provider: "google" });
+    expect(completions()).toEqual([]);
+  });
+});
+
+describe("first-import summary is truthful about a truncated read", () => {
+  it("names the kinds the limit stopped, never claims the full window, and carries no consent sentence", async () => {
+    h.sync.kinds = { event: { itemLimit: 1 } };
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    const summary = h.submit.mock.calls[0]![0].summary as string;
+    const plural = (kind: string) =>
+      resolveObjectNounPlural(kind).toLowerCase();
+    expect(summary).toContain(
+      `reading stopped at the limit for ${plural("event")} (1 records)`
+    );
+    expect(summary).not.toContain("sync, last 90 days)");
+    expect(summary).toContain(
+      `records from ${plural("event")}, ${plural("email.thread")} and ${plural("contact")} (`
+    );
+    expect(summary).not.toContain("syncing automatically");
+  });
+
+  it("an untruncated first import still says it covers the window", async () => {
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    expect(h.submit.mock.calls[0]![0].summary).toContain(
+      "(first Google sync, last 90 days)"
+    );
+  });
+
+  it("lists kinds as plural nouns inside the sentence, never singular capitalized labels", async () => {
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    const summary = h.submit.mock.calls[0]![0].summary as string;
+    expect(summary).toMatch(
+      /^\d+ new and \d+ matching records from events, threads and contacts \(first Google sync, last 90 days\)$/
+    );
+    expect(summary).not.toContain("Event, ");
+  });
+});
+
+describe("lease renewal", () => {
+  const leaseKey = expect.objectContaining({
+    toolId: "tool-1",
+    kind: "event",
+    connectionId: "conn-1",
+  });
+
+  it("renews the kind's lease at a page boundary, on a first read and on a steady auto read", async () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+    // CAL_PAGE_1 → CAL_PAGE_2: one page boundary per read.
+    await runConnectionSync({ provider: "google", reason: "connect" });
+    expect(h.renewLease).toHaveBeenCalledWith(leaseKey);
+
+    h.renewLease.mockClear();
+    h.state.event = { phase: "synced", cursor: "2026-09-10T00:00:00.000Z" };
+    h.decision.mockResolvedValue({ verdict: "auto", source: "rule" });
+    await runConnectionSync({ provider: "google" });
+    expect(h.renewLease).toHaveBeenCalledWith(leaseKey);
+    // Released at the end, not left held by the renewal.
+    expect(h.state.event).toMatchObject({ leaseUntil: null });
   });
 });
 

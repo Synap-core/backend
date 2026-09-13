@@ -44,13 +44,18 @@
  *   type nothing handles, bytes that never arrived). Retrying the SAME input
  *   never helps; a different input may.
  * - `transient` — a genuine hiccup upstream. Retrying may succeed.
+ * - `budget` — the Intelligence Service refused the call because its monthly
+ *   LLM token budget is spent. Retrying NOW never helps, but it is not
+ *   permanent either: it frees when the month rolls over or an operator raises
+ *   the budget. Folding it into `unknown` told an agent "may be permanent"
+ *   about a state with a named cause and a named fix.
  * - `unknown` — the reason is not one this pod has been taught, or the IS said
  *   nothing at all. Explicitly NOT a synonym for `transient`: claiming a
  *   reason we do not understand is temporary is the defect this module exists
  *   to prevent.
  */
 export type DegradedPermanence =
-  "configuration" | "input" | "transient" | "unknown";
+  "configuration" | "input" | "transient" | "budget" | "unknown";
 
 /** Missing capability or credential — an operator must act. */
 const CONFIGURATION_REASONS = new Set([
@@ -75,6 +80,16 @@ const INPUT_REASONS = new Set([
 const TRANSIENT_REASONS = new Set(["is_invalid_response"]);
 
 /**
+ * The IS token budget refused the call. `llm_budget_exceeded` is the named
+ * token; `extraction_error: BudgetExceededError` is what every IS build since
+ * the spend guard landed emits for the same refusal, so both are taught.
+ */
+const BUDGET_REASONS = new Set([
+  "llm_budget_exceeded",
+  "extraction_error: BudgetExceededError",
+]);
+
+/**
  * Classify a degraded reason.
  *
  * `is_empty_result` is deliberately absent from every set above: it is the
@@ -91,6 +106,7 @@ export function classifyDegradedReason(
   if (CONFIGURATION_REASONS.has(trimmed)) return "configuration";
   if (INPUT_REASONS.has(trimmed)) return "input";
   if (TRANSIENT_REASONS.has(trimmed)) return "transient";
+  if (BUDGET_REASONS.has(trimmed)) return "budget";
   return "unknown";
 }
 
@@ -128,6 +144,14 @@ export function describeDegradedForAgent(
       return (
         `AI structuring failed upstream (${token}). This one is transient — ` +
         `retrying the same call may succeed.`
+      );
+    case "budget":
+      return (
+        `AI structuring was refused because the Intelligence Service's monthly ` +
+        `LLM token budget is spent (${token}). Retrying now will not help. It is ` +
+        `NOT permanent: it frees when the monthly budget window resets, or as soon ` +
+        `as an operator raises the budget (TOKEN_ALERT_THRESHOLD / ` +
+        `LLM_BUDGET_STOP_STRUCTURE) or exempts this pod's owner.`
       );
     case "unknown":
       return (

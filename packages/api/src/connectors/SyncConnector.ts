@@ -14,7 +14,8 @@ export interface SyncConnectorConnection {
   connectionId: string;
   provider: string;
   userId: string;
-  createdAt: Date;
+  /** Null when the broker did not report it — unknown, never "now". */
+  createdAt: Date | null;
   lastSyncAt?: Date;
   /**
    * The broker reports this connection as errored (e.g. its refresh token died,

@@ -689,7 +689,7 @@ export async function getMessagingConnector(
       columns: { settings: true, ownerId: true },
     });
 
-    // Registry lookup replaces the old if-ladder: pick the descriptor for the
+    // Registry lookup: pick the descriptor for the
     // requested type, falling back to the default (Unipile) when the provider
     // is unset or not a registered messaging type.
     const type =

@@ -119,6 +119,25 @@ export function isMobileClient(client: string | undefined | null): boolean {
 export type OpenDispatch =
   { action: "redirect"; url: string } | { action: "bounce"; deep: string };
 
+/**
+ * The `?view=` values a bounce URL may carry onto `synap://open/<type>/<id>`.
+ * Mirrors `ObjectNavOptions.view` in the browser's `object-nav.ts` (the ONE
+ * route table that reads it) — a session's `'room'` view opens the Intake
+ * Room instead of the plain session detail. The two lists can't share a
+ * runtime import across repos, so `resolveDeepLink.test.ts` in the browser
+ * repo and this file's tests each pin their own side; a new value needs both.
+ */
+export const OPEN_VIEW_VALUES = ["room"] as const;
+export type OpenViewValue = (typeof OPEN_VIEW_VALUES)[number];
+
+/** True iff `value` is a `view` the bounce grammar forwards. Anything else
+ *  (absent, a typo, an unrelated query param) is dropped, never forwarded. */
+export function isOpenViewValue(
+  value: string | undefined | null
+): value is OpenViewValue {
+  return !!value && (OPEN_VIEW_VALUES as readonly string[]).includes(value);
+}
+
 // Proposal is web-first (review already lives on pod-admin, even for bots).
 // Entity/view 302 only for humans — unfurl HTML must never carry their bodies.
 //
@@ -134,8 +153,10 @@ export function dispatchOpen(opts: {
   adminBase: string | null;
   /** Raw `?client=` value off the request. Absent ⇒ desktop. */
   client?: string | undefined | null;
+  /** Raw `?view=` value off the request. Absent/unknown ⇒ dropped. */
+  view?: string | undefined | null;
 }): OpenDispatch {
-  const { type, id, userAgent, adminBase, client } = opts;
+  const { type, id, userAgent, adminBase, client, view } = opts;
 
   const bot = isUnfurlBot(userAgent);
   const mobile = !bot && isMobileClient(client);
@@ -154,6 +175,9 @@ export function dispatchOpen(opts: {
     };
   }
 
-  const deep = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
+  const base = type ? `synap://open/${type}/${id}` : `synap://open/${id}`;
+  // Only a typed link (`type` present) carries a view — `synap://open/<id>`
+  // reaches `resolveDeepLink` as a bare kind-less object anyway.
+  const deep = type && isOpenViewValue(view) ? `${base}?view=${view}` : base;
   return { action: "bounce", deep };
 }

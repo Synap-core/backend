@@ -450,6 +450,19 @@ export async function rerunSession(args: {
 
   const availability = await assessRerunAvailability(database, parent);
 
+  // Before the dry run: a confirm must never be shown for an action the real
+  // call refuses. The replace floor depends only on WHO is asking, so it is
+  // decidable here; the plan still rides along for context.
+  if (args.mode === "replace" && args.agentUserId) {
+    return {
+      ok: false,
+      reason: "replace_is_a_human_decision",
+      plan,
+      message:
+        "`replace` reverts work that was already approved, so it is the user's decision. Rerun with mode `add`, or ask the user to replace it from the session room.",
+    };
+  }
+
   if (args.dryRun) {
     return {
       ok: true,
@@ -476,15 +489,6 @@ export async function rerunSession(args: {
       reason: "over_cap",
       plan,
       message: `This rerun would re-analyse ${selectedIds.length} sources; the cap is ${RERUN_MAX_SOURCES}. Narrow it with scope.sourceDocumentIds.`,
-    };
-  }
-  if (args.mode === "replace" && args.agentUserId) {
-    return {
-      ok: false,
-      reason: "replace_is_a_human_decision",
-      plan,
-      message:
-        "`replace` reverts work that was already approved, so it is the user's decision. Rerun with mode `add`, or ask the user to replace it from the session room.",
     };
   }
   if (rows.present.length === 0) {
