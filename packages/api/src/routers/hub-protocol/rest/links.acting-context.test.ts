@@ -70,7 +70,7 @@ vi.mock(
     }) =>
       sessionOwners.get(i.sessionId) === i.userId &&
       sessionOwners.get(i.blockerSessionId) === i.userId
-        ? ({ ok: true } as const)
+        ? ({ ok: true, workspaceId: null } as const)
         : ({ ok: false, reason: "not_found" } as const);
     return {
       ...actual,

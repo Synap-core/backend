@@ -542,7 +542,7 @@ export const focusSessionsRouter = router({
           eq(focusSessions.id, input.sessionId),
           eq(focusSessions.userId, ctx.userId)
         ),
-        columns: { id: true, workspaceId: true },
+        columns: { id: true },
       });
       if (!session) {
         throw new TRPCError({
@@ -550,11 +550,12 @@ export const focusSessionsRouter = router({
           message: `Focus session ${input.sessionId} not found`,
         });
       }
+      // `addSessionBlocker` derives the edge's workspace from the blocked
+      // session's own row — never pass one in.
       return addSessionBlocker({
         sessionId: input.sessionId,
         blockerSessionId: input.blockerSessionId,
         userId: ctx.userId,
-        workspaceId: session.workspaceId,
       });
     }),
 

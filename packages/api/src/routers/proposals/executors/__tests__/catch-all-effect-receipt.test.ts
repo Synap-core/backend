@@ -102,7 +102,6 @@ vi.mock(
         sessionId: string;
         blockerSessionId: string;
         userId: string;
-        workspaceId?: string | null;
       }) => {
         blockerCalls.push({ ...i });
         if (i.sessionId === i.blockerSessionId) {
@@ -307,14 +306,17 @@ describe("(3b) link/create blocked_by", () => {
     expect(a.userId).not.toBe(a.proposal.subjectUserId);
   });
 
-  it("applies a same-owner edge via addSessionBlocker with the exact direction and a verified row count", async () => {
+  it("applies a same-owner edge via addSessionBlocker with the exact direction and a verified row count, never passing the PROPOSAL's workspace", async () => {
     const result = await catchAll().execute(blockedByArgs());
+    // No `workspaceId` field at all: `addSessionBlocker` derives the edge's
+    // workspace from the blocked session's OWN row, never from
+    // `proposal.workspaceId` (the request's workspace, which can differ —
+    // R1). Passing one here would be a regression back to the old leak.
     expect(blockerCalls).toEqual([
       {
         sessionId: BLOCKED, // from = the blocked session
         blockerSessionId: BLOCKER, // to = the session it waits on
         userId: OWNER,
-        workspaceId: "ws-1",
       },
     ]);
     expect(edgeWrites).toEqual([`${BLOCKED}->${BLOCKER}`]);

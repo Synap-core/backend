@@ -54,8 +54,6 @@ export interface BlockerEdgeInput {
   blockerSessionId: string;
   /** Owner floor — BOTH sessions must belong to this user. */
   userId: string;
-  /** Workspace stamped on the edge row (the blocked session's workspace). */
-  workspaceId?: string | null;
 }
 
 export type BlockerEdgeResult =
@@ -75,21 +73,27 @@ export type RemoveBlockerResult =
   | { removed: true }
   | { removed: false; reason: "not_found" | "self_blocker" | "no_edge" };
 
-/** Both endpoints exist AND belong to `userId`. Shape-checked first. */
+/**
+ * Both endpoints exist AND belong to `userId`. Shape-checked first. Also
+ * returns the BLOCKED session's own `workspaceId` — the single source every
+ * caller stamps the edge (and judges governance) with, so the edge's
+ * workspace can never depend on which door created it.
+ */
 async function bothOwned(
   sessionId: string,
   blockerSessionId: string,
   userId: string
-): Promise<boolean> {
+): Promise<{ ok: true; workspaceId: string | null } | { ok: false }> {
   // Shape floor BEFORE the query: `focus_sessions.id` is a `uuid` column, so a
   // malformed handle reaches Postgres as `22P02` — a THROW from a door whose
   // contract is to drop, not fail.
-  if (!UUID_RE.test(sessionId) || !UUID_RE.test(blockerSessionId)) return false;
+  if (!UUID_RE.test(sessionId) || !UUID_RE.test(blockerSessionId))
+    return { ok: false };
 
   // Owner floor — never `scopedDb`/`userVisibleWhere`, which have an
   // owner-blind NULL-workspace branch on this table.
   const rows = await db
-    .select({ id: focusSessions.id })
+    .select({ id: focusSessions.id, workspaceId: focusSessions.workspaceId })
     .from(focusSessions)
     .where(
       and(
@@ -97,24 +101,35 @@ async function bothOwned(
         eq(focusSessions.userId, userId)
       )
     );
-  return rows.length === 2;
+  if (rows.length !== 2) return { ok: false };
+  const blocked = rows.find((r) => r.id === sessionId);
+  return { ok: true, workspaceId: blocked?.workspaceId ?? null };
 }
 
 /**
  * The producer's floor, exposed so a GENERIC door (`POST /api/hub/links`) can
  * refuse an edge BEFORE governance turns it into a proposal. The same check
  * `addSessionBlocker` applies — one floor, one place; never re-derive the
- * ownership query at a call site.
+ * ownership query at a call site. On success, also hands back the BLOCKED
+ * session's `workspaceId`, so a caller judging governance can do so in the
+ * SAME workspace the edge will be stamped with, without a second query.
  */
 export async function validateSessionBlocker(
   input: Pick<BlockerEdgeInput, "sessionId" | "blockerSessionId" | "userId">
-): Promise<{ ok: true } | { ok: false; reason: "not_found" | "self_blocker" }> {
+): Promise<
+  | { ok: true; workspaceId: string | null }
+  | { ok: false; reason: "not_found" | "self_blocker" }
+> {
   if (input.sessionId === input.blockerSessionId) {
     return { ok: false, reason: "self_blocker" };
   }
-  if (!(await bothOwned(input.sessionId, input.blockerSessionId, input.userId)))
-    return { ok: false, reason: "not_found" };
-  return { ok: true };
+  const owned = await bothOwned(
+    input.sessionId,
+    input.blockerSessionId,
+    input.userId
+  );
+  if (!owned.ok) return { ok: false, reason: "not_found" };
+  return { ok: true, workspaceId: owned.workspaceId };
 }
 
 /**
@@ -130,7 +145,10 @@ export async function addSessionBlocker(
   const inserted = await db
     .insert(links)
     .values({
-      workspaceId: input.workspaceId ?? null,
+      // The BLOCKED session's own workspace — the single source of truth
+      // every door (POST /links, tRPC addBlocker, proposal approval) stamps
+      // the edge with, so it never depends on which door created it.
+      workspaceId: valid.workspaceId,
       fromType: "session",
       fromId: input.sessionId,
       toType: "session",
@@ -160,7 +178,10 @@ export async function removeSessionBlocker(
   if (input.sessionId === input.blockerSessionId) {
     return { removed: false, reason: "self_blocker" };
   }
-  if (!(await bothOwned(input.sessionId, input.blockerSessionId, input.userId)))
+  if (
+    !(await bothOwned(input.sessionId, input.blockerSessionId, input.userId))
+      .ok
+  )
     return { removed: false, reason: "not_found" };
 
   const deleted = await db

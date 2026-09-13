@@ -112,7 +112,10 @@ vi.mock(
         ? ({ ok: false, reason: "self_blocker" } as const)
         : sessionOwners.get(i.sessionId) === i.userId &&
             sessionOwners.get(i.blockerSessionId) === i.userId
-          ? ({ ok: true } as const)
+          ? ({
+              ok: true,
+              workspaceId: focusSessionWorkspaceById.get(i.sessionId) ?? null,
+            } as const)
           : ({ ok: false, reason: "not_found" } as const);
     return {
       ...actual,
@@ -349,7 +352,7 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     expect(calls.createLink).not.toHaveBeenCalled();
   });
 
-  it("applies a same-owner edge through addSessionBlocker (from = blocked, to = blocker), stamped with the BLOCKED session's own workspace, never raw createLink", async () => {
+  it("applies a same-owner edge through addSessionBlocker (from = blocked, to = blocker), governed and stamped with the BLOCKED session's own workspace, never raw createLink", async () => {
     const res = await postLinks(buildTestApp(), {
       workspaceId: CONSUMER_WS,
       fromType: "session",
@@ -367,14 +370,18 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
       blockedBy: { inserted: 1 },
     });
     const calls = await writeCalls();
-    expect(calls.checkPermissionOrPropose).toHaveBeenCalledTimes(1);
-    // SESSION_WS (the blocked session's own workspace), NOT CONSUMER_WS (the
-    // request-stamped workspace) — aligning with tRPC `focusSessions.addBlocker`.
+    // Governance is judged in SESSION_WS (the blocked session's own
+    // workspace), NOT CONSUMER_WS (the request-stamped workspace) — so a
+    // filed proposal's workspaceId always matches the edge it would create.
+    expect(calls.checkPermissionOrPropose).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: SESSION_WS })
+    );
+    // `addSessionBlocker` derives the edge's workspace itself; the caller
+    // never passes one.
     expect(calls.addSessionBlocker).toHaveBeenCalledWith({
       sessionId: MY_SESSION,
       blockerSessionId: MY_OTHER_SESSION,
       userId: USER_ID,
-      workspaceId: SESSION_WS,
     });
     expect(calls.createLink).not.toHaveBeenCalled();
   });
@@ -441,6 +448,37 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     // The producer's ownership floor must ALSO stay on the human, not the agent.
     expect(calls.addSessionBlocker).toHaveBeenCalledWith(
       expect.objectContaining({ userId: USER_ID })
+    );
+  });
+
+  it("falls back to the key's bound agentUserId when the body omits it, mirroring runs.ts", async () => {
+    const KEY_AGENT_ID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+    const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
+    app.use("/*", async (c, next) => {
+      c.set("userId", USER_ID);
+      c.set("scopes", ["hub-protocol.write", "hub-protocol.read"]);
+      c.set("agentUserId", KEY_AGENT_ID);
+      await next();
+    });
+    registerLinksRoutes(app);
+
+    const res = await postLinks(app, {
+      workspaceId: CONSUMER_WS,
+      fromType: "session",
+      fromId: MY_SESSION,
+      toType: "session",
+      toId: MY_OTHER_SESSION,
+      linkType: "blocked_by",
+      // agentUserId deliberately absent from the body.
+    });
+
+    expect(res.status).toBe(200);
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER_ID,
+        agentUserId: KEY_AGENT_ID,
+      })
     );
   });
 

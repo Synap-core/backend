@@ -126,7 +126,7 @@ const ACKNOWLEDGED_NOOP_KEYS: Record<string, string> = {
  * nothing written.
  */
 async function applyApprovedBlockedBy(
-  proposal: { workspaceId: string | null; subjectUserId?: string | null },
+  proposal: { subjectUserId?: string | null },
   data: Record<string, unknown>,
   doorKey: string
 ): Promise<ProposalEffect> {
@@ -175,11 +175,13 @@ async function applyApprovedBlockedBy(
   }
 
   // `from --blocked_by--> to` ≡ addBlocker(sessionId: from, blocker: to).
+  // `addSessionBlocker` derives the edge's workspace from the blocked
+  // session's own row, not `proposal.workspaceId` (the REQUEST's workspace,
+  // which can differ) — the same source every door stamps the edge with.
   const result = await addSessionBlocker({
     sessionId: data.fromId,
     blockerSessionId: data.toId,
     userId: ownerUserId,
-    workspaceId: proposal.workspaceId,
   });
   if (!result.linked) {
     throw refuse(

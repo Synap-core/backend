@@ -136,6 +136,24 @@ describe("addSessionBlocker (producer)", () => {
     expect(calls.some((c) => c.method === "returning")).toBe(true);
   });
 
+  it("stamps the edge with the BLOCKED session's own workspaceId — from the SAME row the owner floor read, never a caller-supplied one", async () => {
+    // R1: one source of truth. The owner-floor query returns each session's
+    // own workspaceId; the edge must be stamped with the BLOCKED session's
+    // (A's) — not the blocker's (B's), and there is no other input the
+    // caller could supply instead (`BlockerEdgeInput` carries no `workspaceId`
+    // field at all).
+    queue.push([
+      { id: A, workspaceId: "ws-blocked" },
+      { id: B, workspaceId: "ws-blocker" },
+    ]);
+    queue.push([{ id: "link-1" }]);
+    await addSessionBlocker({ sessionId: A, blockerSessionId: B, userId: "u" });
+    const insertValues = calls.find((c) => c.method === "values")?.args[0] as {
+      workspaceId: unknown;
+    };
+    expect(insertValues.workspaceId).toBe("ws-blocked");
+  });
+
   it("reports inserted: 0 for an edge that already existed — never a false write", async () => {
     queue.push([{ id: A }, { id: B }]);
     queue.push([]); // onConflictDoNothing hit the unique edge: RETURNING is empty
