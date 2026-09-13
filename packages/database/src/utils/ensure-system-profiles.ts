@@ -17,6 +17,7 @@ import {
 } from "../index.js";
 import type { CreatePropertyDefInput } from "../repositories/property-def-repository.js";
 import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-properties.js";
+import { foldPropertyKey } from "../services/did-you-mean.js";
 
 /**
  * Profile-property links this seeder must actively REMOVE from pods that were
@@ -36,6 +37,11 @@ import { ensureMachineWrittenPropertiesReadOnly } from "./machine-written-proper
  *
  * Add an entry whenever a slug is removed from a system profile's
  * `propertySlugs`. Removing the line alone does not converge existing pods.
+ *
+ * MATCHING IS FOLD-EQUAL, scoped to the one profile's own links (see
+ * `planRetirementUnlink`): `ek_type` also retires a live `ek-type`, because the
+ * approve-side reconciler slugifies a proposed key before minting a def. When
+ * more than one link on the profile folds to the target, nothing is unlinked.
  */
 export const RETIRED_PROFILE_PROPERTIES: ReadonlyArray<{
   profileSlug: string;
@@ -60,6 +66,425 @@ export const RETIRED_PROFILE_PROPERTIES: ReadonlyArray<{
       "removing the profile link means it is not a second editable classification. " +
       "New writes normalise it into the sole knowledgeForm.",
   },
+  {
+    profileSlug: "decision",
+    propertySlug: "status",
+    reason:
+      "The seed declares `decisionStatus` (proposed/accepted/superseded/rejected) " +
+      "as decision's status. A `status` link on `decision` carries the TASK enum " +
+      "(todo/in-progress/done/cancelled) — confirmed on the live pod — so an agent " +
+      "reading the schema sees two status fields and writes the wrong one. No " +
+      "current seed declares it; it is a fossil.",
+  },
+  {
+    profileSlug: "research",
+    propertySlug: "status",
+    reason:
+      "The seed declares `researchStatus` (ongoing/concluded/abandoned) as " +
+      "research's status. A `status` link on `research` carries the TASK enum — " +
+      "confirmed on the live pod — and no current seed declares it.",
+  },
+];
+
+/** What the retirement pass should do for one entry on one profile. */
+export type RetirementPlan =
+  | { kind: "unlink"; propertyDefId: string; slug: string }
+  | { kind: "none" }
+  | { kind: "ambiguous"; slugs: string[] };
+
+/**
+ * PURE: decide which of ONE profile's links a retirement entry targets.
+ *
+ * Fold-equal (`foldPropertyKey`), never exact: a string-exact compare could not
+ * see `ek-type` for the `ek_type` entry, so the fossil survived every boot.
+ * The fold is safe ONLY because `links` is a single profile's link set — pod-wide
+ * there are many legitimate fold collisions between different profiles' fields.
+ *
+ * More than one fold-equal link ⇒ `ambiguous`: the caller must unlink NOTHING.
+ * Guessing which of `ek_type` / `ek-type` is the fossil would delete a live
+ * schema claim half the time.
+ */
+export function planRetirementUnlink(
+  links: ReadonlyArray<{ propertyDefId: string; slug: string | null }>,
+  retiredSlug: string
+): RetirementPlan {
+  const target = foldPropertyKey(retiredSlug);
+  const hits = links.filter(
+    (l): l is { propertyDefId: string; slug: string } =>
+      l.slug !== null && foldPropertyKey(l.slug) === target
+  );
+  if (hits.length === 0) return { kind: "none" };
+  if (hits.length > 1) {
+    return { kind: "ambiguous", slugs: hits.map((h) => h.slug) };
+  }
+  return {
+    kind: "unlink",
+    propertyDefId: hits[0]!.propertyDefId,
+    slug: hits[0]!.slug,
+  };
+}
+
+/**
+ * The profile → property links this seeder DECLARES on every pod.
+ *
+ * Module-scoped and exported (it used to be a local inside
+ * `ensureSystemProfiles`) so `diagnose`'s schema-contract section can derive
+ * "links the current seed declares" from the seed itself rather than from a
+ * second hand-kept list. The link pass below is ADDITIVE ONLY — a slug removed
+ * from here needs a `RETIRED_PROFILE_PROPERTIES` entry to leave existing pods.
+ */
+export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
+  profileSlug: string;
+  propertySlugs: Array<{
+    slug: string;
+    required?: boolean;
+    defaultValue?: unknown;
+    displayOrder: number;
+  }>;
+}> = [
+  // Core
+  {
+    profileSlug: "note",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "content", required: false, displayOrder: 1 },
+      { slug: "tags", required: false, displayOrder: 2 },
+    ],
+  },
+  {
+    profileSlug: "task",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "status",
+        required: false,
+        defaultValue: "todo",
+        displayOrder: 1,
+      },
+      { slug: "priority", required: false, displayOrder: 2 },
+      { slug: "dueDate", required: false, displayOrder: 3 },
+      { slug: "assignee", required: false, displayOrder: 4 },
+      { slug: "projectId", required: false, displayOrder: 5 },
+      { slug: "tags", required: false, displayOrder: 6 },
+      { slug: "description", required: false, displayOrder: 7 },
+    ],
+  },
+  // "project" profile removed — projects are now first-class table rows
+  // (see schema/projects.ts). Migration 0151 handles the cutover.
+  {
+    profileSlug: "event",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "startDate", required: false, displayOrder: 1 },
+      { slug: "endDate", required: false, displayOrder: 2 },
+      {
+        slug: "isAllDay",
+        required: false,
+        defaultValue: false,
+        displayOrder: 3,
+      },
+      { slug: "location", required: false, displayOrder: 4 },
+      { slug: "attendees", required: false, displayOrder: 5 },
+      { slug: "calendarLink", required: false, displayOrder: 6 },
+      { slug: "tags", required: false, displayOrder: 7 },
+      { slug: "description", required: false, displayOrder: 8 },
+    ],
+  },
+  // Capture hierarchy
+  {
+    profileSlug: "bookmark",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "url", required: true, displayOrder: 1 },
+      { slug: "domain", required: false, displayOrder: 2 },
+      { slug: "source", required: false, displayOrder: 3 },
+      { slug: "content", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+      { slug: "description", required: false, displayOrder: 6 },
+    ],
+  },
+  {
+    profileSlug: "website",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "url", required: true, displayOrder: 1 },
+      { slug: "domain", required: false, displayOrder: 2 },
+      { slug: "favicon", required: false, displayOrder: 3 },
+      { slug: "description", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+    ],
+  },
+  {
+    profileSlug: "article",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "url", required: true, displayOrder: 1 },
+      { slug: "domain", required: false, displayOrder: 2 },
+      { slug: "author", required: false, displayOrder: 3 },
+      { slug: "publishedAt", required: false, displayOrder: 4 },
+      { slug: "readTime", required: false, displayOrder: 5 },
+      { slug: "content", required: false, displayOrder: 6 },
+      { slug: "tags", required: false, displayOrder: 7 },
+    ],
+  },
+  // People hierarchy
+  {
+    profileSlug: "person",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "email", required: false, displayOrder: 1 },
+      { slug: "phone", required: false, displayOrder: 2 },
+      { slug: "discord-handle", required: false, displayOrder: 16 },
+      { slug: "aliases", required: false, displayOrder: 17 },
+      { slug: "telegramHandle", required: false, displayOrder: 3 },
+      { slug: "linkedinUrl", required: false, displayOrder: 4 },
+      { slug: "twitterHandle", required: false, displayOrder: 5 },
+      { slug: "farcasterFid", required: false, displayOrder: 6 },
+      { slug: "walletAddresses", required: false, displayOrder: 7 },
+      { slug: "sources", required: false, displayOrder: 8 },
+      { slug: "lastInteractionAt", required: false, displayOrder: 9 },
+      { slug: "interactionCount", required: false, displayOrder: 10 },
+      { slug: "strengthScore", required: false, displayOrder: 11 },
+      { slug: "aiSummary", required: false, displayOrder: 12 },
+      { slug: "focusAreas", required: false, displayOrder: 13 },
+      { slug: "tags", required: false, displayOrder: 14 },
+      { slug: "description", required: false, displayOrder: 15 },
+    ],
+  },
+  {
+    profileSlug: "contact",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "email", required: false, displayOrder: 1 },
+      { slug: "phone", required: false, displayOrder: 2 },
+      { slug: "role", required: false, displayOrder: 3 },
+      { slug: "companyId", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+      { slug: "description", required: false, displayOrder: 6 },
+    ],
+  },
+  // Organization
+  {
+    profileSlug: "company",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "website", required: false, displayOrder: 1 },
+      { slug: "industry", required: false, displayOrder: 2 },
+      { slug: "employees", required: false, displayOrder: 3 },
+      { slug: "location", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+      { slug: "description", required: false, displayOrder: 6 },
+    ],
+  },
+  // CRM
+  {
+    profileSlug: "deal",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "stage",
+        required: false,
+        defaultValue: "lead",
+        displayOrder: 1,
+      },
+      { slug: "value", required: false, displayOrder: 2 },
+      { slug: "closeDate", required: false, displayOrder: 3 },
+      { slug: "contactId", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+      { slug: "description", required: false, displayOrder: 6 },
+    ],
+  },
+  // File — canonical. `title` replaces the legacy `fileName`; storage
+  // pointers live on the documents row + entities.documentId, never as
+  // properties.
+  {
+    profileSlug: "file",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "mimeType", required: false, displayOrder: 1 },
+      { slug: "fileSize", required: false, displayOrder: 2 },
+      { slug: "tags", required: false, displayOrder: 3 },
+    ],
+  },
+  // 'capture' property assignment removed — the profile itself is gone.
+  // The AI capture pipeline writes to `bookmark`/`article`/`note`/etc.
+  // Anchor — pinned conversation moment
+  {
+    profileSlug: "anchor",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "channelId", required: true, displayOrder: 1 },
+      { slug: "messageId", required: true, displayOrder: 2 },
+      { slug: "messageRole", required: false, displayOrder: 3 },
+      { slug: "threadTitle", required: false, displayOrder: 4 },
+      { slug: "content", required: false, displayOrder: 5 },
+      { slug: "tags", required: false, displayOrder: 6 },
+    ],
+  },
+  // Signal Item — external content from signal feeds
+  {
+    profileSlug: "signal_item",
+    propertySlugs: [
+      { slug: "title", required: false, displayOrder: 0 },
+      { slug: "url", required: true, displayOrder: 1 },
+      { slug: "domain", required: false, displayOrder: 2 },
+      { slug: "sourcePlatform", required: true, displayOrder: 3 },
+      { slug: "sourceRoute", required: true, displayOrder: 4 },
+      { slug: "authorUsername", required: false, displayOrder: 5 },
+      { slug: "authorDisplayName", required: false, displayOrder: 6 },
+      { slug: "authorUrl", required: false, displayOrder: 7 },
+      { slug: "publishedAt", required: true, displayOrder: 8 },
+      { slug: "fetchedAt", required: false, displayOrder: 9 },
+      { slug: "aiSummary", required: false, displayOrder: 10 },
+      {
+        slug: "topics",
+        required: true,
+        defaultValue: [],
+        displayOrder: 11,
+      },
+      {
+        slug: "relevanceScore",
+        required: false,
+        defaultValue: 0.5,
+        displayOrder: 12,
+      },
+      { slug: "sentiment", required: false, displayOrder: 13 },
+      { slug: "importance", required: false, displayOrder: 14 },
+      { slug: "rawData", required: false, displayOrder: 15 },
+      {
+        slug: "capturedFromFeed",
+        required: false,
+        defaultValue: false,
+        displayOrder: 16,
+      },
+      { slug: "captureMethod", required: false, displayOrder: 17 },
+      {
+        slug: "autoLinkedEntities",
+        required: false,
+        defaultValue: [],
+        displayOrder: 18,
+      },
+      {
+        slug: "viewCount",
+        required: false,
+        defaultValue: 0,
+        displayOrder: 19,
+      },
+      {
+        slug: "captureCount",
+        required: false,
+        defaultValue: 0,
+        displayOrder: 20,
+      },
+      { slug: "tags", required: false, displayOrder: 21 },
+      { slug: "description", required: false, displayOrder: 22 },
+    ],
+  },
+  // Decision — the full structured-decision record.
+  {
+    profileSlug: "decision",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "summary", required: false, displayOrder: 1 },
+      {
+        slug: "decisionStatus",
+        required: false,
+        defaultValue: "accepted",
+        displayOrder: 2,
+      },
+      { slug: "decidedAt", required: false, displayOrder: 3 },
+      { slug: "rationale", required: false, displayOrder: 4 },
+      { slug: "alternatives", required: false, displayOrder: 5 },
+      { slug: "projectId", required: false, displayOrder: 6 },
+      { slug: "supersededBy", required: false, displayOrder: 7 },
+      { slug: "tags", required: false, displayOrder: 8 },
+      { slug: "description", required: false, displayOrder: 9 },
+    ],
+  },
+  // Question — what the user is investigating.
+  {
+    profileSlug: "question",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "questionStatus",
+        required: false,
+        defaultValue: "open",
+        displayOrder: 1,
+      },
+      { slug: "askedAt", required: false, displayOrder: 2 },
+      { slug: "projectId", required: false, displayOrder: 3 },
+      { slug: "answeredByDecisionId", required: false, displayOrder: 4 },
+      { slug: "tags", required: false, displayOrder: 5 },
+      // description = why this question matters, constraints
+      { slug: "description", required: false, displayOrder: 6 },
+    ],
+  },
+  // Research — investigation artifact with sources + findings + confidence.
+  {
+    profileSlug: "research",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      {
+        slug: "researchStatus",
+        required: false,
+        defaultValue: "ongoing",
+        displayOrder: 1,
+      },
+      { slug: "questionId", required: false, displayOrder: 2 },
+      { slug: "projectId", required: false, displayOrder: 3 },
+      { slug: "conclusion", required: false, displayOrder: 4 },
+      { slug: "researchConfidence", required: false, displayOrder: 5 },
+      { slug: "tags", required: false, displayOrder: 6 },
+      // description = method, scope, any context that doesn't fit conclusion
+      { slug: "description", required: false, displayOrder: 7 },
+    ],
+  },
+  // Report — the header of a generated narrative. Body = linked document.
+  {
+    profileSlug: "report",
+    propertySlugs: [
+      { slug: "title", required: true, displayOrder: 0 },
+      { slug: "reportPeriod", required: false, displayOrder: 1 },
+      { slug: "generatedAt", required: false, displayOrder: 2 },
+      {
+        slug: "reportStatus",
+        required: false,
+        defaultValue: "ready",
+        displayOrder: 3,
+      },
+      { slug: "summary", required: false, displayOrder: 4 },
+      { slug: "reportSources", required: false, displayOrder: 5 },
+      { slug: "tags", required: false, displayOrder: 6 },
+    ],
+  },
+  // Knowledge — one required canonical form plus optional compact metadata.
+  // Historic entities receive a form only when their legacy payload is
+  // explicitly normalised at a write/import/capture door; no JSONB backfill.
+  {
+    profileSlug: "knowledge",
+    propertySlugs: [
+      {
+        slug: "knowledgeForm",
+        required: true,
+        displayOrder: 0,
+      },
+      { slug: "ek_claim", required: false, displayOrder: 1 },
+      { slug: "ek_why", required: false, displayOrder: 2 },
+      { slug: "ek_evidence", required: false, displayOrder: 3 },
+      { slug: "ek_tags", required: false, displayOrder: 4 },
+    ],
+  },
+  // User Observation — uo_* properties
+  {
+    profileSlug: "user_observation",
+    propertySlugs: [
+      { slug: "uo_observation", required: true, displayOrder: 0 },
+      { slug: "uo_category", required: true, displayOrder: 1 },
+      { slug: "uo_confidence", required: false, displayOrder: 2 },
+      { slug: "uo_validated", required: false, displayOrder: 3 },
+    ],
+  },
 ];
 
 export interface EnsureSystemProfilesResult {
@@ -69,6 +494,50 @@ export interface EnsureSystemProfilesResult {
   propertiesCreated: number;
   linksCreated: number;
   error?: string;
+  /**
+   * Retirement entries the pass REFUSED because more than one link on the
+   * profile folds to the retired slug. Nothing was unlinked for these.
+   */
+  retirementsRefused?: Array<{
+    profileSlug: string;
+    propertySlug: string;
+    foldedSlugs: string[];
+  }>;
+}
+
+/** The slice of a pino-style logger the boot reporter needs. */
+export interface SystemProfilesBootLogger {
+  info(obj: object, msg: string): void;
+  warn(obj: object, msg: string): void;
+  error(obj: object, msg: string): void;
+}
+
+/**
+ * Log an `ensureSystemProfiles` result HONESTLY.
+ *
+ * The seeder catches its own failure into `{ status: "error" }` — it does not
+ * throw — so a caller's `catch` never sees it. Every boot call site used to log
+ * that result at INFO under "reconciled"/"seeded", which printed a failed
+ * reconcile as a successful one. This is the ONE place a result becomes a log
+ * line; `__tripwires__/ensure-system-profiles-boot-honesty.test.ts` holds every
+ * call site to it.
+ */
+export function reportEnsureSystemProfilesResult(
+  logger: SystemProfilesBootLogger,
+  result: EnsureSystemProfilesResult,
+  messages: { ok: string; failed: string }
+): void {
+  if (result.status === "error") {
+    logger.error({ ...result, err: result.error }, messages.failed);
+    return;
+  }
+  logger.info({ ...result }, messages.ok);
+  if (result.retirementsRefused && result.retirementsRefused.length > 0) {
+    logger.warn(
+      { retirementsRefused: result.retirementsRefused },
+      "System profile retirement refused: more than one link folds to a retired slug — nothing unlinked"
+    );
+  }
 }
 
 /**
@@ -1381,362 +1850,9 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       }
     }
 
-    // 4. Link properties to profiles
-    const profilePropertyLinks: Array<{
-      profileSlug: string;
-      propertySlugs: Array<{
-        slug: string;
-        required?: boolean;
-        defaultValue?: unknown;
-        displayOrder: number;
-      }>;
-    }> = [
-      // Core
-      {
-        profileSlug: "note",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "content", required: false, displayOrder: 1 },
-          { slug: "tags", required: false, displayOrder: 2 },
-        ],
-      },
-      {
-        profileSlug: "task",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          {
-            slug: "status",
-            required: false,
-            defaultValue: "todo",
-            displayOrder: 1,
-          },
-          { slug: "priority", required: false, displayOrder: 2 },
-          { slug: "dueDate", required: false, displayOrder: 3 },
-          { slug: "assignee", required: false, displayOrder: 4 },
-          { slug: "projectId", required: false, displayOrder: 5 },
-          { slug: "tags", required: false, displayOrder: 6 },
-          { slug: "description", required: false, displayOrder: 7 },
-        ],
-      },
-      // "project" profile removed — projects are now first-class table rows
-      // (see schema/projects.ts). Migration 0151 handles the cutover.
-      {
-        profileSlug: "event",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "startDate", required: false, displayOrder: 1 },
-          { slug: "endDate", required: false, displayOrder: 2 },
-          {
-            slug: "isAllDay",
-            required: false,
-            defaultValue: false,
-            displayOrder: 3,
-          },
-          { slug: "location", required: false, displayOrder: 4 },
-          { slug: "attendees", required: false, displayOrder: 5 },
-          { slug: "calendarLink", required: false, displayOrder: 6 },
-          { slug: "tags", required: false, displayOrder: 7 },
-          { slug: "description", required: false, displayOrder: 8 },
-        ],
-      },
-      // Capture hierarchy
-      {
-        profileSlug: "bookmark",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "url", required: true, displayOrder: 1 },
-          { slug: "domain", required: false, displayOrder: 2 },
-          { slug: "source", required: false, displayOrder: 3 },
-          { slug: "content", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
-      {
-        profileSlug: "website",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "url", required: true, displayOrder: 1 },
-          { slug: "domain", required: false, displayOrder: 2 },
-          { slug: "favicon", required: false, displayOrder: 3 },
-          { slug: "description", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-        ],
-      },
-      {
-        profileSlug: "article",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "url", required: true, displayOrder: 1 },
-          { slug: "domain", required: false, displayOrder: 2 },
-          { slug: "author", required: false, displayOrder: 3 },
-          { slug: "publishedAt", required: false, displayOrder: 4 },
-          { slug: "readTime", required: false, displayOrder: 5 },
-          { slug: "content", required: false, displayOrder: 6 },
-          { slug: "tags", required: false, displayOrder: 7 },
-        ],
-      },
-      // People hierarchy
-      {
-        profileSlug: "person",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "email", required: false, displayOrder: 1 },
-          { slug: "phone", required: false, displayOrder: 2 },
-          { slug: "discord-handle", required: false, displayOrder: 16 },
-          { slug: "aliases", required: false, displayOrder: 17 },
-          { slug: "telegramHandle", required: false, displayOrder: 3 },
-          { slug: "linkedinUrl", required: false, displayOrder: 4 },
-          { slug: "twitterHandle", required: false, displayOrder: 5 },
-          { slug: "farcasterFid", required: false, displayOrder: 6 },
-          { slug: "walletAddresses", required: false, displayOrder: 7 },
-          { slug: "sources", required: false, displayOrder: 8 },
-          { slug: "lastInteractionAt", required: false, displayOrder: 9 },
-          { slug: "interactionCount", required: false, displayOrder: 10 },
-          { slug: "strengthScore", required: false, displayOrder: 11 },
-          { slug: "aiSummary", required: false, displayOrder: 12 },
-          { slug: "focusAreas", required: false, displayOrder: 13 },
-          { slug: "tags", required: false, displayOrder: 14 },
-          { slug: "description", required: false, displayOrder: 15 },
-        ],
-      },
-      {
-        profileSlug: "contact",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "email", required: false, displayOrder: 1 },
-          { slug: "phone", required: false, displayOrder: 2 },
-          { slug: "role", required: false, displayOrder: 3 },
-          { slug: "companyId", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
-      // Organization
-      {
-        profileSlug: "company",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "website", required: false, displayOrder: 1 },
-          { slug: "industry", required: false, displayOrder: 2 },
-          { slug: "employees", required: false, displayOrder: 3 },
-          { slug: "location", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
-      // CRM
-      {
-        profileSlug: "deal",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          {
-            slug: "stage",
-            required: false,
-            defaultValue: "lead",
-            displayOrder: 1,
-          },
-          { slug: "value", required: false, displayOrder: 2 },
-          { slug: "closeDate", required: false, displayOrder: 3 },
-          { slug: "contactId", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
-      // File — canonical. `title` replaces the legacy `fileName`; storage
-      // pointers live on the documents row + entities.documentId, never as
-      // properties.
-      {
-        profileSlug: "file",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "mimeType", required: false, displayOrder: 1 },
-          { slug: "fileSize", required: false, displayOrder: 2 },
-          { slug: "tags", required: false, displayOrder: 3 },
-        ],
-      },
-      // 'capture' property assignment removed — the profile itself is gone.
-      // The AI capture pipeline writes to `bookmark`/`article`/`note`/etc.
-      // Anchor — pinned conversation moment
-      {
-        profileSlug: "anchor",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "channelId", required: true, displayOrder: 1 },
-          { slug: "messageId", required: true, displayOrder: 2 },
-          { slug: "messageRole", required: false, displayOrder: 3 },
-          { slug: "threadTitle", required: false, displayOrder: 4 },
-          { slug: "content", required: false, displayOrder: 5 },
-          { slug: "tags", required: false, displayOrder: 6 },
-        ],
-      },
-      // Signal Item — external content from signal feeds
-      {
-        profileSlug: "signal_item",
-        propertySlugs: [
-          { slug: "title", required: false, displayOrder: 0 },
-          { slug: "url", required: true, displayOrder: 1 },
-          { slug: "domain", required: false, displayOrder: 2 },
-          { slug: "sourcePlatform", required: true, displayOrder: 3 },
-          { slug: "sourceRoute", required: true, displayOrder: 4 },
-          { slug: "authorUsername", required: false, displayOrder: 5 },
-          { slug: "authorDisplayName", required: false, displayOrder: 6 },
-          { slug: "authorUrl", required: false, displayOrder: 7 },
-          { slug: "publishedAt", required: true, displayOrder: 8 },
-          { slug: "fetchedAt", required: false, displayOrder: 9 },
-          { slug: "aiSummary", required: false, displayOrder: 10 },
-          {
-            slug: "topics",
-            required: true,
-            defaultValue: [],
-            displayOrder: 11,
-          },
-          {
-            slug: "relevanceScore",
-            required: false,
-            defaultValue: 0.5,
-            displayOrder: 12,
-          },
-          { slug: "sentiment", required: false, displayOrder: 13 },
-          { slug: "importance", required: false, displayOrder: 14 },
-          { slug: "rawData", required: false, displayOrder: 15 },
-          {
-            slug: "capturedFromFeed",
-            required: false,
-            defaultValue: false,
-            displayOrder: 16,
-          },
-          { slug: "captureMethod", required: false, displayOrder: 17 },
-          {
-            slug: "autoLinkedEntities",
-            required: false,
-            defaultValue: [],
-            displayOrder: 18,
-          },
-          {
-            slug: "viewCount",
-            required: false,
-            defaultValue: 0,
-            displayOrder: 19,
-          },
-          {
-            slug: "captureCount",
-            required: false,
-            defaultValue: 0,
-            displayOrder: 20,
-          },
-          { slug: "tags", required: false, displayOrder: 21 },
-          { slug: "description", required: false, displayOrder: 22 },
-        ],
-      },
-      // Decision — the full structured-decision record.
-      {
-        profileSlug: "decision",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "summary", required: false, displayOrder: 1 },
-          {
-            slug: "decisionStatus",
-            required: false,
-            defaultValue: "accepted",
-            displayOrder: 2,
-          },
-          { slug: "decidedAt", required: false, displayOrder: 3 },
-          { slug: "rationale", required: false, displayOrder: 4 },
-          { slug: "alternatives", required: false, displayOrder: 5 },
-          { slug: "projectId", required: false, displayOrder: 6 },
-          { slug: "supersededBy", required: false, displayOrder: 7 },
-          { slug: "tags", required: false, displayOrder: 8 },
-          { slug: "description", required: false, displayOrder: 9 },
-        ],
-      },
-      // Question — what the user is investigating.
-      {
-        profileSlug: "question",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          {
-            slug: "questionStatus",
-            required: false,
-            defaultValue: "open",
-            displayOrder: 1,
-          },
-          { slug: "askedAt", required: false, displayOrder: 2 },
-          { slug: "projectId", required: false, displayOrder: 3 },
-          { slug: "answeredByDecisionId", required: false, displayOrder: 4 },
-          { slug: "tags", required: false, displayOrder: 5 },
-          // description = why this question matters, constraints
-          { slug: "description", required: false, displayOrder: 6 },
-        ],
-      },
-      // Research — investigation artifact with sources + findings + confidence.
-      {
-        profileSlug: "research",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          {
-            slug: "researchStatus",
-            required: false,
-            defaultValue: "ongoing",
-            displayOrder: 1,
-          },
-          { slug: "questionId", required: false, displayOrder: 2 },
-          { slug: "projectId", required: false, displayOrder: 3 },
-          { slug: "conclusion", required: false, displayOrder: 4 },
-          { slug: "researchConfidence", required: false, displayOrder: 5 },
-          { slug: "tags", required: false, displayOrder: 6 },
-          // description = method, scope, any context that doesn't fit conclusion
-          { slug: "description", required: false, displayOrder: 7 },
-        ],
-      },
-      // Report — the header of a generated narrative. Body = linked document.
-      {
-        profileSlug: "report",
-        propertySlugs: [
-          { slug: "title", required: true, displayOrder: 0 },
-          { slug: "reportPeriod", required: false, displayOrder: 1 },
-          { slug: "generatedAt", required: false, displayOrder: 2 },
-          {
-            slug: "reportStatus",
-            required: false,
-            defaultValue: "ready",
-            displayOrder: 3,
-          },
-          { slug: "summary", required: false, displayOrder: 4 },
-          { slug: "reportSources", required: false, displayOrder: 5 },
-          { slug: "tags", required: false, displayOrder: 6 },
-        ],
-      },
-      // Knowledge — one required canonical form plus optional compact metadata.
-      // Historic entities receive a form only when their legacy payload is
-      // explicitly normalised at a write/import/capture door; no JSONB backfill.
-      {
-        profileSlug: "knowledge",
-        propertySlugs: [
-          {
-            slug: "knowledgeForm",
-            required: true,
-            displayOrder: 0,
-          },
-          { slug: "ek_claim", required: false, displayOrder: 1 },
-          { slug: "ek_why", required: false, displayOrder: 2 },
-          { slug: "ek_evidence", required: false, displayOrder: 3 },
-          { slug: "ek_tags", required: false, displayOrder: 4 },
-        ],
-      },
-      // User Observation — uo_* properties
-      {
-        profileSlug: "user_observation",
-        propertySlugs: [
-          { slug: "uo_observation", required: true, displayOrder: 0 },
-          { slug: "uo_category", required: true, displayOrder: 1 },
-          { slug: "uo_confidence", required: false, displayOrder: 2 },
-          { slug: "uo_validated", required: false, displayOrder: 3 },
-        ],
-      },
-    ];
-
-    for (const link of profilePropertyLinks) {
+    // 4. Link properties to profiles — the table is SYSTEM_PROFILE_PROPERTY_LINKS
+    // (module scope, exported so diagnose derives "what the seed declares" from it).
+    for (const link of SYSTEM_PROFILE_PROPERTY_LINKS) {
       const profileId = createdProfiles.get(link.profileSlug);
       if (!profileId) continue;
 
@@ -1789,19 +1905,38 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
     // survives for migration/renderer fallback exactly as before. What it
     // removes is the SCHEMA claim: the key stops being required, editable and
     // queryable on that profile.
+    //
+    // Links are resolved through the profile's ACTUAL links rather than
+    // `createdPropertyDefs`: a retired slug is by definition no longer in the
+    // seed, so it is absent from that map. The match is FOLD-equal within this
+    // one profile (`planRetirementUnlink`); an ambiguous fold unlinks nothing
+    // and is reported in `retirementsRefused`.
+    const retirementsRefused: NonNullable<
+      EnsureSystemProfilesResult["retirementsRefused"]
+    > = [];
     for (const retired of RETIRED_PROFILE_PROPERTIES) {
       const profileId = createdProfiles.get(retired.profileSlug);
       if (!profileId) continue;
-
-      // Resolve through the profile's ACTUAL links rather than
-      // `createdPropertyDefs`: a retired slug is by definition no longer in the
-      // seed, so it is absent from that map. Looking it up from the live links
-      // is what lets this pass see a fossil the current seed cannot name.
       const links = await profilePropertyRepo.getByProfile(profileId);
+      const linked: Array<{ propertyDefId: string; slug: string | null }> = [];
       for (const link of links) {
         const def = await propertyDefRepo.getById(link.propertyDefId);
-        if (def?.slug !== retired.propertySlug) continue;
-        await profilePropertyRepo.unlink(profileId, link.propertyDefId);
+        linked.push({
+          propertyDefId: link.propertyDefId,
+          slug: def?.slug ?? null,
+        });
+      }
+      const plan = planRetirementUnlink(linked, retired.propertySlug);
+      if (plan.kind === "ambiguous") {
+        retirementsRefused.push({
+          profileSlug: retired.profileSlug,
+          propertySlug: retired.propertySlug,
+          foldedSlugs: plan.slugs,
+        });
+        continue;
+      }
+      if (plan.kind === "unlink") {
+        await profilePropertyRepo.unlink(profileId, plan.propertyDefId);
       }
     }
 
@@ -1816,6 +1951,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
       profilesCreated,
       propertiesCreated,
       linksCreated,
+      ...(retirementsRefused.length > 0 ? { retirementsRefused } : {}),
     };
   } catch (error: any) {
     return {

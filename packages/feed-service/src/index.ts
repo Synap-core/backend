@@ -100,26 +100,24 @@ export {
   type CPRelayConfig,
 } from "./providers/CPRelayProvider.js";
 
-export {
-  NangoProvider,
-  NangoProviderConfigSchema,
-  type NangoProviderConfig,
-} from "./providers/NangoProvider.js";
-
 export { sourceProviderRegistry } from "./providers/SourceProviderRegistry.js";
 export type { SourceProviderRegistry } from "./providers/SourceProviderRegistry.js";
 
 // Register built-in providers at import time so any code that imports
 // `sourceProviderRegistry` sees them populated. This is safe because each
 // provider class has no side effects in its constructor.
+//
+// NangoProvider (Nango Records API push path) was retired by the Connect &
+// Mirror plan (2026-09-13): no code creates `providerType:"nango-sync"`, a
+// managed pod holds no Nango key after D1 (CP is the sole broker), and sync
+// now writes through `EntityUpsertService` in `services/event-sync/`, not
+// this feed-provider door. See CONNECT-AND-MIRROR-PLAN.md §W6.
 import { sourceProviderRegistry as _registry } from "./providers/SourceProviderRegistry.js";
 import { HTTPAPIProvider as _HTTPAPIProvider } from "./providers/HTTPAPIProvider.js";
 import { CPRelayProvider as _CPRelayProvider } from "./providers/CPRelayProvider.js";
-import { NangoProvider as _NangoProvider } from "./providers/NangoProvider.js";
 
 _registry.register(new _HTTPAPIProvider());
 _registry.register(new _CPRelayProvider());
-_registry.register(new _NangoProvider());
 
 // ============================================================================
 // Classifiers

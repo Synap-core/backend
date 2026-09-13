@@ -59,6 +59,7 @@ import {
   OBJECT_KINDS,
 } from "@synap-core/types/vocabulary";
 import { listCapabilities } from "../services/capabilities/capability-registry.js";
+import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   projectRunnableActions,
   type RunnableCapabilityAction,
@@ -2104,6 +2105,8 @@ export const automationsRouter = router({
         // matching is by profile, so it does not narrow this query.
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
+        /** What the user said they want — ranks, never filters (see playbooks). */
+        intentText: z.string().max(2000).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -2135,11 +2138,36 @@ export const automationsRouter = router({
         )
         .orderBy(desc(automations.updatedAt));
 
-      return rows.map((a) => ({
-        id: a.id,
-        name: a.name,
-        description: a.description ?? undefined,
-        triggerSummary: summarizeEntityCreateTrigger(a.triggerConfig),
+      // Ranked with a human-readable `reason` — the SAME rule as
+      // `playbooks.matchForEntity`. The SQL above already narrowed to automations
+      // whose profileSlug filter is absent (any kind) or equal to the request.
+      const ranked = rankRouteCandidates({
+        entity: { entityId: input.entityId, profileSlug: input.profileSlug },
+        intentText: input.intentText,
+        candidates: rows.map((a) => ({
+          kind: "automation" as const,
+          id: a.id,
+          name: a.name,
+          text: [a.description],
+          subjectProfileSlug:
+            (a.triggerConfig as { filters?: { profileSlug?: unknown } } | null)
+              ?.filters?.profileSlug === input.profileSlug
+              ? input.profileSlug
+              : null,
+          row: a,
+        })),
+      });
+
+      return ranked.map(({ candidate, score, reason, signals }) => ({
+        id: candidate.row.id,
+        name: candidate.row.name,
+        description: candidate.row.description ?? undefined,
+        triggerSummary: summarizeEntityCreateTrigger(
+          candidate.row.triggerConfig
+        ),
+        score,
+        reason,
+        signals,
       }));
     }),
 

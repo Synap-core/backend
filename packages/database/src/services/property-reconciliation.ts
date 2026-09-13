@@ -26,7 +26,7 @@
  * `unmodeled` receipt already uses.
  */
 
-import { closestWithDistance } from "./did-you-mean.js";
+import { closestWithDistance, foldPropertyKey } from "./did-you-mean.js";
 
 /** A property-def value type, as the create door accepts it. */
 export type PropertyDefValueType =
@@ -90,6 +90,12 @@ export interface ReconciledKey {
   suggestion?: string;
   /** Whether the outcome came from an explicit reviewer decision or the default. */
   source: "explicit" | "default";
+  /**
+   * `"canonical"` when the key matched nothing on the RESOLVED profile row but
+   * fold-matched the SYSTEM/SHARED row of the same slug — a lens miss. The value
+   * is stored under the canonical slug and no def is created.
+   */
+  via?: "canonical";
 }
 
 export interface ReconcilePropertiesResult {
@@ -108,6 +114,11 @@ export interface ReconcilePropertiesResult {
     label: string;
     valueType: PropertyDefValueType;
   }>;
+  /**
+   * Keys that missed the resolved (twin) row and fold-matched the canonical
+   * row instead. The API layer turns each into a logged lens-miss signal.
+   */
+  lensMisses: Array<{ key: string; canonicalSlug: string }>;
 }
 
 /**
@@ -146,14 +157,21 @@ export function inferValueType(value: unknown): PropertyDefValueType {
  * @param decisions   Optional per-field reviewer decisions (keyed by proposed key).
  * @param reservedKeys Keys that live on the entity ROW, not the property bag
  *                    (e.g. `title`) — passed through untouched, never a def.
+ * @param canonicalSlugs The effective slugs of the SYSTEM/SHARED profile with
+ *                    the SAME slug as the resolved row, when the resolved row
+ *                    is a different (workspace twin) row. Consulted only for a
+ *                    key that matched nothing on the resolved row, and only by
+ *                    FOLD-EQUALITY with a single candidate — never pod-wide.
  */
 export function reconcileProposedProperties(args: {
   properties: Record<string, unknown>;
   slugs: readonly string[];
   decisions?: PropertyDecisionMap;
   reservedKeys?: ReadonlySet<string>;
+  canonicalSlugs?: readonly string[];
 }): ReconcilePropertiesResult {
-  const { properties, slugs, decisions, reservedKeys } = args;
+  const { properties, slugs, decisions, reservedKeys, canonicalSlugs } = args;
+  const lensMisses: Array<{ key: string; canonicalSlug: string }> = [];
   const slugSet = new Set(slugs);
   const reconciled: ReconciledKey[] = [];
   const outProps: Record<string, unknown> = {};
@@ -272,6 +290,34 @@ export function reconcileProposedProperties(args: {
       continue;
     }
 
+    // Lens miss: nothing on the resolved row, but exactly one slug on the
+    // canonical row of the same kind folds to this key. This is how a twin row
+    // with an empty schema minted `knowledgeform` beside the canonical
+    // `knowledgeForm`. Store under the canonical slug, mint NOTHING, and do not
+    // link the canonical def onto the twin — the twin itself is the defect, and
+    // it is reported, not papered over.
+    const canonicalHits = canonicalSlugs
+      ? canonicalSlugs.filter(
+          (c) => foldPropertyKey(c) === foldPropertyKey(key)
+        )
+      : [];
+    if (canonicalHits.length === 1) {
+      const canonicalSlug = canonicalHits[0]!;
+      outProps[canonicalSlug] = value;
+      reconciled.push({
+        key,
+        class: "remap",
+        value,
+        finalSlug: canonicalSlug,
+        createDef: false,
+        source: "default",
+        suggestion: canonicalSlug,
+        via: "canonical",
+      });
+      lensMisses.push({ key, canonicalSlug });
+      continue;
+    }
+
     // Genuinely new → accept as a first-class field (default = keep + create def).
     const newSlug = slugifyPropertyKey(key);
     if (newSlug && /^[a-z0-9-]+$/.test(newSlug) && !slugSet.has(newSlug)) {
@@ -313,5 +359,6 @@ export function reconcileProposedProperties(args: {
     properties: outProps,
     reconciled,
     defsToCreate: [...defsBySlug.values()],
+    lensMisses,
   };
 }

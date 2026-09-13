@@ -76,10 +76,12 @@ export * from "./utils/workspace-client-projection.js";
 export * from "./utils/backfill-governance-rules.js";
 export * from "./utils/floor-covered-actions.js";
 export * from "./utils/governance-rule-provenance.js";
+export * from "./utils/connection-governance.js";
 export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
 export * from "./utils/message-shape.js";
 export * from "./utils/config-settings.js";
+export * from "./utils/structure-context.js";
 
 // Server-side vault encryption
 export {
@@ -168,7 +170,12 @@ export {
   ensureDevplaneProfiles,
   ensureTeamMemberRoleProfile,
   RETIRED_PROFILE_PROPERTIES,
+  SYSTEM_PROFILE_PROPERTY_LINKS,
+  planRetirementUnlink,
+  reportEnsureSystemProfilesResult,
   type EnsureSystemProfilesResult,
+  type RetirementPlan,
+  type SystemProfilesBootLogger,
 } from "./utils/ensure-system-profiles.js";
 
 // Machine-written property defs (read-only in every editor) + their pass

@@ -36,15 +36,12 @@ import {
   mcpServers,
   secrets,
   CONNECTION_REAUTH_FAILURE_THRESHOLD,
-  providerIntegrations,
-  providers,
   links,
   entities,
 } from "@synap/database/schema";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { getMessagingConnector } from "./index.js";
-import { resolveNangoConnector } from "./index.js";
-import type { NangoConnector } from "./NangoConnector.js";
+import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
 import { resolveCapabilityGrant } from "@synap/database";
@@ -279,41 +276,133 @@ export async function recordExternalAction(opts: {
   });
 }
 
-/**
- * Resolve the configured Nango connector (or undefined when unconfigured).
- * Single lookup shared by every Nango-scheme handler so the registry key is
- * not hardcoded in multiple places.
- */
-async function getNangoConnector(): Promise<NangoConnector | undefined> {
-  // TODO(W3/W4): becomes a capability cast (Pushable — proxyRequest/triggerAction).
-  const connector = await resolveNangoConnector();
-  return connector && connector.isConfigured() ? connector : undefined;
-}
+export type NangoConnectionPick =
+  | { ok: true; connection: SyncConnectorConnection }
+  | { ok: false; reason: "no_connection" | "hint_mismatch" };
 
 /**
  * Pick the Nango connection for a provider from the user's live connections.
  * Honors an explicit `accountHint` (matched as a substring of the connectionId,
- * e.g. the exact connection a registry row pins); when a hint is given but
- * matches nothing, falls back to the first match; with no hint, the
- * most-recently-created. Returns null when the user has no connection for the
- * provider. Shared by `nangoHandler` and `vaultDelegatedHandler` so the 1-of-N
- * account pick stays identical on both routes.
+ * e.g. the exact connection a registry row pins); with no hint, the
+ * most-recently-created.
+ *
+ * A hint that matches NOTHING is a refusal (`hint_mismatch`), never a fallback:
+ * the caller pinned a specific account, and silently running the call as a
+ * DIFFERENT account (the old `?? matching[0]`) acts on data the caller never
+ * chose.
  */
-function pickNangoConnection(
+export function pickNangoConnection(
   connections: SyncConnectorConnection[],
   providerConfigKey: string,
   accountHint: string | undefined
-): SyncConnectorConnection | null {
+): NangoConnectionPick {
   const matching = connections.filter((c) => c.provider === providerConfigKey);
-  if (matching.length === 0) return null;
+  if (matching.length === 0) return { ok: false, reason: "no_connection" };
   if (accountHint) {
-    return (
-      matching.find((c) => c.connectionId.includes(accountHint)) ?? matching[0]!
-    );
+    const pinned = matching.find((c) => c.connectionId.includes(accountHint));
+    return pinned
+      ? { ok: true, connection: pinned }
+      : { ok: false, reason: "hint_mismatch" };
   }
-  return [...matching].sort(
-    (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
-  )[0]!;
+  return {
+    ok: true,
+    connection: [...matching].sort(
+      (a, b) => b.createdAt.getTime() - a.createdAt.getTime()
+    )[0]!,
+  };
+}
+
+/**
+ * Resolve the broker + the acting user's connection for one `nango://` call, or
+ * the dispatch failure that explains why not. A broker fault and a failed list
+ * are `unavailable` — never "no connection", which would send the user to
+ * reconnect an account that is fine. Exported for test.
+ */
+export async function resolveNangoCall(
+  userId: string,
+  providerConfigKey: string,
+  accountHint: string | undefined
+): Promise<
+  | {
+      ok: true;
+      broker: import("./ConnectionBroker.js").ConnectionBroker;
+      connection: SyncConnectorConnection;
+    }
+  | { ok: false; result: TriggerProviderActionResult }
+> {
+  const resolved = await resolveBroker("nango");
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 503,
+        errorCode: "unavailable",
+        error:
+          resolved.reason === "not-configured"
+            ? "No connection broker is configured on this pod"
+            : `This pod's connection broker is unavailable (${resolved.reason}): ${resolved.error}`,
+      },
+    };
+  }
+  const broker = resolved.broker;
+  // A pinned account (a registry row's hint is the full connection id) is read
+  // by id — no per-call list of every connection. A hint that is not a whole
+  // id of this user's connection falls through to the list + pick below, which
+  // keeps the substring match and the `hint_mismatch` refusal.
+  if (accountHint) {
+    const byId = await broker.getConnectionResult(
+      userId,
+      providerConfigKey,
+      accountHint
+    );
+    if (!byId.ok) {
+      return {
+        ok: false,
+        result: {
+          success: false,
+          status: 503,
+          errorCode: "unavailable",
+          error: `Could not read your "${providerConfigKey}" connection (${byId.reason}): ${byId.error}`,
+        },
+      };
+    }
+    if (byId.connection && byId.connection.provider === providerConfigKey) {
+      return { ok: true, broker, connection: byId.connection };
+    }
+  }
+  const listed = await broker.listConnectionsResult(userId);
+  if (!listed.ok) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 503,
+        errorCode: "unavailable",
+        error: `Could not list your "${providerConfigKey}" connections (${listed.reason}): ${listed.error}`,
+      },
+    };
+  }
+  const pick = pickNangoConnection(
+    listed.connections,
+    providerConfigKey,
+    accountHint
+  );
+  if (!pick.ok) {
+    return {
+      ok: false,
+      result: {
+        success: false,
+        status: 404,
+        errorCode: "not_found",
+        error:
+          pick.reason === "hint_mismatch"
+            ? `The selected "${providerConfigKey}" account is not among your live connections — it may have been disconnected. Pick another account or reconnect it.${CONNECT_AFFORDANCE}`
+            : `No connection found for provider "${providerConfigKey}".${CONNECT_AFFORDANCE}`,
+      },
+    };
+  }
+  return { ok: true, broker, connection: pick.connection };
 }
 
 /**
@@ -1143,22 +1232,12 @@ function extractProviderErrorMessage(status: number, body: unknown): string {
   return `provider call failed (status ${status})`;
 }
 
-// ── nango:// handler (Nango proxy — Connection-Id + Provider-Config-Key) ──────
+// ── nango:// handler (the connection broker — CP broker or this pod's key) ────
 //
-// Body is VERBATIM the original nango branch: same providerConfigKey resolution,
-// listConnections, accountHint / most-recent pick, proxyRequest, result shape.
-const nangoHandler: SchemeHandler = async ({ input, tool }) => {
+// Same providerConfigKey resolution, accountHint / most-recent pick, proxy and
+// result shape for both brokers; `resolveBroker` decides which one answers.
+const brokerHandler: SchemeHandler = async ({ input, tool }) => {
   const { userId, method, path, body, accountHint, baseUrlOverride } = input;
-
-  const connector = await getNangoConnector();
-  if (!connector) {
-    return {
-      success: false,
-      status: 503,
-      errorCode: "unavailable",
-      error: "Nango not configured",
-    };
-  }
 
   // Resolve provider config key from the tool row
   const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
@@ -1166,21 +1245,9 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     (toolConfig.providerConfigKey as string) ??
     tool.credentialRef!.replace(/^nango:\/\//, "");
 
-  // Resolve user's connection for this provider (honor accountHint if given).
-  const connections = await connector.listConnections(userId);
-  const connection = pickNangoConnection(
-    connections,
-    providerConfigKey,
-    accountHint
-  );
-  if (!connection) {
-    return {
-      success: false,
-      status: 404,
-      errorCode: "not_found",
-      error: `No connection found for provider "${providerConfigKey}".${CONNECT_AFFORDANCE}`,
-    };
-  }
+  const call = await resolveNangoCall(userId, providerConfigKey, accountHint);
+  if (!call.ok) return call.result;
+  const { broker, connection } = call;
 
   // SSRF guard — a caller/agent-supplied baseUrlOverride would otherwise redirect
   // this credentialed proxy call to an arbitrary host. Reuse the shared validator
@@ -1198,7 +1265,8 @@ const nangoHandler: SchemeHandler = async ({ input, tool }) => {
     }
   }
 
-  const result = await connector.proxyRequest({
+  const result = await broker.proxyRequest({
+    userId,
     connectionId: connection.connectionId,
     providerConfigKey,
     method,
@@ -1244,122 +1312,6 @@ function resolveVaultAuthConfig(raw: unknown): VaultAuthConfig {
         ? "Bearer "
         : "";
   return { in: where, name, prefix };
-}
-
-/**
- * Vault-delegated handler — routes a vault:// secret with a
- * `provider_integration_id` to the correct credential backend.
- *
- * This is the runtime heart of Approach B: the vault becomes the UNIFIED routing
- * intermediary. When a secret carries `provider_integration_id`, its credential
- * is NOT a static key — it lives on the linked provider (Nango OAuth) and must
- * be resolved through that provider's connection lifecycle (proxy, token refresh).
- *
- * Current delegation paths:
- *   nango   → look up the user's Nango connection, proxy the HTTP call
- *   vault   → should never reach here (provider_integration_id would be null)
- *   unipile → not yet delegated through vault (still uses messaging connector)
- *
- * As new provider types are added, add a case here — no caller changes needed.
- */
-async function vaultDelegatedHandler(ctx: {
-  input: TriggerProviderActionInput;
-  tool: ToolRow;
-  vaultId: string;
-  secretRow: {
-    userId: string;
-    providerIntegrationId: string;
-    accountHint?: string | null;
-  };
-  providerIntegrationId: string;
-}): Promise<TriggerProviderActionResult> {
-  const { input } = ctx;
-  const { userId, method, path, body, baseUrlOverride } = input;
-  // The connection row's OWN account_hint (which Nango connection it represents)
-  // is authoritative for the 1-of-N pick; fall back to a caller-supplied hint.
-  const accountHint = ctx.secretRow.accountHint ?? input.accountHint;
-
-  // Resolve the provider integration + its parent provider.
-  const integration = await db.query.providerIntegrations.findFirst({
-    where: eq(providerIntegrations.id, ctx.providerIntegrationId),
-    columns: { id: true, slug: true, providerId: true, backendConfig: true },
-  });
-  if (!integration) {
-    return {
-      success: false,
-      status: 400,
-      errorCode: "bad_request",
-      error: `Provider integration "${ctx.providerIntegrationId}" not found (deleted?).`,
-    };
-  }
-
-  const prov = await db.query.providers.findFirst({
-    where: eq(providers.id, integration.providerId),
-    columns: { slug: true, backendType: true },
-  });
-  if (!prov) {
-    return {
-      success: false,
-      status: 400,
-      errorCode: "bad_request",
-      error: `Provider "${integration.providerId}" not found for integration "${integration.slug}".`,
-    };
-  }
-
-  // ── Nango delegation ────────────────────────────────────────────────────
-  // The secret points at a provider integration owned by Nango. Route through
-  // the Nango proxy (same logic as the nangoHandler, but the providerConfigKey
-  // comes from the integration's backendConfig, not the tool config).
-  if (prov.backendType === "nango") {
-    const connector = await getNangoConnector();
-    if (!connector) {
-      return {
-        success: false,
-        status: 503,
-        errorCode: "unavailable",
-        error: "Nango not configured",
-      };
-    }
-
-    const bCfg = (integration.backendConfig ?? {}) as Record<string, unknown>;
-    const providerConfigKey =
-      (bCfg.providerConfigKey as string) ?? integration.slug;
-
-    // Resolve user's connection for this provider (honor accountHint if given).
-    const connections = await connector.listConnections(userId);
-    const connection = pickNangoConnection(
-      connections,
-      providerConfigKey,
-      accountHint
-    );
-    if (!connection) {
-      return {
-        success: false,
-        status: 404,
-        errorCode: "not_found",
-        error: `No Nango connection found for provider "${providerConfigKey}".${CONNECT_AFFORDANCE}`,
-      };
-    }
-
-    const result = await connector.proxyRequest({
-      connectionId: connection.connectionId,
-      providerConfigKey,
-      method: method ?? "GET",
-      path: path ?? "/",
-      body,
-      baseUrlOverride,
-    });
-
-    return nangoProxyEnvelope(result);
-  }
-
-  // ── Unknown backend type ─────────────────────────────────────────────────
-  return {
-    success: false,
-    status: 400,
-    errorCode: "bad_request",
-    error: `Vault secret "${ctx.vaultId}" is linked to provider integration "${integration.slug}" whose backend type "${prov.backendType}" is not yet supported for delegated credential routing.`,
-  };
 }
 
 // ── vault:// handler (API-key / non-Nango tools — direct guarded HTTP) ────────
@@ -1508,14 +1460,8 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
   const field =
     typeof toolConfig.field === "string" ? toolConfig.field : undefined;
 
-  // ── Phase 0: Provider-integration delegation ──────────────────────────────
-  // When the secret has a `provider_integration_id`, the credential is NOT a
-  // static API key — it routes through the linked provider's credential lifecycle
-  // (OAuth flow, token refresh, proxy). Look up the secret row FIRST to check.
-  //
-  // This is the core of Approach B: `credentialRef = vault://<secretId>` is the
-  // ONLY ref format; the `provider_integration_id` FK discriminates between
-  // vault-direct (API key injection) and provider-delegated (Nango proxy, etc.).
+  // Look up the secret row FIRST: its owner and pod-wide flag drive the vault
+  // policy below, and a provider-integration row is refused.
   const secretRow = await db.query.secrets.findFirst({
     where: eq(secrets.id, vaultId),
     columns: {
@@ -1534,22 +1480,16 @@ const vaultHandler: SchemeHandler = async ({ input, tool }) => {
     };
   }
 
-  // If this secret is linked to a provider integration, delegate to the
-  // provider's credential handler instead of vault-direct injection. The row's
-  // own `account_hint` (which Nango connection this connection row represents)
-  // is carried through so a 1-of-N account pick pins the RIGHT connection.
+  // A provider-integration secret holds no static key. Nothing writes these any
+  // more (provider connections are `nango://` tools brokered by `brokerHandler`),
+  // so one is refused rather than injected as an empty credential.
   if (secretRow.providerIntegrationId) {
-    return vaultDelegatedHandler({
-      input,
-      tool,
-      vaultId,
-      secretRow: {
-        ...secretRow,
-        providerIntegrationId: secretRow.providerIntegrationId!,
-        accountHint: secretRow.accountHint ?? null,
-      },
-      providerIntegrationId: secretRow.providerIntegrationId!,
-    });
+    return {
+      success: false,
+      status: 400,
+      errorCode: "bad_request",
+      error: `Vault secret "${vaultId}" is a provider-integration credential, which is no longer supported. Reconnect the account through its connector.`,
+    };
   }
 
   // (a) Resolve the credential under the ONE vault policy (see
@@ -1969,7 +1909,7 @@ const mcpHandler: SchemeHandler = async ({ input, tool }) => {
 
 /** scheme → handler. Adding a connector type = one entry here. */
 const SCHEME_HANDLERS: Record<string, SchemeHandler> = {
-  nango: nangoHandler,
+  nango: brokerHandler,
   vault: vaultHandler,
   mcp: mcpHandler,
 };
@@ -1977,12 +1917,9 @@ const SCHEME_HANDLERS: Record<string, SchemeHandler> = {
 /**
  * Execute an agnostic provider tool, dispatching by the tool's credentialRef
  * SCHEME (`scheme://rest`):
- *   - `vault://` → UNIFIED handler (Approach B). When the secret carries a
- *     `provider_integration_id`, routes through the linked provider's credential
- *     lifecycle (Nango OAuth proxy, etc.). When null, injects the decrypted API
- *     key into a config-driven HTTP call (existing behavior).
- *   - `nango://` → backward-compat shim (existing tool rows only). NEW tools
- *     use `vault://<secretId>` with the secret's `provider_integration_id`.
+ *   - `vault://` → injects the decrypted API key into a config-driven HTTP call.
+ *   - `nango://` → the connection broker (`brokerHandler`): the acting user's
+ *     OAuth connection, proxied through `resolveBroker`.
  *   - `mcp://`   → bridged to the resolved MCP server's tool call (mcpHandler)
  *
  * Returns a structured result so both the REST endpoint (needs status codes for

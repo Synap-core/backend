@@ -1,12 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
   mapBookingToGraph,
-  emailDomain,
-  isCorporateDomain,
-  companyNameFromDomain,
   meetLink,
   type CalBookingPayload,
 } from "./map-booking-to-graph.js";
+import {
+  emailDomain,
+  isCorporateDomain,
+  companyNameFromDomain,
+} from "../../utils/email-domain.js";
 
 const base: CalBookingPayload = {
   uid: "bk_123",

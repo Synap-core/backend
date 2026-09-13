@@ -40,13 +40,11 @@ import {
   isNull,
   entities,
   projects,
-  proposals,
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
 } from "@synap/database";
-import { ProposalStatus } from "@synap/database/schema";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
@@ -69,6 +67,12 @@ import {
 import { openLink } from "../../utils/deep-links.js";
 import { captureGraphEventKeys } from "./capture-graph-policy.js";
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
+import {
+  buildMaterializedRecord,
+  runMaterializationUnderReceipt,
+  stampMaterialized,
+} from "../proposals/stamp-materialized.js";
+import { loadRelationTypeValidator } from "../../utils/relation-types.js";
 import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
 import {
   collapseDuplicateEntities,
@@ -82,50 +86,6 @@ import {
 } from "../import/structuring.js";
 
 const logger = createLogger({ module: "submit-capture-graph" });
-
-/**
- * Run the materialization of an auto-applied capture graph under an ALREADY
- * INSERTED `auto_approved` receipt row.
- *
- * The receipt has to exist before materialization (its id is the FK target of
- * `entities.source_proposal_id` — see the ordering note at the call site), which
- * means a materialization failure would otherwise leave a receipt CLAIMING a
- * write that never happened: a lying, revertible record of nothing. So on a
- * throw we mark that row `approval_failed` and re-throw. We never DELETE it —
- * a partially-materialized graph may already have rows pointing at it, and a
- * deleted receipt would silently NULL their `source_proposal_id` (the FK is
- * ON DELETE SET NULL), erasing the very provenance this linkage exists for.
- */
-async function runMaterializationUnderReceipt<T>(
-  receipt: { id?: string; data?: Record<string, unknown> } | undefined,
-  run: () => Promise<T>
-): Promise<T> {
-  try {
-    return await run();
-  } catch (err) {
-    if (receipt?.id) {
-      try {
-        await db
-          .update(proposals)
-          .set({
-            status: ProposalStatus.APPROVAL_FAILED,
-            data: {
-              ...(receipt.data ?? {}),
-              materializationError:
-                err instanceof Error ? err.message : String(err),
-            },
-          })
-          .where(eq(proposals.id, receipt.id));
-      } catch (markErr) {
-        logger.error(
-          { err: markErr, proposalId: receipt.id },
-          "capture auto-apply: could not mark receipt approval_failed — row may overstate what landed"
-        );
-      }
-    }
-    throw err;
-  }
-}
 
 /** One flagged create_entity op that fails its EFFECTIVE schema at propose time. */
 export interface CaptureGraphInvalidEntity {
@@ -323,6 +283,200 @@ export interface SubmitCaptureGraphResult {
 /** Bounds on the persisted duplicate advisory — a risk signal, not an entity dump. */
 const DUPLICATE_ADVISORY_MAX_CANDIDATES = 25;
 const DUPLICATE_ADVISORY_MAX_MATCHES_PER_CANDIDATE = 5;
+
+type CaptureGraphDb = typeof db;
+
+/**
+ * THE composite ops a capture graph files, with scope-aware homes stamped.
+ * Extracted from `submitCaptureGraph` (which calls it) so the `validate: true`
+ * dry run validates the SAME ops a real submit would — never a second mapping.
+ */
+export async function buildCaptureGraphOperations(
+  database: CaptureGraphDb,
+  input: {
+    entities: CaptureGraphEntity[];
+    relations: CaptureGraphRelation[];
+    projectId: string | null;
+    workspaceId: string | null;
+  }
+): Promise<CompositeProposalOperation[]> {
+  const { entities: graphEntities, relations, workspaceId } = input;
+  const resolvedProjectId = input.projectId;
+  const operations: CompositeProposalOperation[] = [
+    ...graphEntities.map((e) => ({
+      op: "create_entity" as const,
+      ref: e.ref,
+      profileSlug: e.profileSlug,
+      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+      title: e.title ?? e.ref,
+      ...(e.description ? { description: e.description } : {}),
+      ...(e.content ? { content: e.content } : {}),
+      properties: e.properties ?? {},
+      ...(e.existingEntityId ? { existingEntityId: e.existingEntityId } : {}),
+      ...(e.facets ? { facets: e.facets } : {}),
+      // Per-op pin when the producer already multi-homed (parity with import).
+      ...(e.targetWorkspaceId
+        ? { targetWorkspaceId: e.targetWorkspaceId }
+        : {}),
+    })),
+    ...relations.map((r) => ({
+      op: "create_relation" as const,
+      sourceRef: r.sourceRef,
+      targetRef: r.targetRef,
+      type: r.type,
+    })),
+  ];
+
+  // Scope-aware homes (shared with import): stamp process kinds into the graph
+  // home; leave pod-scope identity unpinned. Replaces blanket workspaceScoped
+  // on materialize — pin ≠ exclusive for person/company/knowledge.
+  if (workspaceId) {
+    const homeScope = new ProfileResolutionService(database);
+    await stampScopeAwareHomesOnOps(operations, workspaceId, (slug) =>
+      homeScope.getEntityScope(slug, workspaceId)
+    );
+  }
+  return operations;
+}
+
+/**
+ * PREFLIGHT: never queue what can't materialize. Validates every NEW
+ * `create_entity` op against its EFFECTIVE schema with the SAME
+ * `validateProperties` path the materializer runs. The ONE implementation —
+ * `submitCaptureGraph` throws `CaptureGraphValidationError` on
+ * `invalidEntities`; the dry run reports them.
+ *
+ * `unresolvedProfiles` lists ops whose profile did not resolve for the lens.
+ * Submit does NOT reject on it (a cold profile lens can fail open, and
+ * unknown-slug graphs are a separate guard); the dry run reports it.
+ */
+export async function preflightCaptureGraphOperations(
+  database: CaptureGraphDb,
+  operations: CompositeProposalOperation[],
+  userId: string,
+  workspaceId: string | null
+): Promise<{
+  invalidEntities: CaptureGraphInvalidEntity[];
+  unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
+}> {
+  const unresolvedProfiles: Array<{ label: string; profileSlug: string }> = [];
+  const profileResolution = new ProfileResolutionService(database);
+  const propertyValidation = new PropertyValidationService(profileResolution);
+  const invalidEntities: CaptureGraphInvalidEntity[] = [];
+  for (const op of operations) {
+    if (op.op !== "create_entity") continue;
+    // Linking an existing entity materializes nothing new — no props to check.
+    if (op.existingEntityId) continue;
+    const profile = await profileResolution.resolveProfile(
+      op.profileSlug,
+      userId,
+      workspaceId
+    );
+    // Unknown profile ⇒ don't NEWLY reject here (a cold profile lens can
+    // fail-open, and unknown-slug graphs are a separate guard). Required-prop
+    // preflight is scoped to KNOWN profiles — exactly the materializer's check.
+    if (!profile) {
+      unresolvedProfiles.push({
+        label: op.title || op.ref || op.profileSlug,
+        profileSlug: op.profileSlug,
+      });
+      continue;
+    }
+    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
+    // `content` is folded in the way the materializer does (a long body becomes
+    // a linked document, a short one inlines to properties.content) so a profile
+    // that required `content` isn't falsely flagged when a body was provided.
+    if (op.content) propsToCheck.content = op.content;
+    const { valid, errors } =
+      await propertyValidation.validateEntityCreateForProposal(
+        propsToCheck,
+        profile.id,
+        workspaceId,
+        {
+          ...(op.title !== undefined ? { title: op.title } : {}),
+          profileDefaults:
+            (profile.defaultValues as Record<string, unknown>) ?? {},
+        }
+      );
+    if (!valid) {
+      invalidEntities.push({
+        label: op.title || op.ref || op.profileSlug,
+        profileSlug: op.profileSlug,
+        errors,
+      });
+    }
+  }
+  return { invalidEntities, unresolvedProfiles };
+}
+
+/**
+ * The `validate: true` dry run of a capture graph: within-batch collapse →
+ * the SAME ops builder → the SAME preflight → relation slugs through the ONE
+ * relation vocabulary validator. Writes nothing.
+ *
+ * NOT seen (decided only at write time): identity dedup against EXISTING
+ * entities (a match links instead of creating, which would skip the property
+ * check for that entity), workspace re-routing of a lens-less graph, project
+ * name-ref resolution, and governance.
+ */
+export async function dryRunCaptureGraph(
+  database: CaptureGraphDb,
+  input: {
+    userId: string;
+    workspaceId: string | null;
+    entities: CaptureGraphEntity[];
+    relations: CaptureGraphRelation[];
+  }
+): Promise<{
+  invalidEntities: CaptureGraphInvalidEntity[];
+  unresolvedProfiles: Array<{ label: string; profileSlug: string }>;
+  relationsFailed: MaterializeRelationFailure[];
+  entityCount: number;
+  relationCount: number;
+}> {
+  const collapsed = collapseDuplicateEntities(
+    input.entities,
+    input.relations,
+    []
+  );
+  const operations = await buildCaptureGraphOperations(database, {
+    entities: collapsed.entities,
+    relations: collapsed.relations,
+    projectId: null,
+    workspaceId: input.workspaceId,
+  });
+  const { invalidEntities, unresolvedProfiles } =
+    await preflightCaptureGraphOperations(
+      database,
+      operations,
+      input.userId,
+      input.workspaceId
+    );
+  const validateRelationType = await loadRelationTypeValidator(
+    database,
+    input.workspaceId
+  );
+  const relationsFailed: MaterializeRelationFailure[] = [];
+  for (const r of collapsed.relations) {
+    try {
+      validateRelationType(r.type);
+    } catch (err) {
+      relationsFailed.push({
+        sourceRef: r.sourceRef,
+        targetRef: r.targetRef,
+        type: r.type,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return {
+    invalidEntities,
+    unresolvedProfiles,
+    relationsFailed,
+    entityCount: collapsed.entities.length,
+    relationCount: collapsed.relations.length,
+  };
+}
 
 export async function submitCaptureGraph(
   input: SubmitCaptureGraphInput
@@ -568,40 +722,13 @@ export async function submitCaptureGraph(
     }
   }
 
-  const operations: CompositeProposalOperation[] = [
-    ...graphEntities.map((e) => ({
-      op: "create_entity" as const,
-      ref: e.ref,
-      profileSlug: e.profileSlug,
-      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
-      title: e.title ?? e.ref,
-      ...(e.description ? { description: e.description } : {}),
-      ...(e.content ? { content: e.content } : {}),
-      properties: e.properties ?? {},
-      ...(e.existingEntityId ? { existingEntityId: e.existingEntityId } : {}),
-      ...(e.facets ? { facets: e.facets } : {}),
-      // Per-op pin when the producer already multi-homed (parity with import).
-      ...(e.targetWorkspaceId
-        ? { targetWorkspaceId: e.targetWorkspaceId }
-        : {}),
-    })),
-    ...relations.map((r) => ({
-      op: "create_relation" as const,
-      sourceRef: r.sourceRef,
-      targetRef: r.targetRef,
-      type: r.type,
-    })),
-  ];
-
-  // Scope-aware homes (shared with import): stamp process kinds into the graph
-  // home; leave pod-scope identity unpinned. Replaces blanket workspaceScoped
-  // on materialize — pin ≠ exclusive for person/company/knowledge.
-  if (workspaceId) {
-    const homeScope = new ProfileResolutionService(db);
-    await stampScopeAwareHomesOnOps(operations, workspaceId, (slug) =>
-      homeScope.getEntityScope(slug, workspaceId)
-    );
-  }
+  // Ops + scope-aware homes: the ONE builder, shared with the dry run.
+  const operations = await buildCaptureGraphOperations(db, {
+    entities: graphEntities,
+    relations,
+    projectId: resolvedProjectId,
+    workspaceId,
+  });
   const homes = computeImportHomes(operations);
 
   // ── PREFLIGHT: never queue what can't materialize ────────────────────────
@@ -612,46 +739,12 @@ export async function submitCaptureGraph(
   // SAME `validateProperties` the materializer runs — so an un-materializable
   // graph is rejected at submit, before EITHER terminal (auto-apply OR pending).
   // Atomic graph ⇒ all-or-nothing: any invalid op rejects the WHOLE graph.
-  const profileResolution = new ProfileResolutionService(db);
-  const propertyValidation = new PropertyValidationService(profileResolution);
-  const invalidEntities: CaptureGraphInvalidEntity[] = [];
-  for (const op of operations) {
-    if (op.op !== "create_entity") continue;
-    // Linking an existing entity materializes nothing new — no props to check.
-    if (op.existingEntityId) continue;
-    const profile = await profileResolution.resolveProfile(
-      op.profileSlug,
-      userId,
-      workspaceId
-    );
-    // Unknown profile ⇒ don't NEWLY reject here (a cold profile lens can
-    // fail-open, and unknown-slug graphs are a separate guard). Required-prop
-    // preflight is scoped to KNOWN profiles — exactly the materializer's check.
-    if (!profile) continue;
-    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
-    // `content` is folded in the way the materializer does (a long body becomes
-    // a linked document, a short one inlines to properties.content) so a profile
-    // that required `content` isn't falsely flagged when a body was provided.
-    if (op.content) propsToCheck.content = op.content;
-    const { valid, errors } =
-      await propertyValidation.validateEntityCreateForProposal(
-        propsToCheck,
-        profile.id,
-        workspaceId,
-        {
-          ...(op.title !== undefined ? { title: op.title } : {}),
-          profileDefaults:
-            (profile.defaultValues as Record<string, unknown>) ?? {},
-        }
-      );
-    if (!valid) {
-      invalidEntities.push({
-        label: op.title || op.ref || op.profileSlug,
-        profileSlug: op.profileSlug,
-        errors,
-      });
-    }
-  }
+  const { invalidEntities } = await preflightCaptureGraphOperations(
+    db,
+    operations,
+    userId,
+    workspaceId
+  );
   if (invalidEntities.length > 0) {
     // Rejected BEFORE any proposal is filed — pending-proposal-one-door untouched.
     throw new CaptureGraphValidationError(invalidEntities);
@@ -950,9 +1043,6 @@ export async function submitCaptureGraph(
               }
             )
         );
-        const materializedEntityIds = materialized.entities
-          .filter((e) => !e.linked)
-          .map((e) => e.entityId);
 
         // Complete the receipt inserted BEFORE materialization: fill in what
         // actually landed, so the row is traceable, shows in the Proposals app,
@@ -966,15 +1056,14 @@ export async function submitCaptureGraph(
         let recordId: string | undefined = captureReceipt?.id;
         if (captureReceipt?.id) {
           try {
-            await db
-              .update(proposals)
-              .set({
-                data: {
-                  ...(captureReceipt.data ?? {}),
-                  materialized: { entityIds: materializedEntityIds },
-                },
-              })
-              .where(eq(proposals.id, captureReceipt.id));
+            // The COMPLETE record (relations, facets, config rows, merge
+            // overwrites — not only entity ids), merged into the row's own data
+            // by the one writer every materializer uses.
+            await stampMaterialized({
+              proposalId: captureReceipt.id,
+              record: buildMaterializedRecord(materialized),
+              baseData: captureReceipt.data,
+            });
           } catch (err) {
             logger.warn(
               { err, userId, proposalId: captureReceipt.id },

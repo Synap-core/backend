@@ -72,6 +72,9 @@ export interface A2AIResponseTriggerData {
   /** Active focus session ID — forwarded to the IS so the agent runs
    *  session-aware and tags all hub calls with X-Session-Id. */
   focusSessionId?: string | null;
+  /** Server-built per-turn context (e.g. a comment's resolved `anchor`),
+   *  forwarded verbatim as the IS `turnContext`. */
+  turnContext?: Record<string, unknown> | null;
   /** Pre-resolved intelligence service URL */
   serviceUrl: string;
   /** Pre-resolved API key (decrypted) for the intelligence service */
@@ -293,6 +296,7 @@ async function callIntelligenceHub(
     sourceMessageId: string;
     focusSessionId?: string | null;
     agentUserId?: string;
+    turnContext?: Record<string, unknown>;
   }
 ): Promise<{
   text: string;
@@ -460,6 +464,7 @@ export async function handleA2AIResponseTrigger(
       sourceMessageId: userMessageId,
       focusSessionId: job.data.focusSessionId,
       agentUserId,
+      ...(job.data.turnContext ? { turnContext: job.data.turnContext } : {}),
     });
     fullContent = result.text;
     streamError = result.error;

@@ -66,6 +66,7 @@ import { createLogger } from "@synap-core/core";
 import { entityWriteVisibleWhere, toApiEntity } from "./helpers.js";
 import { entitiesRouter } from "../entities.js";
 import { entityBodyDocumentIdFrom } from "../../utils/store-entity-source-blob.js";
+import { computeEntityPropertyDiff } from "../../utils/entity-property-diff.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 
 const logger = createLogger({ module: "entities-router" });
@@ -520,15 +521,25 @@ export const createProcs = {
                 ([, v]) => v !== undefined && v !== null && v !== ""
               )
             );
+            // What this merge actually wrote onto the matched entity — reported
+            // as `propertyDiff` so a revert of the run can restore the prior
+            // values without deleting an entity the run never created.
+            const enrichedKeys = new Set<string>();
+            let recoveredBodyDocumentId: string | undefined;
             if (Object.keys(nonEmptyProperties).length > 0) {
               try {
-                await enrichCaller.update({
+                const enriched = await enrichCaller.update({
                   id: matchedId,
                   properties: nonEmptyProperties,
                   source: enrichSource,
                   agentUserId: input.agentUserId,
                   reasoning: input.reasoning,
                 });
+                if ((enriched as { status?: string }).status === "updated") {
+                  for (const key of Object.keys(nonEmptyProperties)) {
+                    enrichedKeys.add(key);
+                  }
+                }
               } catch (enrichErr) {
                 logger.warn(
                   { enrichErr, entityId: matchedId },
@@ -587,13 +598,18 @@ export const createProcs = {
                   });
                   if (body.documentId) {
                     const bodyDocId = body.documentId;
-                    await enrichCaller.update({
+                    const linkedBody = await enrichCaller.update({
                       id: matchedId,
                       documentId: bodyDocId,
                       source: enrichSource,
                       agentUserId: input.agentUserId,
                       reasoning: input.reasoning,
                     });
+                    if (
+                      (linkedBody as { status?: string }).status === "updated"
+                    ) {
+                      recoveredBodyDocumentId = bodyDocId;
+                    }
                     emitSideEffects({
                       subjectType: "document",
                       action: "create",
@@ -607,13 +623,16 @@ export const createProcs = {
                       )
                     );
                   } else if (body.inlineContent !== undefined) {
-                    await enrichCaller.update({
+                    const inlined = await enrichCaller.update({
                       id: matchedId,
                       properties: { content: body.inlineContent },
                       source: enrichSource,
                       agentUserId: input.agentUserId,
                       reasoning: input.reasoning,
                     });
+                    if ((inlined as { status?: string }).status === "updated") {
+                      enrichedKeys.add("content");
+                    }
                   }
                 } catch (bodyErr) {
                   dedupContentDropped = true;
@@ -646,6 +665,37 @@ export const createProcs = {
               },
               "[entities.create] deduplicated onto existing entity (strong identity match)"
             );
+            // Diff against the values the merge found, reading what was
+            // STORED (validation may normalize), not what was sent — revert
+            // restores a key only while it still holds exactly this value.
+            const storedProperties = (matched?.properties ?? {}) as Record<
+              string,
+              unknown
+            >;
+            const mergeDiff = computeEntityPropertyDiff(
+              matchedId,
+              (visibleMatch as { properties?: Record<string, unknown> | null })
+                .properties,
+              Object.fromEntries(
+                [...enrichedKeys]
+                  .filter((key) => key in storedProperties)
+                  .map((key) => [key, storedProperties[key]])
+              )
+            );
+            const propertyDiff =
+              mergeDiff || recoveredBodyDocumentId
+                ? {
+                    ...(mergeDiff ?? {
+                      entityId: matchedId,
+                      before: {},
+                      after: {},
+                      absentBefore: [],
+                    }),
+                    ...(recoveredBodyDocumentId
+                      ? { bodyDocumentId: recoveredBodyDocumentId }
+                      : {}),
+                  }
+                : undefined;
             return {
               status: "created",
               message:
@@ -660,6 +710,7 @@ export const createProcs = {
               // materializer's `contentDropped` diagnostic.
               contentDropped: dedupContentDropped,
               facets: dedupFacets,
+              ...(propertyDiff ? { propertyDiff } : {}),
             };
           }
 
@@ -1366,6 +1417,9 @@ export const createProcs = {
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
+        // Sync-origin fan-out — a caller materializing a
+        // connection sync sets it; absent = an ordinary write.
+        origin: ctx.origin,
         data: { profileSlug, title: input.title },
         logData: { profileSlug, title: input.title, global: input.global },
       });

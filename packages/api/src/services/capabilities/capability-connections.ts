@@ -19,7 +19,7 @@ import { encryptServerSide, db, and, eq, isNull, asc } from "@synap/database";
 import { secrets, secretAuditLog, secretUsages } from "@synap/database/schema";
 
 import { requirePodAdmin, isPodAdmin } from "../../utils/workspace-role.js";
-import { resolveNangoConnector } from "../../connectors/index.js";
+import { resolveBroker } from "../../connectors/index.js";
 import {
   syncNangoConnectionsToRegistry,
   detachNangoConnectionRegistry,
@@ -256,9 +256,9 @@ export async function listConnections(
   let liveOk = false;
   const liveConnections: Array<{ connectionId: string; provider: string }> = [];
   if (providerKeys.length > 0) {
-    const connector = await resolveNangoConnector();
-    if (connector) {
-      const res = await connector.listConnectionsResult(actorUserId);
+    const resolved = await resolveBroker("nango");
+    if (resolved.ok) {
+      const res = await resolved.broker.listConnectionsResult(actorUserId);
       if (res.ok) {
         liveOk = true;
         const keySet = new Set(providerKeys);
@@ -692,10 +692,15 @@ export async function disconnectConnection(input: {
 }): Promise<{ ok: true; podWide: true; provider: string | null }> {
   const { capabilityId, connectionId, actorUserId } = input;
 
-  const connector = await resolveNangoConnector();
-  if (!connector) {
-    throw new Error("Nango is not configured on this pod.");
+  const resolved = await resolveBroker("nango");
+  if (!resolved.ok) {
+    throw new Error(
+      resolved.reason === "not-configured"
+        ? "No connection broker is configured on this pod."
+        : `This pod's connection broker is unavailable (${resolved.reason}): ${resolved.error}`
+    );
   }
+  const connector = resolved.broker;
 
   // One Nango read serves both provider resolution and synthetic-ownership proof.
   const live = await connector.listConnectionsResult(actorUserId);
@@ -721,17 +726,55 @@ export async function disconnectConnection(input: {
     if (persisted.some((r) => r.isPodWide || r.userId !== actorUserId)) {
       await requirePodAdmin(actorUserId);
     }
-  } else {
-    // Synthetic: authorize by proving live ownership. A Nango fault here can't
-    // prove ownership, so refuse rather than revoke on an unverifiable claim.
-    if (!liveMatch) {
-      throw new Error("Connection not found for this capability.");
+    // Revoke AS THE ROW'S OWNER. The broker namespaces connections per user, so
+    // a revoke under an admin's own id finds nothing, revokes nothing — and the
+    // owner's next list re-mirrors the "disconnected" connection.
+    const ownerId = persisted[0]!.userId;
+    const ownerLive =
+      ownerId === actorUserId
+        ? live
+        : await connector.listConnectionsResult(ownerId);
+    if (!ownerLive.ok) {
+      throw new Error(
+        `Could not verify the connection with its owner's broker (${ownerLive.reason}): ${ownerLive.error}`
+      );
     }
+    const ownerMatch = ownerLive.connections.find(
+      (c) => c.connectionId === connectionId
+    );
+    if (ownerMatch) {
+      // Throws when it was not actually revoked — the rows are then kept.
+      await connector.revokeConnection(
+        connectionId,
+        ownerMatch.provider,
+        ownerId
+      );
+    }
+    // No ownerMatch: the owner's broker no longer has it — already gone, so only
+    // the registry footprint remains to clean up.
+    await detachNangoConnectionRegistry(connectionId);
+    return {
+      ok: true,
+      podWide: true,
+      provider: ownerMatch?.provider ?? null,
+    };
   }
 
-  // Reuse the connector disconnect doors verbatim (provider on the hot path lets
-  // the revoke skip an extra Nango lookup; it self-resolves without it).
-  await connector.revokeConnection(connectionId, provider ?? undefined);
+  // Synthetic: authorize by proving live ownership. A broker fault here can't
+  // prove ownership, so refuse rather than revoke on an unverifiable claim.
+  if (!live.ok) {
+    throw new Error(
+      `Could not verify the connection (${live.reason}): ${live.error}`
+    );
+  }
+  if (!liveMatch) {
+    throw new Error("Connection not found for this capability.");
+  }
+  await connector.revokeConnection(
+    connectionId,
+    liveMatch.provider,
+    actorUserId
+  );
   await detachNangoConnectionRegistry(connectionId);
 
   return { ok: true, podWide: true, provider };

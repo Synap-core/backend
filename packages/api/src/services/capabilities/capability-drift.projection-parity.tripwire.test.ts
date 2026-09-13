@@ -34,6 +34,9 @@ import {
   canonicalJson,
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
+  capabilityToolMergeDrift,
+  mergePreservingExisting,
+  PROJECTED_TOOL_MERGE_FIELDS,
   type DefinitionSkillRow,
   type InstalledSkillRow,
 } from "./capability-drift.js";
@@ -111,7 +114,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(3);
+    ).toBe(4);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */
@@ -249,6 +252,138 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
         "b",
       ]);
     });
+  });
+});
+
+/**
+ * The JSONB keys the applier MERGES onto an existing tool row — read out of the
+ * `.set({...})` in `applyTemplateToExistingTool` (a key whose value is a
+ * `mergePreservingExisting(` call), never re-listed here. The existing-tool
+ * branch must still call that helper, or the scan would watch dead code.
+ */
+function applierMergedToolKeys(): string[] {
+  const src = readFileSync(join(here, "create-from-definition.ts"), "utf8");
+  const branch = src.indexOf("if (existingTool) {");
+  expect(branch, "applier's existing-tool branch not found").toBeGreaterThan(
+    -1
+  );
+  const branchEnd = src.indexOf("continue;", branch);
+  expect(
+    src.slice(branch, branchEnd).includes("applyTemplateToExistingTool("),
+    "the existing-tool branch no longer writes through applyTemplateToExistingTool"
+  ).toBe(true);
+  const helper = src.indexOf(
+    "export async function applyTemplateToExistingTool("
+  );
+  expect(helper, "applyTemplateToExistingTool not found").toBeGreaterThan(-1);
+  const start = src.indexOf(".update(toolsTable)", helper);
+  const setStart = src.indexOf(".set({", start);
+  const end = src.indexOf(".where(eq(toolsTable.id, toolId))", setStart);
+  expect(start, "the helper's tool update not found").toBeGreaterThan(helper);
+  expect(end, "end of the helper's tool update not found").toBeGreaterThan(
+    setStart
+  );
+  const keys: string[] = [];
+  for (const line of src.slice(setStart, end).split("\n")) {
+    const m = /^\s+(\w+):\s*mergePreservingExisting\(/.exec(line);
+    if (m) keys.push(m[1]);
+  }
+  return keys;
+}
+
+describe("drift comparator ↔ applier projection parity (tool row merged JSONB)", () => {
+  it("reads EXACTLY the fields the applier merges onto an existing tool", () => {
+    const merged = applierMergedToolKeys().sort();
+    expect(
+      merged.length,
+      "extracted no merged tool keys from the applier — the extraction is broken"
+    ).toBeGreaterThanOrEqual(2);
+    expect(
+      [...PROJECTED_TOOL_MERGE_FIELDS].sort(),
+      `the applier merges ${JSON.stringify(merged)} onto an existing tool; the ` +
+        `comparator must read exactly those. A merged field it does not read ` +
+        `can never reach an installed pod. ${WHY_IT_MATTERS}`
+    ).toEqual(merged);
+  });
+
+  for (const field of PROJECTED_TOOL_MERGE_FIELDS) {
+    it(`a template that only ADDS a ${field} default is drift`, () => {
+      expect(
+        capabilityToolMergeDrift(
+          [{ name: "google", [field]: { existing: 1 } }],
+          [
+            {
+              name: "google",
+              [field]: { existing: 0, sync: { enabled: true } },
+            },
+          ]
+        ).drifted,
+        `a template change touching ONLY tools[].${field} is invisible. ${WHY_IT_MATTERS}`
+      ).toEqual(["google"]);
+    });
+  }
+
+  const TEMPLATE_SYNC = {
+    sync: {
+      enabled: true,
+      kinds: { event: { enabled: true, windowDays: 90, itemLimit: 200 } },
+    },
+  };
+
+  it("a user override of a declared leaf is NOT drift (overrides survive)", () => {
+    const live = {
+      sync: {
+        enabled: false,
+        kinds: { event: { enabled: true, windowDays: 30, itemLimit: 200 } },
+      },
+    };
+    expect(
+      capabilityToolMergeDrift(
+        [{ name: "google", metadata: live }],
+        [{ name: "google", metadata: TEMPLATE_SYNC }]
+      ).drifted
+    ).toEqual([]);
+  });
+
+  it("a row converged by ONE apply is not drift again (no re-apply loop), runtime state included", () => {
+    const partial = {
+      discord: { channel: "c1" },
+      sync: { kinds: { event: { connections: { c1: { cursor: "x" } } } } },
+    };
+    const applied = mergePreservingExisting(TEMPLATE_SYNC, partial);
+    expect(
+      capabilityToolMergeDrift(
+        [{ name: "google", metadata: partial }],
+        [{ name: "google", metadata: TEMPLATE_SYNC }]
+      ).drifted
+    ).toEqual(["google"]);
+    expect(
+      capabilityToolMergeDrift(
+        [{ name: "google", metadata: applied }],
+        [{ name: "google", metadata: TEMPLATE_SYNC }]
+      ).drifted
+    ).toEqual([]);
+  });
+
+  it("skips a templated tool name, an absent tool, and a template with no defaults", () => {
+    expect(
+      capabilityToolMergeDrift(
+        [],
+        [{ name: "google", metadata: TEMPLATE_SYNC }]
+      ).drifted
+    ).toEqual([]);
+    expect(
+      capabilityToolMergeDrift(
+        [{ name: "{{p}} api", metadata: {} }],
+        [{ name: "{{p}} api", metadata: TEMPLATE_SYNC }]
+      ).drifted
+    ).toEqual([]);
+    expect(
+      capabilityToolMergeDrift(
+        [{ name: "google", metadata: { anything: 1 } }],
+        [{ name: "google" }]
+      ).drifted
+    ).toEqual([]);
   });
 });
 

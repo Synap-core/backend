@@ -76,10 +76,18 @@ export async function notifyProposalCreatedOrdered(opts: {
   // caller's write.
   if (opts.podWide) await notifyPodWideProposal(opts.podWide);
 
-  if (!opts.sideEffect) return;
-  void emitSideEffects({
-    subjectType: "proposal",
-    action: "created",
-    ...opts.sideEffect,
-  }).catch((err) => opts.onEmitError?.(err));
+  const sideEffect = opts.sideEffect;
+  if (!sideEffect) return;
+  // Promise.resolve(...) so a SYNCHRONOUS throw or a non-promise return from the
+  // emitter (a bare vi.fn() in tests, a future sync implementation) still reaches
+  // onEmitError instead of escaping the seam or throwing on `.catch`.
+  void Promise.resolve()
+    .then(() =>
+      emitSideEffects({
+        subjectType: "proposal",
+        action: "created",
+        ...sideEffect,
+      })
+    )
+    .catch((err) => opts.onEmitError?.(err));
 }

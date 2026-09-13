@@ -93,7 +93,10 @@ vi.mock("./ai-feedback-events.js", () => ({
 vi.mock("@synap/jobs", () => ({
   broadcastNotification: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
+// Returns a promise: notifyProposalCreatedOrdered chains .catch on it.
+vi.mock("@synap/events", () => ({
+  emitSideEffects: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock("../notifications/NotificationService.js", () => ({
   NotificationService: { fromProposal: vi.fn().mockResolvedValue(undefined) },
 }));

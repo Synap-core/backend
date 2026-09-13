@@ -143,6 +143,11 @@ export const proposalsRouter = router({
         data: z.record(z.string(), z.unknown()),
         /** Optional: update the human-readable summary of the change */
         summary: z.string().optional(),
+        /**
+         * Optional: the `revisionHistory.length` the reviser saw. A revise
+         * against a proposal revised since is refused with CONFLICT (409).
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -168,8 +173,13 @@ export const proposalsRouter = router({
       await mergeProposalRevision({
         proposalId: input.proposalId,
         actorId: ctx.userId as string,
+        // ATTRIBUTION ONLY — never the author rung. `ctx.userId` is the key's
+        // human owner, so without this an IS agent revising from a room comment
+        // is recorded as the human and scored as a human correction (B21).
+        attributionAgentUserId: ctx.agentUserId ?? null,
         patch: { kind: "inner", fields: input.data },
         summary: input.summary,
+        expectedRevision: input.expectedRevision,
       });
 
       return {

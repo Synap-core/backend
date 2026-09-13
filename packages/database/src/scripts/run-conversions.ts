@@ -10,6 +10,14 @@
  *   tsx src/scripts/run-conversions.ts --apply         # apply for real, records the ledger
  *   tsx src/scripts/run-conversions.ts --apply --destructive-tail
  *                                                      # + deactivate merged-away source profiles
+ *   tsx src/scripts/run-conversions.ts --only <opKey>  # restrict to named op(s), manifest order;
+ *                                                      # repeatable or comma-separated
+ *
+ * A pending destructive-tail op (mergeInto / dedupeProfileRows) is completed as:
+ *   tsx src/scripts/run-conversions.ts --only <opKey>                              # dry run
+ *   tsx src/scripts/run-conversions.ts --apply --only <opKey> --destructive-tail
+ * The engine REFUSES such an op on `--apply` without `--destructive-tail` (it
+ * would ledger the repoint and orphan the deactivation forever).
  *
  * `--destructive-tail` is rejected without `--apply` (nothing to destroy in a dry run).
  */
@@ -17,9 +25,15 @@
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-nocheck - This script is executed by tsx, not compiled
 import postgres from "postgres";
-import { CONVERSION_MANIFEST, runConversions } from "../conversions/index.js";
+import {
+  CONVERSION_MANIFEST,
+  runConversions,
+  parseOnlyArgs,
+  selectManifestOps,
+} from "../conversions/index.js";
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const apply = args.has("--apply");
 const dryRun = !apply;
 const destructiveTail = args.has("--destructive-tail");
@@ -28,6 +42,15 @@ if (destructiveTail && dryRun) {
   console.error(
     "❌ --destructive-tail requires --apply (a dry run writes nothing to destroy)."
   );
+  process.exit(1);
+}
+
+let manifest = CONVERSION_MANIFEST;
+try {
+  const only = parseOnlyArgs(argv);
+  if (only) manifest = selectManifestOps(CONVERSION_MANIFEST, only);
+} catch (err) {
+  console.error(`❌ ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
@@ -41,8 +64,10 @@ console.log("🔁 Synap Conversion Runner\n");
 console.log(`Database: ${databaseUrl.replace(/:[^:]*@/, ":****@")}`);
 console.log(`Mode:     ${dryRun ? "DRY RUN (no writes)" : "APPLY"}`);
 console.log(
-  `Manifest: v${CONVERSION_MANIFEST.version}, ${CONVERSION_MANIFEST.ops.length} op(s)`
+  `Manifest: v${CONVERSION_MANIFEST.version}, ${manifest.ops.length} of ${CONVERSION_MANIFEST.ops.length} op(s)`
 );
+if (manifest !== CONVERSION_MANIFEST)
+  console.log(`Only:     ${manifest.ops.map((o) => o.opKey).join(", ")}`);
 if (destructiveTail)
   console.log("Tail:     DESTRUCTIVE (source profiles will be deactivated)");
 console.log("");
@@ -57,7 +82,7 @@ function fmtCounts(counts: Record<string, number>): string {
 }
 
 async function main() {
-  const summary = await runConversions(sql, CONVERSION_MANIFEST, {
+  const summary = await runConversions(sql, manifest, {
     dryRun,
     destructiveTail,
   });

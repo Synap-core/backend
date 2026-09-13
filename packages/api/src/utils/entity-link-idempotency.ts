@@ -26,8 +26,13 @@ import {
   type db,
   eq,
   and,
+  or,
+  isNull,
+  drizzleSql,
+  entities,
   entityExternalLinks,
   relations,
+  secrets,
   registerIdentitySignals,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
@@ -44,7 +49,9 @@ export interface EntityLinkIdempotency {
   register: (
     entityId: string,
     provider: string,
-    externalId: string
+    externalId: string,
+    /** Source-app url + producing connection (secrets row id) for a mirrored record. */
+    link?: { url?: string | null; connectionId?: string | null }
   ) => Promise<void>;
   /**
    * Relation-retry idempotency: entities are keyed via external-links, but
@@ -62,6 +69,18 @@ export interface EntityLinkIdempotency {
     targetEntityId: string,
     type: string
   ) => Promise<boolean>;
+  /**
+   * Present only when the caller named the proposal its rows carry as lineage.
+   * True when a retry's hit is a row THIS proposal created — a crash between
+   * create and stamp — so the record can count it as the run's own creation.
+   */
+  ownsRetry?: (entityId: string) => Promise<boolean>;
+  /** The relation edge's id when THIS proposal created it (same lineage rule). */
+  ownedRelationId?: (
+    sourceEntityId: string,
+    targetEntityId: string,
+    type: string
+  ) => Promise<string | null>;
 }
 
 /**
@@ -77,34 +96,119 @@ export function makeExternalLinkIdempotency(
     namespace,
     provider,
     userId,
-  }: { namespace: string; provider: string; userId: string }
+    sourceProposalId,
+  }: {
+    namespace: string;
+    provider: string;
+    userId: string;
+    /** The proposal the materialized rows carry as `source_proposal_id`. */
+    sourceProposalId?: string;
+  }
 ): EntityLinkIdempotency {
   return {
     namespace,
     provider,
-    // Mirrors entity-upsert-service.ts:102 — exact (provider, externalId) match.
+    ...(sourceProposalId
+      ? {
+          ownsRetry: async (entityId: string) => {
+            const [row] = await database
+              .select({ id: entities.id })
+              .from(entities)
+              .where(
+                and(
+                  eq(entities.id, entityId),
+                  eq(entities.sourceProposalId, sourceProposalId)
+                )
+              )
+              .limit(1);
+            return !!row;
+          },
+          ownedRelationId: async (
+            sourceEntityId: string,
+            targetEntityId: string,
+            type: string
+          ) => {
+            const [row] = await database
+              .select({ id: relations.id })
+              .from(relations)
+              .where(
+                and(
+                  eq(relations.userId, userId),
+                  eq(relations.sourceEntityId, sourceEntityId),
+                  eq(relations.targetEntityId, targetEntityId),
+                  eq(relations.type, type),
+                  eq(relations.sourceProposalId, sourceProposalId)
+                )
+              )
+              .limit(1);
+            return row?.id ?? null;
+          },
+        }
+      : {}),
+    // Exact (provider, externalId) match, restricted to a LIVE entity. A key
+    // whose entity was soft-deleted (the run was reverted, then re-proposed and
+    // re-applied) is not a retry: linking it would report the op as
+    // materialized onto a deleted row and create nothing. It is a miss, so the
+    // op creates afresh.
+    //
+    // Restricted to THIS user's copy: an external record can be shared (a
+    // calendar event has one id on every attendee's calendar), so a link only
+    // resolves onto an entity the user owns, or one a connection of theirs
+    // produced (an import someone else approved).
     lookup: async (p, externalId) => {
-      const existing = await database.query.entityExternalLinks.findFirst({
-        where: and(
-          eq(entityExternalLinks.provider, p),
-          eq(entityExternalLinks.externalId, externalId)
-        ),
-        columns: { entityId: true },
-      });
+      const [existing] = await database
+        .select({ entityId: entityExternalLinks.entityId })
+        .from(entityExternalLinks)
+        .innerJoin(entities, eq(entities.id, entityExternalLinks.entityId))
+        .where(
+          and(
+            eq(entityExternalLinks.provider, p),
+            eq(entityExternalLinks.externalId, externalId),
+            isNull(entities.deletedAt),
+            or(
+              eq(entities.userId, userId),
+              drizzleSql`${entityExternalLinks.nangoConnectionId} in (select ${secrets.id}::text from ${secrets} where ${secrets.userId} = ${userId})`
+            )
+          )
+        )
+        // One row per connection can match: the user's own connection's row
+        // first, then an unstamped import link.
+        .orderBy(
+          drizzleSql`case when ${entityExternalLinks.nangoConnectionId} in (select ${secrets.id}::text from ${secrets} where ${secrets.userId} = ${userId}) then 0 when ${entityExternalLinks.nangoConnectionId} = ${DIRECT_IMPORT_CONNECTION_ID} then 1 else 2 end`
+        )
+        .limit(1);
       return existing?.entityId ?? null;
     },
-    // Mirrors entity-upsert-service.ts:178 — idempotent insert (onConflictDoNothing).
-    register: async (entityId, p, externalId) => {
+    // Mirrors entity-upsert-service.ts:178 — idempotent insert. A key held by a
+    // LIVE entity is left alone (the DoNothing behaviour). A key still pointing
+    // at a SOFT-DELETED entity is re-pointed at the fresh one — otherwise the
+    // lookup above would miss on every later retry and each retry would create
+    // another duplicate.
+    register: async (entityId, p, externalId, link) => {
+      // A mirrored record carries its source-app url and the connection that
+      // produced it; an op-keyed idempotency key carries neither (sentinel).
+      const linkFields = {
+        ...(link?.url ? { url: link.url } : {}),
+        nangoConnectionId: link?.connectionId ?? DIRECT_IMPORT_CONNECTION_ID,
+      };
       await database
         .insert(entityExternalLinks)
         .values({
           entityId,
           provider: p,
           externalId,
-          nangoConnectionId: DIRECT_IMPORT_CONNECTION_ID,
+          ...linkFields,
           status: "active",
         })
-        .onConflictDoNothing();
+        .onConflictDoUpdate({
+          target: [
+            entityExternalLinks.provider,
+            entityExternalLinks.externalId,
+            entityExternalLinks.nangoConnectionId,
+          ],
+          set: { entityId, ...(link ? linkFields : {}) },
+          setWhere: drizzleSql`exists (select 1 from ${entities} where ${entities.id} = ${entityExternalLinks.entityId} and ${entities.deletedAt} is not null)`,
+        });
       // Also absorb the (provider, externalId) pair into the identity signal
       // layer — the dedup half of entity_external_links, so a later import
       // (or any other write door) resolving on the same external id lands on

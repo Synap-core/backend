@@ -23,6 +23,7 @@ import { createLogger } from "@synap-core/core";
 // governed entity materializer). Imported here so this composite path and the
 // materializer's invariant-1 guard can never drift apart.
 import { RELATION_SLUGS } from "@synap/database";
+import type { EntityPropertyDiff } from "./entity-property-diff.js";
 
 const logger = createLogger({ module: "materialize-composite" });
 
@@ -62,6 +63,16 @@ export async function createRelationsFromRefs(
       targetEntityId: string,
       type: string
     ) => Promise<boolean>;
+    /**
+     * An existing edge's id when the SAME proposal created it (a crash before
+     * the record was stamped). Such an edge is recorded as this run's creation
+     * instead of vanishing from the retry's result.
+     */
+    ownedRelationId?: (
+      sourceEntityId: string,
+      targetEntityId: string,
+      type: string
+    ) => Promise<string | null>;
   }
 ): Promise<MaterializeRelationResult[]> {
   const relations: MaterializeRelationResult[] = [];
@@ -79,6 +90,24 @@ export async function createRelationsFromRefs(
         opts?.relationExists &&
         (await opts.relationExists(sourceEntityId, targetEntityId, type))
       ) {
+        const ownRelationId = await opts.ownedRelationId?.(
+          sourceEntityId,
+          targetEntityId,
+          type
+        );
+        if (ownRelationId) {
+          relations.push({
+            sourceEntityId,
+            targetEntityId,
+            type,
+            requested: {
+              sourceRef: op.sourceRef,
+              targetRef: op.targetRef,
+              type: op.type,
+            },
+            relationId: ownRelationId,
+          });
+        }
         continue;
       }
       // A door that can answer "proposed" must never be counted as "linked".
@@ -101,7 +130,24 @@ export async function createRelationsFromRefs(
             `proposal and must not re-enter the governance membrane.`
         );
       }
-      relations.push({ sourceEntityId, targetEntityId, type });
+      // The created row's id is what makes the edge undoable. `exists` means
+      // the door found an edge that was already there — somebody else's, so
+      // it is reported but never recorded as this run's creation.
+      const relationId = (created as { id?: unknown } | undefined)?.id;
+      const preExisting =
+        (created as { status?: string } | undefined)?.status === "exists";
+      relations.push({
+        sourceEntityId,
+        targetEntityId,
+        type,
+        requested: {
+          sourceRef: op.sourceRef,
+          targetRef: op.targetRef,
+          type: op.type,
+        },
+        ...(typeof relationId === "string" ? { relationId } : {}),
+        ...(preExisting ? { preExisting: true as const } : {}),
+      });
     } catch (err) {
       opts?.onError?.(err, op.type, {
         sourceRef: op.sourceRef,
@@ -166,6 +212,24 @@ export interface MaterializeEntityResult {
    * silently. Additive; absent on the happy path.
    */
   contentDropped?: true;
+  /**
+   * Body document created TOGETHER with this entity (op.content routed to a
+   * linked document). Absent when the entity was linked, or had no body.
+   */
+  documentId?: string;
+  /**
+   * What a strong-identity merge wrote onto the PRE-EXISTING entity this op
+   * resolved to, with the values it replaced — so revert can restore them
+   * without deleting an entity the run never created. Only on a merge.
+   */
+  propertyDiff?: EntityPropertyDiff;
+  /**
+   * Linked ONLY because a retry's idempotency key found a row the SAME proposal
+   * created (lineage checked) — a crash between create and stamp. The row is
+   * this run's creation, not a pre-existing entity. Never set on a dedup or
+   * `existingEntityId` link.
+   */
+  linkedByRetry?: true;
 }
 
 export interface MaterializeRelationResult {
@@ -173,6 +237,22 @@ export interface MaterializeRelationResult {
   targetEntityId: string;
   /** Actual relation type used (post type-resolution/fallback). */
   type: string;
+  /** The op as submitted (refs, pre-resolution type) — its identity in a record. */
+  requested?: { sourceRef: string; targetRef: string; type: string };
+  /** Id of the relation row, when the door returned one. */
+  relationId?: string;
+  /** The door found this edge already in the graph — not created by this run. */
+  preExisting?: true;
+}
+
+/** One facet this run attached (a role on an entity). */
+export interface MaterializeFacetResult {
+  /** The create_entity op that declared the facet. */
+  opIndex: number;
+  ref?: string;
+  entityId: string;
+  facetId: string;
+  profileSlug: string;
 }
 
 /** Per-op result for a `create_skill` op (the FACT half of a rule). */
@@ -226,6 +306,12 @@ export interface MaterializeResult {
    * nameable instead of a swallowed `logger.warn`. Empty on the happy path.
    */
   relationsFailed: MaterializeRelationFailure[];
+  /**
+   * Facets the attach door reported `attached`. The door answers `attached`
+   * for a re-attach of an existing live facet too, so this is "attached by the
+   * call", not proof of creation — revert re-checks each row's lineage.
+   */
+  facets: MaterializeFacetResult[];
   /** Rule Loop (NS1): skills created by `create_skill` ops. Empty by default. */
   skills: MaterializeSkillResult[];
   /** Rule Loop (NS1): automations created by `create_automation` ops. */
@@ -336,7 +422,9 @@ export interface MaterializeOptions {
     register: (
       entityId: string,
       provider: string,
-      externalId: string
+      externalId: string,
+      /** Source-app url + producing connection for an op's declared `externalLinks`. */
+      link?: { url?: string | null; connectionId?: string | null }
     ) => Promise<void>;
     // Relation-retry idempotency: skip an edge that already exists for the tenant.
     relationExists?: (
@@ -344,6 +432,14 @@ export interface MaterializeOptions {
       targetEntityId: string,
       type: string
     ) => Promise<boolean>;
+    /** See `EntityLinkIdempotency.ownsRetry` — lineage-checked retry hit. */
+    ownsRetry?: (entityId: string) => Promise<boolean>;
+    /** See `EntityLinkIdempotency.ownedRelationId`. */
+    ownedRelationId?: (
+      sourceEntityId: string,
+      targetEntityId: string,
+      type: string
+    ) => Promise<string | null>;
   };
   /**
    * Cross-CHUNK within-proposal dedup guard. `applyLarge` calls this materializer
@@ -425,6 +521,8 @@ export async function materializeCompositeGraph(
   // facet's `contextRef` can resolve against the FULL refToRealId map, not
   // just the entities created before it in operations[].
   const pendingFacetAttaches: Array<{
+    opIndex: number;
+    ref?: string;
     realId: string;
     facets: NonNullable<
       Extract<CompositeProposalOperation, { op: "create_entity" }>["facets"]
@@ -549,6 +647,9 @@ export async function materializeCompositeGraph(
     let degradedFrom: string | undefined;
     let propertiesDropped: true | undefined;
     let contentDropped: true | undefined;
+    let documentId: string | undefined;
+    let propertyDiff: EntityPropertyDiff | undefined;
+    let linkedByRetry: true | undefined;
     // Operation-keyed idempotency (U1): if this op already materialized under
     // the caller's stable namespace (a retry), link the prior entity instead of
     // re-creating. Keyed by `${namespace}:${op.ref}` — distinct ops have
@@ -584,6 +685,9 @@ export async function materializeCompositeGraph(
       // no duplicate). Treated exactly like the existingEntityId link branch.
       realId = idemHitId;
       linkedExisting = true;
+      if (await options?.idempotency?.ownsRetry?.(idemHitId)) {
+        linkedByRetry = true;
+      }
       if (idemExternalId) idemSeenThisCall.add(idemExternalId);
     } else {
       // Per-op workspace pin (multi-home import graphs): when the op carries
@@ -629,6 +733,11 @@ export async function materializeCompositeGraph(
       // a dedup) — flag it so the body isn't lost without a trace.
       if ((result as { deduplicated?: boolean }).deduplicated === true) {
         linkedExisting = true;
+        // What the merge overwrote on the matched entity (entities.create
+        // reports it) — the only undoable trace of a merge.
+        const reportedDiff = (result as { propertyDiff?: EntityPropertyDiff })
+          .propertyDiff;
+        if (reportedDiff) propertyDiff = reportedDiff;
         // B3: entities.create now RECOVERS a dropped body onto the deduped entity
         // when it safely can (no existing body to clobber) and reports the
         // residual via `contentDropped`. Prefer that signal; fall back to the old
@@ -643,6 +752,16 @@ export async function materializeCompositeGraph(
         }
       } else {
         created++;
+        // The body document minted with the entity. Direct-write callers
+        // report it top-level; the entities.create door carries it on the
+        // returned entity row.
+        const reportedDocumentId =
+          (result as { documentId?: unknown }).documentId ??
+          (result as { entity?: { documentId?: unknown } | null }).entity
+            ?.documentId;
+        if (typeof reportedDocumentId === "string") {
+          documentId = reportedDocumentId;
+        }
       }
       // Register the op's stable key so a retry under the same namespace links
       // this entity instead of re-creating it.
@@ -653,6 +772,29 @@ export async function materializeCompositeGraph(
           idemExternalId
         );
         idemSeenThisCall.add(idemExternalId);
+      }
+    }
+
+    // External records this entity mirrors (a connection sync's Google event,
+    // contact, …) — registered through the same link door on EVERY resolution
+    // path (created, retry-linked, deduped, pinned existing), so an approved
+    // import carries its provider links + url + connection immediately instead
+    // of waiting for a later sync to adopt the entity.
+    if (op.externalLinks && op.externalLinks.length > 0) {
+      if (options?.idempotency) {
+        for (const link of op.externalLinks) {
+          await options.idempotency.register(
+            realId,
+            link.provider,
+            link.externalId,
+            { url: link.url ?? null, connectionId: link.connectionId ?? null }
+          );
+        }
+      } else {
+        logger.warn(
+          { ref: op.ref, count: op.externalLinks.length },
+          "materialize-composite: op declares externalLinks but the caller passed no link door (idempotency) — links NOT registered"
+        );
       }
     }
 
@@ -669,13 +811,21 @@ export async function materializeCompositeGraph(
       ...(degradedFrom ? { degradedFrom } : {}),
       ...(propertiesDropped ? { propertiesDropped: true as const } : {}),
       ...(contentDropped ? { contentDropped: true as const } : {}),
+      ...(documentId ? { documentId } : {}),
+      ...(propertyDiff ? { propertyDiff } : {}),
+      ...(linkedByRetry ? { linkedByRetry } : {}),
     });
 
     // Declared facets are attached in pass 1.5 below (once every create_entity
     // op has resolved), not here — a facet's `contextRef` may point at an
     // entity created LATER in this same batch, which pass 1 can't resolve yet.
     if (op.facets && op.facets.length > 0) {
-      pendingFacetAttaches.push({ realId, facets: op.facets });
+      pendingFacetAttaches.push({
+        opIndex: i,
+        ...(op.ref ? { ref: op.ref } : {}),
+        realId,
+        facets: op.facets,
+      });
     }
   }
 
@@ -700,14 +850,15 @@ export async function materializeCompositeGraph(
   // (packages/api/src/routers/proposals.ts:2231-2235, "Already ${status}"), so
   // this idempotency only matters for a retry WITHIN one approve/import call
   // (e.g. materialize resumed after a partial failure) — no extra guard needed.
+  const facetResults: MaterializeFacetResult[] = [];
   if (options?.facetCaller) {
-    for (const { realId, facets } of pendingFacetAttaches) {
+    for (const { opIndex, ref, realId, facets } of pendingFacetAttaches) {
       for (const facetOp of facets) {
         try {
           const contextEntityId = facetOp.contextRef
             ? resolveCompositeRef(refToRealId, facetOp.contextRef)
             : undefined;
-          await options.facetCaller.attachFacet({
+          const attached = await options.facetCaller.attachFacet({
             entityId: realId,
             profileSlug: facetOp.profileSlug,
             status: facetOp.status,
@@ -715,6 +866,21 @@ export async function materializeCompositeGraph(
             ...(contextEntityId ? { contextEntityId } : {}),
             source: options?.source ?? "system",
           });
+          const facetId = (attached as { facetId?: unknown } | undefined)
+            ?.facetId;
+          if (
+            (attached as { status?: string } | undefined)?.status ===
+              "attached" &&
+            typeof facetId === "string"
+          ) {
+            facetResults.push({
+              opIndex,
+              ...(ref ? { ref } : {}),
+              entityId: realId,
+              facetId,
+              profileSlug: facetOp.profileSlug,
+            });
+          }
         } catch (err) {
           logger.warn(
             { err, entityId: realId, profileSlug: facetOp.profileSlug },
@@ -749,6 +915,7 @@ export async function materializeCompositeGraph(
         onRelationError?.(err, type);
       },
       relationExists: options?.idempotency?.relationExists,
+      ownedRelationId: options?.idempotency?.ownedRelationId,
     }
   );
 
@@ -805,6 +972,7 @@ export async function materializeCompositeGraph(
     entities,
     relations,
     relationsFailed,
+    facets: facetResults,
     skills: skillResults,
     automations: automationResults,
     rules: ruleResults,

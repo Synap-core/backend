@@ -19,11 +19,11 @@
 import { eq, and, isNull } from "drizzle-orm";
 import { getDb } from "../client-pg.js";
 import { propertyDefs, PropertyValueType } from "../schema/property-defs.js";
-import { profiles } from "../schema/profiles.js";
 import {
   RelationDefRepository,
   pickDefForWorkspace,
 } from "../repositories/relation-def-repository.js";
+import { ProfileRepository } from "../repositories/profile-repository.js";
 
 export interface SeedMappingsResult {
   status: "updated" | "skipped" | "error";
@@ -65,6 +65,7 @@ export async function seedPropertyRelationMappings(
   try {
     const db = await getDb();
     const relDefRepo = new RelationDefRepository(db);
+    const profileRepo = new ProfileRepository(db);
     // ONE read of everything visible from this workspace — its own rows PLUS the
     // pod-wide base rows — then resolve precedence in JS via the shared SSOT.
     const visibleDefs = await relDefRepo.list(workspaceId);
@@ -106,10 +107,17 @@ export async function seedPropertyRelationMappings(
         continue;
       }
 
-      // Find the target profile
-      const targetProfile = await db.query.profiles.findFirst({
-        where: eq(profiles.slug, mapping.targetProfileSlug),
-      });
+      // Find the target profile. The property_def being stamped is GLOBAL
+      // (profileId IS NULL, visible from every workspace), so its target must
+      // be a POD-WIDE concept: `getBySlug` with no workspace/user resolves only
+      // active SYSTEM + SHARED rows (at most one — they share a unique index),
+      // never a workspace/user twin. The old `findFirst(eq(slug))` had no scope
+      // filter, no is_active filter and no ORDER BY, so a workspace-scope twin
+      // or a retired row (e.g. the 0151-deactivated `project`) could be stamped
+      // onto a def every workspace reads.
+      const targetProfile = await profileRepo.getBySlug(
+        mapping.targetProfileSlug
+      );
 
       // Update the property_def with the mapping
       await db

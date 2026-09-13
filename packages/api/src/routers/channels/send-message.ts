@@ -63,7 +63,14 @@ import {
   focusSessions,
   agents,
   RoutedSource,
+  proposals,
 } from "@synap/database/schema";
+import { assertMessageAnchorAllowed } from "../../utils/message-anchor.js";
+import {
+  planAnchoredCommentTurn,
+  type AnchoredCommentPlan,
+} from "../../utils/anchored-comment-turn.js";
+import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { resolveIntelligenceServiceByAgentId } from "../../utils/intelligence-routing.js";
 import {
   makeRoutedTeammateContext,
@@ -114,6 +121,33 @@ import {
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "channels" });
+
+/**
+ * Stamp a streamed proposal with the run it belongs to (`proposals.session_id`),
+ * so the client can open that session without a second read. The field is an
+ * optional HINT: a row without a session, or a failed read, emits the proposal
+ * without it — the client then resolves the session through `proposals.list`,
+ * which reports its own failure. Never fabricated.
+ */
+async function withProposalSessionId<P extends { proposalId: string }>(
+  proposal: P
+): Promise<P & { sessionId?: string }> {
+  try {
+    const row = await db.query.proposals.findFirst({
+      where: eq(proposals.id, proposal.proposalId),
+      columns: { sessionId: true },
+    });
+    return row?.sessionId
+      ? { ...proposal, sessionId: row.sessionId }
+      : proposal;
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: proposal.proposalId },
+      "could not read a streamed proposal's session — emitting it without sessionId"
+    );
+    return proposal;
+  }
+}
 
 /**
  * Send message to Intelligence Hub and get AI response (with streaming).
@@ -257,6 +291,30 @@ export const sendMessageProcedure = protectedProcedure
       });
     }
 
+    // An anchored comment may only name a proposal the caller can see — and, on
+    // a session channel, one of that session's proposals. Before any write.
+    // Resolve what the anchor points at (op, field, stale vs the proposal's
+    // current revision) and whether it wakes the run's agent. The resolved
+    // context is SERVER-OWNED and rides the one `turnContext` contract as the
+    // `anchor` sibling — persisted with the message and sent on every door.
+    let anchoredComment: AnchoredCommentPlan | undefined;
+    if (input.metadata?.anchor) {
+      await assertMessageAnchorAllowed({
+        anchor: input.metadata.anchor,
+        channelId,
+        userId,
+      });
+      anchoredComment = await planAnchoredCommentTurn({
+        anchor: input.metadata.anchor,
+        channelId,
+        comment: content,
+      });
+    }
+    const outgoingTurnContext: Record<string, unknown> | undefined =
+      anchoredComment
+        ? { ...(turnContext ?? {}), anchor: anchoredComment.context }
+        : turnContext;
+
     // If no explicit agentId in the request and channel has an assigned agent, use it for IS routing
     if (!requestedAgentId && channel.assignedAgentId) {
       try {
@@ -358,10 +416,15 @@ export const sendMessageProcedure = protectedProcedure
       hash: userMessageHash,
       sessionId: activeSessionId ?? undefined,
       ephemeral: input.ephemeral ?? false,
-      ...(turnContext
+      ...(outgoingTurnContext || input.metadata?.anchor
         ? {
             metadata: {
-              turnContext,
+              ...(outgoingTurnContext
+                ? { turnContext: outgoingTurnContext }
+                : {}),
+              ...(input.metadata?.anchor
+                ? { anchor: input.metadata.anchor }
+                : {}),
             } as (typeof messages.$inferInsert)["metadata"],
           }
         : {}),
@@ -811,6 +874,23 @@ export const sendMessageProcedure = protectedProcedure
     }
 
     if (!isMultiplayerRoom && !isAiChannel) {
+      // An anchored HUMAN comment on an intake run (or on a pending proposal of
+      // this session) wakes the run's agent even with none assigned — through
+      // the ONE auto-respond door, carrying the resolved anchor. This door is
+      // human-only (Kratos session principal), so an agent's anchored message
+      // can never reach here and loop. Assigned/mentioned channels took the
+      // interactive path above and already carry the same anchor context.
+      if (anchoredComment?.decision.trigger) {
+        await triggerAutoRespond({
+          channelId,
+          userMessageId,
+          content,
+          sourceUserId: userId,
+          focusSessionId: activeFocusSessionId,
+          agentType: anchoredComment.decision.agentType,
+          turnContext: outgoingTurnContext,
+        });
+      }
       return { messageId: userMessageId, channelId };
     }
 
@@ -822,6 +902,7 @@ export const sendMessageProcedure = protectedProcedure
       proposalId: string;
       toolName: string;
       description: string;
+      sessionId?: string;
     }> = [];
     const emittedProposalIds = new Set<string>();
     let hubResponse: Partial<HubResponse> = { content: "" };
@@ -1052,7 +1133,7 @@ export const sendMessageProcedure = protectedProcedure
       ...getPodCallback(),
       channelKind,
       focusSessionId: activeFocusSessionId,
-      ...(turnContext ? { turnContext } : {}),
+      ...(outgoingTurnContext ? { turnContext: outgoingTurnContext } : {}),
       ...(input.onboardingSkill
         ? { forcedSkillName: input.onboardingSkill }
         : {}),
@@ -1184,7 +1265,7 @@ export const sendMessageProcedure = protectedProcedure
             );
           });
         } else if (chunk.type === "proposal" && chunk.proposal) {
-          const proposal = chunk.proposal;
+          const proposal = await withProposalSessionId(chunk.proposal);
           if (
             !createdProposals.some(
               (item) => item.proposalId === proposal.proposalId
@@ -1200,6 +1281,9 @@ export const sendMessageProcedure = protectedProcedure
                 proposalId: proposal.proposalId,
                 toolName: proposal.toolName,
                 description: proposal.description,
+                ...(proposal.sessionId
+                  ? { sessionId: proposal.sessionId }
+                  : {}),
                 agentUserId: agentUserId ?? resolvedService.agentUserId,
                 ...(durableTurn
                   ? {
@@ -1222,6 +1306,9 @@ export const sendMessageProcedure = protectedProcedure
                   proposalId: proposal.proposalId,
                   toolName: proposal.toolName,
                   description: proposal.description,
+                  ...(proposal.sessionId
+                    ? { sessionId: proposal.sessionId }
+                    : {}),
                 },
               },
               workspaceId: workspaceId ?? null,
@@ -1269,7 +1356,7 @@ export const sendMessageProcedure = protectedProcedure
                     (item) => item.proposalId === proposal.proposalId
                   )
                 ) {
-                  createdProposals.push(proposal);
+                  createdProposals.push(await withProposalSessionId(proposal));
                 }
               }
             }
@@ -1287,6 +1374,7 @@ export const sendMessageProcedure = protectedProcedure
                 proposalId: cp.proposalId,
                 toolName: cp.toolName,
                 description: cp.description,
+                ...(cp.sessionId ? { sessionId: cp.sessionId } : {}),
                 agentUserId: agentUserId ?? resolvedService.agentUserId,
               },
               workspaceId: workspaceId ?? null,
@@ -1528,7 +1616,8 @@ export const sendMessageProcedure = protectedProcedure
         // Recover any proposals created during the (failed) stream or fallback response
         const fallbackProposals = hubResponse.createdProposals ?? [];
         if (fallbackProposals.length > 0) {
-          for (const cp of fallbackProposals) {
+          for (const rawProposal of fallbackProposals) {
+            const cp = await withProposalSessionId(rawProposal);
             if (
               !createdProposals.some(
                 (item) => item.proposalId === cp.proposalId
@@ -1546,6 +1635,7 @@ export const sendMessageProcedure = protectedProcedure
                 proposalId: cp.proposalId,
                 toolName: cp.toolName,
                 description: cp.description,
+                ...(cp.sessionId ? { sessionId: cp.sessionId } : {}),
                 agentUserId: agentUserId ?? resolvedService.agentUserId,
               },
               workspaceId: workspaceId ?? null,

@@ -37,10 +37,8 @@ import {
 import { proposals } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import type { PropertyDecisionMap } from "@synap/database";
-import type {
-  StoredProposalData,
-  ProposalMaterializedRecord,
-} from "@synap-core/types";
+import { isPodWideConnectionSyncApproval } from "@synap/database";
+import type { StoredProposalData } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
   isCompositeProposalData,
@@ -70,6 +68,11 @@ import type { Context } from "../../context.js";
 import { emitAiCorrection } from "../../utils/ai-feedback-events.js";
 import { AI_KIND } from "../../lib/ai-events.js";
 import { materializeCompositeGraph } from "../../utils/materialize-composite.js";
+import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
+import {
+  buildMaterializedRecord,
+  stampMaterialized,
+} from "../../services/proposals/stamp-materialized.js";
 import {
   attachSourceBlob,
   discardProposalSourceBlob,
@@ -78,12 +81,21 @@ import {
 import { buildRuleLoopCallers } from "../../utils/rule-loop-callers.js";
 import { reconcileApprovedProperties } from "../../services/proposals/reconcile-proposal-properties.js";
 import { completeKnowledgeProposalProperties } from "../../services/proposals/complete-knowledge-proposal.js";
+import {
+  approveStructureGuidelineProposal,
+  assertCanApproveStructureGuideline,
+  governanceApprovalFloorFor,
+} from "../../services/guidelines/guideline-versions.js";
 import { createLogger } from "@synap-core/core";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { relationsRouter } from "../relations.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
 import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
-import { emitSideEffects, getBoss } from "@synap/events";
+import {
+  emitSideEffects,
+  enqueueConnectionSyncApproval,
+  getBoss,
+} from "@synap/events";
 import { messages } from "@synap/database/schema";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 import {
@@ -714,7 +726,10 @@ async function applyProposalApprovalInner(
         );
         const reconciled = await reconcileApprovedProperties({
           properties: props,
-          profileId: profile?.id ?? entityOp.profileSlug,
+          // A profile that did not resolve is NOT an id: pass null so the reconcile
+          // service refuses def creation and stores verbatim (a slug in `profileId`
+          // only failed later, by a uuid cast error).
+          profileId: profile?.id ?? null,
           workspaceId: opWorkspaceId,
           userId,
           decisions,
@@ -748,14 +763,7 @@ async function applyProposalApprovalInner(
 
     // Shared materialization: N entities → ref map → M relations.
     // Same logic the user-import (/import/apply) path uses.
-    const {
-      created: createdCount,
-      linked,
-      primaryId,
-      entities: createdEntities,
-      refToRealId,
-      relationsFailed,
-    } = await materializeCompositeGraph(
+    const materializeResult = await materializeCompositeGraph(
       reconciledOperations,
       entityCaller,
       relationCaller,
@@ -781,6 +789,11 @@ async function applyProposalApprovalInner(
           workspaceId: compositeCtx.workspaceId,
           auditSource: "rule_loop_approval",
         }),
+        // Per-op link idempotency keyed by THIS proposal (client-stable): a
+        // retried or double-clicked approval links what the first attempt
+        // created instead of duplicating it — and `import.apply`, now routed
+        // through this door (intake D7), keeps the retry safety it had.
+        idempotency: approvalIdempotency(db, { userId, proposal }),
         // Graph submitters persist their origin in proposal data. Reuse it
         // on approval so source attribution survives the proposal boundary.
         ...(typeof payload.source === "string"
@@ -788,6 +801,14 @@ async function applyProposalApprovalInner(
           : {}),
       }
     );
+    const {
+      created: createdCount,
+      linked,
+      primaryId,
+      entities: createdEntities,
+      refToRealId,
+      relationsFailed,
+    } = materializeResult;
 
     // A proposed capture that carried a file: the bytes were STAGED at propose
     // time (`stageSourceBlob`), only the reference rode in `data.sourceFile`.
@@ -837,29 +858,22 @@ async function applyProposalApprovalInner(
       }
     }
 
-    // Record what we materialized so `revert` can compute the inverse.
-    // Only entities CREATED here (not pre-existing linked ones) are ours to
-    // undo. Relation ids aren't returned by the materializer, so revert of a
-    // composite undoes the created entities (the cascade removes the
-    // relations touching them).
-    const compositeMaterialized: ProposalMaterializedRecord = {
-      entityIds: createdEntities
-        .filter((entity) => !entity.linked)
-        .map((entity) => entity.entityId),
-    };
-    // `data.materialized` reflects ONLY the applied ops' created entities
-    // (rejected ops never materialize, so they never appear) — `revert`'s
-    // planner reads exactly this. Persist the disposition map alongside so
-    // the partial-apply decision is durable (drives the review UI's
-    // post-approve state + the item-scoped flywheel). We rebuild the WHOLE
-    // `data` object here, so this is a full JSONB replace — no partial merge.
-    const compositePayload: StoredProposalData = {
-      ...payload,
-      materialized: compositeMaterialized,
-      ...(dispositions && Object.keys(dispositions).length > 0
-        ? { dispositions }
-        : {}),
-    };
+    // Record what we materialized so `revert` can compute the inverse — the
+    // COMPLETE record (created entities, relations, facets, config rows, and
+    // what a merge overwrote on a pre-existing entity), from the one builder
+    // every materializer uses. Pre-existing linked entities are never ours to
+    // delete; only their overwritten properties are recorded.
+    //
+    // Relations are recorded by id because nothing else removes them: entity
+    // delete is a SOFT delete (`deletedAt`), it does not cascade, so reverting
+    // the entities alone left every relation touching them in place.
+    //
+    // `data.materialized` reflects ONLY the applied ops (rejected ops never
+    // materialize, so they never appear) — `revert`'s planner reads exactly
+    // this. The disposition map is persisted alongside (below) so the
+    // partial-apply decision is durable (drives the review UI's post-approve
+    // state + the item-scoped flywheel).
+    const compositeMaterialized = buildMaterializedRecord(materializeResult);
 
     // Provenance: record `session --produced--> entity` for every entity this
     // session created (the composite/AI-capture path doesn't flow through the
@@ -959,16 +973,21 @@ async function applyProposalApprovalInner(
       }
     }
 
-    await db
-      .update(proposals)
-      .set({
+    // One statement: the status flip and the merged record land together.
+    await stampMaterialized({
+      proposalId: input.proposalId,
+      record: compositeMaterialized,
+      baseData: payload as unknown as Record<string, unknown>,
+      ...(dispositions && Object.keys(dispositions).length > 0
+        ? { dataPatch: { dispositions } }
+        : {}),
+      set: {
         status: ProposalStatus.APPROVED,
-        data: compositePayload,
         reviewedBy: userId,
         reviewedAt: new Date(),
         updatedAt: new Date(),
-      })
-      .where(eq(proposals.id, input.proposalId));
+      },
+    });
 
     // Report to IS telemetry (fire-and-forget — never blocks). This is the
     // CAPTURE lane: `reportProposalOutcome`'s guard is explicitly widened to
@@ -993,6 +1012,20 @@ async function applyProposalApprovalInner(
       "approved",
       userId
     );
+
+    // A POD-WIDE connection-sync import still earns its
+    // connection's auto rule. `emitProposalReviewed` fans out side effects only
+    // for a workspace-scoped proposal (where the connection-sync-approval reactor
+    // enqueues the job), so the workspace-less case enqueues the SAME job here.
+    // Narrow on purpose: widening the emit to every pod-wide approval would newly
+    // fire webhook delivery and other reactors. Awaited so a queue failure fails
+    // loudly; the job retries and the rule mint behind it is idempotent.
+    if (isPodWideConnectionSyncApproval(proposal)) {
+      await enqueueConnectionSyncApproval({
+        proposalId: input.proposalId,
+        userId,
+      });
+    }
 
     // Per-item reasoned reject → flywheel, item-scoped (Phase 2, Gap 3).
     // For EACH item the reviewer rejected WITH a reason/reasonCode, emit an
@@ -1167,7 +1200,21 @@ async function applyProposalApprovalInner(
   // Gated HERE, at the privileged operation, rather than in the route helpers:
   // one chokepoint that every caller (approve, batchApprove, and any future
   // door) must pass, and it covers governance types added later by prefix.
-  if (proposal.proposalType.startsWith("governance.")) {
+  //
+  // ONE NARROW EXCEPTION — `governance.structure_guideline` (founder D1: whoever
+  // the guideline applies to decides). It writes guideline TEXT for one owner's
+  // or one workspace's extraction, never a governance rule or a posture, so it
+  // is gated by that audience instead: the subject (pod-wide) or a workspace
+  // editor/admin (workspace-scoped), pod admins always. Exact type match — no
+  // other `governance.*` type is widened.
+  const governanceFloor = governanceApprovalFloorFor(proposal.proposalType);
+  if (governanceFloor === "guideline-audience") {
+    await assertCanApproveStructureGuideline({
+      userId,
+      subjectUserId: proposal.subjectUserId ?? null,
+      workspaceId: proposal.workspaceId ?? null,
+    });
+  } else if (governanceFloor === "pod-admin") {
     await assertPodAdmin(userId);
   }
 
@@ -1732,6 +1779,22 @@ async function applyProposalApprovalInner(
         subject: "config_settings(guideline)",
       },
     };
+  }
+
+  // B4e: governance.structure_guideline — the DATA-TYPE twin of B4d, filed by
+  // the structure-guideline scanner from repeated reasoned extraction rejects.
+  // Approving writes the reviewed text as the next guideline VERSION at
+  // entityKind / sourceKind / default (supersede when one exists, lineage
+  // `proposal:<id>`) through `applyStructureGuidelineApproval`. Without this
+  // branch the `*/*` catch-all would flip it APPROVED and write nothing.
+  if (proposal.proposalType === "governance.structure_guideline") {
+    return approveStructureGuidelineProposal({
+      proposal: { ...proposal, subjectUserId: proposal.subjectUserId ?? null },
+      reviewerId: userId,
+      payload,
+      reportProposalOutcome,
+      emitProposalReviewed,
+    });
   }
 
   // ── Registry dispatch ──────────────────────────────────────────────────

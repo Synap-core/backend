@@ -13,6 +13,9 @@ const h = vi.hoisted(() => ({
   structure: vi.fn(),
   submitCaptureGraph: vi.fn(),
   fetchRoutingMemory: vi.fn(async () => null),
+  // The extractor's offered kinds. Default: none (no `availableProfiles` hint).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  buildAvailableProfiles: vi.fn((_p: any): any => undefined),
   // Default: no stored guidelines → merged instructions == explicit only, so the
   // pre-existing assertions (explicit `guidelines` → `instructions`) are unchanged.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,8 +78,39 @@ vi.mock("@synap/database", () => {
     getWorkspaceMembership: vi.fn(),
     insertChannelMessage: vi.fn(),
     resolveGuidelines: h.resolveGuidelines,
+    ProfileResolutionService: class {
+      async getAccessibleProfiles() {
+        return [];
+      }
+    },
+    // THE REAL assembler (database src), with only its resolver swapped for the
+    // hoisted mock below — so interpret's instructions go through the actual
+    // compose/budget/framing code, not a test re-implementation.
+    assembleStructureContext: async (input: unknown) => {
+      // Untyped on purpose: a `typeof import()` of another package's src trips
+      // project references (TS6305); the handler's own call is typed.
+      const real = (await vi.importActual(
+        "../../../../database/src/utils/structure-context.js"
+      )) as { assembleStructureContext: (i: unknown) => Promise<unknown> };
+      return real.assembleStructureContext(input);
+    },
   };
 });
+// importOriginal + spread, never a total mock: the real assembler imports more
+// than `resolveGuidelines` from this module (e.g. `GUIDELINE_TEXT_MAX`), and a
+// total factory went dark — every test died at collection — the moment one was
+// added. Only the resolver is swapped. Untyped on purpose (TS6305, see above).
+vi.mock(
+  "../../../../database/src/utils/config-settings.js",
+  async (importOriginal) => {
+    const actual = (await importOriginal()) as Record<string, unknown>;
+    return { ...actual, resolveGuidelines: h.resolveGuidelines };
+  }
+);
+vi.mock("../../routers/capture.js", () => ({
+  buildAvailableProfiles: h.buildAvailableProfiles,
+  withEffectiveProperties: async (_svc: unknown, p: unknown) => p,
+}));
 vi.mock("./place-artboard-deck.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("./place-artboard-deck.js")>();
@@ -321,6 +355,101 @@ describe("message.interpret — handler", () => {
     expect(h.structure.mock.calls[0][0].instructions).toBe(
       "Only stored guideline"
     );
+  });
+
+  it("a kind-scoped and a source-scoped guideline both reach the structure instructions (framed by kind), with sourceKind 'text' and the extractor's kinds in play", async () => {
+    // The resolver gets the SAME context the rungs match on; return what a
+    // real store would match for it.
+    h.resolveGuidelines.mockImplementationOnce(
+      async (arg: { sourceKind?: string; entityKinds?: string[] }) => [
+        ...(arg.sourceKind === "text"
+          ? [
+              {
+                id: "g-src",
+                version: 1,
+                scopeKind: "sourceKind",
+                scopeRef: "text",
+                specificity: 2,
+                text: "Messages: one idea per entity",
+              },
+            ]
+          : []),
+        ...(arg.entityKinds?.includes("person")
+          ? [
+              {
+                id: "g-kind",
+                version: 4,
+                scopeKind: "entityKind",
+                scopeRef: "person",
+                specificity: 3,
+                text: "Capture the LinkedIn URL",
+              },
+            ]
+          : []),
+      ]
+    );
+    h.structure.mockResolvedValueOnce({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+
+    // availableProfiles comes from capture.ts's builder — `person` is a kind
+    // the extractor is offered.
+    h.buildAvailableProfiles.mockReturnValueOnce([
+      { slug: "person", displayName: "Person" },
+    ]);
+
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "Met Ada", guidelines: "explicit" },
+      { userId: "u1", workspaceId: null }
+    );
+
+    const resolveArg = h.resolveGuidelines.mock.calls[0][0] as unknown as {
+      sourceKind?: string;
+      entityKinds?: string[];
+    };
+    expect(resolveArg.sourceKind).toBe("text");
+    expect(resolveArg.entityKinds).toEqual(["person"]);
+    expect(h.structure.mock.calls[0][0].instructions).toBe(
+      "Messages: one idea per entity\n\n" +
+        'When structuring a "person": Capture the LinkedIn URL\n\n' +
+        "explicit"
+    );
+  });
+
+  it("NO-OP: with no stored guideline the instructions are exactly the explicit text, and absent when there is none", async () => {
+    h.structure.mockResolvedValue({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "a", guidelines: "  only explicit  " },
+      { userId: "u1", workspaceId: null }
+    );
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "b" },
+      { userId: "u1", workspaceId: null }
+    );
+    expect(h.structure.mock.calls[0][0].instructions).toBe("only explicit");
+    expect("instructions" in h.structure.mock.calls[1][0]).toBe(false);
+    h.structure.mockReset();
+  });
+
+  it("a FAILED guideline read still structures with the explicit text (never a silent 'no guidelines')", async () => {
+    h.resolveGuidelines.mockRejectedValueOnce(new Error("db down"));
+    h.structure.mockResolvedValueOnce({
+      entities: [],
+      relations: [],
+      followUp: null,
+    });
+    const out = (await BUILTIN_VERBS["message.interpret"](
+      { content: "a", guidelines: "explicit" },
+      { userId: "u1", workspaceId: null }
+    )) as { guidelineStatus?: string };
+    expect(h.structure.mock.calls[0][0].instructions).toBe("explicit");
+    expect(out.guidelineStatus).toBe("unavailable");
   });
 
   it("does NOT file a proposal when the plan is a clarifying followUp", async () => {

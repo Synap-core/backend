@@ -43,6 +43,11 @@ POD_AGENT_ENABLED_FLAG="${SYNAP_WITH_POD_AGENT:-}"
 # Optional legacy integration endpoint. Federation trust is configured only by
 # a Pod owner through the trusted-issuer registry; a self-hosted Pod must never
 # silently receive an external service URL or authority during installation.
+# When set, this pod's external-service connections (Google, etc.) are also
+# brokered by that control plane — the pod holds no Nango key, and any local
+# NANGO_HOST / NANGO_SECRET_KEY left in the environment is ignored. A
+# self-hosted pod running its OWN Nango instance opts out of the broker with
+# SYNAP_CONNECTOR_BROKER=local (set separately, not a flag here).
 CONTROL_PLANE_URL_FLAG="${SYNAP_CONTROL_PLANE_URL:-}"
 # PROVISIONING_TOKEN is a one-time installation credential. It is used by
 # setup-openclaw.sh for local agent setup and may authorize the first generic

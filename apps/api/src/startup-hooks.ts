@@ -15,6 +15,7 @@ import {
   and,
   inArray,
   ensureSystemProfiles,
+  reportEnsureSystemProfilesResult,
   ensureTeamMemberRoleProfile,
   users,
   workspaces,
@@ -22,6 +23,7 @@ import {
   TrustedIssuerService,
   TRUSTED_ISSUER_CAPABILITIES,
 } from "@synap/database";
+import { recordSystemProfilesBootResult } from "./startup/boot-status.js";
 import { randomUUID, randomBytes } from "crypto";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
@@ -586,8 +588,14 @@ export async function runStartupHooks(): Promise<void> {
   // Ensures existing installations pick up new property defs added in code updates.
   try {
     const result = await ensureSystemProfiles();
-    logger.info({ ...result }, "System profiles seeded on startup");
+    reportEnsureSystemProfilesResult(logger, result, {
+      ok: "System profiles seeded on startup",
+      failed:
+        "System profile reconciliation FAILED on startup (seeder returned status:error) — schema upgrades did not apply",
+    });
+    recordSystemProfilesBootResult(result);
   } catch (err) {
+    recordSystemProfilesBootResult({ thrown: err });
     logger.warn(
       { err },
       "Failed to seed system profiles on startup (non-fatal)"

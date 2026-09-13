@@ -26,6 +26,13 @@ export interface ImportCorpusPayload {
   workspaceId: string;
   source: string;
   items: Array<{ path: string; content: string }>;
+  /**
+   * The run session the corpus belongs to, ensured BEFORE enqueue so a queued
+   * job is findable by its session (the session cancel door stops queued jobs
+   * whose data names it). Optional: jobs enqueued before this field existed
+   * carry none, and the handler then resolves a session itself.
+   */
+  sessionId?: string | null;
 }
 
 /**

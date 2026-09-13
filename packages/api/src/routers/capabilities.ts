@@ -23,6 +23,8 @@ import {
   skills,
   tools as toolsTable,
   vaultGrants,
+  secrets,
+  links,
   entityExternalLinks,
   entities,
   capabilities as capabilitiesTable,
@@ -85,6 +87,7 @@ import {
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../contracts/capability-execute.js";
 import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
+import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import { reconcileCapabilitiesToTemplates } from "../services/capabilities/reconcile-capabilities-to-templates.js";
@@ -604,13 +607,22 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
     props: z.record(z.string(), z.unknown()).optional(),
     displayMode: z.string().optional(),
   }),
+  z.object({
+    kind: z.literal("source-app"),
+    title: z.string().optional(),
+  }),
 ]);
 
 /** One page of a capability's ORDERED renderer page-set. */
 const CapabilityRendererPageSchema = z.object({
   slot: z.string().min(1),
   title: z.string().min(1),
-  ref: RendererRefSchema,
+  // A capability page has no entity to open in its source app: the shared
+  // placement rule refuses `source-app` here.
+  ref: RendererRefSchema.superRefine((ref, ctx) => {
+    const violation = rendererRefScopeViolation(ref, "capability", null);
+    if (violation) ctx.addIssue({ code: "custom", message: violation });
+  }),
 });
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -1829,40 +1841,53 @@ export const capabilitiesRouter = router({
       // `entity_external_links` carries NO userId and NO workspaceId column and
       // has NO VisibilityRule, so the access layer structurally cannot filter
       // it. Two gates stand in instead:
-      //   (1) BINDING + OWNERSHIP — the connectionId must belong to this caller
-      //       AND to this tool. Nango connection ids are
-      //       `{userId}:{podId}:{provider}` (NangoConnector.buildConnectionId)
-      //       and a connectable tool's provider is its `nango://<provider>`
-      //       credentialRef / `config.providerConfigKey` (the same derivation as
-      //       `providerConfigKeyOf` in capability-provider-resolution.ts). Without this,
-      //       an arbitrary connectionId enumerates a stranger's link count, and
-      //       a stale one returns a confident count for a DIFFERENT connection
-      //       inside the one dialog whose job is to be trusted before a revoke.
+      //   (1) BINDING + OWNERSHIP — the connectionId must name one of the
+      //       caller's live connection-registry rows (by row id, or by the
+      //       broker connection id it pins) whose capability this tool is a
+      //       member of. Without this, an arbitrary connectionId enumerates a
+      //       stranger's link count, and a stale one returns a confident count
+      //       for a DIFFERENT connection inside the one dialog whose job is to
+      //       be trusted before a revoke.
       //   (2) VISIBILITY — the count joins `entities` under the access
       //       predicate, so it only counts rows the caller can already see.
+      // Links carry the registry ROW id (sync door) or, when written before
+      // it, the broker connection id — the same pair the detach path flips.
       let sourcedEntityCount: number | null = null;
       if (input.connectionId) {
-        const toolConfig = (tool.config ?? {}) as Record<string, unknown>;
-        const toolProvider =
-          typeof toolConfig.providerConfigKey === "string"
-            ? toolConfig.providerConfigKey
-            : tool.credentialRef?.startsWith("nango://")
-              ? tool.credentialRef.slice("nango://".length)
-              : null;
-        const idParts = input.connectionId.split(":");
-        const connectionProvider =
-          idParts.length >= 3 ? idParts.slice(2).join(":") : null;
-        if (
-          !toolProvider ||
-          !input.connectionId.startsWith(`${userId}:`) ||
-          connectionProvider !== toolProvider
-        ) {
+        const [conn] = await database
+          .select({ id: secrets.id, accountHint: secrets.accountHint })
+          .from(secrets)
+          .innerJoin(
+            links,
+            and(
+              eq(links.fromType, "tool"),
+              eq(links.fromId, input.toolId),
+              eq(links.linkType, "member_of"),
+              eq(links.toType, "capability"),
+              drizzleSql`${links.toId} = ${secrets.capabilityId}::text`
+            )
+          )
+          .where(
+            and(
+              or(
+                drizzleSql`${secrets.id}::text = ${input.connectionId}`,
+                eq(secrets.accountHint, input.connectionId)
+              ),
+              eq(secrets.userId, userId),
+              isNull(secrets.deletedAt)
+            )
+          )
+          .limit(1);
+        if (!conn) {
           throw new TRPCError({
             code: "NOT_FOUND",
             message: "Connection not found for this tool",
           });
         }
 
+        const linkIds = [conn.id, conn.accountHint].filter(
+          (id): id is string => !!id
+        );
         const [row] = await database
           .select({ count: drizzleSql<number>`count(*)::int` })
           .from(entityExternalLinks)
@@ -1870,7 +1895,7 @@ export const capabilitiesRouter = router({
           .where(
             and(
               scopedDb(AccessContext.from(ctx)).predicate(entities),
-              eq(entityExternalLinks.nangoConnectionId, input.connectionId),
+              inArray(entityExternalLinks.nangoConnectionId, linkIds),
               eq(entityExternalLinks.status, "active")
             )
           );

@@ -894,6 +894,17 @@ export class IntelligenceHubClient {
           correctWorkspaceName: string;
         }>;
       } | null;
+      /**
+       * The relation types that resolve for the capture's lens (the pod's
+       * effective relation defs). The IS structurer emits only these slugs for
+       * `relationType`. Optional and additive: an older IS ignores it, and an IS
+       * that does not receive it falls back to the default relation-def slugs.
+       */
+      availableRelationTypes?: Array<{
+        slug: string;
+        displayName?: string;
+        description?: string;
+      }>;
     };
     /** Abort timeout in ms (default 25000). Imports raise this for long notes. */
     timeoutMs?: number;
@@ -981,6 +992,19 @@ export class IntelligenceHubClient {
       text?: string;
       /** True when `text` was truncated by the IS. */
       textTruncated?: boolean;
+    };
+    /**
+     * Run facts for the run manifest (`session.metadata.run`). `model` /
+     * `provider` are the ones that ANSWERED — null when nothing did, which is
+     * exactly when `engine` is "degraded". `promptVersion` is derived from the
+     * prompt's content (`structure:<sha256-12>`), so it moves whenever the
+     * prompt does. Optional: older IS builds never sent it.
+     */
+    meta?: {
+      engine: "structure" | "degraded";
+      model: string | null;
+      provider: string | null;
+      promptVersion: string;
     };
   } | null> {
     try {

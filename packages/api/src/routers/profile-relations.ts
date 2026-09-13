@@ -17,6 +17,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../utils/audit-log.js";
+import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 
 const logger = createLogger({ module: "profile-relations-router" });
 
@@ -86,6 +87,23 @@ export const profileRelationsRouter = router({
         });
       }
 
+      // Ownership gate on the SOURCE profile — the relation lists on its schema.
+      // A new link is additive; re-linking an existing triple rewrites its
+      // order/metadata (the repository upserts), so that needs the owner.
+      const existingRelations = await profileRelRepo.getByProfile(
+        sourceProfile.id
+      );
+      const alreadyLinked = existingRelations.some(
+        (r) =>
+          r.sourceProfileId === input.sourceProfileId &&
+          r.targetProfileId === input.targetProfileId &&
+          r.relationDefId === input.relationDefId
+      );
+      await assertProfileSchemaWrite(db, ctx.userId, sourceProfile, {
+        level: alreadyLinked ? "editor" : "additive",
+        actingWorkspaceId: ctx.workspaceId,
+      });
+
       // Verify relation definition exists in this workspace
       const relDef = await relDefRepo.getById(
         input.relationDefId,
@@ -145,14 +163,25 @@ export const profileRelationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      if (!["owner", "admin"].includes(ctx.workspaceRole)) {
+      const db = await getDb();
+      const resolutionService = new ProfileResolutionService(db);
+      const sourceProfile = await resolutionService.resolveProfile(
+        input.sourceProfileId,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!sourceProfile) {
         throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only workspace owners/admins can unlink profile relations",
+          code: "NOT_FOUND",
+          message: `Source profile not found: ${input.sourceProfileId}`,
         });
       }
+      // Owners/admins of the SOURCE profile's workspace — not of the request's.
+      await assertProfileSchemaWrite(db, ctx.userId, sourceProfile, {
+        level: "admin",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
-      const db = await getDb();
       const profileRelRepo = new ProfileRelationRepository(db);
       await profileRelRepo.unlink(
         input.sourceProfileId,

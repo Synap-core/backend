@@ -256,6 +256,10 @@ export const buildHandlers: McpHandlerMap = {
       profileSlug: args.profileSlug as string,
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
+      // Ranks, never filters: each candidate comes back with `score` + `reason`.
+      ...(typeof args.intentText === "string" && args.intentText.trim()
+        ? { intentText: args.intentText.slice(0, 2000) }
+        : {}),
     });
     // Only reshape in the AMBIGUOUS case (auto-picked among several member
     // workspaces) — the explicit-workspaceId and resolved-entity-workspace

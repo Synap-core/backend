@@ -876,6 +876,36 @@ describe("findExtractionNodeId", () => {
     expect(findExtractionNodeId(flow as any)).toBe("assess");
   });
 
+  it("recognises a message.interpret node, and prefers it over ai.generate (D12)", () => {
+    const flow = {
+      nodes: [
+        { id: "trigger", type: "trigger", data: {} },
+        { id: "narrate", type: "capability", data: { verbId: "ai.generate" } },
+        {
+          id: "interpret",
+          type: "capability",
+          data: { verbId: "message.interpret" },
+        },
+      ],
+      edges: [],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(findExtractionNodeId(flow as any)).toBe("interpret");
+    const onlyInterpret = {
+      nodes: [
+        { id: "step-0", type: "skill", data: { skillId: "x" } },
+        {
+          id: "interpret",
+          type: "capability",
+          data: { verbId: "message.interpret" },
+        },
+      ],
+      edges: [],
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(findExtractionNodeId(onlyInterpret as any)).toBe("interpret");
+  });
+
   it("falls back to the first capability/skill node when no ai.generate node", () => {
     const flow = {
       nodes: [

@@ -191,6 +191,8 @@ export function buildImportGraphProposalData(input: {
   /** Scope folded into the idempotency key (parity with the capture lane). */
   workspaceId?: string | null;
   projectId?: string | null;
+  /** See `importGraphIdempotencyKey` — a rerun session's own dedup namespace. */
+  idempotencyNamespace?: string;
   contentRef?: { storageKey: string; mimeType?: string; size?: number };
   reasoning?: string;
   /** Continuous-improvement report (refuse → inspect → re-run → apply). */
@@ -198,11 +200,7 @@ export function buildImportGraphProposalData(input: {
   homes?: unknown;
   corpusMap?: unknown;
 }): Record<string, unknown> {
-  const idempotencyKey = computeImportGraphIdempotencyKey({
-    workspaceId: input.workspaceId ?? null,
-    projectId: input.projectId ?? null,
-    operations: input.operations,
-  });
+  const idempotencyKey = importGraphIdempotencyKey(input);
   return {
     operations: input.operations,
     source: input.source,
@@ -229,28 +227,59 @@ export function buildImportGraphProposalData(input: {
  * a `data->>'idempotencyKey' IS NULL` scan, which would make every keyless
  * historical proposal match everything.
  */
+/**
+ * THE import-graph dedup key — used by BOTH the stamp and the lookup above, so
+ * the two can never disagree. Without a namespace it is exactly the content
+ * key (every existing caller is unchanged). With one — a rerun session's
+ * `rerun:<sessionId>` — the content key is prefixed, so re-structuring the SAME
+ * corpus in a new session files its own proposal instead of handing back the
+ * parent's, while a double submit inside that session still dedups. A
+ * degenerate graph stays keyless either way.
+ */
+export function importGraphIdempotencyKey(input: {
+  workspaceId?: string | null;
+  projectId?: string | null;
+  operations: ReadonlyArray<CompositeProposalOperation>;
+  idempotencyNamespace?: string;
+}): string | null {
+  const contentKey = computeImportGraphIdempotencyKey({
+    workspaceId: input.workspaceId ?? null,
+    projectId: input.projectId ?? null,
+    operations: input.operations,
+  });
+  if (!contentKey) return null;
+  return input.idempotencyNamespace
+    ? `${input.idempotencyNamespace}:${contentKey}`
+    : contentKey;
+}
+
 export async function findPriorImportGraphProposal(
   input: {
     userId: string;
     workspaceId: string | null;
     projectId?: string | null;
     operations: CompositeProposalOperation[];
+    idempotencyNamespace?: string;
   },
   /** Test seam only — production always uses the module-level connection. */
   database: typeof db = db
-): Promise<{ id: string; status: string } | null> {
-  const idempotencyKey = computeImportGraphIdempotencyKey({
-    workspaceId: input.workspaceId ?? null,
-    projectId: input.projectId ?? null,
-    operations: input.operations,
-  });
+): Promise<{ id: string; status: string; sessionId: string | null } | null> {
+  const idempotencyKey = importGraphIdempotencyKey(input);
   if (!idempotencyKey) return null;
   try {
     const prior = await findPriorCaptureGraphProposal(database, {
       userId: input.userId,
       idempotencyKey,
     });
-    return prior ? { id: prior.id, status: prior.status } : null;
+    // `sessionId` so a re-sent analyze lands in the PRIOR run's room — the
+    // caller owner-checks it before reuse.
+    return prior
+      ? {
+          id: prior.id,
+          status: prior.status,
+          sessionId: prior.sessionId ?? null,
+        }
+      : null;
   } catch (err) {
     logger.warn(
       { err, userId: input.userId },
@@ -573,6 +602,15 @@ export async function proposeImportGraph(
 
   if (isProse) {
     try {
+      // Stored guidelines — the ONE assembler every structure call reads through.
+      const { assembleStructureContext } = await import("@synap/database");
+      const importContext = await assembleStructureContext({
+        db,
+        userId,
+        workspaceId: wsId,
+        sourceKind: `import:${source}`,
+        entityKinds: [...validSlugs],
+      });
       const { client } = await resolveIntelligenceService({
         userId,
         workspaceId: wsId,
@@ -589,6 +627,9 @@ export async function proposeImportGraph(
             userId,
             workspaceId: wsId,
           }),
+          ...(importContext.instructions
+            ? { instructions: importContext.instructions }
+            : {}),
         },
         { logger }
       );

@@ -36,6 +36,7 @@ import {
   buildPropertyMappingJson,
   buildValueMapJson,
 } from "./manifest.js";
+import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
 
 /** Per-op tally. Every field optional — an op reports only what it touched. */
 export interface OpCounts {
@@ -80,6 +81,12 @@ export interface OpResult {
    * `CONVERSION_BOOT_SEVERITY`.
    */
   severity?: "fatal" | "advisory";
+  /**
+   * Set on `status:"deferred"` results only — WHICH defer axis skipped the op.
+   * Stamped here at the two defer sites so a consumer (the boot caller's
+   * `/status/release` pending list) never re-derives it from the op type.
+   */
+  deferReason?: "destructive-tail" | "defer-at-boot";
 }
 
 export interface RunOptions {
@@ -251,6 +258,7 @@ export async function runConversions(
         slug,
         status: "deferred",
         counts: {},
+        deferReason: "destructive-tail",
       });
       continue;
     }
@@ -266,8 +274,39 @@ export async function runConversions(
         slug,
         status: "deferred",
         counts: {},
+        deferReason: "defer-at-boot",
       });
       continue;
+    }
+
+    // THE LEDGER TRAP: a real run that reaches a destructive-tail op WITHOUT
+    // `destructiveTail` would apply only the repoint and ledger the opKey — and
+    // the ledger check above then skips that op on every later run, so the
+    // deactivation can never run and the drained twin stays active. Refuse it
+    // instead: neither applied nor ledgered, halting like any failure. Repoint
+    // and retire are one atomic unit. Placed AFTER both defer checks, so the
+    // boot caller (`deferDestructive`) still defers these ops and never meets
+    // this refusal. A dry run writes nothing, so it is not refused.
+    if (
+      !options.dryRun &&
+      !options.destructiveTail &&
+      opHasDestructiveTail(op)
+    ) {
+      hadError = true;
+      results.push({
+        opKey: op.opKey,
+        op: op.op,
+        slug,
+        status: "error",
+        counts: {},
+        error:
+          `Refusing to apply '${op.opKey}' (${op.op}) without destructiveTail: ` +
+          `its repoint would be ledgered and its profile deactivation orphaned ` +
+          `forever. Dry-run it with \`--only ${op.opKey}\`, then re-run with ` +
+          `\`--apply --only ${op.opKey} --destructive-tail\`.`,
+        severity: conversionBootSeverity(op),
+      });
+      break; // Halt, as for any failure (canary posture).
     }
 
     try {
@@ -405,6 +444,11 @@ async function applySeedKindProfile(
   tx: Sql,
   op: SeedKindProfileOp
 ): Promise<OpCounts> {
+  // A raw INSERT bypasses ProfileRepository.create(), so it restates the
+  // reserved-slug refusal itself (utils/reserved-profile-slugs.ts). Throwing
+  // here fails the op, which aborts boot — a manifest seeding `project` must
+  // never serve.
+  assertProfileSlugNotReserved(op.slug);
   const inserted = await tx`
     INSERT INTO profiles (slug, display_name, ui_hints, scope, entity_scope, profile_kind)
     SELECT ${op.slug}, ${op.displayName}, ${JSON.stringify(op.uiHints ?? {})}::jsonb,
@@ -1232,6 +1276,8 @@ export async function computeCounts(
       return r[0]?.n ? { profilesUpdated: r[0].n } : {};
     }
     case "seedKindProfile": {
+      // Same refusal as applySeedKindProfile, so a dry run reports it too.
+      assertProfileSlugNotReserved(op.slug);
       const r = await sql<Array<{ n: number }>>`
         SELECT COUNT(*)::int AS n FROM profiles
         WHERE slug = ${op.slug} AND scope = 'system'

@@ -84,6 +84,9 @@ import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expec
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
+import { propertyLinkLevel } from "./profile-schema-write-access.js";
+import { profileOwnershipRequirement } from "./profile-pod-wide-fields.js";
+import { isPodAdmin } from "./workspace-role.js";
 import {
   decideAgentPolicy,
   findMatchingPattern,
@@ -113,6 +116,10 @@ export type { ChannelCapabilityGrant };
 export type { ChannelCapabilityDecision } from "@synap/governance-policy";
 
 const logger = createLogger({ module: "permission-check" });
+
+/** 4d's refusal for a human who is not a pod admin — says what to do instead. */
+const POD_ADMIN_SCHEMA_DENY_REASON =
+  "Only a pod admin can add a required field or default to a system kind. Link it as optional, or ask your pod admin.";
 
 /**
  * Lifecycle close for a focus session: `completeFocusSession` gates with
@@ -949,6 +956,8 @@ interface AnonymousPolicyFacts {
   subjectUoValidated: boolean | undefined;
   /** rung 2.1 — the caller's / session's force-propose signal. */
   forcePropose: boolean;
+  /** rung 2.07 — 4d's pod-admin schema-change floor, resolved on the human principal. */
+  podAdminSchemaChange: boolean;
   /** rung 2.8 — the resolved `governance_rules` verdict ("any"-principal rules only). */
   governanceRuleVerdict: "auto" | "propose" | undefined;
   /** rung 2.55 — server-resolved trust of the acting channel's ORIGIN. */
@@ -984,6 +993,8 @@ type ExhaustiveAgentPolicyInput = AgentPolicyInput &
  *                            DEFAULT_AUTO_APPROVE, so both old and new propose.
  *   2.05 HUMAN GATE        — FIRES (previously hand-mirrored here).
  *   2.06 ARBITRARY EXEC    — FIRES (previously hand-mirrored here).
+ *   2.07 POD-ADMIN SCHEMA  — FIRES. Resolved by 4d on `userId`, the human the
+ *                            write acts for — not on an agent row.
  *   2.1  forcePropose      — FIRES (previously hand-mirrored here).
  *   2.5  DESTRUCTIVE       — FIRES (previously hand-mirrored here).
  *   2.55 UNTRUSTED ORIGIN  — FIRES. **THIS IS THE FIX.** This path never
@@ -1038,6 +1049,7 @@ function anonymousPolicyInput(facts: AnonymousPolicyFacts): AgentPolicyInput {
     subjectProfileSlug: facts.subjectProfileSlug,
     subjectUoValidated: facts.subjectUoValidated,
     forcePropose: facts.forcePropose,
+    podAdminSchemaChange: facts.podAdminSchemaChange,
     governanceRuleVerdict: facts.governanceRuleVerdict,
     originTrust: facts.originTrust,
 
@@ -1361,6 +1373,50 @@ async function evaluatePermission(
       }
     }
 
+    // 4d. POD-ADMIN SCHEMA CHANGE: a property-def CREATE that links a REQUIRED
+    // field or a DEFAULT onto a pod-admin-owned kind (system, or shared with no
+    // home workspace). That link applies to every workspace at once, and its
+    // apply door (`createAndLinkPropertyDef` → `assertProfileSchemaWrite`)
+    // accepts only a pod admin — so without this, governance could GRANT a write
+    // that then throws at apply, or approve one into APPROVAL_FAILED. Decided
+    // HERE with the apply door's own rule (`propertyLinkLevel`, and
+    // `alreadyLinked: false` because this is a create):
+    //   • pod admin            → nothing changes;
+    //   • human, not an admin  → DENY, saying what to do instead;
+    //   • AI write, not admin  → rung 2.07 (`podAdminSchemaChange`) in the ONE
+    //     engine, so it lands as a proposal a pod admin can approve.
+    // The principal is `userId`, the human the write acts for — the same id the
+    // apply door checks. A missing/unresolvable profile is left to apply
+    // (NOT_FOUND there), mirroring 4c. A FAILED membership read throws into the
+    // catch below (deny); it never reads as "not an admin".
+    const isAiWrite =
+      Boolean(agentUserId) || source === "ai" || source === "intelligence";
+    let podAdminSchemaChange = false;
+    if (
+      subjectType === "property_def" &&
+      action === "create" &&
+      typeof data?.profileId === "string" &&
+      propertyLinkLevel({
+        required: data.required === true,
+        defaultValue: data.defaultValue,
+        alreadyLinked: false,
+      }) !== "additive"
+    ) {
+      const schemaProfile = await new ProfileResolutionService(
+        db
+      ).resolveProfile(data.profileId, userId, workspaceId ?? "");
+      if (
+        schemaProfile &&
+        profileOwnershipRequirement(schemaProfile).kind === "pod-admin" &&
+        !(await isPodAdmin(userId))
+      ) {
+        if (!isAiWrite) {
+          return { denied: true, reason: POD_ADMIN_SCHEMA_DENY_REASON };
+        }
+        podAdminSchemaChange = true;
+      }
+    }
+
     // Session-scoped force-propose: an unattended propose-only playbook's session
     // (e.g. CRM hygiene) stamps `metadata.governance.forceProposeWrites` so every
     // AI write it makes surfaces as a reviewable proposal, even when
@@ -1369,8 +1425,6 @@ async function evaluatePermission(
     // maintenance write may be attributed via agentUserId OR only source:
     // "intelligence"). Only queried for AI writes with a session that hasn't
     // already forced a proposal (the short-circuit avoids the lookup otherwise).
-    const isAiWrite =
-      Boolean(agentUserId) || source === "ai" || source === "intelligence";
     // ONE read of the session row, reused for TWO things: the force-propose
     // stamp above, and the SLOT CLAIM below. The read now happens whenever an AI
     // write carries a session — including the two flag cases that used to
@@ -1467,6 +1521,7 @@ async function evaluatePermission(
         subjectProfileSlug,
         subjectUoValidated,
         forcePropose: effectiveForcePropose,
+        podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
         // a would-be-auto write from an untrusted (external / bridge) channel.
@@ -1838,6 +1893,7 @@ async function evaluatePermission(
           subjectProfileSlug,
           subjectUoValidated,
           forcePropose: effectiveForcePropose,
+          podAdminSchemaChange,
           governanceRuleVerdict: ruleMatch?.verdict,
           originTrust,
         })
@@ -2002,6 +2058,12 @@ async function evaluatePermission(
         governanceReason:
           proposeReasonCode ?? opts.governanceReason ?? undefined,
       });
+    }
+
+    // 4d's floor when neither AI branch above decided it (an `agentUserId` that
+    // is not an agent row, with no AI `source`): nothing here can land it.
+    if (podAdminSchemaChange) {
+      return { denied: true, reason: POD_ADMIN_SCHEMA_DENY_REASON };
     }
   } catch (error) {
     logger.error({ err: error }, "Permission check error");

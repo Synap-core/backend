@@ -16,6 +16,7 @@ import {
   getDb,
   PropertyDefRepository,
   ProfileRepository,
+  ProfileResolutionService,
   type PropertyValueType,
   eq,
   drizzleSql,
@@ -24,6 +25,7 @@ import { entityPropertyIndex } from "@synap/database/schema";
 // PropertySlugConflictError not used, removed
 import { TRPCError } from "@trpc/server";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "property-defs-router" });
@@ -194,6 +196,28 @@ export const propertyDefsRouter = router({
         });
       }
 
+      // A def naming a profile is written for THAT profile — gate on its owner
+      // (read from the loaded row) before anything exists, including the
+      // slug-conflict lookup below. A def alone attaches nothing to existing
+      // entities, so it is additive: an editor may add one to a system kind.
+      if (input.profileId) {
+        const profile = await new ProfileResolutionService(db).resolveProfile(
+          input.profileId,
+          ctx.userId,
+          ctx.workspaceId
+        );
+        if (!profile) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Profile not found: ${input.profileId}`,
+          });
+        }
+        await assertProfileSchemaWrite(db, ctx.userId, profile, {
+          level: "additive",
+          actingWorkspaceId: ctx.workspaceId,
+        });
+      }
+
       const overlayWorkspaceId = input.overlay ? ctx.workspaceId : null;
 
       // Return existing on slug conflict — match exactly the scope we're
@@ -272,10 +296,32 @@ export const propertyDefsRouter = router({
         });
       }
 
-      // Gate against the ROW's workspace (never a request value). Global/base
-      // defs (workspaceId null) are system-managed → denied here.
-      await assertWorkspaceWrite(db, ctx.userId, {
-        workspaceId: existing.workspaceId,
+      // Gate on the DEF's owner, read from the loaded row — never a request
+      // value. A def's constraints / enum / valueType apply to every entity of
+      // every profile that links it, so this is never additive:
+      //   • overlay def (workspaceId set) → editor+ of THAT workspace;
+      //   • base def on a profile        → that profile's owner (a system
+      //                                    kind's base def ⇒ pod admin);
+      //   • global def (no profile)      → pod admin.
+      let defOwner: { workspaceId?: string | null; userId?: string | null } =
+        {};
+      if (existing.workspaceId) {
+        defOwner = { workspaceId: existing.workspaceId };
+      } else if (existing.profileId) {
+        const owningProfile = await new ProfileRepository(db).getById(
+          existing.profileId
+        );
+        if (!owningProfile) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Profile not found for property definition: ${input.id}`,
+          });
+        }
+        defOwner = owningProfile;
+      }
+      await assertProfileSchemaWrite(db, ctx.userId, defOwner, {
+        level: "editor",
+        actingWorkspaceId: null,
       });
 
       // Check for slug conflict if slug is being changed.

@@ -103,6 +103,35 @@ vi.mock("../utils/event-backed-proposal.js", () => ({
 vi.mock("../utils/materialize-composite.js", () => ({
   materializeCompositeGraph: vi.fn(),
 }));
+// The inverse of a create now runs through the one undo engine
+// (`revertProposalCreations` → `safeRevert`), which this DB-free suite cannot
+// execute — its behaviour is pinned on real Postgres in
+// `services/reversibility/__tests__/run-revert.pglite.test.ts`. Here it is a
+// spy that reports every planned row undone, so these tests keep asserting
+// what they own: reopen vs terminal status, and that a stranded REVERTED
+// proposal never re-runs the inverse.
+const { revertCreationsSpy } = vi.hoisted(() => ({
+  revertCreationsSpy: vi.fn(
+    async ({
+      plan,
+    }: {
+      plan: { entityIds: string[]; relationIds: string[] };
+    }) => ({
+      undone: { entityIds: plan.entityIds, relationIds: plan.relationIds },
+      skipped: [],
+      remaining: { entityIds: [], relationIds: [] },
+    })
+  ),
+}));
+vi.mock(
+  "../services/proposals/revert-creations.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../services/proposals/revert-creations.js")
+    >()),
+    revertProposalCreations: revertCreationsSpy,
+  })
+);
 vi.mock("../utils/intelligence-routing.js", () => ({
   getDefaultActiveService: vi.fn(),
 }));
@@ -391,6 +420,8 @@ describe("proposalsRouter.revert — restoring an approved delete proposal", () 
       targetType: "entity",
       targetId: entityId,
       proposalType: "delete",
+      // NOT NULL on the row; the revert write compare-and-sets on it.
+      updatedAt: new Date("2026-09-13T08:00:00.000Z"),
       // Pod-wide; `sourceId` authorizes the caller as the proposal's owner —
       // the shared ladder's pod-wide branch (owner or pod-admin). Revert no
       // longer skips the check for pod-wide proposals.
@@ -504,6 +535,8 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
       targetType: "entity",
       targetId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
       proposalType: "create_composite",
+      // NOT NULL on the row; the revert write compare-and-sets on it.
+      updatedAt: new Date("2026-09-13T08:00:00.000Z"),
       // Pod-wide. This used to SKIP the authority check entirely — the comment
       // here read "pod-wide → skips the workspace policy check", which recorded
       // the hole as if it were the design. `revert` now runs the shared ladder,
@@ -591,6 +624,7 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     setUpAlreadyReverted();
     const setSpy = captureFlip();
     entityDeleteSpy.mockClear();
+    revertCreationsSpy.mockClear();
 
     const caller = proposalsRouter.createCaller({
       authenticated: true,
@@ -605,6 +639,7 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     expect((result as any).reverted).toBeUndefined();
 
     // The inverse must NOT be re-run — the created entity is already gone.
+    expect(revertCreationsSpy).not.toHaveBeenCalled();
     expect(entityDeleteSpy).not.toHaveBeenCalled();
 
     // Exactly one write: the status flip back to PENDING. It clears the review
@@ -622,6 +657,7 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
     setUpAlreadyReverted();
     captureFlip();
     entityDeleteSpy.mockClear();
+    revertCreationsSpy.mockClear();
 
     const caller = proposalsRouter.createCaller({
       authenticated: true,
@@ -632,6 +668,7 @@ describe("proposalsRouter.revert — reopen (re-propose) vs terminal revert", ()
       /approved or auto-approved/i
     );
     // No inverse and no status write on the rejected path.
+    expect(revertCreationsSpy).not.toHaveBeenCalled();
     expect(entityDeleteSpy).not.toHaveBeenCalled();
     expect((db.update as any).mock.calls.length).toBe(0);
   });

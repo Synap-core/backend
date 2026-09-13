@@ -123,11 +123,27 @@ describe("every MCP capture receipt reports the DERIVED project", () => {
   it("no receipt echoes the bare caller pin any more", () => {
     // `captureProjectId` survives ONLY as what is FORWARDED to the write
     // (`...(captureProjectId ? { projectId: captureProjectId } : {})`, which
-    // keeps placement unchanged); it must never be a receipt's own field.
-    const receiptEchoes = src
-      .split("\n")
-      .filter((l) => /^\s*projectId: captureProjectId,/.test(l));
-    expect(receiptEchoes).toEqual([]);
+    // keeps placement unchanged) and as an INPUT to the graph lane's run-room
+    // key (`computeCaptureGraphIdempotencyKey({ … projectId: captureProjectId
+    // … })`, so the same payload + pin reuses one intake session). It must
+    // never be a receipt's own field.
+    //
+    // A bare `projectId: captureProjectId,` line is exempt ONLY when it sits
+    // within the 4 lines after `computeCaptureGraphIdempotencyKey(` — the key
+    // input, not an echo. Anything else is a receipt echo.
+    const lines = src.split("\n");
+    const isRoomKeyInput = (i: number) =>
+      lines
+        .slice(Math.max(0, i - 4), i)
+        .some((l) => l.includes("computeCaptureGraphIdempotencyKey("));
+    const bare = lines
+      .map((l, i) => ({ l, i }))
+      .filter(({ l }) => /^\s*projectId: captureProjectId,/.test(l));
+    const receiptEchoes = bare.filter(({ i }) => !isRoomKeyInput(i));
+    expect(receiptEchoes.map(({ l }) => l.trim())).toEqual([]);
+    // The exemption is not vacuous and has not widened: exactly the one
+    // room-key input exists.
+    expect(bare.filter(({ i }) => isRoomKeyInput(i))).toHaveLength(1);
   });
 
   it("placement itself is untouched — the pin is still what the write receives", () => {

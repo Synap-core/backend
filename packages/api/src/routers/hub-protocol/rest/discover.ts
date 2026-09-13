@@ -15,7 +15,12 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { resolvePropertyLabel, resolvePropertyOptions } from "@synap/database";
+import {
+  getDb,
+  resolvePropertyLabel,
+  resolvePropertyOptions,
+} from "@synap/database";
+import { listEffectiveRelationTypes } from "../../../utils/relation-types.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -282,8 +287,30 @@ const DiscoverProfileSchema = z.object({
   entityCount: z.number().int().nonnegative().optional(),
 });
 
+/**
+ * The relation types that resolve under the request's lens — the SAME read
+ * `relations.create` rejects an unknown slug against, so `create_relation`
+ * below can be filled from this list. Base layer (`workspaceId: null`) plus the
+ * requested workspace's own defs.
+ */
+const DiscoverRelationTypeSchema = z.object({
+  slug: z.string(),
+  displayName: z.string(),
+  description: z.string().nullable(),
+  isDirectional: z.boolean(),
+  inverseLabel: z.string().nullable(),
+  workspaceId: z.string().nullable(),
+});
+
+const DiscoverRelationTypeFields = {
+  relationTypes: z.array(DiscoverRelationTypeSchema).optional(),
+  /** Present INSTEAD of `relationTypes` when the read failed — never an empty list. */
+  relationTypesError: z.string().optional(),
+};
+
 const DiscoverResponseSchema = z
   .object({
+    ...DiscoverRelationTypeFields,
     profiles: z.array(DiscoverProfileSchema),
     commands: z.record(z.string(), z.string()),
     hint: z.string(),
@@ -292,6 +319,7 @@ const DiscoverResponseSchema = z
 
 export const DiscoverSummaryResponseSchema = z
   .object({
+    ...DiscoverRelationTypeFields,
     profiles: z.array(DiscoverProfileSummarySchema),
     commands: z.record(z.string(), z.string()),
     hint: z.string(),
@@ -377,6 +405,22 @@ export function registerDiscoverRoutes(app: HubHono): void {
         ? profiles.filter((profile) => selectedSlugs.includes(profile.slug))
         : profiles;
 
+      // Relation vocabulary for this lens. A failed read is surfaced as
+      // `relationTypesError`, never folded into an empty list.
+      const relationTypes = await getDb()
+        .then((database) =>
+          listEffectiveRelationTypes(database, workspaceId ?? null)
+        )
+        .then(
+          (types) => ({ relationTypes: types }),
+          (err: unknown) => {
+            logger.error({ err }, "discover: relation types read failed");
+            return {
+              relationTypesError: `Relation types could not be read: ${err instanceof Error ? err.message : String(err)}`,
+            };
+          }
+        );
+
       // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
       if (summary) {
         const summaryProfiles = selectedProfiles.map((p) => ({
@@ -394,6 +438,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
 
         return c.json({
           profiles: summaryProfiles,
+          ...relationTypes,
           commands: {
             discover: "synap discover --json",
             orient: "synap orient --json",
@@ -469,6 +514,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
 
       return c.json({
         profiles: discoveredProfiles,
+        ...relationTypes,
         commands: {
           discover: "synap discover --json",
           orient: "synap orient --json",
@@ -488,7 +534,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
             "synap capture --type <gotcha|lesson|decision|reference> --claim <text> [--why <text>] [--tags <csv>] --json",
           list_workspaces: "synap list workspaces --json",
           create_relation:
-            "synap create relation --source <id> --target <id> --type <type> --json",
+            "synap create relation --source <id> --target <id> --type <relationTypes[].slug> --json",
         },
         hint: "Use `createCommand` per profile as a template. Start with `summary=true`, then pass `profileSlugs` for only the schemas you need. Call `synap discover --profiles` to see only profiles, `--commands` for only the command tree.",
       });

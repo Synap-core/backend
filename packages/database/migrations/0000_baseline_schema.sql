@@ -806,6 +806,7 @@ CREATE TABLE IF NOT EXISTS "entity_external_links" (
   "nango_connection_id"   text  NOT NULL,
   "status"                text  NOT NULL DEFAULT 'active',
   "sync_hash"             text,
+  "url"                   text,
   "last_synced_at"        timestamp with time zone NOT NULL DEFAULT now(),
   "disconnected_at"       timestamp with time zone,
   "created_at"            timestamp with time zone NOT NULL DEFAULT now()
@@ -817,12 +818,20 @@ ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "external_id" text;
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "nango_connection_id" text;
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "status" text DEFAULT 'active';
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "sync_hash" text;
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "url" text;  -- 0259
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "last_synced_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "disconnected_at" timestamp with time zone;
 ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 
-CREATE UNIQUE INDEX IF NOT EXISTS "entity_external_links_provider_external_id_idx"
-  ON "entity_external_links" ("provider", "external_id");
+-- 0261: one link per external record PER CONNECTION. NULL connection ids become
+-- the `direct-import` sentinel so the unique key can never be bypassed by NULLs.
+UPDATE "entity_external_links"
+   SET "nango_connection_id" = 'direct-import'
+ WHERE "nango_connection_id" IS NULL;
+ALTER TABLE "entity_external_links" ALTER COLUMN "nango_connection_id" SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "entity_external_links_provider_external_id_connection_idx"
+  ON "entity_external_links" ("provider", "external_id", "nango_connection_id");
+DROP INDEX IF EXISTS "entity_external_links_provider_external_id_idx";
 
 CREATE INDEX IF NOT EXISTS "entity_external_links_entity_id_idx"
   ON "entity_external_links" ("entity_id");
@@ -4270,9 +4279,11 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
 DO $$ BEGIN
-  CREATE TYPE governance_target AS ENUM ('action', 'profile', 'capability');
+  CREATE TYPE governance_target AS ENUM ('action', 'profile', 'capability', 'connection');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+-- 0260: connection target (idempotent for a pre-0260 baseline).
+ALTER TYPE governance_target ADD VALUE IF NOT EXISTS 'connection';
 DO $$ BEGIN
   CREATE TYPE governance_verdict AS ENUM ('auto', 'propose');
 EXCEPTION WHEN duplicate_object THEN null;
@@ -4408,6 +4419,14 @@ ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "source" text NOT NULL DE
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "created_at" timestamptz NOT NULL DEFAULT now();
 ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
+-- 0258: data-type rungs + guideline versions (idempotent for a pre-0258 baseline).
+ALTER TYPE config_scope_kind ADD VALUE IF NOT EXISTS 'sourceKind';
+ALTER TYPE config_scope_kind ADD VALUE IF NOT EXISTS 'entityKind';
+ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "version" integer NOT NULL DEFAULT 1;
+ALTER TABLE "config_settings" ADD COLUMN IF NOT EXISTS "supersedes_id" uuid;
+CREATE UNIQUE INDEX IF NOT EXISTS "config_settings_supersedes_uq"
+  ON "config_settings" ("supersedes_id")
+  WHERE "supersedes_id" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "config_settings_key_scope_idx"
   ON "config_settings" ("key", "workspace_id", "scope_kind", "scope_ref")
   WHERE "revoked_at" IS NULL;

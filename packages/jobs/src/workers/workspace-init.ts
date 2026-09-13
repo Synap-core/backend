@@ -37,13 +37,18 @@ export async function handleWorkspaceInit(
     ensureDefaultCommands,
     ensureDefaultRelationDefs,
     ensureSystemProfiles,
+    reportEnsureSystemProfilesResult,
     seedPropertyRelationMappings,
   } = await import("@synap/database");
 
   // Ensure system profiles exist (idempotent — creates bookmark, note, task, etc. if missing)
   try {
     const profileResult = await ensureSystemProfiles();
-    logger.info({ ...profileResult }, "System profiles check complete");
+    reportEnsureSystemProfilesResult(logger, profileResult, {
+      ok: "System profiles check complete",
+      failed:
+        "System profile reconciliation FAILED during workspace init (seeder returned status:error) — schema upgrades did not apply",
+    });
   } catch (err) {
     logger.warn({ err }, "Failed to ensure system profiles (non-fatal)");
   }

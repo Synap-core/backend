@@ -120,7 +120,6 @@ describe("tripwire: every capture producer supplies a narrative summary", () => 
       `expected the known capture producers, found: ${rel.join(", ")}`
     ).toBeGreaterThanOrEqual(5);
     for (const expected of [
-      "services/event-sync/run-gcal-import.ts",
       "services/calcom/run-cal-backfill.ts",
       "services/capabilities/builtin-verbs.ts",
       "routers/webhooks-inbound.ts",

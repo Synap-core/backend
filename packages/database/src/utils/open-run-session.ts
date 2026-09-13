@@ -36,6 +36,13 @@ export interface OpenRunSessionInput {
   parentSessionId?: string | null;
   /** One line recorded on the PARENT's `metadata.suspended` at push time. */
   suspendedIntent?: string | null;
+  /**
+   * Explicit typed origin. Absent ⇒ derived exactly as before (automation lane
+   * ⇒ "automation", else "agent"), so existing callers are unchanged. The
+   * intake door passes "human" for a run a person started with no agent
+   * identity — without it every human capture's room read as agent-opened.
+   */
+  origin?: "automation" | "agent" | "human";
 }
 
 export interface OpenRunSessionResult {
@@ -93,12 +100,13 @@ export async function openRunSession(
   // automation ids); every other run source ("enrichment", "import", "digest")
   // is an agent-driven run. This is the ONLY writer that produces
   // automation-origin rows.
-  const origin: "automation" | "agent" =
-    input.source === "automation" ||
+  const origin: "automation" | "agent" | "human" =
+    input.origin ??
+    (input.source === "automation" ||
     !!input.automationId ||
     !!input.automationRunId
       ? "automation"
-      : "agent";
+      : "agent");
 
   const reusedId = await findReusableRunSession();
   if (reusedId) {

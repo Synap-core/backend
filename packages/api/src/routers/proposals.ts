@@ -34,6 +34,7 @@ import {
   users,
   getWorkspaceMembership,
   unmergeEntities,
+  drizzleSql,
   type MergeMaterializedStamp,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -64,8 +65,6 @@ import {
   resolveAutomationStepRunIds,
 } from "./proposals/scope-conditions.js";
 import { createLogger } from "@synap-core/core";
-import { entitiesRouter as regularEntitiesRouter } from "./entities.js";
-import { relationsRouter } from "./relations.js";
 import { documentsRouter } from "./documents.js";
 import { emitSideEffects } from "@synap/events";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -99,7 +98,21 @@ import {
   findFlowNode,
 } from "./proposals/display.js";
 export { buildProposalChanges } from "./proposals/changes.js";
-import { planProposalRevert } from "./proposals/revert.js";
+import {
+  planProposalRevert,
+  planProposalOpRevert,
+} from "./proposals/revert.js";
+import {
+  revertProposalCreations,
+  describeRevertTarget,
+  revertSkipView,
+} from "../services/proposals/revert-creations.js";
+import {
+  mergeMaterializedRecords,
+  markOpsReverted,
+  type CompleteMaterializedRecord,
+} from "../services/proposals/stamp-materialized.js";
+import { proposalUnchangedSince } from "../services/proposals/proposal-cas.js";
 export {
   planProposalRevert,
   type ProposalRevertPlan,
@@ -1623,12 +1636,20 @@ export const proposalsRouter = router({
    *     `createdBy === userId` — createProposal stamps the triggering human as
    *     `createdBy`). This lets the human who dispatched an agent retract the
    *     agent's still-pending request.
+   *   - the human creator of an agent-less proposal (`agentUserId` NULL AND
+   *     `createdBy === userId`) — the intake doors stamp no proposedByUserId.
    * Anyone else — including a workspace owner/admin who is NOT the proposer —
    * must use `reject`, not `withdraw`. Pending-only: an already
    * approved/rejected/withdrawn proposal cannot be withdrawn.
    */
   withdraw: protectedProcedure
-    .input(z.object({ proposalId: z.string() }))
+    .input(
+      z.object({
+        proposalId: z.string(),
+        /** Why it was withdrawn — stored on `data.withdrawReason`. */
+        reason: z.string().max(2000).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
@@ -1696,7 +1717,14 @@ export const proposalsRouter = router({
       // whether any surface treats `withdrawn` differently from `rejected`).
       const isActingAgent =
         !!proposal.agentUserId && proposal.createdBy === userId;
-      if (!isHumanProposer && !isActingAgent) {
+      // The human CREATOR of an agent-less proposal: most capture/import doors
+      // file through `createEventBackedProposal`, which stamps `createdBy` but
+      // never `proposedByUserId`, so the creator failed both rungs above. With
+      // no agent on the row, `createdBy === userId` is the same person as the
+      // proposer — not a widening to other users or to session owners.
+      const isHumanCreator =
+        !proposal.agentUserId && proposal.createdBy === userId;
+      if (!isHumanProposer && !isActingAgent && !isHumanCreator) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Only the proposer can withdraw this proposal.",
@@ -1710,6 +1738,14 @@ export const proposalsRouter = router({
           reviewedBy: userId,
           reviewedAt: new Date(),
           updatedAt: new Date(),
+          // On `data.withdrawReason` (the `data.revertReason` precedent), NEVER
+          // `rejectionReason`: the agent scorecard buckets that column for every
+          // row, so a withdrawal would read as a "top rejection reason".
+          ...(input.reason
+            ? {
+                data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${input.reason}::text)`,
+              }
+            : {}),
         })
         .where(eq(proposals.id, input.proposalId));
 
@@ -1756,10 +1792,30 @@ export const proposalsRouter = router({
          * block re-acceptance). Default false = the historical terminal revert.
          */
         reopen: z.boolean().optional().default(false),
+        /**
+         * Revert ONE item of a composite proposal — the `data.materialized.byOp`
+         * key (an op's `ref`, `$op<index>`, or `<sourceRef>-><targetRef>:<type>`
+         * for a link). Same undo engine, same untouched rules, same receipt; the
+         * rest of the proposal stays applied. A second revert of the same item
+         * is a no-op. Not combinable with `reopen`.
+         */
+        opKey: z.string().min(1).max(500).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // A session revert walks its proposals as ONE pass and hands it over on
+      // the SERVER ctx (`revertSession`) — never on the input, so no client can
+      // name entities to exempt from the edit check. Absent on a plain revert.
+      const revertPass = ctx.revertPass ?? null;
+
+      if (input.opKey && input.reopen) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "reopen returns the WHOLE proposal to review — it cannot be combined with opKey.",
+        });
+      }
 
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
@@ -1872,6 +1928,205 @@ export const proposalsRouter = router({
         return { success: true, reopened: true };
       }
 
+      // ── ONE item ────────────────────────────────────────────────────────────
+      // The narrowed plan runs through the SAME undo engine; the record keeps
+      // naming what is still live, the op is marked so a second revert is a
+      // no-op, and the proposal only flips to `reverted` once nothing is left.
+      if (input.opKey) {
+        const opPlan = planProposalOpRevert(
+          {
+            status: proposal.status,
+            targetType: proposal.targetType,
+            targetId: proposal.targetId,
+            proposalType: proposal.proposalType,
+            data: proposal.data,
+          },
+          input.opKey
+        );
+        if (opPlan.kind === "unknown_op") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `No item '${opPlan.opKey}' on this proposal. Items: ${opPlan.available.slice(0, 30).join(", ") || "(none recorded)"}`,
+          });
+        }
+        if (opPlan.kind === "refused") {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: opPlan.reason,
+          });
+        }
+        if (opPlan.kind === "unsupported") {
+          throw new TRPCError({
+            code: "NOT_IMPLEMENTED",
+            message: opPlan.reason,
+          });
+        }
+        const emptyReverted: CompleteMaterializedRecord = {
+          entityIds: [],
+          relationIds: [],
+          documentIds: [],
+        };
+        if (opPlan.kind === "already_reverted") {
+          return {
+            success: true,
+            opKey: opPlan.opKey,
+            alreadyReverted: true,
+            revertedAt: opPlan.revertedAt,
+            reverted: emptyReverted,
+          };
+        }
+
+        const recordSize = (r: CompleteMaterializedRecord) =>
+          (r.entityIds?.length ?? 0) +
+          (r.relationIds?.length ?? 0) +
+          (r.documentIds?.length ?? 0) +
+          (r.facetIds?.length ?? 0) +
+          (r.skillIds?.length ?? 0) +
+          (r.automationIds?.length ?? 0) +
+          (r.ruleIds?.length ?? 0) +
+          (r.propertyDiffs?.length ?? 0);
+        const at = new Date();
+        let liveLeft = -1;
+        const opData =
+          proposal.data && typeof proposal.data === "object"
+            ? (proposal.data as StoredProposalData)
+            : ({} as StoredProposalData);
+        const creations = await revertProposalCreations({
+          proposal: {
+            id: proposal.id,
+            workspaceId: proposal.workspaceId ?? null,
+            sessionId: proposal.sessionId ?? null,
+            data: proposal.data,
+          },
+          plan: opPlan.plan,
+          userId,
+          pass: revertPass,
+          // The record, the item mark and the status flip land in the SAME
+          // transaction as the undo, compare-and-set on `updatedAt`: two quick
+          // item undos cannot write over each other's record — the loser rolls
+          // its whole undo back and gets CONFLICT.
+          writeInTransaction: async (tx, outcome) => {
+            const live = outcome.skipped.filter(
+              (s) => s.reason !== "already_reverted"
+            );
+            // Nothing undone because everything left was edited since: the
+            // proposal stands, nothing to record.
+            if (recordSize(outcome.undone) === 0 && live.length > 0) return;
+            // Marked only when nothing of the item is still standing — an item
+            // skipped because it was edited stays revertable later.
+            const record =
+              live.length === 0
+                ? markOpsReverted(
+                    outcome.remaining,
+                    opPlan.opKeys,
+                    userId,
+                    at.toISOString()
+                  )
+                : outcome.remaining;
+            liveLeft = recordSize(record);
+            const flipped = await tx
+              .update(proposals)
+              .set({
+                data: {
+                  ...opData,
+                  materialized: record,
+                  revertedMaterialized: mergeMaterializedRecords(
+                    (
+                      opData as {
+                        revertedMaterialized?: CompleteMaterializedRecord;
+                      }
+                    ).revertedMaterialized,
+                    outcome.undone
+                  ),
+                } as unknown as StoredProposalData,
+                ...(liveLeft === 0
+                  ? {
+                      status: ProposalStatus.REVERTED,
+                      reviewedBy: userId,
+                      reviewedAt: at,
+                    }
+                  : {}),
+                updatedAt: at,
+              })
+              .where(
+                and(
+                  eq(proposals.id, input.proposalId),
+                  proposalUnchangedSince(proposal.updatedAt),
+                  inArray(proposals.status, [
+                    ProposalStatus.APPROVED,
+                    ProposalStatus.AUTO_APPROVED,
+                  ])
+                )
+              )
+              .returning({ id: proposals.id });
+            if (flipped.length === 0) {
+              throw new TRPCError({
+                code: "CONFLICT",
+                message:
+                  "This proposal changed while the item was being reverted — nothing was undone. Try again.",
+              });
+            }
+          },
+        });
+        const stillLive = creations.skipped.filter(
+          (s) => s.reason !== "already_reverted"
+        );
+        const opSkips = stillLive.map(revertSkipView);
+        if (liveLeft === -1) {
+          return {
+            success: false,
+            nothingReverted: true,
+            opKey: input.opKey,
+            reverted: emptyReverted,
+            skipped: opSkips,
+            partialFailures: stillLive.map(
+              (s) => `${describeRevertTarget(s.target)} (${s.detail})`
+            ),
+          };
+        }
+        await auditLog({
+          subjectType: "proposal",
+          action: "delete",
+          phase: "completed",
+          subjectId: input.proposalId,
+          userId,
+          workspaceId: proposal.workspaceId ?? undefined,
+          data: {
+            reverted: true,
+            opKey: input.opKey,
+            opKeys: opPlan.opKeys,
+            sourceProposalId: input.proposalId,
+            revertReason: input.reason,
+            deletedEntityIds: creations.undone.entityIds,
+            deletedRelationIds: creations.undone.relationIds,
+          },
+          source: "api",
+        });
+        return {
+          success: stillLive.length === 0,
+          opKey: input.opKey,
+          opKeys: opPlan.opKeys,
+          reverted: { ...creations.undone, documentIds: [] },
+          ...(liveLeft === 0 ? { proposalReverted: true } : {}),
+          ...(opSkips.length > 0
+            ? {
+                skipped: opSkips,
+                partialFailures: stillLive.map(
+                  (s) => `${describeRevertTarget(s.target)} (${s.detail})`
+                ),
+              }
+            : {}),
+          ...(proposal.externalDispatchedAt
+            ? {
+                permanent: {
+                  reason: "external_dispatched" as const,
+                  at: proposal.externalDispatchedAt.toISOString(),
+                },
+              }
+            : {}),
+        };
+      }
+
       // Compute the inverse from the proposal's own data. Fail loud on anything
       // we can't safely undo (update/delete, or a create with no recorded ids).
       const plan = planProposalRevert({
@@ -1928,12 +2183,6 @@ export const proposalsRouter = router({
         };
       }
 
-      const entityCaller = regularEntitiesRouter.createCaller(
-        revertCtx as unknown as Context
-      );
-      const relationCaller = relationsRouter.createCaller(
-        revertCtx as unknown as Context
-      );
       const documentCaller = documentsRouter.createCaller(
         revertCtx as unknown as Context
       );
@@ -1949,12 +2198,17 @@ export const proposalsRouter = router({
       //     having since been hard-purged. Also the legacy fallback for merge
       //     proposals that only stamped loserId (partial unmerge).
       //   - "unmerge": full entity-merge inverse via unmergeEntities.
-      const deleted: ProposalMaterializedRecord = {
+      let deleted: CompleteMaterializedRecord = {
         entityIds: [],
         relationIds: [],
         documentIds: [],
       };
       const failures: string[] = [];
+      // delete-creations only: what the undo engine left alone, and the record
+      // of what is still live afterwards.
+      let liveSkips: ReturnType<typeof revertSkipView>[] = [];
+      let remainingRecord: CompleteMaterializedRecord | undefined;
+      let undoneRecord: CompleteMaterializedRecord | undefined;
       let restoredEntityId: string | undefined;
       let unmerged: { winnerId: string; loserId: string } | undefined;
 
@@ -2048,49 +2302,80 @@ export const proposalsRouter = router({
 
         restoredEntityId = plan.entityId;
       } else {
-        for (const relationId of plan.relationIds) {
-          try {
-            await relationCaller.delete({ id: relationId });
-            deleted.relationIds!.push(relationId);
-          } catch (err) {
-            logger.warn({ err, relationId }, "revert: relation delete failed");
-            failures.push(`relation ${relationId}`);
-          }
+        // Everything the record names — entities, relations, facets, config
+        // rows, and what a merge overwrote — through the ONE undo engine: one
+        // transaction, untouched rows only, retire-not-destroy. This used to be
+        // a per-row best-effort loop with no transaction and no untouched
+        // check: a half-applied undo that deleted rows the user had edited.
+        // Items changed since are SKIPPED and named on the receipt.
+        const creations = await revertProposalCreations({
+          proposal: {
+            id: proposal.id,
+            workspaceId: proposal.workspaceId ?? null,
+            sessionId: proposal.sessionId ?? null,
+            data: proposal.data,
+          },
+          plan,
+          userId,
+          pass: revertPass,
+        });
+        undoneRecord = creations.undone;
+        remainingRecord = creations.remaining;
+        deleted = { ...creations.undone, documentIds: [] };
+        const stillLive = creations.skipped.filter(
+          (s) => s.reason !== "already_reverted"
+        );
+        liveSkips = stillLive.map(revertSkipView);
+        for (const s of stillLive) {
+          failures.push(`${describeRevertTarget(s.target)} (${s.detail})`);
         }
-        for (const entityId of plan.entityIds) {
-          try {
-            await entityCaller.delete({ id: entityId });
-            deleted.entityIds!.push(entityId);
-          } catch (err) {
-            logger.warn({ err, entityId }, "revert: entity delete failed");
-            failures.push(`entity ${entityId}`);
-          }
-        }
+
+        // Documents a document-create proposal made: no soft delete, so they
+        // still go through the governed document door (storage cleanup).
+        const documentFailures: string[] = [];
         for (const documentId of plan.documentIds) {
           try {
             await documentCaller.delete({ documentId });
             deleted.documentIds!.push(documentId);
           } catch (err) {
             logger.warn({ err, documentId }, "revert: document delete failed");
-            failures.push(`document ${documentId}`);
+            documentFailures.push(`document ${documentId}`);
           }
         }
+        failures.push(...documentFailures);
 
-        // If we mapped rows to undo but EVERY delete failed, treat the revert
-        // as failed rather than flipping the proposal to reverted with no effect.
-        const attempted =
-          plan.entityIds.length +
-          plan.relationIds.length +
-          plan.documentIds.length;
-        const succeeded =
-          deleted.entityIds!.length +
-          deleted.relationIds!.length +
+        const revertedCount =
+          (creations.undone.entityIds?.length ?? 0) +
+          (creations.undone.relationIds?.length ?? 0) +
+          (creations.undone.facetIds?.length ?? 0) +
+          (creations.undone.skillIds?.length ?? 0) +
+          (creations.undone.automationIds?.length ?? 0) +
+          (creations.undone.ruleIds?.length ?? 0) +
+          (creations.undone.propertyDiffs?.length ?? 0) +
           deleted.documentIds!.length;
-        if (attempted > 0 && succeeded === 0) {
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message: `Revert failed — could not undo: ${failures.join(", ")}`,
-          });
+        if (revertedCount === 0) {
+          // Nothing was undone because everything left was CHANGED since —
+          // the proposal still stands. Report it without flipping the status:
+          // "reverted" on a proposal whose rows are all still there is a lie.
+          if (stillLive.length > 0) {
+            return {
+              success: false,
+              nothingReverted: true,
+              reverted: deleted,
+              skipped: liveSkips,
+              partialFailures: failures,
+            };
+          }
+          // Every delete that was attempted FAILED — fail loud rather than
+          // flip the proposal to reverted with no effect.
+          if (documentFailures.length > 0) {
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: `Revert failed — could not undo: ${documentFailures.join(", ")}`,
+            });
+          }
+          // Otherwise every row was already gone: nothing left to undo, and
+          // flipping to reverted below is the truth.
         }
       }
 
@@ -2104,7 +2389,24 @@ export const proposalsRouter = router({
         revertedBy: userId,
         revertedAt: revertedAt.toISOString(),
         revertReason: input.reason,
-      };
+        // The record keeps naming only what is still live (the skipped items);
+        // what was undone moves to `revertedMaterialized` for audit. A
+        // re-accept after `reopen` then merges onto the leftovers, never onto
+        // rows that are already gone.
+        ...(remainingRecord && undoneRecord
+          ? {
+              materialized: remainingRecord,
+              revertedMaterialized: mergeMaterializedRecords(
+                (
+                  existingData as {
+                    revertedMaterialized?: CompleteMaterializedRecord;
+                  }
+                ).revertedMaterialized,
+                undoneRecord
+              ),
+            }
+          : {}),
+      } as StoredProposalData;
 
       // Flip status, but only from an applied state — guards the double-revert
       // race: two concurrent calls both pass the precheck, but the loser's
@@ -2133,6 +2435,7 @@ export const proposalsRouter = router({
         .where(
           and(
             eq(proposals.id, input.proposalId),
+            proposalUnchangedSince(proposal.updatedAt),
             inArray(proposals.status, [
               ProposalStatus.APPROVED,
               ProposalStatus.AUTO_APPROVED,
@@ -2142,6 +2445,25 @@ export const proposalsRouter = router({
         .returning({ id: proposals.id });
 
       if (flipped.length === 0) {
+        // Two causes, told apart by the row as it stands. Still applied ⇒
+        // another write landed on the proposal meanwhile: CONFLICT, never a
+        // silent overwrite of its record. LIMIT, stated: this undo already
+        // committed above; a retry is safe (retired rows read already_reverted).
+        const [current] = await db
+          .select({ status: proposals.status })
+          .from(proposals)
+          .where(eq(proposals.id, input.proposalId))
+          .limit(1);
+        if (
+          current?.status === ProposalStatus.APPROVED ||
+          current?.status === ProposalStatus.AUTO_APPROVED
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "This proposal changed while it was being reverted — its record was not overwritten. Try again: what was already undone stays undone.",
+          });
+        }
         // A concurrent revert won; the rows are already undone. Report success
         // without double-auditing.
         return {
@@ -2239,6 +2561,19 @@ export const proposalsRouter = router({
         ...(input.reopen ? { reopened: true } : {}),
         ...(restoredEntityId ? { restoredEntityId } : {}),
         ...(failures.length > 0 ? { partialFailures: failures } : {}),
+        // Items left alone because they were changed since — structured, so a
+        // surface can say WHY each one is still there.
+        ...(liveSkips.length > 0 ? { skipped: liveSkips } : {}),
+        // An external side effect (a message sent, a provider action) has no
+        // inverse: the local rows were undone, the send was not.
+        ...(proposal.externalDispatchedAt
+          ? {
+              permanent: {
+                reason: "external_dispatched" as const,
+                at: proposal.externalDispatchedAt.toISOString(),
+              },
+            }
+          : {}),
       };
     }),
 

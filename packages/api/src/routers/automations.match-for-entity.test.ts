@@ -105,12 +105,18 @@ describe("automations.matchForEntity", () => {
       workspaceId: WORKSPACE,
     });
 
+    // The card shape + the suggest-and-confirm ranking the door now computes
+    // (`rankRouteCandidates`): the automation's profileSlug filter equals the
+    // request, so it is built for this kind — and the reason SAYS so.
     expect(result).toEqual([
       {
         id: "auto-1",
         name: "Onboard new person",
         description: "Kick off the onboarding flow",
         triggerSummary: "On person created",
+        score: 2,
+        reason: "Made for person items",
+        signals: [{ type: "kind", profileSlug: "person" }],
       },
     ]);
 
@@ -167,11 +173,65 @@ describe("automations.matchForEntity", () => {
       workspaceId: WORKSPACE,
     });
 
+    // No profileSlug filter: it fires for ANY kind — the weakest structural
+    // signal, and the reason names it rather than claiming a kind match.
     expect(card).toEqual({
       id: "auto-2",
       name: "Log every creation",
       description: undefined,
       triggerSummary: "On any entity created",
+      score: 0.5,
+      reason: "Runs for anything new",
+      signals: [{ type: "anyKind" }],
+    });
+  });
+
+  it("with intentText, ranks the textual match FIRST through the real door and says why", async () => {
+    // Matcher order is updatedAt desc — the textual match arrives SECOND, so a
+    // door that ignored `intentText` would return it second.
+    const personFilter = {
+      eventPattern: "entity.create.completed",
+      filters: { profileSlug: "person" },
+    };
+    const chain = selectChain([
+      {
+        id: "auto-archive",
+        name: "Archive stale people",
+        description: "Move old contacts away",
+        status: "active",
+        triggerType: "event",
+        triggerConfig: personFilter,
+      },
+      {
+        id: "auto-review",
+        name: "Weekly review of people",
+        description: "Read and triage who you met",
+        status: "active",
+        triggerType: "event",
+        triggerConfig: personFilter,
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = automationsRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      profileSlug: "person",
+      workspaceId: WORKSPACE,
+      intentText: "review them weekly",
+    });
+
+    expect(result.map((r) => r.id)).toEqual(["auto-review", "auto-archive"]);
+    expect(result[0]).toMatchObject({
+      score: 8,
+      reason: "You mentioned “review”, “weekly” · Made for person items",
+      signals: [
+        { type: "intent", terms: ["review", "weekly"] },
+        { type: "kind", profileSlug: "person" },
+      ],
+    });
+    expect(result[1]).toMatchObject({
+      score: 2,
+      reason: "Made for person items",
     });
   });
 

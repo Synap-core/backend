@@ -794,6 +794,8 @@ async function resolveChannelOriginTrust(
   //    `resolveOriginTrust` passes no capabilityId, so only capability-null rows.)
   const guidelineRows = (await db
     .select({
+      id: configSettings.id,
+      version: configSettings.version,
       scopeKind: configSettings.scopeKind,
       scopeRef: configSettings.scopeRef,
       value: configSettings.value,
@@ -823,6 +825,8 @@ async function resolveChannelOriginTrust(
         )
       )
     )) as Array<{
+    id: string;
+    version: number;
     scopeKind: ConfigScopeKind;
     scopeRef: string | null;
     value: GuidelineValue | Record<string, unknown>;
@@ -867,7 +871,10 @@ async function resolveChannelOriginTrust(
         const value = r.value as GuidelineValue;
         const text = typeof value?.text === "string" ? value.text.trim() : "";
         return {
+          id: r.id,
+          version: r.version,
           scopeKind: r.scopeKind,
+          scopeRef: r.scopeRef,
           rank: RANK[r.scopeKind] ?? 0,
           createdAt: r.createdAt,
           text,
@@ -879,9 +886,14 @@ async function resolveChannelOriginTrust(
         (a, b) =>
           a.rank - b.rank || a.createdAt.getTime() - b.createdAt.getTime()
       )
+      // The REAL row identity (id, version, ref) — the same shape
+      // `resolveGuidelines` returns, never a placeholder: a mirror that fakes
+      // the fields it does not read today is wrong the day someone reads them.
       .map((m) => ({
-        id: "", // resolveMostSpecificPosture reads only `posture`
+        id: m.id,
+        version: m.version,
         scopeKind: m.scopeKind,
+        scopeRef: m.scopeRef,
         specificity: m.rank,
         text: m.text,
         posture: m.posture,
@@ -1844,20 +1856,33 @@ export interface TuneTargetResult {
 }
 
 /**
- * The extraction node in a flow: the capability node running `ai.generate` (the
- * assessment/extraction step — e.g. arch-client-intelligence's `assess` node).
+ * The capability verbs that do extraction, in preference order. Structured
+ * extraction is `message.interpret` (intake decision D12 — the versioned,
+ * guideline-grounded engine); `ai.generate` stays for narrative/assessment
+ * nodes, so it is recognised second.
+ */
+export const EXTRACTION_VERB_IDS = [
+  "message.interpret",
+  "ai.generate",
+] as const;
+
+/**
+ * The extraction node in a flow: the capability node running an
+ * `EXTRACTION_VERB_IDS` verb (e.g. arch-client-intelligence's `assess` node).
  * Falls back to the first capability/skill node, then null. NOT hardcoded to a
- * node id, so it works for any external-message extraction automation.
+ * node id, so it works for any extraction automation.
  */
 export function findExtractionNodeId(
   flow: FlowDefinition | null | undefined
 ): string | null {
   const nodes = flow?.nodes;
   if (!nodes?.length) return null;
-  const aiNode = nodes.find(
-    (n) => n.type === "capability" && n.data?.verbId === "ai.generate"
-  );
-  if (aiNode) return aiNode.id;
+  for (const verbId of EXTRACTION_VERB_IDS) {
+    const node = nodes.find(
+      (n) => n.type === "capability" && n.data?.verbId === verbId
+    );
+    if (node) return node.id;
+  }
   const anyStep = nodes.find(
     (n) => n.type === "capability" || n.type === "skill"
   );
@@ -1948,6 +1973,34 @@ export interface QualityByVersionInput {
 }
 
 /**
+ * The trigger families whose automations are EXTRACTION goals, as `eventType`
+ * LIKE patterns on `automation_runs.trigger_payload`:
+ *   - `external_message.received%` — a channel's inbound message (the original
+ *     scope; unchanged).
+ *   - `capture.complete.%` — a capture finished (`capture.complete.completed`,
+ *     `routers/capture.ts`): the "goal for a data type" `message.interpret` run.
+ *   - `hydration.imported.%` — an import landed (`hydration.imported.completed`,
+ *     the only import-completion side-effect emitted today; `import.apply` in
+ *     `import-orchestrator.ts` emits none, so it cannot fire an automation).
+ * Each run row carries ONE `eventType`, so a disjunction selects each run at
+ * most once — no double counting across families.
+ */
+export const QUALITY_TRIGGER_EVENT_PATTERNS = [
+  "external_message.received%",
+  "capture.complete.%",
+  "hydration.imported.%",
+] as const;
+
+export function qualityTriggerScopeWhere() {
+  return or(
+    ...QUALITY_TRIGGER_EVENT_PATTERNS.map(
+      (pattern) =>
+        drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE ${pattern}`
+    )
+  )!;
+}
+
+/**
  * Extraction quality grouped by automation VERSION — the before/after proof that
  * a prompt change helped. For each external-message-triggered automation, split
  * its runs by the `definitionSnapshot.version` stamped at run time and report the
@@ -1959,9 +2012,9 @@ export async function getQualityByVersion(
   input: QualityByVersionInput
 ): Promise<QualityByVersionResult> {
   const { userId, automationId } = input;
-  const externalRun = drizzleSql`${automationRuns.triggerPayload}->>'eventType' LIKE 'external_message.received%'`;
+  const extractionRun = qualityTriggerScopeWhere();
 
-  // 1. Recent external-message runs (floored), newest-first, capped.
+  // 1. Recent extraction-goal runs (floored), newest-first, capped.
   const runRows = await db
     .select({
       id: automationRuns.id,
@@ -1975,7 +2028,7 @@ export async function getQualityByVersion(
     .where(
       and(
         userVisibleWhere(automationRuns.workspaceId, userId),
-        externalRun,
+        extractionRun,
         automationId ? eq(automationRuns.automationId, automationId) : undefined
       )
     )

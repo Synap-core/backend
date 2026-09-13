@@ -29,6 +29,10 @@ import {
 import type { RoutingMemory } from "../services/routing-memory.js";
 import type { ImportItem } from "./import-items.js";
 import {
+  mergeStructureRunMeta,
+  type StructureRunMeta,
+} from "../services/intake/record-session-run-manifest.js";
+import {
   workspaceLensWhere,
   ownerPrivateVisibleWhere,
 } from "../utils/user-visible-where.js";
@@ -37,6 +41,8 @@ import {
 export interface StructureCapableClient {
   structure(input: {
     text: string;
+    /** Guideline-assembled bias (`assembleStructureContext`). */
+    instructions?: string;
     hints?: {
       availableProfiles?: Array<{
         slug: string;
@@ -77,6 +83,8 @@ export interface StructureCapableClient {
     targetWorkspaceId?: string | null;
     /** Suggested project lens (only stamped when present). */
     targetProjectId?: string | null;
+    /** Run facts (IS `meta`); absent on an older IS. */
+    meta?: StructureRunMeta;
   } | null>;
 }
 
@@ -124,6 +132,11 @@ export interface DeepStructureStats {
 export interface DeepStructureResult {
   operations: CompositeProposalOperation[];
   stats: DeepStructureStats;
+  /**
+   * The IS run facts across every answered structure call, folded by
+   * `mergeStructureRunMeta`. `null` when no answered call carried `meta`.
+   */
+  structureMeta: StructureRunMeta | null;
 }
 
 interface DeepStructureOptions {
@@ -188,6 +201,11 @@ interface DeepStructureOptions {
    * seen. Used by `analyzeLarge` (cross-chunk dedup); omitted for a single call.
    */
   seedExistingNames?: string[];
+  /**
+   * The assembled structure instructions (stored guidelines for this import's
+   * source kind — `assembleStructureContext`). Absent → the call is unchanged.
+   */
+  instructions?: string;
 }
 
 interface DeepStructureDeps {
@@ -429,6 +447,7 @@ export async function deepStructureImportItems(
         const call = () =>
           client.structure({
             text: item.body,
+            ...(opts.instructions ? { instructions: opts.instructions } : {}),
             hints: {
               availableProfiles: opts.availableProfiles,
               existingEntityNames: waveHint,
@@ -788,8 +807,14 @@ export async function deepStructureImportItems(
     homesByWorkspace[key] = (homesByWorkspace[key] ?? 0) + 1;
   }
 
+  let structureMeta: StructureRunMeta | null = null;
+  for (const r of extracted) {
+    structureMeta = mergeStructureRunMeta(structureMeta, r?.meta);
+  }
+
   return {
     operations,
+    structureMeta,
     stats: {
       itemsProcessed,
       itemsFailed,

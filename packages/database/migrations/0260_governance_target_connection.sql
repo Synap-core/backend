@@ -1,0 +1,23 @@
+-- 0260_governance_target_connection.sql
+--
+-- A governance rule can target a CONNECTION.
+--
+-- `target_kind = 'connection'` rows say "sync writes from this connection
+-- auto-apply | propose". `target_pattern` holds the `secrets` row id that is the
+-- connection registry entry. They are resolved ONLY by
+-- `resolveConnectionSyncDecision` (packages/database/src/utils/
+-- connection-governance.ts) for sync writes; the rung-2.8 agent resolver
+-- (`resolveGovernanceRule`) never matches a connection row, so no existing
+-- verdict can change. Floors still apply: a connection rule's `auto` is fed to
+-- the pure engine, which holds destructive/admin/scope-change writes for review.
+--
+-- The default `auto` rule is minted when the user approves the connection's
+-- first `import.graph` proposal with "keep syncing" on (source_proposal_id
+-- lineage), and revoked when they turn it off.
+--
+-- TRANSACTION NOTE: `scripts/migrate.ts` runs every migration inside
+-- `sql.begin()`. `ALTER TYPE … ADD VALUE` is legal inside a transaction from
+-- Postgres 12 onward (this deployment is 16) provided the new value is not USED
+-- in the same transaction — nothing here uses it (same precedent as 0253 and
+-- 0258). `IF NOT EXISTS` makes a re-run a no-op.
+ALTER TYPE governance_target ADD VALUE IF NOT EXISTS 'connection';

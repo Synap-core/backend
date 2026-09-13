@@ -35,7 +35,7 @@
  *   // result.action = 'created' | 'updated'
  */
 
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { entityExternalLinks, entities } from "../schema/index.js";
 import type { getDb } from "../client-pg.js";
 import type { Entity } from "../schema/entities.js";
@@ -67,6 +67,21 @@ export interface EntityUpsertInput {
   source: string;
   /** Stable provider-specific ID (phone, email, profile URL slug). Stored in entity_external_links. */
   externalId: string;
+  /**
+   * Where the record lives in its source app (`entity_external_links.url`) — the
+   * provider's own web URL, never constructed. Omit/null when the provider gives
+   * none. A later sync that learns a URL fills it on the existing link.
+   */
+  url?: string | null;
+  /**
+   * The connection (`secrets` row id) that produced this record, stamped on the
+   * link's `nango_connection_id` so a link records WHICH user's connection it
+   * came from (Places opens only the caller's own). Omit for non-connection
+   * imports (the `direct-import` sentinel). A sentinel link is re-stamped when a
+   * connection later upserts the same record; another connection's stamp is
+   * never overwritten.
+   */
+  connectionId?: string | null;
   /** Identity signals extracted from this record — used for cross-source matching. */
   signals: IdentitySignal[];
   /**
@@ -98,6 +113,16 @@ export interface EntityUpsertResult {
 
 /** nangoConnectionId sentinel for non-OAuth imports */
 const DIRECT_IMPORT_CONNECTION_ID = "direct-import";
+
+/** Postgres unique_violation (23505), also when wrapped as a driver error's cause. */
+function isUniqueViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; current && depth < 4; depth++) {
+    if ((current as { code?: unknown }).code === "23505") return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /**
  * The drizzle db handle — the SAME shape `materializeEntity` requires (and that
@@ -194,22 +219,73 @@ export class EntityUpsertService {
     // become a role-named entity — the role is a facet on a real subject.
     // Resolved up front so a strong match (below) attaches the role to the
     // matched entity instead of dropping it.
-    const rolePayload = await resolveRolePayload(this.db, input.profileSlug);
+    const rolePayload = await resolveRolePayload(this.db, input.profileSlug, {
+      workspaceId: input.workspaceId,
+    });
 
     // ── Step 1: Exact re-import check (entity_external_links) ─────────────────
-    const existingLink = await this.db.query.entityExternalLinks.findFirst({
+    // Links are unique per provider × record × connection, so several rows can
+    // match. Only this user's copy is ever resolved onto — a shared calendar
+    // event has one id on every attendee's calendar: a link is this user's when
+    // they own its entity, or when this very connection produced it (an import
+    // someone else approved). Preference: this connection's own row, then an
+    // unstamped import link, then any other row on an entity the user owns.
+    const links = await this.db.query.entityExternalLinks.findMany({
       where: and(
         eq(entityExternalLinks.provider, input.source),
         eq(entityExternalLinks.externalId, input.externalId)
       ),
-      columns: { entityId: true },
+      columns: {
+        id: true,
+        entityId: true,
+        url: true,
+        nangoConnectionId: true,
+      },
     });
+    const linkedEntities =
+      links.length === 0
+        ? []
+        : await this.db.query.entities.findMany({
+            where: inArray(
+              entities.id,
+              links.map((l) => l.entityId)
+            ),
+          });
+    const entityById = new Map(linkedEntities.map((e) => [e.id, e]));
+    const linkRank = (l: (typeof links)[number]): number =>
+      input.connectionId && l.nangoConnectionId === input.connectionId
+        ? 0
+        : l.nangoConnectionId === DIRECT_IMPORT_CONNECTION_ID
+          ? 1
+          : 2;
+    const match = [...links]
+      .sort((a, b) => linkRank(a) - linkRank(b))
+      .map((link) => ({ link, entity: entityById.get(link.entityId) }))
+      .find(
+        ({ link, entity }) =>
+          !!entity &&
+          (entity.userId === input.userId ||
+            (!!input.connectionId &&
+              link.nangoConnectionId === input.connectionId))
+      );
 
-    if (existingLink) {
-      const entity = await this.db.query.entities.findFirst({
-        where: eq(entities.id, existingLink.entityId),
-      });
+    if (match) {
+      const existingLink = match.link;
+      const entity = match.entity;
       if (entity) {
+        const linkPatch: { url?: string; nangoConnectionId?: string } = {};
+        if (input.url && input.url !== existingLink.url) {
+          linkPatch.url = input.url;
+        }
+        if (
+          input.connectionId &&
+          existingLink.nangoConnectionId === DIRECT_IMPORT_CONNECTION_ID
+        ) {
+          linkPatch.nangoConnectionId = input.connectionId;
+        }
+        if (Object.keys(linkPatch).length > 0) {
+          await this.patchLink(existingLink.id, linkPatch);
+        }
         // Register any new signals that weren't present before
         await this.registerSignals(entity.id, normalizedSignals, input.source);
         // Kind + Facets: a role payload attaches onto the matched subject.
@@ -220,47 +296,51 @@ export class EntityUpsertService {
     }
 
     // ── Step 2: Cross-source signal match (STRONG identity, via the SSOT) ───────
-    // Also look up the (source, externalId) pair as a strong `external_id`
-    // signal: the external-link idempotency door registers writes under exactly
-    // this key, so this is the read side that lets a re-import resolve to the
-    // same subject via the signal layer — belt to Step 1's external-links belt.
-    const lookupSignals: IdentitySignal[] = [...normalizedSignals];
-    if (input.externalId) {
-      lookupSignals.push({
-        type: "external_id",
-        value: `${input.source}:${input.externalId}`,
-      });
-    }
-    if (lookupSignals.length > 0) {
+    const strongMatch = async (signals: IdentitySignal[]) => {
       const resolution = await resolveIdentity(this.db, {
         userId: input.userId,
-        signals: lookupSignals,
+        signals,
       });
+      if (resolution.match !== "strong" || !resolution.entity) return null;
+      // Load the full row — the SSOT returns a minimal projection.
+      const entity = await this.db.query.entities.findFirst({
+        where: eq(entities.id, resolution.entity.id),
+      });
+      return entity ?? null;
+    };
+    const adoptMatch = async (
+      entity: NonNullable<Awaited<ReturnType<typeof strongMatch>>>
+    ): Promise<EntityUpsertResult> => {
+      // Register this external link so future re-imports are exact-matched (Step 1)
+      await this.registerExternalLink(
+        entity.id,
+        input.source,
+        input.externalId,
+        input.url,
+        input.connectionId
+      );
+      await this.registerSignals(entity.id, normalizedSignals, input.source);
+      // Kind + Facets: a role payload attaches onto the matched subject.
+      if (rolePayload)
+        await this.attachRoleOnMatch(entity as Entity, rolePayload, input);
+      return { entity: entity as Entity, action: "matched" };
+    };
 
-      if (resolution.match === "strong" && resolution.entity) {
-        // Load the full row — the SSOT returns a minimal projection.
-        const entity = await this.db.query.entities.findFirst({
-          where: eq(entities.id, resolution.entity.id),
-        });
-        if (entity) {
-          // Register this external link so future re-imports are exact-matched (Step 1)
-          await this.registerExternalLink(
-            entity.id,
-            input.source,
-            input.externalId
-          );
-          // Register any new signals for this entity
-          await this.registerSignals(
-            entity.id,
-            normalizedSignals,
-            input.source
-          );
-          // Kind + Facets: a role payload attaches onto the matched subject.
-          if (rolePayload)
-            await this.attachRoleOnMatch(entity as Entity, rolePayload, input);
-          return { entity: entity as Entity, action: "matched" };
-        }
+    // The (source, externalId) pair as a strong `external_id` signal — the key
+    // the external-link idempotency door registers writes under. It names the
+    // same external record as Step 1, so it follows Step 1's owner rule.
+    if (input.externalId) {
+      const byExternalId = await strongMatch([
+        { type: "external_id", value: `${input.source}:${input.externalId}` },
+      ]);
+      if (byExternalId && byExternalId.userId === input.userId) {
+        return adoptMatch(byExternalId);
       }
+    }
+    // Person identity (email, phone, url, handle) is one subject pod-wide.
+    if (normalizedSignals.length > 0) {
+      const bySignal = await strongMatch(normalizedSignals);
+      if (bySignal) return adoptMatch(bySignal);
     }
 
     // ── Step 3: Create new entity ─────────────────────────────────────────────
@@ -315,7 +395,13 @@ export class EntityUpsertService {
     );
 
     await Promise.all([
-      this.registerExternalLink(entity.id, input.source, input.externalId),
+      this.registerExternalLink(
+        entity.id,
+        input.source,
+        input.externalId,
+        input.url,
+        input.connectionId
+      ),
       this.registerSignals(entity.id, normalizedSignals, input.source),
     ]);
 
@@ -335,10 +421,44 @@ export class EntityUpsertService {
     return { entity, action: "created" };
   }
 
+  /**
+   * Patch a matched link's url / connection stamp. Re-stamping an unstamped
+   * import link collides with the connection's OWN row for the same record when
+   * one was written meanwhile (one row per provider × record × connection).
+   * That row is then the connection's link, so the stamp is dropped and the
+   * unstamped row stays as it is — an older import's idempotency key, not a
+   * second entity — and only the url is patched.
+   */
+  private async patchLink(
+    linkId: string,
+    patch: { url?: string; nangoConnectionId?: string }
+  ): Promise<void> {
+    try {
+      await this.db
+        .update(entityExternalLinks)
+        .set(patch)
+        .where(eq(entityExternalLinks.id, linkId));
+    } catch (err) {
+      if (!patch.nangoConnectionId || !isUniqueViolation(err)) throw err;
+      logger.warn(
+        { linkId, connectionId: patch.nangoConnectionId },
+        "EntityUpsertService: the connection already holds its own link for this record — unstamped link left as is"
+      );
+      if (patch.url) {
+        await this.db
+          .update(entityExternalLinks)
+          .set({ url: patch.url })
+          .where(eq(entityExternalLinks.id, linkId));
+      }
+    }
+  }
+
   private async registerExternalLink(
     entityId: string,
     provider: string,
-    externalId: string
+    externalId: string,
+    url?: string | null,
+    connectionId?: string | null
   ): Promise<void> {
     await this.db
       .insert(entityExternalLinks)
@@ -346,8 +466,9 @@ export class EntityUpsertService {
         entityId,
         provider,
         externalId,
-        nangoConnectionId: DIRECT_IMPORT_CONNECTION_ID,
+        nangoConnectionId: connectionId ?? DIRECT_IMPORT_CONNECTION_ID,
         status: "active",
+        ...(url ? { url } : {}),
       })
       .onConflictDoNothing();
     // Also absorb the (provider, externalId) pair into the identity signal

@@ -28,11 +28,14 @@ export const entityExternalLinks = pgTable(
     entityId: uuid("entity_id")
       .references(() => entities.id, { onDelete: "cascade" })
       .notNull(),
-    provider: text("provider").notNull(), // "google-calendar", "github", etc.
+    provider: text("provider").notNull(), // "google", "github", etc.
     externalId: text("external_id").notNull(), // ID in the external system
     nangoConnectionId: text("nango_connection_id").notNull(), // Links back to CP connection
     status: text("status").notNull().default("active"), // "active" | "disconnected"
     syncHash: text("sync_hash"), // Hash of external record for change detection
+    // Where the record LIVES in its source app (0259) — the provider's own web
+    // URL, captured at sync time. NULL = the provider gave none; never guessed.
+    url: text("url"),
     lastSyncedAt: timestamp("last_synced_at", {
       mode: "date",
       withTimezone: true,
@@ -51,10 +54,12 @@ export const entityExternalLinks = pgTable(
       .notNull(),
   },
   (table) => ({
-    // Core dedup index: one entity per external record per provider
-    providerExternalIdIdx: uniqueIndex(
-      "entity_external_links_provider_external_id_idx"
-    ).on(table.provider, table.externalId),
+    // Core dedup index (0261): one link per external record PER CONNECTION, so
+    // two members syncing the same shared record each keep their own link + url.
+    // Writers' ON CONFLICT targets must name exactly these three columns.
+    providerExternalIdConnectionIdx: uniqueIndex(
+      "entity_external_links_provider_external_id_connection_idx"
+    ).on(table.provider, table.externalId, table.nangoConnectionId),
     // Find all external links for an entity
     entityIdIdx: index("entity_external_links_entity_id_idx").on(
       table.entityId

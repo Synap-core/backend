@@ -5,6 +5,12 @@
 import {
   db,
   eq,
+  and,
+  isNull,
+  drizzleSql,
+  secrets,
+  tools,
+  links,
   automationStepRuns,
   normalizeCommandNodeData,
 } from "@synap/database";
@@ -237,6 +243,67 @@ export async function executeSkillNode(
  *
  * `stepRun` is only present in the main pass (see `executeSkillNode`).
  */
+/**
+ * Node-level selection always wins (explicit selector, then bare connectionId).
+ * The automation's `triggerConfig.connectionId` is a fallback ONLY for a node
+ * whose verb that connection can actually serve (`trigger.servesThisVerb`):
+ * the dispatcher THROWS on a selector that is not the node's own capability's
+ * connection, so applying a Google connection to a Slack node in the same
+ * automation would break a step that ran fine on its default authBinding. Pure.
+ */
+export function resolveCapabilityConnectionSelector(
+  data: {
+    connectionSelector?: { connectionId?: string; contextObjectId?: string };
+    connectionId?: string;
+  },
+  trigger?: { connectionId: string; servesThisVerb: boolean } | null
+): { connectionId?: string; contextObjectId?: string } | null {
+  if (data.connectionSelector) return data.connectionSelector;
+  if (data.connectionId) return { connectionId: data.connectionId };
+  return trigger?.servesThisVerb
+    ? { connectionId: trigger.connectionId }
+    : null;
+}
+
+/**
+ * Can the connection `connectionId` serve verb `verbId`? True when the
+ * connection's capability (`secrets.capability_id`) owns a tool
+ * (`links` tool --member_of--> capability, the SAME edge the dispatcher resolves)
+ * whose verb catalog (`tools.capabilities[].id`) lists the verb. A connection
+ * that is missing / deleted / not a capability connection answers false. A
+ * failed READ throws (the step fails loudly rather than guessing).
+ */
+export async function connectionServesVerb(
+  connectionId: string,
+  verbId: string,
+  database: Pick<typeof db, "select"> = db
+): Promise<boolean> {
+  const [conn] = await database
+    .select({ capabilityId: secrets.capabilityId })
+    .from(secrets)
+    .where(and(eq(secrets.id, connectionId), isNull(secrets.deletedAt)))
+    .limit(1);
+  if (!conn?.capabilityId) return false;
+  const [hit] = await database
+    .select({ id: tools.id })
+    .from(tools)
+    .innerJoin(
+      links,
+      and(
+        eq(links.fromType, "tool"),
+        drizzleSql`${links.fromId} = ${tools.id}::text`,
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability"),
+        eq(links.toId, conn.capabilityId)
+      )
+    )
+    .where(
+      drizzleSql`${tools.capabilities} @> ${JSON.stringify([{ id: verbId }])}::jsonb`
+    )
+    .limit(1);
+  return Boolean(hit);
+}
+
 export async function executeCapabilityNode(
   data: {
     capabilityId?: string;
@@ -255,6 +322,9 @@ export async function executeCapabilityNode(
     stepRun?: { id: string };
     // CONFUSED-DEPUTY GUARD (see executeCommandStep) — the causal-chain producer.
     producerAgentUserId?: string | null;
+    // The automation's `triggerConfig.connectionId` — the connection its steps
+    // run against when a node names none of its own.
+    triggerConnectionId?: string | null;
   }
 ): Promise<unknown> {
   const verbId = data.verbId;
@@ -297,10 +367,25 @@ export async function executeCapabilityNode(
   }
 
   // Runtime 1-of-N connection selection (Wave 4): explicit selector, or
-  // a bare connectionId shorthand. Absent → default/authBinding behavior.
-  const connectionSelector =
-    data.connectionSelector ??
-    (data.connectionId ? { connectionId: data.connectionId } : null);
+  // a bare connectionId shorthand, or the automation's trigger-level
+  // connection WHEN it serves this verb. Absent → default/authBinding behavior.
+  // The trigger lookup runs only when the node names no connection of its own.
+  const triggerConnectionId =
+    !data.connectionSelector && !data.connectionId
+      ? (opts.triggerConnectionId ?? null)
+      : null;
+  const connectionSelector = resolveCapabilityConnectionSelector(
+    data,
+    triggerConnectionId
+      ? {
+          connectionId: triggerConnectionId,
+          servesThisVerb: await connectionServesVerb(
+            triggerConnectionId,
+            verbId
+          ),
+        }
+      : null
+  );
 
   // ── Canonical dispatch (SAME door as `case "skill"`) ──────────────
   // Runs as the workspace OWNER (userId = ownerId, no agent identity):

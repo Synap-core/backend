@@ -777,6 +777,87 @@ describe("decideAgentPolicy — forcePropose (scope/identity change)", () => {
   });
 });
 
+describe("decideAgentPolicy — rung 2.07 pod-admin schema change", () => {
+  const EXPECTED = {
+    verdict: "propose",
+    reason: PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE,
+    reasonCode: "POD_ADMIN_SCHEMA_CHANGE",
+  };
+
+  it("proposes even when a governance rule says auto (a rule cannot widen it)", () => {
+    // The discriminating input: without the floor, rung 2.8 executes this.
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        governanceRuleVerdict: "auto",
+      }).verdict
+    ).toBe("execute");
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        governanceRuleVerdict: "auto",
+        podAdminSchemaChange: true,
+      })
+    ).toEqual(EXPECTED);
+  });
+
+  it("beats ownership (3) and a wildcard autoApproveFor (4)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        isAgentOwnedWorkspace: true,
+        autoApproveFor: ["*"],
+        podAdminSchemaChange: true,
+      })
+    ).toEqual(EXPECTED);
+  });
+
+  it("wins the reason over forcePropose (2.1) — the proposal names the real cause", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        forcePropose: true,
+        podAdminSchemaChange: true,
+      })
+    ).toEqual(EXPECTED);
+  });
+
+  it("stays BELOW the ADMIN floor (2) and below CBAC deny (1)", () => {
+    expect(
+      decideAgentPolicy({
+        subjectType: "workspace",
+        action: "update",
+        podAdminSchemaChange: true,
+      }).reasonCode
+    ).toBe("ADMIN");
+    expect(
+      decideAgentPolicy({
+        subjectType: "property_def",
+        action: "create",
+        agentCapabilities: ["entity.read"],
+        podAdminSchemaChange: true,
+      }).verdict
+    ).toBe("deny");
+  });
+
+  it("absent/false leaves the verdict unchanged", () => {
+    for (const podAdminSchemaChange of [undefined, false]) {
+      expect(
+        decideAgentPolicy({
+          subjectType: "property_def",
+          action: "create",
+          governanceRuleVerdict: "auto",
+          podAdminSchemaChange,
+        }).verdict
+      ).toBe("execute");
+    }
+  });
+});
+
 describe("decideAgentPolicy — governance by KIND (user_observation)", () => {
   it("INFERENCE (uo_validated !== true) → propose, regardless of workspace", () => {
     // Inference in an agent-owned workspace would normally execute (step 3);
@@ -1039,6 +1120,20 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
       verdict: "propose",
       reason: PROPOSE_REASON.SCOPE_IDENTITY_CHANGE,
       reasonCode: "SCOPE_IDENTITY_CHANGE",
+    });
+  });
+
+  it("a rule can NEVER override a floor: a pod-admin schema change (2.07) still proposes even with governanceRuleVerdict:'auto'", () => {
+    const v = decideAgentPolicy({
+      subjectType: "property_def",
+      action: "create",
+      podAdminSchemaChange: true,
+      governanceRuleVerdict: "auto",
+    });
+    expect(v).toEqual({
+      verdict: "propose",
+      reason: PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE,
+      reasonCode: "POD_ADMIN_SCHEMA_CHANGE",
     });
   });
 

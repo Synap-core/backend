@@ -23,6 +23,9 @@ export interface GovernanceRuleDraft {
   agentUserId?: string;
   scopeKind: "workspace" | "pod";
   workspaceId?: string;
+  // Deliberately NOT `connection`: this menu offers widening for an agent's
+  // proposal. A connection rule is minted only by approving a connection's sync
+  // import (or the keep-syncing toggle), never from this menu.
   targetKind: "action" | "profile" | "capability";
   targetPattern: string;
   targetProfile?: string;

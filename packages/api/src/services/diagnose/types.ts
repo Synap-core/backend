@@ -86,7 +86,13 @@ export interface HealthSection {
      * signal was computed (see `GlobalSignals.reviewQueue`) — absent means
      * "not measured", never "0%".
      */
-    | "review_queue";
+    | "review_queue"
+    /**
+     * System-profile schema vs the seed: undeclared base links, workspace
+     * twins of system kinds, outstanding retirements. Present only when
+     * computed (see `GlobalSignals.schemaContract`).
+     */
+    | "schema_contract";
   status: HealthStatus;
   /** Plain-language one-liner — honest-empty aware ("no stuck runs"). */
   headline: string;

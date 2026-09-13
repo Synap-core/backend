@@ -64,6 +64,7 @@ import {
   httpStatusForTrpcError,
   isUuid,
   logger,
+  mayActAsUser,
   resolveActingContext,
   resolveActorId,
   type HubHono,
@@ -72,6 +73,10 @@ import { getConfinedWorkspace } from "../confine-workspace.js";
 import { channelVisibilityWhere } from "../../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../../utils/query-channel-messages.js";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
+import {
+  assertMessageAnchorAllowed,
+  MessageAnchorSchema,
+} from "../../../utils/message-anchor.js";
 
 /**
  * Channel WRITE floor for the two message-append doors below.
@@ -111,6 +116,46 @@ async function callerMayWriteToChannel(
     .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
     .limit(1);
   return !!row[0];
+}
+
+/**
+ * Anchor gate for the two message-append doors. Their `metadata` is an open
+ * record (dispatch stamps `agentType` on it), so only the `anchor` key is held
+ * to the shared contract in `utils/message-anchor.ts`: strict shape, and a
+ * proposal it names must be visible to the acting user (and belong to the
+ * session, on a session channel). The returned metadata carries the PARSED
+ * anchor, so what is stored is exactly what was validated.
+ */
+async function gateMessageAnchor(
+  metadata: Record<string, unknown> | undefined,
+  channelId: string,
+  userId: string
+): Promise<
+  | { ok: true; metadata: Record<string, unknown> | undefined }
+  | { ok: false; status: 400 | 403 | 500; error: string }
+> {
+  if (!metadata || metadata.anchor === undefined) return { ok: true, metadata };
+  const parsed = MessageAnchorSchema.safeParse(metadata.anchor);
+  if (!parsed.success) {
+    return { ok: false, status: 400, error: "Invalid metadata.anchor" };
+  }
+  try {
+    await assertMessageAnchorAllowed({
+      anchor: parsed.data,
+      channelId,
+      userId,
+    });
+  } catch (err) {
+    const status = httpStatusForTrpcError(err);
+    return {
+      ok: false,
+      // An unknown proposal answers like an invisible one (403, as these doors
+      // already do for an unreachable thread) — no existence oracle.
+      status: status === 404 ? 403 : status,
+      error: err instanceof Error ? err.message : "Anchor not allowed",
+    };
+  }
+  return { ok: true, metadata: { ...metadata, anchor: parsed.data } };
 }
 
 export function registerThreadsRoutes(app: HubHono): void {
@@ -160,6 +205,14 @@ export function registerThreadsRoutes(app: HubHono): void {
       );
     }
     const query = c.req.valid("query");
+    // A hub-read key may only list threads for an identity it HOLDS — without
+    // this, `?userId=<anyone>` fed straight into the visibility predicate.
+    if (!mayActAsUser(c, query.userId)) {
+      return c.json(
+        { error: "userId does not match the authenticated session" },
+        403
+      );
+    }
     const userId = query.userId;
     const workspaceId = query.workspaceId;
     const limit = parseInt(query.limit ?? "50", 10);
@@ -876,6 +929,21 @@ export function registerThreadsRoutes(app: HubHono): void {
         actingUserIds.push(acting.userId);
       }
 
+      // Every anchored item is gated for ITS acting user — a batch must not be
+      // a way to pin one comment the single door would refuse.
+      const metadataByIndex: Array<Record<string, unknown> | undefined> = [];
+      for (let i = 0; i < items.length; i++) {
+        const anchorGate = await gateMessageAnchor(
+          items[i].metadata,
+          threadId,
+          actingUserIds[i]
+        );
+        if (!anchorGate.ok) {
+          return c.json({ error: anchorGate.error }, anchorGate.status);
+        }
+        metadataByIndex.push(anchorGate.metadata);
+      }
+
       // ATTRIBUTION — mirrors the single-message door below: the agent id comes
       // ONLY from the verified auth context (a body-supplied one would be
       // spoofable), and `routedSource` MUST accompany `routedTeammateId` or the
@@ -909,7 +977,7 @@ export function registerThreadsRoutes(app: HubHono): void {
               }
             : {}),
           hash,
-          ...(m.metadata ? { metadata: m.metadata } : {}),
+          ...(metadataByIndex[i] ? { metadata: metadataByIndex[i] } : {}),
         };
         return row;
       });
@@ -1043,6 +1111,15 @@ export function registerThreadsRoutes(app: HubHono): void {
         return c.json({ error: "Thread not found or not accessible" }, 403);
       }
 
+      const anchorGate = await gateMessageAnchor(
+        body.metadata,
+        threadId,
+        userId
+      );
+      if (!anchorGate.ok) {
+        return c.json({ error: anchorGate.error }, anchorGate.status);
+      }
+
       const { randomUUID } = await import("crypto");
       const msgId = randomUUID();
       // Canonical tamper-hash: computeMessageHash(id, content) — the ONE formula
@@ -1102,7 +1179,7 @@ export function registerThreadsRoutes(app: HubHono): void {
             }
           : {}),
         hash,
-        ...(body.metadata ? { metadata: body.metadata } : {}),
+        ...(anchorGate.metadata ? { metadata: anchorGate.metadata } : {}),
       });
 
       // Keystone fact write: this door mirrors the MCP `synap_post_message`

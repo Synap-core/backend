@@ -152,16 +152,19 @@ export async function migrateGcalEvents(): Promise<MigrateGcalEventsResult> {
           dropped += 1;
           continue;
         }
-        const graph = mapGcalToGraph(item);
-        if (!graph) {
+        const mapped = mapGcalToGraph(item);
+        const event = mapped?.graph.entities.find(
+          (e) => e.ref === mapped.eventRef
+        );
+        if (!event) {
           dropped += 1;
           continue;
         }
         const createdEvent = await entityRepo.create(
           {
             profileSlug: "event",
-            title: graph.event.title,
-            properties: graph.event.properties,
+            title: event.title,
+            properties: event.properties,
             workspaceId,
             userId: owner,
           },

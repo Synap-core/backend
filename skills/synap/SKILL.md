@@ -1687,6 +1687,15 @@ create_proposal with targetType: "focus_session"
 - `GET /api/hub/focus-sessions/:id?workspaceId=<id>` — read
 - `PATCH /api/hub/focus-sessions/:id` — update `{ workspaceId, progress, status, goal, agentIds }`
 
+**Before you hand work to the human — check the guidelines first.** When you cannot take a deliverable, you file it on the human with `owner: 'human'`, a `blockedReason` (`credential` · `permission` · `capability` · `policy` · `decision` · `physical`) and a one-line `why`. Before you do, look up standing guidance for that kind of block. When the same block keeps recurring, the human may have approved a guideline for it, e.g. "Stripe keys live in the team vault under billing/".
+
+- IS agent: `get_work_guidelines { workKind: "<blockedReason>" }`
+- Hub REST: `GET /api/hub/guidelines?workKind=<blockedReason>&workspaceId=<id>` → `{ workKind, guidelines: [{ id, text }] }`
+
+If a guideline lets you proceed, follow it instead of blocking. If none applies, block as usual. A failed lookup is an error, not "no guideline".
+
+Every block door also carries the guidance in its response, as a safety net: `outputs/block`, an `addOutput`, a PATCH that adds a human-owned slot, or a create that declares one already blocked. That response comes back with `blockGuidelines: { status: "matched", matches: [{ expectedLabel, blockedReason, guidelines, message }] }`. If you see it, read it: the slot is filed, and a guideline covers this block. If it lets you proceed, do the work and reclaim the slot (`unblockOutput`). `status: "unavailable"` means the guidelines could not be read. A guideline never retires a slot, and it never changes what governance allows.
+
 **CLI** (use when running as Claude Code / OpenClaw agent):
 
 ```bash

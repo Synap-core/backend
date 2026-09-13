@@ -94,6 +94,11 @@ export function createChatTurnFrameSequencer() {
             proposalId: proposal.proposalId,
             toolName: proposal.toolName,
             description: proposal.description,
+            // The run the proposal belongs to, when its row has one — lets the
+            // client open the session without a second read. Never invented.
+            ...(typeof proposal.sessionId === "string"
+              ? { sessionId: proposal.sessionId }
+              : {}),
           });
         }
         return undefined;
@@ -114,6 +119,9 @@ export function createChatTurnFrameSequencer() {
           proposalId: data.proposalId,
           toolName: data.toolName,
           description: data.description,
+          ...(typeof data.sessionId === "string"
+            ? { sessionId: data.sessionId }
+            : {}),
         });
       }
 

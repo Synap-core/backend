@@ -115,7 +115,20 @@ export function computeAgentScorecard(
       default:
         break;
     }
-    if (Array.isArray(r.revisionHistory) && r.revisionHistory.length > 0) {
+    // A revision is a HUMAN CORRECTION only when no agent made it (B21): the
+    // entry names an acting agent when an agent key revised it on a human's
+    // behalf (`computeRevisedEnvelope`), and some doors record the agent itself
+    // as `by`. An unattributed entry (`by: null`) claims no actor and is not
+    // counted. LIMIT: entries written before the acting agent was recorded carry
+    // only the human owner in `by` and still count — history cannot be re-split.
+    if (
+      Array.isArray(r.revisionHistory) &&
+      r.revisionHistory.some((rev) => {
+        const actingAgent = (rev as { actingAgentUserId?: string | null })
+          .actingAgentUserId;
+        return !actingAgent && !!rev.by && rev.by !== opts.agentId;
+      })
+    ) {
       revised += 1;
     }
     const bucket = proposalReasonBucket(r.reasonCode, r.rejectionReason);

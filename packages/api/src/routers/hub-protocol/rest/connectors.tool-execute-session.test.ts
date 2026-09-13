@@ -30,9 +30,13 @@ vi.mock("../../../connectors/external-dispatch.js", () => ({
 vi.mock("../../../connectors/materialize-tools.js", () => ({
   materializeConnectorTools: async () => ({}),
 }));
-vi.mock("../../../services/capabilities/capability-nango-sync.js", () => ({
-  detachNangoConnectionRegistry: async () => {},
-}));
+vi.mock(
+  "../../../services/capabilities/capability-nango-sync.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    detachNangoConnectionRegistry: async () => {},
+  })
+);
 
 const { registerConnectorsRoutes } = await import("./connectors.js");
 

@@ -54,7 +54,10 @@ import {
 // Static, NOT part of the dynamic `submit-capture-graph` import in the graph
 // branch: a pure helper there would be stubbed away by any `vi.mock` of that
 // module, exactly where a test believes it is exercising the door.
-import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
+import {
+  captureStatusForReceiptState,
+  materializedReceiptState,
+} from "../../../services/capture-agent/capture-receipt-state.js";
 
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
@@ -168,39 +171,62 @@ const captureHandler: McpToolHandler = async (
         explicitRefs.add(candidate);
         return { ...e, ref: candidate };
       });
+    // EVERY structural problem is collected and returned at once — one error
+    // per retry made an agent fix a graph one ref at a time. `error` stays the
+    // human sentence (all problems joined); `problems`, `issues` and
+    // `declaredRefs` are additive.
+    const dryRun = args.validate === true;
+    const problems: string[] = [];
     for (const e of graphEntities) {
       if (typeof e.profileSlug !== "string" || !e.profileSlug) {
-        return ok({
-          error: `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`,
-        });
+        problems.push(
+          `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`
+        );
       }
     }
     // Relation SHAPE (sourceRef/targetRef/type presence) stays door-local —
     // MCP-specific message with the field names the agent must supply.
-    for (const r of captureRelations) {
+    const shapedRelations: Array<{
+      sourceRef: string;
+      targetRef: string;
+      type: string;
+    }> = [];
+    captureRelations.forEach((r, i) => {
       if (
         typeof r.sourceRef !== "string" ||
         typeof r.targetRef !== "string" ||
         typeof r.type !== "string" ||
         !r.type
       ) {
-        return ok({
-          error: "each relation needs `sourceRef`, `targetRef` and `type`",
+        problems.push(
+          `relations[${i}] needs \`sourceRef\`, \`targetRef\` and \`type\``
+        );
+      } else {
+        shapedRelations.push({
+          sourceRef: r.sourceRef,
+          targetRef: r.targetRef,
+          type: r.type,
         });
       }
-    }
+    });
     // SHARED: ref-uniqueness + dangling-relation (the one door both surfaces
     // run). Rendered here with MCP's own wording (the extra "same call" hint).
-    const refIssue = validateCaptureGraphRefs(
-      graphEntities,
-      captureRelations as Array<{ sourceRef: string; targetRef: string }>
-    );
-    if (refIssue) {
+    const refReport = validateCaptureGraphRefs(graphEntities, shapedRelations);
+    for (const issue of refReport?.issues ?? []) {
+      problems.push(
+        issue.kind === "duplicate-ref"
+          ? `duplicate entity ref: ${issue.ref}`
+          : `relation references an unknown ref: ${issue.sourceRef} -> ${issue.targetRef}. Every ref must belong to an entity in the same call.`
+      );
+    }
+    if (problems.length > 0) {
       return ok({
-        error:
-          refIssue.kind === "duplicate-ref"
-            ? `duplicate entity ref: ${refIssue.ref}`
-            : `relation references an unknown ref: ${refIssue.sourceRef} -> ${refIssue.targetRef}. Every ref must belong to an entity in the same call.`,
+        ...(dryRun ? { status: "invalid", dryRun: true } : {}),
+        error: problems.join("; "),
+        problems,
+        ...(refReport
+          ? { issues: refReport.issues, declaredRefs: refReport.declaredRefs }
+          : {}),
       });
     }
 
@@ -428,6 +454,65 @@ const captureHandler: McpToolHandler = async (
       });
     }
 
+    // ── DRY RUN (`validate: true`) ───────────────────────────────────────
+    // Every validator above has run (shape, refs, no-durable-content,
+    // already-known, membership, updateExisting) — each non-writing. Stop
+    // here, before `submitCaptureGraph`, and add the checks that otherwise run
+    // only inside the write: relation slugs (the SAME validator the capture
+    // lanes use, whose message names the valid slugs) and, per NEW entity, the
+    // profile + property validators `submitCaptureGraph`'s preflight calls.
+    // Problems come back in the real call's shapes: `relationsFailed[]` (as a
+    // `partial` write reports them) and `invalidEntities[]` (as
+    // `CaptureGraphValidationError` carries them). Nothing is written.
+    if (dryRun) {
+      // The SAME collapse → ops builder → preflight a real submit runs
+      // (exported from submit-capture-graph, never re-implemented here), plus
+      // relation slugs through the one relation vocabulary validator.
+      const { dryRunCaptureGraph } =
+        await import("../../../services/capture-agent/submit-capture-graph.js");
+      const checked = await dryRunCaptureGraph(db, {
+        userId,
+        workspaceId: graphWsId,
+        entities: graphEntities as unknown as Parameters<
+          typeof dryRunCaptureGraph
+        >[1]["entities"],
+        relations: shapedRelations,
+      });
+      const invalidEntities = [
+        ...checked.invalidEntities,
+        ...checked.unresolvedProfiles.map((u) => ({
+          label: u.label,
+          profileSlug: u.profileSlug,
+          errors: [
+            `no profile "${u.profileSlug}" resolves for this lens — discover slugs with synap_list_profiles`,
+          ],
+        })),
+      ];
+      const { relationsFailed } = checked;
+      const clean =
+        relationsFailed.length === 0 && invalidEntities.length === 0;
+      return ok({
+        status: clean ? "valid" : "invalid",
+        dryRun: true,
+        scope: graphScope,
+        message: clean
+          ? "Validated — NOTHING was written. Re-send the same call without `validate` to write it."
+          : "NOT written — fix every problem below, then re-send without `validate`.",
+        entityCount: checked.entityCount,
+        relationCount: checked.relationCount,
+        ...(relationsFailed.length ? { relationsFailed } : {}),
+        ...(invalidEntities.length ? { invalidEntities } : {}),
+        ...(crossKindLinks.length
+          ? { links: { proposed: crossKindLinks } }
+          : {}),
+        notChecked: [
+          "identity dedup against EXISTING entities: a match links instead of creating, so its properties would not be validated at write time",
+          "workspace re-routing of a lens-less graph: slugs and profiles were checked against the lens you sent (pod-wide base layer when none), a routed workspace may accept more",
+          "governance: whether the write auto-applies or is proposed",
+        ],
+      });
+    }
+
     const { submitCaptureGraph } =
       await import("../../../services/capture-agent/submit-capture-graph.js");
     const { buildCaptureNarrativeSummary } =
@@ -446,6 +531,41 @@ const captureHandler: McpToolHandler = async (
     // is auto-approvable it MATERIALIZES the graph now (a direct operator
     // write it builds itself, the same one the approve loop performs) and
     // records an `auto_approved` proposal; otherwise it files a pending one.
+    // The run ROOM (intake decision 1): the ambient session when there is one,
+    // else an intake session KEYED by the graph's canonical content, so a
+    // retried payload — including one the submit below refuses — reuses one
+    // room instead of minting another. Sources + manifest are recorded only
+    // AFTER the submit succeeds. The agent structured this graph itself, so no
+    // guideline read and no IS facts exist — the manifest says `unknown`.
+    const { recordStructureIntake } =
+      await import("../../../services/intake/record-structure-intake.js");
+    const { runFactsFromStructureMeta } =
+      await import("../../../services/intake/record-session-run-manifest.js");
+    const { ensureIntakeSession } =
+      await import("../../../services/intake/ensure-intake-session.js");
+    const { computeCaptureGraphIdempotencyKey } =
+      await import("../../../utils/pending-capture-dedup.js");
+    const graphRun = await ensureIntakeSession({
+      userId,
+      workspaceId: graphWsId ?? null,
+      agentUserId: agentUserId ?? null,
+      verifiedHandle: sessionId ?? null,
+      door: "capture",
+      goal: `Capture · ${graphSummary || "agent graph"}`,
+      correlationKey: `capture-graph:${new Date().toISOString().slice(0, 10)}:${computeCaptureGraphIdempotencyKey(
+        {
+          workspaceId: graphWsId ?? null,
+          projectId: captureProjectId,
+          entities: graphEntities as unknown as Parameters<
+            typeof computeCaptureGraphIdempotencyKey
+          >[0]["entities"],
+          relations: captureRelations as unknown as Parameters<
+            typeof computeCaptureGraphIdempotencyKey
+          >[0]["relations"],
+        }
+      ).slice(0, 40)}`,
+    });
+    const graphSessionId = graphRun.sessionId ?? undefined;
     const graphResult = await submitCaptureGraph({
       userId,
       ...(agentUserId ? { agentUserId } : {}),
@@ -454,7 +574,7 @@ const captureHandler: McpToolHandler = async (
       ...(captureProjectName ? { projectName: captureProjectName } : {}),
       // Origin is the door, not a caller claim: an MCP caller is an agent.
       source: "agent",
-      ...(sessionId ? { sessionId } : {}),
+      ...(graphSessionId ? { sessionId: graphSessionId } : {}),
       // Shape-validated above (profileSlug present, refs unique and
       // resolvable) — the remaining fields are optional and pass straight
       // through to the same core the HTTP door feeds.
@@ -476,6 +596,21 @@ const captureHandler: McpToolHandler = async (
         ? { rawSource: { rawText: captureRawText } }
         : {}),
     });
+    // Submitted — now keep the raw text as a source and record the manifest on
+    // the room the graph was filed into.
+    const graphIntake = graphSessionId
+      ? await recordStructureIntake({
+          database: db,
+          userId,
+          workspaceId: graphWsId ?? null,
+          agentUserId: agentUserId ?? null,
+          verifiedHandle: graphSessionId,
+          source: captureNormalizedText ? { text: captureRawText } : {},
+          guidelines: [],
+          runFacts: runFactsFromStructureMeta(undefined),
+          correlationKey: null,
+        })
+      : null;
     // The terminal is policy-derived: `applied` (materialized now, whitelisted
     // graph), `partial` (entities landed, at least one submitted relation did
     // NOT) or `proposed` (pending review).
@@ -491,6 +626,19 @@ const captureHandler: McpToolHandler = async (
       status: captureStatusForReceiptState(graphResult.writeReceipt.state),
       scope: graphScope,
       ...graphResult,
+      // The session this graph was filed into, and what the run recorded.
+      sessionId: graphSessionId ?? null,
+      intake: graphIntake
+        ? { ...graphIntake.intake, sessionSource: graphRun.status }
+        : {
+            status: "failed" as const,
+            sessionSource: graphRun.status,
+            requestedSessionIgnored: graphRun.requestedSessionIgnored,
+            sourceDocumentIds: [] as string[],
+            ...(graphRun.status === "failed"
+              ? { errors: [`session: ${graphRun.error}`] }
+              : {}),
+          },
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
       ...(captureNormalizedText
         ? {
@@ -502,6 +650,17 @@ const captureHandler: McpToolHandler = async (
   }
 
   // ══ TEXT BRANCH ═════════════════════════════════════════════════════════
+  // A dry run cannot see a text capture's structure without invoking the AI
+  // structurer, so `validate` is refused here BY NAME rather than ignored
+  // (an ignored flag would WRITE a capture the caller believed was a dry run).
+  if (args.validate === true) {
+    return ok({
+      status: "invalid",
+      dryRun: true,
+      error:
+        "`validate: true` checks the structured `entities[]` lane only — nothing was written. A text capture's entities and relations are produced by the AI structurer at write time, so there is nothing to validate beforehand. Send `entities[]` (+ `relations[]`) to dry-run a graph.",
+    });
+  }
   const { captureRouter } = await import("../../capture.js");
   // Placement already resolved into `requestedWorkspaceId`:
   //   1. explicit args.workspaceId / URL pin / service-key confinement
@@ -617,6 +776,13 @@ const captureHandler: McpToolHandler = async (
   // wait for review. The materialized entities come back in the result.
   const captureProposals =
     (structured as { proposals?: unknown[] }).proposals ?? [];
+  // The run room `structure` ensured (the ambient session when it verified,
+  // else a minted one). execute files into THIS id, so structure's sources +
+  // manifest and execute's receipt share one session.
+  const runSessionId =
+    (structured as { sessionId?: string | null }).sessionId ??
+    sessionId ??
+    undefined;
   // DEGRADED MODE: when the IS structurer is down, `structure()` returns the
   // shared labelled raw-note fallback (`buildDegradedCaptureFallback`,
   // routers/capture.ts:242, returned at :1144) with `degraded: true`. We
@@ -846,7 +1012,7 @@ const captureHandler: McpToolHandler = async (
     // fires on freshly created ones. Omitting it here meant an MCP capture that
     // deduped into an existing entity left no edge back to the session that
     // produced it, which is exactly the case a session dashboard needs most.
-    ...(sessionId ? { sessionId } : {}),
+    ...(runSessionId ? { sessionId: runSessionId } : {}),
     threadId: channel.id,
     ...(intakeMessageIds[0] ? { sourceMessageId: intakeMessageIds[0] } : {}),
     // Rung 1 of the placement ladder: a caller-pinned workspace (explicit
@@ -894,6 +1060,7 @@ const captureHandler: McpToolHandler = async (
     summary?: string;
     reasoning?: string;
     message?: string;
+    sessionId?: string | null;
     project?: {
       projectId?: string;
       rung: number | null;
@@ -960,8 +1127,9 @@ const captureHandler: McpToolHandler = async (
       scope: {
         workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
         projectId: scopeProjectId,
-        sessionId: sessionId ?? null,
+        sessionId: ex.sessionId ?? runSessionId ?? null,
       },
+      sessionId: ex.sessionId ?? runSessionId ?? null,
       threadId: channel.id,
       ...(ex.proposalId ? { proposalId: ex.proposalId } : {}),
       ...(ex.proposalType ? { proposalType: ex.proposalType } : {}),
@@ -990,8 +1158,14 @@ const captureHandler: McpToolHandler = async (
   // still the caller's pin when there is one.
   const landedProjectId =
     ex.project?.status === "linked" ? ex.project.projectId : scopeProjectId;
+  // Edges execute() could not create (unknown slug, failed defs read) — the
+  // text lane reports them like the graph lane: named, and `partial`, never a
+  // bare `applied` with the failures buried inside `executed`.
+  const textRelationsFailed =
+    (executed as { relationsFailed?: unknown[] }).relationsFailed ?? [];
+  const textState = materializedReceiptState(textRelationsFailed.length);
   const textReceipt: CaptureWriteReceipt = {
-    state: "applied",
+    state: textState,
     effectiveWorkspaceId: landedWsId,
     ...(landedProjectId ? { projectId: landedProjectId } : {}),
     // Intent-vs-outcome on the project axis: a requested pin that did NOT
@@ -1005,12 +1179,16 @@ const captureHandler: McpToolHandler = async (
     // branch above returns early. (This comment used to claim capture is
     // ALWAYS direct and never proposed; that stopped being true when
     // `execute()` gained its governance gate.)
-    status: "applied",
+    status: captureStatusForReceiptState(textState),
+    ...(textRelationsFailed.length
+      ? { relationsFailed: textRelationsFailed }
+      : {}),
     scope: {
       workspaceId: landedWsId,
       projectId: landedProjectId,
-      sessionId: sessionId ?? null,
+      sessionId: ex.sessionId ?? runSessionId ?? null,
     },
+    sessionId: ex.sessionId ?? runSessionId ?? null,
     threadId: channel.id,
     writeReceipt: textReceipt,
     // The note LANDED, so the receipt is honestly "applied" — but what landed

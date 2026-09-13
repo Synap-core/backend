@@ -38,14 +38,29 @@ import {
   and,
   createGuideline,
   listGuidelines,
+  listGuidelineHistory,
   revokeGuideline,
+  supersedeGuideline,
+  GuidelineSupersedeConflictError,
+  GUIDELINE_SOURCE_KINDS,
+  GUIDELINE_TEXT_MAX,
+  IMPORT_SOURCE_KIND_PREFIX,
 } from "@synap/database";
 import {
   configSettings,
+  profiles,
   workspaceMembers,
   CONFIG_SCOPE_KINDS,
 } from "@synap/database/schema";
+import type { ConfigSetting } from "@synap/database/schema";
 import { BLOCKED_REASONS } from "@synap/playbooks";
+import { IMPORT_SOURCE_VALUES } from "@synap-core/types";
+// The `sourceKind` vocabulary gate — shared with the Hub read door and the
+// correction paths, so it lives in services and every door imports it downward.
+import { isGuidelineSourceKind } from "../services/guidelines/source-kind.js";
+
+/** A profile slug's shape; existence is checked against `profiles` on create. */
+const ENTITY_KIND_REF = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
 
@@ -123,7 +138,7 @@ const SCOPE_KINDS_NEEDING_REF = CONFIG_SCOPE_KINDS.filter(
 
 const CreateInputSchema = z
   .object({
-    text: z.string().min(1).max(2000),
+    text: z.string().min(1).max(GUIDELINE_TEXT_MAX),
     posture: z.enum(["auto", "propose"]).optional(),
     // DERIVED from the enum — see SCOPE_KINDS_NEEDING_REF.
     scopeKind: z.enum(CONFIG_SCOPE_KINDS),
@@ -166,7 +181,74 @@ const CreateInputSchema = z
       )} when scopeKind is 'workKind'`,
       path: ["scopeRef"],
     }
+  )
+  // The DATA-TYPE rungs (0258): closed input vocabulary; profile-slug output.
+  .refine(
+    (v) => v.scopeKind !== "sourceKind" || isGuidelineSourceKind(v.scopeRef),
+    {
+      message: `scopeRef must be one of ${GUIDELINE_SOURCE_KINDS.join(
+        " | "
+      )} or ${IMPORT_SOURCE_KIND_PREFIX}<${IMPORT_SOURCE_VALUES.join(
+        " | "
+      )}> when scopeKind is 'sourceKind'`,
+      path: ["scopeRef"],
+    }
+  )
+  .refine(
+    (v) =>
+      v.scopeKind !== "entityKind" || ENTITY_KIND_REF.test(v.scopeRef ?? ""),
+    {
+      message: "scopeRef must be a profile slug when scopeKind is 'entityKind'",
+      path: ["scopeRef"],
+    }
   );
+
+/**
+ * May `userId` READ this guideline row? Mirrors the list lens: a pod-wide row
+ * only by its owner (owner floor), a workspace row by any member. Answers
+ * NOT_FOUND for a pod-wide row the caller does not own, so its existence does
+ * not leak.
+ */
+async function assertCanReadGuideline(
+  userId: string,
+  row: ConfigSetting
+): Promise<void> {
+  if (row.workspaceId) {
+    await assertWorkspaceMember(userId, row.workspaceId);
+  } else if (row.createdBy !== userId) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Guideline not found" });
+  }
+}
+
+/**
+ * May `userId` CHANGE this guideline (revoke / supersede)? The author always;
+ * a workspace row also any editor of that workspace (or pod admin). Gated on
+ * the LOADED row, never on request input.
+ */
+async function assertCanChangeGuideline(
+  userId: string,
+  row: ConfigSetting
+): Promise<void> {
+  if (row.createdBy === userId) return;
+  if (row.workspaceId) {
+    await assertWorkspaceEditor(userId, row.workspaceId);
+    return;
+  }
+  throw new TRPCError({
+    code: "FORBIDDEN",
+    message: "You can only change your own pod-wide guidelines",
+  });
+}
+
+async function loadGuideline(id: string): Promise<ConfigSetting> {
+  const existing = await db.query.configSettings.findFirst({
+    where: eq(configSettings.id, id),
+  });
+  if (!existing || existing.key !== "guideline") {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Guideline not found" });
+  }
+  return existing;
+}
 
 export const guidelinesRouter = router({
   /**
@@ -199,6 +281,20 @@ export const guidelinesRouter = router({
       if (input.workspaceId) {
         await assertWorkspaceEditor(ctx.userId, input.workspaceId);
       }
+      // An entityKind guideline for a kind that does not exist could never
+      // match — refuse it rather than store an inert row that reads as active.
+      if (input.scopeKind === "entityKind") {
+        const profile = await db.query.profiles.findFirst({
+          where: eq(profiles.slug, input.scopeRef!),
+          columns: { id: true },
+        });
+        if (!profile) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `No kind "${input.scopeRef}" exists in this pod`,
+          });
+        }
+      }
       const guideline = await createGuideline({
         db,
         text: input.text,
@@ -222,29 +318,65 @@ export const guidelinesRouter = router({
   revoke: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
-      const existing = await db.query.configSettings.findFirst({
-        where: eq(configSettings.id, input.id),
-      });
-      if (!existing || existing.key !== "guideline") {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Guideline not found",
-        });
-      }
+      const existing = await loadGuideline(input.id);
       if (existing.revokedAt) {
         return { guideline: existing };
       }
-      if (existing.createdBy !== ctx.userId) {
-        if (existing.workspaceId) {
-          await assertWorkspaceEditor(ctx.userId, existing.workspaceId);
-        } else {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "You can only revoke your own pod-wide guidelines",
-          });
-        }
-      }
+      await assertCanChangeGuideline(ctx.userId, existing);
       const guideline = await revokeGuideline({ db, id: input.id });
       return { guideline };
+    }),
+
+  /**
+   * Edit a guideline = SUPERSEDE it (0258): the current version is revoked and
+   * version + 1 is inserted with the same scope and `supersedesId` lineage, in
+   * one transaction. Only the CURRENT version can be edited — editing an older
+   * one answers CONFLICT so a stale editor never forks the history. Scope is
+   * not editable (a different scope is a different guideline).
+   */
+  update: protectedProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        text: z.string().min(1).max(GUIDELINE_TEXT_MAX),
+        posture: z.enum(["auto", "propose"]).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existing = await loadGuideline(input.id);
+      await assertCanChangeGuideline(ctx.userId, existing);
+      try {
+        const { previous, guideline } = await supersedeGuideline({
+          db,
+          id: input.id,
+          text: input.text,
+          posture: input.posture,
+          source: "user",
+          createdBy: ctx.userId,
+        });
+        return { guideline, previous };
+      } catch (err) {
+        if (err instanceof GuidelineSupersedeConflictError) {
+          throw new TRPCError({
+            code: err.reason === "not_found" ? "NOT_FOUND" : "CONFLICT",
+            message: err.message,
+          });
+        }
+        throw err;
+      }
+    }),
+
+  /**
+   * Every version of the guideline `id` belongs to, newest first (revoked
+   * versions included — that is the history). Readable by whoever can read
+   * the row it was asked about.
+   */
+  history: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const existing = await loadGuideline(input.id);
+      await assertCanReadGuideline(ctx.userId, existing);
+      const versions = await listGuidelineHistory({ db, id: input.id });
+      return { versions };
     }),
 });

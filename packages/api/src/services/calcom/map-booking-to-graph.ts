@@ -21,6 +21,11 @@ import type {
   CaptureGraphEntity,
   CaptureGraphRelation,
 } from "../../routers/hub-protocol/rest/_capture-graph-dedup.js";
+import {
+  emailDomain,
+  isCorporateDomain,
+  companyNameFromDomain,
+} from "../../utils/email-domain.js";
 
 // ── Cal.com webhook / bookings-list payload (fields we consume) ────────────────
 export interface CalBookingPayload {
@@ -51,58 +56,6 @@ export interface BookingGraph {
 // The CRM `linked_to_deal` relation def (crmData.ts CRM_RELATION_TYPES.LINKED_TO_DEAL).
 // Workspace-scoped; resolves when the proposal is scoped to the CRM workspace.
 const LINKED_TO_DEAL = "linked_to_deal";
-
-// Consumer mailbox domains — an attendee on one of these is an individual, NOT a
-// company, so we do NOT mint a company entity from the email domain.
-const CONSUMER_EMAIL_DOMAINS = new Set([
-  "gmail.com",
-  "googlemail.com",
-  "outlook.com",
-  "hotmail.com",
-  "live.com",
-  "msn.com",
-  "yahoo.com",
-  "yahoo.co.uk",
-  "icloud.com",
-  "me.com",
-  "mac.com",
-  "proton.me",
-  "protonmail.com",
-  "gmx.com",
-  "gmx.net",
-  "aol.com",
-  "zoho.com",
-  "yandex.com",
-  "mail.com",
-]);
-
-/** Domain part of an email, lowercased; null when absent/malformed. */
-export function emailDomain(email: string | undefined): string | null {
-  if (!email) return null;
-  const at = email.lastIndexOf("@");
-  if (at < 0) return null;
-  const domain = email
-    .slice(at + 1)
-    .trim()
-    .toLowerCase();
-  return domain.includes(".") ? domain : null;
-}
-
-/** A corporate domain is any real domain that isn't a known consumer mailbox. */
-export function isCorporateDomain(domain: string | null): boolean {
-  return !!domain && !CONSUMER_EMAIL_DOMAINS.has(domain);
-}
-
-/** "acme-corp.io" → "Acme Corp" (best-effort display name from a domain). */
-export function companyNameFromDomain(domain: string): string {
-  const base = domain.split(".")[0] || domain;
-  return base
-    .replace(/[-_]+/g, " ")
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
 
 /** Prefer the explicit video link, else a location that is itself a URL. */
 export function meetLink(payload: CalBookingPayload): string | undefined {

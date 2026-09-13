@@ -633,7 +633,12 @@ export interface CaptureScope {
  * receipt fields): §2.3's `items[]`, `properties`, `next[]`.
  */
 export interface CaptureWriteReceipt {
-  state: "applied" | "rejected";
+  /**
+   * `partial` = entities landed but at least one submitted relation did not
+   * (named in the response's `relationsFailed[]`) — the same word the graph
+   * lane derives through `materializedReceiptState`.
+   */
+  state: "applied" | "partial" | "rejected";
   effectiveWorkspaceId: string | null;
   projectId?: string;
   /**

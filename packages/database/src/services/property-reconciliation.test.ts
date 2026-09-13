@@ -162,3 +162,85 @@ describe("reconcileProposedProperties — reserved keys", () => {
     expect(r.reconciled.find((k) => k.key === "title")!.createDef).toBe(false);
   });
 });
+
+describe("reconcileProposedProperties — canonical-row fold (lens miss)", () => {
+  it("a key the twin row lacks, fold-equal to ONE canonical slug, is stored under the canonical slug with no def", () => {
+    const r = reconcileProposedProperties({
+      properties: { knowledgeForm: "insight" },
+      slugs: [],
+      canonicalSlugs: ["knowledgeForm", "ek_claim"],
+    });
+    expect(r.properties).toEqual({ knowledgeForm: "insight" });
+    expect(r.defsToCreate).toEqual([]);
+    expect(r.reconciled[0]).toMatchObject({
+      class: "remap",
+      finalSlug: "knowledgeForm",
+      createDef: false,
+      via: "canonical",
+    });
+    expect(r.lensMisses).toEqual([
+      { key: "knowledgeForm", canonicalSlug: "knowledgeForm" },
+    ]);
+  });
+
+  it("folds case and separators: a proposed `ek-type` lands on the canonical `ek_type`", () => {
+    const r = reconcileProposedProperties({
+      properties: { "ek-type": "lesson" },
+      slugs: [],
+      canonicalSlugs: ["ek_type"],
+    });
+    expect(r.properties).toEqual({ ek_type: "lesson" });
+    expect(r.defsToCreate).toEqual([]);
+  });
+
+  it("without canonical slugs the same input mints `knowledgeform` — the defect the fold closes", () => {
+    const r = reconcileProposedProperties({
+      properties: { knowledgeForm: "insight" },
+      slugs: [],
+    });
+    expect(r.defsToCreate.map((d) => d.slug)).toEqual(["knowledgeform"]);
+    expect(r.lensMisses).toEqual([]);
+  });
+
+  it("two canonical slugs folding to the key ⇒ no fold; today's new-field path runs", () => {
+    const r = reconcileProposedProperties({
+      properties: { due_date: "2026-09-13" },
+      slugs: [],
+      canonicalSlugs: ["dueDate", "due-date"],
+    });
+    expect(r.lensMisses).toEqual([]);
+    expect(r.reconciled[0]?.via).toBeUndefined();
+    expect(r.defsToCreate.map((d) => d.slug)).toEqual(["due-date"]);
+  });
+
+  it("a match on the resolved row wins; the canonical row is not consulted", () => {
+    const r = reconcileProposedProperties({
+      properties: { score: 3 },
+      slugs: ["score"],
+      canonicalSlugs: ["Score"],
+    });
+    expect(r.properties).toEqual({ score: 3 });
+    expect(r.lensMisses).toEqual([]);
+  });
+
+  it("an explicit keep decision is honoured over the canonical fold", () => {
+    const r = reconcileProposedProperties({
+      properties: { knowledgeForm: "insight" },
+      slugs: [],
+      canonicalSlugs: ["knowledgeForm"],
+      decisions: { knowledgeForm: { action: "keep" } },
+    });
+    expect(r.lensMisses).toEqual([]);
+    expect(r.defsToCreate.map((d) => d.slug)).toEqual(["knowledgeform"]);
+  });
+
+  it("the canonical check is fold-EQUALITY, not fuzzy: a one-edit typo is not folded", () => {
+    const r = reconcileProposedProperties({
+      properties: { knowledgeFrm: "insight" },
+      slugs: [],
+      canonicalSlugs: ["knowledgeForm"],
+    });
+    expect(r.lensMisses).toEqual([]);
+    expect(r.properties).not.toHaveProperty("knowledgeForm");
+  });
+});

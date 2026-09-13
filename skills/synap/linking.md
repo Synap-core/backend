@@ -18,7 +18,7 @@ Known system-profile auto-syncs:
 | document | `entityId`  | (any)          | `attached_to`        |
 | anchor   | `channelId` | (channel)      | `anchored_in`        |
 
-Custom profiles: if you created a property with `valueType: "entity_id"`, the auto-sync kicks in, but the relation type defaults to `related_to` unless the profile defines a `relationDefinition`. When precision matters, create the relation explicitly (Way 2) with a specific `type`.
+Custom profiles: an `entity_id` property does NOT create an edge on its own. Auto-sync writes a relation only when the property def is mapped to a relation def (its `relationDefId`), and the edge then takes THAT def's slug. An unmapped `entity_id` property stores the id and creates no relation at all — there is no default or fallback type. When you need the edge, create it explicitly (Way 2) with an existing relation-def slug; `synap_list_profiles` returns them under `relationTypes`.
 
 **Do not trust this table to stay current.** Always verify with `GET /api/hub/profiles` — the returned profile includes `properties[].valueType` and `properties[].targetProfileSlug`. Any property with `valueType: "entity_id"` is an auto-sync candidate.
 

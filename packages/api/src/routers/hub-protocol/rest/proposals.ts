@@ -463,6 +463,8 @@ export function registerProposalsRoutes(app: HubHono): void {
     const body = (await c.req.json()) as {
       data: Record<string, unknown>;
       summary?: string;
+      /** The revision the reviser saw — stale ⇒ CONFLICT (409). */
+      expectedRevision?: number;
     };
     try {
       const resolvedId = await resolveProposalId(
@@ -474,6 +476,7 @@ export function registerProposalsRoutes(app: HubHono): void {
         proposalId: resolvedId,
         data: body.data,
         summary: body.summary,
+        expectedRevision: body.expectedRevision,
       });
       return c.json(result);
     } catch (err) {

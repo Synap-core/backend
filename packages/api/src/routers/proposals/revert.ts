@@ -13,6 +13,8 @@ import {
   isRequestShapedProposalData,
   isCompositeProposalData,
 } from "@synap-core/types/proposals";
+import type { CompleteMaterializedRecord } from "../../services/proposals/stamp-materialized.js";
+import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
 
 // ---------------------------------------------------------------------------
 // Revert planning (pure — no DB, fully unit-testable)
@@ -39,6 +41,12 @@ export type ProposalRevertPlan =
       entityIds: string[];
       relationIds: string[];
       documentIds: string[];
+      /** Facets, config rows and merge overwrites — the complete record. */
+      facetIds: string[];
+      skillIds: string[];
+      automationIds: string[];
+      ruleIds: string[];
+      propertyDiffs: EntityPropertyDiff[];
     }
   | { kind: "restore-delete"; entityId: string }
   /**
@@ -203,41 +211,191 @@ export function planProposalRevert(
   }
 
   if (isCreate) {
-    const entityIds = [...(materialized?.entityIds ?? [])];
-    const relationIds = [...(materialized?.relationIds ?? [])];
-    const documentIds = [...(materialized?.documentIds ?? [])];
+    const record = (materialized ?? {}) as CompleteMaterializedRecord;
+    const plan = {
+      kind: "delete-creations" as const,
+      entityIds: [...(record.entityIds ?? [])],
+      relationIds: [...(record.relationIds ?? [])],
+      documentIds: [...(record.documentIds ?? [])],
+      facetIds: [...(record.facetIds ?? [])],
+      skillIds: [...(record.skillIds ?? [])],
+      automationIds: [...(record.automationIds ?? [])],
+      ruleIds: [...(record.ruleIds ?? [])],
+      propertyDiffs: [...(record.propertyDiffs ?? [])],
+    };
+    const isEmpty = () =>
+      plan.entityIds.length === 0 &&
+      plan.relationIds.length === 0 &&
+      plan.documentIds.length === 0 &&
+      plan.facetIds.length === 0 &&
+      plan.skillIds.length === 0 &&
+      plan.automationIds.length === 0 &&
+      plan.ruleIds.length === 0 &&
+      plan.propertyDiffs.length === 0;
 
     // Fallback for branches whose created id IS the proposal target and which
     // therefore may not have stamped `materialized` (generic `.validated` entity
     // create; document create where documentId === targetId).
-    if (
-      entityIds.length === 0 &&
-      relationIds.length === 0 &&
-      documentIds.length === 0
-    ) {
+    //
+    // NEVER for a composite graph: its `targetId` is a placeholder minted at
+    // propose time, not a created row. Falling back to it is how an import
+    // with no record reverted by deleting a random id → NOT_FOUND → "Revert
+    // failed". A graph with no record says so instead.
+    if (isEmpty() && !isCompositeProposalData(data ?? null)) {
       if (proposal.targetType === "entity" && proposal.targetId) {
-        entityIds.push(proposal.targetId);
+        plan.entityIds.push(proposal.targetId);
       } else if (proposal.targetType === "document" && proposal.targetId) {
-        documentIds.push(proposal.targetId);
+        plan.documentIds.push(proposal.targetId);
       }
     }
 
-    if (
-      entityIds.length === 0 &&
-      relationIds.length === 0 &&
-      documentIds.length === 0
-    ) {
+    if (isEmpty()) {
       return {
         kind: "unsupported",
         reason: `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
       };
     }
 
-    return { kind: "delete-creations", entityIds, relationIds, documentIds };
+    return plan;
   }
 
   return {
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Single-item revert — ONE op of a composite proposal
+// ---------------------------------------------------------------------------
+
+export type ProposalOpRevertPlan =
+  | {
+      kind: "op";
+      /** The narrowed inverse, same shape the whole-proposal revert runs. */
+      plan: Extract<ProposalRevertPlan, { kind: "delete-creations" }>;
+      /** The op itself plus the run's own links to it that go with it. */
+      opKeys: string[];
+    }
+  | { kind: "already_reverted"; opKey: string; revertedAt: string }
+  | { kind: "unknown_op"; opKey: string; available: string[] }
+  /** Refused on purpose: undoing this item alone would also undo another live item's change. */
+  | { kind: "refused"; reason: string }
+  | { kind: "unsupported"; reason: string };
+
+/** `<sourceRef>-><targetRef>:<type>` → its two refs (see `relationOpKey`). */
+function relationRefs(
+  key: string
+): { sourceRef: string; targetRef: string } | null {
+  const arrow = key.indexOf("->");
+  const colon = key.lastIndexOf(":");
+  if (arrow <= 0 || colon <= arrow + 2) return null;
+  return {
+    sourceRef: key.slice(0, arrow),
+    targetRef: key.slice(arrow + 2, colon),
+  };
+}
+
+/**
+ * The inverse of ONE op, read from `data.materialized.byOp` — never re-derived
+ * from the operations. An entity op takes its facets, what a merge overwrote on
+ * a matched entity, and the run's OWN links to that entity (a link left
+ * pointing at a retired entity is a dangling edge). Rows the op merely linked
+ * (`linked` / `preExisting`) were never this run's and are not in the plan.
+ */
+export function planProposalOpRevert(
+  proposal: RevertPlannerInput,
+  opKey: string
+): ProposalOpRevertPlan {
+  const whole = planProposalRevert(proposal);
+  if (whole.kind !== "delete-creations") {
+    return whole.kind === "unsupported"
+      ? whole
+      : {
+          kind: "unsupported",
+          reason: `Only a proposal that created rows can be reverted one item at a time (this one is '${whole.kind}').`,
+        };
+  }
+  const record = ((proposal.data as { materialized?: unknown } | null)
+    ?.materialized ?? {}) as CompleteMaterializedRecord;
+  const byOp = record.byOp ?? {};
+  const entry = byOp[opKey];
+  if (!entry) {
+    return { kind: "unknown_op", opKey, available: Object.keys(byOp) };
+  }
+  if (entry.revertedAt) {
+    return { kind: "already_reverted", opKey, revertedAt: entry.revertedAt };
+  }
+
+  const plan: Extract<ProposalRevertPlan, { kind: "delete-creations" }> = {
+    kind: "delete-creations",
+    entityIds: [],
+    relationIds: [],
+    documentIds: [],
+    facetIds: [...(entry.facetIds ?? [])],
+    skillIds: entry.skillId ? [entry.skillId] : [],
+    automationIds: entry.automationId ? [entry.automationId] : [],
+    ruleIds: entry.ruleId ? [entry.ruleId] : [],
+    propertyDiffs: [],
+  };
+  const opKeys = [opKey];
+
+  if (entry.op === "create_relation") {
+    if (entry.relationId && !entry.preExisting)
+      plan.relationIds.push(entry.relationId);
+  } else if (entry.op === "create_entity" && entry.entityId) {
+    // Two live items on ONE entity share its record: `stampMaterialized` keeps
+    // one merged property diff per entity, so undoing this item alone would
+    // restore (or retire) what the other item changed too. Refuse, and say so.
+    const sharing = Object.entries(byOp)
+      .filter(
+        ([key, other]) =>
+          key !== opKey &&
+          !other.revertedAt &&
+          other.op === "create_entity" &&
+          other.entityId === entry.entityId
+      )
+      .map(([key]) => `'${key}'`);
+    if (sharing.length > 0) {
+      return {
+        kind: "refused",
+        reason: `Item '${opKey}' changed entity ${entry.entityId}, and so did ${sharing.join(", ")}. Their changes are recorded together, so undoing '${opKey}' alone would also undo theirs — revert the whole proposal instead.`,
+      };
+    }
+    if (entry.linked) {
+      plan.propertyDiffs.push(
+        ...(record.propertyDiffs ?? []).filter(
+          (d) => d.entityId === entry.entityId
+        )
+      );
+    } else {
+      plan.entityIds.push(entry.entityId);
+    }
+    for (const [key, other] of Object.entries(byOp)) {
+      if (other.op !== "create_relation" || other.revertedAt) continue;
+      if (!other.relationId || other.preExisting) continue;
+      const refs = relationRefs(key);
+      if (refs && (refs.sourceRef === opKey || refs.targetRef === opKey)) {
+        plan.relationIds.push(other.relationId);
+        opKeys.push(key);
+      }
+    }
+  }
+
+  const empty =
+    plan.entityIds.length +
+      plan.relationIds.length +
+      plan.facetIds.length +
+      plan.skillIds.length +
+      plan.automationIds.length +
+      plan.ruleIds.length +
+      plan.propertyDiffs.length ===
+    0;
+  if (empty) {
+    return {
+      kind: "unsupported",
+      reason: `Op '${opKey}' created nothing this proposal owns — it linked something that already existed and changed nothing on it.`,
+    };
+  }
+  return { kind: "op", plan, opKeys };
 }

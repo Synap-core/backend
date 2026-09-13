@@ -186,6 +186,14 @@ export interface StageSourceBlobInput {
    * complete 64k document.
    */
   extractedTextTruncated?: boolean;
+  /**
+   * Extra `documents.metadata` keys, merged under the door's own
+   * (`extractedTextTruncated`). How an intake SOURCE document
+   * (`services/intake/stage-intake-source.ts`) carries its `intakeSource`
+   * marker through this one upload + document-create implementation instead
+   * of a second one.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -362,8 +370,15 @@ export async function stageSourceBlob(
       mimeType: input.mimeType,
       userId: input.userId,
       workspaceId: input.workspaceId ?? undefined,
-      ...(input.extractedTextTruncated
-        ? { metadata: { extractedTextTruncated: true } }
+      ...(input.extractedTextTruncated || input.metadata
+        ? {
+            metadata: {
+              ...(input.metadata ?? {}),
+              ...(input.extractedTextTruncated
+                ? { extractedTextTruncated: true }
+                : {}),
+            },
+          }
         : {}),
       preUploadedVersion: {
         versionId: randomUUID(),

@@ -562,18 +562,22 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     existingEntityNames = undefined;
   }
 
-  // Scoped GUIDELINES (Wave 3a) — natural-language intent attached at any
-  // granularity (default | channelType | bridge | channel | shape) via the
-  // `config_settings` store, resolved for THIS message's context and injected as
-  // the structure pass's `instructions` (the SAME hook explicit `guidelines`
-  // uses). Ordered most-general → most-specific so a specific guideline
-  // reinforces/overrides a general one; the caller's explicit `guidelines` is
-  // appended LAST so it wins. Best-effort: a resolver hiccup degrades to "no
-  // scoped guidelines" (explicit-only), never fails the interpret — and with no
-  // stored guidelines this is a byte-identical no-op vs Wave 1 (explicit only).
+  // Scoped GUIDELINES — natural-language intent attached at any granularity
+  // (default | workKind | sourceKind | entityKind | channelType | bridge |
+  // channel | shape) via the `config_settings` store, assembled for THIS
+  // message's context by THE ONE reading door `assembleStructureContext` (the
+  // same door interactive capture uses) and injected as the structure pass's
+  // `instructions`. Ordered most-general → most-specific; the caller's explicit
+  // `guidelines` is appended LAST so it wins; the shared 2000-char budget drops
+  // the least specific first. With no matching guideline this is a
+  // byte-identical no-op (explicit only). A failed guideline READ does not fail
+  // the interpret — it structures with the explicit text and says so in the
+  // result (`guidelineStatus: "unavailable"`), never as "no guidelines".
   let mergedInstructions: string | undefined =
     input.guidelines?.trim() || undefined;
-  try {
+  let appliedGuidelines: Array<{ id: string; version: number }> = [];
+  let guidelineStatus: "ok" | "unavailable" = "ok";
+  {
     // channelType/bridgeId — derived from the channel's origin so the `bridge`
     // and `channelType` guideline scopes actually match at runtime (they are
     // stored granularities, previously never supplied here). Reuses
@@ -606,8 +610,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       }
     }
 
-    const { resolveGuidelines } = await import("@synap/database");
-    const resolved = await resolveGuidelines({
+    const { assembleStructureContext } = await import("@synap/database");
+    const structureContext = await assembleStructureContext({
       db,
       userId: ctx.userId,
       // The capability this interpret runs through (skills row id), when known —
@@ -617,20 +621,21 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       channelType,
       bridgeId,
       workspaceId: workspaceId ?? undefined,
+      // A message is text input. The kinds in play are the kinds the extractor
+      // may produce (the same `availableProfiles` hint it is given).
+      sourceKind: "text",
+      entityKinds: availableProfiles?.map((p) => p.slug),
       envelope: {
         content: input.content,
         channelId: input.channelId ?? undefined,
         entityId: input.entityId ?? undefined,
         attachments: [],
       },
+      instructions: [input.guidelines],
     });
-    const parts = [
-      ...resolved.map((g) => g.text),
-      ...(input.guidelines?.trim() ? [input.guidelines.trim()] : []),
-    ];
-    mergedInstructions = parts.length > 0 ? parts.join("\n\n") : undefined;
-  } catch {
-    mergedInstructions = input.guidelines?.trim() || undefined;
+    mergedInstructions = structureContext.instructions;
+    appliedGuidelines = structureContext.guidelines;
+    guidelineStatus = structureContext.guidelineStatus;
   }
 
   // Extraction — the SAME client.structure the capture path calls, reached the
@@ -704,6 +709,10 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       status: "no_proposal",
       reason,
       entityCount: 0,
+      // Which guideline versions shaped this pass (for a run manifest), and
+      // whether they could be read at all.
+      guidelines: appliedGuidelines,
+      guidelineStatus,
       ...(reason === "degraded" || reason === "structuring-unavailable"
         ? {
             degraded: true as const,
@@ -771,6 +780,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
     entityCount: result.entityCount,
     relationCount: result.relationCount,
+    guidelines: appliedGuidelines,
+    guidelineStatus,
     // Named, not left as a silent shortfall against the submitted count.
     ...(result.relationsFailed?.length
       ? { relationsFailed: result.relationsFailed }

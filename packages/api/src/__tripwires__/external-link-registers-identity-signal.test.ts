@@ -125,14 +125,15 @@ describe("tripwire: every entity_external_links writer registers the external_id
       join(DATABASE_SRC, "services", "entity-upsert-service.ts"),
       "utf8"
     );
-    // SCOPED to Step 2's own `lookupSignals` block. Matching the whole file
-    // would pass on the WRITER's key at `registerExternalLink` even with the
-    // reader deleted — the same vacuity `enclosingBlockTail` exists to prevent.
-    const at = src.indexOf("const lookupSignals");
-    expect(at, "Step 2's lookupSignals declaration not found").toBeGreaterThan(
+    // SCOPED to Step 2's own external-id lookup: the signal list passed to the
+    // strong match that resolves by external id. Matching the whole file would
+    // pass on the WRITER's key at `registerExternalLink` even with the reader
+    // deleted — the same vacuity `enclosingBlockTail` exists to prevent.
+    const at = src.indexOf("const byExternalId = await strongMatch(");
+    expect(at, "Step 2's external-id strong lookup not found").toBeGreaterThan(
       -1
     );
-    const readBlock = src.slice(at, src.indexOf("lookupSignals.length", at));
+    const readBlock = src.slice(at, src.indexOf("]);", at));
     expect(
       readBlock,
       "EntityUpsertService Step 2 must look up `${source}:${externalId}` as an external_id signal"

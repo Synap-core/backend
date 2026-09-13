@@ -13,9 +13,10 @@ import { TRPCError } from "@trpc/server";
 import { t } from "./init-trpc.js";
 import { requireUserId } from "./utils/user-scoped.js";
 import { createLogger } from "@synap-core/core";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and } from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 import { listMemberWorkspaces } from "./utils/workspace-membership.js";
+import { isPodAdmin } from "./utils/workspace-role.js";
 import "@synap/database"; // Fix TS2742: inferred type portability
 import {
   isSynapLikeError,
@@ -322,32 +323,12 @@ export const podAdminProcedure = protectedProcedure.use(async (opts) => {
  * NOT wholly pod-admin can still require pod-admin for a SUBSET of its input —
  * `profiles.update` gates its pod-wide fields on an unowned (system/shared)
  * profile this way. One mechanism, two entry points; never a second copy of
- * the membership query.
+ * the membership query. The predicate itself is `isPodAdmin`
+ * (`utils/workspace-role.ts`): a FAILED membership read throws through it and
+ * never reads as "not an admin".
  */
 export async function assertPodAdmin(userId: string): Promise<void> {
-  // Find the pod-admin workspace
-  const podAdminWorkspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.systemSlug, "pod-admin"),
-    columns: { id: true },
-  });
-
-  if (!podAdminWorkspace) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Pod administration workspace not found",
-    });
-  }
-
-  // Verify user is an admin or owner of that workspace
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, podAdminWorkspace.id),
-      eq(workspaceMembers.userId, userId),
-      inArray(workspaceMembers.role, ["admin", "owner"])
-    ),
-  });
-
-  if (!membership) {
+  if (!(await isPodAdmin(userId))) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Pod admin access required",

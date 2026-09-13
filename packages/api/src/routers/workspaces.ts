@@ -52,6 +52,10 @@ import { emitSideEffects, getBoss } from "@synap/events";
 import { storage } from "@synap/storage";
 import { workspaceRuntimePrimarySurfaceSchema } from "../schemas/workspace-primary-surface.js";
 import { logger, isPodReadableWorkspace } from "./workspaces/helpers.js";
+import {
+  preserveServerOwnedSettings,
+  stripServerOwnedSettings,
+} from "../connectors/server-owned-settings.js";
 import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
@@ -113,7 +117,8 @@ const coreProcedures = {
           id: workspaceId,
           name: input.name,
           ownerId: ctx.userId,
-          settings: input.settings || {},
+          // Server-owned keys (controlPlane, nango) are never client-writable.
+          settings: stripServerOwnedSettings(input.settings || {}),
         },
         ctx.userId
       );
@@ -512,6 +517,20 @@ const coreProcedures = {
         const aiGov = { ...(aiGovIn as Record<string, unknown>) };
         delete aiGov.autoApproveFor;
         settingsToPersist = { ...settingsToPersist, aiGovernance: aiGov };
+      }
+
+      // `update` REPLACES settings and clients only ever see a projection
+      // without the server-owned keys (controlPlane, nango): take those from
+      // the stored row so a round-trip can neither erase nor plant them.
+      if (settingsToPersist) {
+        const stored = await dbConn.query.workspaces.findFirst({
+          where: eq(workspaces.id, input.id),
+          columns: { settings: true },
+        });
+        settingsToPersist = preserveServerOwnedSettings(
+          settingsToPersist,
+          stored?.settings
+        );
       }
 
       await workspaceRepo.update(

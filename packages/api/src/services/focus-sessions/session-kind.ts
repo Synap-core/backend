@@ -70,6 +70,15 @@ const RUN_ORIGINS = ["playbook", "automation"] as const;
  */
 const AUTOMATION_KEYS = ["automationRunId", "automationId"] as const;
 
+/**
+ * Every metadata key whose PRESENCE is a run signal: the two automation keys,
+ * plus `intake` — stamped by `ensureIntakeSession` (services/intake) on a
+ * session it MINTED for a capture/import analysis run. A person's own session
+ * that merely receives a run manifest (`metadata.run`) carries no `intake`
+ * key and stays `work`; that is why the marker is not `run`.
+ */
+const RUN_METADATA_KEYS = [...AUTOMATION_KEYS, "intake"] as const;
+
 /** The marker `resolveOrCreateAgentProposalSession` stamps on a receipt. */
 export const AGENT_PROPOSAL_PACKAGE_KIND = "agent-proposal-package";
 
@@ -95,7 +104,7 @@ function notReceiptWhere(): SQL {
  * half reads — so a third automation key can never reach one half only.
  */
 function metadataKeyWhere(
-  key: (typeof AUTOMATION_KEYS)[number],
+  key: (typeof RUN_METADATA_KEYS)[number],
   test: "IS NULL" | "IS NOT NULL"
 ): SQL {
   return drizzleSql`${focusSessions.metadata} #>> ${drizzleSql.raw(`'{${key}}'`)} ${drizzleSql.raw(test)}` as SQL;
@@ -136,7 +145,7 @@ function runSignalWhere(): SQL {
     or(
       inArray(focusSessions.origin, [...RUN_ORIGINS]),
       isNotNull(focusSessions.playbookId),
-      ...AUTOMATION_KEYS.map((key) => metadataKeyWhere(key, "IS NOT NULL"))
+      ...RUN_METADATA_KEYS.map((key) => metadataKeyWhere(key, "IS NOT NULL"))
     )
   ) as SQL;
 }
@@ -153,7 +162,7 @@ function noRunSignalWhere(): SQL {
         not(inArray(focusSessions.origin, [...RUN_ORIGINS]))
       ),
       isNull(focusSessions.playbookId),
-      ...AUTOMATION_KEYS.map((key) => metadataKeyWhere(key, "IS NULL"))
+      ...RUN_METADATA_KEYS.map((key) => metadataKeyWhere(key, "IS NULL"))
     )
   ) as SQL;
 }
@@ -207,7 +216,7 @@ export function projectSessionKind(row: SessionKindProjectable): SessionKind {
     !!row.playbookId ||
     // Presence, not type: `#>> '{…}' IS NOT NULL` in the SQL half is true for a
     // JSON value of ANY type, so a string test here would fork.
-    AUTOMATION_KEYS.some((k) => metadataValue(row.metadata, k) != null);
+    RUN_METADATA_KEYS.some((k) => metadataValue(row.metadata, k) != null);
   return isRun ? "run" : "work";
 }
 

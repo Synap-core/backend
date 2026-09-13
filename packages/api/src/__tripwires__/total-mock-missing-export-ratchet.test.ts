@@ -84,8 +84,11 @@ import { scanTotalMockGaps } from "../../scripts/scan-total-mock-gaps.mjs";
  *     stale, which the module error had been hiding.
  * The remaining two conversions closed gaps that were live but unreached —
  * `parseCsvTable`/`csvRowsToTypedImportItems` and `resolveOriginTrust`.
+ * 2026-09-13: 34 → 33 — `permission-check.auto-approve-receipt` and
+ * `…auto-approve-satisfies-outputs` converted to importOriginal+spread (both
+ * lacked `resolveOriginTrust`); measured 35 → 33 across exactly those two.
  */
-const BASELINE = 34;
+const BASELINE = 33;
 
 describe("tripwire: total vi.mock factories vs the imports they must cover", () => {
   const { totalFactories, findings } = scanTotalMockGaps() as {

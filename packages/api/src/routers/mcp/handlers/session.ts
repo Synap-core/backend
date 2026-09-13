@@ -199,6 +199,10 @@ export const sessionHandlers: McpHandlerMap = {
       pendingProposals: result.pendingProposals,
       counts: result.counts,
       warnings: result.warnings,
+      // `cancelled` only: what the cancel stopped, what was already running and
+      // will finish, and what had already applied (undo it with a session
+      // revert). Also kept on the session's `metadata.run.cancel`.
+      ...(result.cancel ? { cancel: result.cancel } : {}),
       note:
         result.counts.pending > 0
           ? `Review pack: ${result.counts.pending} pending proposal(s) for this session — use synap_list_proposals with sessionId, or open the session room.`
@@ -208,6 +212,121 @@ export const sessionHandlers: McpHandlerMap = {
             // returned `status:"cancelled"` while this line still said closed.
             `Session ${result.session.status} with no pending proposals in the pack.`,
     });
+  },
+  /**
+   * Revert is a HUMAN decision — it takes back approved work — so this door
+   * reverts nothing, for any caller. It answers `refused` with the session's
+   * revertable proposals and a link to each, so the agent can hand the user the
+   * door that does it (session room / proposal). Agent-PROPOSED revert through a
+   * governed executor is a follow-up, not this tool.
+   */
+  synap_revert_session: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: "sessionId must be a focus session UUID." });
+    }
+    const [session] = await db
+      .select({ id: focusSessions.id, goal: focusSessions.goal })
+      .from(focusSessions)
+      .where(
+        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
+      )
+      .limit(1);
+    if (!session) {
+      return ok({ error: `Focus session ${sessionId} not found` });
+    }
+    const asked = [
+      ...(Array.isArray(args.proposalIds) ? args.proposalIds : []),
+      ...(args.proposalId !== undefined ? [args.proposalId] : []),
+    ].filter((id): id is string => typeof id === "string" && UUID_RE.test(id));
+    const { proposals } = await import("@synap/database");
+    const { ProposalStatus } = await import("@synap/database/schema");
+    const { openLink } = await import("../../../utils/deep-links.js");
+    const revertable = await db
+      .select({ id: proposals.id, proposalType: proposals.proposalType })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.sessionId, sessionId),
+          inArray(proposals.status, [
+            ProposalStatus.APPROVED,
+            ProposalStatus.AUTO_APPROVED,
+          ]),
+          ...(asked.length > 0 ? [inArray(proposals.id, asked)] : [])
+        )
+      )
+      .orderBy(desc(proposals.createdAt))
+      .limit(50);
+    return ok({
+      status: "refused",
+      reason: "revert_is_a_human_decision",
+      message:
+        "Reverting takes back work that was already approved, so it is the user's decision — nothing was changed. Give the user the links below: from the session room or a proposal they can undo everything, only some proposals, or one item (items edited since are skipped with the reason).",
+      sessionId,
+      goal: session.goal,
+      ...(typeof args.opKey === "string" ? { opKey: args.opKey } : {}),
+      revertable: revertable.map((p) => ({
+        proposalId: p.id,
+        proposalType: p.proposalType,
+        link: openLink(p.id),
+      })),
+    });
+  },
+  /**
+   * RERUN a session as a NEW session spawned from it (same service as tRPC /
+   * Hub). `dryRun` only needs read scope. An agent may rerun in `add` mode —
+   * every write still lands through the governed capture/import doors, so a
+   * `proposed` outcome is the normal answer — but `replace` reverts approved
+   * work and is refused by the service as a human decision.
+   */
+  synap_rerun_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const dryRun = args.dryRun === true;
+    requireScope(apiKeyScopes, dryRun ? "mcp.read" : "mcp.write", toolName);
+    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    if (!UUID_RE.test(sessionId)) {
+      return ok({ error: "sessionId must be a focus session UUID." });
+    }
+    if (args.mode !== "replace" && args.mode !== "add") {
+      return ok({ error: "mode must be 'replace' or 'add'." });
+    }
+    const ids = Array.isArray(args.sourceDocumentIds)
+      ? args.sourceDocumentIds.filter(
+          (id): id is string => typeof id === "string" && UUID_RE.test(id)
+        )
+      : [];
+    const reasoning =
+      typeof args.reasoning === "string"
+        ? args.reasoning.slice(0, 2000)
+        : undefined;
+    const [{ rerunSession }, { createHubProtocolCallerContext }] =
+      await Promise.all([
+        import("../../../services/focus-sessions/rerun-session.js"),
+        import("../../hub-protocol/utils.js"),
+      ]);
+    const callerContext = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      null,
+      null,
+      null,
+      agentUserId ?? null
+    );
+    const result = await rerunSession({
+      sessionId,
+      userId,
+      mode: args.mode,
+      ...(ids.length > 0 ? { scope: { sourceDocumentIds: ids } } : {}),
+      dryRun,
+      ...(reasoning ? { reason: reasoning } : {}),
+      agentUserId: agentUserId ?? null,
+      callerContext,
+    });
+    return ok(result);
   },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;

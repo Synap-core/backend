@@ -81,7 +81,7 @@ const CONNECTOR_SCHEMA = {
       "1. IS calls GET /api/hub/connectors/providers to see what is connected",
       "2. IS calls POST /api/hub/connectors/session with providerId to get redirectUrl",
       "3. IS returns redirectUrl to user: 'Click to connect [service]: <url>'",
-      "4. After OAuth, Nango fires /api/connectors/nango-webhook → records import automatically",
+      "4. After OAuth, the pod's connection sync runs: the first sync files ONE import proposal for review, later syncs follow the connection's rule",
       "5. IS can now query the imported entities via MCP search tools",
     ],
   },

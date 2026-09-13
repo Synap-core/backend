@@ -51,7 +51,13 @@ vi.mock("../client-pg.js", () => {
       // keeps this test blind to SQL shape and sensitive only to the JS
       // precedence rule, which is where the guard now lives.
       relationDefs: { findMany: async () => visibleRows },
-      profiles: { findFirst: async () => ({ id: "profile-1" }) },
+      // `ProfileRepository.getBySlug(slug)` (no workspace) → findMany. No
+      // `findFirst` stub: an unscoped slug `findFirst` must not come back.
+      profiles: {
+        findMany: async () => [
+          { id: "profile-1", scope: "system", createdAt: new Date(0) },
+        ],
+      },
     },
     update: () => ({
       set: (v: Record<string, unknown>) => ({

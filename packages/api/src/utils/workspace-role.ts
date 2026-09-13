@@ -54,7 +54,10 @@ export async function requirePodAdmin(userId: string) {
  * Non-throwing pod-admin check — the boolean sibling of `requirePodAdmin`. Used
  * where a caller must BRANCH on admin-ness rather than fail (e.g. reveal foreign
  * per-user connections to an admin, but simply hide them from a non-admin instead
- * of erroring). Returns false when the pod-admin workspace is missing.
+ * of erroring). Returns false when the pod-admin workspace is missing. A FAILED
+ * read (either query throwing) propagates — it never folds into `false`;
+ * `assertPodAdmin` (trpc.ts) and the governance gate's rung-2.07 check both
+ * rely on that.
  */
 export async function isPodAdmin(userId: string): Promise<boolean> {
   const podAdminWorkspace = await db.query.workspaces.findFirst({

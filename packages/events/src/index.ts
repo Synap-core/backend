@@ -63,7 +63,11 @@ export {
 
 export { getBoss, startBoss, stopBoss, boss } from "./boss.js";
 
-export { emitSideEffects, type SideEffectPayload } from "./side-effects.js";
+export {
+  emitSideEffects,
+  enqueueConnectionSyncApproval,
+  type SideEffectPayload,
+} from "./side-effects.js";
 
 // Reactor registry — a new reaction = registerReactor(...), never an edit to
 // emitSideEffects. getReactors() is exposed for tests/introspection.

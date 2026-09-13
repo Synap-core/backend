@@ -315,23 +315,28 @@ export {
   type RunEventSyncResult,
 } from "./services/event-sync/run-event-sync.js";
 export {
-  runGcalImport,
-  type RunGcalImportResult,
-} from "./services/event-sync/run-gcal-import.js";
-export {
   runConnectionSync,
+  runScheduledConnectionSyncs,
+  enqueueConnectionSync,
+  getConnectionSyncStatus,
   registerSyncKind,
   getSyncKinds,
   isProviderSyncEnabled,
+  CONNECTION_SYNC_QUEUE,
   type RunConnectionSyncResult,
+  type ConnectionSyncStatus,
+  type SyncTriggerReason,
+  type SyncPhase,
+  type SyncCounts,
   type SyncKindHandler,
   type SyncKindContext,
   type KindSyncResult,
+  type KindSyncState,
   type ProviderSyncConfig,
   type StoredKindSyncConfig,
   type ResolvedKindSyncConfig,
-  type SyncScope,
 } from "./services/event-sync/connection-sync.js";
+export { reconcileLiveConnections } from "./services/capabilities/capability-nango-sync.js";
 export { scanStaleProposals } from "./services/proposals/scan-stale-proposals.js";
 export {
   expireLapsedProposals,

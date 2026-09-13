@@ -72,6 +72,11 @@ import {
   closeImportProposalOnApply,
 } from "./import/session.js";
 import {
+  buildMaterializedRecord,
+  mergeMaterializedRecords,
+  type CompleteMaterializedRecord,
+} from "./proposals/stamp-materialized.js";
+import {
   resolveProfileHints,
   buildCsvTablePlan,
   proposeImportGraph,
@@ -84,6 +89,16 @@ import {
   type ProfileHints,
 } from "./import/structuring.js";
 import { suggestViewsFromImportGraph } from "./import/suggest-views.js";
+import { assembleStructureContext } from "@synap/database";
+import {
+  recordImportIntake,
+  importRunFacts,
+} from "./intake/record-import-intake.js";
+import {
+  mergeStructureRunMeta,
+  type StructureRunMeta,
+} from "./intake/record-session-run-manifest.js";
+
 // Re-exported to preserve the prior public named export from this module.
 export { buildImportSummary, computeImportHomes };
 export type { ImportHomesSummary } from "./import/structuring.js";
@@ -155,6 +170,12 @@ export type ImportAnalyzeInput = {
    * Returns `proposalId: null`; ops/quality/homes are still fully populated.
    */
   previewOnly?: boolean;
+  /**
+   * Dedup namespace of the session this analyze files into (a rerun passes
+   * `rerun:<sessionId>`): folded into the import.graph idempotency key so a
+   * rerun files its OWN proposal. Omitted → the content key, unchanged.
+   */
+  idempotencyNamespace?: string;
 };
 
 export type ImportApplyInput = {
@@ -710,6 +731,16 @@ export class ImportOrchestrator {
       title: it.title,
     }));
 
+    // Stored guidelines — the ONE assembler, scoped to this import's source kind.
+    const importContext = await assembleStructureContext({
+      db,
+      userId,
+      workspaceId: wsId,
+      sourceKind: `import:${input.source}`,
+      entityKinds: [...validSlugs],
+    });
+    let deepStructureMeta: StructureRunMeta | null | undefined;
+
     if (isProse && input.aiStructure !== false) {
       try {
         const { client } = await resolveIntelligenceService({
@@ -729,9 +760,13 @@ export class ImportOrchestrator {
               workspaceId: wsId,
             }),
             validateEntity,
+            ...(importContext.instructions
+              ? { instructions: importContext.instructions }
+              : {}),
           },
           { logger }
         );
+        deepStructureMeta = deep.structureMeta;
         if (deep.stats.entityCount > 0) {
           const linkOps = linkProvenanceToContainers(
             deep.operations,
@@ -830,9 +865,15 @@ export class ImportOrchestrator {
     // focusSessions.create requires a workspaceId) create an `Import …` session.
     // Best-effort: a session hiccup must never fail the import.
     // previewOnly dry-runs: do not mint sessions either (no durable side effects).
-    const sessionId = input.previewOnly
-      ? (input.sessionId ?? this.ctx.sessionId ?? null)
-      : await resolveImportSession(this.ctx, input, tablePlan);
+    // Phase 1 — only a handle the caller OWNS, never a mint. Placement may read
+    // it; the run's session is settled after the duplicate lookup below, so a
+    // re-sent analyze reuses its PRIOR room instead of minting an empty one.
+    let sessionResolution = input.previewOnly
+      ? null
+      : await resolveImportSession(this.ctx, input, tablePlan, { mint: false });
+    let sessionId = sessionResolution
+      ? sessionResolution.sessionId
+      : (input.sessionId ?? this.ctx.sessionId ?? null);
     // Thread minted/passed session onto orchestrator so a same-instance apply
     // (or apply that reuses this.ctx) stamps produced-links correctly.
     if (sessionId) this.ctx.sessionId = sessionId;
@@ -909,7 +950,20 @@ export class ImportOrchestrator {
           workspaceId: workspaceId ?? null,
           projectId: this.ctx.projectId ?? null,
           operations: ops,
+          ...(input.idempotencyNamespace
+            ? { idempotencyNamespace: input.idempotencyNamespace }
+            : {}),
         });
+    if (sessionResolution && !sessionResolution.sessionId) {
+      sessionResolution = await this.settleRunSession(
+        input,
+        tablePlan,
+        priorProposal,
+        sessionResolution
+      );
+      sessionId = sessionResolution.sessionId;
+      if (sessionId) this.ctx.sessionId = sessionId;
+    }
     if (input.previewOnly) {
       logger.info(
         {
@@ -949,6 +1003,9 @@ export class ImportOrchestrator {
           sourceId: targetId,
           workspaceId: workspaceId ?? null,
           projectId: this.ctx.projectId ?? null,
+          ...(input.idempotencyNamespace
+            ? { idempotencyNamespace: input.idempotencyNamespace }
+            : {}),
           quality,
           homes,
           corpusMap: corpusMapMeta,
@@ -972,6 +1029,25 @@ export class ImportOrchestrator {
         "import.analyze"
       );
     }
+    // The run's inputs as source documents + its manifest. previewOnly files
+    // nothing durable, so it records nothing either; a deduplicated analyze
+    // already recorded them on the prior run.
+    const intake =
+      sessionResolution && !deduplicated
+        ? await recordImportIntake({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            sessionId,
+            source: input.source,
+            items: input.items,
+            run: {
+              guidelines: importContext.guidelines,
+              guidelineStatus: importContext.guidelineStatus,
+              ...importRunFacts(mode, input.aiStructure, deepStructureMeta),
+            },
+          })
+        : null;
     return {
       workspaceId,
       source: input.source,
@@ -980,6 +1056,16 @@ export class ImportOrchestrator {
       /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
       deduplicated,
       sessionId: sessionId ?? null,
+      ...(sessionResolution
+        ? {
+            sessionSource: sessionResolution.sessionSource,
+            requestedSessionIgnored: sessionResolution.requestedSessionIgnored,
+            ...(sessionResolution.error
+              ? { sessionError: sessionResolution.error }
+              : {}),
+          }
+        : {}),
+      ...(intake ? { intake } : {}),
       tablePlan,
       operations: ops,
       summary,
@@ -999,6 +1085,15 @@ export class ImportOrchestrator {
    * REST /import/apply; reuses the composite materializer approve uses.
    */
   async apply(input: ImportApplyInput) {
+    // D7 — ONE governed door. An apply that names its analyze-time proposal is
+    // an approval of that proposal, so it goes through `applyProposalApproval`
+    // exactly as approving it from the inbox does (authority, dispositions,
+    // property reconciliation, lineage, record, status, telemetry). Only a
+    // proposal-less apply (client-echoed ops, back-compat) stays direct.
+    if (input.proposalId) {
+      const governed = await this.applyThroughApproval(input.proposalId, input);
+      if (governed) return governed;
+    }
     const { workspaceId, userId, trpcCtx } = this.ctx;
 
     // HITL SSOT: prefer proposal.data.operations over client-supplied ops.
@@ -1015,6 +1110,12 @@ export class ImportOrchestrator {
       workspaceId,
       userId,
       sessionId: this.ctx.sessionId ?? null,
+      // LINEAGE: the analyze-time proposal authorizes every row this apply
+      // writes — `entities.source_proposal_id` / `relations.source_proposal_id`
+      // / `events.proposal_id` name it, which is what lets revert tell this
+      // import's rows from anyone else's. The row exists (resolveApplyOperations
+      // just read it as PENDING), so the foreign key holds.
+      ...(input.proposalId ? { governanceProposalId: input.proposalId } : {}),
     };
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
@@ -1034,12 +1135,7 @@ export class ImportOrchestrator {
       );
     }
 
-    const {
-      created,
-      linked,
-      entities: materialized,
-      relationsFailed,
-    } = await materializeCompositeGraph(
+    const applied = await materializeCompositeGraph(
       operations,
       entityCaller,
       relationCaller,
@@ -1065,9 +1161,18 @@ export class ImportOrchestrator {
           namespace: `${this.ctx.userId}:${idempotencyKey}`,
           provider: "import",
           userId: this.ctx.userId,
+          // Rows this apply writes carry the analyze proposal as lineage, so a
+          // retry's hit on one of them is this import's own creation.
+          ...(input.proposalId ? { sourceProposalId: input.proposalId } : {}),
         }),
       }
     );
+    const {
+      created,
+      linked,
+      entities: materialized,
+      relationsFailed,
+    } = applied;
 
     // Project membership (lens-context): file imported entities into the active
     // project. Import materializes directly (the proposal is a record), so the
@@ -1077,7 +1182,11 @@ export class ImportOrchestrator {
 
     // Close the analyze-time proposal row (PENDING → APPROVED). Best-effort —
     // materialize already succeeded; a close failure must never fail the import.
-    await closeImportProposalOnApply(input.proposalId, userId);
+    await closeImportProposalOnApply(
+      input.proposalId,
+      userId,
+      buildMaterializedRecord(applied)
+    );
 
     // HITL: suggest useful views from the imported profile mix. Best-effort —
     // never fails the import; human reviews proposals in the proposal UI.
@@ -1107,6 +1216,174 @@ export class ImportOrchestrator {
       // Edges that did not land (each fails alone after its entities exist).
       ...(relationsFailed.length > 0 ? { relationsFailed } : {}),
       ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
+    };
+  }
+
+  /**
+   * Settle an analyze run's session AFTER the duplicate lookup, when phase 1
+   * found no verified handle:
+   *  - a PRIOR identical proposal → its session (owner-checked), or NONE when it
+   *    had none — never a fresh empty room for a proposal that already exists;
+   *  - otherwise the full ladder (playbook → minted intake session).
+   */
+  private async settleRunSession(
+    input: ImportAnalyzeInput,
+    tablePlan: CsvTablePlan | null,
+    prior: { sessionId: string | null } | null,
+    phase1: { requestedSessionIgnored: boolean }
+  ): Promise<Awaited<ReturnType<typeof resolveImportSession>>> {
+    if (prior) {
+      if (prior.sessionId) {
+        const { resolveVerifiedSessionId } =
+          await import("../routers/hub-protocol/_middleware/session.js");
+        const owned = await resolveVerifiedSessionId(
+          this.ctx.userId,
+          null,
+          prior.sessionId
+        );
+        if (owned) {
+          return {
+            sessionId: owned,
+            sessionSource: "prior",
+            requestedSessionIgnored: phase1.requestedSessionIgnored,
+          };
+        }
+      }
+      return {
+        sessionId: null,
+        sessionSource: "none",
+        requestedSessionIgnored: phase1.requestedSessionIgnored,
+      };
+    }
+    return resolveImportSession(this.ctx, input, tablePlan);
+  }
+
+  /**
+   * `apply` through the governed approval door. Returns null only when the
+   * stored proposal carries no operations (back-compat: the direct path then
+   * uses the client-echoed ops). The session is the PROPOSAL's (verified when
+   * analyze filed it) — never the request's raw `sessionId`.
+   *
+   * Not used by `applyLarge`: that door materializes in chunks with a
+   * cumulative ref map, which one approval call does not do.
+   */
+  private async applyThroughApproval(
+    proposalId: string,
+    input: ImportApplyInput
+  ) {
+    const { userId } = this.ctx;
+    // ONE answer for "does not exist", "is not an import", and "not yours to
+    // approve" — decided BEFORE anything about the row (status, ops) is said, so
+    // the door is no oracle for other users' proposal ids or states.
+    const notFound = () =>
+      new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Import proposal ${proposalId} not found`,
+      });
+    const proposal = await db.query.proposals.findFirst({
+      where: eq(proposals.id, proposalId),
+    });
+    if (!proposal || proposal.proposalType !== "import.graph") {
+      throw notFound();
+    }
+    // The approve door's own authority check — this IS an approval. The acting
+    // principal is the AGENT when an agent key drove the call: approval is the
+    // human step, and `computeCanReviewApproval` refuses an agent principal.
+    const actingAgentUserId =
+      (this.ctx.trpcCtx as { agentUserId?: string | null }).agentUserId ?? null;
+    const { computeCanReviewApproval } =
+      await import("../routers/proposals/review-authority.js");
+    const { allowed } = await computeCanReviewApproval({
+      proposal,
+      userId: actingAgentUserId ?? userId,
+      purpose: "approve",
+    });
+    if (!allowed) throw notFound();
+
+    // Same HITL gate as `resolveApplyOperations`: only a PENDING analyze
+    // proposal may be applied (re-applying re-filed view suggestions).
+    if (proposal.status !== ProposalStatus.PENDING) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Import proposal ${proposalId} is not pending (status: ${proposal.status})`,
+      });
+    }
+    const stored = proposal.data as { operations?: unknown } | null;
+    const operations = Array.isArray(stored?.operations)
+      ? (stored!.operations as CompositeProposalOperation[])
+      : [];
+    if (operations.length === 0) return null;
+
+    const { applyProposalApproval } =
+      await import("../routers/proposals/apply-approval.js");
+    const result = (await applyProposalApproval({
+      proposal,
+      userId,
+      input: { proposalId },
+      ctx: this.ctx.trpcCtx as never,
+    })) as { created?: number; linked?: number; relationsFailed?: unknown[] };
+
+    // The approval stamped the record; read the created ids back from it for
+    // the import's active project lens (the approval files only the
+    // proposal's own project / session placement).
+    const after = await db.query.proposals.findFirst({
+      where: eq(proposals.id, proposalId),
+      columns: { data: true },
+    });
+    const entityIds =
+      (after?.data as { materialized?: { entityIds?: string[] } } | null)
+        ?.materialized?.entityIds ?? [];
+    await stampProjectMembership(
+      this.ctx,
+      entityIds.map((entityId) => ({ entityId }))
+    );
+
+    if (proposal.sessionId) {
+      try {
+        const { recordSessionRunManifest } =
+          await import("./intake/record-session-run-manifest.js");
+        const { approvalIdempotencyNamespace } =
+          await import("./proposals/approval-idempotency.js");
+        await recordSessionRunManifest({
+          sessionId: proposal.sessionId,
+          userId,
+          patch: {
+            idempotencyNamespace: approvalIdempotencyNamespace(
+              userId,
+              proposalId
+            ),
+          },
+        });
+      } catch (err) {
+        logger.warn(
+          { err, proposalId, sessionId: proposal.sessionId },
+          "import.apply: run manifest namespace not recorded (import preserved)"
+        );
+      }
+    }
+
+    const created = result.created ?? 0;
+    const viewProposalIds = await suggestViewsFromImportGraph(
+      this.ctx,
+      operations,
+      { createdCount: created }
+    );
+    logger.info(
+      { userId, proposalId, created, linked: result.linked ?? 0 },
+      "import.apply materialized through the governed approval door"
+    );
+    return {
+      workspaceId: proposal.workspaceId ?? null,
+      source: input.source,
+      created,
+      linked: result.linked ?? 0,
+      ...(result.relationsFailed?.length
+        ? { relationsFailed: result.relationsFailed }
+        : {}),
+      ...(viewProposalIds.length > 0 ? { viewProposalIds } : {}),
+      proposalId,
+      sessionId: proposal.sessionId ?? null,
+      governed: true as const,
     };
   }
 
@@ -1162,6 +1439,15 @@ export class ImportOrchestrator {
       workspaceId: wsId,
       capability: "default",
     });
+    // Same one assembler as analyze(); every chunk reads the same guidelines.
+    const importContext = await assembleStructureContext({
+      db,
+      userId,
+      workspaceId: wsId,
+      sourceKind: `import:${input.source}`,
+      entityKinds: [...validSlugs],
+    });
+    let largeStructureMeta: StructureRunMeta | null | undefined;
 
     // ONE shared resolver across all chunks — wraps the live-search resolver and
     // adds earlier-chunk-created + memoized state (cross-chunk dedup).
@@ -1212,6 +1498,9 @@ export class ImportOrchestrator {
           resolveExisting: (slug, title) => shared.resolveExisting(slug, title),
           seedExistingNames: shared.getExistingEntityNames(),
           validateEntity,
+          ...(importContext.instructions
+            ? { instructions: importContext.instructions }
+            : {}),
         },
         { logger }
       );
@@ -1246,6 +1535,10 @@ export class ImportOrchestrator {
         }
       }
 
+      largeStructureMeta = mergeStructureRunMeta(
+        largeStructureMeta,
+        deep.structureMeta
+      );
       entityCount += deep.stats.entityCount;
       relationCount += deep.stats.relationCount;
       duplicatesMerged += deep.stats.duplicatesMerged;
@@ -1326,9 +1619,13 @@ export class ImportOrchestrator {
 
     // Same session mint rules as analyze() (N≥2 / forceSession / playbook / pass-through).
     // previewOnly: no durable session mint.
-    const sessionId = input.previewOnly
-      ? (input.sessionId ?? this.ctx.sessionId ?? null)
-      : await resolveImportSession(this.ctx, input, null);
+    // Phase 1 — verified handle only; settled after the duplicate lookup (see analyze()).
+    let sessionResolution = input.previewOnly
+      ? null
+      : await resolveImportSession(this.ctx, input, null, { mint: false });
+    let sessionId = sessionResolution
+      ? sessionResolution.sessionId
+      : (input.sessionId ?? this.ctx.sessionId ?? null);
     if (sessionId) this.ctx.sessionId = sessionId;
 
     // Homes / placement — same rules as analyze() (see comment there).
@@ -1375,7 +1672,20 @@ export class ImportOrchestrator {
           workspaceId: workspaceId ?? null,
           projectId: this.ctx.projectId ?? null,
           operations,
+          ...(input.idempotencyNamespace
+            ? { idempotencyNamespace: input.idempotencyNamespace }
+            : {}),
         });
+    if (sessionResolution && !sessionResolution.sessionId) {
+      sessionResolution = await this.settleRunSession(
+        input,
+        null,
+        priorProposal,
+        sessionResolution
+      );
+      sessionId = sessionResolution.sessionId;
+      if (sessionId) this.ctx.sessionId = sessionId;
+    }
     if (input.previewOnly) {
       logger.info(
         {
@@ -1415,6 +1725,9 @@ export class ImportOrchestrator {
           sourceId: batchId,
           workspaceId: workspaceId ?? null,
           projectId: this.ctx.projectId ?? null,
+          ...(input.idempotencyNamespace
+            ? { idempotencyNamespace: input.idempotencyNamespace }
+            : {}),
           quality,
           homes,
           corpusMap: stats.corpusMap,
@@ -1437,6 +1750,22 @@ export class ImportOrchestrator {
       );
     }
 
+    const intake =
+      sessionResolution && !deduplicated
+        ? await recordImportIntake({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            sessionId,
+            source: input.source,
+            items: input.items,
+            run: {
+              guidelines: importContext.guidelines,
+              guidelineStatus: importContext.guidelineStatus,
+              ...importRunFacts("deep", input.aiStructure, largeStructureMeta),
+            },
+          })
+        : null;
     return {
       workspaceId,
       source: input.source,
@@ -1445,6 +1774,16 @@ export class ImportOrchestrator {
       /** True when `proposalId` is a PRIOR proposal returned by idempotency. */
       deduplicated,
       sessionId: sessionId ?? null,
+      ...(sessionResolution
+        ? {
+            sessionSource: sessionResolution.sessionSource,
+            requestedSessionIgnored: sessionResolution.requestedSessionIgnored,
+            ...(sessionResolution.error
+              ? { sessionError: sessionResolution.error }
+              : {}),
+          }
+        : {}),
+      ...(intake ? { intake } : {}),
       operations,
       summary,
       stats,
@@ -1480,6 +1819,8 @@ export class ImportOrchestrator {
       workspaceId,
       userId,
       sessionId: this.ctx.sessionId ?? null,
+      // LINEAGE — same as apply(): the analyze-time proposal authorizes the rows.
+      ...(input.proposalId ? { governanceProposalId: input.proposalId } : {}),
     };
     const entityCaller = regularEntitiesRouter.createCaller(callerCtx as never);
     const relationCaller = relationsRouter.createCaller(callerCtx as never);
@@ -1488,6 +1829,8 @@ export class ImportOrchestrator {
     const refToRealId: Record<string, string> = {};
     let created = 0;
     let linked = 0;
+    // What every chunk materialized, folded into ONE record for the proposal.
+    let record: CompleteMaterializedRecord = {};
 
     // U1: always build idempotency hooks (stable namespace) once for all chunks.
     // Chunk refs are re-namespaced (c0_e0, c1_e0, …) so per-op keys stay distinct.
@@ -1500,6 +1843,7 @@ export class ImportOrchestrator {
       namespace: `${this.ctx.userId}:${idempotencyKey}`,
       provider: "import",
       userId: this.ctx.userId,
+      ...(input.proposalId ? { sourceProposalId: input.proposalId } : {}),
     });
     // One dedup guard shared across all chunks of THIS apply, so a duplicate
     // op.ref split across two chunks can't merge two distinct entities (the
@@ -1561,6 +1905,7 @@ export class ImportOrchestrator {
       created += res.created;
       linked += res.linked;
       relationsFailed.push(...res.relationsFailed);
+      record = mergeMaterializedRecords(record, buildMaterializedRecord(res));
       // Project membership (lens-context) per chunk — same as apply().
       // Skips entities materialize already filed via op.projectId.
       await stampProjectMembership(this.ctx, res.entities);
@@ -1579,7 +1924,7 @@ export class ImportOrchestrator {
 
     // Close the analyze-time proposal row (PENDING → APPROVED). Best-effort —
     // materialize already succeeded; a close failure must never fail the import.
-    await closeImportProposalOnApply(input.proposalId, userId);
+    await closeImportProposalOnApply(input.proposalId, userId, record);
 
     // HITL: suggest useful views — skip when created=0 (no inbox spam on retry).
     const viewProposalIds = await suggestViewsFromImportGraph(

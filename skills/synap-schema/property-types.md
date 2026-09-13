@@ -74,7 +74,7 @@ Set `includeTime: true` for datetime; false for date-only. Don't store durations
 }
 ```
 
-**Always set `targetProfileSlug`** (or `targetProfileSlugs: [...]` for multi-target). Without it, UI can't render a picker and auto-sync defaults to `related_to`.
+**Always set `targetProfileSlug`** (or `targetProfileSlugs: [...]` for multi-target). Without it, UI can't render a picker. Setting it does not create an edge: auto-sync writes a relation only when the property def is mapped to a relation def (`relationDefId`); an unmapped `entity_id` property creates no relation and has no default type.
 
 For linking to users (workspace members), use:
 

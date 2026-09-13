@@ -10,12 +10,34 @@
 import { createRoute, z } from "@hono/zod-openapi";
 import { db, workspaceMembers, eq, and } from "@synap/database";
 import {
-  resolveNangoConnector,
-  resolveNangoConnectorResult,
+  BrokerRefusalError,
+  resolveBroker,
 } from "../../../connectors/index.js";
 import { triggerProviderAction } from "../../../connectors/external-dispatch.js";
 import { materializeConnectorTools } from "../../../connectors/materialize-tools.js";
-import { detachNangoConnectionRegistry } from "../../../services/capabilities/capability-nango-sync.js";
+import {
+  disconnectOwnedConnection,
+  reconcileLiveConnections,
+} from "../../../services/capabilities/capability-nango-sync.js";
+import {
+  ConnectionSyncStatusSchema,
+  getConnectionSyncStatus,
+} from "../../../services/event-sync/connection-sync.js";
+
+/** A broker that cannot answer, as the one JSON error every door returns. */
+function brokerUnavailable(resolved: { reason: string; error: string }) {
+  return resolved.reason === "not-configured"
+    ? {
+        status: 503 as const,
+        body: { error: "No connection broker is configured on this pod" },
+      }
+    : {
+        status: 503 as const,
+        body: {
+          error: `This pod's connection broker is unavailable (${resolved.reason}): ${resolved.error}`,
+        },
+      };
+}
 import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -65,6 +87,11 @@ export function registerConnectorsRoutes(app: HubHono): void {
                         // broken vault is not reported as an absent one.
                         "vault-unreadable",
                         "db-unavailable",
+                        // A CP-managed pod without its broker credential.
+                        "broker-credential-missing",
+                        "unsupported-scheme",
+                        // The broker's list filled its page — not trusted.
+                        "truncated",
                       ]),
                       message: z.string(),
                     })
@@ -87,13 +114,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const resolved = await resolveNangoConnectorResult();
+      const resolved = await resolveBroker("nango");
       if (!resolved.ok) {
-        // A configured-but-unreadable Nango is a 200 `error` status, NOT a 503
-        // "not configured". The two demand opposite fixes (restore the vault
-        // key vs. connect Nango), and reporting the first as the second is the
-        // exact false diagnosis this door exists to prevent.
+        // A configured-but-unreadable broker is a 200 `error` status, NOT a 503
+        // "not configured". The two demand opposite fixes (restore the
+        // credential vs. set one up), and reporting the first as the second is
+        // the exact false diagnosis this door exists to prevent.
         if (resolved.reason === "not-configured") {
           return c.json({ error: "Nango not configured" }, 503);
         }
@@ -106,24 +132,27 @@ export function registerConnectorsRoutes(app: HubHono): void {
           200
         );
       }
-      const connector = resolved.connector;
+      const connector = resolved.broker;
       const userId = c.get("userId") as string;
-      const [declared, connections] = await Promise.all([
+      const [declared, listed] = await Promise.all([
         connector.listIntegrationsResult(),
-        connector.listConnections(userId),
+        connector.listConnectionsResult(userId),
       ]);
-      if (!declared.ok) {
+      if (!declared.ok || !listed.ok) {
+        const fault = !declared.ok
+          ? declared
+          : (listed as Extract<typeof listed, { ok: false }>);
         return c.json(
           {
             providers: [],
             nangoStatus: "error" as const,
-            nangoError: { reason: declared.reason, message: declared.error },
+            nangoError: { reason: fault.reason, message: fault.error },
           },
           200
         );
       }
       const connMap = new Map(
-        connections.map((conn) => [conn.provider, conn.connectionId])
+        listed.connections.map((conn) => [conn.provider, conn.connectionId])
       );
       return c.json(
         {
@@ -141,6 +170,80 @@ export function registerConnectorsRoutes(app: HubHono): void {
     }
   );
 
+  // ── GET /connectors/sync-status ───────────────────────────────────────────
+  //
+  // Read-only status for the ONE sync door (`services/event-sync/connection-sync.ts`),
+  // per provider tool × kind × connection: phase, counts, and the failing reason
+  // when there is one. Static route (no `/:id`), so ordering vs. the dynamic
+  // routes below is not load-bearing, but it's kept with its sibling GETs.
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/connectors/sync-status",
+      tags: ["Connectors"],
+      summary: "Sync status per provider × kind × connection",
+      request: {
+        query: z.object({
+          provider: z.string().optional(),
+          workspaceId: z.string().optional(),
+        }),
+      },
+      responses: {
+        200: {
+          description: "Sync status rows",
+          content: {
+            "application/json": {
+              // Derived from `ConnectionSyncStatusSchema` (connection-sync.ts) —
+              // the ONE definition of this row shape. Never hand-copy its
+              // fields here: this door already shipped once without
+              // `workspaceId` because a hand-copy silently omitted a field
+              // the source type had.
+              schema: z
+                .object({ statuses: z.array(ConnectionSyncStatusSchema) })
+                .openapi("ConnectorSyncStatusList"),
+            },
+          },
+        },
+        403: {
+          description: "Forbidden",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+        500: {
+          description: "Failed to read sync status",
+          content: { "application/json": { schema: ErrorSchema } },
+        },
+      },
+    }),
+    async (c): Promise<any> => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+        return c.json(
+          { error: "Insufficient scope: hub-protocol.read required" },
+          403
+        );
+      }
+      const { provider, workspaceId } = c.req.valid("query");
+      try {
+        const statuses = await getConnectionSyncStatus({
+          provider,
+          workspaceId: workspaceId ?? undefined,
+          userId: c.get("userId") as string,
+        });
+        return c.json({ statuses }, 200);
+      } catch (err) {
+        // A read failure must never read as "nothing is syncing" — surface it,
+        // never fall back to `{ statuses: [] }`.
+        logger.error(
+          { err, provider, workspaceId },
+          "GET /connectors/sync-status failed"
+        );
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+  );
+
   // ── POST /connectors/connect ──────────────────────────────────────────────
   //
   // THE single "resolve-or-start" door every thin client (Discord bot, CLI, the
@@ -153,7 +256,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
   // `onBehalfOfUserId` binds the connection to another workspace member (same
   // owner/admin gate as POST /connectors/session). Owner-kinds beyond the acting
   // user (global / entity / agent — the `authBinding` axis) are a documented
-  // follow-up: they need matching execution-side resolution in nangoHandler, so
+  // follow-up: they need matching execution-side resolution in brokerHandler, so
   // we don't half-wire a creation path the dispatcher can't resolve yet.
   app.openapi(
     createRoute({
@@ -209,6 +312,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
                       "unauthenticated",
                       "unreachable",
                       "malformed",
+                      "truncated",
                     ])
                     .optional(),
                   message: z.string().optional(),
@@ -265,10 +369,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolvedBroker = await resolveBroker("nango");
+      if (!resolvedBroker.ok) {
+        const unavailable = brokerUnavailable(resolvedBroker);
+        return c.json(unavailable.body, unavailable.status);
       }
+      const connector = resolvedBroker.broker;
 
       const { provider, workspaceId, onBehalfOfUserId, forceReauth } =
         c.req.valid("json");
@@ -318,34 +424,49 @@ export function registerConnectorsRoutes(app: HubHono): void {
       }
 
       try {
-        const [declared, connections] = await Promise.all([
+        const [declared, listed] = await Promise.all([
           connector.listIntegrationsResult(),
-          connector.listConnections(userId),
+          connector.listConnectionsResult(userId),
         ]);
 
         const wanted = (provider ?? "").trim().toLowerCase();
 
-        // Could not find out what this pod offers → say THAT, naming the real
-        // cause. Minting a session against an unvalidated provider here is what
-        // produced the vendor 500 this door exists to prevent.
-        if (!declared.ok) {
+        // Could not find out what this pod offers, or what this user already
+        // has → say THAT, naming the real cause. Minting a session against an
+        // unvalidated provider (or re-OAuthing a connection we merely failed to
+        // read) is what this door exists to prevent.
+        if (!declared.ok || !listed.ok) {
+          const reason = (
+            !declared.ok
+              ? declared
+              : (listed as Extract<typeof listed, { ok: false }>)
+          ).reason;
+          const via =
+            connector.mode === "cp"
+              ? "its control-plane connection broker"
+              : "its Nango server";
           const message =
-            declared.reason === "unauthenticated"
-              ? `This pod's NANGO_SECRET_KEY is not valid for its Nango environment, so its integrations can't be listed. A pod admin needs to fix the key.`
-              : declared.reason === "unreachable"
-                ? `This pod cannot reach its Nango server, so its integrations can't be listed. A pod admin needs to check that Nango is running and reachable.`
-                : `This pod's Nango returned an integration list that could not be read. A pod admin needs to check the Nango version and configuration.`;
+            reason === "unauthenticated"
+              ? connector.mode === "cp"
+                ? `The control plane rejected this pod's broker credential, so connections can't be checked. A pod admin needs to rotate the pod's relay key.`
+                : `This pod's NANGO_SECRET_KEY is not valid for its Nango environment, so its integrations can't be listed. A pod admin needs to fix the key.`
+              : reason === "unreachable"
+                ? `This pod cannot reach ${via}, so connections can't be checked. A pod admin needs to check that it is running and reachable.`
+                : reason === "truncated"
+                  ? `This pod's connection broker could not read its complete connection list, so connections can't be checked reliably right now. A pod admin needs to raise this with the control plane operator.`
+                  : `This pod's connection broker returned a response that could not be read. A pod admin needs to check its version and configuration.`;
           return c.json(
             {
               status: "provider_unavailable" as const,
               ...(provider ? { provider } : {}),
               code: "POD_PROVIDER_NOT_CONFIGURED" as const,
-              reason: declared.reason,
+              reason,
               message,
             },
             200
           );
         }
+        const connections = listed.connections;
 
         const integrations = declared.integrations;
 
@@ -420,6 +541,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
             unlocked = result.unlocked.filter(
               (u) => u.provider === match.uniqueKey
             );
+            // Mirror the connection into the registry → its first sync.
+            await reconcileLiveConnections(userId, connections);
           } catch (matErr) {
             logger.warn(
               { err: matErr, provider: match.uniqueKey },
@@ -471,6 +594,9 @@ export function registerConnectorsRoutes(app: HubHono): void {
             workspaceId ?? ""
           );
         } catch (sessErr) {
+          if (sessErr instanceof BrokerRefusalError) {
+            return c.json({ error: sessErr.message }, 403);
+          }
           logger.warn(
             { err: sessErr, provider: match.uniqueKey, userId },
             "connect: Nango rejected a declared integration at session time"
@@ -571,11 +697,12 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolvedBroker = await resolveBroker("nango");
+      if (!resolvedBroker.ok) {
+        const unavailable = brokerUnavailable(resolvedBroker);
+        return c.json(unavailable.body, unavailable.status);
       }
+      const connector = resolvedBroker.broker;
       const callerUserId = c.get("userId") as string;
       const { providerId, workspaceId, onBehalfOfUserId } = c.req.valid("json");
 
@@ -658,6 +785,9 @@ export function registerConnectorsRoutes(app: HubHono): void {
           workspaceId ?? ""
         );
       } catch (err) {
+        if (err instanceof BrokerRefusalError) {
+          return c.json({ error: err.message }, 403);
+        }
         logger.error({ err, providerId }, "POST /connectors/session failed");
         return c.json(
           {
@@ -715,17 +845,25 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolvedBroker = await resolveBroker("nango");
+      if (!resolvedBroker.ok) {
+        const unavailable = brokerUnavailable(resolvedBroker);
+        return c.json(unavailable.body, unavailable.status);
       }
       const { connectionId } = c.req.valid("param");
       try {
-        await connector.revokeConnection(connectionId);
-        // Self-heal: drop the connection-registry pointer rows + mark sourced
-        // entities disconnected, so a revoke takes effect immediately.
-        await detachNangoConnectionRegistry(connectionId);
+        // Revoke + self-heal the registry, only for the caller's OWN connection.
+        const outcome = await disconnectOwnedConnection({
+          broker: resolvedBroker.broker,
+          userId: c.get("userId") as string,
+          connectionId,
+        });
+        if (!outcome.ok) {
+          return c.json(
+            { error: outcome.error },
+            outcome.reason === "not_found" ? 404 : 503
+          );
+        }
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(
@@ -790,17 +928,26 @@ export function registerConnectorsRoutes(app: HubHono): void {
           403
         );
       }
-      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolvedBroker = await resolveBroker("nango");
+      if (!resolvedBroker.ok) {
+        const unavailable = brokerUnavailable(resolvedBroker);
+        return c.json(unavailable.body, unavailable.status);
       }
-      const { connectionId, provider } = c.req.valid("json");
+      // `provider` is accepted for compatibility; the provider key now comes from
+      // the caller's own live connection, which also proves ownership.
+      const { connectionId } = c.req.valid("json");
       try {
-        // Pass the provider key on the hot path (CLI sends it) so the revoke
-        // needs no extra Nango lookup; the door still self-resolves without it.
-        await connector.revokeConnection(connectionId, provider);
-        await detachNangoConnectionRegistry(connectionId);
+        const outcome = await disconnectOwnedConnection({
+          broker: resolvedBroker.broker,
+          userId: c.get("userId") as string,
+          connectionId,
+        });
+        if (!outcome.ok) {
+          return c.json(
+            { error: outcome.error },
+            outcome.reason === "not_found" ? 404 : 503
+          );
+        }
         return c.json({ success: true }, 200);
       } catch (err) {
         logger.error(
@@ -873,18 +1020,29 @@ export function registerConnectorsRoutes(app: HubHono): void {
         );
       }
 
-      // TODO(W3/W4): becomes a capability cast (Readable/Pushable/Credentialed).
-      const connector = await resolveNangoConnector();
-      if (!connector || !connector.isConfigured()) {
-        return c.json({ error: "Nango not configured" }, 503);
+      const resolvedBroker = await resolveBroker("nango");
+      if (!resolvedBroker.ok) {
+        const unavailable = brokerUnavailable(resolvedBroker);
+        return c.json(unavailable.body, unavailable.status);
       }
 
       const userId = c.get("userId") as string;
       const { provider } = c.req.valid("param");
 
       try {
-        const allConnections = await connector.listConnections(userId);
-        const filtered = allConnections.filter((c) => c.provider === provider);
+        const listed =
+          await resolvedBroker.broker.listConnectionsResult(userId);
+        if (!listed.ok) {
+          return c.json(
+            {
+              error: `Could not list connections (${listed.reason}): ${listed.error}`,
+            },
+            503
+          );
+        }
+        const filtered = listed.connections.filter(
+          (c) => c.provider === provider
+        );
         return c.json(
           {
             connections: filtered.map((conn) => ({

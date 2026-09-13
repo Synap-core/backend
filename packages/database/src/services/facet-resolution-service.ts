@@ -27,6 +27,7 @@ import {
 import type * as schema from "../schema/index.js";
 import type { Profile } from "../schema/profiles.js";
 import { profiles } from "../schema/profiles.js";
+import { ProfileRepository } from "../repositories/profile-repository.js";
 import { entities } from "../schema/entities.js";
 import { entityFacets, type EntityFacet } from "../schema/entity-facets.js";
 import { facetVisibilityConditions } from "../utils/facet-visibility.js";
@@ -236,17 +237,38 @@ export interface RolePayloadInfo {
  * `profileSlug` is a role-profile (client/partner/investor/…) must NOT get a
  * role-named entity: the role is a facet on a real subject. Returns the role's
  * profileId + applicableKinds when `slug` resolves to a role profile, else null
- * (it's a primary kind, or unknown — create it normally). Best-effort read;
- * matches on slug (findFirst) — roles are user/system-scoped, not per-workspace.
+ * (it's a primary kind, or unknown — create it normally).
+ *
+ * Resolved through the caller's WORKSPACE LENS, never by slug alone. Profile
+ * slugs have not been unique since migration 0052 (one row per system/shared
+ * slug, per (slug, workspace), per (slug, user)), and a role slug can carry
+ * several rows — e.g. `partner` exists as a shared role AND a workspace role,
+ * with different schemas. The old `findFirst(eq(slug))` had no ORDER BY, so
+ * which twin a write attached was arbitrary. `getBySlugForWorkspace` returns
+ * the row that workspace actually sees (workspace > shared-with-access >
+ * system, active only).
+ *
+ * FAILS CLOSED without a lens: no workspace ⇒ null, no guess. That is safe
+ * because null only skips the create-payload rewrite; `EntityRepository.create`
+ * still adapts a single-kind role into kind+facet and refuses a multi-kind one
+ * (`role-is-not-a-kind`), so a role-named entity is never created. What a
+ * workspace-less caller loses is the strong-match attach of a MULTI-kind role
+ * onto an existing entity.
+ *
+ * `lens` is REQUIRED so every caller must state which workspace it resolves
+ * through — a missing lens is a compile error, not a silent null.
  */
 export async function resolveRolePayload(
   db: PostgresJsDatabase<typeof schema>,
-  slug: string
+  slug: string,
+  lens: { workspaceId: string | null | undefined }
 ): Promise<RolePayloadInfo | null> {
-  const profile = await db.query.profiles.findFirst({
-    where: eq(profiles.slug, slug),
-    columns: { id: true, slug: true, profileKind: true, applicableKinds: true },
-  });
+  const workspaceId = lens.workspaceId;
+  if (!workspaceId) return null;
+  const profile = await new ProfileRepository(db).getBySlugForWorkspace(
+    slug,
+    workspaceId
+  );
   if (!profile || profile.profileKind !== "role") return null;
   return {
     profileId: profile.id,

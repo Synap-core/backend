@@ -244,3 +244,117 @@ describe("conversion boot severity", () => {
     expect(summary.hadError).toBe(true);
   });
 });
+
+// ─── The ledger trap (W1a) ────────────────────────────────────────────────────
+// A real run without destructiveTail must never apply-and-ledger a
+// destructive-tail op: once ledgered, the ledger skip makes its deactivation
+// unreachable forever.
+describe("runConversions — destructive-tail op without destructiveTail", () => {
+  for (const [label, op] of [
+    [
+      "dedupeProfileRows",
+      { op: "dedupeProfileRows", opKey: "t.dedupe", slug: "knowledge" },
+    ],
+    [
+      "mergeInto",
+      {
+        op: "mergeInto",
+        opKey: "t.merge",
+        fromSlugs: ["note"],
+        intoSlug: "item",
+      },
+    ],
+  ] as const) {
+    it(`REFUSES a ${label} op on a real run — neither applied nor ledgered, run halts`, async () => {
+      const ledgered: string[] = [];
+      const bodyQueries: string[] = [];
+      const base = makeFakeSql(ledgered);
+      const spy: any = (
+        strings: TemplateStringsArray,
+        ...values: unknown[]
+      ) => {
+        const text = strings.join("?");
+        if (
+          !text.includes("CREATE TABLE") &&
+          !text.includes("SELECT op_key FROM") &&
+          !text.includes('INSERT INTO "_conversions"')
+        ) {
+          bodyQueries.push(text);
+        }
+        return (base as any)(strings, ...values);
+      };
+      spy.json = (base as any).json;
+      spy.begin = async (cb: (tx: Sql) => unknown) => cb(spy as Sql);
+
+      const summary = await runConversions(
+        spy as Sql,
+        {
+          version: 1,
+          ops: [op as any, { op: "keep", opKey: "t.after", slug: "note" }],
+        },
+        { dryRun: false, destructiveTail: false }
+      );
+
+      expect(summary.results[0].status).toBe("error");
+      expect(summary.results[0].error).toMatch(
+        new RegExp(
+          `--apply --only ${op.opKey.replace(".", "\\.")} --destructive-tail`
+        )
+      );
+      expect(summary.hadError).toBe(true);
+      expect(bodyQueries).toEqual([]); // the repoint never ran
+      expect(ledgered).toEqual([]); // not even an error row — a later tail run is clean
+      expect(summary.results.map((r) => r.opKey)).toEqual([op.opKey]); // halted
+    });
+  }
+
+  it("still APPLIES + ledgers it when destructiveTail:true (the operator path)", async () => {
+    const ledgered: string[] = [];
+    const summary = await runConversions(
+      makeFakeSql(ledgered),
+      { version: 1, ops: [manifest.ops[2]] },
+      { dryRun: false, destructiveTail: true }
+    );
+    expect(summary.hadError).toBe(false);
+    expect(ledgered).toEqual(["t.dedupe"]);
+  });
+
+  it("does NOT refuse a dry run (writes nothing, so nothing can be orphaned)", async () => {
+    const summary = await runConversions(makeFakeSql([]), manifest, {
+      dryRun: true,
+      destructiveTail: false,
+    });
+    expect(summary.hadError).toBe(false);
+    expect(summary.results.map((r) => r.status)).toEqual([
+      "dry-run",
+      "dry-run",
+      "dry-run",
+    ]);
+  });
+
+  it("BOOT options still DEFER these ops (no throw, no error, stamped reason) — the pod keeps booting", async () => {
+    const ledgered: string[] = [];
+    const bootManifest: ConversionManifest = {
+      version: 1,
+      ops: [...manifest.ops, ...deferAtBootManifest.ops],
+    };
+    // Exactly index.ts's boot options.
+    const summary = await runConversions(makeFakeSql(ledgered), bootManifest, {
+      dryRun: false,
+      destructiveTail: false,
+      deferDestructive: true,
+      skipDeferred: true,
+    });
+    expect(summary.hadError).toBe(false);
+    expect(summary.results.filter((r) => r.status === "error")).toEqual([]);
+    const deferred = summary.results
+      .filter((r) => r.status === "deferred")
+      .map((r) => [r.opKey, r.deferReason]);
+    expect(deferred).toEqual([
+      ["t.merge", "destructive-tail"],
+      ["t.dedupe", "destructive-tail"],
+      ["t.remap.deferred", "defer-at-boot"],
+    ]);
+    expect(ledgered).toEqual(["t.keep"]);
+  });
+});

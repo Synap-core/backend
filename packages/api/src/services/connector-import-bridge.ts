@@ -27,7 +27,14 @@
  * denied (no auto-pull); the owner/UI path runs directly.
  */
 
+import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
+import type { CompositeProposalOperation } from "@synap-core/types/proposals";
+import {
+  buildImportGraphProposalData,
+  findPriorImportGraphProposal,
+} from "./import/structuring.js";
+import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
 import {
   connectorRegistry,
   isReadable,
@@ -274,6 +281,77 @@ export async function pullToImport(
     itemCount,
     source: IMPORT_SOURCE,
   };
+}
+
+// ── Pre-mapped graph → ONE import proposal (connection sync) ─────────────────
+//
+// A connection sync already holds a MAPPED graph (entities + relations, with
+// existing matches pinned as `existingEntityId`), so it skips the orchestrator's
+// structuring pass and files through the SAME primitives `analyze()` uses: the
+// shared `import.graph` data builder (content idempotency key included) and the
+// prior-proposal lookup, so an identical re-run returns the pending proposal
+// instead of a clone.
+
+export type SubmitSyncGraphInput = {
+  userId: string;
+  workspaceId: string | null;
+  operations: CompositeProposalOperation[];
+  summary: string;
+  /** `proposal.data.connectionSync` — read by the approval hook (K3). */
+  connectionSync: {
+    connectionId: string;
+    provider: string;
+    kinds: string[];
+    keepSyncing: boolean;
+  };
+};
+
+export async function submitSyncGraphToImport(
+  input: SubmitSyncGraphInput
+): Promise<{ proposalId: string; deduplicated: boolean }> {
+  const prior = await findPriorImportGraphProposal({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    operations: input.operations,
+  });
+  if (prior) return { proposalId: prior.id, deduplicated: true };
+
+  const targetId = randomUUID();
+  const { proposal } = await createEventBackedProposal({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    targetType: "entity",
+    targetId,
+    proposalType: "import.graph",
+    action: "create",
+    source: IMPORT_SOURCE,
+    summary: input.summary,
+    data: {
+      ...buildImportGraphProposalData({
+        operations: input.operations,
+        source: IMPORT_SOURCE,
+        sourceId: targetId,
+        workspaceId: input.workspaceId,
+      }),
+      connectionSync: input.connectionSync,
+    },
+  });
+  const proposalId = (proposal as { id?: string } | null)?.id;
+  if (!proposalId) {
+    throw new Error("connection sync: import proposal was not created");
+  }
+  logger.info(
+    {
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      proposalId,
+      operations: input.operations.length,
+      connectionId: input.connectionSync.connectionId,
+      kinds: input.connectionSync.kinds,
+    },
+    "connection sync → import proposal created"
+  );
+  return { proposalId, deduplicated: false };
 }
 
 // ── Back-compat wrapper: Nango sync ──────────────────────────────────────────

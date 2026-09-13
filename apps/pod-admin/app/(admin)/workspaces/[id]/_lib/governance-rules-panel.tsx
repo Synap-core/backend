@@ -24,7 +24,8 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Ban, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../../lib/trpc";
 import { SectionCard } from "../../../components/section-card";
 import {
@@ -66,6 +67,24 @@ export function GovernanceRulesPanel({
   const rules =
     (rulesQuery.data?.rules as GovernanceRuleRow[] | undefined) ?? [];
 
+  // A connection rule targets a registry row id; name it from the admin
+  // connection list. Unresolved (or the list failed) → "A connection", never
+  // the uuid.
+  const connectionsQuery = trpc.connectors.allConnections.useQuery(undefined, {
+    enabled: rules.some((r) => r.targetKind === "connection"),
+  });
+  const providerById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const c of connectionsQuery.data ?? []) {
+      map.set(c.connectionId, humanizeToken(c.providerId));
+    }
+    return map;
+  }, [connectionsQuery.data]);
+  const connectionLabel = useCallback(
+    (connectionId: string) => providerById.get(connectionId),
+    [providerById]
+  );
+
   const revokeMutation = trpc.governanceRules.revoke.useMutation({
     onSuccess: () => {
       void utils.governanceRules.list.invalidate({ workspaceId });
@@ -102,6 +121,7 @@ export function GovernanceRulesPanel({
               key={rule.id}
               rule={rule}
               workspaceName={workspaceName}
+              connectionLabel={connectionLabel}
               onRevoke={() => setRevokeTarget(rule)}
             />
           ))}
@@ -111,6 +131,7 @@ export function GovernanceRulesPanel({
       {revokeTarget ? (
         <RevokeRuleModal
           rule={revokeTarget}
+          connectionLabel={connectionLabel}
           isPending={revokeMutation.isPending}
           onClose={() => setRevokeTarget(null)}
           onConfirm={() => revokeMutation.mutate({ id: revokeTarget.id })}
@@ -125,10 +146,12 @@ export function GovernanceRulesPanel({
 function RuleRow({
   rule,
   workspaceName,
+  connectionLabel,
   onRevoke,
 }: {
   rule: GovernanceRuleRow;
   workspaceName?: string;
+  connectionLabel: (connectionId: string) => string | undefined;
   onRevoke: () => void;
 }) {
   const isProposalAuthored = ruleProvenance(rule) === "proposal";
@@ -144,7 +167,7 @@ function RuleRow({
       <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[13px] font-medium text-foreground">
-            {humanizeTarget(rule)}
+            {humanizeTarget(rule, { connectionLabel })}
           </span>
           <span
             className={[
@@ -193,11 +216,13 @@ function RuleRow({
 
 function RevokeRuleModal({
   rule,
+  connectionLabel,
   isPending,
   onClose,
   onConfirm,
 }: {
   rule: GovernanceRuleRow;
+  connectionLabel: (connectionId: string) => string | undefined;
   isPending: boolean;
   onClose: () => void;
   onConfirm: () => void;
@@ -226,9 +251,9 @@ function RevokeRuleModal({
         </ModalHeader>
         <ModalBody className="gap-3 px-6 py-4">
           <p className="text-[12.5px] text-foreground/85">
-            {humanizeTarget(rule)} will stop being auto-decided for{" "}
-            {humanizePrincipal(rule).toLowerCase()}. Future matches go back
-            through normal proposal review.
+            {humanizeTarget(rule, { connectionLabel })} will stop being
+            auto-decided for {humanizePrincipal(rule).toLowerCase()}. Future
+            matches go back through normal proposal review.
           </p>
         </ModalBody>
         <ModalFooter className="border-t border-foreground/[0.06] px-6 py-3">

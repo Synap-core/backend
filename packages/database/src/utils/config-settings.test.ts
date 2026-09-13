@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { resolveGuidelines, SCOPE_SPECIFICITY } from "./config-settings.js";
+import {
+  resolveGuidelines,
+  supersedeGuideline,
+  SCOPE_SPECIFICITY,
+} from "./config-settings.js";
 import { CONFIG_SCOPE_KINDS } from "../schema/config-settings.js";
 
 /**
@@ -286,5 +290,189 @@ describe("GOVERNANCE IS UNCHANGED for a caller that passes no workKind", () => {
     expect(before.length).toBe(2);
     expect(before[before.length - 1].posture).toBe("propose");
     expect(after).toEqual(before);
+  });
+});
+
+/**
+ * The DATA-TYPE rungs (0258). Same inert-unless-asked contract as workKind:
+ * a caller that passes no sourceKind / entityKinds resolves exactly as before.
+ */
+describe("resolveGuidelines — the data-type rungs (sourceKind, entityKind)", () => {
+  const rows = () => [
+    row({ id: "g-default", scopeKind: "default", text: "Always" }),
+    row({
+      id: "g-src-image",
+      scopeKind: "sourceKind",
+      scopeRef: "image",
+      text: "Screenshots: read prices literally",
+    }),
+    row({
+      id: "g-src-url",
+      scopeKind: "sourceKind",
+      scopeRef: "url",
+      text: "Links: bookmark only",
+    }),
+    row({
+      id: "g-kind-person",
+      scopeKind: "entityKind",
+      scopeRef: "person",
+      text: "Always capture the LinkedIn URL",
+    }),
+    row({
+      id: "g-kind-deal",
+      scopeKind: "entityKind",
+      scopeRef: "deal",
+      text: "Deals need a stage",
+    }),
+    row({
+      id: "g-channel",
+      scopeKind: "channel",
+      scopeRef: "chan-1",
+      text: "On this channel",
+    }),
+  ];
+
+  it("matches a sourceKind row only for that source and an entityKind row only when the kind is in play; ranks default < sourceKind < entityKind < transport", async () => {
+    const resolved = await resolveGuidelines({
+      db: makeDb(rows()).db,
+      userId: "u1",
+      workspaceId: "ws-1",
+      channelId: "chan-1",
+      sourceKind: "image",
+      entityKinds: ["person", "company"],
+    });
+    expect(resolved.map((g) => g.id)).toEqual([
+      "g-default",
+      "g-src-image",
+      "g-kind-person",
+      "g-channel",
+    ]);
+    expect(SCOPE_SPECIFICITY.workKind).toBeLessThan(
+      SCOPE_SPECIFICITY.sourceKind
+    );
+    expect(SCOPE_SPECIFICITY.sourceKind).toBeLessThan(
+      SCOPE_SPECIFICITY.entityKind
+    );
+    expect(SCOPE_SPECIFICITY.entityKind).toBeLessThan(
+      SCOPE_SPECIFICITY.channelType
+    );
+  });
+
+  it("returns each resolved guideline's id + version + scopeRef (the manifest shape)", async () => {
+    const [g] = await resolveGuidelines({
+      db: makeDb([
+        {
+          ...row({
+            id: "g-v3",
+            scopeKind: "entityKind",
+            scopeRef: "person",
+            text: "v3 text",
+          }),
+          version: 3,
+        },
+      ]).db,
+      userId: "u1",
+      entityKinds: ["person"],
+    });
+    expect(g).toMatchObject({ id: "g-v3", version: 3, scopeRef: "person" });
+  });
+
+  it("a caller passing no data-type context resolves byte-identically with and without data-type rows present", async () => {
+    const transportOnly = rows().filter(
+      (r) => r.scopeKind !== "sourceKind" && r.scopeKind !== "entityKind"
+    );
+    const call = { userId: "u1", workspaceId: "ws-1", channelId: "chan-1" };
+    const before = await resolveGuidelines({
+      db: makeDb(transportOnly).db,
+      ...call,
+    });
+    const after = await resolveGuidelines({ db: makeDb(rows()).db, ...call });
+    // NON-VACUITY: the data-type rows really were in the second fixture.
+    expect(rows().length - transportOnly.length).toBe(4);
+    expect(before.map((g) => g.id)).toEqual(["g-default", "g-channel"]);
+    expect(after).toEqual(before);
+  });
+});
+
+describe("supersedeGuideline — an edit is a new version, never an in-place update", () => {
+  function makeTxDb(current: Record<string, unknown> | undefined) {
+    const inserted: Array<Record<string, unknown>> = [];
+    const revokedIds: string[] = [];
+    const tx = {
+      update: () => ({
+        set: (patch: Record<string, unknown>) => ({
+          where: () => ({
+            returning: async () => {
+              if (!current || current.revokedAt) return [];
+              revokedIds.push(current.id as string);
+              return [{ ...current, ...patch }];
+            },
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: (v: Record<string, unknown>) => ({
+          returning: async () => {
+            const r = { id: "new-row", ...v };
+            inserted.push(r);
+            return [r];
+          },
+        }),
+      }),
+      query: {
+        configSettings: {
+          findFirst: async () => (current ? { id: current.id } : undefined),
+        },
+      },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const db: any = {
+      transaction: async (fn: (t: unknown) => unknown) => fn(tx),
+    };
+    return { db, inserted, revokedIds };
+  }
+
+  const v2 = {
+    id: "g-v2",
+    key: "guideline",
+    value: { text: "old", posture: "propose" },
+    scopeKind: "entityKind",
+    scopeRef: "person",
+    shape: null,
+    capabilityId: null,
+    workspaceId: "ws-1",
+    version: 2,
+    supersedesId: "g-v1",
+    revokedAt: null,
+  };
+
+  it("revokes the current row and inserts version+1 with the same scope and supersedesId lineage", async () => {
+    const { db, inserted, revokedIds } = makeTxDb(v2);
+    const { guideline, previous } = await supersedeGuideline({
+      db,
+      id: "g-v2",
+      text: "new text",
+      createdBy: "u1",
+    });
+    expect(revokedIds).toEqual(["g-v2"]);
+    expect(previous.revokedAt).toBeInstanceOf(Date);
+    expect(inserted).toHaveLength(1);
+    expect(guideline).toMatchObject({
+      version: 3,
+      supersedesId: "g-v2",
+      scopeKind: "entityKind",
+      scopeRef: "person",
+      workspaceId: "ws-1",
+      // posture carries over when not given
+      value: { text: "new text", posture: "propose" },
+    });
+  });
+
+  it("refuses to supersede a version that is no longer current (no insert)", async () => {
+    const { db, inserted } = makeTxDb({ ...v2, revokedAt: new Date() });
+    await expect(
+      supersedeGuideline({ db, id: "g-v2", text: "x", createdBy: "u1" })
+    ).rejects.toMatchObject({ reason: "not_current" });
+    expect(inserted).toHaveLength(0);
   });
 });

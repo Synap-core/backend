@@ -45,6 +45,9 @@ const ConnectionSchema = z.object({
   // third-party OAuth account — the distinction a surface needs to label
   // "internal key" rather than "connected account".
   internal: z.boolean().optional(),
+  // The provider's connection list could not be read (broker fault / truncated
+  // list), so `missing` is unmeasured, not a confirmed absence.
+  unverified: z.object({ reason: z.string(), message: z.string() }).optional(),
 });
 
 const VerbParamSchema = z.object({

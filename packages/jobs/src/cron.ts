@@ -32,6 +32,10 @@ import {
   BLOCKED_SLOT_RECURRENCE_CRON,
 } from "./workers/blocked-slot-recurrence-scanner.js";
 import {
+  STRUCTURE_GUIDELINE_SCAN_QUEUE,
+  STRUCTURE_GUIDELINE_SCAN_CRON,
+} from "./workers/structure-guideline-scanner.js";
+import {
   LIBRARIAN_ARCHIVER_QUEUE,
   LIBRARIAN_ARCHIVER_CRON,
 } from "./workers/librarian-archiver.js";
@@ -61,6 +65,10 @@ import {
   FIREFLIES_BACKFILL_CRON_QUEUE,
   FIREFLIES_BACKFILL_CRON,
 } from "./workers/fireflies-worker.js";
+import {
+  CONNECTION_SYNC_RUN_QUEUE,
+  CONNECTION_SYNC_CRON,
+} from "./workers/connection-sync-run.js";
 
 const logger = createLogger({ module: "cron-scheduler" });
 
@@ -216,6 +224,20 @@ export async function registerCronSchedules(): Promise<void> {
     "Registered cron: blocked-slot.recurrence-scan (daily at 3:50 AM UTC)"
   );
 
+  // Structure-guideline scanner (daily at 3:55 AM UTC — after the blocked-slot
+  // scanner). Files PENDING governance.structure_guideline proposals from
+  // repeated reasoned extraction rejects; a guideline is only ever written by a
+  // human approving one.
+  await scheduleSafe(
+    boss,
+    STRUCTURE_GUIDELINE_SCAN_QUEUE,
+    STRUCTURE_GUIDELINE_SCAN_CRON,
+    {}
+  );
+  logger.info(
+    "Registered cron: structure-guideline.scan (daily at 3:55 AM UTC)"
+  );
+
   // Librarian project archiver (daily at 3:45 AM UTC — after near-dup at 3:15).
   // Proposes archival of stale 0-gravity active projects; never auto-archives.
   await scheduleSafe(
@@ -285,12 +307,20 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: fireflies-backfill-cron (every 30min)");
 
   // Event sync (every 6 hours — the cron worker invokes the api-side runner
-  // in-process (IoC slot): FIRST imports Google Calendar → Synap `event`
-  // entities, THEN mirrors upcoming Synap events + Stellar deadlines into
-  // native Discord scheduled events). No-ops unless the pod's Discord tool has
-  // eventSync.enabled.
+  // in-process (IoC slot) which mirrors upcoming Synap events + Stellar
+  // deadlines into native Discord scheduled events; Google Calendar events are
+  // already Synap `event` entities via the connection sync below). No-ops
+  // unless the pod's Discord tool has eventSync.enabled.
   await scheduleSafe(boss, "event-sync-cron", "0 */6 * * *", {});
   logger.info("Registered cron: event-sync-cron (every 6h)");
+
+  // Connection sync steady tick (every 30 min) — the scheduled job carries no
+  // provider, so the runner walks every sync-enabled provider connection
+  // (first run → one grouped import proposal; steady → the connection's rule).
+  await scheduleSafe(boss, CONNECTION_SYNC_RUN_QUEUE, CONNECTION_SYNC_CRON, {
+    reason: "cron",
+  });
+  logger.info("Registered cron: connection-sync-run (every 30min)");
 
   // Stale-proposal scan (every 6h — pending proposals whose target workspace the
   // owner can no longer reach get a governance.proposal_stale notification; the

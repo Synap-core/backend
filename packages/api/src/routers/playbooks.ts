@@ -59,6 +59,7 @@ import {
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
 import { AccessContext, scopedDb } from "../access/index.js";
+import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
   checkPermissionOrPropose,
@@ -1242,6 +1243,11 @@ export const playbooksRouter = router({
         // also round-tripped by the caller into `instantiate`/`run` as `subjectId`.
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
+        /**
+         * What the user said they want (capture note / intent). Ranks the
+         * candidates — never filters them; see `rankRouteCandidates`.
+         */
+        intentText: z.string().max(2000).optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -1287,15 +1293,37 @@ export const playbooksRouter = router({
         )
         .orderBy(desc(playbooks.updatedAt));
 
-      return rows.map((p) => ({
-        id: p.id,
-        name: p.name,
-        goalTemplate: p.goalTemplate,
-        subjectProfileSlug:
-          (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
-          input.profileSlug,
-        params: p.params,
-        executor: p.executor,
+      // Ranked with a human-readable `reason` (suggest-and-confirm): intent
+      // words first, then kind, then facet. Ties keep the updatedAt order.
+      const ranked = rankRouteCandidates({
+        entity: {
+          entityId: input.entityId,
+          profileSlug: input.profileSlug,
+          facetSlugs: matchSlugs.slice(1),
+        },
+        intentText: input.intentText,
+        candidates: rows.map((p) => ({
+          kind: "playbook" as const,
+          id: p.id,
+          name: p.name,
+          text: [p.goalTemplate],
+          subjectProfileSlug:
+            (p.subjectProfile as { profileSlug?: string } | null)
+              ?.profileSlug ?? input.profileSlug,
+          row: p,
+        })),
+      });
+
+      return ranked.map(({ candidate, score, reason, signals }) => ({
+        id: candidate.row.id,
+        name: candidate.row.name,
+        goalTemplate: candidate.row.goalTemplate,
+        subjectProfileSlug: candidate.subjectProfileSlug,
+        params: candidate.row.params,
+        executor: candidate.row.executor,
+        score,
+        reason,
+        signals,
       }));
     }),
 

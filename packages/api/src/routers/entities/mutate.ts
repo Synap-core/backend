@@ -340,10 +340,15 @@ export const mutateProcs = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         // Governance linkage (0231): auto-approve receipt (perm is granted here).
-        proposalId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
+        // Falls back to the composite caller's proposal, like entities.create.
+        proposalId:
+          ("granted" in perm ? perm.autoApprovedProposalId : undefined) ??
+          ctx.governanceProposalId,
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
+        // Sync-origin fan-out — see entities.create.
+        origin: ctx.origin,
         data: {
           profileSlug: input.profileSlug ?? oldEntity?.type ?? undefined,
           ...(Object.keys(changedProperties).length > 0
@@ -523,6 +528,9 @@ export const mutateProcs = {
         workspaceId: governanceWorkspaceId,
         correlationId,
         sessionId: ctx.sessionId ?? null,
+        // Composite caller's proposal + sync origin — see entities.create.
+        proposalId: ctx.governanceProposalId,
+        origin: ctx.origin,
         data: { profileSlug: deletedEntityRow?.type ?? undefined },
         logData: {},
       });

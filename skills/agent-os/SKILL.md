@@ -160,10 +160,25 @@ Each returns `{ workspace: { workspaceId }, projectLink: {...}, capabilities:
 
 ### 6. Capabilities — OFFER, never silently install
 
-A template may declare `capabilities` (e.g. CRM → `nango-gmail`). These need
-credentials (OAuth/API key), so **ask before connecting**: "CRM can connect to
-Gmail for email sync. Connect now or skip?" Skipped capabilities can be added
-later via `POST /api/hub/capabilities/apply`.
+A template may declare `capabilities` (e.g. CRM → `nango-google`, ONE
+capability covering Gmail + Calendar + Contacts through a single brokered
+OAuth connection — there is no separate `nango-gmail`/`google-calendar` id).
+These need credentials, so **ask before connecting**: "CRM can connect to
+Google for mail/calendar/contacts sync. Connect now or skip?" Skipped
+capabilities can be added later via `POST /api/hub/capabilities/apply`.
+
+Connecting is brokered (never a raw Nango key on the pod): the FIRST sync of a
+newly connected source produces exactly ONE `import.graph` proposal for the
+user to review; approving it (with "keep syncing" left on) mints a
+per-connection governance rule, and every steady-state sync after that lands
+automatically under that rule until the user turns it off. **"Keep syncing"
+only ever widens AUTO-CREATE/UPDATE from this connection** — a destructive
+write (delete/archive/merge) still routes to review regardless of that
+setting; the governance floors are never bypassed by a connection rule. Some
+synced entities carry a source link and open back in the source app (e.g.
+Google Calendar events); others do not (e.g. the people/companies linked from
+Gmail correspondence carry no source link today) — never assume every synced
+entity is openable, and never assume one is pod-native-only either.
 
 ### 7. Hand off to per-workspace onboarding (Tier 2)
 

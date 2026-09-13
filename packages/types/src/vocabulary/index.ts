@@ -85,6 +85,11 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   archive: { imperative: "Archive", past: "Archived" },
   restore: { imperative: "Restore", past: "Restored" },
   run: { imperative: "Run", past: "Ran" },
+  // A NEW run of stored input with the current guidelines (intake plan §4.3 —
+  // a rerun is a new session `spawned_from` the previous one). "Rerun" on the
+  // button and pending item; "Reran" on the history receipt. Added ahead of its
+  // producer, for the W2 rerun door, so that door never hand-writes a label.
+  rerun: { imperative: "Rerun", past: "Reran" },
   // `capture.complete.completed` is emitted by `routers/capture.ts` and by
   // `buildEventPattern`, so this token reaches users. Without a row here
   // `resolveActionLabel(action, "past")` fell through to `humanizeToken`,
@@ -331,6 +336,11 @@ export const PROPOSAL_KIND_LABELS: Readonly<Record<string, string>> = {
   governance_tighten: "Tighten a lane",
   governance_raise_ceiling: "Raise a ceiling",
   governance_tighten_posture: "Tighten posture",
+  // Guideline recommenders — each asks the reviewer to adopt standing guideline
+  // TEXT: one for how extraction reads a data type, one for how blocked work is
+  // handled.
+  governance_structure_guideline: "Extraction guideline",
+  governance_work_guideline: "Work guideline",
   capability_run: "Run capability",
   automation_run: "Run automation",
   // Server-side dev-loop HUMAN GATES. The chip is the first thing a reviewer
@@ -396,6 +406,20 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   failed: "Failed",
   cancelled: "Cancelled",
   skipped: "Skipped",
+  // connection sync phases (K2 `SyncPhase`, `connection-sync.ts`). `failed` is
+  // shared with the run lifecycle above. `mapping` is what the user sees happen
+  // — records matched against what is already in Synap — not the mapper's name.
+  fetching: "Fetching",
+  mapping: "Matching",
+  review_ready: "Ready to review",
+  synced: "Synced",
+  // external connection states (capability card `connection.state`). The card's
+  // own token for "no connection" is `missing`, which is too generic for a global
+  // table ("missing" means other things elsewhere), so surfaces map it to
+  // `disconnected` before resolving.
+  connected: "Connected",
+  disconnected: "Not connected",
+  unavailable: "Not available",
   // ⚠️ OVERLOADED TOKEN — deliberately rendered as the neutral word.
   // `stale` means three different things in this product: a session the reaper
   // gave up on (progress), a sync that is out of date (freshness), and a broken

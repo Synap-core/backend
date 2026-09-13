@@ -125,6 +125,8 @@ describe("playbooks.matchForEntity", () => {
       workspaceId: WORKSPACE,
     });
 
+    // The candidate shape + the suggest-and-confirm ranking the door now
+    // computes (`rankRouteCandidates`): built for the requested kind.
     expect(result).toEqual([
       {
         id: "pb-1",
@@ -133,6 +135,9 @@ describe("playbooks.matchForEntity", () => {
         subjectProfileSlug: "post",
         params: [{ key: "platform", type: "string" }],
         executor: "is-agent",
+        score: 2,
+        reason: "Made for post items",
+        signals: [{ type: "kind", profileSlug: "post" }],
       },
     ]);
 
@@ -190,7 +195,8 @@ describe("playbooks.matchForEntity", () => {
       workspaceId: WORKSPACE,
     });
 
-    // The facet-subject playbook surfaces via the widened match set.
+    // The facet-subject playbook surfaces via the widened match set, ranked as
+    // a FACET match (not a kind match) — the facet slugs reach the ranker.
     expect(result).toEqual([
       {
         id: "pb-lead",
@@ -199,6 +205,9 @@ describe("playbooks.matchForEntity", () => {
         subjectProfileSlug: "lead",
         params: [],
         executor: "is-agent",
+        score: 1.5,
+        reason: "Matches its lead role",
+        signals: [{ type: "facet", profileSlug: "lead" }],
       },
     ]);
 
@@ -223,6 +232,51 @@ describe("playbooks.matchForEntity", () => {
         ]),
       })
     );
+  });
+
+  it("with intentText, ranks the textual match FIRST through the real door and says why", async () => {
+    // Matcher order is updatedAt desc — the textual match arrives SECOND, so a
+    // door that ignored `intentText` would return it second.
+    const chain = selectChain([
+      {
+        id: "pb-archive",
+        name: "Archive old drafts",
+        goalTemplate: "Move stale drafts away",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: { profileSlug: "post" },
+      },
+      {
+        id: "pb-review",
+        name: "Weekly review of posts",
+        goalTemplate: "Read and triage what was saved",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: { profileSlug: "post" },
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      profileSlug: "post",
+      workspaceId: WORKSPACE,
+      intentText: "review them weekly",
+    });
+
+    expect(result.map((r) => r.id)).toEqual(["pb-review", "pb-archive"]);
+    expect(result[0]).toMatchObject({
+      score: 8,
+      reason: "You mentioned “review”, “weekly” · Made for post items",
+      signals: [
+        { type: "intent", terms: ["review", "weekly"] },
+        { type: "kind", profileSlug: "post" },
+      ],
+    });
+    expect(result[1]).toMatchObject({
+      score: 2,
+      reason: "Made for post items",
+    });
   });
 
   it("returns [] when no playbook matches the profile", async () => {

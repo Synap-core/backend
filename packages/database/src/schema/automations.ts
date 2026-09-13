@@ -160,6 +160,20 @@ export interface AutomationTriggerConfig {
   facetChangeType?: "attach" | "detach" | "status_changed" | "any";
   /** Only match facets with this status */
   facetStatus?: string;
+
+  // ── connection sync ────────────────────────────────────────────────────
+  /**
+   * Fire on events whose side-effect `origin` is `"sync"` (a bulk mirror of an
+   * external source). Default (absent/false): such events are skipped by the
+   * trigger matcher, so a first sync of 200 contacts does not open 200 runs.
+   */
+  includeSyncOrigin?: boolean;
+  /**
+   * The connection (`secrets` row id) this automation's capability steps run
+   * against. Passed as `connectionSelector.connectionId` to every capability
+   * node that does not name its own selector/connection.
+   */
+  connectionId?: string;
 }
 
 export interface AutomationNodeBase {

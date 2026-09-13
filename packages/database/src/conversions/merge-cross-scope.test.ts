@@ -233,7 +233,7 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
 
     const summary = await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
     expect(
       summary.results[0].error ?? null,
@@ -254,7 +254,7 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
     const { sql, q, ids } = await setupPod();
     await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
 
     const [row] = await q(
@@ -281,17 +281,31 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
     expect(pd.workspace_id).toBe(WS_CRM);
   });
 
-  it("leaves the legacy profile ACTIVE without --destructive-tail, deactivates it with", async () => {
+  it("REFUSES without --destructive-tail (no repoint, no ledger), deactivates with", async () => {
+    // Repoint + retire are atomic: applying only the repoint would ledger the
+    // opKey and orphan the deactivation forever (the ledger trap).
     const noTail = await setupPod();
-    await runConversions(noTail.sql, manifestOf(CROSS_SCOPE_OP), {
-      dryRun: false,
-      destructiveTail: false,
-    });
+    const refused = await runConversions(
+      noTail.sql,
+      manifestOf(CROSS_SCOPE_OP),
+      {
+        dryRun: false,
+        destructiveTail: false,
+      }
+    );
+    expect(refused.hadError).toBe(true);
+    expect(refused.results[0].error).toMatch(/--destructive-tail/);
     const [still] = await noTail.q(
       `SELECT is_active FROM profiles WHERE id = $1`,
       [noTail.ids.crmClient]
     );
     expect(still.is_active).toBe(true);
+    const [facetRow] = await noTail.q(
+      `SELECT profile_id FROM entity_facets WHERE id = $1`,
+      [noTail.ids.facet]
+    );
+    expect(facetRow.profile_id).toBe(noTail.ids.crmClient); // not repointed
+    expect(await noTail.q(`SELECT op_key FROM "_conversions"`)).toEqual([]);
 
     const tail = await setupPod();
     const summary = await runConversions(tail.sql, manifestOf(CROSS_SCOPE_OP), {
@@ -310,14 +324,14 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
     const { sql, q, ids } = await setupPod();
     await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
     // Fresh manifest object, same opKey → the ledger short-circuits it; drop the
     // ledger row to prove the SQL ITSELF is a no-op the second time.
     await q(`DELETE FROM "_conversions"`);
     const again = await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
     expect(again.results[0].status).toBe("noop");
     const [row] = await q(
@@ -347,7 +361,7 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
 
     const summary = await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
     expect(summary.hadError).toBe(true);
     expect(summary.results[0].error).toMatch(/refusing to record a no-op/);
@@ -367,7 +381,7 @@ describe("cross-scope mergeInto (intoScope:'shared')", () => {
     ]);
     const summary = await runConversions(sql, manifestOf(CROSS_SCOPE_OP), {
       dryRun: false,
-      destructiveTail: false,
+      destructiveTail: true,
     });
     expect(summary.hadError).toBe(false);
     expect(summary.results[0].status).toBe("noop");

@@ -130,6 +130,38 @@ describe("NangoConnector.listConnectionsResult — filtering & pagination", () =
   });
 });
 
+describe("NangoConnector.listConnectionsResult — the page cap fails closed", () => {
+  it("a full page (1000 rows) is ok:false truncated, never a partial ok:true", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          connections: Array.from({ length: 1000 }, (_, i) =>
+            conn(`c${i}`, "google", "user-1")
+          ),
+        })
+      )
+    );
+    const r = await connector.listConnectionsResult("user-1");
+    expect(r).toMatchObject({ ok: false, reason: "truncated" });
+  });
+
+  it("999 rows is the complete list (positive control)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          connections: Array.from({ length: 999 }, (_, i) =>
+            conn(`c${i}`, "google", "user-1")
+          ),
+        })
+      )
+    );
+    const r = await connector.listConnectionsResult("user-1");
+    expect(r.ok && r.connections.length).toBe(999);
+  });
+});
+
 describe("NangoConnector.listConnections — lossy compat wrapper", () => {
   it("returns [] on failure (so read-only callers are unchanged)", async () => {
     vi.stubGlobal(

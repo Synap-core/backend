@@ -155,7 +155,7 @@ export interface AgentGovernanceOverride {
   agentUserId: string;
   /** Resolved display label (users.name → agentType → the id). */
   agentLabel: string;
-  targetKind: "action" | "profile" | "capability";
+  targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
   verdict: "auto" | "propose";

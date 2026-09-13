@@ -57,6 +57,11 @@ import {
   FOCUS_SESSION_CLOSED_EVENT_TYPE,
 } from "./close-event.js";
 import { isTerminalSessionStatus } from "./session-statuses.js";
+import {
+  stopSessionWork,
+  cancelRecordMetadataSql,
+  type SessionCancelRecord,
+} from "./cancel-session.js";
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
@@ -74,6 +79,8 @@ export interface CompleteFocusSessionParams {
    * alive and its dependents unblocked in silence.
    */
   terminalStatus?: "closed" | "cancelled" | "failed";
+  /** Why it was cancelled — kept on `metadata.run.cancel`. Ignored unless `cancelled`. */
+  cancelReason?: string;
 }
 
 export type ProposalPackItem = {
@@ -105,6 +112,8 @@ export type CompleteFocusSessionResult = {
     retiredSlots: number;
   };
   warnings: string[];
+  /** `cancelled` only: what was stopped, what will finish, what already applied. */
+  cancel?: SessionCancelRecord;
 };
 
 function packItem(row: typeof proposals.$inferSelect): ProposalPackItem {
@@ -255,6 +264,24 @@ export async function completeFocusSession(
     );
   }
 
+  // CANCEL IS CANCEL (cancel-session.ts): the INTENT commits with the status —
+  // only now, after the gate let the cancel through (a proposed cancel stops
+  // nothing). The stop itself runs after the commit, holding no lock.
+  let cancel: SessionCancelRecord | undefined =
+    terminalStatus === "cancelled"
+      ? {
+          at: new Date().toISOString(),
+          by: params.agentUserId ?? params.userId,
+          ...(params.cancelReason ? { reason: params.cancelReason } : {}),
+          state: "stopping",
+          stopped: [],
+          notStoppable: [],
+          notLinked: [],
+          stopFailed: [],
+          finished: [],
+        }
+      : undefined;
+
   const [updated] = await db.transaction(async (tx) => {
     // Only the cancel path touches the array, so only it needs the lock — a
     // `closed`/`failed` exit leaves `expectedOutputs` alone and cannot lose a
@@ -281,6 +308,7 @@ export async function completeFocusSession(
         status: terminalStatus,
         closedAt: new Date(),
         ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
+        ...(cancel ? { metadata: cancelRecordMetadataSql(cancel) } : {}),
         ...(verificationReport != null
           ? {
               verificationReport: {
@@ -305,6 +333,47 @@ export async function completeFocusSession(
       .where(eq(focusSessions.id, sessionId))
       .returning();
   });
+
+  // The stop, AFTER the commit: no lock is held across its calls and nothing it
+  // does can roll the cancel back. It never throws — a failed stop lands in
+  // `stopFailed`. The outcome is the record's second write.
+  if (cancel) {
+    const outcome = await stopSessionWork({
+      session: {
+        id: session.id,
+        userId: params.userId,
+        channelId: session.channelId ?? null,
+      },
+    });
+    cancel = { ...cancel, state: "done", ...outcome };
+    try {
+      const [recorded] = await db
+        .update(focusSessions)
+        .set({ metadata: cancelRecordMetadataSql(cancel) })
+        .where(eq(focusSessions.id, sessionId))
+        .returning();
+      if (recorded) updated.metadata = recorded.metadata;
+    } catch (err) {
+      warnings.push(
+        `The session is cancelled, but what the cancel stopped could not be recorded on it (${err instanceof Error ? err.message : String(err)}).`
+      );
+    }
+    if (outcome.notStoppable.length > 0) {
+      warnings.push(
+        `${outcome.notStoppable.length} piece(s) of work were already running and could not be stopped — they will finish.`
+      );
+    }
+    if (outcome.stopFailed.length > 0) {
+      warnings.push(
+        `${outcome.stopFailed.length} stop(s) failed — the session is cancelled anyway; see cancel.stopFailed for why.`
+      );
+    }
+    if (outcome.notLinked.length > 0) {
+      warnings.push(
+        `${outcome.notLinked.length} import job(s) name no session, so this cancel cannot tell whether they belong to it — they will run.`
+      );
+    }
+  }
 
   // The session is closed, so its EPHEMERAL proposals are no longer answerable.
   // A capability run is an outbound call bound to this session — urgent for
@@ -416,5 +485,6 @@ export async function completeFocusSession(
       retiredSlots,
     },
     warnings,
+    ...(cancel ? { cancel } : {}),
   };
 }

@@ -25,7 +25,10 @@
  * to run (or was reverted).
  */
 
+import { getTableConfig } from "drizzle-orm/pg-core";
 import { sql } from "../client-pg.js";
+import { governanceTargetEnum } from "../schema/governance-rules.js";
+import { entityExternalLinks } from "../schema/entity-external-links.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -1447,6 +1450,13 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "verdict",
     addedBy: "0215_governance_rules.sql",
   },
+  // Entity external-link url (0259) — the source-app URL a sync writes onto every external
+  // link. The upsert names the column, so without it EVERY sync write 500s.
+  {
+    table: "entity_external_links",
+    column: "url",
+    addedBy: "0259_entity_external_links_url.sql",
+  },
   // Capability run receipts (0219) — at-most-once claim for a DIRECT-run
   // WRITE/external capability verb. New table; checking one column confirms the
   // migration ran (a missing table would fail the double-send guard silently).
@@ -1462,6 +1472,18 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "config_settings",
     column: "scope_kind",
     addedBy: "0235_config_settings.sql",
+  },
+  // Guideline versions (0258) — every guideline read selects `version` and every
+  // edit writes `supersedes_id`; without the columns the list/resolve doors 500.
+  {
+    table: "config_settings",
+    column: "version",
+    addedBy: "0258_config_settings_guideline_data_type_and_versions.sql",
+  },
+  {
+    table: "config_settings",
+    column: "supersedes_id",
+    addedBy: "0258_config_settings_guideline_data_type_and_versions.sql",
   },
   // Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
   // to governance_rules' verdicts). First axis: daily_write_count. New table;
@@ -1492,6 +1514,76 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0255_calendar_feed_tokens.sql",
   },
 ];
+
+/**
+ * Postgres enums whose FULL value set the runtime writes. A pod that skipped the
+ * migration adding a value boots fine and fails only at the first insert that
+ * uses it (`invalid input value for enum`), so the set is checked at boot.
+ * DERIVED from the drizzle enum definitions — adding a value to the schema adds
+ * it to this check.
+ */
+const REQUIRED_ENUMS = [governanceTargetEnum] as const;
+
+/** A tagged-template query function shaped like postgres.js's `sql`. */
+type EnumQuery = <T>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<T>;
+
+/**
+ * Every declared enum value missing from the live database, per enum. An enum
+ * type that does not exist at all reports every value missing.
+ */
+export async function findMissingEnumValues(
+  query: EnumQuery = sql as unknown as EnumQuery
+): Promise<Array<{ type: string; missing: string[] }>> {
+  const out: Array<{ type: string; missing: string[] }> = [];
+  for (const e of REQUIRED_ENUMS) {
+    const rows = await query<Array<{ label: string }>>`
+      SELECT e.enumlabel AS label
+        FROM pg_enum e
+        JOIN pg_type t ON t.oid = e.enumtypid
+       WHERE t.typname = ${e.enumName}
+    `;
+    const present = new Set(rows.map((r) => r.label));
+    const missing = e.enumValues.filter((v) => !present.has(v));
+    if (missing.length > 0) out.push({ type: e.enumName, missing });
+  }
+  return out;
+}
+
+/**
+ * Tables whose declared indexes must all exist. A missing UNIQUE index is a
+ * runtime break, not a slow query: every `INSERT … ON CONFLICT (cols)` against it
+ * errors ("no unique or exclusion constraint matching the ON CONFLICT
+ * specification"). `entity_external_links`' per-connection key (0261) is the
+ * one writers conflict on. DERIVED from the drizzle table config — a new index
+ * declared in the schema joins this check by existing.
+ */
+const REQUIRED_INDEX_TABLES = [entityExternalLinks] as const;
+
+/** Every index declared in the drizzle schema but absent from the live DB. */
+export async function findMissingIndexes(
+  query: EnumQuery = sql as unknown as EnumQuery
+): Promise<Array<{ table: string; missing: string[] }>> {
+  const out: Array<{ table: string; missing: string[] }> = [];
+  for (const table of REQUIRED_INDEX_TABLES) {
+    const cfg = getTableConfig(table);
+    const declared = cfg.indexes
+      .map((i) => i.config.name)
+      .filter((n): n is string => typeof n === "string");
+    const rows = await query<Array<{ indexname: string }>>`
+      SELECT indexname
+        FROM pg_indexes
+       WHERE schemaname = 'public'
+         AND tablename = ${cfg.name}
+    `;
+    const present = new Set(rows.map((r) => r.indexname));
+    const missing = declared.filter((n) => !present.has(n));
+    if (missing.length > 0) out.push({ table: cfg.name, missing });
+  }
+  return out;
+}
 
 export interface SchemaCoherenceResult {
   ok: boolean;
@@ -1585,6 +1677,36 @@ export async function validateSchemaCoherence(): Promise<void> {
         "0220_profiles_entity_scope_pod_default.sql). Kinds are pod-wide; with " +
         "the old default every kind created without an explicit entityScope " +
         "silently lands workspace-scoped. The pod refuses to start."
+    );
+  }
+
+  // Enum floor: every value the runtime writes must exist in the live enum, or
+  // the first insert that uses it fails (e.g. a `connection` governance rule on
+  // a pod that skipped 0260_governance_target_connection.sql).
+  const missingEnums = await findMissingEnumValues();
+  if (missingEnums.length > 0) {
+    throw new Error(
+      "SCHEMA COHERENCE CHECK FAILED — enum values missing: " +
+        missingEnums
+          .map(
+            (m) =>
+              `${m.type} lacks ${m.missing.map((v) => `'${v}'`).join(", ")}`
+          )
+          .join("; ") +
+        ". A migration adding them did not run. The pod refuses to start."
+    );
+  }
+
+  // Index floor: a declared index missing from the live DB (e.g. 0261's
+  // per-connection link key) breaks every `ON CONFLICT` write against it.
+  const missingIndexes = await findMissingIndexes();
+  if (missingIndexes.length > 0) {
+    throw new Error(
+      "SCHEMA COHERENCE CHECK FAILED — indexes missing: " +
+        missingIndexes
+          .map((m) => `${m.table} lacks ${m.missing.join(", ")}`)
+          .join("; ") +
+        ". A migration creating them did not run. The pod refuses to start."
     );
   }
 

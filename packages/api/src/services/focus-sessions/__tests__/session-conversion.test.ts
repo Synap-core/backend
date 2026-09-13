@@ -61,6 +61,23 @@ vi.mock("@synap/database", async (importOriginal) => {
     /** Writes staged during this transaction attempt; applied only on success. */
     const pending: (() => void)[] = [];
     return {
+      // READS run on the transaction too (`safeRevert` checks each target
+      // `FOR UPDATE` inside it). Not recorded in `txCalls` — this suite pins
+      // where the WRITES go. Counts answer 0; a locked row read answers the
+      // store's current row.
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () =>
+            Object.assign(Promise.resolve([{ n: 0 }]), {
+              for: () =>
+                Promise.resolve(
+                  table === actual.playbooks
+                    ? [{ id: PLAYBOOK_ID, status: store.playbookStatus }]
+                    : [{ status: "active" }]
+                ),
+            }),
+        }),
+      }),
       update: (table: unknown) => ({
         set: (patch: Record<string, unknown>) => ({
           where: () => {

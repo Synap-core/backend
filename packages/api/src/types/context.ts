@@ -139,4 +139,20 @@ export interface Context {
    * When set, proposals created during this request are linked to this session.
    */
   sessionId?: string | null;
+  /**
+   * `"sync"` when this request materializes a bulk mirror of an external source
+   * (a connection sync, or the approval of its grouped import). Forwarded by the
+   * entity/relation doors to `recordDomainMutation`, so event automations skip
+   * the fan-out unless they opted in (`triggerConfig.includeSyncOrigin`).
+   * INTERNAL composite-caller channel — createContext never sets it from HTTP.
+   */
+  origin?: "sync";
+  /**
+   * The enclosing session revert pass (`revertSession`), so each per-proposal
+   * `proposals.revert` in that pass tolerates the pass's OWN `updated_at` bumps.
+   * INTERNAL composite-caller channel — createContext never sets it from HTTP,
+   * and it is never read from procedure input: a client must not be able to
+   * exempt entities from the edit check.
+   */
+  revertPass?: import("../services/reversibility/safe-revert.js").RevertPass;
 }

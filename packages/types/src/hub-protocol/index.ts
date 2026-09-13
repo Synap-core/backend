@@ -113,6 +113,12 @@ export interface CreatedProposal {
   toolName: string;
   /** Human-readable summary of the proposed action */
   description: string;
+  /**
+   * The focus session (run) the proposal belongs to — `proposals.session_id`,
+   * read from the row by the pod when it streams the proposal. Absent when the
+   * row has none or the pod could not read it; never fabricated.
+   */
+  sessionId?: string;
 }
 
 /**

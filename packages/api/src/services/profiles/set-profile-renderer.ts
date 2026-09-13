@@ -49,6 +49,7 @@ import type { RendererRef } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 
 import { assertMayBindRenderer } from "./renderer-binding-authz.js";
+import { assertRendererRefAllowedForScope } from "./renderer-ref-scope.js";
 import {
   SLOT_TO_CONTENT_KIND,
   type RendererScope,
@@ -151,6 +152,10 @@ export async function setProfileRenderer(
         "(subjectId) is not supported. See renderer-bindings.ts.",
     });
   }
+
+  // PLACES — `source-app` is user × profile-kind detail only. The ONE shared
+  // rule (renderer-ref-scope.ts), before any DB round trip.
+  assertRendererRefAllowedForScope(ref, scope, slot);
 
   const db = await getDb();
   const contentKind = SLOT_TO_CONTENT_KIND[slot] as

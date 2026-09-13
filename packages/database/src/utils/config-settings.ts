@@ -33,6 +33,31 @@ type DbHandle = typeof import("../client-pg.js").db;
 export const GUIDELINE_KEY = "guideline";
 
 /**
+ * MIRROR — the AUTHORED list is `GUIDELINE_SOURCE_KINDS` in
+ * `@synap-core/types/guidelines` (what browser and relay import). This package
+ * cannot import it (`@synap-core/types` depends on `@synap/database`), so this
+ * runtime copy is pinned identical by `guideline-vocabulary-parity.test.ts`.
+ * Change it THERE first.
+ *
+ * The closed `sourceKind` vocabulary for NON-import inputs — the kinds of input
+ * a capture door accepts. An import item's kind is `import:<source>`, where
+ * `<source>` is an `IMPORT_SOURCE_VALUES` token (@synap/types — gated at the
+ * write door, `routers/guidelines.ts`, since this package does not depend on
+ * @synap/types).
+ */
+export const GUIDELINE_SOURCE_KINDS = [
+  "text",
+  "url",
+  "image",
+  "file",
+  "audio",
+] as const;
+export type GuidelineSourceKind = (typeof GUIDELINE_SOURCE_KINDS)[number];
+
+/** The `sourceKind` prefix for import items: `import:<IMPORT_SOURCE_VALUES>`. */
+export const IMPORT_SOURCE_KIND_PREFIX = "import:";
+
+/**
  * THE ordering authority: scope kinds general → specific. Rank is the INDEX, so
  * inserting a rung renumbers everything after it automatically and no second
  * hand-maintained table can fall behind (the enum's own declaration order is
@@ -65,10 +90,33 @@ export const GUIDELINE_KEY = "guideline";
  * first, which is exactly the untyped-`appliesTo` failure this rung replaces.
  * A different work vocabulary gets its OWN rung and its own context field —
  * never a second namespace here.
+ *
+ * WHERE THE DATA-TYPE RUNGS SIT (`sourceKind`, `entityKind` — 0258), AND WHY.
+ *
+ * They are a THIRD axis: what is being STRUCTURED (the input's kind, the
+ * output's kind). Like `workKind`, a data-type guideline ("from a screenshot,
+ * read prices literally"; "a person needs a LinkedIn URL") applies ACROSS every
+ * channel and bridge, so by the same argument it is broader than any transport
+ * rung and sits below them. Between the two: the input kind describes the whole
+ * capture, the entity kind narrows to one thing extracted from it, so
+ * `sourceKind` < `entityKind`. Both sit above `workKind`, which is about
+ * blocked WORK rather than about structuring and never co-occurs with them in
+ * one call today.
+ *
+ * VOCABULARIES: `sourceKind` refs are `GUIDELINE_SOURCE_KINDS` or
+ * `import:<IMPORT_SOURCE_VALUES>`, and `entityKind` refs are profile slugs, both
+ * gated at the write door. Two rungs, not one `dataType` rung with a prefix,
+ * for the reason recorded above: one `scopeRef` must never carry two
+ * vocabularies.
  */
+// MIRROR — the AUTHORED order is `GUIDELINE_SCOPE_ORDER` in
+// `@synap-core/types/guidelines`; this runtime copy is pinned identical (order
+// AND membership) by `guideline-vocabulary-parity.test.ts`. Change it there first.
 const SCOPE_ORDER = [
   "default",
   "workKind",
+  "sourceKind",
+  "entityKind",
   "channelType",
   "bridge",
   "channel",
@@ -120,6 +168,21 @@ export interface ResolveGuidelinesInput {
    * it.
    */
   workKind?: string | null;
+  /**
+   * The kind of INPUT being structured (`text | url | image | file | audio` or
+   * `import:<source>`). Absent ⇒ no `sourceKind` row can match — the same
+   * inert-unless-asked contract as `workKind`.
+   */
+  sourceKind?: string | null;
+  /**
+   * The entity kinds (profile slugs) IN PLAY for this structuring pass — the
+   * kinds the extractor may produce, plus an anchor's kind. A structure pass
+   * runs BEFORE its output kinds are known, so an `entityKind` guideline
+   * matches when its kind is available to the extractor, and the assembler
+   * frames its text with the kind so the model applies it only to that kind.
+   * Absent/empty ⇒ no `entityKind` row can match.
+   */
+  entityKinds?: readonly string[] | null;
   /** null/undefined = pod lens only (no workspace-scoped rows match). */
   workspaceId?: string | null;
   /** The normalized message — required for `shape`-scoped rows to match. */
@@ -129,7 +192,11 @@ export interface ResolveGuidelinesInput {
 /** One resolved guideline, in application order (general → specific). */
 export interface ResolvedGuideline {
   id: string;
+  /** The row's version (0258). A run manifest records `{id, version}`. */
+  version: number;
   scopeKind: ConfigScopeKind;
+  /** The rung's ref — e.g. the profile slug of an `entityKind` row. */
+  scopeRef: string | null;
   specificity: number;
   text: string;
   posture?: "auto" | "propose";
@@ -180,6 +247,7 @@ export async function resolveGuidelines(
       scopeRef: configSettings.scopeRef,
       value: configSettings.value,
       shape: configSettings.shape,
+      version: configSettings.version,
       createdAt: configSettings.createdAt,
     })
     .from(configSettings)
@@ -196,6 +264,7 @@ export async function resolveGuidelines(
     scopeRef: string | null;
     value: GuidelineValue | Record<string, unknown>;
     shape: MessageShapePredicate | null;
+    version: number | null;
     createdAt: Date;
   }>;
 
@@ -211,7 +280,9 @@ export async function resolveGuidelines(
     if (!text) continue; // a guideline with no text contributes nothing
     matched.push({
       id: row.id,
+      version: row.version ?? 1,
       scopeKind: row.scopeKind,
+      scopeRef: row.scopeRef,
       specificity: SCOPE_SPECIFICITY[row.scopeKind],
       text,
       posture: value.posture,
@@ -258,7 +329,12 @@ function scopeMatches(
   shape: MessageShapePredicate | null,
   ctx: Pick<
     ResolveGuidelinesInput,
-    "channelId" | "channelType" | "bridgeId" | "workKind"
+    | "channelId"
+    | "channelType"
+    | "bridgeId"
+    | "workKind"
+    | "sourceKind"
+    | "entityKinds"
   >,
   envelope: MessageEnvelope | undefined
 ): boolean {
@@ -269,6 +345,11 @@ function scopeMatches(
       // Absent context ⇒ never matches: a caller that knows nothing about the
       // kind of work must resolve exactly as it did before this rung existed.
       return !!ctx.workKind && scopeRef === ctx.workKind;
+    case "sourceKind":
+      // Same inert-unless-asked contract as workKind.
+      return !!ctx.sourceKind && scopeRef === ctx.sourceKind;
+    case "entityKind":
+      return !!scopeRef && !!ctx.entityKinds?.includes(scopeRef);
     case "channelType":
       return !!ctx.channelType && scopeRef === ctx.channelType;
     case "bridge":
@@ -376,4 +457,268 @@ export async function revokeGuideline(input: {
     )
     .returning();
   return row;
+}
+
+// ---------------------------------------------------------------------------
+// Versions (0258): an edit is a SUPERSEDE, never an in-place update
+// ---------------------------------------------------------------------------
+
+/** Thrown when the row to supersede is absent, not a guideline, or no longer current. */
+export class GuidelineSupersedeConflictError extends Error {
+  constructor(
+    readonly reason: "not_found" | "not_current",
+    readonly guidelineId: string
+  ) {
+    super(
+      reason === "not_found"
+        ? `Guideline ${guidelineId} not found`
+        : `Guideline ${guidelineId} is no longer the current version — reload and edit the latest`
+    );
+    this.name = "GuidelineSupersedeConflictError";
+  }
+}
+
+export interface SupersedeGuidelineInput {
+  db: DbHandle;
+  /** The CURRENT version being edited. */
+  id: string;
+  text: string;
+  /** Omitted ⇒ the previous version's posture carries over. */
+  posture?: "auto" | "propose";
+  /** Provenance of the new version ('user' | 'proposal:<id>' | …). */
+  source?: string;
+  createdBy: string;
+}
+
+/**
+ * Edit a guideline by SUPERSEDING it: in ONE transaction, revoke the current
+ * row (only if still current) and insert version + 1 carrying the same scope
+ * (capability, rung, ref, shape, workspace) with `supersedesId` = the old id.
+ *
+ * Scope is deliberately NOT editable here: a guideline moved to a different
+ * rung is a different guideline, and its history would otherwise claim a
+ * lineage across two situations. Access floors are the caller's concern (the
+ * router gates on the LOADED row, like `revoke`).
+ *
+ * Concurrency: the revoke's `revoked_at IS NULL` guard lets only one of two
+ * racing edits proceed; the partial UNIQUE index on `supersedes_id` backs it at
+ * the database level.
+ */
+export async function supersedeGuideline(
+  input: SupersedeGuidelineInput
+): Promise<{ previous: ConfigSetting; guideline: ConfigSetting }> {
+  return input.db.transaction(async (tx) => {
+    const [previous] = await tx
+      .update(configSettings)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(configSettings.id, input.id),
+          eq(configSettings.key, GUIDELINE_KEY),
+          isNull(configSettings.revokedAt)
+        )
+      )
+      .returning();
+    if (!previous) {
+      const existing = await tx.query.configSettings.findFirst({
+        where: and(
+          eq(configSettings.id, input.id),
+          eq(configSettings.key, GUIDELINE_KEY)
+        ),
+        columns: { id: true },
+      });
+      throw new GuidelineSupersedeConflictError(
+        existing ? "not_current" : "not_found",
+        input.id
+      );
+    }
+    const prevValue = previous.value as GuidelineValue;
+    const posture = input.posture ?? prevValue?.posture;
+    const value: GuidelineValue = {
+      text: input.text,
+      ...(posture ? { posture } : {}),
+    };
+    const [guideline] = await tx
+      .insert(configSettings)
+      .values({
+        key: GUIDELINE_KEY,
+        value,
+        scopeKind: previous.scopeKind,
+        scopeRef: previous.scopeRef,
+        shape: previous.shape,
+        capabilityId: previous.capabilityId,
+        workspaceId: previous.workspaceId,
+        source: input.source ?? "user",
+        createdBy: input.createdBy,
+        version: (previous.version ?? 1) + 1,
+        supersedesId: previous.id,
+      })
+      .returning();
+    return { previous, guideline };
+  });
+}
+
+/** The longest chain history will walk — a guard against a corrupt cycle. */
+const MAX_HISTORY_DEPTH = 500;
+
+/**
+ * The full version history of the guideline `id` belongs to, NEWEST FIRST —
+ * walking back through `supersedesId` to version 1 and forward to the current
+ * (or last revoked) head. Includes revoked versions: that IS the history.
+ * Returns `[]` when `id` is not a guideline. Access is the caller's concern.
+ */
+export async function listGuidelineHistory(input: {
+  db: DbHandle;
+  id: string;
+}): Promise<ConfigSetting[]> {
+  const { db } = input;
+  const start = await db.query.configSettings.findFirst({
+    where: and(
+      eq(configSettings.id, input.id),
+      eq(configSettings.key, GUIDELINE_KEY)
+    ),
+  });
+  if (!start) return [];
+
+  const chain: ConfigSetting[] = [start];
+  const seen = new Set([start.id]);
+  let back = start;
+  while (back.supersedesId && chain.length < MAX_HISTORY_DEPTH) {
+    const prev = await db.query.configSettings.findFirst({
+      where: eq(configSettings.id, back.supersedesId),
+    });
+    if (!prev || seen.has(prev.id)) break;
+    seen.add(prev.id);
+    chain.push(prev);
+    back = prev;
+  }
+  let forward = start;
+  while (chain.length < MAX_HISTORY_DEPTH) {
+    const next = await db.query.configSettings.findFirst({
+      where: eq(configSettings.supersedesId, forward.id),
+    });
+    if (!next || seen.has(next.id)) break;
+    seen.add(next.id);
+    chain.push(next);
+    forward = next;
+  }
+  return chain.sort((a, b) => (b.version ?? 1) - (a.version ?? 1));
+}
+
+// ---------------------------------------------------------------------------
+// Corrections → guideline versions (intake W5). ONE copy of the text cap, the
+// current-row lookup and the inferred-guideline proposal payload, shared by the
+// jobs scanner (files the proposal) and the api approve path (applies it).
+// ---------------------------------------------------------------------------
+
+/**
+ * THE cap on one guideline's text. The write door's zod schemas, both
+ * correction paths and the structure-instructions budget
+ * (`STRUCTURE_INSTRUCTIONS_BUDGET`, which a single guideline must fit whole)
+ * all read this one number.
+ */
+export const GUIDELINE_TEXT_MAX = 2000;
+
+/** Filed by the structure-guideline scanner; applied on approval. */
+export const STRUCTURE_GUIDELINE_PROPOSAL_TYPE =
+  "governance.structure_guideline";
+
+/** The data-type rungs a correction can target, plus the lens-only default. */
+export type StructureGuidelineScopeKind =
+  "default" | "sourceKind" | "entityKind";
+
+/** The `governance.structure_guideline` payload — the ONE declaration. */
+export interface StructureGuidelineProposalData {
+  /** The human whose corrections these are — the guideline's owner. */
+  userId: string;
+  /**
+   * The same human under the ownership key the review ladder reads
+   * (`data.sourceId`, as `createProposal` writes it) — so the subject may
+   * approve their own pod-wide proposal at the approve door.
+   */
+  sourceId: string;
+  /** Stable cluster identity (user × rung × ref) — the dedup key. */
+  clusterKey: string;
+  scopeKind: StructureGuidelineScopeKind;
+  scopeRef: string | null;
+  /** NULL = pod-wide (owner-floored on read). */
+  workspaceId: string | null;
+  /** The FULL proposed version text (reviewer-editable). */
+  text: string;
+  /**
+   * ONLY what the evidence adds, kept apart from `text` so a rebase onto a
+   * newer version appends it once and never re-appends old guideline text.
+   */
+  addition: string;
+  /** Approval SUPERSEDES this version; null = no guideline existed. */
+  supersedesGuidelineId: string | null;
+  /** The superseded version's text, so the reviewer sees the diff. */
+  currentText: string | null;
+  evidence: {
+    corrections: number;
+    proposals: number;
+    windowDays: number;
+    reasonHistogram: Record<string, number>;
+    exampleReasons: string[];
+    sampleProposalIds: string[];
+  };
+  /** Set when an approval found the guideline moved and re-drafted instead. */
+  rebase?: {
+    reason: string;
+    at: string;
+    previousSupersedesGuidelineId: string | null;
+  };
+}
+
+export interface CurrentGuideline {
+  id: string;
+  text: string;
+  createdAt: Date;
+}
+
+/**
+ * The CURRENT (unrevoked, capability-free) guideline at one rung in one lens:
+ * a workspace's row, or the user's own pod-wide row (owner floor). Newest first
+ * when several exist. Returns null when none — the caller creates version 1.
+ */
+export async function findCurrentGuideline(input: {
+  db: DbHandle;
+  userId: string;
+  scopeKind: ConfigScopeKind;
+  scopeRef?: string | null;
+  workspaceId?: string | null;
+}): Promise<CurrentGuideline | null> {
+  const [row] = await input.db
+    .select({
+      id: configSettings.id,
+      value: configSettings.value,
+      createdAt: configSettings.createdAt,
+    })
+    .from(configSettings)
+    .where(
+      and(
+        eq(configSettings.key, GUIDELINE_KEY),
+        isNull(configSettings.revokedAt),
+        isNull(configSettings.capabilityId),
+        eq(configSettings.scopeKind, input.scopeKind),
+        input.scopeRef
+          ? eq(configSettings.scopeRef, input.scopeRef)
+          : isNull(configSettings.scopeRef),
+        input.workspaceId
+          ? eq(configSettings.workspaceId, input.workspaceId)
+          : and(
+              isNull(configSettings.workspaceId),
+              eq(configSettings.createdBy, input.userId)
+            )
+      )
+    )
+    .orderBy(desc(configSettings.createdAt))
+    .limit(1);
+  if (!row) return null;
+  const text = (row.value as { text?: unknown } | null)?.text;
+  return {
+    id: row.id,
+    text: typeof text === "string" ? text : "",
+    createdAt: row.createdAt,
+  };
 }

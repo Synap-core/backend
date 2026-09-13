@@ -1,727 +1,148 @@
 /**
  * Connectors REST Router
  *
- * Handles CP → Pod communication for external connector syncing.
- * All endpoints use JWT verification (same as provision router).
+ * Handles CP → Pod communication for external connections.
+ * All endpoints use CP JWT verification (same trust rail as the provision router).
  *
  * Routes:
- *   POST /pull-sync   — Receive "sync ready" signal, pull records from Nango
- *   POST /disconnect   — Mark external links as disconnected
+ *   POST /sync-trigger — The CP saw provider activity for a connection (Nango
+ *                         `sync` / `auth` webhook). Enqueue the ONE connection
+ *                         sync door; the pod reads the provider itself through
+ *                         its capability verbs.
+ *
+ * (POST /disconnect was removed 2026-09-13: the CP user-session connector routes
+ * that signed its `connector_disconnect` token were retired, leaving no sender.)
  */
 
 import { Hono } from "hono";
 import { z } from "zod";
+import { getDb, eq, and, isNull, isNotNull } from "@synap/database";
+import { secrets } from "@synap/database/schema";
 import {
-  getDb,
-  sql,
-  eq,
-  and,
-  EntityRepository,
-  EventRepository,
-} from "@synap/database";
-import { entityExternalLinks } from "@synap/database/schema";
-import { verifyCpJwtWithTrust, NangoConnector } from "@synap/api";
-import { emitSideEffects } from "@synap/events";
-import { createLogger } from "@synap-core/core";
-import crypto from "crypto";
-import { matchAttendeesToContacts } from "../services/connector-matching.js";
+  verifyCpJwtWithTrust,
+  enqueueConnectionSync,
+  reconcileLiveConnections,
+} from "@synap/api";
+import { config, createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "connectors-router" });
 
 export const connectorsRouter = new Hono();
 
-// ---------------------------------------------------------------------------
-// Entity mapping: convert Nango records to Synap entity format
-// ---------------------------------------------------------------------------
-
-interface NangoRecord {
-  id: string;
-  [key: string]: unknown;
-}
-
-interface MappedEntity {
-  profileSlug: string;
-  title: string;
-  properties: Record<string, unknown>;
-  externalId: string;
-}
-
 /**
- * Map a Nango record to a Synap entity based on provider + model.
+ * The pod's connection registry row for a broker connection id — owned by THIS
+ * user, a capability connection, not deleted.
  */
-function mapNangoRecord(
-  provider: string,
-  model: string,
-  record: NangoRecord
-): MappedEntity | null {
-  switch (provider) {
-    case "google-calendar": {
-      return {
-        profileSlug: "event",
-        title:
-          (record.summary as string) ||
-          (record.name as string) ||
-          "Untitled Event",
-        externalId: record.id,
-        properties: {
-          startDate: record.start_datetime || record.start_date,
-          endDate: record.end_datetime || record.end_date,
-          location: record.location || null,
-          description: record.description || null,
-          attendees: Array.isArray(record.attendees)
-            ? record.attendees.map((a: any) => a.email || a)
-            : [],
-          calendarLink: record.html_link || null,
-          source: "google-calendar",
-        },
-      };
-    }
-    case "google-contacts": {
-      const name =
-        (record.given_name as string) || (record.name as string) || "Unnamed";
-      return {
-        profileSlug: "contact",
-        title: name,
-        externalId: record.id,
-        properties: {
-          email: record.email || null,
-          phone: record.phone || null,
-          company: record.organization || null,
-          notes: record.notes || null,
-          source: "google-contacts",
-        },
-      };
-    }
-    case "github": {
-      if (model === "Repository") {
-        return {
-          profileSlug: "repository",
-          title: (record.name as string) || "Untitled Repo",
-          externalId: record.id,
-          properties: {
-            description: record.description || null,
-            url: record.html_url || record.url || null,
-            language: record.language || null,
-            stars: record.stargazers_count || 0,
-            source: "github",
-          },
-        };
-      }
-      if (model === "Issue") {
-        return {
-          profileSlug: "task",
-          title: (record.title as string) || "Untitled Issue",
-          externalId: record.id,
-          properties: {
-            description: record.body || null,
-            status: record.state === "closed" ? "done" : "todo",
-            url: record.html_url || null,
-            labels: Array.isArray(record.labels)
-              ? record.labels.map((l: any) => l.name || l)
-              : [],
-            source: "github",
-          },
-        };
-      }
-      return null;
-    }
-    case "google-mail": {
-      // Emails map to "note" entities — they're captured communications.
-      // The subject becomes the title; body_text + snippet go into content.
-      // from_email is stored so the pod can later match it to a person entity.
-      const fromEmail = (record.from_email as string) || "";
-      const subject = (record.subject as string) || "(no subject)";
-      const bodyText = (record.body_text as string) || null;
-      const snippet = (record.snippet as string) || null;
-      const content = bodyText || snippet || null;
-      const date = (record.date as string) || null;
-
-      return {
-        profileSlug: "note",
-        title: subject,
-        externalId: record.id as string,
-        properties: {
-          content,
-          fromEmail,
-          fromName: record.from_name || null,
-          toEmails: Array.isArray(record.to_emails) ? record.to_emails : [],
-          emailDate: date,
-          threadId: record.thread_id || null,
-          isUnread: record.is_unread ?? false,
-          source: "google-mail",
-          tags: ["email"],
-        },
-      };
-    }
-    case "notion": {
-      return {
-        profileSlug: "document",
-        title:
-          (record.title as string) ||
-          (record.Name as string) ||
-          "Untitled Page",
-        externalId: record.id,
-        properties: {
-          content: (record.content as string) || null,
-          url: (record.url as string) || null,
-          lastEditedTime: record.last_edited_time || null,
-          tags: Array.isArray(record.tags) ? record.tags : [],
-          source: "notion",
-        },
-      };
-    }
-    case "linear": {
-      return {
-        profileSlug: "task",
-        title: (record.title as string) || "Untitled Issue",
-        externalId: record.id,
-        properties: {
-          description: (record.description as string) || null,
-          status: (record.state as string) || "todo",
-          priority: (record.priority as string) || null,
-          url: (record.url as string) || null,
-          assignee: (record.assignee as string) || null,
-          labels: Array.isArray(record.labels) ? record.labels : [],
-          dueDate: (record.dueDate as string) || null,
-          source: "linear",
-        },
-      };
-    }
-    case "slack": {
-      return {
-        profileSlug: "note",
-        title: `Slack: ${((record.text as string) || "").slice(0, 60)}`,
-        externalId: record.id,
-        properties: {
-          content: (record.text as string) || null,
-          channel: (record.channel as string) || null,
-          author:
-            (record.username as string) || (record.user as string) || null,
-          timestamp: (record.ts as string) || null,
-          threadTs: (record.thread_ts as string) || null,
-          source: "slack",
-          tags: ["slack"],
-        },
-      };
-    }
-    case "hubspot": {
-      if (model === "Contact") {
-        const firstName = (record.firstname as string) || "";
-        const lastName = (record.lastname as string) || "";
-        return {
-          profileSlug: "contact",
-          title: `${firstName} ${lastName}`.trim() || "Unnamed Contact",
-          externalId: record.id,
-          properties: {
-            email: (record.email as string) || null,
-            phone: (record.phone as string) || null,
-            company: (record.company as string) || null,
-            jobTitle: (record.jobtitle as string) || null,
-            source: "hubspot",
-          },
-        };
-      }
-      if (model === "Deal") {
-        return {
-          profileSlug: "task",
-          title: (record.dealname as string) || "Unnamed Deal",
-          externalId: record.id,
-          properties: {
-            amount: (record.amount as number) || null,
-            stage: (record.dealstage as string) || null,
-            closeDate: (record.closedate as string) || null,
-            source: "hubspot",
-          },
-        };
-      }
-      return null;
-    }
-    default:
-      return null;
-  }
-}
-
-/**
- * Generate a hash of a record for change detection.
- */
-function hashRecord(record: unknown): string {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify(record))
-    .digest("hex")
-    .slice(0, 16);
-}
-
-// ---------------------------------------------------------------------------
-// Core sync logic — shared between pull-sync (CP mode) and nango-webhook
-// ---------------------------------------------------------------------------
-
-interface SyncParams {
-  userId: string;
-  provider: string;
-  nangoConnectionId: string;
-  model: string;
-  nangoHost: string;
-  nangoKey: string;
-}
-
-interface SyncResult {
-  created: number;
-  updated: number;
-  skipped: number;
-  recordCount: number;
-}
-
-async function runNangoSync(
-  params: SyncParams
-): Promise<SyncResult | { error: string; status: number }> {
-  const { userId, provider, nangoConnectionId, model, nangoHost, nangoKey } =
-    params;
-
-  // Fetch records from Nango Records API
-  let records: NangoRecord[];
-  try {
-    const url = new URL(`/records`, nangoHost);
-    url.searchParams.set("model", model);
-    url.searchParams.set("connection_id", nangoConnectionId);
-    url.searchParams.set("provider_config_key", provider);
-
-    const response = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${nangoKey}` },
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    if (!response.ok) {
-      const errBody = await response.text().catch(() => "");
-      logger.error(
-        { status: response.status, body: errBody },
-        "Failed to fetch Nango records"
-      );
-      return { error: "Failed to fetch records from Nango", status: 502 };
-    }
-
-    const data = (await response.json()) as Record<string, unknown>;
-    records = (data.records || data.data || []) as NangoRecord[];
-  } catch (err) {
-    logger.error({ err }, "Nango records fetch failed");
-    const ws = await getDb()
-      .then((d) => d.query.workspaces.findFirst())
-      .catch(() => null);
-    if (ws) {
-      emitSideEffects({
-        subjectType: "connector_sync",
-        action: "sync_completed",
-        subjectId: nangoConnectionId,
-        userId,
-        workspaceId: ws.id,
-        data: { provider, syncStatus: "error" },
-      });
-    }
-    return { error: "Failed to fetch records", status: 502 };
-  }
-
-  if (records.length === 0) {
-    return { created: 0, updated: 0, skipped: 0, recordCount: 0 };
-  }
-
+async function findConnectionRow(
+  brokerConnectionId: string,
+  podUserId: string
+): Promise<{ id: string } | null> {
   const database = await getDb();
-  const ws = await database.query.workspaces.findFirst();
-  if (!ws) return { error: "No workspace found", status: 404 };
-
-  const eventRepo = new EventRepository(sql);
-  const entityRepo = new EntityRepository(database, eventRepo);
-
-  let created = 0;
-  let updated = 0;
-  let skipped = 0;
-  const createdEntityIds: string[] = [];
-
-  for (const record of records) {
-    const mapped = mapNangoRecord(provider, model, record);
-    if (!mapped) {
-      skipped++;
-      continue;
-    }
-
-    const recordHash = hashRecord(record);
-
-    try {
-      const existingLink = await database.query.entityExternalLinks.findFirst({
-        where: and(
-          eq(entityExternalLinks.provider, provider),
-          eq(entityExternalLinks.externalId, mapped.externalId)
-        ),
-      });
-
-      if (existingLink) {
-        if (existingLink.syncHash === recordHash) {
-          skipped++;
-          continue;
-        }
-        await entityRepo.update(
-          existingLink.entityId,
-          { title: mapped.title, properties: mapped.properties },
-          userId
-        );
-        await database
-          .update(entityExternalLinks)
-          .set({ syncHash: recordHash, lastSyncedAt: new Date() })
-          .where(eq(entityExternalLinks.id, existingLink.id));
-        updated++;
-      } else {
-        const createdEntity = await entityRepo.create(
-          {
-            profileSlug: mapped.profileSlug,
-            title: mapped.title,
-            properties: mapped.properties,
-            workspaceId: ws.id,
-            userId,
-            skipValidation: true,
-          },
-          userId
-        );
-        await database.insert(entityExternalLinks).values({
-          entityId: createdEntity.id,
-          provider,
-          externalId: mapped.externalId,
-          nangoConnectionId,
-          status: "active",
-          syncHash: recordHash,
-        });
-        createdEntityIds.push(createdEntity.id);
-        created++;
-      }
-    } catch (err) {
-      logger.warn(
-        { err, externalId: mapped.externalId, provider },
-        "Failed to upsert entity from connector"
-      );
-      skipped++;
-    }
-  }
-
-  logger.info({ provider, model, created, updated, skipped }, "Sync completed");
-
-  // Match calendar attendees / email senders to existing person entities
-  if (createdEntityIds.length > 0) {
-    matchAttendeesToContacts(ws.id, createdEntityIds).catch((err) =>
-      logger.warn({ err }, "Attendee matching failed (non-fatal)")
-    );
-  }
-
-  emitSideEffects({
-    subjectType: "connector_sync",
-    action: "sync_completed",
-    subjectId: nangoConnectionId,
-    userId,
-    workspaceId: ws.id,
-    data: {
-      provider,
-      syncStatus: "success",
-      entitiesProcessed: created + updated,
-    },
-  });
-
-  return { created, updated, skipped, recordCount: records.length };
-}
-
-// ---------------------------------------------------------------------------
-// POST /pull-sync — Receive sync-ready JWT, pull records from Nango
-// ---------------------------------------------------------------------------
-
-connectorsRouter.post("/pull-sync", async (c) => {
-  const body = await c.req.json().catch(() => null);
-  const parsed = z.object({ token: z.string().min(1) }).safeParse(body);
-
-  if (!parsed.success) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-
-  const podPublicUrl = process.env.PUBLIC_URL;
-  if (!podPublicUrl) {
-    logger.error(
-      "pull-sync refused: PUBLIC_URL not configured — audience check is mandatory"
-    );
-    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
-  }
-
-  let cpUrl: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    cpUrl = cp?.url;
-  } catch {
-    /* fall through */
-  }
-
-  const payload = await verifyCpJwtWithTrust<{
-    type: string;
-    podId: string;
-    userId: string;
-    provider: string;
-    nangoConnectionId: string;
-    model: string;
-  }>(parsed.data.token, {
-    pinnedIssuer: cpUrl,
-    audience: podPublicUrl,
-  });
-
-  if (!payload || payload.type !== "connector_sync_ready") {
-    return c.json({ error: "Invalid or expired token" }, 401);
-  }
-
-  const { userId, provider, nangoConnectionId, model } = payload;
-
-  logger.info(
-    { provider, model, userId },
-    "Pull-sync: received sync-ready signal"
-  );
-
-  // Resolve Nango credentials from workspace settings (CP mode) or env (local mode)
-  const database = await getDb();
-  const ws = await database.query.workspaces.findFirst();
-  const wsSettings = (ws?.settings as Record<string, unknown>) ?? {};
-  const cpSettings = (wsSettings.controlPlane as Record<string, unknown>) ?? {};
-
-  const nangoHost = (cpSettings.nangoHost as string) || process.env.NANGO_HOST;
-  const nangoKey =
-    (cpSettings.nangoRecordsApiKey as string) || process.env.NANGO_SECRET_KEY;
-
-  if (!nangoHost || !nangoKey) {
-    logger.error("Nango not configured — missing nangoHost / NANGO_SECRET_KEY");
-    return c.json({ error: "Nango not configured on this pod" }, 503);
-  }
-
-  const result = await runNangoSync({
-    userId,
-    provider,
-    nangoConnectionId,
-    model,
-    nangoHost,
-    nangoKey,
-  });
-  if ("error" in result)
-    return c.json(
-      { error: result.error },
-      result.status as 400 | 401 | 403 | 404 | 500 | 502 | 503
-    );
-
-  return c.json({
-    success: true,
-    entitiesProcessed: result.created + result.updated,
-    created: result.created,
-    updated: result.updated,
-    skipped: result.skipped,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POST /nango-webhook — Self-hosted Nango sync notification
-//
-// Called by Nango (self-hosted) when a sync job completes. No CP JWT needed;
-// authenticity is verified via HMAC-SHA256 of the raw body using the pod's
-// NANGO_SECRET_KEY. This is the local-mode equivalent of /pull-sync.
-//
-// Nango webhook payload shape:
-//   { from, type, connectionId, providerConfigKey, model, success, ... }
-//
-// `connectionId` is Nango's own id for the connection — NOT the end user.
-// ---------------------------------------------------------------------------
-
-const NangoWebhookSchema = z.object({
-  from: z.string(),
-  type: z.string(),
-  connectionId: z.string().min(1),
-  providerConfigKey: z.string().min(1),
-  model: z.string().min(1),
-  success: z.boolean().optional(),
-});
-
-connectorsRouter.post("/nango-webhook", async (c) => {
-  const nangoKey = process.env.NANGO_SECRET_KEY;
-  if (!nangoKey) {
-    // Self-hosted Nango not configured — ignore webhook
-    return c.json({ ok: true, skipped: true });
-  }
-
-  const rawBody = await c.req.text();
-  const signature = c.req.header("x-nango-signature") ?? "";
-
-  // Validate HMAC signature
-  const expected = `sha256=${crypto
-    .createHmac("sha256", nangoKey)
-    .update(rawBody)
-    .digest("hex")}`;
-
-  if (
-    Buffer.byteLength(signature) !== Buffer.byteLength(expected) ||
-    !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-  ) {
-    logger.warn({ signature }, "nango-webhook: invalid HMAC signature");
-    return c.json({ error: "Invalid signature" }, 401);
-  }
-
-  let body: unknown;
-  try {
-    body = JSON.parse(rawBody);
-  } catch {
-    return c.json({ error: "Invalid JSON" }, 400);
-  }
-
-  const parsed = NangoWebhookSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: "Unexpected webhook payload" }, 400);
-  }
-
-  const { connectionId, providerConfigKey, model, success } = parsed.data;
-
-  if (success === false) {
-    logger.info(
-      { connectionId, providerConfigKey, model },
-      "nango-webhook: sync failed, skipping ingest"
-    );
-    return c.json({ ok: true, skipped: true });
-  }
-
-  const nangoHost = process.env.NANGO_HOST ?? "http://localhost:3003";
-
-  // `connectionId` is NOT the user. Connect-flow connection ids are generated
-  // by Nango; `end_user.id` is what we stamp. Ask Nango who owns this
-  // connection rather than assuming, and skip rather than attribute the sync to
-  // a user that does not exist.
-  const owner = await new NangoConnector({
-    host: nangoHost,
-    secretKey: nangoKey,
-  }).resolveConnectionUserId(connectionId);
-
-  // Could not ASK Nango → 500 so Nango retries. Returning 200 here would ack the
-  // webhook and drop the sync permanently on a transient blip.
-  if (!owner.ok) {
-    logger.error(
-      { connectionId, provider: providerConfigKey, reason: owner.reason },
-      "nango-webhook: could not resolve the connection's end_user"
-    );
-    return c.json({ error: `Cannot resolve connection: ${owner.reason}` }, 500);
-  }
-
-  // Nango answered and the connection has no end user — nothing to attribute to.
-  if (!owner.userId) {
-    logger.warn(
-      { connectionId, provider: providerConfigKey, model },
-      "nango-webhook: connection has no end_user — skipping ingest"
-    );
-    return c.json({ ok: true, skipped: true });
-  }
-
-  const userId = owner.userId;
-
-  logger.info(
-    { userId, provider: providerConfigKey, model },
-    "nango-webhook: triggering sync ingest"
-  );
-
-  const result = await runNangoSync({
-    userId,
-    provider: providerConfigKey,
-    nangoConnectionId: connectionId,
-    model,
-    nangoHost,
-    nangoKey,
-  });
-
-  if ("error" in result) {
-    logger.error({ error: result.error }, "nango-webhook: sync ingest failed");
-    return c.json(
-      { error: result.error },
-      result.status as 400 | 401 | 403 | 404 | 500 | 502 | 503
-    );
-  }
-
-  return c.json({
-    ok: true,
-    entitiesProcessed: result.created + result.updated,
-    created: result.created,
-    updated: result.updated,
-    skipped: result.skipped,
-  });
-});
-
-// ---------------------------------------------------------------------------
-// POST /disconnect — Mark external links as disconnected
-// ---------------------------------------------------------------------------
-
-connectorsRouter.post("/disconnect", async (c) => {
-  const body = await c.req.json().catch(() => null);
-  const parsed = z.object({ token: z.string().min(1) }).safeParse(body);
-
-  if (!parsed.success) {
-    return c.json({ error: "Invalid request body" }, 400);
-  }
-
-  const podPublicUrl = process.env.PUBLIC_URL;
-  if (!podPublicUrl) {
-    logger.error(
-      "connector disconnect refused: PUBLIC_URL not configured — audience check is mandatory"
-    );
-    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
-  }
-
-  let cpUrl: string | undefined;
-  try {
-    const db = await getDb();
-    const ws = await db.query.workspaces.findFirst({
-      columns: { settings: true },
-    });
-    const cp = (ws?.settings as Record<string, unknown> | null)
-      ?.controlPlane as { url?: string } | undefined;
-    cpUrl = cp?.url;
-  } catch {
-    /* fall through */
-  }
-
-  const payload = await verifyCpJwtWithTrust<{
-    type: string;
-    podId: string;
-    provider: string;
-    nangoConnectionId: string;
-  }>(parsed.data.token, {
-    pinnedIssuer: cpUrl,
-    audience: podPublicUrl,
-  });
-
-  if (!payload || payload.type !== "connector_disconnect") {
-    return c.json({ error: "Invalid or expired token" }, 401);
-  }
-
-  const { provider, nangoConnectionId } = payload;
-  const database = await getDb();
-
-  // Mark all external links for this connection as disconnected
-  const result = await database
-    .update(entityExternalLinks)
-    .set({
-      status: "disconnected",
-      disconnectedAt: new Date(),
-    })
+  const [conn] = await database
+    .select({ id: secrets.id })
+    .from(secrets)
     .where(
       and(
-        eq(entityExternalLinks.nangoConnectionId, nangoConnectionId),
-        eq(entityExternalLinks.status, "active")
+        eq(secrets.accountHint, brokerConnectionId),
+        eq(secrets.userId, podUserId),
+        isNotNull(secrets.capabilityId),
+        isNull(secrets.deletedAt)
       )
     )
-    .returning({ id: entityExternalLinks.id });
+    .limit(1);
+  return conn ?? null;
+}
 
-  logger.info(
-    { provider, nangoConnectionId, disconnectedCount: result.length },
-    "External links marked as disconnected"
+// ---------------------------------------------------------------------------
+// POST /sync-trigger — CP webhook poke → enqueue the connection sync
+// ---------------------------------------------------------------------------
+
+const SyncTriggerClaimsSchema = z.object({
+  type: z.literal("connector_sync_trigger"),
+  providerConfigKey: z.string().min(1),
+  /** The broker's (Nango's) connection id — `secrets.accountHint` on the pod. */
+  connectionId: z.string().min(1),
+  podUserId: z.string().min(1),
+});
+
+connectorsRouter.post("/sync-trigger", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = z.object({ token: z.string().min(1) }).safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid request body" }, 400);
+  }
+
+  const podPublicUrl = process.env.PUBLIC_URL;
+  if (!podPublicUrl) {
+    logger.error(
+      "sync-trigger refused: PUBLIC_URL not configured — audience check is mandatory"
+    );
+    return c.json({ error: "PUBLIC_URL not configured; request refused" }, 500);
+  }
+
+  const payload = await verifyCpJwtWithTrust<Record<string, unknown>>(
+    parsed.data.token,
+    { pinnedIssuer: config.server.controlPlaneUrl, audience: podPublicUrl }
   );
+  const claims = SyncTriggerClaimsSchema.safeParse(payload);
+  if (!payload || !claims.success) {
+    return c.json({ error: "Invalid or expired token" }, 401);
+  }
+  const { providerConfigKey, connectionId, podUserId } = claims.data;
 
-  return c.json({
-    success: true,
-    disconnectedCount: result.length,
-  });
+  // The broker id names the account; the pod's connection registry row is the
+  // sync identity.
+  let conn = await findConnectionRow(connectionId, podUserId);
+  if (!conn) {
+    // The webhook can arrive before anything mirrored a fresh connection into
+    // the registry (OAuth finished with no client refetch). Mirror it now —
+    // inserting the row enqueues its first sync — and look again.
+    let mirrored: Awaited<ReturnType<typeof reconcileLiveConnections>>;
+    try {
+      // Reads the user's complete live list from the broker itself.
+      mirrored = await reconcileLiveConnections(podUserId);
+    } catch (err) {
+      mirrored = {
+        ok: false,
+        reason: "threw",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (!mirrored.ok) {
+      // Could not read the live list: retryable, and not the same fact as
+      // "this connection does not exist".
+      logger.warn(
+        { provider: providerConfigKey, podUserId, error: mirrored.error },
+        "sync-trigger: connection not mirrored and the live list is unreadable"
+      );
+      return c.json({ error: "Connection broker unavailable" }, 503);
+    }
+    conn = await findConnectionRow(connectionId, podUserId);
+  }
+  if (!conn) {
+    // The CP retries a 404 a bounded number of times, so a miss while a
+    // connection is still settling is expected, not a failure.
+    logger.warn(
+      { provider: providerConfigKey, podUserId },
+      "sync-trigger: no matching connection on this pod"
+    );
+    return c.json({ error: "No matching connection on this pod" }, 404);
+  }
+
+  try {
+    await enqueueConnectionSync({
+      provider: providerConfigKey,
+      connectionId: conn.id,
+      reason: "webhook",
+    });
+  } catch (err) {
+    // Queue down → 503 so the CP job retries; acking would drop the poke.
+    logger.error(
+      { err, provider: providerConfigKey },
+      "sync-trigger: enqueue failed"
+    );
+    return c.json({ error: "Sync queue unavailable" }, 503);
+  }
+
+  return c.json({ accepted: true, connectionId: conn.id }, 202);
 });

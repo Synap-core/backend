@@ -1,6 +1,8 @@
 import { syncConnectorRegistry } from "./SyncConnector.js";
 import { enrichmentProviderRegistry } from "./EnrichmentProvider.js";
 import { NangoConnector } from "./NangoConnector.js";
+import { CpBrokerConnector } from "./CpBrokerConnector.js";
+import type { ConnectionBroker } from "./ConnectionBroker.js";
 import { ApifyProvider } from "./ApifyProvider.js";
 import { ApolloProvider } from "./ApolloProvider.js";
 import { UnipileConnector } from "./UnipileConnector.js";
@@ -20,8 +22,9 @@ import {
   upsertServiceSecret,
   isServerVaultAvailable,
   getDb,
+  resolveVaultReferences,
 } from "@synap/database";
-import { createLogger } from "@synap-core/core";
+import { config, createLogger } from "@synap-core/core";
 
 const connectorsLogger = createLogger({ module: "connectors" });
 
@@ -343,6 +346,244 @@ export async function resolveNangoConnector(): Promise<NangoConnector | null> {
   return result.ok ? result.connector : null;
 }
 
+// ── The broker seam (`nango://`) ────────────────────────────────────────────
+//
+// A CP-managed pod holds NO Nango key: the Control Plane brokers every call in
+// the pod's `<podId>:<podUserId>` namespace. A self-hosted pod brokers with its
+// own vault key. `resolveBroker` is the ONE door every connection caller uses;
+// the callers never branch on which one answered.
+
+/** Where the resolved broker came from — surfaced by status/diagnose doors. */
+export type BrokerSource = NangoConfigSource | "control-plane";
+
+export type BrokerResolveResult =
+  | { ok: true; broker: ConnectionBroker; source: BrokerSource }
+  | {
+      ok: false;
+      reason:
+        | "not-configured"
+        | "vault-unreadable"
+        | "db-unavailable"
+        | "broker-credential-missing"
+        | "unsupported-scheme";
+      error: string;
+    };
+
+type CpBrokerResolution =
+  | { kind: "not-managed" }
+  | { kind: "ok"; broker: CpBrokerConnector }
+  | {
+      kind: "fault";
+      reason: "broker-credential-missing" | "db-unavailable";
+      error: string;
+    };
+
+/**
+ * The name the Control Plane seeds its relay credential under — mirrored from
+ * the CP's `seedRelaySourceConfig` (synap-control-plane-api
+ * services/provisioning/source-config-seed.ts). A `cp-relay` config an admin
+ * creates under any other name is never read as the broker credential.
+ */
+export const CP_RELAY_SOURCE_NAME = "Synap Relay (CP-managed)";
+
+/** How many recent seeded relay rows are considered when picking the live key. */
+const RELAY_ROW_CANDIDATES = 5;
+
+/**
+ * Is this pod's connection broker the Control Plane? Decided by SERVER env only
+ * (`CONTROL_PLANE_URL`, empty on a pod never connected to a CP) — never by
+ * workspace settings, which editors can change and a routine settings save can
+ * erase. `SYNAP_CONNECTOR_BROKER=local` is the explicit operator opt-out for a
+ * CP-connected pod that brokers through its own Nango.
+ */
+export function isControlPlaneBrokered(): boolean {
+  return (
+    !!config.server.controlPlaneUrl &&
+    process.env.SYNAP_CONNECTOR_BROKER !== "local"
+  );
+}
+
+/**
+ * The CP broker client for a Control-Plane-brokered pod, or `not-managed`.
+ *
+ * The pod's credential is its CP-issued relay JWT — the SAME pod credential the
+ * CP relay verifies (`type:"pod_relay"`, podId claim) — delivered into the
+ * `cp-relay` source config as a vault ref. `CP_RELAY_KEY` / `SOURCE_RELAY_KEY`
+ * override it, mirroring the relay's own resolution. A brokered pod WITHOUT that
+ * credential is a FAULT, never "not configured".
+ */
+async function resolveCpBroker(): Promise<CpBrokerResolution> {
+  // The URL the pod's relay credential is sent to comes from server config
+  // ONLY. A workspace-settings URL would let an editor redirect the pod-wide
+  // key to a host they control.
+  const cpUrl = config.server.controlPlaneUrl;
+  if (!cpUrl) return { kind: "not-managed" };
+
+  let relayKey = process.env.CP_RELAY_KEY || process.env.SOURCE_RELAY_KEY;
+  if (!relayKey) {
+    try {
+      // The CP rotates by delivering a fresh seeded row through a create-only
+      // door. Of the most recent SEEDED rows, take the key that lives longest.
+      const rows = await db.query.sourceConfigs.findMany({
+        where: (t, { and, eq }) =>
+          and(
+            eq(t.providerType, "cp-relay"),
+            eq(t.name, CP_RELAY_SOURCE_NAME),
+            eq(t.enabled, true)
+          ),
+        orderBy: (t, { desc }) => [desc(t.createdAt)],
+        limit: RELAY_ROW_CANDIDATES,
+        columns: { config: true, userId: true },
+      });
+      let best: { key: string; exp: number } | null = null;
+      for (const row of rows) {
+        const ref = (row.config as Record<string, unknown> | undefined)
+          ?.relayKey;
+        if (typeof ref !== "string") continue;
+        const resolved = await resolveVaultReferences(
+          { relayKey: ref },
+          row.userId
+        );
+        const key = resolved.relayKey;
+        if (!key) continue;
+        const exp = relayKeyExpiry(key)?.getTime() ?? 0;
+        if (!best || exp > best.exp) best = { key, exp };
+      }
+      relayKey = best?.key;
+    } catch (err) {
+      return {
+        kind: "fault",
+        reason: "db-unavailable",
+        error: `Could not read this pod's control plane credential: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
+  }
+  if (!relayKey) {
+    return {
+      kind: "fault",
+      reason: "broker-credential-missing",
+      error: (await holdsLocalNangoKey())
+        ? "CONTROL_PLANE_URL is set, so this pod brokers connections through that control plane — but it holds no relay credential from it. This pod also has its own Nango key: to broker through that key instead, set SYNAP_CONNECTOR_BROKER=local on the pod and restart it."
+        : "This pod is managed by a control plane but holds no relay credential, so it cannot reach its connection broker. Rotate the pod's relay key from the control plane.",
+    };
+  }
+  // Read (not verify — the CP verifies) the key's expiry, so a lapsed key is a
+  // legible fault here instead of an opaque 401 from the broker.
+  const expiresAt = relayKeyExpiry(relayKey);
+  if (expiresAt && expiresAt.getTime() <= Date.now()) {
+    return {
+      kind: "fault",
+      reason: "broker-credential-missing",
+      error: `This pod's control plane credential expired on ${expiresAt.toISOString()}. The control plane re-issues it automatically every 20 days (rotate-pod-relay-keys); if this persists, rotate the pod's relay key from the control plane.`,
+    };
+  }
+  return { kind: "ok", broker: new CpBrokerConnector({ cpUrl, relayKey }) };
+}
+
+/**
+ * Does this pod hold its OWN Nango key (vault, env or legacy settings)? Only
+ * sharpens a fault message — a pod that is CP-brokered by mistake names the
+ * `SYNAP_CONNECTOR_BROKER=local` opt-out instead of telling a self-hoster to
+ * rotate a relay key it never had. A failed read counts as "no".
+ */
+async function holdsLocalNangoKey(): Promise<boolean> {
+  if (process.env.NANGO_SECRET_KEY) return true;
+  const local = await resolveNangoConnectorResult().catch(() => null);
+  return local?.ok === true;
+}
+
+let loggedBrokerChoice = false;
+
+/** Log which broker this process uses, and why — once, on first resolution. */
+function logBrokerChoiceOnce(result: BrokerResolveResult): void {
+  if (loggedBrokerChoice) return;
+  loggedBrokerChoice = true;
+  const brokered = isControlPlaneBrokered();
+  connectorsLogger.info(
+    {
+      broker: result.ok ? result.source : null,
+      fault: result.ok ? null : result.reason,
+      why: brokered
+        ? "CONTROL_PLANE_URL is set (opt out with SYNAP_CONNECTOR_BROKER=local)"
+        : config.server.controlPlaneUrl
+          ? "SYNAP_CONNECTOR_BROKER=local overrides CONTROL_PLANE_URL"
+          : "no CONTROL_PLANE_URL — this pod's own Nango key",
+    },
+    "Connection broker resolved"
+  );
+}
+
+/** The `exp` of a JWT, unverified, or null when it cannot be read. */
+function relayKeyExpiry(jwt: string): Date | null {
+  const payload = jwt.split(".")[1];
+  if (!payload) return null;
+  try {
+    const exp = JSON.parse(
+      Buffer.from(payload, "base64url").toString("utf8")
+    )?.exp;
+    return typeof exp === "number" ? new Date(exp * 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the connection broker for a credential scheme. Never throws.
+ *
+ * Precedence:
+ *   1. A pod brokered by a Control Plane (`isControlPlaneBrokered`, server env)
+ *      → the CP broker, full stop. No local key tier is consulted: not env or
+ *      legacy settings (the shared host key is the cross-pod exposure the
+ *      broker removes), not the vault (an unreadable nango vault row must not
+ *      break a managed pod, and a vaulted key must not silently take over).
+ *   2. Otherwise → this pod's own Nango key (vault → env → legacy settings).
+ * A resolver FAULT is returned as a fault, never as "not configured".
+ */
+export async function resolveBroker(
+  scheme = "nango"
+): Promise<BrokerResolveResult> {
+  if (scheme !== "nango") {
+    return {
+      ok: false,
+      reason: "unsupported-scheme",
+      error: `No connection broker handles "${scheme}://"`,
+    };
+  }
+
+  const result = await resolveBrokerFor();
+  logBrokerChoiceOnce(result);
+  return result;
+}
+
+async function resolveBrokerFor(): Promise<BrokerResolveResult> {
+  if (isControlPlaneBrokered()) {
+    if (process.env.NANGO_SECRET_KEY) warnManagedPodHoldsNangoKey("env");
+    const cp = await resolveCpBroker();
+    if (cp.kind === "ok") {
+      return { ok: true, broker: cp.broker, source: "control-plane" };
+    }
+    if (cp.kind === "fault") {
+      return { ok: false, reason: cp.reason, error: cp.error };
+    }
+  }
+
+  const local = await resolveNangoConnectorResult();
+  if (local.ok) {
+    return { ok: true, broker: local.connector, source: local.source };
+  }
+  return local;
+}
+
+function warnManagedPodHoldsNangoKey(source: NangoConfigSource): void {
+  const key = `managed:${source}`;
+  if (warnedNangoSources.has(key)) return;
+  warnedNangoSources.add(key);
+  connectorsLogger.warn(
+    { source },
+    "This pod is control-plane managed but still carries a Nango key (env/legacy settings). It is ignored — the control plane brokers connections. Remove NANGO_SECRET_KEY from this pod."
+  );
+}
+
 /**
  * Warn (once per process) that Nango is being served from a DEPRECATED tier.
  *
@@ -381,8 +622,14 @@ export async function migrateNangoEnvToVault(): Promise<{
     | "vault-already-set"
     | "no-env"
     | "no-owner"
-    | "vault-unavailable";
+    | "vault-unavailable"
+    | "control-plane-brokered";
 }> {
+  // A CP-brokered pod's env key is the SHARED host key: vaulting it would plant
+  // exactly the un-namespaced credential the broker exists to remove.
+  if (isControlPlaneBrokered()) {
+    return { migrated: false, reason: "control-plane-brokered" };
+  }
   const envKey = process.env.NANGO_SECRET_KEY;
   if (!envKey) return { migrated: false, reason: "no-env" };
 
@@ -488,6 +735,24 @@ export type {
   SyncConnectorSession,
   SyncConnectorConnection,
 } from "./SyncConnector.js";
+
+export type {
+  BrokerMode,
+  BrokerProbeResult,
+  BrokerProxyParams,
+  BrokerProxyResult,
+  ConnectionBroker,
+} from "./ConnectionBroker.js";
+export {
+  CpBrokerConnector,
+  BrokerRefusalError,
+  BrokerConnectionNotFoundError,
+} from "./CpBrokerConnector.js";
+export {
+  SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
+  preserveServerOwnedSettings,
+  stripServerOwnedSettings,
+} from "./server-owned-settings.js";
 
 export type {
   EnrichmentProvider,

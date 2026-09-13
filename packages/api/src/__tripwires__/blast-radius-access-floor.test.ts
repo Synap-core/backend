@@ -169,9 +169,17 @@ describe("tripwire: blastRadius never understates the blast radius", () => {
    */
   it("the per-connection count is bound to the caller AND to the tool", () => {
     const proc = blastRadiusProcedure().replace(/\s+/g, " ");
-    // Bound to the tool's provider and owned by the caller, else 404.
-    expect(proc).toContain("connectionProvider !== toolProvider");
-    expect(proc).toContain("input.connectionId.startsWith(`${userId}:`)");
+    // Bound to one of the CALLER's registry rows (owner predicate) whose
+    // capability THIS tool is a member of (tool + member_of predicates), else 404.
+    //
+    // NOT COVERED: these pin literals inside the blastRadius slice, not the SQL
+    // semantics. A predicate that is present but mis-joined (e.g. the member_of
+    // join on the wrong column), or wrapped in an `or(...)` that neutralises it,
+    // still passes; so does moving the binding into a helper this slice cannot see
+    // (which would go red, not silently green, only if the literal leaves the slice).
+    expect(proc).toContain("eq(secrets.userId, userId)");
+    expect(proc).toContain("eq(links.fromId, input.toolId)");
+    expect(proc).toContain('eq(links.linkType, "member_of")');
     expect(proc).toContain('message: "Connection not found for this tool"');
     // And the count itself only ever sees entities the caller can see.
     expect(proc).toContain(

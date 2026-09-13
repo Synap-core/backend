@@ -77,6 +77,12 @@ export interface ResolveAgentGovernanceInput {
   /** Force a proposal even on an otherwise auto-approved write (chat door). Automation omits. */
   forcePropose?: boolean;
   /**
+   * Rung 2.07 — the write links a required field or a default onto a
+   * pod-admin-owned kind and its principal is not a pod admin (chat door,
+   * resolved in `permission-check.ts`). Automation omits.
+   */
+  podAdminSchemaChange?: boolean;
+  /**
    * The acting channel id, when the write is evaluated in a channel context
    * (chat door — an inbound-message agent turn). Threaded to rung 2.55's
    * origin-trust resolver (`resolveOriginTrust`). Absent → no channel context →
@@ -117,7 +123,7 @@ interface GovernanceRuleCandidate {
   id: string;
   principalKind: "agent" | "any";
   scopeKind: "workspace" | "pod";
-  targetKind: "action" | "profile" | "capability";
+  targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
   verdict: "auto" | "propose";
@@ -163,6 +169,11 @@ function scoreRuleTarget(
     if (matchesActionPattern(eventKey, [rule.targetPattern])) return 1;
     return undefined;
   }
+  // A CONNECTION rule governs sync writes only — resolved by
+  // `resolveConnectionSyncDecision` (connection-governance.ts), never here. Its
+  // pattern is a secrets row id, so letting it fall through to the capability arm
+  // below would make it match any caller that passed that id as a capabilityId.
+  if (rule.targetKind === "connection") return undefined;
   // targetKind === "capability" — match the row id (legacy/back-compat) OR the
   // stable verb name (preferred; reinstall-safe). Same score either way: both
   // are exact-identity matches for "this exact capability", just keyed
@@ -183,7 +194,7 @@ export interface DraftGovernanceRuleTarget {
   agentUserId?: string | null;
   scopeKind: "pod" | "workspace";
   workspaceId?: string | null;
-  targetKind: "action" | "profile" | "capability";
+  targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile?: string | null;
   verdict: "auto" | "propose";
@@ -873,6 +884,7 @@ export async function resolveAgentGovernanceDecision(
     subjectProfileSlug: input.subjectProfileSlug,
     subjectUoValidated: input.subjectUoValidated,
     forcePropose: input.forcePropose,
+    podAdminSchemaChange: input.podAdminSchemaChange,
     governanceRuleVerdict: ruleMatch?.verdict,
     originTrust,
   };
@@ -1088,6 +1100,8 @@ function reasonToRung(reason: string): string {
       return "admin-actions";
     case PROPOSE_REASON.SCOPE_IDENTITY_CHANGE:
       return "force-propose";
+    case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:
+      return "pod-admin-schema-change";
     case PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR:
       return "destructive-actions-hard-floor";
     case PROPOSE_REASON.USER_OBSERVATION_INFERENCE:

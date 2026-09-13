@@ -36,7 +36,74 @@
 
 import { auditLog } from "./audit-log.js";
 import { emitSideEffects, type SideEffectPayload } from "@synap/events";
-import type { EventRecord } from "@synap/database";
+import { isConnectionSyncProposal, type EventRecord } from "@synap/database";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "domain-mutation" });
+
+/**
+ * proposalId → "is it a connection-sync proposal". Approving one import graph
+ * materializes up to hundreds of entities, each naming the same proposal, so the
+ * in-flight PROMISE is memoized (one read per proposal, not per entity). Only
+ * settled-true/false results are kept; a failed read is evicted so the next
+ * mutation retries. Bounded; entries expire.
+ */
+const SYNC_PROPOSAL_TTL_MS = 5 * 60_000;
+const SYNC_PROPOSAL_MAX = 500;
+const syncProposalMemo = new Map<
+  string,
+  { at: number; value: Promise<boolean> }
+>();
+
+function lookupSyncProposal(proposalId: string): Promise<boolean> {
+  const now = Date.now();
+  const hit = syncProposalMemo.get(proposalId);
+  if (hit && now - hit.at < SYNC_PROPOSAL_TTL_MS) return hit.value;
+  if (syncProposalMemo.size >= SYNC_PROPOSAL_MAX) syncProposalMemo.clear();
+  const value = isConnectionSyncProposal(proposalId);
+  syncProposalMemo.set(proposalId, { at: now, value });
+  value.catch(() => syncProposalMemo.delete(proposalId));
+  return value;
+}
+
+/**
+ * The fan-out origin for this mutation. An explicit `opts.origin` wins. Otherwise
+ * a write that names a proposal carrying `data.connectionSync` (an approved sync
+ * import being materialized) is `"sync"` — this is how the approval path gets
+ * origin without knowing about sync.
+ *
+ * A FAILED lookup is logged at error level and resolves to no origin: the write
+ * already happened, and an automation firing on it is the pre-sync behaviour, so
+ * the failure is visible in logs rather than silently re-labelled.
+ */
+export async function resolveFanOutOrigin(
+  opts: Pick<DomainMutationOpts, "origin" | "proposalId" | "subjectType">
+): Promise<SideEffectPayload["origin"]> {
+  if (opts.origin) return opts.origin;
+  const proposalId = opts.proposalId;
+  if (!proposalId) return undefined;
+  const lookup = async () =>
+    (await lookupSyncProposal(proposalId)) ? ("sync" as const) : undefined;
+  try {
+    return await lookup();
+  } catch {
+    // ONE retry: a failed read is evicted from the memo, so this is a fresh read.
+    try {
+      return await lookup();
+    } catch (err) {
+      logger.error(
+        { err, proposalId, subjectType: opts.subjectType },
+        "connection-sync proposal lookup failed twice — emitting without origin (automations may fire)"
+      );
+      return undefined;
+    }
+  }
+}
+
+/** Test seam: drop memoized proposal lookups. */
+export function __resetSyncProposalMemo(): void {
+  syncProposalMemo.clear();
+}
 
 export interface DomainMutationOpts {
   subjectType: string;
@@ -69,6 +136,12 @@ export interface DomainMutationOpts {
   sessionId?: string | null;
   /** Automation chain context → the cycle / depth guard. */
   automationContext?: SideEffectPayload["automationContext"];
+  /**
+   * `"sync"` for a bulk mirror of an external source. Fan-out only: event
+   * automations skip it unless they opted in; index/embedding still run. See
+   * `SideEffectPayload.origin`.
+   */
+  origin?: SideEffectPayload["origin"];
   /** Side-effect / automation-matcher / webhook payload. */
   data?: Record<string, unknown>;
   /** Event-log payload. Defaults to `data`. */
@@ -105,35 +178,42 @@ export async function recordDomainMutation(
     throwOnError: opts.throwOnError,
   });
 
-  // Fire-and-forget fan-out — emitSideEffects self-isolates every reactor and
-  // swallows a missing queue, so this never rejects; the .catch is belt-and-braces.
-  emitSideEffects({
-    subjectType: opts.subjectType,
-    action: opts.action,
-    subjectId: opts.subjectId,
-    userId: opts.userId,
-    workspaceId: opts.workspaceId,
-    // PROVENANCE — the `events` row id this fan-out is about. THIS is the door
-    // that makes `automation_runs.trigger_event_id` (0256) non-NULL: the log
-    // append above is already awaited, so its `EventRecord` is in hand here and
-    // naming it costs no extra query. Nothing else on the first-party path
-    // could supply it — `emitSideEffects` has no events row of its own, which
-    // is exactly why the column read NULL for every event-fired run.
-    //
-    // `null` when the best-effort append failed: an emit with no log row must
-    // claim no event rather than a stale or guessed one.
-    //
-    // ⚠️ TOP-LEVEL, never `data.eventId` — that key is the first thing
-    // `resolveAutomationEventFingerprintId` reads, so a unique id there would
-    // give every event a unique fingerprint and silently disable the
-    // exactly-once claim. See `SideEffectPayload.eventId`.
-    eventId: record?.id ?? null,
-    sessionId: opts.sessionId ?? null,
-    automationContext: opts.automationContext,
-    data: opts.data,
-  }).catch(() => {
-    /* reactors log their own failures; nothing to do here */
-  });
+  // Fire-and-forget fan-out. The origin lookup runs INSIDE the chain: it must
+  // resolve before the matcher job is enqueued, but the caller never waits on it.
+  // `resolveFanOutOrigin` never rejects and emitSideEffects self-isolates every
+  // reactor, so the .catch is belt-and-braces.
+  void resolveFanOutOrigin(opts)
+    .then((origin) =>
+      emitSideEffects({
+        subjectType: opts.subjectType,
+        action: opts.action,
+        subjectId: opts.subjectId,
+        userId: opts.userId,
+        workspaceId: opts.workspaceId,
+        // PROVENANCE — the `events` row id this fan-out is about. THIS is the door
+        // that makes `automation_runs.trigger_event_id` (0256) non-NULL: the log
+        // append above is already awaited, so its `EventRecord` is in hand here and
+        // naming it costs no extra query. Nothing else on the first-party path
+        // could supply it — `emitSideEffects` has no events row of its own, which
+        // is exactly why the column read NULL for every event-fired run.
+        //
+        // `null` when the best-effort append failed: an emit with no log row must
+        // claim no event rather than a stale or guessed one.
+        //
+        // ⚠️ TOP-LEVEL, never `data.eventId` — that key is the first thing
+        // `resolveAutomationEventFingerprintId` reads, so a unique id there would
+        // give every event a unique fingerprint and silently disable the
+        // exactly-once claim. See `SideEffectPayload.eventId`.
+        eventId: record?.id ?? null,
+        sessionId: opts.sessionId ?? null,
+        automationContext: opts.automationContext,
+        ...(origin ? { origin } : {}),
+        data: opts.data,
+      })
+    )
+    .catch(() => {
+      /* reactors log their own failures; nothing to do here */
+    });
 
   return record;
 }

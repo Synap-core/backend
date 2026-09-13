@@ -1,0 +1,17 @@
+-- 0259_entity_external_links_url.sql
+--
+-- Where a mirrored record LIVES in its source app.
+--
+-- `entity_external_links` already maps an entity to its external record
+-- (provider + external_id) but not to the provider's own web address, so
+-- "open in source" had to reconstruct a URL from the id — a guess, and wrong for
+-- providers whose URLs are not id-shaped (a Google Calendar event's `htmlLink`
+-- encodes the calendar, not just the event id).
+--
+-- `url` is captured at sync time from the provider's own payload. NULL means the
+-- provider gave none; the Places resolver then reports "no external target"
+-- rather than inventing one.
+--
+-- Additive and nullable: every existing row reads NULL, which is the honest
+-- value for a link written before this column existed.
+ALTER TABLE "entity_external_links" ADD COLUMN IF NOT EXISTS "url" text;

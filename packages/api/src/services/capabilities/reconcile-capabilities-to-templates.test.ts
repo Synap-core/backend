@@ -409,4 +409,73 @@ describe("reconcileCapabilitiesToTemplates — earned contentHash stamp", () => 
     expect(report.applied[0]!.reason).toContain("verbCatalogDrift=[toolA]");
     expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
   });
+
+  it("applies a template that only ADDED tools[].metadata defaults — never stamps it clean", async () => {
+    loadCapabilityTemplate.mockResolvedValue({
+      ...templateDef,
+      contentHash: "hash-v2",
+      tools: [
+        {
+          name: "toolA",
+          metadata: {
+            sync: { enabled: true, kinds: { event: { windowDays: 90 } } },
+          },
+        },
+      ],
+    });
+    state.containersRows = [
+      {
+        id: "container-1",
+        name: "Test Capability",
+        createdBy: "user-1",
+        workspaceId: null,
+        metadata: {
+          templateKey: "tmpl-key",
+          contentHash: "hash-v1",
+          comparatorVersion: DRIFT_COMPARATOR_VERSION,
+        },
+      },
+    ];
+    // Skills and verb catalog already converged; the live tool carries runtime
+    // state but none of the template's new defaults.
+    state.memberToolRows = [
+      { name: "toolA", metadata: { discord: { channel: "c1" } } },
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped).toHaveLength(0);
+    expect(report.applied).toHaveLength(1);
+    expect(report.applied[0]!.reason).toContain("toolMergeDrift=[toolA]");
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+  });
+
+  it("a user override of a declared tool default is not drift — no re-apply", async () => {
+    loadCapabilityTemplate.mockResolvedValue({
+      ...templateDef,
+      contentHash: "hash-v2",
+      tools: [{ name: "toolA", metadata: { sync: { enabled: true } } }],
+    });
+    state.containersRows = [
+      {
+        id: "container-1",
+        name: "Test Capability",
+        createdBy: "user-1",
+        workspaceId: null,
+        metadata: { templateKey: "tmpl-key", contentHash: "hash-v1" },
+      },
+    ];
+    state.memberToolRows = [
+      { name: "toolA", metadata: { sync: { enabled: false } } },
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped[0]!.reason).toBe("no drift");
+    expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
+  });
 });

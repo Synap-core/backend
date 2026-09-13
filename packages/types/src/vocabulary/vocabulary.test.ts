@@ -288,6 +288,8 @@ describe("tripwire: no raw machine token reaches a title", () => {
     "governance.tighten_lane",
     "governance.raise_ceiling",
     "governance.tighten_posture",
+    "governance.structure_guideline",
+    "governance.work_guideline",
     "messaging.external.send",
     "vault.request",
     "channel.mcp.add",
@@ -342,6 +344,22 @@ describe("resolveStatusLabel", () => {
     // (session progress / sync freshness / broken binding), so a GLOBAL table
     // must not impose one reading.
     expect(resolveStatusLabel("stale")).toBe("Stale");
+  });
+
+  it("names every connection-sync phase (no humanized fallback)", () => {
+    expect(resolveStatusLabel("fetching")).toBe("Fetching");
+    expect(resolveStatusLabel("mapping")).toBe("Matching");
+    // humanizeToken would say "Review ready" — a label about the mechanism.
+    expect(resolveStatusLabel("review_ready")).toBe("Ready to review");
+    expect(resolveStatusLabel("synced")).toBe("Synced");
+    expect(resolveStatusLabel("failed")).toBe("Failed");
+  });
+
+  it("names external connection states", () => {
+    expect(resolveStatusLabel("connected")).toBe("Connected");
+    // humanizeToken would say "Disconnected" — a past event, not a state.
+    expect(resolveStatusLabel("disconnected")).toBe("Not connected");
+    expect(resolveStatusLabel("unavailable")).toBe("Not available");
   });
 
   it("humanizes an unknown status instead of leaking it", () => {
@@ -399,6 +417,8 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     "governance_tighten",
     "governance_raise_ceiling",
     "governance_tighten_posture",
+    "governance_structure_guideline",
+    "governance_work_guideline",
     "capability_run",
     "automation_run",
     "dev_plan_approval",
@@ -423,6 +443,14 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
     );
     expect(resolveProposalKindLabel("governance_tighten_posture")).toBe(
       "Tighten posture"
+    );
+    // humanizeToken would say "Governance structure guideline" — the mechanism,
+    // not what the reviewer is being asked to adopt.
+    expect(resolveProposalKindLabel("governance_structure_guideline")).toBe(
+      "Extraction guideline"
+    );
+    expect(resolveProposalKindLabel("governance_work_guideline")).toBe(
+      "Work guideline"
     );
   });
 
@@ -472,11 +500,22 @@ describe("resolveProposalKindLabel — all 14 ProposalKind values", () => {
       "governance_tighten",
       "governance_raise_ceiling",
       "governance_tighten_posture",
+      "governance_structure_guideline",
+      "governance_work_guideline",
       "capability_run",
       "automation_run",
     ]) {
       expect(PROPOSAL_KIND_LABELS[kind], kind).toBeTruthy();
     }
+  });
+});
+
+describe("rerun — the intake run verb", () => {
+  it("carries BOTH moods: the button says Rerun, the receipt says Reran", () => {
+    expect(resolveActionLabel("rerun", "imperative")).toBe("Rerun");
+    // humanizeToken ignores the mood and would put "Rerun" into a past-tense
+    // history row — this assertion is what proves the table row exists.
+    expect(resolveActionLabel("rerun", "past")).toBe("Reran");
   });
 });
 

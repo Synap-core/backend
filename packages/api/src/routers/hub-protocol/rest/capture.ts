@@ -20,6 +20,7 @@ import { db } from "@synap/database";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
+import { loadRouteSuggestions } from "../../../services/routing/load-route-suggestions.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
 import {
   buildDegradedNextStep,
@@ -340,13 +341,30 @@ export function registerCaptureRoutes(app: HubHono): void {
     const { userId } = acting;
 
     try {
-      // Byte-identical payload to trpc.import.enqueueLargeImport — the worker
-      // reads exactly these four fields (ImportCorpusPayload).
+      // The run room exists BEFORE the job is queued and the job names it, so a
+      // session cancel can find a corpus that has not started. The verified
+      // `X-Session-Id` when present, else a minted intake session.
+      const { resolveImportSession } =
+        await import("../../../services/import/session.js");
+      const session = await resolveImportSession(
+        {
+          workspaceId: acting.workspaceId ?? null,
+          userId,
+          trpcCtx: {},
+        },
+        {
+          source: body.source as never,
+          items: body.items,
+          sessionId: (c.get("sessionId") as string | undefined) ?? null,
+        }
+      );
+      // Same payload as trpc.import.enqueueLargeImport (ImportCorpusPayload).
       const jobId = await getBoss().send(IMPORT_CORPUS_QUEUE, {
         userId,
         workspaceId: acting.workspaceId,
         source: body.source,
         items: body.items,
+        ...(session.sessionId ? { sessionId: session.sessionId } : {}),
       });
 
       logger.info(
@@ -366,6 +384,9 @@ export function registerCaptureRoutes(app: HubHono): void {
           jobId,
           itemCount: body.items.length,
           workspaceId: acting.workspaceId,
+          sessionId: session.sessionId,
+          sessionSource: session.sessionSource,
+          requestedSessionIgnored: session.requestedSessionIgnored,
         },
         202
       );
@@ -576,10 +597,15 @@ export function registerCaptureRoutes(app: HubHono): void {
 
     try {
       const scopes = c.get("scopes") as string[];
+      // The verified `X-Session-Id` (sessionMiddleware) is the room this
+      // structure call files into; absent/unowned → `capture.structure` mints
+      // one and returns its id as `sessionId`.
       const ctx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        workspaceId
+        workspaceId,
+        null,
+        (c.get("sessionId") as string | undefined) ?? null
       );
       const caller = captureRouter.createCaller(
         ctx as Parameters<typeof captureRouter.createCaller>[0]
@@ -646,9 +672,14 @@ export function registerCaptureRoutes(app: HubHono): void {
           sourceUrl: body.url,
         });
 
+        // The run room structure ensured — the pending proposal files into it,
+        // so the session IS the review pack (intake decision 1).
+        const runSessionId = (result as { sessionId?: string | null })
+          .sessionId;
         const graph = await submitCaptureGraph({
           userId,
           workspaceId: targetWorkspaceId,
+          ...(runSessionId ? { sessionId: runSessionId } : {}),
           entities,
           relations,
           ...(structureRawSource ? { rawSource: structureRawSource } : {}),
@@ -688,7 +719,16 @@ export function registerCaptureRoutes(app: HubHono): void {
           graph.writeReceipt.state === "pending"
             ? "awaiting_confirmation"
             : captureStatusForReceiptState(graph.writeReceipt.state);
+        // Suggest-and-confirm routing for what this capture PROPOSES, ranked
+        // against what the user typed. Suggestions only — nothing runs.
+        const routeSuggestions = await loadRouteSuggestions({
+          ctx: ctx as unknown as Record<string, unknown>,
+          workspaceId: targetWorkspaceId ?? workspaceId,
+          entities: entities.map((e) => ({ profileSlug: e.profileSlug })),
+          intentText: body.text,
+        });
         return c.json({
+          routeSuggestions,
           proposalId: graph.proposalId,
           reviewUrl: graph.reviewUrl,
           status: structureStatus,
@@ -698,6 +738,11 @@ export function registerCaptureRoutes(app: HubHono): void {
           bindingCount: graph.bindingCount,
           applied: graph.applied,
           writeReceipt: graph.writeReceipt,
+          // The session actually used + what was recorded for the run.
+          sessionId: runSessionId ?? null,
+          ...((result as { intake?: unknown }).intake
+            ? { intake: (result as { intake?: unknown }).intake }
+            : {}),
           ...(graph.projectCandidate
             ? { projectCandidate: graph.projectCandidate }
             : {}),
@@ -736,7 +781,7 @@ export function registerCaptureRoutes(app: HubHono): void {
         const question = followUpRead.question;
         const suggestions = followUpRead.suggestions;
         return c.json({
-          ...(result as Record<string, unknown>),
+          ...(result as unknown as Record<string, unknown>),
           status: "needs_input",
           pendingQuestion: {
             question: question ?? CAPTURE_FOLLOW_UP_FALLBACK,
@@ -777,7 +822,7 @@ export function registerCaptureRoutes(app: HubHono): void {
           typeof degradedReason === "string" ? degradedReason : undefined;
         const salvage = (result as { proposals?: unknown }).proposals;
         return c.json({
-          ...(result as Record<string, unknown>),
+          ...(result as unknown as Record<string, unknown>),
           // NOT a receipt status: no graph was submitted, so there is no
           // `writeReceipt.state` to derive from and forcing this through
           // `captureStatusForReceiptState` would be a claim about a write that
@@ -1040,10 +1085,17 @@ export function registerCaptureRoutes(app: HubHono): void {
 
     try {
       const scopes = c.get("scopes") as string[];
+      // The acting AGENT rides the context: applying an import proposal IS an
+      // approval, and review authority refuses an agent principal (approval is
+      // the human step). Without it an agent key approved its own import as
+      // the human it is linked to.
       const trpcCtx = await createHubProtocolCallerContext(
         userId,
         scopes,
-        workspaceId
+        workspaceId,
+        null,
+        null,
+        (c.get("agentUserId") as string | undefined) ?? null
       );
       const orchestrator = new ImportOrchestrator({
         workspaceId: workspaceId ?? null,
@@ -1409,14 +1461,20 @@ export function registerCaptureRoutes(app: HubHono): void {
     // SHARED: ref-uniqueness + dangling-relation (fail loud — a dangling ref
     // would silently drop the link at materialization time). Rendered with this
     // door's exact wording + 400 shape.
-    const refIssue = validateCaptureGraphRefs(body.entities, relations);
-    if (refIssue) {
+    const refReport = validateCaptureGraphRefs(body.entities, relations);
+    if (refReport) {
       return c.json(
         {
-          error:
-            refIssue.kind === "duplicate-ref"
-              ? `duplicate entity ref: ${refIssue.ref}`
-              : `relation references an unknown ref: ${refIssue.sourceRef} -> ${refIssue.targetRef}`,
+          // Every problem at once; `issues` + `declaredRefs` are additive.
+          error: refReport.issues
+            .map((issue) =>
+              issue.kind === "duplicate-ref"
+                ? `duplicate entity ref: ${issue.ref}`
+                : `relation references an unknown ref: ${issue.sourceRef} -> ${issue.targetRef}`
+            )
+            .join("; "),
+          issues: refReport.issues,
+          declaredRefs: refReport.declaredRefs,
         },
         400
       );

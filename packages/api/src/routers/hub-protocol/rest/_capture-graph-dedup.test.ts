@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   collapseDuplicateEntities,
+  validateCaptureGraphRefs,
   type CaptureGraphEntity,
   type CaptureGraphRelation,
   type CaptureGraphBinding,
@@ -215,5 +216,46 @@ describe("collapseDuplicateEntities", () => {
     const result = collapseDuplicateEntities(entities, [], []);
 
     expect(result.entities).toHaveLength(2);
+  });
+});
+
+describe("validateCaptureGraphRefs — every problem at once", () => {
+  it("returns null for a valid graph", () => {
+    expect(
+      validateCaptureGraphRefs(
+        [{ ref: "a" }, { ref: "b" }],
+        [{ sourceRef: "a", targetRef: "b" }]
+      )
+    ).toBeNull();
+  });
+
+  it("collects EVERY duplicate and dangling edge, not just the first, and lists the declared refs", () => {
+    const report = validateCaptureGraphRefs(
+      [{ ref: "a" }, { ref: "a" }, { ref: "a" }, { ref: "b" }, { ref: "b" }],
+      [
+        { sourceRef: "a", targetRef: "ghost" },
+        { sourceRef: "nope", targetRef: "nope" },
+        { sourceRef: "a", targetRef: "b" },
+      ]
+    );
+    expect(report).toEqual({
+      issues: [
+        { kind: "duplicate-ref", ref: "a" },
+        { kind: "duplicate-ref", ref: "b" },
+        {
+          kind: "unknown-relation-ref",
+          sourceRef: "a",
+          targetRef: "ghost",
+          unknownRefs: ["ghost"],
+        },
+        {
+          kind: "unknown-relation-ref",
+          sourceRef: "nope",
+          targetRef: "nope",
+          unknownRefs: ["nope"],
+        },
+      ],
+      declaredRefs: ["a", "b"],
+    });
   });
 });

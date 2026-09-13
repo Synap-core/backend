@@ -100,10 +100,19 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
     //     sourceProposalId = the proposal). Wave 5 router-decomposition
     //     (2026-08-12) moved this out of routers/proposals.ts — a path
     //     re-key, not a behavior change.
+    //   - database/src/utils/connection-governance.ts → `ensureConnectionAutoRule`,
+    //     reached only from the owner's approval of a connection's first import
+    //     (sourceProposalId = that proposal) or the owner's own keep-syncing
+    //     toggle. It writes ONE `targetKind: "connection"` row with no action
+    //     list, so there is nothing for `filterUncoveredActions` to diff. The
+    //     agent resolver skips connection rules (resolve-agent-governance-
+    //     decision.ts); only `resolveConnectionSyncDecision` reads them, through
+    //     `decideAgentPolicy`, so the floors still apply to every sync write.
     const ALLOWLIST = new Set(
       [
         "packages/api/src/routers/governance-rules.ts",
         "packages/api/src/routers/proposals/apply-approval.ts",
+        "packages/database/src/utils/connection-governance.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

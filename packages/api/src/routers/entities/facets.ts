@@ -15,6 +15,7 @@ import {
   getDb,
   eventRepository,
   FacetRepository,
+  ProfileResolutionService,
   resolveWorkspacePlacement,
   FacetProfileKindError,
   FacetKindMismatchError,
@@ -204,44 +205,39 @@ export const facetProcs = {
       // rejected here, not parked as a proposal that can never materialize.
       // FacetRepository remains the validation SSOT — this pre-check throws
       // the repository's own error classes so messages stay single-sourced.
+      //
+      // It judges the SAME ROW the executor will attach: `FacetRepository
+      // .attach` resolves `resolveProfile(profileId ?? profileSlug, userId,
+      // workspaceId ?? "")`, and this is that exact call. The old pre-check
+      // read EVERY row carrying the slug (no visibility floor, no is_active,
+      // no ORDER BY) and passed if ANY twin applied — so it could wave through
+      // an attach the executor then refused, or name an arbitrary twin in the
+      // error. Mirroring the executor keeps the two from disagreeing, whatever
+      // tie-break `getBySlug` applies.
       {
-        const candidates = await db.query.profiles.findMany({
-          where: input.profileId
-            ? eq(profiles.id, input.profileId)
-            : eq(profiles.slug, input.profileSlug!),
-          columns: {
-            id: true,
-            slug: true,
-            profileKind: true,
-            applicableKinds: true,
-          },
-        });
-        if (candidates.length > 0) {
-          const roleCandidates = candidates.filter(
-            (p) => p.profileKind === "role"
-          );
-          if (roleCandidates.length === 0) {
-            throw new FacetProfileKindError(
-              candidates[0].id,
-              candidates[0].slug
-            );
+        const target = await new ProfileResolutionService(db).resolveProfile(
+          input.profileId ?? input.profileSlug!,
+          ctx.userId,
+          facetWorkspaceId ?? ""
+        );
+        if (target) {
+          if (target.profileKind !== "role") {
+            throw new FacetProfileKindError(target.id, target.slug);
           }
-          const applies = roleCandidates.some(
-            (p) =>
-              !p.applicableKinds ||
-              p.applicableKinds.length === 0 ||
-              p.applicableKinds.includes(parent.type)
-          );
-          if (!applies) {
+          const applicableKinds = target.applicableKinds ?? [];
+          if (
+            applicableKinds.length > 0 &&
+            (!parent.type || !applicableKinds.includes(parent.type))
+          ) {
             throw new FacetKindMismatchError(
-              roleCandidates[0].slug,
-              parent.type,
-              roleCandidates[0].applicableKinds ?? []
+              target.slug,
+              parent.type ?? "(unknown)",
+              applicableKinds
             );
           }
         }
-        // No candidates → fall through; the repository reports NOT_FOUND with
-        // workspace-aware resolution on the granted path.
+        // Not resolvable → fall through; the repository reports NOT_FOUND from
+        // the same resolution.
       }
 
       // The ACTOR, resolved once for this door.
@@ -392,6 +388,8 @@ export const facetProcs = {
         entityTitle: parent.title,
         contextEntityTitle,
         automationContext: input.automationContext,
+        origin: ctx.origin,
+        proposalId: ctx.governanceProposalId,
       });
 
       return {
@@ -541,6 +539,8 @@ export const facetProcs = {
         sessionId: ctx.sessionId ?? null,
         entityTitle: parentForUpdate?.title,
         automationContext: input.automationContext,
+        origin: ctx.origin,
+        proposalId: ctx.governanceProposalId,
       });
 
       return { status: "updated" as const, message: "Facet updated", facet };
@@ -658,6 +658,8 @@ export const facetProcs = {
         sessionId: ctx.sessionId ?? null,
         entityTitle: parentForDetach?.title,
         automationContext: input.automationContext,
+        origin: ctx.origin,
+        proposalId: ctx.governanceProposalId,
       });
 
       return { status: "detached" as const, message: "Facet detached" };

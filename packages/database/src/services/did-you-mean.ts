@@ -40,6 +40,22 @@ function levenshtein(a: string, b: string, max = Infinity): number {
 }
 
 /**
+ * The case/separator FOLD every property-key comparison in this module uses:
+ * lower-case, then drop `-`, `_` and whitespace. `dueDate`, `due-date` and
+ * `due_date` all fold to `duedate`.
+ *
+ * Exported so a caller that needs fold-EQUALITY (not a fuzzy distance) — the
+ * seeder's retirement compare, approve-side reconciliation's canonical-row
+ * check — shares this exact rule instead of re-deriving a near-copy.
+ *
+ * A fold is only safe WITHIN ONE PROFILE's links: pod-wide, distinct fields
+ * legitimately fold together (`dueDate` on one profile, `due-date` on another).
+ */
+export function foldPropertyKey(key: string): string {
+  return key.toLowerCase().replace(/[-_\s]/g, "");
+}
+
+/**
  * Closest candidate to `input`, or undefined when nothing is close enough.
  *
  * Comparison is case-insensitive and ignores `-`/`_`/space, so the common
@@ -51,7 +67,7 @@ export function suggestClosest(
   input: string,
   candidates: readonly string[]
 ): string | undefined {
-  const fold = (s: string) => s.toLowerCase().replace(/[-_\s]/g, "");
+  const fold = foldPropertyKey;
   const target = fold(input);
   if (!target) return undefined;
 
@@ -84,7 +100,7 @@ export function closestWithDistance(
   input: string,
   candidates: readonly string[]
 ): { candidate: string; distance: number } | undefined {
-  const fold = (s: string) => s.toLowerCase().replace(/[-_\s]/g, "");
+  const fold = foldPropertyKey;
   const target = fold(input);
   if (!target) return undefined;
 

@@ -216,6 +216,26 @@ describe("handleA2AIResponseTrigger", () => {
     );
   });
 
+  it("forwards a server-built turnContext (a comment's resolved anchor) to the IS", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "revised",
+      error: null,
+      steps: [],
+    });
+    const turnContext = {
+      anchor: { version: 1, proposalId: "p-1", opRef: "t2", stale: true },
+    };
+
+    await handleA2AIResponseTrigger(baseJob({ turnContext }));
+
+    expect(mocks.requestHeadlessChatText).toHaveBeenCalledWith(
+      "http://is.local",
+      "key",
+      expect.objectContaining({ turnContext })
+    );
+  });
+
   it("persists assistant with aiSteps and finishes turn completed", async () => {
     mocks.insertReturning = [runningTurn()];
     const steps = [

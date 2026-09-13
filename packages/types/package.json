@@ -121,6 +121,10 @@
       "types": "./dist/imports/index.d.ts",
       "import": "./dist/imports/index.js"
     },
+    "./guidelines": {
+      "types": "./dist/guidelines/index.d.ts",
+      "import": "./dist/guidelines/index.js"
+    },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"

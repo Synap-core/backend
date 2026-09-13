@@ -24,7 +24,7 @@ export interface GovernanceRuleRow {
   agentLabel: string | null;
   scopeKind: "workspace" | "pod";
   workspaceId: string | null;
-  targetKind: "action" | "profile" | "capability";
+  targetKind: "action" | "profile" | "capability" | "connection";
   targetPattern: string;
   targetProfile: string | null;
   verdict: "auto" | "propose";
@@ -49,8 +49,24 @@ export function humanizeScope(
   return workspaceName ?? "This workspace";
 }
 
+export interface HumanizeTargetOptions {
+  /**
+   * Human label for a connection (registry row id → e.g. "Google"), resolved by
+   * the caller from `connectors.allConnections` (providerId). Absent or
+   * unresolved → "A connection". The raw uuid is never shown.
+   */
+  connectionLabel?: (connectionId: string) => string | undefined;
+}
+
 /** targetKind → a readable description of what the rule matches. */
-export function humanizeTarget(rule: GovernanceRuleRow): string {
+export function humanizeTarget(
+  rule: GovernanceRuleRow,
+  opts: HumanizeTargetOptions = {}
+): string {
+  if (rule.targetKind === "connection") {
+    const label = opts.connectionLabel?.(rule.targetPattern);
+    return label ? `Connection · ${label}` : "A connection";
+  }
   if (rule.targetKind === "capability") {
     return `Capability "${rule.targetPattern}"`;
   }

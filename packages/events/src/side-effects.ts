@@ -67,6 +67,22 @@ export interface SideEffectPayload {
    * `automation-trigger-matcher.fingerprint-provenance.test.ts`.
    */
   eventId?: string | null;
+  /**
+   * WHERE this mutation came from, when that changes who should react to it.
+   * `"sync"` = a bulk mirror of an external source (a connection sync run, or the
+   * approval of its grouped import proposal). Absent = an ordinary write.
+   *
+   * Read by exactly ONE consumer: the automation-trigger matcher, which skips
+   * event automations for a sync-origin payload unless the automation opted in
+   * (`triggerConfig.includeSyncOrigin === true`) — a 200-contact first sync must
+   * not fan out 200 enrollment runs. Every other reactor (search index,
+   * embedding, webhooks, …) ignores it, so mirrored records stay searchable.
+   * Pinned by `__tests__/side-effects.sync-origin.test.ts`.
+   *
+   * TOP-LEVEL, never `data.origin`: `data` is the automation-visible payload and
+   * feeds the D5 event fingerprint.
+   */
+  origin?: "sync";
 }
 
 // Re-export the reactor registry surface so future reactions can register
@@ -182,6 +198,9 @@ const automationTriggerMatchReactor: Reactor = {
       eventId: payload.eventId ?? null,
       automationContext: payload.automationContext,
       sessionId: payload.sessionId ?? null,
+      // Sync-origin payloads reach the matcher (so an opted-in automation can
+      // still fire); the matcher, not this reactor, decides who skips.
+      ...(payload.origin ? { origin: payload.origin } : {}),
       // CONFUSED-DEPUTY GUARD: carry the event's ACTOR as the causal-chain
       // producer. Agent-authored governed writes emit with `userId = agentUserId`
       // (the Hub write door collapses the two), so this IS the producing agent
@@ -243,6 +262,43 @@ const sessionRecapReactor: Reactor = {
   },
 };
 
+// 8. Connection sync approval — approving a connection's
+// first `import.graph` with "keep syncing" on mints the connection's `auto`
+// governance rule. Hangs off the ONE approved-proposal emit
+// (`emitProposalReviewed`), so no approval door needs to know about sync. The
+// payload carries no proposal type, so every approval enqueues; the worker loads
+// the row and no-ops for anything that is not a connection sync. Idempotent
+// (`ensureConnectionAutoRule`), so a redelivered job cannot mint a second rule.
+const connectionSyncApprovalReactor: Reactor = {
+  id: "connection-sync-approval",
+  match: (payload) =>
+    payload.subjectType === "proposal" && payload.action === "approved",
+  async handler(payload, { boss }) {
+    await enqueueConnectionSyncApproval(
+      { proposalId: payload.subjectId, userId: payload.userId },
+      boss
+    );
+  },
+};
+
+/**
+ * THE one enqueue for the connection-sync-approval job — used by the reactor
+ * above AND by the approval path for a pod-wide (workspace-less) proposal, which
+ * `emitProposalReviewed` does not fan out. Same job shape + same singletonKey on
+ * both, so a proposal reached by both can never be processed twice concurrently,
+ * and `ensureConnectionAutoRule` is idempotent behind it.
+ */
+export async function enqueueConnectionSyncApproval(
+  input: { proposalId: string; userId: string },
+  boss: Pick<ReturnType<typeof getBoss>, "send"> = getBoss()
+): Promise<void> {
+  await boss.send(
+    "connection-sync-approval",
+    { proposalId: input.proposalId, userId: input.userId },
+    { singletonKey: `connection-sync-approval:${input.proposalId}` }
+  );
+}
+
 // Registration order === original inline order. Do not reorder.
 registerReactor(searchIndexReactor);
 registerReactor(entityEmbeddingReactor);
@@ -251,6 +307,7 @@ registerReactor(crossThreadNotifyReactor);
 registerReactor(automationTriggerMatchReactor);
 registerReactor(hydrationSummaryReactor);
 registerReactor(sessionRecapReactor);
+registerReactor(connectionSyncApprovalReactor);
 
 // ============================================================================
 

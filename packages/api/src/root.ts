@@ -88,6 +88,7 @@ import { signalsRouter } from "./routers/signals.js";
 import { typesenseRouter } from "./routers/typesense.js";
 import { n8nActionsRouter } from "./routers/n8n/actions.js";
 import { usersRouter } from "./routers/users.js";
+import { placesRouter } from "./routers/places.js";
 
 /**
  * Core API Router
@@ -181,6 +182,8 @@ export const coreRouter = router({
   typesense: typesenseRouter,
   n8nActions: n8nActionsRouter,
   users: usersRouter,
+  // Places — "open where it lives" (entity → source app target).
+  places: placesRouter,
 });
 
 export type AppRouter = typeof coreRouter;

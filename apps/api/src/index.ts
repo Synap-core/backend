@@ -514,20 +514,22 @@ app.get("/metrics", async (c) => {
   });
 });
 
-// Ontology-conversions boot state — set by the conversion boot gate below.
-// `degraded` = an ADVISORY conversion op failed to apply at boot but the pod
-// was allowed to keep serving (fatal ops still exit(1)). Surfaced on
-// /status/release so a running-but-un-migrated pod is VISIBLE, not invisible.
-let conversionsBootState: {
-  degraded: boolean;
-  failures: Array<{
-    opKey: string;
-    op: string;
-    severity: string;
-    error: string;
-  }>;
-  checkedAt: number;
-} = { degraded: false, failures: [], checkedAt: 0 };
+// Ontology-conversions boot state — set by the conversion boot gate below on
+// EVERY completed pass (not only a degraded one — a clean boot must stamp
+// `checkedAt` and `pending` too). `degraded` = an ADVISORY op failed at boot
+// but the pod kept serving (fatal ops still exit(1)); `pending` = ops deferred
+// for a deliberate operator run. Surfaced on /status/release so a
+// running-but-un-migrated pod is VISIBLE, not invisible. Projection lives in
+// startup/boot-status.ts (shared with its test).
+import {
+  BOOT_CONVERSION_OPTIONS,
+  UNCHECKED_CONVERSIONS_STATE,
+  conversionsBootStateFromSummary,
+  conversionsStatusSection,
+  systemProfilesStatusSection,
+  type ConversionsBootState,
+} from "./startup/boot-status.js";
+let conversionsBootState: ConversionsBootState = UNCHECKED_CONVERSIONS_STATE;
 
 // ── Deploy verification (public, no auth) ──────────────────────────────────
 // GET /status/release answers "is the latest actually deployed, and did the
@@ -616,15 +618,13 @@ app.get("/status/release", async (c) => {
     buildStamp,
     // conversions — degraded=true when an ADVISORY conversion op failed to
     // apply at boot yet the pod kept serving (fatal ops exit(1) instead, so a
-    // fatal failure never reaches this route). Lets ops alert on a
-    // running-but-un-migrated pod.
-    conversions: {
-      degraded: conversionsBootState.degraded,
-      failures: conversionsBootState.failures,
-      checkedAt: conversionsBootState.checkedAt
-        ? new Date(conversionsBootState.checkedAt).toISOString()
-        : null,
-    },
+    // fatal failure never reaches this route). `pending` lists ops deferred
+    // for an operator run (destructive-tail / defer-at-boot); null + a null
+    // checkedAt mean the boot pass has not run (e.g. SYNAP_SKIP_CONVERSIONS).
+    conversions: conversionsStatusSection(conversionsBootState),
+    // systemProfiles — the boot seeder's result. status:"error" means schema
+    // upgrades did not apply; null until the post-listen startup hook reports.
+    systemProfiles: systemProfilesStatusSection(),
   });
 });
 
@@ -784,7 +784,7 @@ app.get("/open/:id", async (c) => {
     return applyOpenDispatch(c, undefined, id);
   }
   const { getDb, eq, and, isNull } = await import("@synap/database");
-  const { proposals, entities, views, documents, channels } =
+  const { proposals, projects, entities, views, documents, channels } =
     await import("@synap/database/schema");
   const database = await getDb();
 
@@ -808,6 +808,21 @@ app.get("/open/:id", async (c) => {
     )
   ) {
     type = "proposal";
+  } else if (
+    // Migration 0151 copied projects into the first-class `projects` table
+    // while preserving ids, and left the pre-0151 entity row live sharing
+    // that same id. Probing `projects` BEFORE `entities` is load-bearing: an
+    // entity-first check would keep resolving a project id to the stale
+    // `entity` copy this bug served. `projects` has no soft-delete column.
+    await exists(() =>
+      database
+        .select({ id: projects.id })
+        .from(projects)
+        .where(eq(projects.id, id))
+        .limit(1)
+    )
+  ) {
+    type = "project";
   } else if (
     await exists(() =>
       database
@@ -1660,9 +1675,12 @@ await (async () => {
 //   - Non-destructive ops apply automatically, once. The `_conversions` ledger
 //     records applied opKeys, so every subsequent boot skips them (no re-work).
 //   - Destructive-tail ops (profile deactivation in mergeInto / dedupe) are
-//     DEFERRED, never auto-applied — logged loudly as pending operator action.
-//     The operator completes them deliberately with:
-//       tsx src/scripts/run-conversions.ts --apply --destructive-tail
+//     DEFERRED, never auto-applied — logged loudly as pending operator action
+//     and listed on /status/release (conversions.pending). The operator
+//     completes each deliberately, one op at a time, dry run first:
+//       tsx src/scripts/run-conversions.ts --only <opKey>
+//       tsx src/scripts/run-conversions.ts --apply --only <opKey> --destructive-tail
+//     (the engine refuses a destructive-tail op on --apply without the tail).
 //   - A failing op ABORTS startup non-zero (a drifted ontology never serves).
 //   - Kill-switch: SYNAP_SKIP_CONVERSIONS=1 skips the whole pass with a warn.
 await (async () => {
@@ -1676,15 +1694,13 @@ await (async () => {
   try {
     const { sql, runConversions, CONVERSION_MANIFEST } =
       await import("@synap/database");
-    const summary = await runConversions(sql, CONVERSION_MANIFEST, {
-      dryRun: false,
-      destructiveTail: false,
-      deferDestructive: true,
-      // Manifest ops flagged `deferAtBoot` (e.g. crm.deal-stage.commercial-fold)
-      // are SKIPPED here — a data cutover must never auto-apply at deploy. An
-      // operator runs them deliberately with `run-conversions.ts --apply`.
-      skipDeferred: true,
-    });
+    // deferDestructive + skipDeferred (see BOOT_CONVERSION_OPTIONS): a data
+    // cutover or profile retirement never auto-applies at deploy.
+    const summary = await runConversions(
+      sql,
+      CONVERSION_MANIFEST,
+      BOOT_CONVERSION_OPTIONS
+    );
 
     // Severity axis: a FATAL op's apply-failure is unsafe to serve → exit(1).
     // An ADVISORY op's failure (value-remap / scope; data stays dual-readable)
@@ -1702,17 +1718,9 @@ await (async () => {
       );
     }
 
+    conversionsBootState = conversionsBootStateFromSummary(summary);
+
     if (advisory.length > 0) {
-      conversionsBootState = {
-        degraded: true,
-        failures: advisory.map((r) => ({
-          opKey: r.opKey,
-          op: r.op,
-          severity: r.severity ?? "advisory",
-          error: r.error ?? "unknown error",
-        })),
-        checkedAt: Date.now(),
-      };
       apiLogger.warn(
         {
           event: "boot.conversions.degraded",
@@ -1749,10 +1757,14 @@ await (async () => {
 
     if (deferred.length > 0) {
       apiLogger.warn(
-        { ops: deferred.map((r) => r.opKey) },
-        "Ontology conversions: deferred op(s) PENDING operator action — run " +
-          "`tsx src/scripts/run-conversions.ts --apply` in @synap/database " +
-          "(add --destructive-tail to also retire merged-away / duplicate profiles)"
+        {
+          ops: deferred.map((r) => ({ opKey: r.opKey, reason: r.deferReason })),
+        },
+        "Ontology conversions: deferred op(s) PENDING operator action (listed on " +
+          "/status/release conversions.pending). In @synap/database, per op, dry " +
+          "run first: `tsx src/scripts/run-conversions.ts --only <opKey>`, then " +
+          "`--apply --only <opKey>` — adding `--destructive-tail` for a " +
+          "destructive-tail op (the engine refuses it without)."
       );
     }
   } catch (err) {
@@ -1952,13 +1964,18 @@ try {
               await import("@synap/jobs/workers/import-corpus-worker.js");
             const { ImportOrchestrator } = await import("@synap/api");
             registerImportCorpusHandler(async (p) => {
+              // `p.sessionId` — the run room ensured before enqueue. Absent on a
+              // job queued before the field existed: analyzeLarge then resolves
+              // (mints) a session itself, as it always did.
               const res = await new ImportOrchestrator({
                 workspaceId: p.workspaceId,
                 userId: p.userId,
                 trpcCtx: {},
+                sessionId: p.sessionId ?? null,
               }).analyzeLarge({
                 source: p.source as never,
                 items: p.items,
+                sessionId: p.sessionId ?? null,
               });
               // Project the orchestrator's own numbers into the queue's OUTPUT
               // contract (ImportCorpusResult). pg-boss persists whatever the
@@ -2021,6 +2038,8 @@ try {
               await import("@synap/jobs/workers/inbound-attachment-worker.js");
             const { registerEventSyncRunner } =
               await import("@synap/jobs/workers/event-sync-cron.js");
+            const { registerConnectionSyncRunner } =
+              await import("@synap/jobs/workers/connection-sync-run.js");
             const { registerStaleProposalRunner } =
               await import("@synap/jobs/workers/stale-proposal-cron.js");
             const { registerBrokenAutomationRunner } =
@@ -2086,15 +2105,23 @@ try {
             registerInboundAttachmentIngestRunner((input) =>
               api.runInboundAttachmentIngest(input)
             );
-            // ONE schedule, correct ordering: import Google Calendar → Synap
-            // `event` entities FIRST, then the source-A mirror pass pushes those
-            // (and native/Stellar events) to Discord — so a Google event lands as
-            // a Synap entity before it is mirrored, never straight to Discord.
-            registerEventSyncRunner(async () => {
-              const imported = await api.runGcalImport();
-              const mirrored = await api.runEventSync();
-              return { imported, mirrored };
-            });
+            // The Discord mirror pass. Google Calendar events reach it as Synap
+            // `event` entities landed by the connection sync — never straight
+            // to Discord.
+            registerEventSyncRunner(() => api.runEventSync());
+            // ONE connection sync door: a triggered job (connect / CP webhook
+            // poke) names its provider + connection; the scheduled tick names
+            // none and walks every sync-enabled connection.
+            registerConnectionSyncRunner((data) =>
+              data.provider
+                ? api.runConnectionSync({
+                    provider: data.provider,
+                    connectionId: data.connectionId,
+                    workspaceId: data.workspaceId,
+                    reason: data.reason,
+                  })
+                : api.runScheduledConnectionSyncs(data.reason ?? "cron")
+            );
             registerEventEndRunner(() => api.runEventEnd());
             // ONE cron, two reasons to walk the pending table. `scanStale`
             // detects a workspace that disappeared; `expireLapsed` detects time

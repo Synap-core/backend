@@ -130,6 +130,14 @@ import {
 } from "./broken-automation-cron.js";
 import { handleEventEndCron, EVENT_END_CRON_QUEUE } from "./event-end-cron.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
+import {
+  handleConnectionSyncApproval,
+  CONNECTION_SYNC_APPROVAL_QUEUE,
+} from "./connection-sync-approval.js";
+import {
+  CONNECTION_SYNC_RUN_QUEUE,
+  handleConnectionSyncRun,
+} from "./connection-sync-run.js";
 import { handleEntityExtract } from "./entity-extract-worker.js";
 import {
   handleProactiveScan,
@@ -154,6 +162,7 @@ import {
 } from "./cp-project-sync.js";
 import {
   ensureSystemProfiles,
+  reportEnsureSystemProfilesResult,
   ensureDefaultRelationDefs,
   registerCpProjectSyncTrigger,
 } from "@synap/database";
@@ -180,6 +189,10 @@ import {
   BLOCKED_SLOT_RECURRENCE_QUEUE,
   handleBlockedSlotRecurrenceScan,
 } from "./blocked-slot-recurrence-scanner.js";
+import {
+  STRUCTURE_GUIDELINE_SCAN_QUEUE,
+  handleStructureGuidelineScan,
+} from "./structure-guideline-scanner.js";
 import {
   handleLibrarianArchiver,
   LIBRARIAN_ARCHIVER_QUEUE,
@@ -230,6 +243,10 @@ const ALL_QUEUES = [
   // above). `queues-are-created.tripwire.test.ts` derives THIS list from
   // source and cross-checks it against every worked and scheduled queue.
   BLOCKED_SLOT_RECURRENCE_QUEUE,
+  // The daily structure-guideline scanner. Files PENDING
+  // governance.structure_guideline proposals only (same created-queue class as
+  // the two scanners above — pinned by queues-are-created.tripwire.test.ts).
+  STRUCTURE_GUIDELINE_SCAN_QUEUE,
   "automation-trigger-match",
   "automation-execute",
   "automation-cron-scheduler",
@@ -258,6 +275,8 @@ const ALL_QUEUES = [
   BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   SESSION_RECAP_QUEUE,
+  CONNECTION_SYNC_APPROVAL_QUEUE,
+  CONNECTION_SYNC_RUN_QUEUE,
   PROACTIVE_SCAN_QUEUE,
   PROPOSAL_REVIEWED_NOTIFY_QUEUE,
   MEMORY_DECAY_QUEUE,
@@ -378,10 +397,11 @@ export async function registerAllWorkers(): Promise<void> {
   // init remains a safe retry when the database is briefly unavailable at boot.
   try {
     const profileResult = await ensureSystemProfiles();
-    logger.info(
-      { ...profileResult },
-      "System profiles reconciled at worker boot"
-    );
+    reportEnsureSystemProfilesResult(logger, profileResult, {
+      ok: "System profiles reconciled at worker boot",
+      failed:
+        "System profile reconciliation FAILED at worker boot (seeder returned status:error) — schema upgrades did not apply; workspace init will retry",
+    });
   } catch (err) {
     logger.warn(
       { err },
@@ -770,6 +790,21 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: session-recap");
 
+  // Connection sync approval (on-demand) — enqueued by the reactor for every
+  // proposal.approved; mints a connection's auto rule when its sync import is
+  // approved with "keep syncing" on. Idempotent.
+  await boss.work(CONNECTION_SYNC_APPROVAL_QUEUE, async ([job]: any[]) =>
+    handleConnectionSyncApproval(job)
+  );
+  logger.info("Registered worker: connection-sync-approval");
+
+  // Connection sync run — the one sync door's pg-boss job:
+  // on-connect / webhook / manual enqueue + the 30-min cron (cron.ts).
+  await boss.work(CONNECTION_SYNC_RUN_QUEUE, async ([job]: any[]) =>
+    handleConnectionSyncRun(job)
+  );
+  logger.info("Registered worker: connection-sync-run");
+
   // Proactive scan — cluster assembly → intelligence-service brain. Reachable as
   // an action a loop/automation can invoke (no parallel per-event auto-trigger).
   await boss.work(PROACTIVE_SCAN_QUEUE, async ([job]: any[]) =>
@@ -854,6 +889,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleBlockedSlotRecurrenceScan()
   );
   logger.info("Registered worker: blocked-slot.recurrence-scan");
+
+  // Structure-guideline scanner (cron: daily 03:55 UTC — files
+  // governance.structure_guideline proposals only; never writes a guideline)
+  await boss.work(STRUCTURE_GUIDELINE_SCAN_QUEUE, async () =>
+    handleStructureGuidelineScan()
+  );
+  logger.info("Registered worker: structure-guideline.scan");
 
   await boss.work(LIBRARIAN_ARCHIVER_QUEUE, async () =>
     handleLibrarianArchiver()

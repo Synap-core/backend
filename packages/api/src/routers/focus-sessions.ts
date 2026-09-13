@@ -85,6 +85,7 @@ import {
 } from "../services/focus-sessions/session-kind.js";
 import { spawnProjectFromSession } from "../services/focus-sessions/spawn-project.js";
 import { revertConversion } from "../services/focus-sessions/session-conversion.js";
+import { revertSession } from "../services/focus-sessions/revert-session.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getDb } from "@synap/database";
 import {
@@ -767,6 +768,116 @@ export const focusSessionsRouter = router({
    * them) and drops the lineage edge. Refuses with a typed reason once the
    * window has passed or the created object has been used.
    */
+  revert: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        reason: z.string().max(2000).optional(),
+        /** Revert only these proposals of the session; omit for all of them. */
+        proposalIds: z.array(z.string().uuid()).min(1).max(500).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await revertSession({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        reason: input.reason,
+        proposalIds: input.proposalIds,
+        callerContext: ctx,
+      });
+      if (!result.ok) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return {
+        sessionId: result.sessionId,
+        proposals: result.proposals,
+        counts: result.counts,
+      };
+    }),
+
+  /**
+   * CANCEL a session (a run) — the ONE close door with `cancelled`: stops the
+   * work still in flight where a real stop exists, and records what was
+   * stopped, what will finish, and what already applied on
+   * `metadata.run.cancel` (also returned as `cancel`). Undo what finished with
+   * `revert`. A session already closed returns as it stands, with no `cancel`.
+   */
+  cancel: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        reason: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { cancelSession } =
+        await import("../services/focus-sessions/cancel-session.js");
+      const result = await cancelSession({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        reason: input.reason,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return {
+        status: result.session.status,
+        session: result.session,
+        cancel: result.cancel ?? null,
+        alreadyClosed: result.cancel === undefined,
+        counts: result.counts,
+        warnings: result.warnings,
+      };
+    }),
+
+  /**
+   * RERUN a session (a run) — a NEW session `spawned_from` this one that
+   * re-analyses its stored sources with the current guidelines. `replace`
+   * reverts this session's applied work first (skips listed); `add` runs on
+   * top. `dryRun` answers the counts + cap verdict and writes nothing. A
+   * refusal (still open, over cap, no stored sources…) comes back as
+   * `{ ok: false, reason, message }` for the run bar to show; only an unknown
+   * session throws.
+   */
+  rerun: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        mode: z.enum(["replace", "add"]),
+        scope: z
+          .object({
+            sourceDocumentIds: z.array(z.string().uuid()).min(1).max(500),
+          })
+          .optional(),
+        dryRun: z.boolean().optional(),
+        reason: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { rerunSession } =
+        await import("../services/focus-sessions/rerun-session.js");
+      const result = await rerunSession({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        mode: input.mode,
+        scope: input.scope,
+        dryRun: input.dryRun,
+        reason: input.reason,
+        agentUserId: ctx.agentUserId ?? null,
+        callerContext: ctx,
+      });
+      if (!result.ok && result.reason === "not_found") {
+        throw new TRPCError({ code: "NOT_FOUND", message: result.message });
+      }
+      return result;
+    }),
+
   revertConversion: protectedProcedure
     .input(z.object({ sessionId: z.string().uuid() }))
     .mutation(async ({ ctx, input }) => {
@@ -826,10 +937,16 @@ export const focusSessionsRouter = router({
         row,
         requireUserId(ctx.userId)
       );
+      // Whether this run can be rerun right now — the rerun door's OWN rule
+      // (`assessRerunAvailability`), so a surface never re-derives it.
+      const { assessRerunAvailability } =
+        await import("../services/focus-sessions/rerun-session.js");
+      const rerun = await assessRerunAvailability(db, row);
       return withParentSessionId({
         ...staffed,
         triage: projectTriage(row),
         kind: projectSessionKind(row),
+        rerun,
       });
     }),
 

@@ -150,4 +150,26 @@ describe("notifyProposalCreatedOrdered", () => {
 
     expect(onEmitError).toHaveBeenCalledOnce();
   });
+
+  it("a SYNCHRONOUS throw (or a non-promise emitter) still reaches onEmitError", async () => {
+    // A bare vi.fn() in a test, or a future sync implementation, must not escape
+    // the seam: the old `void emit().catch(...)` shape threw on `.catch` of
+    // undefined and let a sync throw propagate out of the helper.
+    const onEmitError = vi.fn();
+    const events = await import("@synap/events");
+    vi.spyOn(events, "emitSideEffects").mockImplementationOnce((() => {
+      throw new Error("sync explode");
+    }) as any);
+
+    await expect(
+      notifyProposalCreatedOrdered({
+        podWide: null,
+        sideEffect: { subjectId: PROPOSAL, userId: ADMIN },
+        onEmitError,
+      })
+    ).resolves.toBeUndefined();
+    await flush();
+
+    expect(onEmitError).toHaveBeenCalledOnce();
+  });
 });

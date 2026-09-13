@@ -35,6 +35,8 @@ const h = vi.hoisted(() => ({
   // CP template client
   templateByKey: {} as Record<string, unknown>,
   createCapabilityFromDefinitionCalls: [] as Array<unknown>,
+  /** Proposal ids the governed template apply files instead of installing. */
+  applyProposals: [] as string[],
 }));
 
 const { toolsTable, capabilitiesTable } = vi.hoisted(() => ({
@@ -108,7 +110,7 @@ vi.mock("../services/capabilities/cp-template-client.js", () => ({
 vi.mock("../services/capabilities/create-from-definition.js", () => ({
   createCapabilityFromDefinition: async (...args: unknown[]) => {
     h.createCapabilityFromDefinitionCalls.push(args);
-    return { created: { container: null } };
+    return { created: { container: null }, proposals: h.applyProposals };
   },
 }));
 
@@ -122,16 +124,43 @@ function connectorFor(
   providers: Array<{ uniqueKey: string; displayName: string }>
 ): MaterializableConnector {
   return {
-    listConnections: async () =>
-      providers.map((p) => ({ provider: p.uniqueKey, connectionId: "conn-1" })),
-    listIntegrations: async () =>
-      providers.map((p) => ({
+    listConnectionsResult: async () => ({
+      ok: true as const,
+      connections: providers.map((p) => ({
+        provider: p.uniqueKey,
+        connectionId: "conn-1",
+      })),
+    }),
+    listIntegrationsResult: async () => ({
+      ok: true as const,
+      integrations: providers.map((p) => ({
         uniqueKey: p.uniqueKey,
         provider: p.uniqueKey,
         displayName: p.displayName,
       })),
+    }),
   };
 }
+
+describe("materializeConnectorTools — a failed connection list is not 'nothing connected'", () => {
+  it("throws instead of materializing zero tools when the broker cannot list", async () => {
+    const connector: MaterializableConnector = {
+      listConnectionsResult: async () => ({
+        ok: false as const,
+        reason: "unreachable",
+        error: "control plane down",
+      }),
+      listIntegrationsResult: async () => ({
+        ok: true as const,
+        integrations: [],
+      }),
+    };
+    await expect(materializeConnectorTools(ctx, connector)).rejects.toThrow(
+      /listing connections failed \(unreachable\)/
+    );
+    expect(h.insertedTools).toHaveLength(0);
+  });
+});
 
 beforeEach(() => {
   h.existingToolRow = null;
@@ -147,6 +176,7 @@ beforeEach(() => {
   h.addPartShouldThrow = false;
   h.templateByKey = {};
   h.createCapabilityFromDefinitionCalls.length = 0;
+  h.applyProposals = [];
 });
 
 describe("materializeConnectorTools — bare provider tool gets a container", () => {
@@ -229,6 +259,37 @@ describe("materializeConnectorTools — bare provider tool gets a container", ()
     expect(result.applied).toEqual(["google"]);
   });
 
+  it("a GOVERNED apply that files proposals is pendingInstall, never 'applied'", async () => {
+    h.templateByKey["nango-google"] = {
+      key: "nango-google",
+      name: "Google",
+      skills: [],
+    };
+    h.applyProposals = ["prop-tool", "prop-skill"];
+    const result = await materializeConnectorTools(
+      ctx,
+      connectorFor([{ uniqueKey: "google", displayName: "Google" }])
+    );
+    expect(result.applied).toEqual([]);
+    expect(result.pendingInstall).toEqual([
+      { provider: "google", proposalIds: ["prop-tool", "prop-skill"] },
+    ]);
+  });
+
+  it("an apply that installs directly reports no pendingInstall (positive control)", async () => {
+    h.templateByKey["nango-google"] = {
+      key: "nango-google",
+      name: "Google",
+      skills: [],
+    };
+    const result = await materializeConnectorTools(
+      ctx,
+      connectorFor([{ uniqueKey: "google", displayName: "Google" }])
+    );
+    expect(result.pendingInstall).toEqual([]);
+    expect(result.applied).toEqual(["google"]);
+  });
+
   it("is non-fatal when addPart fails — the sync still reports the tool as synced", async () => {
     h.addPartShouldThrow = true;
     const connector = connectorFor([
@@ -239,5 +300,95 @@ describe("materializeConnectorTools — bare provider tool gets a container", ()
 
     expect(result.toolIds).toEqual(["tool-new-1"]);
     expect(h.addPartCalls).toHaveLength(1);
+  });
+});
+
+describe("pendingInstall reaches the client's connection rows", () => {
+  it("annotatePendingInstall marks only the waiting provider's rows", async () => {
+    const { annotatePendingInstall } = await import("./materialize-tools.js");
+    const rows = annotatePendingInstall(
+      [
+        { provider: "google", connectionId: "g1" },
+        { provider: "notion", connectionId: "n1" },
+      ],
+      [{ provider: "google", proposalIds: ["prop-1"] }]
+    );
+    expect(rows).toEqual([
+      {
+        provider: "google",
+        connectionId: "g1",
+        pendingInstall: { proposalIds: ["prop-1"] },
+      },
+      { provider: "notion", connectionId: "n1" },
+    ]);
+  });
+
+  it("connectors.connections returns the rows annotated with the mirror's pendingInstall (source seam)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(
+      fileURLToPath(new URL("../routers/connectors-trpc.ts", import.meta.url)),
+      "utf-8"
+    );
+    const start = src.indexOf("  connections: protectedProcedure");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n    }),", start));
+    expect(body).toMatch(
+      /const pendingInstall = await mirrorObservedConnections\(/
+    );
+    expect(body).toMatch(
+      /return annotatePendingInstall\(listed\.connections, pendingInstall\)/
+    );
+  });
+});
+
+describe("pendingInstall reaches the client's providers rows (S-6)", () => {
+  it("a pending provider is NOT connected and carries its proposal ids; others are untouched", async () => {
+    const { annotateProviderPendingInstall } =
+      await import("./materialize-tools.js");
+    const rows = annotateProviderPendingInstall(
+      [
+        { id: "google", connected: true, connectionId: "g1" },
+        { id: "notion", connected: true, connectionId: "n1" },
+        { id: "slack", connected: false, connectionId: undefined },
+      ],
+      [{ provider: "google", proposalIds: ["prop-1"] }]
+    );
+    expect(rows).toEqual([
+      {
+        id: "google",
+        connected: false,
+        connectionId: "g1",
+        pendingInstall: { proposalIds: ["prop-1"] },
+      },
+      {
+        id: "notion",
+        connected: true,
+        connectionId: "n1",
+        pendingInstall: null,
+      },
+      {
+        id: "slack",
+        connected: false,
+        connectionId: undefined,
+        pendingInstall: null,
+      },
+    ]);
+  });
+
+  it("connectors.providers returns rows annotated from the same mirror source (source seam)", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { fileURLToPath } = await import("node:url");
+    const src = readFileSync(
+      fileURLToPath(new URL("../routers/connectors-trpc.ts", import.meta.url)),
+      "utf-8"
+    );
+    const start = src.indexOf("  providers: protectedProcedure");
+    expect(start).toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf("\n    }),", start));
+    expect(body).toMatch(
+      /const pendingInstall = await mirrorObservedConnections\(/
+    );
+    expect(body).toMatch(/providers: annotateProviderPendingInstall\(/);
   });
 });

@@ -79,7 +79,11 @@ export interface FileAnchoredCaptureProposalsParams {
   sessionId?: string;
   entities: CaptureProposeEntity[];
   relations: CaptureProposeRelation[];
-  /** Validate/normalize a relation slug (falls back to a generic type). */
+  /**
+   * Validate a relation slug: returns it when it resolves, THROWS when it does
+   * not (`loadRelationTypeValidator`). A throwing slug drops THAT relation into
+   * the returned `relationsFailed[]` — it is never filed and never coerced.
+   */
   resolveRelationType: (type: string) => string;
   /**
    * A source blob the caller already STAGED (bytes + `documents` row exist, no
@@ -109,6 +113,13 @@ export async function fileAnchoredCaptureProposals(
    * exists to prevent.
    */
   sourceFileAttached: boolean;
+  /** Relations NOT filed because their slug did not resolve (reason names it). */
+  relationsFailed: Array<{
+    sourceRef: string;
+    targetRef: string;
+    type: string;
+    reason: string;
+  }>;
 }> {
   const {
     userId,
@@ -264,12 +275,29 @@ export async function fileAnchoredCaptureProposals(
     targetEntityId: string;
     type: string;
   }> = [];
+  const relationsFailed: Array<{
+    sourceRef: string;
+    targetRef: string;
+    type: string;
+    reason: string;
+  }> = [];
   for (const r of relations) {
     const srcNew = newEntityTempIds.has(r.sourceTempId);
     const tgtNew = newEntityTempIds.has(r.targetTempId);
     const srcExisting = existingIdByTempId.get(r.sourceTempId);
     const tgtExisting = existingIdByTempId.get(r.targetTempId);
-    const type = resolveRelationType(r.relationType);
+    let type: string;
+    try {
+      type = resolveRelationType(r.relationType);
+    } catch (err) {
+      relationsFailed.push({
+        sourceRef: r.sourceTempId,
+        targetRef: r.targetTempId,
+        type: r.relationType,
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      continue;
+    }
 
     if (srcNew || tgtNew) {
       const sourceRef = srcNew ? r.sourceTempId : srcExisting;
@@ -343,5 +371,5 @@ export async function fileAnchoredCaptureProposals(
     );
   }
 
-  return { proposalIds, sourceFileAttached };
+  return { proposalIds, sourceFileAttached, relationsFailed };
 }

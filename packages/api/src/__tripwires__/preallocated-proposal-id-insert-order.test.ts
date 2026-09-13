@@ -138,16 +138,24 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
    * written during the same materialization are at identical risk, and the
    * receipt insert must precede all of them, not just the first entity.
    *
-   * There are exactly TWO producers today and they differ in the ONE way that
-   * matters: whether the row exists yet. This asserts the set, so a THIRD
+   * There are exactly FOUR producers today and they differ in the ONE way that
+   * matters: whether the row exists yet. This asserts the set, so a FIFTH
    * producer repeating the 2026-09-12 bug cannot land silently — it goes red by
    * EXISTING, with no list to forget to update.
+   *
+   * (2026-09-13, run-scoped reversibility: the text-lane capture receipt and
+   * the two import apply paths became producers, so the rows they write carry
+   * lineage a revert can check. Each reason below is asserted, not narrated.)
    */
   const KNOWN_PRODUCERS: Record<string, string> = {
     "routers/proposals/apply-approval.ts":
       "approval path — stamps `proposal.id`, a row loaded from the DB, so the FK target already exists.",
     "services/capture-agent/submit-capture-graph.ts":
       "pre-allocates the id, so it MUST insert the proposals row before building the ctx (the lexical case above enforces that).",
+    "routers/capture.ts":
+      "text-lane capture receipt — pre-allocates the id and inserts the row before building the materialize ctx (the lexical case enforces that).",
+    "services/import-orchestrator.ts":
+      "import apply / applyLarge — stamps `input.proposalId`, the analyze-time proposal `resolveApplyOperations` just loaded as PENDING, so the FK target exists.",
   };
 
   function producers(): Map<string, string[]> {
@@ -172,7 +180,7 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
     return found;
   }
 
-  it("governanceProposalId has exactly the two known producers, each with a checkable reason", () => {
+  it("governanceProposalId has exactly the known producers, each with a checkable reason", () => {
     const found = producers();
     // Non-vacuity: the scan still sees producers at all.
     expect(found.size).toBeGreaterThan(0);
@@ -193,6 +201,22 @@ describe("a pre-allocated proposal id is inserted before it is stamped onto FK r
     expect(
       found.get("services/capture-agent/submit-capture-graph.ts")
     ).toContain("captureProposalId");
+
+    // Same for the text-lane receipt: a pre-allocated id the lexical case holds
+    // to insert-before-stamp.
+    expect(found.get("routers/capture.ts")).toEqual(["captureReceiptId"]);
+    expect(
+      findings.some(
+        (f) =>
+          f.file === "routers/capture.ts" && f.variable === "captureReceiptId"
+      )
+    ).toBe(true);
+
+    // The import producer stamps the id of a proposal it READ, never a minted one.
+    expect(found.get("services/import-orchestrator.ts")).toEqual([
+      "input.proposalId",
+      "input.proposalId",
+    ]);
   });
 
   it("every pre-allocated id has a proposals insert LEXICALLY BEFORE its first stamp", () => {

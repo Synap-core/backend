@@ -544,10 +544,15 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     },
 
     // note + capture → item, the universal capture kind (item seeded by
-    // w3a.seed.item above — op order keeps that seed first). `capture` was
-    // already removed from ensure-system-profiles.ts (see its comment there)
-    // so that fromSlug resolves to zero rows on every pod — a permanent,
-    // harmless no-op kept for audit completeness.
+    // w3a.seed.item above — op order keeps that seed first). `capture` is no
+    // longer seeded by ensure-system-profiles.ts (see its comment there), so on
+    // a FRESH pod that fromSlug resolves to zero rows and this half is a no-op.
+    // It is NOT a no-op everywhere: a pod seeded before that removal keeps its
+    // system `capture` row (the live pod still carries an active one). There,
+    // boot applies this op non-destructively (index.ts runs runConversions
+    // with dryRun:false, deferDestructive:true) — capture entities are
+    // repointed onto `item` — and deactivating the drained row waits for an
+    // operator's --destructive-tail run.
     //
     // DECISION D2 (approved): note is retired as a kind and folded into
     // `item` — a note IS an item with a prose doc. This op is authoritative
@@ -678,9 +683,14 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // question, research, and decision as first-class primary kinds, so
     // converting them into `item` roles would contradict the SSOT.
     //
-    // The ops were DORMANT — `runConversions()` is manual + dry-run-by-default
-    // and never auto-runs, so these never applied on any pod. Per the
-    // append-only ledger discipline the opKeys are NOT deleted; each is turned
+    // The ops were NOT dormant. They were live `convertToFacet` ops from
+    // 2026-07-09 (18f9ba3a) until retired here on 2026-07-22 (ede15f35), and
+    // boot has auto-applied conversions since 2026-07-11 (df316301 — index.ts
+    // runs runConversions with dryRun:false). A pod that booted inside that
+    // window converted these kinds into `item` roles; `w6.revert.{question,
+    // research,decision}` below move such pods back. Retiring an op to a `keep`
+    // only stops FRESH pods converting. Per the append-only ledger discipline
+    // the opKeys are NOT deleted; each is turned
     // into a `keep` ledger no-op (applyOp returns {} — engine.ts) recording that
     // the slug is deliberately kept as a primary kind. This mirrors how
     // w3a.keep.note was superseded in place rather than removed. The
@@ -690,19 +700,19 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w4.convert.question",
       slug: "question",
-      note: "RETIRED (Decision 1): question stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
+      note: "RETIRED (Decision 1): question stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions, so pods that booted the live convert (2026-07-11..2026-07-22) carry question as a role — w6.revert.question below moves them back.",
     },
     {
       op: "keep",
       opKey: "w4.convert.research",
       slug: "research",
-      note: "RETIRED (Decision 1): research stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
+      note: "RETIRED (Decision 1): research stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions, so pods that booted the live convert (2026-07-11..2026-07-22) carry research as a role — w6.revert.research below moves them back.",
     },
     {
       op: "keep",
       opKey: "w4.convert.decision",
       slug: "decision",
-      note: "RETIRED (Decision 1): decision stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline (never applied — runConversions is manual/dry-run-default).",
+      note: "RETIRED (Decision 1): decision stays a primary kind — research-base.yaml + the research templates declare it as a kind. The earlier W4 intent to convert it into an `item` role is withdrawn; entry kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions, so pods that booted the live convert (2026-07-11..2026-07-22) carry decision as a role — w6.revert.decision below moves them back.",
     },
 
     // user_observation → item: AI-inferred observations about the user.
@@ -792,13 +802,16 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // RETIRED (Decision 1): the research-drift reconvert is withdrawn alongside
     // w4.convert.research — research stays a primary kind, so there is no
     // now-role research profile to sweep drift onto. Kept as a ledger no-op per
-    // the append-only opKey discipline (never applied — runConversions is
-    // manual/dry-run-default).
+    // the append-only opKey discipline. It was NOT dormant: a live
+    // `convertToFacet` from 2026-07-11 (5bfa201f) to 2026-07-22 (ede15f35)
+    // while boot auto-applied conversions, so a pod that booted in that window
+    // may have moved research entities onto an `item` role —
+    // w6.revert.research below moves them back.
     {
       op: "keep",
       opKey: "w5.reconvert.research-drift",
       slug: "research",
-      note: "RETIRED (Decision 1): research stays a primary kind — the W5 drift-reconvert onto an `item` role is withdrawn with w4.convert.research. Entry kept as a ledger no-op per append-only opKey discipline (never applied).",
+      note: "RETIRED (Decision 1): research stays a primary kind — the W5 drift-reconvert onto an `item` role is withdrawn with w4.convert.research. Entry kept as a ledger no-op per append-only opKey discipline. Boot AUTO-APPLIES conversions, so pods that booted the live reconvert (2026-07-11..2026-07-22) may carry research as a role — w6.revert.research below moves them back.",
     },
 
     // ─── Enterprise-OS Wave 1: campaign schema-drift repair ────────────────

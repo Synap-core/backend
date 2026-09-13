@@ -95,6 +95,11 @@ import {
 } from "../utils/property-relation-sync.js";
 import { inheritRelationWorkspaceId } from "../lib/relation-workspace-inherit.js";
 import {
+  isBuiltinRelationType,
+  listEffectiveRelationTypes,
+  unknownRelationTypeMessage,
+} from "../utils/relation-types.js";
+import {
   filterUnavailableEntityConnections,
   structuralNeighbor,
   type EntityConnection,
@@ -295,16 +300,8 @@ function focusSessionConnectionVisibilityWhere(workspaceId?: string | null) {
     : eq(focusSessions.workspaceId, workspaceId);
 }
 
-/**
- * Generic built-in relation types introduced by "impact-aware writes". These
- * are accepted by `create` WITHOUT a workspace relation-def (like
- * SYSTEM_RELATION_TYPES) so the entity-create handler can auto-connect
- * same-named facets across profiles. Kept deliberately generic.
- *
- * - `same_subject`: two entities (different profiles, same name) are facets of
- *   one real-world subject — e.g. a `person` and a `company` both named "Acme".
- */
-export const IMPACT_RELATION_TYPES = ["same_subject"] as const;
+// Moved to the one relation-vocabulary module; re-exported for existing importers.
+export { IMPACT_RELATION_TYPES } from "../utils/relation-types.js";
 
 /**
  * Build a human-readable label from a relation's endpoints so a proposal inbox
@@ -919,10 +916,7 @@ export const relationsRouter = router({
       // Validate type: must be a system/impact built-in OR a workspace-defined
       // relation def. Impact built-ins (e.g. same_subject) need no workspace def
       // so auto-connect can run on any workspace.
-      const isSystemType =
-        (SYSTEM_RELATION_TYPES as readonly string[]).includes(input.type) ||
-        (IMPACT_RELATION_TYPES as readonly string[]).includes(input.type);
-      if (!isSystemType) {
+      if (!isBuiltinRelationType(input.type)) {
         const database = await getDb();
         const relDefRepo = new RelationDefRepository(database);
         const def = await relDefRepo.getBySlug(
@@ -930,9 +924,19 @@ export const relationsRouter = router({
           effectiveWorkspaceId
         );
         if (!def) {
+          // Name the slug AND the valid ones for this lens, so the caller (and
+          // every `relationsFailed[]` entry that carries this message) can fix
+          // the edge without a second discovery round-trip.
+          const valid = await listEffectiveRelationTypes(
+            database,
+            effectiveWorkspaceId
+          );
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Unknown relation type: "${input.type}". Must be a workspace relation definition.`,
+            message: unknownRelationTypeMessage(
+              input.type,
+              valid.map((t) => t.slug)
+            ),
           });
         }
       }
@@ -1114,6 +1118,13 @@ export const relationsRouter = router({
         // is the SAME verified handle this router already passes to the graph
         // link above; it now also reaches `events.session_id`.
         sessionId: ctx.sessionId ?? undefined,
+        // Sync-origin fan-out — see entities.create.
+        origin: ctx.origin,
+        // The proposal that authorized this edge (composite approval). Stamps
+        // `events.proposal_id`, and lets `recordDomainMutation` derive
+        // origin "sync" for an approved connection-sync import — the same
+        // linkage `entities.create` already passes.
+        proposalId: ctx.governanceProposalId,
         logData: {
           sourceEntityId: input.sourceEntityId,
           targetEntityId: input.targetEntityId,
@@ -1567,6 +1578,8 @@ export const relationsRouter = router({
         agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: effectiveWorkspaceId,
         sessionId: ctx.sessionId ?? undefined,
+        origin: ctx.origin,
+        proposalId: ctx.governanceProposalId,
         logData: { metadata: input.metadata, type: input.type },
         data: {
           relationType: relation.type,
@@ -1711,6 +1724,8 @@ export const relationsRouter = router({
         agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: effectiveWorkspaceId,
         sessionId: ctx.sessionId ?? undefined,
+        origin: ctx.origin,
+        proposalId: ctx.governanceProposalId,
         logData: { id: input.id },
         data: {
           relationType: relationToDelete?.type,

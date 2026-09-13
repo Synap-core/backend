@@ -92,17 +92,29 @@ async function ensureProviderContainer(
 }
 
 /**
- * The narrow connector surface materialization needs — satisfied by
- * `NangoConnector` (the only connector with provider integrations + a family
- * template per provider). Declared locally so this module doesn't depend on the
- * full connector class.
+ * The narrow connector surface materialization needs — satisfied by every
+ * `ConnectionBroker` (the CP broker client and the self-hosted `NangoConnector`).
+ * Declared locally so this module doesn't depend on the full broker seam.
+ * Both reads are TYPED: a failed list is a different fact from an empty one.
  */
 export interface MaterializableConnector {
-  listConnections(
-    userId: string
-  ): Promise<Array<{ provider: string; connectionId: string }>>;
-  listIntegrations(): Promise<
-    Array<{ uniqueKey: string; provider: string; displayName: string }>
+  listConnectionsResult(userId: string): Promise<
+    | {
+        ok: true;
+        connections: Array<{ provider: string; connectionId: string }>;
+      }
+    | { ok: false; reason: string; error: string }
+  >;
+  listIntegrationsResult(): Promise<
+    | {
+        ok: true;
+        integrations: Array<{
+          uniqueKey: string;
+          provider: string;
+          displayName: string;
+        }>;
+      }
+    | { ok: false; reason: string; error: string }
   >;
 }
 
@@ -149,6 +161,53 @@ export interface MaterializeResult {
     displayName: string;
     skills: Array<{ name: string; description?: string }>;
   }>;
+  /**
+   * Providers whose family template could NOT be applied directly because the
+   * governed apply filed proposals (e.g. the caller may not install it). Until
+   * those are approved the connection has no capability, so no registry row and
+   * no sync — a caller must say "waiting for approval", never "connected".
+   */
+  pendingInstall: Array<{ provider: string; proposalIds: string[] }>;
+}
+
+/**
+ * A connection row as the client receives it: `pendingInstall` is present only
+ * while its provider's template install waits on the named proposals.
+ */
+export function annotatePendingInstall<T extends { provider: string }>(
+  connections: T[],
+  pendingInstall: MaterializeResult["pendingInstall"]
+): Array<T & { pendingInstall?: { proposalIds: string[] } }> {
+  const byProvider = new Map(
+    pendingInstall.map((p) => [p.provider, p.proposalIds])
+  );
+  return connections.map((c) => {
+    const proposalIds = byProvider.get(c.provider);
+    return proposalIds ? { ...c, pendingInstall: { proposalIds } } : c;
+  });
+}
+
+/**
+ * A `connectors.providers` row as the client receives it. While the provider's
+ * install waits on the named proposals it carries `pendingInstall` and is NOT
+ * `connected`: the broker connection exists, but nothing is installed to use or
+ * sync it, so "Connected" would be a lie every client had to correct.
+ */
+export function annotateProviderPendingInstall<
+  T extends { id: string; connected: boolean },
+>(
+  providers: T[],
+  pendingInstall: MaterializeResult["pendingInstall"]
+): Array<T & { pendingInstall: { proposalIds: string[] } | null }> {
+  const byProvider = new Map(
+    pendingInstall.map((p) => [p.provider, p.proposalIds])
+  );
+  return providers.map((p) => {
+    const proposalIds = byProvider.get(p.id);
+    return proposalIds
+      ? { ...p, connected: false, pendingInstall: { proposalIds } }
+      : { ...p, pendingInstall: null };
+  });
 }
 
 /**
@@ -163,10 +222,21 @@ export async function materializeConnectorTools(
   const userId = ctx.userId;
   if (!userId) throw new Error("materializeConnectorTools: missing userId");
 
-  const [connections, integrations] = await Promise.all([
-    connector.listConnections(userId),
-    connector.listIntegrations(),
+  const [listed, declared] = await Promise.all([
+    connector.listConnectionsResult(userId),
+    connector.listIntegrationsResult(),
   ]);
+  // An unread connection list is not "nothing connected": materializing off it
+  // would skip every provider and report `synced: 0` as if that were the truth.
+  if (!listed.ok) {
+    throw new Error(
+      `Cannot materialize connector tools — listing connections failed (${listed.reason}): ${listed.error}`
+    );
+  }
+  const connections = listed.connections;
+  // Integrations only supply display names; without them the provider key is
+  // shown, which is honest rather than wrong.
+  const integrations = declared.ok ? declared.integrations : [];
 
   const displayNameByProvider = new Map(
     integrations.map((i) => [i.uniqueKey, i.displayName])
@@ -178,6 +248,7 @@ export async function materializeConnectorTools(
   const toolIds: string[] = [];
   const applied: string[] = [];
   const unlocked: MaterializeResult["unlocked"] = [];
+  const pendingInstall: MaterializeResult["pendingInstall"] = [];
 
   for (const provider of connectedProviders) {
     const credentialRef = `nango://${provider}`;
@@ -287,7 +358,13 @@ export async function materializeConnectorTools(
       // Pod-wide apply: no workspace lens (the connected provider tool is
       // pod-wide). The acting user owns the seeded vault/grants.
       const applyCtx = { ...ctx, workspaceId: null } as unknown as Context;
-      await createCapabilityFromDefinition(def, {}, applyCtx);
+      const result = await createCapabilityFromDefinition(def, {}, applyCtx);
+      if (result.proposals.length > 0) {
+        // Governed: the caller could not install it directly. Nothing is
+        // applied yet — report it, never as `applied`.
+        pendingInstall.push({ provider, proposalIds: result.proposals });
+        continue;
+      }
       applied.push(provider);
     } catch (err) {
       // Graceful degrade — keep the bare tool; the connection still works, it
@@ -299,5 +376,5 @@ export async function materializeConnectorTools(
     }
   }
 
-  return { synced: toolIds.length, toolIds, applied, unlocked };
+  return { synced: toolIds.length, toolIds, applied, unlocked, pendingInstall };
 }

@@ -45,6 +45,9 @@ export interface HeadlessChatRequest {
   sourceMessageId: string;
   focusSessionId?: string | null;
   agentUserId?: string;
+  /** Server-built per-turn context — the same IS `turnContext` field the
+   *  interactive client sends (e.g. a comment's resolved `anchor`). */
+  turnContext?: Record<string, unknown>;
   /**
    * LLM scheduling priority for the IS FairSemaphore.
    * Headless / background workers SHOULD pass `"background"` so live chat keeps
@@ -87,6 +90,7 @@ export async function requestHeadlessChatText(
     sourceMessageId: payload.sourceMessageId,
     focusSessionId: payload.focusSessionId,
     agentUserId: payload.agentUserId,
+    ...(payload.turnContext ? { turnContext: payload.turnContext } : {}),
     // REQUIRED: without stream:true the IS chat-stream takes its non-streaming
     // branch (plain JSON), so the SSE reader finds no frames and the reply is
     // dropped as empty. With stream:true the IS emits SSE (content deltas + the

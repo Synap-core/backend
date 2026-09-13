@@ -1,36 +1,29 @@
 /**
- * Google Calendar item → Synap event graph mapper (PURE function; no I/O).
+ * Google Calendar item → sync graph mapper (PURE function; no I/O).
  *
- * The event-sync redesign: Google Calendar events flow THROUGH Synap. Each GCal
- * item becomes a Synap `event` entity (the SAME shape event-sync's
+ * Each GCal item becomes a Synap `event` entity (the SAME shape event-sync's
  * `normalizeEntity` reads — startDate/endDate/calendarLink/location), so the
- * existing source-A mirror pass pushes it to a native Discord scheduled event
- * with NO direct Google→Discord path.
+ * source-A mirror pass pushes it to a native Discord scheduled event with NO
+ * direct Google→Discord path. Attendees become people (email identity) and, for
+ * a corporate domain, a company — through the shared `participantsGraph`, so a
+ * person met on an event and later emailed is the SAME ref in one run.
  *
- * TWO OUTPUTS, because the event is created two DIFFERENT ways (see run-gcal-import):
- *   - `event`         — properties for the BARE event, created DIRECTLY via
- *                       `EntityRepository.create` (R4) so it ALWAYS lands + mirrors.
- *                       (The composite door only auto-applies if EVERY op
- *                       auto-approves; a non-approvable company/deal op would
- *                       silently downgrade the whole graph to a proposal — which
- *                       would break "auto". So the event goes direct.)
- *   - `graph`         — person[] + company? + the event (as an existing ref) +
- *                       relations, for a BEST-EFFORT `submitCaptureGraph` that
- *                       resolves attendee identity and links them to the event.
- *
- * Attendee identity reuses the Cal.com mapper's proven domain helpers (email
- * dedup drives person identity; a corporate domain mints a company by website).
+ * The event's upsert identity is `(google, <googleEventId>)` — byte-compatible
+ * with the external links the previous per-event importer registered, so an
+ * event imported before this door still matches exactly. Its `url` is the
+ * event's `htmlLink` from the API response (never constructed).
  */
 
-import type {
-  CaptureGraphEntity,
-  CaptureGraphRelation,
-} from "../../routers/hub-protocol/rest/_capture-graph-dedup.js";
 import {
-  emailDomain,
-  isCorporateDomain,
-  companyNameFromDomain,
-} from "../calcom/map-booking-to-graph.js";
+  mergeSyncGraph,
+  participantsGraph,
+  emptySyncGraph,
+  RELATION_ATTENDED_BY,
+  RELATION_RELATES_TO,
+  type SyncGraph,
+} from "./sync-graph.js";
+
+export const GOOGLE_PROVIDER = "google";
 
 // ── Google Calendar `events.list` item (fields we consume) ─────────────────────
 export interface GCalAttendee {
@@ -47,6 +40,8 @@ export interface GCalAttendee {
 export interface GCalItem {
   id?: string;
   summary?: string;
+  /** "confirmed" | "tentative" | "cancelled". */
+  status?: string;
   /** { dateTime } for timed events, { date } for all-day events (or a bare ISO string). */
   start?: unknown;
   end?: unknown;
@@ -57,25 +52,14 @@ export interface GCalItem {
   attendees?: GCalAttendee[] | null;
 }
 
-/** What the mapper hands back. */
 export interface GcalGraph {
-  /** Non-null only when the item has an id AND a parseable start. */
   googleEventId: string;
-  /** For the DIRECT bare-event create (R4). */
-  event: { title: string; properties: Record<string, unknown> };
-  /** person[] + company? + the event (ref only) for the best-effort submitCaptureGraph. */
-  entities: CaptureGraphEntity[];
-  relations: CaptureGraphRelation[];
+  /** The event's ref inside `graph`. */
+  eventRef: string;
+  graph: SyncGraph;
   /** True when the Google start had a `date` (no time) → all-day. */
   isAllDay: boolean;
 }
-
-const EVENT_REF = "event";
-
-// event→person "attended_by" (default-relation-defs.ts) and event→company
-// "relates_to" — the general graph link; the event is the anchor, not a facet.
-const ATTENDED_BY = "attended_by";
-const RELATES_TO = "relates_to";
 
 /** Extract an ISO time from a Google Calendar start/end field. */
 export function gcalTime(t: unknown): string | undefined {
@@ -122,14 +106,20 @@ export function startBucketWindow(
   };
 }
 
+export function eventRef(googleEventId: string): string {
+  return `event:${googleEventId}`;
+}
+
 /**
- * Map ONE Google Calendar item to a Synap event graph. Deterministic + pure.
- * Returns null when the item has no id or no parseable start (nothing to sync).
+ * Map ONE Google Calendar item to a sync graph. Deterministic + pure.
+ * Returns null when the item has no id, no parseable start, or is cancelled
+ * (nothing to mirror).
  */
 export function mapGcalToGraph(item: GCalItem): GcalGraph | null {
   const googleEventId = item.id?.trim();
   const startDate = gcalTime(item.start);
   if (!googleEventId || !startDate) return null;
+  if (item.status === "cancelled") return null;
 
   const endDate = gcalTime(item.end);
   const isAllDay = isAllDayStart(item.start);
@@ -140,7 +130,8 @@ export function mapGcalToGraph(item: GCalItem): GcalGraph | null {
       ? item.location.trim()
       : undefined;
   // Prefer the Meet link; fall back to the event's Google Calendar page.
-  const calendarLink = item.hangoutLink?.trim() || item.htmlLink?.trim();
+  const htmlLink = item.htmlLink?.trim() || undefined;
+  const calendarLink = item.hangoutLink?.trim() || htmlLink;
 
   // Attendees we can act on: has an email, isn't the pod owner (self) or a room.
   const attendees = (item.attendees ?? []).filter(
@@ -152,76 +143,46 @@ export function mapGcalToGraph(item: GCalItem): GcalGraph | null {
     ...(a.responseStatus ? { responseStatus: a.responseStatus } : {}),
   }));
 
-  // ── Bare-event properties (event-sync/normalizeEntity shape) ────────────────
-  const eventProperties: Record<string, unknown> = {
-    googleEventId,
-    source: "google",
-    startDate,
-    ...(endDate ? { endDate } : {}),
-    ...(location ? { location } : {}),
-    ...(calendarLink ? { calendarLink } : {}),
-    ...(item.description?.trim()
-      ? { description: item.description.trim() }
-      : {}),
-    ...(attendeeSummary.length > 0 ? { attendees: attendeeSummary } : {}),
-    isAllDay,
-  };
-
-  // ── Best-effort graph: person[] + company? + the event (existing ref) ───────
-  const entities: CaptureGraphEntity[] = [
-    // The event as an EXISTING ref — run-gcal-import fills existingEntityId after
-    // the direct create, so relations can anchor to it without re-creating it.
-    { ref: EVENT_REF, profileSlug: "event", title, properties: {} },
-  ];
-  const relations: CaptureGraphRelation[] = [];
-
-  const seenCompanyDomains = new Set<string>();
-  attendees.forEach((a, i) => {
-    const email = a.email!.trim();
-    const personRef = `person_${i}`;
-    const name =
-      a.displayName?.trim() || email.split("@")[0] || "Unknown contact";
-    entities.push({
-      ref: personRef,
-      profileSlug: "person",
-      title: name,
-      properties: { email, source: "google" },
-    });
-    // event attended_by person (the participant link).
-    relations.push({
-      sourceRef: EVENT_REF,
-      targetRef: personRef,
-      type: ATTENDED_BY,
-    });
-
-    // Corporate domain → company (dedup by website). One per distinct domain.
-    const domain = emailDomain(email);
-    if (
-      isCorporateDomain(domain) &&
-      domain &&
-      !seenCompanyDomains.has(domain)
-    ) {
-      seenCompanyDomains.add(domain);
-      const companyRef = `company_${domain}`;
-      entities.push({
-        ref: companyRef,
-        profileSlug: "company",
-        title: companyNameFromDomain(domain),
-        properties: { website: `https://${domain}`, source: "google" },
-      });
-      relations.push({
-        sourceRef: EVENT_REF,
-        targetRef: companyRef,
-        type: RELATES_TO,
-      });
-    }
+  const ref = eventRef(googleEventId);
+  const graph = emptySyncGraph();
+  graph.entities.push({
+    ref,
+    profileSlug: "event",
+    title,
+    properties: {
+      googleEventId,
+      source: GOOGLE_PROVIDER,
+      startDate,
+      ...(endDate ? { endDate } : {}),
+      ...(location ? { location } : {}),
+      ...(calendarLink ? { calendarLink } : {}),
+      ...(item.description?.trim()
+        ? { description: item.description.trim() }
+        : {}),
+      ...(attendeeSummary.length > 0 ? { attendees: attendeeSummary } : {}),
+      isAllDay,
+    },
+    identity: {
+      source: GOOGLE_PROVIDER,
+      externalId: googleEventId,
+      url: htmlLink ?? null,
+    },
   });
 
-  return {
-    googleEventId,
-    event: { title, properties: eventProperties },
-    entities,
-    relations,
-    isAllDay,
-  };
+  mergeSyncGraph(
+    graph,
+    participantsGraph(
+      attendees.map((a) => ({
+        email: a.email!.trim(),
+        ...(a.displayName?.trim() ? { name: a.displayName.trim() } : {}),
+      })),
+      {
+        ref,
+        personRelation: RELATION_ATTENDED_BY,
+        companyRelation: RELATION_RELATES_TO,
+      }
+    )
+  );
+
+  return { googleEventId, eventRef: ref, graph, isAllDay };
 }

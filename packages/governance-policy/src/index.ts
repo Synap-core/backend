@@ -26,6 +26,10 @@
  *                                    container (`command.execute`) is floored on
  *                                    the EVENT KEY, never on the bare verb —
  *                                    `automation.execute` must stay runnable.
+ *   2.07 podAdminSchemaChange     → always propose; a required field / default
+ *                                    onto a pod-admin-owned kind by a principal
+ *                                    who is not a pod admin (resolved by the
+ *                                    caller). Unwidenable by any rung below.
  *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
  *                                    merge), regardless of ANY override rung
  *                                    below (ownership, explicit autoApproveFor,
@@ -870,6 +874,16 @@ export interface AgentPolicyInput {
    */
   forcePropose?: boolean;
   /**
+   * The write adds a REQUIRED field or a DEFAULT to a kind the pod administrator
+   * owns (a system kind, or a shared kind with no home workspace), and the
+   * principal behind it is NOT a pod admin — rung 2.07. Such a link applies to
+   * every workspace at once and its apply door (`assertProfileSchemaWrite`)
+   * accepts only a pod admin, so it can only ever land as a proposal a pod admin
+   * approves. Resolved by the caller (it needs the profile row and a membership
+   * read; this engine stays pure). Absent/false → no effect.
+   */
+  podAdminSchemaChange?: boolean;
+  /**
    * Explicit opt-in that lets a DESTRUCTIVE action (delete/archive/purge/merge)
    * be resolved to "execute" by a downstream override rung (ownership, explicit
    * autoApproveFor, DEFAULT_AUTO_APPROVE, capability governance). Absent/false
@@ -965,6 +979,8 @@ export const PROPOSE_REASON = {
     "This is a human gate — a person must approve it, and no governance rule can widen it.",
   ARBITRARY_EXECUTION:
     "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
+  POD_ADMIN_SCHEMA_CHANGE:
+    "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -1029,6 +1045,21 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.ARBITRARY_EXECUTION,
       reasonCode: "ARBITRARY_EXECUTION",
+    };
+  }
+
+  // 2.07 POD-ADMIN SCHEMA CHANGE → always propose. A required field or a default
+  // linked onto a pod-admin-owned kind is refused at apply to anyone but a pod
+  // admin, so "execute" here would only move the refusal from the gate to the
+  // apply door (or to an APPROVAL_FAILED). Above the governance_rules store
+  // (2.8), ownership (3), autoApproveFor (4) and DEFAULT_AUTO_APPROVE (8), so no
+  // rule can widen it; above 2.1 so the proposal carries THIS reason rather
+  // than the generic scope/identity one.
+  if (input.podAdminSchemaChange === true) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE,
+      reasonCode: "POD_ADMIN_SCHEMA_CHANGE",
     };
   }
 

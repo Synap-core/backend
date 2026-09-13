@@ -64,20 +64,55 @@ describe("signalsFromExplicit", () => {
 });
 
 describe("resolveRolePayload", () => {
-  /** Minimal db stub: only `query.profiles.findFirst` is exercised. */
-  const dbReturning = (row: unknown) =>
+  /**
+   * Minimal db stub for `ProfileRepository.getBySlugForWorkspace`:
+   * select → from → leftJoin → where resolves to `{ p, accessWorkspaceId }`
+   * rows. The repository's priority sort runs for real on whatever we return.
+   */
+  const dbReturning = (rows: Array<Record<string, unknown>>) =>
     ({
-      query: { profiles: { findFirst: async () => row } },
+      select: () => ({
+        from: () => ({
+          leftJoin: () => ({
+            where: async () =>
+              rows.map((p) => ({ p, accessWorkspaceId: null })),
+          }),
+        }),
+      }),
+      query: {
+        profiles: {
+          findFirst: async () => {
+            throw new Error(
+              "resolveRolePayload must not resolve by slug alone"
+            );
+          },
+        },
+      },
     }) as unknown as Parameters<typeof resolveRolePayload>[0];
 
+  /** A db that fails the test if it is touched at all. */
+  const untouchableDb = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("resolveRolePayload read the db without a lens");
+      },
+    }
+  ) as unknown as Parameters<typeof resolveRolePayload>[0];
+
+  const lens = { workspaceId: "ws-1" };
+
   it("returns the role payload when the slug resolves to a role profile", async () => {
-    const db = dbReturning({
-      id: "prof-role-1",
-      slug: "client",
-      profileKind: "role",
-      applicableKinds: ["person", "company"],
-    });
-    expect(await resolveRolePayload(db, "client")).toEqual({
+    const db = dbReturning([
+      {
+        id: "prof-role-1",
+        slug: "client",
+        scope: "system",
+        profileKind: "role",
+        applicableKinds: ["person", "company"],
+      },
+    ]);
+    expect(await resolveRolePayload(db, "client", lens)).toEqual({
       profileId: "prof-role-1",
       slug: "client",
       applicableKinds: ["person", "company"],
@@ -85,31 +120,81 @@ describe("resolveRolePayload", () => {
   });
 
   it("returns null for a primary kind profile (not a role)", async () => {
-    const db = dbReturning({
-      id: "prof-kind-1",
-      slug: "person",
-      profileKind: "kind",
-      applicableKinds: [],
-    });
-    expect(await resolveRolePayload(db, "person")).toBeNull();
+    const db = dbReturning([
+      {
+        id: "prof-kind-1",
+        slug: "person",
+        scope: "system",
+        profileKind: "kind",
+        applicableKinds: [],
+      },
+    ]);
+    expect(await resolveRolePayload(db, "person", lens)).toBeNull();
   });
 
   it("returns null for an unknown slug (no matching profile)", async () => {
-    const db = dbReturning(undefined);
-    expect(await resolveRolePayload(db, "does-not-exist")).toBeNull();
+    expect(
+      await resolveRolePayload(dbReturning([]), "does-not-exist", lens)
+    ).toBeNull();
   });
 
   it("defaults applicableKinds to [] when the role row has none", async () => {
-    const db = dbReturning({
-      id: "prof-role-2",
-      slug: "investor",
-      profileKind: "role",
-      applicableKinds: null,
-    });
-    expect(await resolveRolePayload(db, "investor")).toEqual({
+    const db = dbReturning([
+      {
+        id: "prof-role-2",
+        slug: "investor",
+        scope: "system",
+        profileKind: "role",
+        applicableKinds: null,
+      },
+    ]);
+    expect(await resolveRolePayload(db, "investor", lens)).toEqual({
       profileId: "prof-role-2",
       slug: "investor",
       applicableKinds: [],
     });
+  });
+
+  // A MISSING lens is now a compile error (TS2554), so only an EMPTY one —
+  // a caller whose workspace resolved to null/undefined — is testable here.
+  it("fails closed with an empty workspace lens — null, and the db is never read", async () => {
+    expect(
+      await resolveRolePayload(untouchableDb, "client", { workspaceId: null })
+    ).toBeNull();
+    expect(
+      await resolveRolePayload(untouchableDb, "client", {
+        workspaceId: undefined,
+      })
+    ).toBeNull();
+  });
+
+  // The live `partner` shape: a shared row AND a workspace row share the slug.
+  // The workspace's own row must win, whatever order the rows come back in —
+  // this is the input where "first row" and "lens priority" disagree.
+  const sharedRole = {
+    id: "prof-partner-shared",
+    slug: "partner",
+    scope: "shared",
+    profileKind: "role",
+    applicableKinds: ["company"],
+  };
+  const workspaceRole = {
+    id: "prof-partner-ws",
+    slug: "partner",
+    scope: "workspace",
+    profileKind: "role",
+    applicableKinds: ["person", "company"],
+  };
+
+  it("picks the workspace's own twin over a shared twin, independent of row order", async () => {
+    for (const rows of [
+      [sharedRole, workspaceRole],
+      [workspaceRole, sharedRole],
+    ]) {
+      expect(
+        (await resolveRolePayload(dbReturning(rows), "partner", lens))
+          ?.profileId
+      ).toBe("prof-partner-ws");
+    }
   });
 });

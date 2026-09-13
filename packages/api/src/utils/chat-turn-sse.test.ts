@@ -71,6 +71,66 @@ describe("chat turn SSE contract", () => {
   });
 });
 
+it("forwards a streamed proposal's sessionId on both proposal sources — and never invents one", () => {
+  const frames = createChatTurnFrameSequencer();
+  frames.fromBroadcast({
+    event: EventNames.CHAT_STREAM,
+    data: { type: "start", threadId: "channel-1", triggerMessageId: "user-1" },
+  });
+
+  // Ordered stream: `proposal` nested under the chat:stream event.
+  expect(
+    frames.fromBroadcast({
+      event: EventNames.CHAT_STREAM,
+      data: {
+        type: "proposal",
+        threadId: "channel-1",
+        proposal: {
+          proposalId: "p-1",
+          toolName: "create_entity",
+          description: "Create task",
+          sessionId: "session-1",
+        },
+      },
+    })
+  ).toMatchObject({
+    type: "proposal",
+    proposalId: "p-1",
+    sessionId: "session-1",
+  });
+
+  // Legacy socket `ai:proposal` (no turnId).
+  expect(
+    frames.fromBroadcast({
+      event: EventNames.AI_PROPOSAL,
+      data: {
+        threadId: "channel-1",
+        proposalId: "p-2",
+        toolName: "create_entity",
+        description: "Create note",
+        sessionId: "session-1",
+      },
+    })
+  ).toMatchObject({
+    type: "proposal",
+    proposalId: "p-2",
+    sessionId: "session-1",
+  });
+
+  // A proposal without a session carries no sessionId key at all.
+  const bare = frames.fromBroadcast({
+    event: EventNames.AI_PROPOSAL,
+    data: {
+      threadId: "channel-1",
+      proposalId: "p-3",
+      toolName: "create_entity",
+      description: "Create note",
+    },
+  });
+  expect(bare).toMatchObject({ type: "proposal", proposalId: "p-3" });
+  expect(bare && "sessionId" in bare).toBe(false);
+});
+
 it("opens the stable text part before encoding AI SDK deltas", () => {
   const start = encodeAiSdkUiMessageStreamFrame({
     type: "start",

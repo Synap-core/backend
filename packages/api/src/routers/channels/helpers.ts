@@ -15,6 +15,7 @@ import { AccessContext, scopedDb } from "../../access/index.js";
 
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
+import { ChannelMessageMetadataInputSchema } from "../../utils/message-anchor.js";
 
 import { TRPCError } from "@trpc/server";
 import {
@@ -238,6 +239,12 @@ export const channelSendMessageInputSchema = z.object({
    * must never be able to force-load an arbitrary Pod skill.
    */
   onboardingSkill: z.enum(["onboard", "agent-os"]).optional(),
+  /**
+   * Client-writable message metadata — ONLY `anchor` (strict, bounded), which
+   * focuses a comment on one part of a run. Every other metadata key is
+   * server-owned. Contract + authority check: `utils/message-anchor.ts`.
+   */
+  metadata: ChannelMessageMetadataInputSchema.optional(),
 });
 
 /** Redact credential-like entry keys before persisting or forwarding context. */

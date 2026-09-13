@@ -742,8 +742,10 @@ export class HubRestClient {
 
   /**
    * Create a typed relation between two entities.
-   * Type is a free string — conventions: "related_to", "parent_of", "child_of",
-   * "belongs_to", "authored_by", "depends_on", "references".
+   * Type is NOT a free string: it must be an existing relation-def slug of the
+   * effective workspace or the pod-wide base layer (e.g. "relates_to",
+   * "works_at", "references"). An unknown slug is rejected, and the error lists
+   * the valid slugs; `GET /api/hub/discover` returns them as `relationTypes`.
    * Goes through governance — may return "proposed".
    */
   async createRelation(

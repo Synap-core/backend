@@ -10,24 +10,72 @@ import { createLogger } from "@synap-core/core";
 import type { CsvTablePlan } from "../../import/import-adapters.js";
 import type { OrchestratorContext } from "./types.js";
 import type { ImportAnalyzeInput } from "../import-orchestrator.js";
-import { createFocusSession } from "../focus-sessions/create-session.js";
+import { ensureIntakeSession } from "../intake/ensure-intake-session.js";
+import { resolveVerifiedSessionId } from "../../routers/hub-protocol/_middleware/session.js";
+import {
+  stampMaterialized,
+  type CompleteMaterializedRecord,
+} from "../proposals/stamp-materialized.js";
 
 const logger = createLogger({ module: "import-orchestrator/session" });
 
 /**
- * Resolve the session this import attaches to:
- * 1. Caller-supplied sessionId (pass-through).
+ * Resolve the session (run room) this import attaches to. Intake decision 1:
+ * an import that files a proposal ALWAYS belongs to a session.
+ *
+ * 1. A caller-supplied sessionId the caller OWNS (`resolveVerifiedSessionId`).
+ *    It used to be passed straight through, so an import could file its
+ *    proposal — and on apply, its `produced` links — into another user's
+ *    session. An unowned handle is now ignored, and the result says so.
  * 2. Playbook-templated session when `input.playbookId` is set.
- * 3. Auto-mint a bare `Import …` focus session when N≥2 items OR
- *    `forceSession` is true (founder: both paths). Best-effort — never fail import.
- * 4. Otherwise null (single-item / tiny import may stay session-agnostic).
+ * 3. Otherwise a minted intake session (`ensureIntakeSession` — a `run`). The
+ *    old "N≥2 items or forceSession" rule is gone: a one-item import that files
+ *    a proposal needs its room too, so `forceSession` no longer changes anything.
+ *
+ * Best-effort: a mint failure never fails the import, but it is REPORTED
+ * (`sessionSource: "failed"` + `error`), never folded into "no session".
  */
+export interface ImportSessionResolution {
+  sessionId: string | null;
+  /**
+   * `prior` = the session of the identical graph proposed earlier (a re-sent
+   * analyze lands back in its room); `none` = no session resolved by design
+   * (the verified-handle-only phase, or a prior proposal that had none).
+   */
+  sessionSource:
+    "provided" | "playbook" | "minted" | "prior" | "none" | "failed";
+  /** A handle was sent and a different session was used. */
+  requestedSessionIgnored: boolean;
+  error?: string;
+}
+
 export async function resolveImportSession(
   ctx: OrchestratorContext,
   input: ImportAnalyzeInput,
-  _tablePlan?: CsvTablePlan | null
-): Promise<string | null> {
-  if (input.sessionId) return input.sessionId;
+  _tablePlan?: CsvTablePlan | null,
+  /**
+   * `mint: false` resolves ONLY a handle the caller owns — no playbook session,
+   * no mint. Analyze runs this phase before its duplicate lookup, so a re-sent
+   * analyze can reuse the PRIOR proposal's session instead of minting an empty
+   * one (and staging its sources twice).
+   */
+  opts: { mint?: boolean } = {}
+): Promise<ImportSessionResolution> {
+  const requested = input.sessionId ?? null;
+  const verified = requested
+    ? await resolveVerifiedSessionId(ctx.userId, null, requested)
+    : undefined;
+  if (verified) {
+    return {
+      sessionId: verified,
+      sessionSource: "provided",
+      requestedSessionIgnored: false,
+    };
+  }
+  const requestedSessionIgnored = requested !== null;
+  if (opts.mint === false) {
+    return { sessionId: null, sessionSource: "none", requestedSessionIgnored };
+  }
 
   // Playbook-templated session (goal / outputs / playbook FK).
   if (input.playbookId && ctx.workspaceId) {
@@ -40,57 +88,47 @@ export async function resolveImportSession(
         userId: ctx.userId,
         params: input.playbookParams,
       });
-      return session.id;
+      return {
+        sessionId: session.id,
+        sessionSource: "playbook",
+        requestedSessionIgnored,
+      };
     } catch (err) {
-      // Session instantiation is best-effort — an import must not fail
-      // because a playbook instantiation hiccupped. Log and return null
-      // (the import still completes; it just won't be session-attached).
+      // Best-effort — an import must not fail because a playbook
+      // instantiation hiccupped. It falls through to a minted intake room, so
+      // the run still has a session.
       logger.warn(
         { err, playbookId: input.playbookId },
-        "import: playbook session instantiation failed (import preserved)"
+        "import: playbook session instantiation failed — minting an intake session instead"
       );
-      return null;
     }
   }
 
   const itemCount = input.items?.length ?? 0;
-  const shouldMint = input.forceSession === true || itemCount >= 2;
-  if (!shouldMint) return null;
-
-  try {
-    const goal =
-      itemCount > 0
-        ? `Import ${itemCount} ${input.source} item${itemCount === 1 ? "" : "s"}`
-        : `Import ${input.source}`;
-    const created = await createFocusSession({
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId ?? null,
-      projectId: ctx.projectId ?? null,
-      goal,
-      expectedOutputs: [
-        {
-          kind: "entity",
-          label: "Things to organize",
-          status: "pending",
-        },
-      ],
-    });
-    if (created.status === "created") {
-      return created.session.id;
-    }
-    // Proposed (agent governance) — import continues without session attachment.
-    logger.info(
-      { proposalId: created.proposalId, itemCount },
-      "import: bare Import session proposed (import continues without sessionId)"
-    );
-    return null;
-  } catch (err) {
-    logger.warn(
-      { err, itemCount },
-      "import: bare Import session mint failed (import preserved)"
-    );
-    return null;
+  const goal =
+    itemCount > 0
+      ? `Import ${itemCount} ${input.source} item${itemCount === 1 ? "" : "s"}`
+      : `Import ${input.source}`;
+  const minted = await ensureIntakeSession({
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId ?? null,
+    projectId: ctx.projectId ?? null,
+    door: "import",
+    goal,
+  });
+  if (minted.status === "failed") {
+    return {
+      sessionId: null,
+      sessionSource: "failed",
+      requestedSessionIgnored,
+      error: minted.error,
+    };
   }
+  return {
+    sessionId: minted.sessionId,
+    sessionSource: "minted",
+    requestedSessionIgnored,
+  };
 }
 
 /**
@@ -149,19 +187,37 @@ export async function stampProjectMembership(
 }
 
 /**
- * After a successful human apply of an `import.graph` proposal, mark the
- * analyze-time proposal row APPROVED (it was the user's confirmation). Only
- * flips PENDING → APPROVED; best-effort — never fails the import if the update
- * hiccups (the materialize already landed; the row is audit, not a gate).
+ * After a successful human apply of an `import.graph` proposal, record what the
+ * apply materialized on the analyze-time proposal row, then mark it APPROVED
+ * (it was the user's confirmation). Only flips PENDING → APPROVED; best-effort —
+ * never fails the import if either write hiccups (the materialize already
+ * landed; the row is audit, not a gate).
+ *
+ * The record is what makes an import undoable: without it `revert` had nothing
+ * to invert and fell back to the proposal's placeholder `targetId`, so "Undo
+ * import" always failed. It is written even when the flip does not match (a
+ * concurrent apply already approved the row) — the record MERGES, so a retry's
+ * record never erases the first attempt's.
  *
  * Human apply is the review step, so status is APPROVED (not AUTO_APPROVED).
  * There is no `resolvedAt` column on proposals — `reviewedAt` is the review stamp.
  */
 export async function closeImportProposalOnApply(
   proposalId: string | null | undefined,
-  reviewedBy: string
+  reviewedBy: string,
+  record?: CompleteMaterializedRecord
 ): Promise<void> {
   if (!proposalId) return;
+  if (record) {
+    try {
+      await stampMaterialized({ proposalId, record });
+    } catch (err) {
+      logger.error(
+        { err, proposalId },
+        "import.apply: materialized record NOT stamped — this import cannot be undone (import preserved)"
+      );
+    }
+  }
   try {
     await db
       .update(proposals)

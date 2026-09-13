@@ -1,15 +1,10 @@
 /**
  * Connectors tRPC Router
  *
- * Proxies connector operations to a Control Plane.
- * The frontend sends the CP URL with each request; the pod validates it
- * against its provisioned allowlist before proxying.
- *
- * Security: The pod only proxies to URLs that were established via a
- * cryptographically verified provisioning flow (ES256 JWT). This prevents
- * SSRF — the pod never fetches from arbitrary user-supplied URLs.
- *
- * Tier gating: Solo (free) = 1 connector. Any paid tier = unlimited.
+ * Every connection operation goes through the ONE broker seam
+ * (`resolveBroker`): the Control Plane broker on a CP-managed pod (no Nango key
+ * on the pod; the CP brokers in the pod's namespace and enforces tier limits),
+ * or this pod's own vault key when self-hosted. No procedure branches on which.
  *
  * Procedures:
  *   connectors.providers   — List available providers with connection status + limits
@@ -27,7 +22,10 @@ import {
   getDb,
   db,
   eq,
-  desc,
+  and,
+  inArray,
+  isNull,
+  isNotNull,
   entityExternalLinks,
   drizzleSql,
   upsertServiceSecret,
@@ -35,35 +33,135 @@ import {
   isServerVaultAvailable,
   getWorkspaceMembership,
 } from "@synap/database";
-import { entities, workspaces, workspaceMembers } from "@synap/database/schema";
+import {
+  secrets,
+  tools,
+  workspaces,
+  workspaceMembers,
+} from "@synap/database/schema";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
+  BrokerRefusalError,
   enrichmentProviderRegistry,
   getMessagingConnector,
+  isControlPlaneBrokered,
+  resolveBroker,
   resolveNangoConnector,
-  resolveNangoConnectorResult,
   migrateNangoEnvToVault,
   resolvePodConnectorWorkspace,
+  type ConnectionBroker,
   type UnipileConnector,
 } from "../connectors/index.js";
 import {
   syncConnectionToImport,
   pullToImport,
 } from "../services/connector-import-bridge.js";
-import { materializeConnectorTools } from "../connectors/materialize-tools.js";
-import { detachNangoConnectionRegistry } from "../services/capabilities/capability-nango-sync.js";
+import {
+  annotatePendingInstall,
+  annotateProviderPendingInstall,
+  materializeConnectorTools,
+  type MaterializeResult,
+} from "../connectors/materialize-tools.js";
+import {
+  disconnectOwnedConnection,
+  enqueueManualConnectionSync,
+  reconcileLiveConnections,
+  setConnectionKeepSyncing,
+} from "../services/capabilities/capability-nango-sync.js";
+import { resolveCapabilityNangoProviderKeys } from "../services/capabilities/capability-provider-resolution.js";
+import { getConnectionSyncStatus } from "../services/event-sync/connection-sync.js";
+import { loadProviderSyncKinds } from "../connectors/sync-kinds.js";
+import type { SyncConnectorConnection } from "../connectors/SyncConnector.js";
 
 /**
- * Returns a configured NangoConnector when self-hosted Nango is available,
- * checking env vars first then workspace.settings.nango as fallback.
- * Returns null when neither is configured (pod must use CP-managed Nango).
+ * A pod brokered by its control plane must never take a LOCAL Nango key: it
+ * would bypass the broker's per-pod namespace.
+ */
+function refuseOnBrokeredPod(): void {
+  if (isControlPlaneBrokered()) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "This pod's connections are brokered by its control plane, so a local Nango key would bypass the broker. To self-host connectors instead, set SYNAP_CONNECTOR_BROKER=local on the pod.",
+    });
+  }
+}
+
+/**
+ * First observation of a connection, reached by the client's post-OAuth refetch:
+ * make sure its provider tool exists and carries its family template
+ * (materialize), then mirror it into the connection registry — which enqueues
+ * its first sync. Idempotent. A failure is logged and does not fail the list,
+ * which the broker answered.
  *
- * Delegates to the ONE `resolveNangoConnector` resolver in the connector layer
- * so this router and the registry share a single Nango resolution path (the
- * old in-router env→ws.settings duplicate was the dual-Nango drift risk).
+ * Returns the providers whose template install is waiting on an approval: the
+ * governed apply filed proposals instead of installing, so the connection has
+ * no capability, no registry row and no sync until someone approves.
+ */
+async function mirrorObservedConnections(
+  ctx: Parameters<typeof materializeConnectorTools>[0],
+  broker: ConnectionBroker,
+  connections: SyncConnectorConnection[]
+): Promise<MaterializeResult["pendingInstall"]> {
+  if (connections.length === 0) return [];
+  let pendingInstall: MaterializeResult["pendingInstall"] = [];
+  try {
+    const refs = [...new Set(connections.map((c) => `nango://${c.provider}`))];
+    const existing = await db
+      .select({ ref: tools.credentialRef, capabilities: tools.capabilities })
+      .from(tools)
+      .where(
+        and(inArray(tools.credentialRef, refs), isNull(tools.workspaceId))
+      );
+    // A tool without verbs is a template apply that has not landed (yet, or
+    // pending approval): materialize again — the governed apply is idempotent.
+    const installed = new Set(
+      existing
+        .filter(
+          (t) => Array.isArray(t.capabilities) && t.capabilities.length > 0
+        )
+        .map((t) => t.ref)
+    );
+    if (installed.size < refs.length) {
+      pendingInstall = (await materializeConnectorTools(ctx, broker))
+        .pendingInstall;
+    }
+    await reconcileLiveConnections(ctx.userId!, connections);
+  } catch (err) {
+    logger.warn(
+      { err },
+      "connections: could not mirror newly observed connections (the list itself was returned)"
+    );
+  }
+  return pendingInstall;
+}
+
+/**
+ * This pod's OWN Nango key (vault → env → legacy settings), or null. Only the
+ * Records-API import path (`syncToImport`) still needs the concrete local
+ * connector; every connection operation goes through `requireBroker`.
  */
 async function getLocalNango() {
   return resolveNangoConnector();
+}
+
+/**
+ * The connection broker, or a TRPCError that names the real cause. "No broker"
+ * is a precondition; a broker that is configured but unreadable is a fault.
+ */
+async function requireBroker(): Promise<ConnectionBroker> {
+  const resolved = await resolveBroker("nango");
+  if (resolved.ok) return resolved.broker;
+  if (resolved.reason === "not-configured") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "No connection broker is configured on this pod.",
+    });
+  }
+  throw new TRPCError({
+    code: "INTERNAL_SERVER_ERROR",
+    message: `This pod's connection broker is unavailable (${resolved.reason}): ${resolved.error}`,
+  });
 }
 
 /**
@@ -173,20 +271,6 @@ async function getEnrichmentKeys(): Promise<{
 
 const logger = createLogger({ module: "connectors-trpc" });
 
-// ─── Connector limits per tier ───────────────────────────────────────────────
-
-/** -1 = unlimited */
-const CONNECTOR_LIMITS: Record<string, number> = {
-  solo: 1,
-  pro: -1,
-  team: -1,
-  enterprise: -1,
-};
-
-function getConnectorLimit(tier: string): number {
-  return CONNECTOR_LIMITS[tier] ?? CONNECTOR_LIMITS.solo!;
-}
-
 // ─── Cached workspace controlPlane settings ──────────────────────────────────
 
 const CACHE_TTL = 5 * 60_000; // 5 min
@@ -222,13 +306,6 @@ async function getControlPlaneSettings(): Promise<ControlPlaneSettings> {
     const settings = (ws?.settings as Record<string, unknown>) ?? {};
     const cp = (settings.controlPlane as ControlPlaneSettings) ?? {};
 
-    if (!cp.url) {
-      logger.warn(
-        { hasWorkspace: !!ws, hasControlPlane: !!cp.podId },
-        "No controlPlane.url in workspace settings — pod may need re-provisioning"
-      );
-    }
-
     cpSettingsCache = { value: cp, resolvedAt: Date.now() };
     return cp;
   } catch (err) {
@@ -240,194 +317,14 @@ async function getControlPlaneSettings(): Promise<ControlPlaneSettings> {
   }
 }
 
-// ─── CP URL validation (SSRF prevention) ─────────────────────────────────────
-
-function normalize(url: string): string {
-  return url.replace(/\/+$/, "").toLowerCase();
-}
-
-/** Blocked hostnames / IP patterns for SSRF prevention. */
-const SSRF_BLOCKED = [
-  /^localhost$/i,
-  /^127\./,
-  /^10\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^192\.168\./,
-  /^0\./,
-  /^169\.254\./,
-  /\.(internal|local|localhost)$/i,
-];
-
-/**
- * Validate a CP URL for safety (SSRF prevention).
- *
- * Strategy (layered):
- *   1. If the pod has a provisioned allowlist (DB or env var), validate against it.
- *   2. Otherwise, allow any public HTTPS URL (the pod is already auth-gated).
- *      This handles pods that were provisioned before controlPlane.url was stored.
- *
- * Always blocked: private IPs, localhost, non-HTTPS.
- */
-async function validateCpUrl(requestedUrl: string): Promise<string> {
-  const cleaned = requestedUrl.replace(/\/+$/, "");
-
-  // Basic safety: must be HTTPS, no private/internal targets
-  let parsed: URL;
-  try {
-    parsed = new URL(cleaned);
-  } catch {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Invalid Control Plane URL",
-    });
-  }
-
-  if (parsed.protocol !== "https:") {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Control Plane URL must use HTTPS",
-    });
-  }
-
-  if (SSRF_BLOCKED.some((re) => re.test(parsed.hostname))) {
-    logger.warn({ requestedUrl }, "Blocked SSRF attempt on CP URL");
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "Control Plane URL points to a private network",
-    });
-  }
-
-  // Prefer explicit allowlist when available
-  const cp = await getControlPlaneSettings();
-  const allowedUrls: string[] = [];
-
-  if (cp.url) allowedUrls.push(normalize(cp.url));
-  if (Array.isArray(cp.allowedUrls)) {
-    for (const u of cp.allowedUrls) {
-      if (typeof u === "string") allowedUrls.push(normalize(u));
-    }
-  }
-  if (config.server.controlPlaneUrl) {
-    allowedUrls.push(normalize(config.server.controlPlaneUrl));
-  }
-
-  if (allowedUrls.length > 0) {
-    // Strict mode: check against provisioned allowlist
-    if (allowedUrls.includes(normalize(cleaned))) {
-      return cleaned;
-    }
-    logger.warn(
-      { requestedUrl, allowedUrls },
-      "CP URL not in provisioned allowlist"
-    );
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: `Control Plane URL not in allowlist. Allowed: ${allowedUrls.join(", ")}`,
-    });
-  }
-
-  // No allowlist configured — pod may need re-provisioning.
-  logger.warn(
-    { requestedUrl, hasPodId: !!cp.podId },
-    "No CP URL allowlist configured — rejecting request"
-  );
-  throw new TRPCError({
-    code: "PRECONDITION_FAILED",
-    message:
-      "No Control Plane URL configured. The pod needs to be re-provisioned.",
-  });
-}
-
-/**
- * Resolve CP URL: use frontend-provided URL (validated) or fall back to
- * the provisioned URL.
- */
-async function resolveCpUrl(
-  frontendUrl: string | undefined
-): Promise<string | null> {
-  if (frontendUrl) return validateCpUrl(frontendUrl);
-
-  // Fallback: provisioned URL
-  const cp = await getControlPlaneSettings();
-  if (cp.url) return cp.url.replace(/\/+$/, "");
-  if (config.server.controlPlaneUrl) {
-    return config.server.controlPlaneUrl.replace(/\/+$/, "");
-  }
-  return null;
-}
-
-// ─── CP fetch helper ──────────────────────────────────────────────────────────
-
-/** Extract session token from request cookie header. */
-function getSessionToken(req: Request | undefined): string | undefined {
-  const cookie = req?.headers.get("cookie") ?? "";
-  const match = cookie.match(/better-auth\.session_token=([^;]+)/);
-  return match?.[1] ?? undefined;
-}
-
-/**
- * Forward a request to the CP connectors API.
- */
-async function cpFetch(
-  cpUrl: string,
-  path: string,
-  options: {
-    method: string;
-    body?: unknown;
-    sessionToken?: string;
-    query?: Record<string, string>;
-  }
-): Promise<unknown> {
-  const url = new URL(`${cpUrl}/api/connectors${path}`);
-  if (options.query) {
-    for (const [key, value] of Object.entries(options.query)) {
-      url.searchParams.set(key, value);
-    }
-  }
-
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
-
-  if (options.sessionToken) {
-    headers["Authorization"] = `Bearer ${options.sessionToken}`;
-    headers["Cookie"] = `better-auth.session_token=${options.sessionToken}`;
-  }
-
-  const response = await fetch(url.toString(), {
-    method: options.method,
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-    signal: AbortSignal.timeout(15_000),
-  });
-
-  if (!response.ok) {
-    const errBody = await response.text().catch(() => "");
-    logger.warn(
-      { status: response.status, path, body: errBody },
-      "CP connector request failed"
-    );
-    throw new TRPCError({
-      code: response.status === 404 ? "NOT_FOUND" : "INTERNAL_SERVER_ERROR",
-      message: `Connector operation failed: ${errBody}`,
-    });
-  }
-
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    logger.warn({ path, preview: text.slice(0, 200) }, "CP returned non-JSON");
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: `Connector service returned non-JSON. Check your Control Plane URL. Preview: ${text.slice(0, 100)}`,
-    });
-  }
-}
-
 // ─── Shared input schema ──────────────────────────────────────────────────────
 
-/** All CP-proxying procedures accept an optional cpUrl from the frontend. */
+/**
+ * Accepted for backward compatibility and IGNORED: the pod no longer forwards a
+ * client-named Control Plane URL (the broker's CP URL is server config).
+ * Added 2026-09-13; remove once no shipped client sends `cpUrl` (relay and
+ * browser stopped on 2026-09-13), no earlier than 2026-12-01.
+ */
 const cpUrlInput = z.object({ cpUrl: z.string().url().optional() }).optional();
 
 // ─── Router ───────────────────────────────────────────────────────────────────
@@ -435,121 +332,117 @@ const cpUrlInput = z.object({ cpUrl: z.string().url().optional() }).optional();
 export const connectorsRouter = router({
   /**
    * List available providers with their connection status for this pod.
-   * Also returns the connector limit for the current tier.
    *
-   * Local mode: reads integrations directly from self-hosted Nango.
-   * CP mode: proxies to Control Plane.
+   * `connectorLimit` is always -1: the pod never enforces a limit. The broker is
+   * the ONE enforcement point and refuses an over-limit session
+   * (`FORBIDDEN`, broker code `CONNECTOR_LIMIT`).
    */
-  providers: protectedProcedure
-    .input(cpUrlInput)
-    .query(async ({ ctx, input }) => {
-      const local = await resolveNangoConnectorResult();
+  providers: protectedProcedure.input(cpUrlInput).query(async ({ ctx }) => {
+    // The pod does not know its plan: the broker enforces limits. `tier` says
+    // only who brokers — "managed" (the control plane) or "local".
+    const tier = isControlPlaneBrokered() ? "managed" : "local";
+    const resolved = await resolveBroker("nango");
 
-      // A Nango that is configured-but-unreadable is NOT "no connectors". Report
-      // the fault instead of falling through to the CP or to an empty list —
-      // both of those render as "this pod has no connectors", which sends the
-      // operator looking for a missing feature instead of a broken credential.
-      if (!local.ok && local.reason !== "not-configured") {
+    if (!resolved.ok) {
+      // Genuinely nothing configured is the ONE state that may render as an
+      // empty list. A configured-but-unreadable broker is a fault, reported as
+      // such — never as "this pod has no connectors".
+      if (resolved.reason === "not-configured") {
         return {
           providers: [],
           connectorLimit: -1,
-          tier: "local",
-          nangoStatus: "error" as const,
-          nangoError: { reason: local.reason, message: local.error },
-        };
-      }
-
-      if (local.ok) {
-        const declared = await local.connector.listIntegrationsResult();
-        if (!declared.ok) {
-          return {
-            providers: [],
-            connectorLimit: -1,
-            tier: "local",
-            nangoStatus: "error" as const,
-            nangoError: { reason: declared.reason, message: declared.error },
-          };
-        }
-        const connections = await local.connector.listConnections(ctx.userId);
-        const connectedProviders = new Set(connections.map((c) => c.provider));
-        return {
-          providers: declared.integrations.map((i) => ({
-            id: i.uniqueKey,
-            provider: i.provider,
-            displayName: i.displayName,
-            connected: connectedProviders.has(i.uniqueKey),
-          })),
-          connectorLimit: -1,
-          tier: "local",
+          tier,
           nangoStatus: "ok" as const,
         };
       }
-
-      const cpUrl = await resolveCpUrl(input?.cpUrl);
-      if (!cpUrl) {
-        // Genuinely nothing configured: no Nango credential AND no CP. This is a
-        // real, legitimate state ("this pod offers no connectors") — the only
-        // one that may render as an empty list.
-        return {
-          providers: [],
-          connectorLimit: -1,
-          tier: "local",
-          nangoStatus: "ok" as const,
-        };
-      }
-
-      const cp = await getControlPlaneSettings();
-      const podId = cp.podId ?? null;
-      const tier = cp.tier ?? "solo";
-      const limit = getConnectorLimit(tier);
-
-      const result = (await cpFetch(cpUrl, "/providers", {
-        method: "GET",
-        sessionToken: getSessionToken(ctx.req),
-        query: podId ? { podId } : undefined,
-      })) as { providers: unknown[] };
-
       return {
-        providers: result.providers,
-        connectorLimit: limit,
+        providers: [],
+        connectorLimit: -1,
         tier,
-        nangoStatus: "ok" as const,
+        nangoStatus: "error" as const,
+        nangoError: { reason: resolved.reason, message: resolved.error },
       };
-    }),
+    }
+
+    const [declared, listed] = await Promise.all([
+      resolved.broker.listIntegrationsResult(),
+      resolved.broker.listConnectionsResult(ctx.userId),
+    ]);
+    if (!declared.ok || !listed.ok) {
+      const fault = !declared.ok
+        ? declared
+        : (listed as Extract<typeof listed, { ok: false }>);
+      return {
+        providers: [],
+        connectorLimit: -1,
+        tier,
+        nangoStatus: "error" as const,
+        nangoError: { reason: fault.reason, message: fault.error },
+      };
+    }
+    const connectionByProvider = new Map<string, string>();
+    for (const c of listed.connections) {
+      if (!connectionByProvider.has(c.provider)) {
+        connectionByProvider.set(c.provider, c.connectionId);
+      }
+    }
+    // What each connection brings, before connecting. `undefined` = unknown
+    // (template unreadable), `[]` = brings nothing.
+    const syncKindsByProvider = await loadProviderSyncKinds(
+      declared.integrations.map((i) => i.uniqueKey)
+    );
+    // A connection whose install waits for an admin is not "connected": the
+    // same mirror source `connections` annotates its rows from (idempotent;
+    // re-applies only while a provider tool has no verbs yet).
+    const pendingInstall = await mirrorObservedConnections(
+      ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
+      resolved.broker,
+      listed.connections
+    );
+    return {
+      providers: annotateProviderPendingInstall(
+        declared.integrations.map((i) => ({
+          id: i.uniqueKey,
+          provider: i.provider,
+          displayName: i.displayName,
+          connected: connectionByProvider.has(i.uniqueKey),
+          connectionId: connectionByProvider.get(i.uniqueKey),
+          syncKinds: syncKindsByProvider.get(i.uniqueKey),
+        })),
+        pendingInstall
+      ),
+      connectorLimit: -1,
+      tier,
+      nangoStatus: "ok" as const,
+    };
+  }),
 
   /**
-   * List user's active connections for this pod.
+   * List the user's live connections. A failed read THROWS — an empty array
+   * means the broker answered and the user has no connections.
    *
-   * Local mode: queries self-hosted Nango directly.
-   * CP mode: proxies to Control Plane.
+   * A deliberately SIDE-EFFECTING read: it is the client's post-OAuth refetch,
+   * so it also materializes a missing provider tool, mirrors new connections
+   * into the registry and enqueues their first sync. Every step is idempotent
+   * (about four queries in steady state), and a mirror failure is logged
+   * without failing the list the broker answered.
    */
-  connections: protectedProcedure
-    .input(cpUrlInput)
-    .query(async ({ ctx, input }) => {
-      const localNango = await getLocalNango();
-      if (localNango) {
-        return localNango.listConnections(ctx.userId);
-      }
-
-      const cpUrl = await resolveCpUrl(input?.cpUrl);
-      if (!cpUrl) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No Control Plane configured",
-        });
-      }
-
-      const cp = await getControlPlaneSettings();
-      const podId = cp.podId ?? null;
-
-      const result = (await cpFetch(cpUrl, "/connections", {
-        method: "GET",
-        sessionToken: getSessionToken(ctx.req),
-        query: podId ? { podId } : undefined,
-      })) as { connections: unknown[] };
-
-      return result.connections;
-    }),
+  connections: protectedProcedure.input(cpUrlInput).query(async ({ ctx }) => {
+    const broker = await requireBroker();
+    const listed = await broker.listConnectionsResult(ctx.userId);
+    if (!listed.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Could not list connections (${listed.reason}): ${listed.error}`,
+      });
+    }
+    const pendingInstall = await mirrorObservedConnections(
+      ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
+      broker,
+      listed.connections
+    );
+    return annotatePendingInstall(listed.connections, pendingInstall);
+  }),
 
   /**
    * Materialize the user's connected providers into canonical `tools` rows
@@ -571,25 +464,25 @@ export const connectorsRouter = router({
   syncToolRows: protectedProcedure
     .input(cpUrlInput)
     .mutation(async ({ ctx }) => {
-      const localNango = await getLocalNango();
-      if (!localNango) {
-        // No Nango resolves on this pod — nothing to materialize (no-op).
+      const resolved = await resolveBroker("nango");
+      if (!resolved.ok && resolved.reason === "not-configured") {
+        // No broker on this pod — nothing to materialize (no-op).
         return { synced: 0, toolIds: [] as string[] };
       }
+      const broker = await requireBroker();
       // Delegate to the ONE shared materializer (also used by the Hub-REST
       // connect door) so the browser and the CLI/agent take identical paths.
       const { synced, toolIds } = await materializeConnectorTools(
         ctx as unknown as Parameters<typeof materializeConnectorTools>[0],
-        localNango
+        broker
       );
       return { synced, toolIds };
     }),
 
   /**
-   * Get a Nango Connect session token for the OAuth UI.
-   *
-   * Local mode: creates session directly on self-hosted Nango — no CP needed.
-   * CP mode: proxies to CP which enforces tier-based connector limits.
+   * Get a Connect session for the OAuth UI, through the broker. On a CP-managed
+   * pod the CP stamps the pod's namespace and enforces the plan's connector
+   * limit; an over-limit request is FORBIDDEN.
    */
   session: protectedProcedure
     .input(
@@ -604,117 +497,69 @@ export const connectorsRouter = router({
         .optional()
     )
     .mutation(async ({ ctx, input }) => {
-      const localNango = await getLocalNango();
-      if (localNango) {
-        let workspaceId = input?.workspaceId ?? "";
-        if (!workspaceId) {
-          // Resolve from DB when not supplied by client
-          const database = await getDb();
-          const ws = await database.query.workspaces.findFirst();
-          workspaceId = ws?.id ?? "unknown";
-        }
+      const broker = await requireBroker();
 
-        // Validate the requested integration key exists in Nango before
-        // passing it as allowed_integrations — Nango rejects unknown keys.
-        // Fall back to "*" (the picker) ONLY when Nango answered and genuinely
-        // doesn't declare it; a failed lookup proves nothing about the key.
-        let effectiveProvider = input?.providerId ?? "*";
-        if (effectiveProvider !== "*") {
-          const declared = await localNango.listIntegrationsResult();
-          if (declared.ok) {
-            const exists = declared.integrations.some(
-              (i) => i.uniqueKey === effectiveProvider
-            );
-            if (!exists) effectiveProvider = "*";
-          }
-        }
-
-        let session: Awaited<ReturnType<typeof localNango.createSession>>;
-        try {
-          session = await localNango.createSession(
-            ctx.userId,
-            effectiveProvider,
-            workspaceId
-          );
-        } catch (err) {
-          logger.error(
-            { err, providerId: input?.providerId },
-            "Nango session failed"
-          );
-          throw new TRPCError({
-            code: "INTERNAL_SERVER_ERROR",
-            message:
-              "Could not start a connection session with this pod's Nango. A pod admin needs to check that the integration is fully configured.",
-          });
-        }
-        return {
-          token: session.sessionToken,
-          // Return the public-facing Connect URL for browser use, NOT the
-          // internal API host (e.g. http://eve-arms-nango:3003) which the
-          // browser cannot reach.
-          nangoHost: localNango.getConnectUrl(),
-          connectLink: session.redirectUrl,
-        };
+      let workspaceId = input?.workspaceId ?? "";
+      if (!workspaceId) {
+        // Resolve from DB when not supplied by client
+        const database = await getDb();
+        const ws = await database.query.workspaces.findFirst();
+        workspaceId = ws?.id ?? "unknown";
       }
 
-      const cpUrl = await resolveCpUrl(input?.cpUrl);
-      if (!cpUrl) {
+      // Validate the requested integration key is declared before passing it as
+      // allowed_integrations — Nango rejects unknown keys. Fall back to "*" (the
+      // picker) ONLY when the broker answered and genuinely doesn't declare it;
+      // a failed lookup proves nothing about the key.
+      let effectiveProvider = input?.providerId ?? "*";
+      if (effectiveProvider !== "*") {
+        const declared = await broker.listIntegrationsResult();
+        if (declared.ok) {
+          const exists = declared.integrations.some(
+            (i) => i.uniqueKey === effectiveProvider
+          );
+          if (!exists) effectiveProvider = "*";
+        }
+      }
+
+      let session: Awaited<ReturnType<ConnectionBroker["createSession"]>>;
+      try {
+        session = await broker.createSession(
+          ctx.userId,
+          effectiveProvider,
+          workspaceId
+        );
+      } catch (err) {
+        if (err instanceof BrokerRefusalError) {
+          throw new TRPCError({
+            code:
+              err.code === "CONNECTOR_LIMIT"
+                ? "FORBIDDEN"
+                : "PRECONDITION_FAILED",
+            message: err.message,
+          });
+        }
+        logger.error(
+          { err, providerId: input?.providerId, mode: broker.mode },
+          "Connect session failed"
+        );
         throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No Control Plane configured",
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Could not start a connection session. A pod admin needs to check that the integration is fully configured.",
         });
       }
-
-      const cp = await getControlPlaneSettings();
-      // podId may be absent on pods provisioned before the CP wrote it to DB.
-      // We pass it when available but do not hard-block — the CP will reject if it requires it.
-      const podId = cp.podId ?? null;
-
-      const tier = cp.tier ?? "solo";
-      const limit = getConnectorLimit(tier);
-
-      if (limit >= 0) {
-        const providersResult = (await cpFetch(cpUrl, "/providers", {
-          method: "GET",
-          sessionToken: getSessionToken(ctx.req),
-          query: podId ? { podId } : undefined,
-        })) as {
-          providers: Array<{ connected?: boolean }>;
-        };
-
-        const connectedCount = providersResult.providers.filter(
-          (p) => p.connected
-        ).length;
-
-        if (connectedCount >= limit) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: `Free plan allows ${limit} connector${limit === 1 ? "" : "s"}. Upgrade to connect more services.`,
-          });
-        }
-      }
-
-      const result = (await cpFetch(cpUrl, "/session", {
-        method: "POST",
-        sessionToken: getSessionToken(ctx.req),
-        body: {
-          ...(podId ? { podId } : {}),
-          ...(input?.providerId ? { providerId: input.providerId } : {}),
-        },
-      })) as { token: string; nangoHost?: string; connectLink?: string };
-
       return {
-        token: result.token,
-        nangoHost: result.nangoHost,
-        connectLink: result.connectLink,
+        token: session.sessionToken,
+        // The public-facing Connect URL for browser use, never an internal API
+        // host the browser cannot reach. The CP broker returns a full link.
+        nangoHost: broker.getConnectUrl() ?? undefined,
+        connectLink: session.redirectUrl,
       };
     }),
 
   /**
-   * Disconnect a connector.
-   *
-   * Local mode: revokes connection directly on self-hosted Nango.
-   * CP mode: proxies to Control Plane.
+   * Disconnect one of the caller's own connections through the broker.
    */
   disconnect: protectedProcedure
     .input(
@@ -724,27 +569,21 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      const localNango = await getLocalNango();
-      if (localNango) {
-        await localNango.revokeConnection(input.connectionId);
-        await detachNangoConnectionRegistry(input.connectionId);
-        return { success: true };
-      }
-
-      const cpUrl = await resolveCpUrl(input.cpUrl);
-      if (!cpUrl) {
+      const broker = await requireBroker();
+      const outcome = await disconnectOwnedConnection({
+        broker,
+        userId: ctx.userId,
+        connectionId: input.connectionId,
+      });
+      if (!outcome.ok) {
         throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "No Control Plane configured",
+          code:
+            outcome.reason === "not_found"
+              ? "NOT_FOUND"
+              : "INTERNAL_SERVER_ERROR",
+          message: outcome.error,
         });
       }
-
-      await cpFetch(cpUrl, "/disconnect", {
-        method: "POST",
-        sessionToken: getSessionToken(ctx.req),
-        body: { connectionId: input.connectionId },
-      });
-
       return { success: true };
     }),
 
@@ -1003,7 +842,12 @@ export const connectorsRouter = router({
    */
   autodiscover: protectedProcedure.query(async () => {
     const publicUrl = process.env.PUBLIC_URL?.trim();
-    const localNango = await getLocalNango();
+    // "Configured" here means a LOCAL Nango key — a CP-brokered pod has none.
+    const resolvedBroker = await resolveBroker("nango");
+    const localNango =
+      resolvedBroker.ok && resolvedBroker.source !== "control-plane"
+        ? true
+        : null;
 
     let nangoCandidate: {
       url: string;
@@ -1149,6 +993,7 @@ export const connectorsRouter = router({
       })
     )
     .mutation(async ({ input }) => {
+      refuseOnBrokeredPod();
       const ws = await requirePodConnectorWorkspace();
       assertVaultWritable();
       const ownerId = vaultOwnerFor(ws);
@@ -1301,15 +1146,19 @@ export const connectorsRouter = router({
     };
 
     async function probeNango(): Promise<ServiceHealth> {
-      const n = await getLocalNango();
-      if (!n)
+      const resolved = await resolveBroker("nango");
+      if (!resolved.ok) {
+        const notConfigured = resolved.reason === "not-configured";
         return {
-          configured: false,
+          configured: !notConfigured,
           reachable: false,
           authenticated: false,
-          error: "No secret key configured",
+          error: notConfigured
+            ? "No connection broker configured"
+            : `${resolved.reason}: ${resolved.error}`,
         };
-      const result = await n.probe();
+      }
+      const result = await resolved.broker.probe();
       return { configured: true, ...result };
     }
 
@@ -1460,49 +1309,81 @@ export const connectorsRouter = router({
   }),
 
   /**
-   * Sync status per provider for the current workspace.
-   * Returns the most recent lastSyncedAt + entity count per provider.
-   * Used to display "Last synced X ago" on connector cards.
+   * Sync status per connection × kind, from the ONE sync door.
+   *
+   * Replaces the old read off `entity_external_links`, which matched the user by
+   * a `{userId}:{podId}:{provider}` connection-id prefix that Connect-flow
+   * connections (Nango-generated ids) never carry — so it was always empty.
+   * `lastSyncedAt` / `entityCount` are kept for existing connector cards.
    */
   syncStatus: protectedProcedure.query(async ({ ctx }) => {
-    const rows = await db
-      .select({
-        provider: entityExternalLinks.provider,
-        connectionId: entityExternalLinks.nangoConnectionId,
-        lastSyncedAt: entityExternalLinks.lastSyncedAt,
-      })
-      .from(entityExternalLinks)
-      .orderBy(desc(entityExternalLinks.lastSyncedAt));
-
-    // Collapse to one row per provider for the current user's connections.
-    // Connection IDs are `{userId}:{podId}:{provider}` — filter by userId prefix.
-    const byProvider = new Map<
-      string,
-      { lastSyncedAt: Date; entityCount: number }
-    >();
-
-    for (const r of rows) {
-      if (!r.connectionId.startsWith(ctx.userId + ":")) continue;
-      const existing = byProvider.get(r.provider);
-      if (!existing) {
-        byProvider.set(r.provider, {
-          lastSyncedAt: r.lastSyncedAt,
-          entityCount: 1,
-        });
-      } else {
-        existing.entityCount++;
-        if (r.lastSyncedAt > existing.lastSyncedAt) {
-          existing.lastSyncedAt = r.lastSyncedAt;
-        }
-      }
-    }
-
-    return Array.from(byProvider.entries()).map(([provider, info]) => ({
-      provider,
-      lastSyncedAt: info.lastSyncedAt,
-      entityCount: info.entityCount,
+    // Scoped to the caller's OWN connections inside the door: a per-connection
+    // row carries another member's error / proposal / counts.
+    const rows = await getConnectionSyncStatus({ userId: ctx.userId });
+    return rows.map((r) => ({
+      ...r,
+      lastSyncedAt: r.lastRunAt ? new Date(r.lastRunAt) : null,
+      entityCount: r.counts ? r.counts.created + r.counts.merged : 0,
     }));
   }),
+
+  /**
+   * "Keep syncing automatically" for one of the caller's connections
+   * (`connectionId` = the registry row id). On mints the connection's `auto`
+   * rule from its approved first import; off revokes it. NOT_FOUND for another
+   * user's or a deleted row; PRECONDITION_FAILED before any import was approved.
+   */
+  setKeepSyncing: protectedProcedure
+    .input(z.object({ connectionId: z.string().min(1), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const outcome = await setConnectionKeepSyncing({
+        userId: ctx.userId,
+        connectionId: input.connectionId,
+        enabled: input.enabled,
+      });
+      if (!outcome.ok) {
+        throw new TRPCError({
+          code:
+            outcome.reason === "not_found"
+              ? "NOT_FOUND"
+              : "PRECONDITION_FAILED",
+          message: outcome.error,
+        });
+      }
+      return {
+        enabled: outcome.enabled,
+        ...(outcome.ruleId ? { ruleId: outcome.ruleId } : {}),
+      };
+    }),
+
+  /**
+   * "Sync now" for the caller's own connections. `connectionId` is the registry
+   * row id (the id `syncStatus` rows carry); with only `provider`, every one of
+   * the caller's connections for it. Another user's or a deleted row is
+   * NOT_FOUND. A queue fault surfaces as an error, never as `enqueued`.
+   */
+  syncNow: protectedProcedure
+    .input(
+      z
+        .object({
+          connectionId: z.string().min(1).optional(),
+          provider: z.string().min(1).optional(),
+        })
+        .refine((v) => !!v.connectionId || !!v.provider, {
+          message: "connectionId or provider is required",
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const outcome = await enqueueManualConnectionSync({
+        userId: ctx.userId,
+        connectionId: input.connectionId,
+        provider: input.provider,
+      });
+      if (!outcome.ok) {
+        throw new TRPCError({ code: "NOT_FOUND", message: outcome.error });
+      }
+      return { enqueued: true as const, count: outcome.count };
+    }),
 
   /**
    * Get external source links for an entity.
@@ -1524,77 +1405,88 @@ export const connectorsRouter = router({
     }),
 
   /**
-   * Pod Admin: list ALL active connections across every workspace on this pod.
+   * Pod Admin: list ALL connections on this pod.
    *
-   * Connections are tracked locally via `entity_external_links` (one row per
-   * external record synced through Nango). We collapse to one row per
-   * (provider, nangoConnectionId) so the Pod Admin grid shows distinct
-   * connections rather than every synced entity.
-   *
-   * The connection's effective workspace is inferred from the linked entity's
-   * `workspaceId`. JOINing against `workspaces` populates `workspaceName` so
-   * the grid can group by workspace without an extra round-trip.
-   *
-   * `accountEmail` is not stored on the pod (it lives on the CP) — returned
-   * as `null` for now; clients should hydrate it from the CP if needed.
+   * The connection registry is the source: one `secrets` pointer row per broker
+   * connection (`accountHint` = the broker's connection id). Sync state comes
+   * from the ONE sync door. `connectionId` is the BROKER's connection id — the
+   * same meaning it has in `connectors.connections` / `providers` (and the meaning this
+   * procedure has always had). `registryConnectionId` is the registry row id, the
+   * identity the sync door and connection governance rules key on.
+   * `accountEmail` is not stored on the pod — returned `null`.
    */
   allConnections: podAdminProcedure.query(async () => {
-    // Collect every (connectionId, provider) pair with the most recent
-    // sync timestamp + first-seen createdAt + originating entity.
-    const rows = await db
+    const registry = await db
       .select({
-        connectionId: entityExternalLinks.nangoConnectionId,
-        providerId: entityExternalLinks.provider,
-        status: entityExternalLinks.status,
-        lastSyncedAt: entityExternalLinks.lastSyncedAt,
-        createdAt: entityExternalLinks.createdAt,
-        workspaceId: entities.workspaceId,
-        workspaceName: workspaces.name,
+        id: secrets.id,
+        capabilityId: secrets.capabilityId,
+        accountHint: secrets.accountHint,
+        workspaceId: secrets.workspaceId,
+        connectionState: secrets.connectionState,
+        createdAt: secrets.createdAt,
       })
-      .from(entityExternalLinks)
-      .leftJoin(entities, eq(entityExternalLinks.entityId, entities.id))
-      .leftJoin(workspaces, eq(entities.workspaceId, workspaces.id))
-      .orderBy(desc(entityExternalLinks.lastSyncedAt));
+      .from(secrets)
+      .where(
+        and(
+          isNotNull(secrets.capabilityId),
+          isNotNull(secrets.accountHint),
+          isNull(secrets.deletedAt)
+        )
+      );
+    // sync-status: pod-admin view — every member's rows, behind podAdminProcedure.
+    const statuses = await getConnectionSyncStatus({});
 
-    // Collapse to one row per (provider, connectionId) — keep the most
-    // recent lastSyncedAt and the earliest createdAt observed.
-    type ConnectionRow = {
-      connectionId: string;
-      providerId: string;
-      workspaceId: string | null;
-      workspaceName: string | null;
-      accountEmail: string | null;
-      status: string;
-      lastSyncedAt: Date;
-      createdAt: Date;
-    };
-
-    const grouped = new Map<string, ConnectionRow>();
-    for (const r of rows) {
-      const key = `${r.providerId}::${r.connectionId}`;
-      const existing = grouped.get(key);
-      if (!existing) {
-        grouped.set(key, {
-          connectionId: r.connectionId,
-          providerId: r.providerId,
-          workspaceId: r.workspaceId ?? null,
-          workspaceName: r.workspaceName ?? null,
-          accountEmail: null,
-          status: r.status,
-          lastSyncedAt: r.lastSyncedAt,
-          createdAt: r.createdAt,
-        });
-      } else {
-        if (r.lastSyncedAt > existing.lastSyncedAt) {
-          existing.lastSyncedAt = r.lastSyncedAt;
-          existing.status = r.status;
-        }
-        if (r.createdAt < existing.createdAt) {
-          existing.createdAt = r.createdAt;
-        }
-      }
+    const providerByCapability = new Map<string, string | null>();
+    for (const capabilityId of new Set(
+      registry.map((r) => r.capabilityId).filter((c): c is string => !!c)
+    )) {
+      const keys = await resolveCapabilityNangoProviderKeys(capabilityId);
+      providerByCapability.set(capabilityId, keys[0] ?? null);
     }
 
-    return Array.from(grouped.values());
+    const workspaceIds = [
+      ...new Set(
+        registry.map((r) => r.workspaceId).filter((w): w is string => !!w)
+      ),
+    ];
+    const workspaceNames = new Map<string, string>();
+    for (const workspaceId of workspaceIds) {
+      const ws = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: { name: true },
+      });
+      if (ws) workspaceNames.set(workspaceId, ws.name);
+    }
+
+    return registry.map((r) => {
+      const runs = statuses.filter((s) => s.connectionId === r.id);
+      const lastRunAt = runs
+        .map((s) => s.lastRunAt)
+        .filter((t): t is string => !!t)
+        .sort()
+        .pop();
+      const status =
+        r.connectionState === "needs_reauth"
+          ? "needs_reauth"
+          : runs.some((s) => s.phase === "failed")
+            ? "error"
+            : "active";
+      return {
+        connectionId: r.accountHint!,
+        registryConnectionId: r.id,
+        providerId:
+          runs[0]?.provider ??
+          (r.capabilityId ? providerByCapability.get(r.capabilityId) : null) ??
+          null,
+        workspaceId: r.workspaceId ?? null,
+        workspaceName: r.workspaceId
+          ? (workspaceNames.get(r.workspaceId) ?? null)
+          : null,
+        accountEmail: null,
+        status,
+        lastSyncedAt: lastRunAt ? new Date(lastRunAt) : null,
+        createdAt: r.createdAt,
+      };
+    });
   }),
 });

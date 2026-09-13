@@ -159,6 +159,31 @@ const FIXTURES: Array<{
     kind: "run",
   },
   {
+    name: "a MINTED intake run (ensureIntakeSession stamps metadata.intake) — run",
+    // openRunSession writes origin "agent" + metadata.source for it, which is
+    // `work` on its own — so this row is only a run through the intake key.
+    row: {
+      status: "active",
+      origin: "agent",
+      playbookId: null,
+      metadata: {
+        source: "intake:capture",
+        intake: { door: "capture", mintedAt: "2026-09-13T00:00:00.000Z" },
+      },
+    },
+    kind: "run",
+  },
+  {
+    name: "a person's work session that only RECEIVED a run manifest — still work",
+    row: {
+      status: "active",
+      origin: "human",
+      playbookId: null,
+      metadata: { run: { version: 1, sourceDocumentIds: ["d1"] } },
+    },
+    kind: "work",
+  },
+  {
     name: "receipt — the agent-write container",
     row: {
       status: "active",

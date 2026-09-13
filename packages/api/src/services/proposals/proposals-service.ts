@@ -24,6 +24,7 @@ import {
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { TRPCError } from "@trpc/server";
+import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import { isNestedEnvelope } from "@synap-core/types/proposals";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
@@ -231,7 +232,18 @@ export type ProposalRevisionPatch = {
  * the field is pinned here. Nothing a reviser legitimately expresses requires
  * changing it: it is stamped once, by the door that created the proposal.
  */
-export const PROTECTED_ENVELOPE_FIELDS = ["sourceFile", "sourceId"] as const;
+export const PROTECTED_ENVELOPE_FIELDS = [
+  "sourceFile",
+  "sourceId",
+  // `connectionSync` — stamped ONLY by the connection-sync door when it files a
+  // connection's import.graph. It is an AUTHORITY INPUT twice over: approving a
+  // proposal that carries it can mint the connection's `auto` governance rule
+  // (`applyConnectionSyncApproval`), and every write materialized from it is
+  // tagged `origin: "sync"`, which silently skips every event automation. A
+  // revise that could set it would let any reviser suppress automations on an
+  // unrelated approval, or plant `keepSyncing` on a pending import.
+  "connectionSync",
+] as const;
 
 /**
  * The protected field a patch would SET or ALTER at either level, or null.
@@ -268,6 +280,8 @@ const PROTECTED_FIELD_REASON: Record<
   sourceFile: "it is system-authored file provenance, not reviewable content",
   sourceId:
     "it is the authority input reviewer eligibility is derived from, not reviewable content",
+  connectionSync:
+    "it is stamped by the connection-sync door and decides automation fan-out and sync governance, not reviewable content",
 };
 
 export interface ComputeRevisedEnvelopeParams {
@@ -281,6 +295,11 @@ export interface ComputeRevisedEnvelopeParams {
   reasoning?: string;
   /** The actor filing the revision — recorded as `by` on the history entry. */
   actorId?: string | null;
+  /**
+   * The AGENT that filed this revision on `actorId`'s behalf, when there is
+   * one — recorded as `actingAgentUserId` on the entry. Attribution only.
+   */
+  actingAgentUserId?: string | null;
 }
 
 /**
@@ -383,9 +402,16 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
     }
   }
 
-  const revision: ProposalRevision = {
+  // `by` is the HUMAN the call acts for (every door passes the key owner), so an
+  // agent's revision is indistinguishable from the human's own edit unless the
+  // acting agent is recorded beside it — the agent scorecard reads this to count
+  // only human corrections (B21). JSONB entry; absent on human revisions.
+  const revision: ProposalRevision & { actingAgentUserId?: string } = {
     at: new Date().toISOString(),
     by: actorId ?? null,
+    ...(params.actingAgentUserId
+      ? { actingAgentUserId: params.actingAgentUserId }
+      : {}),
     before,
     patch: historyPatch,
   };
@@ -414,6 +440,19 @@ export interface MergeProposalRevisionParams {
    * are separate rungs and must stay separate.
    */
   actingAgentUserId?: string | null;
+  /**
+   * ATTRIBUTION ONLY: the agent to record on the revision entry when the door
+   * must NOT grant the author rung (the Hub door, whose `actorId` is the key's
+   * human owner). Never read by authorization. Defaults to `actingAgentUserId`.
+   */
+  attributionAgentUserId?: string | null;
+  /**
+   * The `revisionHistory.length` the reviser saw (e.g. an anchored comment's
+   * `contentVersion`). Asserted UNDER the row lock: a revise against content
+   * that has since been revised is refused with CONFLICT instead of silently
+   * applying a comment to a version its author never saw. Undefined = no-op.
+   */
+  expectedRevision?: number;
   /**
    * Re-target this pending proposal's destination workspace — the TOP-LEVEL
    * `proposals.workspace_id` column, not `data.workspaceId`. Every visibility/
@@ -446,6 +485,7 @@ export async function mergeProposalRevision(
         // Authority inputs — see the review-authority gate below.
         workspaceId: proposals.workspaceId,
         agentUserId: proposals.agentUserId,
+        revisionHistory: proposals.revisionHistory,
       })
       .from(proposals)
       .where(eq(proposals.id, params.proposalId))
@@ -521,12 +561,18 @@ export async function mergeProposalRevision(
       });
     }
 
+    // Stale-content guard, inside the lock (after authority, so an unauthorized
+    // caller still reads NOT_FOUND and learns nothing from the version).
+    assertReviewedRevision(params.expectedRevision, existing.revisionHistory);
+
     const { merged, revision } = computeRevisedEnvelope({
       envelope: (existing.data ?? {}) as Record<string, unknown>,
       patch: params.patch,
       summary: params.summary,
       reasoning: params.reasoning,
       actorId: params.actorId,
+      actingAgentUserId:
+        params.attributionAgentUserId ?? params.actingAgentUserId ?? null,
     });
 
     // postgres.js 3.4.8 sql.json() is broken on the pod image — always

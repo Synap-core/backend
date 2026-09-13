@@ -112,7 +112,8 @@ vi.mock("../../../realtime/socket-events.js", () => ({
 vi.mock("../../../utils/intelligence-routing.js", () => ({
   getDefaultActiveService: async () => null,
 }));
-vi.mock("@synap/events", () => ({
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   emitSideEffects: () => {},
   getBoss: () => ({ send: async () => {} }),
 }));

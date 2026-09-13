@@ -51,6 +51,7 @@ import {
   normalizeCommandNodeData,
 } from "@synap/database";
 import type {
+  AutomationTriggerConfig,
   FlowDefinition,
   AutomationEdge,
   NodeErrorHandling,
@@ -313,6 +314,12 @@ async function executeAutomationFlow(params: {
   const actingUserId = resolveExecutionActor(run.triggeredBy, ownerId);
 
   const flow = automation.flowDefinition as FlowDefinition;
+  // The connection this automation runs its capability steps against, when its
+  // trigger names one. A node's own selector still wins, and the trigger
+  // connection is only used for a node whose verb it serves.
+  const triggerConnectionId =
+    (automation.triggerConfig as AutomationTriggerConfig | null)
+      ?.connectionId ?? null;
 
   // `definitionSnapshot` unset is the exact "this is the run's FIRST execution"
   // signal (robust against BOTH delay-resume AND crash-redelivery, where
@@ -1209,7 +1216,12 @@ async function executeAutomationFlow(params: {
                             connectionId?: string;
                           },
                           context,
-                          { workspaceId, ownerId, producerAgentUserId }
+                          {
+                            workspaceId,
+                            ownerId,
+                            producerAgentUserId,
+                            triggerConnectionId,
+                          }
                         );
                         break;
                       case "playbook_run":
@@ -1616,7 +1628,13 @@ async function executeAutomationFlow(params: {
                   connectionId?: string;
                 },
                 context,
-                { workspaceId, ownerId, stepRun, producerAgentUserId }
+                {
+                  workspaceId,
+                  ownerId,
+                  stepRun,
+                  producerAgentUserId,
+                  triggerConnectionId,
+                }
               );
               break;
             }

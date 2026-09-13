@@ -6,6 +6,10 @@ import type {
   SyncConnectorSession,
 } from "./SyncConnector.js";
 import type { ReadRequest, ReadResult } from "./ConnectorRegistry.js";
+import type {
+  BrokerConnectionResult,
+  ConnectionBroker,
+} from "./ConnectionBroker.js";
 
 const NangoRecordSchema = z
   .object({
@@ -121,12 +125,18 @@ export type NangoConnectionsResult =
   | { ok: true; connections: SyncConnectorConnection[] }
   | {
       ok: false;
-      reason: "unreachable" | "unauthenticated" | "malformed";
+      /**
+       * `truncated` = the environment filled the one-shot page, so the list may
+       * be incomplete. Fail closed: a connection past the page reads as revoked.
+       */
+      reason: "unreachable" | "unauthenticated" | "malformed" | "truncated";
       error: string;
     };
 
-export class NangoConnector implements SyncConnector {
+export class NangoConnector implements SyncConnector, ConnectionBroker {
   readonly name = "nango";
+  /** The self-hosted broker: this pod's own Nango key. See `resolveBroker`. */
+  readonly mode = "local" as const;
 
   constructor(
     private readonly overrides?: {
@@ -171,6 +181,77 @@ export class NangoConnector implements SyncConnector {
     return {
       Authorization: `Bearer ${this.secretKey}`,
       "Content-Type": "application/json",
+    };
+  }
+
+  /**
+   * One of the user's connections by id (`GET /connection/:id?provider_config_key=`).
+   * A connection of another end user, or of another provider, is `null` — the
+   * same answer as absent.
+   */
+  async getConnectionResult(
+    userId: string,
+    providerConfigKey: string,
+    connectionId: string
+  ): Promise<BrokerConnectionResult> {
+    const params = new URLSearchParams({
+      provider_config_key: providerConfigKey,
+    });
+    let res: Response;
+    try {
+      res = await fetch(
+        `${this.host}/connection/${encodeURIComponent(connectionId)}?${params}`,
+        { headers: this.authHeaders() }
+      );
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (res.status === 404) return { ok: true, connection: null };
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        reason: "unauthenticated",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    if (!res.ok) {
+      return {
+        ok: false,
+        reason: "unreachable",
+        error: `Nango returned ${res.status}`,
+      };
+    }
+    const parsed = NangoConnectionSchema.safeParse(
+      await res.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return {
+        ok: false,
+        reason: "malformed",
+        error: "Nango /connection/:id returned an unexpected shape",
+      };
+    }
+    const c = parsed.data;
+    if (
+      c.end_user?.id !== userId ||
+      c.provider_config_key !== providerConfigKey
+    ) {
+      return { ok: true, connection: null };
+    }
+    return {
+      ok: true,
+      connection: {
+        connectionId: c.connection_id,
+        provider: c.provider_config_key,
+        userId,
+        createdAt: c.created_at ? new Date(c.created_at) : new Date(),
+        lastSyncAt: c.last_fetched_at ? new Date(c.last_fetched_at) : undefined,
+        hasError: Array.isArray(c.errors) && c.errors.length > 0,
+      },
     };
   }
 
@@ -309,10 +390,13 @@ export class NangoConnector implements SyncConnector {
 
     const rows = parsed.data.connections;
     if (rows.length >= LIMIT) {
-      // No cursor to page with on this version — surface rather than truncate silently.
-      console.warn(
-        `[nango] /connection returned ${rows.length} rows (limit ${LIMIT}); more may exist but this server version cannot page.`
-      );
+      // No cursor to page with on this version, so a full page may be missing
+      // rows — and a missing row reads as "revoked". Fail closed.
+      return {
+        ok: false,
+        reason: "truncated",
+        error: `Nango /connection returned ${rows.length} rows (the one-shot limit ${LIMIT}); the list may be incomplete, so it is not trusted`,
+      };
     }
     const connections = rows
       .filter((c) => c.end_user?.id === userId)
@@ -402,7 +486,10 @@ export class NangoConnector implements SyncConnector {
 
   async revokeConnection(
     connectionId: string,
-    providerConfigKey?: string
+    providerConfigKey?: string,
+    // The acting user — required by the CP broker, unused here: this pod's own
+    // environment is already this pod's namespace.
+    _userId?: string
   ): Promise<void> {
     // TWO bugs fixed here (both let disconnect LIE about success):
     //  1. Nango's `DELETE /connection/:id` requires `provider_config_key` as a
@@ -617,6 +704,8 @@ export class NangoConnector implements SyncConnector {
    * Returns the raw response status, headers, and parsed body.
    */
   async proxyRequest(params: {
+    /** The acting user — required by the CP broker, unused by a local key. */
+    userId?: string;
     connectionId: string;
     providerConfigKey: string;
     method: string;

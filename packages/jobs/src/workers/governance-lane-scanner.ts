@@ -58,6 +58,8 @@ const logger = createLogger({ module: "governance-lane-scanner" });
  */
 export interface GovernanceWidenLaneProposalData {
   agentUserId: string;
+  // Deliberately NOT `connection`: a widen_lane rule is agent-principal, and a
+  // connection rule is principal `any` (sync writes run as the connection owner).
   targetKind: "action" | "profile" | "capability";
   targetPattern: string;
   targetProfile?: string | null;

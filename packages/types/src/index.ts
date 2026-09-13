@@ -98,6 +98,9 @@ export * from "./feeds/index.js";
 // Import domain contracts
 export * from "./imports/index.js";
 
+// Guideline scope vocabulary (leaf module — browser/relay/pod safe)
+export * from "./guidelines/index.js";
+
 // External connect (integration registration/provision contracts)
 export * from "./external-connect/index.js";
 

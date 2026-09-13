@@ -78,9 +78,12 @@ import {
   hasScope,
   httpStatusForTrpcError,
   logger,
+  rejectAgentReviewer,
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { createHubProtocolCallerContext } from "../utils.js";
+import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
@@ -662,7 +665,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
-      return c.json(row);
+      // Same projection as tRPC `focusSessions.get`: the rerun door's own rule.
+      const { assessRerunAvailability } =
+        await import("../../../services/focus-sessions/rerun-session.js");
+      return c.json({ ...row, rerun: await assessRerunAvailability(db, row) });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.get failed");
       return c.json(
@@ -1241,6 +1247,251 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/cancel — cancel a session (a run): the ONE close
+   * door with `cancelled`. Stops queued jobs and running replies bound to the
+   * session and returns the `cancel` record (stopped · notStoppable ·
+   * finished), also kept on `metadata.run.cancel`. Governed like `/complete`:
+   * an agent's cancel may come back `proposed` (403, nothing stopped yet).
+   */
+  app.post("/focus-sessions/:id/cancel", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const raw = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
+    const reason = typeof raw?.reason === "string" ? raw.reason : undefined;
+
+    try {
+      // OWNER FLOOR on the first read: another user's session and a missing
+      // one answer the SAME 404 — this lookup is not an existence oracle. (The
+      // close door floors on the owner again; this stops the read itself from
+      // telling the two apart.)
+      const floorUserId = c.get("userId") as string | undefined;
+      const existing = floorUserId
+        ? await db.query.focusSessions.findFirst({
+            where: and(
+              eq(focusSessions.id, id),
+              eq(focusSessions.userId, floorUserId)
+            ),
+          })
+        : undefined;
+      if (!existing) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const acting = await resolveActingContext(c, {
+        workspaceId: existing.workspaceId ?? undefined,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const { userId, workspaceId } = acting;
+      const agentUserId = await resolveCaptureActorUserId(
+        c,
+        c.get("agentUserId") as string | undefined,
+        { workspaceId }
+      );
+
+      const { cancelSession } =
+        await import("../../../services/focus-sessions/cancel-session.js");
+      const result = await cancelSession({
+        sessionId: id,
+        userId,
+        agentUserId,
+        reason,
+      });
+      if (!result) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      return c.json({
+        status: result.session.status,
+        session: result.session,
+        cancel: result.cancel ?? null,
+        alreadyClosed: result.cancel === undefined,
+        counts: result.counts,
+        warnings: result.warnings,
+      });
+    } catch (err) {
+      const e = err as {
+        code?: unknown;
+        message?: string;
+        proposalId?: string;
+        summary?: string;
+        reasoning?: string;
+        reviewPath?: string;
+        reviewUrl?: string;
+      };
+      if (e.code === "FORBIDDEN" && e.proposalId) {
+        return c.json(
+          {
+            status: "proposed" as const,
+            message: e.message ?? "Session cancel proposed for review",
+            proposalId: e.proposalId,
+            summary: e.summary,
+            reasoning: e.reasoning,
+            reviewPath: e.reviewPath,
+            reviewUrl: e.reviewUrl,
+            session: null,
+          },
+          403
+        );
+      }
+      if (e.code === "FORBIDDEN") {
+        return c.json({ error: e.message ?? "Forbidden" }, 403);
+      }
+      logger.error({ err, id }, "focus-sessions.cancel failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/revert — undo everything a session (a run)
+   * applied. Every approved / auto-approved proposal of the session is reverted
+   * newest-first through the canonical `proposals.revert` door, and each gets
+   * an outcome: reverted · partial · skipped (changed since) · permanent
+   * (external side effect) · unsupported · failed. Items the user edited since
+   * are left alone and named — never silently deleted.
+   *
+   * Human review, like `/proposals/:id/revert`: an agent credential is refused.
+   */
+  app.post("/focus-sessions/:id/revert", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const blocked = rejectAgentReviewer(c, "revert");
+    if (blocked) return blocked;
+
+    const id = c.req.param("id");
+    const raw = (await c.req.json().catch(() => ({}))) as {
+      reason?: unknown;
+      proposalIds?: unknown;
+    };
+    const reason = typeof raw?.reason === "string" ? raw.reason : undefined;
+    let proposalIds: string[] | undefined;
+    if (raw?.proposalIds !== undefined) {
+      const parsedIds = z
+        .array(z.string().uuid())
+        .min(1)
+        .max(500)
+        .safeParse(raw.proposalIds);
+      if (!parsedIds.success) {
+        return c.json(
+          { error: "proposalIds must be a non-empty array of proposal UUIDs" },
+          400
+        );
+      }
+      proposalIds = parsedIds.data;
+    }
+
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const callerContext = await createHubProtocolCallerContext(
+        userId,
+        scopes
+      );
+      const result = await revertSession({
+        sessionId: id,
+        userId,
+        reason,
+        proposalIds,
+        callerContext,
+      });
+      if (!result.ok) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      return c.json(
+        {
+          sessionId: result.sessionId,
+          proposals: result.proposals,
+          counts: result.counts,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.revert failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/rerun — a NEW session `spawned_from` this run
+   * that re-analyses its stored sources with the current guidelines.
+   * Body: `{ mode: "replace"|"add", scope?: { sourceDocumentIds }, dryRun?, reason? }`.
+   * Dry-run variant: `?dryRun=true` (or `dryRun: true`) — counts + cap verdict,
+   * nothing written. Same service and response body as tRPC
+   * `focusSessions.rerun`. Refusals: 404 unknown session · 403 an agent
+   * credential asking for `replace` (reverting approved work is human review)
+   * · 409 still open / over cap / no stored sources / mint failed.
+   */
+  app.post("/focus-sessions/:id/rerun", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    const parsed = z
+      .object({
+        mode: z.enum(["replace", "add"]),
+        scope: z
+          .object({
+            sourceDocumentIds: z.array(z.string().uuid()).min(1).max(500),
+          })
+          .optional(),
+        dryRun: z.boolean().optional(),
+        reason: z.string().max(2000).optional(),
+      })
+      .safeParse(await c.req.json().catch(() => null));
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const agentUserId = (c.get("agentUserId") as string | undefined) ?? null;
+      const callerContext = await createHubProtocolCallerContext(
+        userId,
+        scopes,
+        null,
+        null,
+        null,
+        agentUserId
+      );
+      const { rerunSession } =
+        await import("../../../services/focus-sessions/rerun-session.js");
+      const result = await rerunSession({
+        sessionId: id,
+        userId,
+        mode: parsed.data.mode,
+        scope: parsed.data.scope,
+        dryRun: parsed.data.dryRun || c.req.query("dryRun") === "true",
+        reason: parsed.data.reason,
+        agentUserId,
+        callerContext,
+      });
+      if (result.ok) return c.json(result, 200);
+      const status =
+        result.reason === "not_found"
+          ? 404
+          : result.reason === "replace_is_a_human_decision"
+            ? 403
+            : 409;
+      return c.json(result, status);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.rerun failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
       );
     }
   });

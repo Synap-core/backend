@@ -59,13 +59,55 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v4 = v3 + the tool row's merged JSONB (`PROJECTED_TOOL_MERGE_FIELDS`: config,
+ *      metadata) via `capabilityToolMergeDrift`. Before it, a template change
+ *      touching only `tools[].metadata` (nango-google's `metadata.sync`
+ *      defaults) diffed clean, got stamped, and reached no installed pod.
  * v3 = v2 + `metadata.allowedHosts` (the sandbox egress declaration — see
  *      `declaredAllowedHosts`). Adding it retires every v2 stamp so each
  *      container re-diffs once and a declared allowlist actually lands.
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 3;
+export const DRIFT_COMPARATOR_VERSION = 4;
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    !Array.isArray(v) &&
+    Object.getPrototypeOf(v) === Object.prototype
+  );
+}
+
+/**
+ * Deep-merge a template's default `metadata`/`config` UNDER the tool's existing
+ * runtime values — existing wins at every leaf, the template only supplies keys the
+ * tool does not already have. Preserves operator runtime state (e.g. the Discord
+ * bot's `metadata.discord` channel links) across a boot-time template reconcile that
+ * would otherwise reset it to the template's empty defaults. Arrays are treated as
+ * leaves (existing replaces, never concatenated).
+ *
+ * Lives HERE (not in the applier) so the drift comparator computes tool-row
+ * drift with the applier's exact merge — `create-from-definition.ts` imports it.
+ */
+export function mergePreservingExisting(
+  template: Record<string, unknown>,
+  existing: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...template };
+  for (const key of Object.keys(existing)) {
+    const ev = existing[key];
+    out[key] =
+      key in template && isPlainObject(template[key]) && isPlainObject(ev)
+        ? mergePreservingExisting(
+            template[key] as Record<string, unknown>,
+            ev as Record<string, unknown>
+          )
+        : ev; // existing leaf (incl. arrays / empty-string) wins
+  }
+  return out;
+}
 
 /** The subset of a live `skills` row the drift check reads. */
 export interface InstalledSkillRow {
@@ -294,11 +336,70 @@ export function capabilityDefinitionDrift(
   return { missing, drifted };
 }
 
-/** The subset of a live `tools` row the verb-catalog drift check reads. */
+/** The subset of a live `tools` row the tool drift checks read. */
 export interface InstalledToolRow {
   name: string;
   /** `tools.capabilities` — the stored verb catalog. */
   capabilityCatalog?: ToolVerbCatalogEntry[] | null;
+  /** `tools.config` / `tools.metadata` — see `PROJECTED_TOOL_MERGE_FIELDS`. */
+  config?: unknown;
+  metadata?: unknown;
+}
+
+/**
+ * The JSONB fields the applier deep-merges template-UNDER-existing onto an
+ * EXISTING tool row (`create-from-definition.ts`, existing-tool `.set({...})`,
+ * each via `mergePreservingExisting`). Derived from that block and pinned by
+ * `capability-drift.projection-parity.tripwire.test.ts` — a new merged field
+ * there without an entry here fails the tripwire by name.
+ */
+export const PROJECTED_TOOL_MERGE_FIELDS = ["config", "metadata"] as const;
+
+/** The subset of a definition tool the merge drift check reads. */
+export interface DefinitionToolRow {
+  name?: unknown;
+  config?: unknown;
+  metadata?: unknown;
+}
+
+/**
+ * Tool-row drift on the merged JSONB fields: a tool DRIFTS exactly when a
+ * re-apply would change it, i.e. the template declares a key path the live row
+ * lacks. Computed with the applier's OWN merge, so the diff and the convergence
+ * cannot disagree:
+ *   - after one apply every declared path exists and the merge is the identity,
+ *     so a converged row never re-applies on the next boot;
+ *   - a user override (an existing leaf that differs from the template) is
+ *     never drift, because the merge keeps it;
+ *   - runtime keys the template never declares (sync run state, watermarks)
+ *     are never drift.
+ */
+export function capabilityToolMergeDrift(
+  installedToolRows: InstalledToolRow[],
+  declaredTools: DefinitionToolRow[]
+): { drifted: string[] } {
+  const installedByName = new Map(
+    installedToolRows.map((row) => [row.name, row])
+  );
+  const drifted: string[] = [];
+  for (const tool of declaredTools) {
+    // Same skip as the skill / verb-catalog diffs: an interpolated name cannot
+    // be matched exactly, and an absent tool is missingToolMemberships' concern.
+    if (typeof tool.name !== "string" || tool.name.includes("{{")) continue;
+    const installed = installedByName.get(tool.name);
+    if (!installed) continue;
+    const differs = PROJECTED_TOOL_MERGE_FIELDS.some((field) => {
+      const template = tool[field];
+      if (!isPlainObject(template)) return false;
+      const live = isPlainObject(installed[field]) ? installed[field] : {};
+      return (
+        canonicalJson(mergePreservingExisting(template, live)) !==
+        canonicalJson(live)
+      );
+    });
+    if (differs) drifted.push(tool.name);
+  }
+  return { drifted };
 }
 
 /**

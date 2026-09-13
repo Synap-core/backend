@@ -22,6 +22,8 @@ import {
 import type { CapabilityRendererPage } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 
+import { assertRendererRefAllowedForScope } from "../profiles/renderer-ref-scope.js";
+
 export type CapabilityRendererScope = "workspace" | "capability";
 
 export interface SetCapabilityRendererInput {
@@ -46,6 +48,11 @@ export async function setCapabilityRenderer(
   input: SetCapabilityRendererInput
 ): Promise<void> {
   const { userId, workspaceId, capabilityId, pages, scope } = input;
+  // The shared placement rule — also guards the proposal executor, which
+  // replays a stored payload through here.
+  for (const page of pages) {
+    assertRendererRefAllowedForScope(page.ref, "capability", null);
+  }
   const db = await getDb();
 
   if (scope === "capability") {

@@ -48,6 +48,7 @@ import {
   workspaces,
   users,
   proposals,
+  secrets,
 } from "@synap/database/schema";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
@@ -195,7 +196,7 @@ const CreateInputSchema = z
     agentUserId: z.string().min(1).optional(),
     scopeKind: z.enum(["workspace", "pod"]),
     workspaceId: z.string().uuid().optional(),
-    targetKind: z.enum(["action", "profile", "capability"]),
+    targetKind: z.enum(["action", "profile", "capability", "connection"]),
     targetPattern: z.string().min(1),
     targetProfile: z.string().min(1).optional(),
     verdict: z.enum(["auto", "propose"]),
@@ -213,6 +214,12 @@ const CreateInputSchema = z
   .refine((v) => v.targetKind !== "profile" || !!v.targetProfile, {
     message: "targetProfile is required when targetKind is 'profile'",
     path: ["targetProfile"],
+  })
+  // A connection rule governs a connection's SYNC writes, which run as the
+  // connection's owner — there is no agent to narrow to.
+  .refine((v) => v.targetKind !== "connection" || v.principalKind === "any", {
+    message: "a connection rule applies to any principal (principalKind 'any')",
+    path: ["principalKind"],
   });
 
 export const governanceRulesRouter = router({
@@ -353,7 +360,7 @@ export const governanceRulesRouter = router({
         agentUserId: z.string().min(1).optional(),
         scopeKind: z.enum(["pod", "workspace"]),
         workspaceId: z.string().uuid().optional(),
-        targetKind: z.enum(["action", "profile", "capability"]),
+        targetKind: z.enum(["action", "profile", "capability", "connection"]),
         targetPattern: z.string().min(1),
         targetProfile: z.string().min(1).optional(),
         verdict: z.enum(["auto", "propose"]),
@@ -502,6 +509,27 @@ export const governanceRulesRouter = router({
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
       await assertCanManageRule(ctx.userId, input);
+
+      // A connection rule widens (or narrows) what a connection may write without
+      // review — only the connection's owner can give that consent.
+      if (input.targetKind === "connection") {
+        const conn = await db.query.secrets.findFirst({
+          where: eq(secrets.id, input.targetPattern),
+          columns: { userId: true },
+        });
+        if (!conn) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Connection not found",
+          });
+        }
+        if (conn.userId !== ctx.userId) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You do not own this connection — cannot manage its rules",
+          });
+        }
+      }
 
       const [rule] = await db
         .insert(governanceRules)

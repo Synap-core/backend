@@ -8,14 +8,16 @@ import {
   type GCalItem,
 } from "./map-gcal-to-graph.js";
 
+// Literal `events.list` item shape (fields per the Calendar v3 Events resource).
 const timed: GCalItem = {
   id: "gcal_abc123",
+  status: "confirmed",
   summary: "Sync with Acme",
   start: { dateTime: "2026-07-16T15:30:00Z" },
   end: { dateTime: "2026-07-16T16:15:00Z" },
   location: "Paris office",
   hangoutLink: "https://meet.google.com/abc-defg-hij",
-  htmlLink: "https://calendar.google.com/event?eid=xyz",
+  htmlLink: "https://www.google.com/calendar/event?eid=Z2NhbF9hYmMxMjM",
   description: "Quarterly review",
   attendees: [
     { email: "jelle@acme-corp.io", displayName: "Jelle Bets" },
@@ -47,97 +49,100 @@ describe("Layer-2 dedup helpers", () => {
   it("normalizes titles (case, trim, inner whitespace)", () => {
     expect(normalizeEventTitle("  Sync   With Acme ")).toBe("sync with acme");
     expect(normalizeEventTitle(null)).toBe("");
-    expect(normalizeEventTitle(undefined)).toBe("");
   });
 
-  it("buckets timed events to the hour", () => {
+  it("buckets timed events to the hour and recurring occurrences apart", () => {
     const w = startBucketWindow("2026-07-16T15:47:12Z", false)!;
     expect(w.gte).toBe("2026-07-16T15:00:00.000Z");
     expect(w.lt).toBe("2026-07-16T16:00:00.000Z");
+    const next = startBucketWindow("2026-07-23T15:00:00Z", false)!;
+    expect(next.gte).not.toBe(w.gte);
   });
 
-  it("buckets recurring same-title occurrences into DISTINCT windows", () => {
-    const a = startBucketWindow("2026-07-16T15:00:00Z", false)!;
-    const b = startBucketWindow("2026-07-23T15:00:00Z", false)!;
-    expect(a.gte).not.toBe(b.gte);
-  });
-
-  it("buckets all-day events to the day", () => {
+  it("buckets all-day events to the day; null on unparseable", () => {
     const w = startBucketWindow("2026-08-01", true)!;
     expect(w.gte).toBe("2026-08-01T00:00:00.000Z");
     expect(w.lt).toBe("2026-08-02T00:00:00.000Z");
-  });
-
-  it("returns null on an unparseable start", () => {
     expect(startBucketWindow("not-a-date", false)).toBeNull();
   });
 });
 
 describe("mapGcalToGraph — timed event with corporate attendee", () => {
   const g = mapGcalToGraph(timed)!;
-  const byRef = Object.fromEntries(g.entities.map((e) => [e.ref, e]));
+  const byRef = Object.fromEntries(g.graph.entities.map((e) => [e.ref, e]));
+  const event = byRef["event:gcal_abc123"]!;
 
-  it("returns the googleEventId", () => {
+  it("shapes the event for event-sync and keys it on the Google event id", () => {
     expect(g.googleEventId).toBe("gcal_abc123");
+    expect(event.profileSlug).toBe("event");
+    expect(event.title).toBe("Sync with Acme");
+    expect(event.properties).toMatchObject({
+      googleEventId: "gcal_abc123",
+      source: "google",
+      startDate: "2026-07-16T15:30:00Z",
+      endDate: "2026-07-16T16:15:00Z",
+      calendarLink: "https://meet.google.com/abc-defg-hij",
+      location: "Paris office",
+      isAllDay: false,
+      attendees: [{ email: "jelle@acme-corp.io", name: "Jelle Bets" }],
+    });
   });
 
-  it("shapes the bare event for event-sync (startDate/endDate/calendarLink/location)", () => {
-    expect(g.event.properties.googleEventId).toBe("gcal_abc123");
-    expect(g.event.properties.source).toBe("google");
-    expect(g.event.properties.startDate).toBe("2026-07-16T15:30:00Z");
-    expect(g.event.properties.endDate).toBe("2026-07-16T16:15:00Z");
-    // Meet link preferred as calendarLink; physical address as location.
-    expect(g.event.properties.calendarLink).toBe(
-      "https://meet.google.com/abc-defg-hij"
-    );
-    expect(g.event.properties.location).toBe("Paris office");
-    expect(g.event.properties.isAllDay).toBe(false);
-    expect(g.event.title).toBe("Sync with Acme");
+  it("carries the API's htmlLink as the external link url (never built)", () => {
+    expect(event.identity).toEqual({
+      source: "google",
+      externalId: "gcal_abc123",
+      url: "https://www.google.com/calendar/event?eid=Z2NhbF9hYmMxMjM",
+    });
   });
 
-  it("carries the acted-on attendees on the event (self + resource dropped)", () => {
-    expect(g.event.properties.attendees).toEqual([
-      { email: "jelle@acme-corp.io", name: "Jelle Bets" },
-    ]);
+  it("mints the attendee person (email identity) and corporate company", () => {
+    expect(byRef["person:jelle@acme-corp.io"]).toMatchObject({
+      profileSlug: "person",
+      title: "Jelle Bets",
+      properties: { email: "jelle@acme-corp.io" },
+      identity: {
+        source: "email",
+        externalId: "jelle@acme-corp.io",
+        url: null,
+      },
+    });
+    expect(byRef["company:acme-corp.io"]).toMatchObject({
+      profileSlug: "company",
+      title: "Acme Corp",
+      properties: { website: "https://acme-corp.io" },
+    });
   });
 
-  it("includes the event as an entity ref so relations can anchor to it", () => {
-    expect(byRef.event.profileSlug).toBe("event");
-  });
-
-  it("mints a person from the corporate attendee (email drives dedup)", () => {
-    expect(byRef.person_0.title).toBe("Jelle Bets");
-    expect(byRef.person_0.properties?.email).toBe("jelle@acme-corp.io");
-  });
-
-  it("mints a company only for the corporate domain (website = dedup key)", () => {
-    const company = g.entities.find((e) => e.profileSlug === "company")!;
-    expect(company.title).toBe("Acme Corp");
-    expect(company.properties?.website).toBe("https://acme-corp.io");
-  });
-
-  it("links event→person (attended_by) and event→company (relates_to)", () => {
-    expect(g.relations).toEqual(
+  it("links attended_by, relates_to and works_at with existing relation slugs", () => {
+    expect(g.graph.relations).toEqual(
       expect.arrayContaining([
         {
-          sourceRef: "event",
-          targetRef: "person_0",
+          sourceRef: "event:gcal_abc123",
+          targetRef: "person:jelle@acme-corp.io",
           type: "attended_by",
         },
         {
-          sourceRef: "event",
-          targetRef: "company_acme-corp.io",
+          sourceRef: "event:gcal_abc123",
+          targetRef: "company:acme-corp.io",
           type: "relates_to",
+        },
+        {
+          sourceRef: "person:jelle@acme-corp.io",
+          targetRef: "company:acme-corp.io",
+          type: "works_at",
         },
       ])
     );
+    expect(g.graph.relations).toHaveLength(3);
   });
 
-  it("does NOT create a person for the owner (self) or the meeting room (resource)", () => {
-    const emails = g.entities
-      .filter((e) => e.profileSlug === "person")
-      .map((e) => e.properties?.email);
-    expect(emails).toEqual(["jelle@acme-corp.io"]);
+  it("drops the owner (self) and the meeting room (resource)", () => {
+    expect(
+      g.graph.entities
+        .filter((e) => e.profileSlug === "person")
+        .map((e) => e.ref)
+    ).toEqual(["person:jelle@acme-corp.io"]);
   });
 });
 
@@ -150,52 +155,42 @@ describe("mapGcalToGraph — all-day event, consumer attendee", () => {
     attendees: [{ email: "sam@gmail.com", displayName: "Sam Doe" }],
   })!;
 
-  it("keys on DATE granularity + flags all-day", () => {
+  it("keys on DATE granularity, no company for a consumer mailbox", () => {
     expect(g.isAllDay).toBe(true);
-    expect(g.event.properties.isAllDay).toBe(true);
-    expect(g.event.properties.startDate).toBe("2026-08-01");
-    expect(g.event.properties.endDate).toBe("2026-08-02");
-  });
-
-  it("does NOT mint a company for a consumer mailbox", () => {
-    expect(g.entities.some((e) => e.profileSlug === "company")).toBe(false);
-    // event + one person only.
-    expect(g.entities.map((e) => e.profileSlug).sort()).toEqual([
+    expect(g.graph.entities.map((e) => e.profileSlug).sort()).toEqual([
       "event",
       "person",
     ]);
+    expect(g.graph.relations).toEqual([
+      {
+        sourceRef: "event:gcal_allday",
+        targetRef: "person:sam@gmail.com",
+        type: "attended_by",
+      },
+    ]);
   });
 
-  it("still links the person via attended_by", () => {
-    expect(g.relations).toEqual([
-      { sourceRef: "event", targetRef: "person_0", type: "attended_by" },
-    ]);
+  it("stores a null url when the API gave no htmlLink", () => {
+    expect(g.graph.entities[0]!.identity.url).toBeNull();
   });
 });
 
 describe("mapGcalToGraph — degenerate", () => {
-  it("returns null without an id", () => {
+  it("returns null without an id, without a start, or when cancelled", () => {
     expect(
       mapGcalToGraph({
         summary: "x",
         start: { dateTime: "2026-01-01T00:00:00Z" },
       })
     ).toBeNull();
-  });
-
-  it("returns null without a parseable start", () => {
     expect(mapGcalToGraph({ id: "x", summary: "no start" })).toBeNull();
-  });
-
-  it("yields just the event ref when there are no attendees", () => {
-    const g = mapGcalToGraph({
-      id: "solo",
-      summary: "Focus block",
-      start: { dateTime: "2026-01-01T09:00:00Z" },
-    })!;
-    expect(g.entities.map((e) => e.profileSlug)).toEqual(["event"]);
-    expect(g.relations).toEqual([]);
-    expect(g.event.properties.attendees).toBeUndefined();
+    expect(
+      mapGcalToGraph({
+        id: "c",
+        status: "cancelled",
+        start: { dateTime: "2026-01-01T00:00:00Z" },
+      })
+    ).toBeNull();
   });
 
   it("falls back to email local-part when no display name is given", () => {
@@ -204,7 +199,7 @@ describe("mapGcalToGraph — degenerate", () => {
       start: { dateTime: "2026-01-01T00:00:00Z" },
       attendees: [{ email: "founder@startup.xyz" }],
     })!;
-    const person = g.entities.find((e) => e.profileSlug === "person")!;
+    const person = g.graph.entities.find((e) => e.profileSlug === "person")!;
     expect(person.title).toBe("founder");
   });
 });

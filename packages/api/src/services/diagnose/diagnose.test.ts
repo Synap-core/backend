@@ -30,6 +30,48 @@ function proposalRow(
 }
 
 describe("computeAgentScorecard", () => {
+  it("B21: counts only HUMAN revisions as corrections — agent-attributed or self-authored revisions are not", () => {
+    const opts = {
+      agentId: "agent-1",
+      agentName: null,
+      agentType: null,
+      todayCount: 0,
+      cap: 10,
+    };
+    const rev = (over: Record<string, unknown>) =>
+      ({
+        at: "2026-09-13T00:00:00Z",
+        by: "human-1",
+        before: {},
+        patch: {},
+        ...over,
+      }) as never;
+    const card = computeAgentScorecard(
+      [
+        // an agent revising from a room comment, recorded under its human owner
+        proposalRow({
+          targetId: "a",
+          revisionHistory: [rev({ actingAgentUserId: "agent-1" })],
+        }),
+        // a door that records the agent itself as the actor
+        proposalRow({
+          targetId: "b",
+          revisionHistory: [rev({ by: "agent-1" })],
+        }),
+        // a human edit
+        proposalRow({ targetId: "c", revisionHistory: [rev({})] }),
+        // agent revised, THEN a human corrected it — still a human correction
+        proposalRow({
+          targetId: "d",
+          revisionHistory: [rev({ actingAgentUserId: "agent-1" }), rev({})],
+        }),
+      ],
+      opts
+    );
+    expect(card.counts.revised).toBe(2);
+    expect(card.rates.reviseRate).toBe(0.5);
+  });
+
   it("computes counts, rates and a rejection histogram", () => {
     const rows: ScorecardProposalRow[] = [
       proposalRow({ status: "approved", targetId: "a" }),

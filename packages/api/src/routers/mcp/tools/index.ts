@@ -453,7 +453,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List all available entity types (profiles) — system profiles plus custom types. ALWAYS call at session start before creating entities. Never assume 'deal' or custom types exist — workspaces differ. Returns a lightweight digest per profile: id, slug, displayName, entityScope (pod-wide vs workspace-scoped), description, icon. For full property schemas use synap_orient or GET /discover.",
+          "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, entityScope (pod-wide vs workspace-scoped), description, icon), and every relation type that resolves for the same lens (slug, displayName, description, isDirectional, inverseLabel, workspaceId — null means pod-wide). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing from `profiles`), never silently dropped. For full property schemas use synap_orient or GET /discover.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1591,7 +1591,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+          "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1617,6 +1617,86 @@ export const tools = {
             },
           },
           required: ["sessionId"],
+        },
+      },
+      {
+        name: "synap_revert_session",
+        annotations: {
+          title: "Ask the user to revert a session",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Reverting takes back work that was already approved, so it is a HUMAN decision: this tool NEVER reverts anything. Call it when a session (a run), some of its proposals, or one item of a proposal should be undone. It answers status 'refused' — that is the contract, NOT an error — with the session's revertable proposals and a link to each: hand those to the user. The user reverts from the session room or the proposal — everything, only some proposals, or one item; items edited since are skipped with the reason.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session (run) UUID.",
+            },
+            proposalIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Optional: only these proposals of the session should be undone.",
+            },
+            proposalId: {
+              type: "string",
+              description:
+                "Optional: one proposal of the session — with opKey, one item of it.",
+            },
+            opKey: {
+              type: "string",
+              description:
+                "Optional: one item of proposalId — its key in the proposal's materialized record (an op ref, or `<sourceRef>-><targetRef>:<type>` for a link).",
+            },
+          },
+          required: ["sessionId"],
+        },
+      },
+      {
+        name: "synap_rerun_session",
+        annotations: {
+          title: "Rerun a session",
+          readOnlyHint: false,
+          // `replace` reverts the previous run's approved work first.
+          destructiveHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Re-analyse a finished session (a run) from its STORED sources with the CURRENT guidelines, as a NEW session spawned from it. ALWAYS call with dryRun:true first: it returns the counts (sources, what would be reverted, pending proposals left alone, estimated structure calls) and whether it is within the cap — nothing is written. mode 'add' re-analyses on top of the previous run; mode 'replace' reverts the previous run first and is a HUMAN decision (an agent gets `ok:false, reason:'replace_is_a_human_decision'` — hand the user the session room). Each re-analysed source files its writes through the governed capture/import doors, so an item outcome 'proposed' is normal, NOT an error. A still-open session is refused (cancel it first); refusals come back as { ok:false, reason, message }.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The finished focus session (run) UUID to rerun.",
+            },
+            mode: {
+              type: "string",
+              enum: ["add", "replace"],
+              description:
+                "'add' = re-analyse on top of the previous run. 'replace' = revert the previous run first (human only).",
+            },
+            dryRun: {
+              type: "boolean",
+              description:
+                "true = counts + cap verdict only, nothing written. Do this first.",
+            },
+            sourceDocumentIds: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Optional: rerun only these stored sources of the session (the ids in its run manifest).",
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are rerunning (e.g. which guideline changed) — recorded on the new session's run manifest for the reviewer.",
+            },
+          },
+          required: ["sessionId", "mode"],
         },
       },
       {
@@ -1895,7 +1975,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Given an entity's profile (e.g. 'post', 'deal', 'lead'), find active playbooks whose SUBJECT is that kind of entity — the Capture→Session matcher answering 'is there a playbook FOR this thing?'. Read-only. Returns candidates ({ id, name, goalTemplate, subjectProfileSlug, params, executor }); [] when none. Launch a returned candidate as an entity-bound session with synap_start_session (its id as templateId + the entity as subjectEntityId).",
+          "Given an entity's profile (e.g. 'post', 'deal', 'lead'), find active playbooks whose SUBJECT is that kind of entity — the Capture→Session matcher answering 'is there a playbook FOR this thing?'. Read-only. Returns candidates, best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Launch a returned candidate as an entity-bound session with synap_start_session (its id as templateId + the entity as subjectEntityId).",
         inputSchema: {
           type: "object",
           properties: {
@@ -1913,6 +1993,11 @@ export const tools = {
               type: "string",
               description:
                 "Workspace ID to scope the lookup (optional — falls back to the user's first workspace). Pod-wide playbooks match regardless.",
+            },
+            intentText: {
+              type: "string",
+              description:
+                "Optional: what the user said they want (their capture note / request). RANKS the candidates — never filters them — and each result then carries `score` and a human-readable `reason` (e.g. 'You mentioned “review” · Made for deal items'). Show the reason when you suggest a playbook; never run one without the user's confirmation.",
             },
           },
           required: ["profileSlug"],
@@ -2194,6 +2279,11 @@ export const tools = {
               type: "string",
               description:
                 "One line the reviewer sees on the proposal card (structured payloads). Auto-generated when omitted — write your own, it is what the user reads.",
+            },
+            validate: {
+              type: "boolean",
+              description:
+                'Dry run for the structured `entities[]` lane: run the capture\'s validators and write NOTHING. Returns `dryRun: true` and `status: "valid"` or `"invalid"`, with every problem at once: ref and shape problems in `problems[]`, unknown relation slugs in `relationsFailed[]` (same shape as a real call, with the valid slugs named), and unknown profiles or invalid properties in `invalidEntities[]`. `notChecked[]` lists what only the real write can decide. Not supported on the `text` lane.',
             },
             profileSlug: {
               type: "string",

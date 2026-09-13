@@ -57,6 +57,11 @@ import {
   MIN_CONFIDENT_REVIEW_SAMPLE,
   type ReviewQueueApproval,
 } from "./review-queue.js";
+import {
+  gatherSchemaContractSignal,
+  summarizeSchemaContract,
+  type SchemaContractSignal,
+} from "./schema-contract.js";
 
 const HOUR_MS = 60 * 60 * 1000;
 const PENDING_SCAN_LIMIT = 1000;
@@ -115,6 +120,11 @@ export interface GlobalSignals {
    * printing a fabricated 0%.
    */
   reviewQueue?: ReviewQueueApproval;
+  /**
+   * System-profile schema vs the seed (see ./schema-contract.ts). Optional for
+   * the same reason: absent means NOT COMPUTED, and no section is emitted.
+   */
+  schemaContract?: SchemaContractSignal;
 }
 
 /**
@@ -309,6 +319,10 @@ export function summarizeGlobalHealth(
         lens: "proposals visible in your workspaces or authored by you (proposalUserFloor)",
       },
     });
+  }
+
+  if (signals.schemaContract) {
+    sections.push(summarizeSchemaContract(signals.schemaContract));
   }
 
   // Roll up: worst section wins.
@@ -594,7 +608,7 @@ export async function diagnoseGlobal(params: {
   // this file's counts disagreed with `orient` before. Still independent of
   // `agentActivity` (which depends on `agentRows` from the big Promise.all),
   // so the two awaits run concurrently rather than round-tripping serially.
-  const [agentActivity, reviewQueue] = await Promise.all([
+  const [agentActivity, reviewQueue, schemaContract] = await Promise.all([
     Promise.all(
       agentActivityCounts.map(async (a) => ({
         ...a,
@@ -602,6 +616,7 @@ export async function diagnoseGlobal(params: {
       }))
     ),
     reviewQueueApproval({ userId, workspaceId }),
+    gatherSchemaContractSignal({ userId, workspaceId }),
   ]);
 
   return summarizeGlobalHealth(
@@ -616,6 +631,7 @@ export async function diagnoseGlobal(params: {
       capabilities: capabilitiesSignal,
       agentActivity,
       reviewQueue,
+      schemaContract,
     },
     { workspaceId }
   );

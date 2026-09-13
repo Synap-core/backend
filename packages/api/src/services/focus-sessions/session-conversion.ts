@@ -38,22 +38,11 @@
  * destroys rows is a worse failure mode than one that hides them.
  */
 
-import {
-  db,
-  and,
-  eq,
-  ne,
-  not,
-  count,
-  focusSessions,
-  playbooks,
-  playbookRuns,
-  projects,
-  links,
-} from "@synap/database";
+import { db, and, eq, focusSessions, links } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
+import { safeRevert } from "../reversibility/safe-revert.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
@@ -180,83 +169,6 @@ export type RevertResult =
         | "object_in_use";
     };
 
-/** Has the created object been used since? Then the undo must refuse. */
-async function objectIsUntouched(
-  kind: ConversionKind,
-  id: string,
-  sessionId: string,
-  /**
-   * The session's subject entity, when it had one. `spawnProjectFromSession`
-   * carries it onto the new project as `project --targets--> entity`, so that
-   * edge is the SPAWN'S OWN and must not count as somebody else using the
-   * project — counting it made revert refuse `object_in_use` for every spawn
-   * from a subject-bound session, i.e. the undo never worked at all there.
-   */
-  subjectEntityId: string | null
-): Promise<boolean> {
-  if (kind === "playbook") {
-    // A playbook that has RUN is somebody's history — never retire it.
-    const [runs] = await db
-      .select({ n: count() })
-      .from(playbookRuns)
-      .where(eq(playbookRuns.playbookId, id));
-    if ((runs?.n ?? 0) > 0) return false;
-    const row = await db.query.playbooks.findFirst({
-      where: eq(playbooks.id, id),
-      columns: { id: true, status: true },
-    });
-    // Still the draft the promote minted, and still present.
-    return !!row && row.status === "draft";
-  }
-
-  // A project is in use the moment anything ELSE points at it: another session
-  // scoped to it, or any link that is not our own lineage edge.
-  const [otherSessions] = await db
-    .select({ n: count() })
-    .from(focusSessions)
-    .where(
-      and(eq(focusSessions.projectId, id), ne(focusSessions.id, sessionId))
-    );
-  if ((otherSessions?.n ?? 0) > 0) return false;
-  const [otherLinks] = await db
-    .select({ n: count() })
-    .from(links)
-    .where(
-      and(
-        eq(links.toType, "project"),
-        eq(links.toId, id),
-        ne(links.linkType, "promoted_to")
-      )
-    );
-  if ((otherLinks?.n ?? 0) > 0) return false;
-  const outboundConditions = [
-    eq(links.fromType, "project"),
-    eq(links.fromId, id),
-  ];
-  if (subjectEntityId) {
-    // Exclude the subject edge the spawn itself wrote (see the parameter).
-    outboundConditions.push(
-      not(
-        and(
-          eq(links.linkType, "targets"),
-          eq(links.toType, "entity"),
-          eq(links.toId, subjectEntityId)
-        )!
-      )
-    );
-  }
-  const [outbound] = await db
-    .select({ n: count() })
-    .from(links)
-    .where(and(...outboundConditions));
-  if ((outbound?.n ?? 0) > 0) return false;
-  const row = await db.query.projects.findFirst({
-    where: eq(projects.id, id),
-    columns: { id: true, status: true },
-  });
-  return !!row && row.status === "active";
-}
-
 /**
  * THE inverse verb — one door for both conversions. Restores the goal, archives
  * the created object when it is still untouched, and drops the lineage edge.
@@ -284,58 +196,54 @@ export async function revertConversion(params: {
     return { ok: false, reason: "window_expired" };
   }
 
-  const untouched = await objectIsUntouched(
-    conversion.kind,
-    conversion.id,
-    session.id,
-    session.subjectEntityId ?? null
-  );
-  if (!untouched) return { ok: false, reason: "object_in_use" };
-
   // The archive, the lineage-edge drop, and the goal restore are one
   // transaction: a half-revert (goal restored but the created object still
   // live, or the object archived but the lineage link still present) is
-  // worse than a revert that fails outright and can be retried.
+  // worse than a revert that fails outright and can be retried. The
+  // untouched check and the archive are the shared undo engine's
+  // (`safeRevert`); all-or-nothing, because a used object refuses the whole
+  // undo rather than half of it.
+  //
+  // `subjectEntityId`: `spawnProjectFromSession` carries it onto the new
+  // project as `project --targets--> entity`, so that edge is the SPAWN'S OWN
+  // and must not count as somebody else using the project — counting it made
+  // revert refuse `object_in_use` for every spawn from a subject-bound
+  // session, i.e. the undo never worked at all there.
   const restoredGoal = conversion.renamedFrom ?? session.goal;
   const revertedAt = new Date();
-  await db.transaction(async (tx) => {
-    // Archive the created object.
-    if (conversion.kind === "playbook") {
+  const outcome = await safeRevert({
+    targets: [{ kind: conversion.kind, id: conversion.id }],
+    mode: "all_or_nothing",
+    sessionId: session.id,
+    subjectEntityId: session.subjectEntityId ?? null,
+    alsoInTransaction: async (tx) => {
+      // Drop the lineage edge — the conversion did not happen.
       await tx
-        .update(playbooks)
-        .set({ status: "archived", updatedAt: new Date() })
-        .where(eq(playbooks.id, conversion.id));
-    } else {
+        .delete(links)
+        .where(
+          and(
+            eq(links.fromType, "session"),
+            eq(links.fromId, session.id),
+            eq(links.toType, conversion.kind),
+            eq(links.toId, conversion.id),
+            eq(links.linkType, "promoted_to")
+          )
+        );
+
       await tx
-        .update(projects)
-        .set({ status: "archived", updatedAt: new Date() })
-        .where(eq(projects.id, conversion.id));
-    }
-
-    // Drop the lineage edge — the conversion did not happen.
-    await tx
-      .delete(links)
-      .where(
-        and(
-          eq(links.fromType, "session"),
-          eq(links.fromId, session.id),
-          eq(links.toType, conversion.kind),
-          eq(links.toId, conversion.id),
-          eq(links.linkType, "promoted_to")
-        )
-      );
-
-    await tx
-      .update(focusSessions)
-      .set({
-        goal: restoredGoal,
-        metadata: mergeSessionMetadata({
-          conversion: { ...conversion, revertedAt: revertedAt.toISOString() },
-        }),
-        updatedAt: revertedAt,
-      })
-      .where(eq(focusSessions.id, session.id));
+        .update(focusSessions)
+        .set({
+          goal: restoredGoal,
+          metadata: mergeSessionMetadata({
+            conversion: { ...conversion, revertedAt: revertedAt.toISOString() },
+          }),
+          updatedAt: revertedAt,
+        })
+        .where(eq(focusSessions.id, session.id));
+    },
   });
+  // Refused before anything was written: the object has been used.
+  if (outcome.skipped.length > 0) return { ok: false, reason: "object_in_use" };
 
   const data = {
     sessionId: session.id,

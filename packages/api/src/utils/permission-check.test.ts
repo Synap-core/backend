@@ -27,6 +27,8 @@ const {
   mockResolveProfile,
   mockFocusSessionFindFirst,
   mockEmitAiDecision,
+  mockPodAdminWorkspaceFindFirst,
+  mockPodAdminMemberFindFirst,
 } = vi.hoisted(() => ({
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
   mockDbSelect: vi.fn(),
@@ -42,6 +44,10 @@ const {
   mockFocusSessionFindFirst: vi.fn().mockResolvedValue(undefined),
   // The daily-cap REFUSAL's human-facing record (see the cap tests below).
   mockEmitAiDecision: vi.fn().mockResolvedValue(undefined),
+  // `isPodAdmin` (utils/workspace-role.ts) — read by the gate's 4d check only.
+  // Default: no pod-admin workspace → not an admin; only 4d's tests set them.
+  mockPodAdminWorkspaceFindFirst: vi.fn().mockResolvedValue(undefined),
+  mockPodAdminMemberFindFirst: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@synap/database", async () => {
@@ -76,6 +82,8 @@ vi.mock("@synap/database", async () => {
       // (deriveSessionForceProposeGovernance re-reads the run session's stamp).
       query: {
         focusSessions: { findFirst: mockFocusSessionFindFirst },
+        workspaces: { findFirst: mockPodAdminWorkspaceFindFirst },
+        workspaceMembers: { findFirst: mockPodAdminMemberFindFirst },
       },
     },
     // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the proposal
@@ -138,7 +146,7 @@ vi.mock("@synap/jobs", () => ({
 }));
 
 vi.mock("@synap/events", () => ({
-  emitSideEffects: vi.fn(),
+  emitSideEffects: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../notifications/NotificationService.js", () => ({
@@ -176,6 +184,13 @@ import {
 // Import it separately so mocks are fully resolved first.
 import { checkPermissionOrPropose as checkPermissionOrProposeStrict } from "./permission-check.js";
 import type { PermissionCheckOpts } from "./permission-check.js";
+import { previewPermissionDecision } from "./permission-check.js";
+const previewPermissionDecisionForTest = (opts: OffVocabularyOptsForPreview) =>
+  previewPermissionDecision(opts as unknown as PermissionCheckOpts);
+type OffVocabularyOptsForPreview = Omit<
+  PermissionCheckOpts,
+  "subjectType" | "action"
+> & { subjectType: string; action: string };
 
 /**
  * OFF-VOCABULARY TEST DOOR.
@@ -2311,5 +2326,219 @@ describe("checkPermissionOrPropose — #4 origin-trust activation (sourceMessage
     });
 
     expect("granted" in result && result.granted === true).toBe(true);
+  });
+});
+
+/**
+ * 4d — POD-ADMIN SCHEMA CHANGE, through the real gate.
+ *
+ * A `property_def/create` that links a REQUIRED field or a DEFAULT onto a
+ * pod-admin-owned kind (system / unowned shared) is refused at APPLY to anyone
+ * but a pod admin (`assertProfileSchemaWrite`). The gate must decide it up
+ * front: human non-admin → deny; AI non-admin → proposal carrying rung 2.07's
+ * reason; pod admin → unchanged.
+ *
+ * THE DISCRIMINATING INPUT is an `auto` governance rule for
+ * `property_def.create`: `property_def.create` is NOT in DEFAULT_AUTO_APPROVE,
+ * so without a rule an AI write already proposes at rung 9 and "it proposed"
+ * would prove nothing. With the rule, the pod-admin case EXECUTES and the
+ * non-admin case must still propose — and name POD_ADMIN_SCHEMA_CHANGE.
+ */
+describe("checkPermissionOrPropose — 4d pod-admin schema change (property_def/create onto a system kind)", () => {
+  const DENY_REASON =
+    "Only a pod admin can add a required field or default to a system kind. Link it as optional, or ask your pod admin.";
+  const RULE_AUTO = {
+    principalKind: "any",
+    scopeKind: "workspace",
+    targetKind: "action",
+    targetPattern: "property_def.create",
+    targetProfile: null,
+    verdict: "auto",
+    createdAt: new Date(),
+  };
+
+  function setupSchemaFlow(ruleRow: Record<string, unknown> | null) {
+    mockDbSelect.mockImplementation((fields: Record<string, unknown> = {}) => {
+      const keys = Object.keys(fields);
+      let rows: unknown[] = [];
+      if (keys.includes("userType")) {
+        rows = [{ userType: "agent", agentMetadata: {} }];
+      } else if (keys.includes("settings")) {
+        rows = [{ settings: {}, workspaceType: "personal" }];
+      } else if (keys.length === 1 && keys[0] === "channelId") {
+        rows = [];
+      } else if (keys.includes("channelType")) {
+        rows = [];
+      } else if (keys.length === 1 && keys[0] === "n") {
+        rows = [{ n: 0 }];
+      } else {
+        rows = ruleRow ? [ruleRow] : [];
+      }
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue(rows),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve(rows).then(res, rej),
+      };
+      return b;
+    });
+  }
+
+  const podAdmin = (yes: boolean) => {
+    mockPodAdminWorkspaceFindFirst.mockResolvedValue({ id: "pod-admin-ws" });
+    mockPodAdminMemberFindFirst.mockResolvedValue(
+      yes ? { role: "admin" } : undefined
+    );
+  };
+
+  const write = (over: Record<string, unknown> = {}) =>
+    checkPermissionOrPropose({
+      userId: "user-abc",
+      workspaceId: "ws-123",
+      subjectType: "property_def",
+      action: "create",
+      data: {
+        profileId: "11111111-1111-4111-8111-111111111111",
+        slug: "due_reason",
+        valueType: "string",
+        required: true,
+      },
+      ...over,
+    });
+
+  const lastGovernanceReason = () =>
+    (
+      vi.mocked(insertPendingProposal).mock.calls.at(-1)?.[0] as
+        { governanceReason?: string } | undefined
+    )?.governanceReason;
+
+  beforeEach(() => {
+    mockVerifyPermission.mockResolvedValue({ allowed: true });
+    mockFocusSessionFindFirst.mockReset().mockResolvedValue(undefined);
+    // A SYSTEM kind: no home workspace, no owning user → pod-admin-owned.
+    mockResolveProfile.mockResolvedValue({
+      id: "profile-task",
+      slug: "task",
+      workspaceId: null,
+      userId: null,
+    });
+    setupSchemaFlow(RULE_AUTO);
+    podAdmin(false);
+    vi.mocked(insertPendingProposal).mockClear();
+  });
+
+  afterEach(() => {
+    mockResolveProfile.mockResolvedValue({ id: "profile-1", slug: "task" });
+    mockPodAdminWorkspaceFindFirst.mockReset().mockResolvedValue(undefined);
+    mockPodAdminMemberFindFirst.mockReset().mockResolvedValue(undefined);
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue([]),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([]).then(res, rej),
+      };
+      return b;
+    });
+  });
+
+  // (a) human, not a pod admin → DENY with the actionable reason
+  it("(a) a human non-admin is DENIED — required field", async () => {
+    expect(await write()).toEqual({ denied: true, reason: DENY_REASON });
+    expect(insertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("(a) a human non-admin is DENIED — a default value, required absent", async () => {
+    const result = await write({
+      data: {
+        profileId: "11111111-1111-4111-8111-111111111111",
+        slug: "due_reason",
+        valueType: "string",
+        defaultValue: "none",
+      },
+    });
+    expect(result).toEqual({ denied: true, reason: DENY_REASON });
+  });
+
+  it("(a) previewPermissionDecision inherits the same deny (no second copy)", async () => {
+    const preview = await previewPermissionDecisionForTest({
+      userId: "user-abc",
+      workspaceId: "ws-123",
+      subjectType: "property_def",
+      action: "create",
+      data: {
+        profileId: "11111111-1111-4111-8111-111111111111",
+        slug: "due_reason",
+        required: true,
+      },
+    });
+    expect(preview).toEqual({ decision: "deny", reason: DENY_REASON });
+  });
+
+  // (b) AI write, not a pod admin → PROPOSED with rung 2.07's reason
+  it("(b) an AGENT non-admin is PROPOSED with POD_ADMIN_SCHEMA_CHANGE despite an auto rule", async () => {
+    const result = await write({ agentUserId: "agent-schema-1" });
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect((result as { proposalId?: string }).proposalId).toBeDefined();
+    expect(lastGovernanceReason()).toBe("POD_ADMIN_SCHEMA_CHANGE");
+  });
+
+  it("(b) an unattributed INTELLIGENCE write (hub door, no agent row) is PROPOSED with POD_ADMIN_SCHEMA_CHANGE", async () => {
+    const result = await write({ source: "intelligence" });
+    expect("granted" in result && result.granted === false).toBe(true);
+    expect(lastGovernanceReason()).toBe("POD_ADMIN_SCHEMA_CHANGE");
+  });
+
+  // (c) pod admin → unchanged (the auto rule executes)
+  it("(c) a pod admin is unchanged — human granted, agent auto-executes on the rule", async () => {
+    podAdmin(true);
+    expect(await write()).toEqual({ granted: true });
+    const agent = await write({ agentUserId: "agent-schema-1" });
+    expect("granted" in agent && agent.granted === true).toBe(true);
+    expect(insertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  // (d) an OPTIONAL link onto a system kind by an editor → unchanged
+  it("(d) an optional link (required:false, no default) by a non-admin is unchanged", async () => {
+    const optional = {
+      data: {
+        profileId: "11111111-1111-4111-8111-111111111111",
+        slug: "due_reason",
+        valueType: "string",
+        required: false,
+      },
+    };
+    expect(await write(optional)).toEqual({ granted: true });
+    const agent = await write({ ...optional, agentUserId: "agent-schema-1" });
+    expect("granted" in agent && agent.granted === true).toBe(true);
+    // The optional path never needed the membership read at all.
+    expect(mockPodAdminMemberFindFirst).not.toHaveBeenCalled();
+  });
+
+  it("a workspace-owned kind, or an unresolvable profile, is left to the apply door", async () => {
+    mockResolveProfile.mockResolvedValue({
+      id: "profile-ws",
+      slug: "lead",
+      workspaceId: "ws-123",
+      userId: null,
+    });
+    expect(await write()).toEqual({ granted: true });
+    mockResolveProfile.mockResolvedValue(null);
+    expect(await write()).toEqual({ granted: true });
+  });
+
+  it("a FAILED membership read fails closed — never read as 'not an admin'", async () => {
+    mockPodAdminMemberFindFirst.mockRejectedValue(
+      new Error("connection terminated")
+    );
+    const human = await write();
+    expect(human).toEqual({ denied: true, reason: "Permission check error" });
+    const agent = await write({ agentUserId: "agent-schema-1" });
+    expect(agent).toEqual({ denied: true, reason: "Permission check error" });
+    expect(insertPendingProposal).not.toHaveBeenCalled();
   });
 });

@@ -16,6 +16,10 @@
  * without disturbing entity↔entity relations.
  */
 
+import {
+  listEffectiveRelationTypes,
+  unknownRelationTypeMessage,
+} from "../utils/relation-types.js";
 import { z } from "zod";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
@@ -428,9 +432,16 @@ export const cellInstancesRouter = router({
         const relDefRepo = new RelationDefRepository(database);
         const def = await relDefRepo.getBySlug(type, effectiveWorkspaceId);
         if (!def) {
+          const valid = await listEffectiveRelationTypes(
+            database,
+            effectiveWorkspaceId
+          );
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: `Unknown relation type: "${type}". Must be a workspace relation definition.`,
+            message: unknownRelationTypeMessage(
+              type,
+              valid.map((t) => t.slug)
+            ),
           });
         }
       }

@@ -194,19 +194,13 @@ export const devplaneRouter = router({
         linkedAppSlug: (props["linkedAppSlug"] as string | undefined) ?? null,
         onFailure:
           (props["onFailure"] as
-            | "stop"
-            | "continue"
-            | "rollback"
-            | undefined) ?? "stop",
+            "stop" | "continue" | "rollback" | undefined) ?? "stop",
         rollbackRecipeId:
           (props["rollbackRecipeId"] as string | undefined) ?? null,
         recipeTemplate:
           (props["recipeTemplate"] as
-            | "kamal"
-            | "docker-compose"
-            | "git-pull"
-            | "custom"
-            | undefined) ?? null,
+            "kamal" | "docker-compose" | "git-pull" | "custom" | undefined) ??
+          null,
       };
     }),
 
@@ -251,11 +245,8 @@ export const devplaneRouter = router({
             recipeId: (props["recipeId"] as string | undefined) ?? null,
             runStatus:
               (props["runStatus"] as
-                | "running"
-                | "success"
-                | "failed"
-                | "cancelled"
-                | undefined) ?? null,
+                "running" | "success" | "failed" | "cancelled" | undefined) ??
+              null,
             runSteps,
             runStartedAt: (props["runStartedAt"] as string | undefined) ?? null,
             runFinishedAt:
@@ -555,7 +546,7 @@ export const devplaneRouter = router({
         [
           "@synap-core/connectors",
           "1.0.0",
-          "Nango OAuth connectors — 39 integrations, CP→Pod pull-sync",
+          "Nango OAuth connectors — 39 integrations, CP-brokered, pod connection sync",
         ],
         [
           "@synap-core/marketplace",
@@ -734,7 +725,7 @@ export const devplaneRouter = router({
           "Connectors (Nango)",
           "in-progress",
           "synap-app",
-          "39 OAuth integrations via Nango self-hosted — CP→Pod pull-sync, source tracking on entities",
+          "39 OAuth integrations via Nango — CP broker + pod connection sync, source tracking on entities",
         ],
         [
           "Marketplace",

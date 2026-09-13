@@ -38,10 +38,14 @@ export const governanceScopeEnum = pgEnum("governance_scope", [
 export const GOVERNANCE_SCOPES = governanceScopeEnum.enumValues;
 export type GovernanceScope = (typeof GOVERNANCE_SCOPES)[number];
 
+// `connection` (0260): target_pattern = the `secrets` connection row id. Resolved
+// ONLY by `resolveConnectionSyncDecision` (utils/connection-governance.ts) for
+// sync writes; the rung-2.8 agent resolver never matches it.
 export const governanceTargetEnum = pgEnum("governance_target", [
   "action",
   "profile",
   "capability",
+  "connection",
 ]);
 export const GOVERNANCE_TARGETS = governanceTargetEnum.enumValues;
 export type GovernanceTarget = (typeof GOVERNANCE_TARGETS)[number];

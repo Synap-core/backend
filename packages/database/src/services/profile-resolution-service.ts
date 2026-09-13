@@ -109,6 +109,15 @@ export type RendererRef =
       title?: string;
       props?: Record<string, unknown>;
       displayMode?: string;
+    }
+  | {
+      /**
+       * "Open where it lives" (Places). Carries no url: the concrete target is
+       * resolved per ENTITY on the pod from its `entity_external_links` row
+       * (`resolveEntityOpenTarget`), so the binding only records the choice.
+       */
+      kind: "source-app";
+      title?: string;
     };
 
 /**
@@ -378,7 +387,7 @@ export class ProfileResolutionService {
     // Try by slug first — workspace-aware, returns only what's accessible.
     // Empty string for workspaceId is the convention for "no workspace lens"
     // (workspace-less users in hydration).
-    let profile = await this.profileRepo.getBySlug(
+    const profile = await this.profileRepo.getBySlug(
       identifier,
       workspaceId ?? "",
       userId
@@ -392,34 +401,19 @@ export class ProfileResolutionService {
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!UUID_RE.test(identifier)) return null;
 
-    profile = await this.profileRepo.getById(identifier);
-    if (profile && (await this.isAccessible(profile, userId, workspaceId))) {
-      return profile;
-    }
-
-    return null;
-  }
-
-  /**
-   * Check if profile is accessible to user/workspace
-   */
-  private async isAccessible(
-    profile: Profile,
-    userId: string,
-    workspaceId: string | null
-  ): Promise<boolean> {
-    if (profile.scope === "system") return true;
-    // Profiles have a globally unique slug constraint, so workspace-scoped
-    // profiles are effectively shared schema definitions across workspaces
-    if (profile.scope === "workspace") return true;
-    if (profile.scope === "user" && profile.userId === userId) return true;
-    if (profile.scope === "shared") {
-      if (!workspaceId) return false;
-      // Check profile_workspace_access join table
-      const granted = await this.profileRepo.getGrantedWorkspaces(profile.id);
-      return granted.includes(workspaceId);
-    }
-    return false;
+    // By ID through the SAME floor the list read uses — `getAccessibleProfiles`
+    // with `ids` — so a profile is reachable by id exactly when it is listed for
+    // this caller and lens. The id branch used to load the row unfiltered and
+    // answer "accessible" for every workspace-scoped profile of ANY workspace,
+    // and every write procedure that resolves a caller-supplied UUID here
+    // inherited that: a member of workspace A could load, then edit or delete,
+    // workspace B's profile by id.
+    const [accessible] = await this.profileRepo.getAccessibleProfiles(
+      userId,
+      workspaceId ?? "",
+      { ids: [identifier] }
+    );
+    return accessible ?? null;
   }
 
   /**

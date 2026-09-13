@@ -60,11 +60,29 @@ export interface CaptureGraphBinding {
  * renders its OWN exact wording + transport shape: the MCP door emits
  * `ok({ error })`, the REST door `c.json({ error }, 400)`, and their relation
  * messages differ (the MCP one carries an extra "must belong to an entity in
- * the same call" hint). `null` = valid.
+ * the same call" hint).
+ *
+ * `unknownRefs` names WHICH side(s) of the edge were not declared.
  */
 export type CaptureGraphRefIssue =
   | { kind: "duplicate-ref"; ref: string }
-  | { kind: "unknown-relation-ref"; sourceRef: string; targetRef: string };
+  | {
+      kind: "unknown-relation-ref";
+      sourceRef: string;
+      targetRef: string;
+      unknownRefs: string[];
+    };
+
+/**
+ * EVERY ref problem in the call at once, plus the refs the call DID declare —
+ * so a caller fixes the whole graph in one round-trip instead of one error per
+ * retry. `null` = valid.
+ */
+export interface CaptureGraphRefReport {
+  issues: CaptureGraphRefIssue[];
+  /** Distinct entity refs declared in this call, in declaration order. */
+  declaredRefs: string[];
+}
 
 /**
  * The shared ref-uniqueness + dangling-relation check both capture-graph doors
@@ -77,27 +95,42 @@ export type CaptureGraphRefIssue =
  * BEFORE calling this, and validates `profileSlug` / relation shape with its own
  * hint-carrying messages. This function assumes each entity already carries the
  * `ref` its door intends and only checks uniqueness + reachability.
+ *
+ * Collects ALL issues (each duplicated ref reported once; every dangling edge
+ * reported) rather than returning on the first.
  */
 export function validateCaptureGraphRefs(
   entities: ReadonlyArray<{ ref?: string | null }>,
   relations: ReadonlyArray<{ sourceRef: string; targetRef: string }>
-): CaptureGraphRefIssue | null {
+): CaptureGraphRefReport | null {
+  const issues: CaptureGraphRefIssue[] = [];
   const refs = new Set<string>();
+  const reportedDuplicates = new Set<string>();
   for (const e of entities) {
     if (!e.ref) continue; // ref-presence is the caller's door-local concern
-    if (refs.has(e.ref)) return { kind: "duplicate-ref", ref: e.ref };
+    if (refs.has(e.ref)) {
+      if (!reportedDuplicates.has(e.ref)) {
+        reportedDuplicates.add(e.ref);
+        issues.push({ kind: "duplicate-ref", ref: e.ref });
+      }
+      continue;
+    }
     refs.add(e.ref);
   }
   for (const r of relations) {
-    if (!refs.has(r.sourceRef) || !refs.has(r.targetRef)) {
-      return {
+    const unknownRefs = [r.sourceRef, r.targetRef].filter(
+      (ref, i, arr) => !refs.has(ref) && arr.indexOf(ref) === i
+    );
+    if (unknownRefs.length > 0) {
+      issues.push({
         kind: "unknown-relation-ref",
         sourceRef: r.sourceRef,
         targetRef: r.targetRef,
-      };
+        unknownRefs,
+      });
     }
   }
-  return null;
+  return issues.length > 0 ? { issues, declaredRefs: [...refs] } : null;
 }
 
 import {

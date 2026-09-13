@@ -74,9 +74,22 @@ export const workerRegistry: WorkerMetadata[] = [
     id: "event-sync-cron",
     name: "Event Sync",
     description:
-      "Every 6h (in-process): FIRST imports upcoming Google Calendar events into Synap `event` entities (run-gcal-import), THEN mirrors upcoming Synap events + Stellar grant deadlines into native Discord scheduled events (run-event-sync, idempotent via a dedup map in the Discord tool metadata). Google no longer pushes to Discord directly — it flows through Synap entities. No-ops unless the Discord tool has eventSync.enabled.",
+      "Every 6h (in-process): mirrors upcoming Synap events + Stellar grant deadlines into native Discord scheduled events (run-event-sync, idempotent via a dedup map in the Discord tool metadata). Google Calendar events reach it as Synap `event` entities landed by the connection sync — never straight to Discord. No-ops unless the Discord tool has eventSync.enabled.",
     triggers: ["cron:0 */6 * * *"],
     outputs: ["discord.scheduled_event.created"],
+    category: "ai",
+  },
+  {
+    id: "connection-sync-run",
+    name: "Connection Sync",
+    description:
+      "The ONE connection sync door (in-process runner). Enqueued on connect, by the CP webhook poke (POST /api/connectors/sync-trigger) and every 30min for every sync-enabled provider connection. Per connection × kind (event, email.thread, contact): the first run reads a bounded window (windowDays / itemLimit) and files ONE grouped import.graph proposal; steady runs follow the connection's governance rule — auto upserts through EntityUpsertService with origin:\"sync\" (indexed + embedded, non-opted automations skipped), otherwise one grouped proposal. State (cursor, phase, counts, error) lives on the provider tool's metadata.sync.",
+    triggers: ["queue:connection-sync-run", "cron:*/30 * * * *"],
+    outputs: [
+      "connection_sync.progress",
+      "proposal.created",
+      "entity.create.completed",
+    ],
     category: "ai",
   },
   {
@@ -95,6 +108,15 @@ export const workerRegistry: WorkerMetadata[] = [
       "On-demand (enqueued by the session-recap reactor when a focus session advances to its `post` stage). Delegates to the api-side runner which reads the session's produced entities, asks the IS to summarize + propose follow-ups, posts the recap to the session's channel, and surfaces the follow-ups as ONE governed proposal.",
     triggers: ["queue:session-recap"],
     outputs: ["message.create.completed", "proposal.created"],
+    category: "ai",
+  },
+  {
+    id: "connection-sync-approval",
+    name: "Connection Sync Approval",
+    description:
+      "On-demand (enqueued by the connection-sync-approval reactor for every proposal.approved). When the approved proposal is a connection's import.graph carrying data.connectionSync with keepSyncing on, and the approver owns the connection, ensures exactly one active `auto` governance rule targeting that connection (source_proposal_id lineage). Idempotent; no-op for every other proposal.",
+    triggers: ["queue:connection-sync-approval"],
+    outputs: [],
     category: "ai",
   },
   {

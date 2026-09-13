@@ -10,6 +10,7 @@ import { z } from "zod";
 import { router, workspaceProcedure, podProcedure } from "../trpc.js";
 import { createLogger } from "@synap-core/core";
 import { ImportOrchestrator } from "../services/import-orchestrator.js";
+import { resolveImportSession } from "../services/import/session.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { getBoss } from "@synap/jobs";
 import { IMPORT_CORPUS_QUEUE } from "@synap/jobs/workers/import-corpus-worker.js";
@@ -230,11 +231,27 @@ export const importRouter = router({
     .input(AnalyzeLargeImportSchema)
     .mutation(async ({ ctx, input }) => {
       const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+      // The run room exists BEFORE the job is queued, and the job names it, so
+      // a session cancel can find a corpus that has not started yet.
+      const session = await resolveImportSession(
+        {
+          workspaceId,
+          userId: ctx.userId as string,
+          trpcCtx: ctx as unknown as Record<string, unknown>,
+          projectId: input.projectId ?? null,
+        },
+        {
+          source: input.source,
+          items: input.items,
+          sessionId: input.sessionId ?? null,
+        }
+      );
       const jobId = await getBoss().send(IMPORT_CORPUS_QUEUE, {
         userId: ctx.userId as string,
         workspaceId,
         source: input.source,
         items: input.items,
+        ...(session.sessionId ? { sessionId: session.sessionId } : {}),
       });
       logger.info(
         {
@@ -246,7 +263,13 @@ export const importRouter = router({
         },
         "Large import enqueued on import-corpus queue"
       );
-      return { queued: true as const, jobId };
+      return {
+        queued: true as const,
+        jobId,
+        sessionId: session.sessionId,
+        sessionSource: session.sessionSource,
+        requestedSessionIgnored: session.requestedSessionIgnored,
+      };
     }),
 
   /**

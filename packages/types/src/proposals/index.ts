@@ -462,6 +462,19 @@ export interface CompositeCreateEntityOp {
     properties?: Record<string, unknown>;
     contextRef?: string;
   }>;
+  /**
+   * External records this entity mirrors (e.g. a connection sync's Google
+   * event). Registered through the external-link door when the op materializes
+   * — created OR linked — so an approved import already carries its provider
+   * links, source-app `url` and the producing connection (`connectionId` =
+   * `secrets` row id). Additive — ops without it behave exactly as before.
+   */
+  externalLinks?: Array<{
+    provider: string;
+    externalId: string;
+    url?: string | null;
+    connectionId?: string | null;
+  }>;
 }
 
 export interface CompositeCreateRelationOp {

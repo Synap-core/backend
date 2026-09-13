@@ -16,8 +16,13 @@
  * proposal executor (see routers/proposals/approve-executors.ts).
  */
 
-import { getDb } from "@synap/database";
+import { TRPCError } from "@trpc/server";
+import { getDb, ProfileResolutionService } from "@synap/database";
 import type { Context } from "../../types/context.js";
+import {
+  assertProfileSchemaWrite,
+  propertyLinkLevel,
+} from "../../utils/profile-schema-write-access.js";
 import { propertyDefsRouter } from "../../routers/property-defs.js";
 import { profilePropertiesRouter } from "../../routers/profile-properties.js";
 
@@ -62,12 +67,40 @@ export async function createAndLinkPropertyDef(
   const db = await getDb();
   const overlay = input.overlay === true;
 
+  // Ownership gate BEFORE the def exists. The two writes below are separate
+  // router calls, not one transaction, so a link refused AFTER the create
+  // would leave an orphaned, unrenderable def behind. `profile-properties.link`
+  // re-checks with the precise answer (it can see an existing link); this
+  // pre-check evaluates the same rule for a brand-new link.
+  if (input.profileId) {
+    const profile = await new ProfileResolutionService(db).resolveProfile(
+      input.profileId,
+      input.userId,
+      input.workspaceId
+    );
+    if (!profile) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Profile not found: ${input.profileId}`,
+      });
+    }
+    await assertProfileSchemaWrite(db, input.userId, profile, {
+      level: propertyLinkLevel({
+        required: input.required,
+        defaultValue: input.defaultValue,
+        alreadyLinked: false,
+      }),
+      actingWorkspaceId: input.workspaceId,
+    });
+  }
+
+  // No `workspaceRole` here: the membership gates read the caller's role from
+  // the database, and a faked "owner" would satisfy any check that trusted it.
   const callerCtx = {
     db,
     authenticated: true as const,
     userId: input.userId,
     workspaceId: input.workspaceId,
-    workspaceRole: "owner",
   } as unknown as Context;
 
   const propertyDefCaller = propertyDefsRouter.createCaller(callerCtx);

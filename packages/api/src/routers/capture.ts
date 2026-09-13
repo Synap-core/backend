@@ -20,6 +20,18 @@ import { requireUserId } from "../utils/user-scoped.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import { resolveVerifiedSessionId } from "./hub-protocol/_middleware/session.js";
 import {
+  capturePlanKey,
+  recordStructureIntake,
+  structureSourceKind,
+} from "../services/intake/record-structure-intake.js";
+import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
+import { loadRouteSuggestions } from "../services/routing/load-route-suggestions.js";
+import {
+  recordSessionRunManifest,
+  runFactsFromStructureMeta,
+  type StructureRunMeta,
+} from "../services/intake/record-session-run-manifest.js";
+import {
   resolveIntelligenceService,
   IntelligenceAuthError,
 } from "../utils/intelligence-routing.js";
@@ -40,7 +52,6 @@ import {
   entities as entitiesTable,
   drizzleSql,
   RelationRepository,
-  RelationDefRepository,
   ProfileResolutionService,
   PropertyDefRepository,
   EntityUpsertService,
@@ -97,8 +108,22 @@ import {
 import {
   materializeCompositeGraph,
   createRelationsFromRefs,
+  type MaterializeRelationFailure,
 } from "../utils/materialize-composite.js";
+import {
+  listEffectiveRelationTypes,
+  loadRelationTypeValidator,
+} from "../utils/relation-types.js";
 import { makeExternalLinkIdempotency } from "../utils/entity-link-idempotency.js";
+import {
+  computeEntityPropertyDiff,
+  type EntityPropertyDiff,
+} from "../utils/entity-property-diff.js";
+import {
+  buildMaterializedRecord,
+  runMaterializationUnderReceipt,
+  stampMaterialized,
+} from "../services/proposals/stamp-materialized.js";
 import {
   storeEntitySourceBlob,
   stageSourceBlob,
@@ -175,10 +200,6 @@ async function resolveCapturedBody(params: {
   }
   return { documentId: body.documentId, inlineContent: body.inlineContent };
 }
-
-// ── Default relation type for unknown slugs ────────────────────────────────
-
-const FALLBACK_RELATION_TYPE = "relates_to";
 
 /** Canonical generic kind for unclassified capture material. */
 const DEFAULT_CAPTURE_PROFILE = "item";
@@ -943,6 +964,14 @@ export const captureRouter = router({
          */
         anchorEntityId: z.string().uuid().optional(),
         /**
+         * The session (run room) this structure call belongs to. Verified
+         * (owned by the caller) before use; an unowned or absent handle means a
+         * fresh intake session is minted. Either way the response names the
+         * session ACTUALLY used (`sessionId` + `intake.requestedSessionIgnored`),
+         * and callers hand that id to `capture.execute`.
+         */
+        sessionId: z.string().uuid().optional(),
+        /**
          * Dedup strategy for `dedupCandidates`: "title" = existing Typesense
          * title-similarity search (unchanged); "semantic" = pgvector cosine
          * search over entity embeddings (see semanticDedupCandidates);
@@ -1184,6 +1213,77 @@ export const captureRouter = router({
         }
       }
 
+      // Stored guidelines — THE one assembler every structure call reads through
+      // (intake plan B8). Composed with the caller/anchor/roster instructions
+      // under the shared budget; the ids@version that made it in are recorded
+      // on the run manifest below.
+      const { assembleStructureContext } = await import("@synap/database");
+      const structureContext = await assembleStructureContext({
+        db: database,
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        sourceKind: structureSourceKind(input),
+        entityKinds: availableProfiles.map((p) => p.slug),
+        instructions: [structureInstructions],
+      });
+      structureInstructions = structureContext.instructions;
+
+      // The run ROOM, recorded on every outcome from here on (plan, follow-up,
+      // empty, degraded): session ensured, inputs stored as source documents,
+      // manifest written. A degraded outcome keeps its source with a `degraded`
+      // marker and files NO proposal. Additive response fields only.
+      const finishIntake = async <T extends object>(
+        result: T,
+        run: { meta?: StructureRunMeta | null; podDegraded?: boolean } = {}
+      ) => {
+        const r = result as {
+          degraded?: unknown;
+          degradedReason?: unknown;
+          extraction?: { text?: unknown; textTruncated?: unknown };
+        };
+        const echo = await recordStructureIntake({
+          database,
+          userId,
+          workspaceId: workspaceId ?? null,
+          agentUserId: ctx.agentUserId ?? null,
+          verifiedHandle: ctx.sessionId ?? null,
+          bodyHandle: input.sessionId ?? null,
+          // So an execute that was not handed this room's id still finds it.
+          planKey: capturePlanKey(
+            (result as { proposals?: unknown }).proposals,
+            (result as { relations?: unknown }).relations
+          ),
+          source: {
+            text: input.text,
+            url: input.url,
+            html: input.html,
+            file: input.file,
+          },
+          ...(typeof r.extraction?.text === "string"
+            ? {
+                extractedText: r.extraction.text,
+                extractedTextTruncated: r.extraction.textTruncated === true,
+              }
+            : {}),
+          ...(r.degraded === true
+            ? {
+                degraded: {
+                  reason:
+                    typeof r.degradedReason === "string"
+                      ? r.degradedReason
+                      : "unknown",
+                },
+              }
+            : {}),
+          guidelines: structureContext.guidelines,
+          guidelineStatus: structureContext.guidelineStatus,
+          runFacts: runFactsFromStructureMeta(run.meta, {
+            podDegraded: run.podDegraded,
+          }),
+        });
+        return { ...result, ...echo };
+      };
+
       // Routing memory — recent corrections (negatives: the user moved the AI's
       // pick) + confirmed routes (positives) so the router learns from its own
       // history. Threaded into structure() so EVERY capture door benefits. Best
@@ -1229,6 +1329,29 @@ export const captureRouter = router({
         degradedReason: DegradedCaptureReasonOrUnknown
       ) => buildDegradedCaptureFallback(inputText, degradedReason);
 
+      // The relation vocabulary for this lens, sent so the structurer emits only
+      // slugs the write lanes will accept — the SAME read those lanes validate
+      // against (`listEffectiveRelationTypes`), never a second list. A failed
+      // read OMITS the hint (the IS falls back to its default relation-def
+      // slugs) and is logged at error; any edge the write then rejects is still
+      // named in `relationsFailed[]`, so nothing is lost silently.
+      let availableRelationTypes:
+        | Array<{ slug: string; displayName: string; description?: string }>
+        | undefined;
+      try {
+        availableRelationTypes = (
+          await listEffectiveRelationTypes(database, workspaceId ?? null)
+        ).map((t) => ({
+          slug: t.slug,
+          displayName: t.displayName,
+          ...(t.description ? { description: t.description } : {}),
+        }));
+      } catch (err) {
+        logger.error(
+          { err, userId, workspaceId },
+          "capture.structure: relation types read failed — the structurer falls back to its default slugs"
+        );
+      }
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
@@ -1245,6 +1368,7 @@ export const captureRouter = router({
             ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
             : input.previousEntities,
           routingMemory,
+          ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
@@ -1285,7 +1409,9 @@ export const captureRouter = router({
             "IS structure auth failure — marking service as credential_error"
           );
           markServiceCredentialError();
-          return degradedFallback("is_auth_error");
+          return finishIntake(degradedFallback("is_auth_error"), {
+            podDegraded: true,
+          });
         }
         throw err;
       }
@@ -1303,7 +1429,9 @@ export const captureRouter = router({
           },
           "IS structure failed (non-auth) after retries — returning degraded fallback, credential status left unchanged"
         );
-        return degradedFallback("is_invalid_response");
+        return finishIntake(degradedFallback("is_invalid_response"), {
+          podDegraded: true,
+        });
       }
 
       // 1a. Reconcile the workspace pick by NAME. The LLM reliably reasons the
@@ -1387,12 +1515,15 @@ export const captureRouter = router({
             ? "IS returned zero entities without error — marking degraded (is_empty_result)"
             : "IS returned zero entities with an explicit degradedReason — forwarding the IS reason"
         );
-        return {
-          ...degradedFallback(emptyReason),
-          ...(structureResult.extraction
-            ? { extraction: structureResult.extraction }
-            : {}),
-        };
+        return finishIntake(
+          {
+            ...degradedFallback(emptyReason),
+            ...(structureResult.extraction
+              ? { extraction: structureResult.extraction }
+              : {}),
+          },
+          { meta: (structureResult as { meta?: StructureRunMeta }).meta }
+        );
       }
 
       // Normalise every Knowledge proposal before the caller validates or
@@ -1504,38 +1635,42 @@ export const captureRouter = router({
 
       // 2. If followUp, pass through immediately (no dedup yet)
       if (structureResult.followUp) {
-        return {
-          proposals: structureResult.entities,
-          relations: structureResult.relations,
-          followUp: structureResult.followUp,
-          targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
-          targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
-          targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
-          targetWorkspaceConfidence:
-            structureResult.targetWorkspaceConfidence ?? null,
-          targetProjectId: structureResult.targetProjectId ?? null,
-          targetProjectReason: structureResult.targetProjectReason ?? null,
-          targetProjectConfidence:
-            structureResult.targetProjectConfidence ?? null,
-          formSpec: structureResult.formSpec ?? null,
-          // Soft meta-structure chips only — never materialize; omit when empty.
-          ...(structureResult.architectureSuggestions?.length
-            ? {
-                architectureSuggestions:
-                  structureResult.architectureSuggestions,
-              }
-            : {}),
-          dedupCandidates: {} as Record<
-            string,
-            Array<{
-              entityId: string;
-              title: string;
-              profileSlug: string;
-              score: number;
-            }>
-          >,
-          ...extractionPassThrough,
-        };
+        return finishIntake(
+          {
+            proposals: structureResult.entities,
+            relations: structureResult.relations,
+            followUp: structureResult.followUp,
+            targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+            targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
+            targetWorkspaceReason:
+              structureResult.targetWorkspaceReason ?? null,
+            targetWorkspaceConfidence:
+              structureResult.targetWorkspaceConfidence ?? null,
+            targetProjectId: structureResult.targetProjectId ?? null,
+            targetProjectReason: structureResult.targetProjectReason ?? null,
+            targetProjectConfidence:
+              structureResult.targetProjectConfidence ?? null,
+            formSpec: structureResult.formSpec ?? null,
+            // Soft meta-structure chips only — never materialize; omit when empty.
+            ...(structureResult.architectureSuggestions?.length
+              ? {
+                  architectureSuggestions:
+                    structureResult.architectureSuggestions,
+                }
+              : {}),
+            dedupCandidates: {} as Record<
+              string,
+              Array<{
+                entityId: string;
+                title: string;
+                profileSlug: string;
+                score: number;
+              }>
+            >,
+            ...extractionPassThrough,
+          },
+          { meta: (structureResult as { meta?: StructureRunMeta }).meta }
+        );
       }
 
       // 3. Dedup: for each entity, search for existing matches
@@ -1637,44 +1772,49 @@ export const captureRouter = router({
         "Structure capture: proposals ready"
       );
 
-      return {
-        proposals: structureResult.entities,
-        relations: structureResult.relations,
-        followUp: null as string | StructuredFollowUp | null,
-        targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
-        targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
-        targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
-        targetWorkspaceConfidence:
-          structureResult.targetWorkspaceConfidence ?? null,
-        targetProjectId: structureResult.targetProjectId ?? null,
-        targetProjectReason: structureResult.targetProjectReason ?? null,
-        targetProjectConfidence:
-          structureResult.targetProjectConfidence ?? null,
-        formSpec: structureResult.formSpec ?? null,
-        // Soft meta-structure chips only — never materialize; omit when empty.
-        ...(structureResult.architectureSuggestions?.length
-          ? {
-              architectureSuggestions: structureResult.architectureSuggestions,
-            }
-          : {}),
-        dedupCandidates,
-        // Additive: true when one or more dedup searches threw, so the caller
-        // can distinguish "checked, no duplicates" from "didn't check". Omitted
-        // when all searches succeeded.
-        ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
-        // Forward the degraded signal from IS so callers can distinguish a
-        // real classification from a confidence-0.3 fallback item. The item is
-        // still written (preserving user text), but callers now know WHY.
-        degraded: (structureResult as { degraded?: boolean }).degraded ?? false,
-        ...((structureResult as { degradedReason?: string }).degradedReason !==
-        undefined
-          ? {
-              degradedReason: (structureResult as { degradedReason?: string })
-                .degradedReason,
-            }
-          : {}),
-        ...extractionPassThrough,
-      };
+      return finishIntake(
+        {
+          proposals: structureResult.entities,
+          relations: structureResult.relations,
+          followUp: null as string | StructuredFollowUp | null,
+          targetWorkspaceId: structureResult.targetWorkspaceId ?? null,
+          targetWorkspaceName: structureResult.targetWorkspaceName ?? null,
+          targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
+          targetWorkspaceConfidence:
+            structureResult.targetWorkspaceConfidence ?? null,
+          targetProjectId: structureResult.targetProjectId ?? null,
+          targetProjectReason: structureResult.targetProjectReason ?? null,
+          targetProjectConfidence:
+            structureResult.targetProjectConfidence ?? null,
+          formSpec: structureResult.formSpec ?? null,
+          // Soft meta-structure chips only — never materialize; omit when empty.
+          ...(structureResult.architectureSuggestions?.length
+            ? {
+                architectureSuggestions:
+                  structureResult.architectureSuggestions,
+              }
+            : {}),
+          dedupCandidates,
+          // Additive: true when one or more dedup searches threw, so the caller
+          // can distinguish "checked, no duplicates" from "didn't check". Omitted
+          // when all searches succeeded.
+          ...(dedupSkipped ? { dedupSkipped: true as const } : {}),
+          // Forward the degraded signal from IS so callers can distinguish a
+          // real classification from a confidence-0.3 fallback item. The item is
+          // still written (preserving user text), but callers now know WHY.
+          degraded:
+            (structureResult as { degraded?: boolean }).degraded ?? false,
+          ...((structureResult as { degradedReason?: string })
+            .degradedReason !== undefined
+            ? {
+                degradedReason: (structureResult as { degradedReason?: string })
+                  .degradedReason,
+              }
+            : {}),
+          ...extractionPassThrough,
+        },
+        { meta: (structureResult as { meta?: StructureRunMeta }).meta }
+      );
     }),
 
   // ── analyzeBulkMapping (AI-driven CSV mapping plan) ─────────────────────
@@ -1940,6 +2080,8 @@ export const captureRouter = router({
       // `z.string().uuid()` that NOTHING validated, while being written onto the
       // capture proposal, the `session --produced--> entity` links and the
       // workspace/project placement rungs. Both now resolve through one door.
+      // What the caller SENT, kept only to report whether it was used.
+      const requestedSessionId = input.sessionId ?? ctx.sessionId ?? null;
       const sessionId = await resolveVerifiedSessionId(
         userId,
         ctx.sessionId,
@@ -2023,6 +2165,44 @@ export const captureRouter = router({
       } else {
         workspaceId = ctx.workspaceId;
       }
+      // ── The run ROOM (intake plan decision 1) ───────────────────────────────
+      // Every capture that files or applies anything belongs to a session: the
+      // verified handle when there is one, else a minted intake session. Ensured
+      // AFTER placement on purpose — the VERIFIED `sessionId` above is the only
+      // one placement consults, so a freshly minted room can never outrank the
+      // AI's routing hint. `runSessionId` is what attribution uses (proposal,
+      // receipt, produced links) and what the response echoes.
+      const runSession = await ensureIntakeSession({
+        userId,
+        workspaceId: workspaceId ?? null,
+        agentUserId: ctx.agentUserId ?? null,
+        verifiedHandle: sessionId ?? null,
+        door: "capture",
+        goal: `Capture · ${input.entities[0]?.title ?? input.file?.filename ?? "items"}`,
+        correlationKey: input.idempotencyKey
+          ? `capture-execute:${input.idempotencyKey.slice(0, 200)}`
+          : null,
+        // Decision F: the SAME plan key `capture.structure` remembered, so a
+        // client that forgot to forward the structure `sessionId` still lands in
+        // structure's room. Structure minted it in the AMBIENT workspace;
+        // execute may have routed — both are allowed, nothing else.
+        planKey: capturePlanKey(input.entities, input.relations),
+        reuseWorkspaceIds: Array.from(
+          new Set([ctx.workspaceId ?? null, workspaceId ?? null])
+        ),
+      });
+      const runSessionId = runSession.sessionId ?? sessionId;
+      const sessionEcho = {
+        sessionId: runSessionId ?? null,
+        intakeSession: {
+          sessionSource: runSession.status,
+          requestedSessionIgnored:
+            requestedSessionId !== null && runSessionId !== requestedSessionId,
+          ...(runSession.status === "failed"
+            ? { error: runSession.error }
+            : {}),
+        },
+      };
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
@@ -2038,20 +2218,16 @@ export const captureRouter = router({
       // ref-resolution + relation creation; the callers own write policy
       // (content→document routing, retry-as-item, relation-slug fallback).
 
-      // Prefetch valid relation slugs for this workspace (avoids N+1).
+      // Prefetch the relation vocabulary for this lens once (avoids N+1).
       // Workspace-less callers (hydration) resolve against the pod-wide layer.
-      const relDefRepo = new RelationDefRepository(database);
-      let validRelationSlugs: Set<string>;
-      // `list(null)` is the POD-WIDE base layer (workspace_id IS NULL);
-      // `list(ws)` is that workspace's defs PLUS the base layer. A workspace-less
-      // caller used to get `{relates_to}` alone, so every real default slug it
-      // sent was silently coerced to the fallback.
-      try {
-        const allDefs = await relDefRepo.list(workspaceId ?? null);
-        validRelationSlugs = new Set(allDefs.map((d) => d.slug));
-      } catch {
-        validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
-      }
+      // An unknown slug is NEVER coerced: the validator throws, so that edge
+      // alone fails into `relationsFailed[]` naming the slug and the valid list.
+      // A failed defs read fails the edges with the read error (logged at
+      // error) instead of folding into a calm `{relates_to}` vocabulary.
+      const resolveRelationType = await loadRelationTypeValidator(
+        database,
+        workspaceId ?? null
+      );
 
       // Kind + Facets guard (T2): a payload whose profileSlug is itself a ROLE
       // (client/partner/…) must never become a role-named entity — the role is
@@ -2063,7 +2239,9 @@ export const captureRouter = router({
       // below then links/creates, and the facet-attach pass materializes roles.
       for (const e of input.entities) {
         if (e.existingEntityId) continue;
-        const rolePayload = await resolveRolePayload(database, e.profileSlug);
+        const rolePayload = await resolveRolePayload(database, e.profileSlug, {
+          workspaceId,
+        });
         if (!rolePayload) continue;
         const roleFacet = {
           profileSlug: rolePayload.slug,
@@ -2204,20 +2382,23 @@ export const captureRouter = router({
 
         let proposalIds: string[];
         let sourceFileAttached: boolean;
+        let proposeRelationsFailed: MaterializeRelationFailure[];
         try {
-          ({ proposalIds, sourceFileAttached } =
-            await fileAnchoredCaptureProposals({
-              userId,
-              workspaceId,
-              correlationId: captureId,
-              projectId: input.projectId ?? undefined,
-              sessionId: sessionId ?? undefined,
-              entities: input.entities,
-              relations: input.relations,
-              resolveRelationType: (type) =>
-                validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
-              ...(stagedCaptureFile ? { sourceFile: stagedCaptureFile } : {}),
-            }));
+          ({
+            proposalIds,
+            sourceFileAttached,
+            relationsFailed: proposeRelationsFailed,
+          } = await fileAnchoredCaptureProposals({
+            userId,
+            workspaceId,
+            correlationId: captureId,
+            projectId: input.projectId ?? undefined,
+            sessionId: runSessionId ?? undefined,
+            entities: input.entities,
+            relations: input.relations,
+            resolveRelationType,
+            ...(stagedCaptureFile ? { sourceFile: stagedCaptureFile } : {}),
+          }));
         } catch (err) {
           // A hard RBAC/CBAC denial aborts the whole filing, so no proposal
           // exists to carry the blob and none ever will — discard it here or it
@@ -2254,7 +2435,12 @@ export const captureRouter = router({
           relations: [] as never[],
           captureId,
           correlationId: captureId,
+          ...sessionEcho,
           proposalIds,
+          // Edges NOT filed (unknown relation slug) — named, never coerced.
+          ...(proposeRelationsFailed.length
+            ? { relationsFailed: proposeRelationsFailed }
+            : {}),
           // Honest receipt: the file is held, not saved. `null` covers both "no
           // file was sent" and "staging failed" — either way nothing is waiting.
           sourceFileStaged: stagedCaptureFile
@@ -2502,7 +2688,7 @@ export const captureRouter = router({
               // members it does not cover.
               ...(anyMemberProposes ? { forcePropose: true } : {}),
               correlationId: captureId,
-              sessionId: sessionId ?? undefined,
+              sessionId: runSessionId ?? undefined,
               sourceMessageId:
                 input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
               threadId: input.threadId,
@@ -2562,6 +2748,7 @@ export const captureRouter = router({
           // was written on this branch.
           ...(captureUpdates.length ? { updated: captureUpdates } : {}),
           captureId,
+          ...sessionEcho,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           summary: perm.summary,
@@ -2581,6 +2768,10 @@ export const captureRouter = router({
       // zero-friction, so they proceed to create.
       const autoLinkedTempIds = new Set<string>();
       const resolvedExistingIds = new Map<string, string>();
+      // What each identity merge overwrote on the matched (pre-existing)
+      // entity — recorded on the receipt so a revert restores it instead of
+      // leaving the capture's values behind on somebody's entity.
+      const identityMergeDiffs: EntityPropertyDiff[] = [];
       for (const e of input.entities) {
         if (e.existingEntityId) continue;
         const identity = await resolveIdentity(database, {
@@ -2603,11 +2794,34 @@ export const captureRouter = router({
         );
         if (Object.keys(nonEmptyProperties).length > 0) {
           try {
-            await entitiesCaller.update({
+            const readProperties = async () => {
+              const [row] = await database
+                .select({ properties: entitiesTable.properties })
+                .from(entitiesTable)
+                .where(inArray(entitiesTable.id, [identity.entity!.id]))
+                .limit(1);
+              return (row?.properties ?? {}) as Record<string, unknown>;
+            };
+            const priorProperties = await readProperties();
+            const enriched = await entitiesCaller.update({
               id: identity.entity.id,
               properties: nonEmptyProperties,
               source: "user",
             });
+            if ((enriched as { status?: string }).status === "updated") {
+              // Diff against what was STORED (validation may normalize).
+              const stored = await readProperties();
+              const diff = computeEntityPropertyDiff(
+                identity.entity.id,
+                priorProperties,
+                Object.fromEntries(
+                  Object.keys(nonEmptyProperties)
+                    .filter((key) => key in stored)
+                    .map((key) => [key, stored[key]])
+                )
+              );
+              if (diff) identityMergeDiffs.push(diff);
+            }
           } catch (err) {
             logger.warn(
               { err, entityId: identity.entity.id },
@@ -2670,6 +2884,89 @@ export const captureRouter = router({
         });
       };
 
+      // RECEIPT FIRST — the auto_approved record of this capture is inserted
+      // BEFORE materialization, exactly as the structured lane does
+      // (submit-capture-graph.ts). Its id is a FOREIGN KEY the created rows
+      // carry (`entities.source_proposal_id`, `relations.source_proposal_id`),
+      // so the row must be COMMITTED before the first entity insert. It used to
+      // be inserted AFTER, with no lineage on the writes: entities were joined
+      // to it by a best-effort UPDATE, relations and facets not at all, so the
+      // capture could never be told apart from anyone else's rows on revert.
+      // A failed insert materializes UNSTAMPED — the capture is never lost.
+      const captureReceiptId = randomUUID();
+      let captureReceipt:
+        | {
+            id?: string;
+            correlationId?: string;
+            data?: Record<string, unknown>;
+          }
+        | undefined;
+      try {
+        const { createAutoApprovedProposal } =
+          await import("../utils/event-backed-proposal.js");
+        const { correlationId: receiptCorrelationId, proposal: receiptRow } =
+          await createAutoApprovedProposal({
+            id: captureReceiptId,
+            userId,
+            reviewedBy: userId,
+            workspaceId: workspaceId ?? null,
+            // `createdBy` stays the HUMAN explicitly: the helper falls back
+            // `createdBy ?? agentUserId ?? userId`, and every consumer (the
+            // proposal list, revert, findPriorCaptureGraphProposal, the agent
+            // scorecard, the daily agent cap) floors on `createdBy = <human>`.
+            // Attribution is ADDITIVE.
+            createdBy: userId,
+            ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+            ...(runSessionId ? { sessionId: runSessionId } : {}),
+            ...(input.threadId ? { threadId: input.threadId } : {}),
+            ...((input.sourceMessageId ?? ctx.sourceMessageId)
+              ? {
+                  sourceMessageId: input.sourceMessageId ?? ctx.sourceMessageId,
+                }
+              : {}),
+            // The deterministically-resolved project (linked below), or the AI's
+            // advisory suggestion — surfaced on the record, never linked.
+            projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
+            targetType: "entity",
+            targetId: randomUUID(),
+            proposalType: "capture.graph",
+            action: "graph",
+            // A valid EventSource; the capture origin lives in data.source.
+            source: "api",
+            summary: buildCaptureSummary(operations, captureSourceLabel),
+            data: {
+              // One capture, one id: the routing decision, the entity
+              // provenance stamp and every capture-trace share `captureId`.
+              correlationId: captureId,
+              operations,
+              source: "capture",
+              // Filled by `stampMaterialized` once the capture's writes are
+              // done. Empty is the honest value until then.
+              materialized: { entityIds: [] as string[] },
+            },
+          });
+        captureReceipt = receiptRow?.id
+          ? {
+              id: receiptRow.id,
+              correlationId: receiptCorrelationId,
+              data: receiptRow.data as Record<string, unknown>,
+            }
+          : undefined;
+      } catch (err) {
+        logger.warn(
+          { err, userId },
+          "capture.execute: auto_approved receipt insert failed (materializing unstamped)"
+        );
+      }
+      // The entity door for the materialization itself carries the receipt as
+      // its governance lineage — only when the row exists (FK, above).
+      const materializeEntitiesCaller = captureReceipt?.id
+        ? entitiesRouter.createCaller({
+            ...ctx,
+            governanceProposalId: captureReceiptId,
+          } as unknown as Context)
+        : entitiesCaller;
+
       const entityCaller = {
         create: async (op: {
           profileSlug: string;
@@ -2696,7 +2993,7 @@ export const captureRouter = router({
           const salvageProperties: Record<string, unknown> =
             inlineContent !== undefined ? { content: inlineContent } : {};
           try {
-            const created = await entitiesCaller.create({
+            const created = await materializeEntitiesCaller.create({
               profileSlug: op.profileSlug,
               title: op.title,
               description: op.description,
@@ -2711,6 +3008,7 @@ export const captureRouter = router({
             return {
               id: (created as { id: string }).id,
               profileSlug: op.profileSlug,
+              ...(documentId ? { documentId } : {}),
             };
           } catch (err) {
             // PropertyValidationError = valid profile, invalid property. Salvage
@@ -2725,7 +3023,7 @@ export const captureRouter = router({
                   { err, profileSlug: op.profileSlug },
                   "Entity creation failed validation — retrying same profile with properties dropped"
                 );
-                const salvaged = await entitiesCaller.create({
+                const salvaged = await materializeEntitiesCaller.create({
                   profileSlug: op.profileSlug,
                   title: op.title,
                   description: op.description,
@@ -2741,6 +3039,7 @@ export const captureRouter = router({
                   id: (salvaged as { id: string }).id,
                   profileSlug: op.profileSlug,
                   propertiesDropped: true as const,
+                  ...(documentId ? { documentId } : {}),
                 };
               } catch (retryErr) {
                 logger.warn(
@@ -2756,7 +3055,7 @@ export const captureRouter = router({
             }
             // Item fallback is process-shaped — pin to routed home when present.
             const fallbackPin = await pinForSlug(DEFAULT_CAPTURE_PROFILE);
-            const fallback = await entitiesCaller.create({
+            const fallback = await materializeEntitiesCaller.create({
               profileSlug: DEFAULT_CAPTURE_PROFILE,
               title: op.title,
               description: op.description,
@@ -2772,6 +3071,7 @@ export const captureRouter = router({
               id: (fallback as { id: string }).id,
               profileSlug: DEFAULT_CAPTURE_PROFILE,
               degradedFrom: op.profileSlug,
+              ...(documentId ? { documentId } : {}),
             };
           }
         },
@@ -2791,102 +3091,110 @@ export const captureRouter = router({
               type: rel.type,
               workspaceId,
               userId,
+              // Lineage — only when the receipt row exists (FK).
+              ...(captureReceipt?.id
+                ? { sourceProposalId: captureReceiptId }
+                : {}),
             },
             userId
           ),
       };
 
-      const result = await materializeCompositeGraph(
-        operations,
-        entityCaller,
-        relationCaller,
-        (err, type) =>
-          logger.warn({ err, type }, "Relation creation failed, skipping"),
-        {
-          source: "capture",
-          // Rule Loop callers — the SAME three canonical doors proposal
-          // approval wires. Without them a config op in this batch would
-          // materialize when the write was GOVERNED and be silently dropped
-          // when it was AUTO-APPROVED: behaviour forking on governance state.
-          ...buildRuleLoopCallers({
-            database,
-            userId,
-            workspaceId: workspaceId ?? null,
-            auditSource: "rule_loop_capture",
-          }),
-          resolveRelationType: (type) =>
-            validRelationSlugs.has(type) ? type : FALLBACK_RELATION_TYPE,
-          // U1: always key materialize. Prefer client key; else stable hash of
-          // proposal tempIds so a blind retry of the same plan does not double-create.
-          idempotency: makeExternalLinkIdempotency(database, {
-            // userId-scoped: without this a colliding key could link another
-            // tenant's entity (global provider/externalId index).
-            namespace: `${userId}:${
-              input.idempotencyKey && input.idempotencyKey.length > 0
-                ? input.idempotencyKey.slice(0, 200)
-                : // THE canonical content key — `computeCaptureGraphIdempotencyKey`,
-                  // the same rule `submit-capture-graph` already feeds into the
-                  // same `provider:"capture"` index. It folds workspace + project,
-                  // sorts entities by CONTENT and canonicalises property key
-                  // order, so an LLM-assigned positional label (`t1`/`t2`, by
-                  // array index) never reaches the entity component of the hash.
-                  //
-                  // `ref` IS still passed, because the canonical rule needs it for
-                  // the OTHER half: it builds a ref→content-key map and resolves
-                  // each relation endpoint THROUGH it, so a re-emitted graph whose
-                  // entities arrived in a different order (and so carry different
-                  // labels) still hashes to the same relation component. Omitting
-                  // `ref` leaves that map empty, every endpoint falls back to the
-                  // raw label, and multi-entity captures with relations silently
-                  // lose the order-independence this key exists to provide.
-                  //
-                  // The previous fallback joined those very `ref`s (`t1`, `t2`, …),
-                  // so every single-entity capture without a client key produced
-                  // the identical namespace `cap:t1` and the second one "deduped"
-                  // into the first REGARDLESS OF CONTENT. Reproduced live
-                  // 2026-08-15: three unrelated captures, one entity, two payloads
-                  // silently discarded.
-                  //
-                  // DAY BUCKET: the external-link lookup is a bare
-                  // `(provider, externalId)` match with no time predicate, and the
-                  // row is permanent — so without this a recurring capture with a
-                  // stable phrase ("Standup: no blockers") would link day 1's
-                  // entity forever and report success while storing nothing. The
-                  // window idiom this mirrors is `WRITE_IDEMPOTENCY_WINDOW_MS`,
-                  // which exists for exactly this reason. A retry arrives within
-                  // seconds, so a UTC-day grain is ample; the cost is that a retry
-                  // spanning midnight creates a duplicate instead of collapsing —
-                  // strictly the safer direction of the two failures.
-                  `cap:${new Date().toISOString().slice(0, 10)}:${computeCaptureGraphIdempotencyKey(
-                    {
-                      workspaceId: workspaceId ?? null,
-                      projectId: resolvedProjectId ?? null,
-                      entities: input.entities.map((e) => ({
-                        ref: e.tempId,
-                        profileSlug: e.profileSlug,
-                        title: e.title,
-                        description: e.description,
-                        content: e.content,
-                        properties: e.properties,
-                      })),
-                      // This lane names relation endpoints `sourceTempId` /
-                      // `targetTempId` / `relationType`; the canonical key takes
-                      // the `sourceRef` / `targetRef` / `type` vocabulary the
-                      // graph lane uses. Same triple, two spellings — mapped here
-                      // so both lanes hash identically rather than forking the
-                      // rule a second time.
-                      relations: input.relations.map((r) => ({
-                        sourceRef: r.sourceTempId,
-                        targetRef: r.targetTempId,
-                        type: r.relationType,
-                      })),
-                    }
-                  ).slice(0, 40)}`
-            }`,
-            provider: "capture",
-            userId,
-          }),
-        }
+      // The namespace the materialize below ACTUALLY keys its rows under —
+      // assigned where it is built, recorded on the run manifest afterwards.
+      let captureIdempotencyNamespace: string | undefined;
+      const result = await runMaterializationUnderReceipt(captureReceipt, () =>
+        materializeCompositeGraph(
+          operations,
+          entityCaller,
+          relationCaller,
+          (err, type) =>
+            logger.warn({ err, type }, "Relation creation failed, skipping"),
+          {
+            source: "capture",
+            // Rule Loop callers — the SAME three canonical doors proposal
+            // approval wires. Without them a config op in this batch would
+            // materialize when the write was GOVERNED and be silently dropped
+            // when it was AUTO-APPROVED: behaviour forking on governance state.
+            ...buildRuleLoopCallers({
+              database,
+              userId,
+              workspaceId: workspaceId ?? null,
+              auditSource: "rule_loop_capture",
+            }),
+            resolveRelationType,
+            // U1: always key materialize. Prefer client key; else stable hash of
+            // proposal tempIds so a blind retry of the same plan does not double-create.
+            idempotency: makeExternalLinkIdempotency(database, {
+              // userId-scoped: without this a colliding key could link another
+              // tenant's entity (global provider/externalId index).
+              namespace: (captureIdempotencyNamespace = `${userId}:${
+                input.idempotencyKey && input.idempotencyKey.length > 0
+                  ? input.idempotencyKey.slice(0, 200)
+                  : // THE canonical content key — `computeCaptureGraphIdempotencyKey`,
+                    // the same rule `submit-capture-graph` already feeds into the
+                    // same `provider:"capture"` index. It folds workspace + project,
+                    // sorts entities by CONTENT and canonicalises property key
+                    // order, so an LLM-assigned positional label (`t1`/`t2`, by
+                    // array index) never reaches the entity component of the hash.
+                    //
+                    // `ref` IS still passed, because the canonical rule needs it for
+                    // the OTHER half: it builds a ref→content-key map and resolves
+                    // each relation endpoint THROUGH it, so a re-emitted graph whose
+                    // entities arrived in a different order (and so carry different
+                    // labels) still hashes to the same relation component. Omitting
+                    // `ref` leaves that map empty, every endpoint falls back to the
+                    // raw label, and multi-entity captures with relations silently
+                    // lose the order-independence this key exists to provide.
+                    //
+                    // The previous fallback joined those very `ref`s (`t1`, `t2`, …),
+                    // so every single-entity capture without a client key produced
+                    // the identical namespace `cap:t1` and the second one "deduped"
+                    // into the first REGARDLESS OF CONTENT. Reproduced live
+                    // 2026-08-15: three unrelated captures, one entity, two payloads
+                    // silently discarded.
+                    //
+                    // DAY BUCKET: the external-link lookup is a bare
+                    // `(provider, externalId)` match with no time predicate, and the
+                    // row is permanent — so without this a recurring capture with a
+                    // stable phrase ("Standup: no blockers") would link day 1's
+                    // entity forever and report success while storing nothing. The
+                    // window idiom this mirrors is `WRITE_IDEMPOTENCY_WINDOW_MS`,
+                    // which exists for exactly this reason. A retry arrives within
+                    // seconds, so a UTC-day grain is ample; the cost is that a retry
+                    // spanning midnight creates a duplicate instead of collapsing —
+                    // strictly the safer direction of the two failures.
+                    `cap:${new Date().toISOString().slice(0, 10)}:${computeCaptureGraphIdempotencyKey(
+                      {
+                        workspaceId: workspaceId ?? null,
+                        projectId: resolvedProjectId ?? null,
+                        entities: input.entities.map((e) => ({
+                          ref: e.tempId,
+                          profileSlug: e.profileSlug,
+                          title: e.title,
+                          description: e.description,
+                          content: e.content,
+                          properties: e.properties,
+                        })),
+                        // This lane names relation endpoints `sourceTempId` /
+                        // `targetTempId` / `relationType`; the canonical key takes
+                        // the `sourceRef` / `targetRef` / `type` vocabulary the
+                        // graph lane uses. Same triple, two spellings — mapped here
+                        // so both lanes hash identically rather than forking the
+                        // rule a second time.
+                        relations: input.relations.map((r) => ({
+                          sourceRef: r.sourceTempId,
+                          targetRef: r.targetTempId,
+                          type: r.relationType,
+                        })),
+                      }
+                    ).slice(0, 40)}`
+              }`),
+              provider: "capture",
+              userId,
+            }),
+          }
+        )
       );
 
       const created = result.entities.map((e) => ({
@@ -2927,6 +3235,9 @@ export const captureRouter = router({
       // instrumentable drop) and threaded into the proposal below so the routing
       // decision, the entity stamp, and every capture-trace share ONE id.
       let facetsAttached = 0;
+      // Facet ids the attach door reported `attached` — recorded on the
+      // receipt (revert re-checks each row's lineage before detaching).
+      const attachedFacetIds: string[] = [];
       // Self-diagnosis: facets the pipeline dropped (the exemplar-bug class —
       // the IS no longer eats role facets, but this governed door still can:
       // not-a-role / applicableKinds mismatch / property-invalid). Surfaced in
@@ -2964,7 +3275,7 @@ export const captureRouter = router({
             });
           };
           try {
-            const r = await entitiesCaller.attachFacet({
+            const r = await materializeEntitiesCaller.attachFacet({
               entityId: parentEntityId,
               profileSlug: f.profileSlug,
               properties: f.properties,
@@ -2984,6 +3295,10 @@ export const captureRouter = router({
               recordFacetDrop(status);
             } else {
               facetsAttached++;
+              const facetId = (r as { facetId?: unknown } | undefined)?.facetId;
+              if (status === "attached" && typeof facetId === "string") {
+                attachedFacetIds.push(facetId);
+              }
             }
           } catch (err) {
             const reason = err instanceof Error ? err.message : "attach_failed";
@@ -3027,7 +3342,7 @@ export const captureRouter = router({
       // identity-deduped) rather than created, so this explicit pass is still
       // required to cover the full `created` set. Idempotent via the links
       // unique-edge index; best-effort (never blocks the capture).
-      if (sessionId) {
+      if (runSessionId) {
         for (const c of created) {
           try {
             await database
@@ -3035,7 +3350,7 @@ export const captureRouter = router({
               .values({
                 workspaceId: workspaceId ?? null,
                 fromType: "session" as LinkEndpointType,
-                fromId: sessionId,
+                fromId: runSessionId,
                 toType: "entity" as LinkEndpointType,
                 toId: c.entityId,
                 linkType: "produced" as LinkType,
@@ -3062,86 +3377,24 @@ export const captureRouter = router({
         "Capture execute completed"
       );
 
-      // Track 3 — record-and-materialize. The write above is an already-done
-      // first-party capture; record it as a persistent `auto_approved` proposal
-      // so the capture is traceable, shows in the Proposals app, and can be
-      // reverted (revert reads `data.materialized.entityIds`). BEST-EFFORT: a
-      // recording hiccup must NEVER fail the capture (same discipline as the
-      // keepRaw block below). NOT routed through checkPermissionOrPropose — this
-      // RECORDS an already-committed first-party write, it does not ask permission.
-      if (created.length > 0) {
+      // Track 3 — record-and-materialize. The capture's `auto_approved` receipt
+      // was inserted BEFORE materialization (above) so the created rows carry
+      // it as lineage; this block joins the routing decisions to it.
+      // BEST-EFFORT: a recording hiccup must NEVER fail the capture (same
+      // discipline as the keepRaw block below). NOT routed through
+      // checkPermissionOrPropose — this RECORDS an already-committed first-party
+      // write, it does not ask permission. No receipt ⇒ nothing to join to.
+      if (
+        created.length > 0 &&
+        captureReceipt?.id &&
+        captureReceipt.correlationId
+      ) {
         try {
-          const { createAutoApprovedProposal } =
-            await import("../utils/event-backed-proposal.js");
           const materializedEntityIds = created
             .filter((c) => !c.linked)
             .map((c) => c.entityId);
-          const { correlationId, proposal } = await createAutoApprovedProposal({
-            userId,
-            reviewedBy: userId,
-            workspaceId: workspaceId ?? null,
-            // PROVENANCE — the same two stamps the governance gate above already
-            // resolved (:2142 / :2147). They were omitted here, so every TEXT-lane
-            // capture filed a row reading human-authored and session-less, while
-            // the STRUCTURED lane (submit-capture-graph.ts:721) stamped the
-            // session. Two capture lanes, two different provenances for the same
-            // user action — and the receipt the caller sees reported a session the
-            // stored row did not carry.
-            //
-            // This is what re-listing fields by hand costs: the helper accepts
-            // both (event-backed-proposal.ts:17/22) and writes them to columns
-            // behind a truthiness spread, so an omission is indistinguishable
-            // from a deliberate NULL.
-            // `createdBy` is passed EXPLICITLY and stays the human. The helper
-            // falls back `createdBy ?? agentUserId ?? userId`
-            // (event-backed-proposal.ts:163), so stamping `agentUserId` without
-            // this would silently move authorship to the agent — and every
-            // consumer floors on `createdBy = <human>`: the human's proposal list,
-            // the revert surface, `findPriorCaptureGraphProposal`, the agent
-            // scorecard (which needs createdBy=human AND agentUserId=agent, so it
-            // would match NOTHING), and the daily agent proposal cap, which the
-            // row would escape by accident. Attribution must be ADDITIVE.
-            createdBy: userId,
-            ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
-            // The one verified handle resolved at the top of `execute` — header
-            // first, body only after an ownership check. This used to prefer the
-            // header and fall back to an UNVALIDATED body value; that follow-up
-            // is now done, so both doors are equally trusted here.
-            ...(sessionId ? { sessionId } : {}),
-            ...(input.threadId ? { threadId: input.threadId } : {}),
-            ...((input.sourceMessageId ?? ctx.sourceMessageId)
-              ? {
-                  sourceMessageId: input.sourceMessageId ?? ctx.sourceMessageId,
-                }
-              : {}),
-            // The deterministically-resolved project (already LINKED above), or —
-            // when none resolved — the AI's advisory suggestion. This is an
-            // auto_approved RECORD (createAutoApprovedProposal never stamps
-            // membership), so the advisory id is surfaced/traceable but NOT
-            // linked; only a user-confirmed project ever becomes a real edge.
-            projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
-            targetType: "entity",
-            targetId: randomUUID(),
-            proposalType: "capture.graph",
-            action: "graph",
-            // Event source must be a valid EventSource (api/automation/system/…);
-            // "capture" is NOT one — passing it made every capture audit event
-            // fail Zod validation (silently, via best-effort auditLog). The
-            // capture-origin discriminator already lives in data.source + the
-            // proposalType, so the transport source is "api".
-            source: "api",
-            summary: buildCaptureSummary(operations, captureSourceLabel),
-            data: {
-              // Unify the whole capture under the pre-minted captureId — the
-              // routing decision, the entity provenance stamp, AND every
-              // capture-trace share this id, so the diagnose door returns one
-              // capture's complete story.
-              correlationId: captureId,
-              operations,
-              source: "capture",
-              materialized: { entityIds: materializedEntityIds },
-            },
-          });
+          const correlationId = captureReceipt.correlationId;
+          const proposal = { id: captureReceipt.id };
 
           // A routing decision is only MEASURABLE when it (a) actually made a
           // pick (aiWorkspaceId) AND (b) produced at least one fresh entity to
@@ -3373,6 +3626,59 @@ export const captureRouter = router({
         }
       }
 
+      // Record the COMPLETE set of what this capture wrote on its receipt —
+      // entities, relations, facets, merge overwrites. Stamped here, after the
+      // capture's last write (the kept raw file above): stamping earlier would
+      // make that attach read as the entity being "edited since" on revert.
+      if (captureReceipt?.id) {
+        try {
+          await stampMaterialized({
+            proposalId: captureReceipt.id,
+            record: buildMaterializedRecord(result, {
+              facetIds: attachedFacetIds,
+              propertyDiffs: identityMergeDiffs,
+            }),
+            baseData: captureReceipt.data,
+          });
+        } catch (err) {
+          logger.warn(
+            { err, userId, proposalId: captureReceipt.id },
+            "capture.execute: receipt materialized record not stamped — this capture cannot be fully undone (capture preserved)"
+          );
+        }
+      }
+
+      // Run manifest: the namespace this capture keyed its rows under, and the
+      // kept raw file as a source. (Sources, guidelines and IS facts were
+      // recorded by `capture.structure` for the same room.) Best-effort, loud.
+      if (runSessionId) {
+        try {
+          const recorded = await recordSessionRunManifest({
+            sessionId: runSessionId,
+            userId,
+            patch: {
+              ...(captureIdempotencyNamespace
+                ? { idempotencyNamespace: captureIdempotencyNamespace }
+                : {}),
+              ...(sourceFile && "documentId" in sourceFile
+                ? { sourceDocumentIds: [sourceFile.documentId] }
+                : {}),
+            },
+          });
+          if (!recorded.ok) {
+            logger.warn(
+              { userId, sessionId: runSessionId },
+              "capture.execute: run manifest not recorded — session not found for this user"
+            );
+          }
+        } catch (err) {
+          logger.error(
+            { err, userId, sessionId: runSessionId },
+            "capture.execute: run manifest NOT recorded (capture preserved)"
+          );
+        }
+      }
+
       // Emit capture.complete event — enables automation triggers + event log audit trail
       if (created.length > 0) {
         const captureEventId = randomUUID();
@@ -3426,10 +3732,22 @@ export const captureRouter = router({
           .catch(() => {}); // non-blocking
       }
 
+      // Suggest-and-confirm routing (intake plan §3.5): which playbooks /
+      // automations fit what this capture just created, each with its reason.
+      // Nothing runs; a skip or a failure is stated, never an empty list.
+      const routeSuggestions = await loadRouteSuggestions({
+        ctx: ctx as unknown as Record<string, unknown>,
+        workspaceId,
+        entities: created
+          .filter((c) => !c.linked)
+          .map((c) => ({ entityId: c.entityId, profileSlug: c.profileSlug })),
+      });
+
       return {
         status: "applied" as const,
         created,
         relations: createdRelations,
+        routeSuggestions,
         // W1 — entities PATCHED rather than created/linked. Each entry says
         // whether the patch landed (`applied`), was parked for review
         // (`proposed`, with its reviewable diff) or failed. Absent when the
@@ -3440,6 +3758,7 @@ export const captureRouter = router({
         // N, dropped M facets — why". Empty array on the happy path.
         captureId,
         threadId: input.threadId,
+        ...sessionEcho,
         // Disposition of the kept raw file (keepRaw + file only): landed,
         // parked for review with its handle, denied, or failed. Absent when
         // the capture carried no file, so existing consumers are untouched.
@@ -3736,18 +4055,11 @@ export const captureRouter = router({
       // ── Phase 3: relations (shared loop — the SAME relation definition the
       // composite orchestrator uses; only the entity phase above differs, via
       // EntityUpsertService dedup). tempToReal IS a ref→realId map (ref=tempId).
-      const relDefRepo = new RelationDefRepository(database);
-      let validRelationSlugs: Set<string>;
-      // `list(null)` is the POD-WIDE base layer (workspace_id IS NULL);
-      // `list(ws)` is that workspace's defs PLUS the base layer. A workspace-less
-      // caller used to get `{relates_to}` alone, so every real default slug it
-      // sent was silently coerced to the fallback.
-      try {
-        const allDefs = await relDefRepo.list(workspaceId ?? null);
-        validRelationSlugs = new Set(allDefs.map((d) => d.slug));
-      } catch {
-        validRelationSlugs = new Set([FALLBACK_RELATION_TYPE]);
-      }
+      // Same vocabulary + same never-coerce rule as `execute` (see there).
+      const resolveRelationType = await loadRelationTypeValidator(
+        database,
+        workspaceId ?? null
+      );
 
       const relationsFailed: Array<{
         sourceRef: string;
@@ -3782,8 +4094,7 @@ export const captureRouter = router({
               ),
           },
           {
-            resolveRelationType: (t) =>
-              validRelationSlugs.has(t) ? t : FALLBACK_RELATION_TYPE,
+            resolveRelationType,
             onError: (err, type, refs) => {
               relationsFailed.push({
                 ...refs,

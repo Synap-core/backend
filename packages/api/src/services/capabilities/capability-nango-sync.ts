@@ -24,11 +24,26 @@ import {
   isNull,
   inArray,
   encryptServerSide,
+  ensureConnectionAutoRule,
+  disableConnectionAutoRule,
 } from "@synap/database";
-import { secrets, entityExternalLinks } from "@synap/database/schema";
+import {
+  secrets,
+  entityExternalLinks,
+  links,
+  tools,
+} from "@synap/database/schema";
+import {
+  findApprovedConnectionImport,
+  resolveSyncTool,
+} from "../event-sync/sync-state-store.js";
 import { createLogger } from "@synap-core/core";
 
-import { resolveNangoConnector } from "../../connectors/index.js";
+import { resolveBroker } from "../../connectors/index.js";
+import type { ConnectionBroker } from "../../connectors/ConnectionBroker.js";
+import { BrokerConnectionNotFoundError } from "../../connectors/CpBrokerConnector.js";
+import type { SyncConnectorConnection } from "../../connectors/SyncConnector.js";
+import { enqueueConnectionSync } from "../event-sync/connection-sync.js";
 import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolution.js";
 
 const logger = createLogger({ module: "capability-nango-sync" });
@@ -39,7 +54,13 @@ const logger = createLogger({ module: "capability-nango-sync" });
  */
 export async function syncNangoConnectionsToRegistry(
   capabilityId: string,
-  actorUserId: string
+  actorUserId: string,
+  /**
+   * The actor's live connections when the caller JUST read them from the broker
+   * (one broker read per request, not one per capability). Must be the actor's
+   * COMPLETE live list: the removal half treats absence as revoked.
+   */
+  live?: SyncConnectorConnection[]
 ): Promise<void> {
   // 1. The capability's Nango providers — resolved the SAME way the catalog card
   //    does (member_of tool links first, template-def fallback). Sharing this with
@@ -48,8 +69,31 @@ export async function syncNangoConnectionsToRegistry(
   const providerKeys = await resolveCapabilityNangoProviderKeys(capabilityId);
   if (providerKeys.length === 0) return; // pure-vault / no Nango tool — nothing to sync.
 
-  const connector = await resolveNangoConnector();
-  if (!connector) return; // Nango unconfigured — leave the registry untouched.
+  let liveList = live;
+  if (!liveList) {
+    const resolved = await resolveBroker("nango");
+    if (!resolved.ok) {
+      // No broker, or a broker fault: leave the registry untouched either way —
+      // but a fault is logged, never read as "this user has no connections".
+      if (resolved.reason !== "not-configured") {
+        logger.warn(
+          { capabilityId, actorUserId, reason: resolved.reason },
+          "Skipping connection reconcile — the connection broker is unavailable"
+        );
+      }
+      return;
+    }
+    const connector = resolved.broker;
+    const liveResult = await connector.listConnectionsResult(actorUserId);
+    if (!liveResult.ok) {
+      logger.warn(
+        { capabilityId, actorUserId, reason: liveResult.reason },
+        "Skipping Nango connection reconcile — could not list connections (not treating as empty)"
+      );
+      return;
+    }
+    liveList = liveResult.connections;
+  }
 
   // 2. Existing registry rows for this (capability, actor) — dedup + default gate.
   const existing = await db
@@ -70,20 +114,12 @@ export async function syncNangoConnectionsToRegistry(
   );
   let needsDefault = !existing.some((r) => r.isDefault);
 
-  // 3. Live Nango connections for the actor, filtered to this capability's
-  //    providers. TYPED + paginated: a Nango HTTP error / rate-limit must NOT
-  //    look like "zero connections", or the removal branch below would soft-
-  //    delete every live pointer row. An unreliable list drives neither insert
-  //    nor remove — we simply skip this pass and try again on the next call.
-  const liveResult = await connector.listConnectionsResult(actorUserId);
-  if (!liveResult.ok) {
-    logger.warn(
-      { capabilityId, actorUserId, reason: liveResult.reason },
-      "Skipping Nango connection reconcile — could not list connections (not treating as empty)"
-    );
-    return;
-  }
-  const liveConnections = liveResult.connections;
+  // 3. Live Nango connections for the actor (read above, or supplied), filtered
+  //    to this capability's providers. A broker HTTP error / truncated page
+  //    never reaches here — it returned above rather than look like "zero
+  //    connections", which would make the removal branch below soft-delete
+  //    every live pointer row.
+  const liveConnections = liveList;
 
   // The set of connectionIds Nango still reports for THIS capability's providers.
   // A pointer row whose account_hint is not in this set is an orphan — the
@@ -118,20 +154,41 @@ export async function syncNangoConnectionsToRegistry(
       // and pins THIS account via the hint (see external-dispatch). This works
       // against the live nango:// tools without needing a provider_integrations row.
       const blob = encryptServerSide("");
-      await db.insert(secrets).values({
-        userId: actorUserId,
-        workspaceId: null,
-        name: `${providerConfigKey} · ${conn.connectionId.slice(-6)}`,
-        type: "api_key",
-        capabilityId,
-        accountHint: conn.connectionId,
-        isDefault: makeDefault,
-        encryptedData: blob.encryptedData,
-        iv: blob.iv,
-        authTag: blob.authTag,
-        encryptionVersion: 1,
-        encryptionMode: "server",
-      });
+      const [created] = await db
+        .insert(secrets)
+        .values({
+          userId: actorUserId,
+          workspaceId: null,
+          name: `${providerConfigKey} · ${conn.connectionId.slice(-6)}`,
+          type: "api_key",
+          capabilityId,
+          accountHint: conn.connectionId,
+          isDefault: makeDefault,
+          encryptedData: blob.encryptedData,
+          iv: blob.iv,
+          authTag: blob.authTag,
+          encryptionVersion: 1,
+          encryptionMode: "server",
+        })
+        .returning({ id: secrets.id });
+
+      // A connection first observed ⇒ its first sync. The registry row id IS
+      // the connection's identity for the sync door. An enqueue failure must not
+      // undo the mirror, but it is logged — the connection would otherwise sit
+      // unsynced with nothing saying why.
+      if (created) {
+        await enqueueConnectionSync({
+          provider: providerConfigKey,
+          connectionId: created.id,
+          workspaceId: null,
+          reason: "connect",
+        }).catch((err: unknown) =>
+          logger.warn(
+            { err, capabilityId, connectionId: created.id },
+            "Could not enqueue the first sync for a newly observed connection"
+          )
+        );
+      }
     }
   }
 
@@ -308,6 +365,296 @@ export function chooseHealthyDefault(
   return healthy ? { demoteId: current.id, promoteId: healthy.id } : null;
 }
 
+export type ReconcileLiveOutcome =
+  /** `capabilities` = how many capabilities were reconciled (0 = no provider tool yet). */
+  | { ok: true; capabilities: number }
+  | { ok: false; reason: string; error: string };
+
+/**
+ * Mirror a user's live connections into the registry for every capability that
+ * carries their provider's `nango://` tool. Inserting a pointer row enqueues the
+ * connection's first sync (see `syncNangoConnectionsToRegistry`); a connection
+ * already mirrored is skipped, so repeated calls enqueue nothing more.
+ *
+ * Two callers:
+ *   - a client door that JUST read the list passes it as `live` (one broker read
+ *     per request). It must be the user's COMPLETE live list.
+ *   - a server-side caller with no client context (e.g. a sync trigger that
+ *     found no registry row) omits `live`; the list is read here through the
+ *     broker. A broker fault or failed list is `ok:false` — nothing is
+ *     reconciled off an unread list.
+ *
+ * It does not materialize a missing provider tool (that needs a caller context
+ * for the governed template apply): with no tool yet it reconciles nothing and
+ * reports `capabilities: 0`.
+ */
+export async function reconcileLiveConnections(
+  userId: string,
+  live?: SyncConnectorConnection[]
+): Promise<ReconcileLiveOutcome> {
+  let list = live;
+  if (!list) {
+    const resolved = await resolveBroker("nango");
+    if (!resolved.ok) {
+      return { ok: false, reason: resolved.reason, error: resolved.error };
+    }
+    const listed = await resolved.broker.listConnectionsResult(userId);
+    if (!listed.ok) {
+      return { ok: false, reason: listed.reason, error: listed.error };
+    }
+    list = listed.connections;
+  }
+  const refs = [...new Set(list.map((c) => `nango://${c.provider}`))];
+  if (refs.length === 0) return { ok: true, capabilities: 0 };
+  const toolRows = await db
+    .select({ id: tools.id })
+    .from(tools)
+    .where(inArray(tools.credentialRef, refs));
+  if (toolRows.length === 0) return { ok: true, capabilities: 0 };
+  const edges = await db
+    .select({ capabilityId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "tool"),
+        inArray(
+          links.fromId,
+          toolRows.map((t) => t.id)
+        ),
+        eq(links.linkType, "member_of"),
+        eq(links.toType, "capability")
+      )
+    );
+  const capabilityIds = new Set(edges.map((e) => e.capabilityId));
+  for (const capabilityId of capabilityIds) {
+    await syncNangoConnectionsToRegistry(capabilityId, userId, list);
+  }
+  return { ok: true, capabilities: capabilityIds.size };
+}
+
+/**
+ * The provider a registry row syncs as, derived from the row itself: the one of
+ * its capability's Nango providers whose sync tool this connection resolves to
+ * (the same join the sync door runs). With `wanted`, only that provider is
+ * considered. `null` = the row has no sync tool for any (or that) provider.
+ */
+async function resolveRowSyncProvider(
+  capabilityId: string,
+  connectionId: string,
+  wanted?: string
+): Promise<{
+  provider: string;
+  tool: NonNullable<Awaited<ReturnType<typeof resolveSyncTool>>>;
+} | null> {
+  const keys = await resolveCapabilityNangoProviderKeys(capabilityId);
+  for (const provider of wanted ? keys.filter((k) => k === wanted) : keys) {
+    const tool = await resolveSyncTool({ provider, connectionId });
+    if (tool) return { provider, tool };
+  }
+  return null;
+}
+
+export type KeepSyncingOutcome =
+  | { ok: true; enabled: boolean; ruleId?: string }
+  | { ok: false; reason: "not_found" | "no_approved_import"; error: string };
+
+/**
+ * The "keep syncing automatically" toggle for ONE of the caller's connections.
+ *
+ * On = the connection's `auto` governance rule (steady syncs apply without a
+ * proposal); off = that rule revoked (the next sync proposes). The rule is
+ * scoped exactly where the sync door evaluates it — the workspace of the
+ * provider tool that carries this connection's sync config — so the toggle and
+ * the runner can never disagree about which rule applies.
+ *
+ * A rule is earned consent with lineage: it records the approved first-import
+ * proposal it grew from. Turning it on before any import of this connection was
+ * approved has no such proposal, so it is refused rather than minted without
+ * lineage. Another user's row, a deleted row or a non-registry row is
+ * `not_found` — ownership is checked in code.
+ */
+export async function setConnectionKeepSyncing(input: {
+  userId: string;
+  connectionId: string;
+  enabled: boolean;
+}): Promise<KeepSyncingOutcome> {
+  const notFound = {
+    ok: false as const,
+    reason: "not_found" as const,
+    error: "Connection not found",
+  };
+  const [row] = await db
+    .select({
+      id: secrets.id,
+      userId: secrets.userId,
+      capabilityId: secrets.capabilityId,
+      deletedAt: secrets.deletedAt,
+    })
+    .from(secrets)
+    .where(eq(secrets.id, input.connectionId))
+    .limit(1);
+  if (
+    !row ||
+    row.userId !== input.userId ||
+    !row.capabilityId ||
+    row.deletedAt
+  ) {
+    return notFound;
+  }
+  const synced = await resolveRowSyncProvider(row.capabilityId, row.id);
+  if (!synced) return notFound;
+
+  const scope = {
+    userId: input.userId,
+    workspaceId: synced.tool.workspaceId ?? null,
+    connectionId: row.id,
+  };
+
+  if (!input.enabled) {
+    await disableConnectionAutoRule(scope);
+    return { ok: true, enabled: false };
+  }
+
+  const approved = await findApprovedConnectionImport(row.id);
+  if (!approved) {
+    return {
+      ok: false,
+      reason: "no_approved_import",
+      error:
+        "Automatic syncing turns on once this connection's first import has been approved.",
+    };
+  }
+  const { ruleId } = await ensureConnectionAutoRule({
+    ...scope,
+    sourceProposalId: approved.id,
+  });
+  return { ok: true, enabled: true, ruleId };
+}
+
+export type ManualSyncOutcome =
+  | { ok: true; count: number }
+  | { ok: false; reason: "not_found"; error: string };
+
+/**
+ * "Sync now" for the caller's OWN connections — the door behind
+ * `connectors.syncNow` (the user's "Try again").
+ *
+ * With `connectionId` (a registry row id, the id sync-status rows carry): the row
+ * must be the caller's, a connection-registry row (capability set) and not
+ * deleted; its provider is the one its sync tool resolves under (never merely the
+ * capability's first provider key). With only `provider`: every one of the
+ * caller's live registry rows that syncs as that provider. Anything else —
+ * another user's row, a deleted row, nothing to sync — is `not_found`, the same
+ * answer either way so a caller cannot probe another user's ids. The owner check
+ * runs in code, not only in SQL.
+ */
+export async function enqueueManualConnectionSync(input: {
+  userId: string;
+  connectionId?: string;
+  provider?: string;
+}): Promise<ManualSyncOutcome> {
+  const columns = {
+    id: secrets.id,
+    userId: secrets.userId,
+    capabilityId: secrets.capabilityId,
+    deletedAt: secrets.deletedAt,
+  };
+  const rows = input.connectionId
+    ? await db
+        .select(columns)
+        .from(secrets)
+        .where(eq(secrets.id, input.connectionId))
+    : await db
+        .select(columns)
+        .from(secrets)
+        .where(
+          and(eq(secrets.userId, input.userId), isNull(secrets.deletedAt))
+        );
+
+  const owned = rows.filter(
+    (r) => r.userId === input.userId && !!r.capabilityId && !r.deletedAt
+  );
+
+  const targets: Array<{ connectionId: string; provider: string }> = [];
+  for (const row of owned) {
+    const synced = await resolveRowSyncProvider(
+      row.capabilityId!,
+      row.id,
+      input.provider
+    );
+    if (synced)
+      targets.push({ connectionId: row.id, provider: synced.provider });
+  }
+
+  if (targets.length === 0) {
+    return {
+      ok: false,
+      reason: "not_found",
+      error: input.connectionId
+        ? "Connection not found"
+        : `You have no "${input.provider}" connection to sync`,
+    };
+  }
+  // A queue fault throws — "sync requested" is never claimed when it was not.
+  for (const t of targets) {
+    await enqueueConnectionSync({
+      provider: t.provider,
+      connectionId: t.connectionId,
+      workspaceId: null,
+      reason: "manual",
+    });
+  }
+  return { ok: true, count: targets.length };
+}
+
+export type DisconnectOwnedOutcome =
+  | { ok: true; provider: string }
+  | { ok: false; reason: "not_found" | "list_failed"; error: string };
+
+/**
+ * The disconnect door shared by tRPC and Hub REST: revoke ONE of the acting
+ * user's own connections, then clean up its registry footprint.
+ *
+ * Ownership is proven from the user's live broker list before anything happens.
+ * Without it a caller could name another user's connection id: the revoke is
+ * refused (or is a no-op) but `detachNangoConnectionRegistry` — which matches by
+ * connection id across ALL users — would still soft-delete that user's pointer
+ * rows. A failed list proves nothing, so it refuses too.
+ */
+export async function disconnectOwnedConnection(input: {
+  broker: ConnectionBroker;
+  userId: string;
+  connectionId: string;
+}): Promise<DisconnectOwnedOutcome> {
+  const listed = await input.broker.listConnectionsResult(input.userId);
+  if (!listed.ok) {
+    return {
+      ok: false,
+      reason: "list_failed",
+      error: `Could not verify the connection (${listed.reason}): ${listed.error}`,
+    };
+  }
+  const own = listed.connections.find(
+    (c) => c.connectionId === input.connectionId
+  );
+  if (!own) {
+    return { ok: false, reason: "not_found", error: "Connection not found" };
+  }
+  try {
+    await input.broker.revokeConnection(
+      own.connectionId,
+      own.provider,
+      input.userId
+    );
+  } catch (err) {
+    // Ownership was proven from the live list just above; a broker "not found"
+    // now means it was revoked in between — the desired end state.
+    if (!(err instanceof BrokerConnectionNotFoundError)) throw err;
+  }
+  await detachNangoConnectionRegistry(own.connectionId);
+  return { ok: true, provider: own.provider };
+}
+
 /**
  * Directly clean up the connection-registry footprint of a single revoked Nango
  * connection — called by the disconnect doors right after `revokeConnection`, so
@@ -339,13 +686,18 @@ export async function detachNangoConnectionRegistry(
     }
 
     // Mark any entities sourced from this connection as disconnected, so
-    // "last synced" / source badges stop showing it as live.
+    // "last synced" / source badges stop showing it as live. The sync door
+    // stamps links with the registry ROW id; links written before it carry the
+    // broker's connection id — both identify this connection.
     const linkRows = await db
       .update(entityExternalLinks)
       .set({ status: "disconnected", disconnectedAt: new Date() })
       .where(
         and(
-          eq(entityExternalLinks.nangoConnectionId, connectionId),
+          inArray(entityExternalLinks.nangoConnectionId, [
+            connectionId,
+            ...removed.map((r) => r.id),
+          ]),
           eq(entityExternalLinks.status, "active")
         )
       )

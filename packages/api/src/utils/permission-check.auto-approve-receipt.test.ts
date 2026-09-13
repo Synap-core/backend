@@ -105,7 +105,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
-vi.mock("@synap/database/agent-governance", () => ({
+vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   resolveAgentGovernanceDecision: mockGov,
   resolveGovernanceRule: vi.fn().mockResolvedValue(null),
 }));

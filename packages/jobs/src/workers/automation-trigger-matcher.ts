@@ -258,6 +258,24 @@ interface TriggerMatchPayload {
    * matcher) → owner-only governance, exactly as today.
    */
   producerAgentUserId?: string | null;
+  /**
+   * `"sync"` when the event is a bulk mirror of an external source (see
+   * `SideEffectPayload.origin`). Event automations skip it unless
+   * `triggerConfig.includeSyncOrigin === true` — `shouldSkipSyncOrigin`.
+   */
+  origin?: "sync";
+}
+
+/**
+ * A sync-origin event does NOT fire an event automation
+ * unless that automation opted in. Search-index + embedding are reactors, not
+ * automations, so they are untouched by this. Pure — exported for the test.
+ */
+export function shouldSkipSyncOrigin(
+  origin: TriggerMatchPayload["origin"],
+  config: Pick<AutomationTriggerConfig, "includeSyncOrigin"> | null | undefined
+): boolean {
+  return origin === "sync" && config?.includeSyncOrigin !== true;
 }
 
 /**
@@ -523,7 +541,7 @@ export function matchTriggerSpecificFilters(
 
   // ── connector_sync trigger ──────────────────────────────────────────────
   if (eventType.startsWith("connector_sync.")) {
-    // Filter by connector provider (e.g. "google-calendar", "github")
+    // Filter by connector provider (e.g. "google", "github")
     if (config.provider && eventData?.provider !== config.provider) {
       return false;
     }
@@ -1214,6 +1232,9 @@ export async function handleAutomationTriggerMatch(job: {
     }
 
     const config = automation.triggerConfig as AutomationTriggerConfig;
+
+    // ── Sync-origin opt-in ─────────────────────────────────────────────
+    if (shouldSkipSyncOrigin(job.data.origin, config)) continue;
 
     // ── Pattern match ──────────────────────────────────────────────────
     if (!matchPattern(eventType, config.eventPattern)) continue;

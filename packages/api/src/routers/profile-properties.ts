@@ -14,6 +14,10 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import {
+  assertProfileSchemaWrite,
+  propertyLinkLevel,
+} from "../utils/profile-schema-write-access.js";
 
 const logger = createLogger({ module: "profile-properties-router" });
 
@@ -60,6 +64,21 @@ export const profilePropertiesRouter = router({
         });
       }
 
+      // Ownership gate on the LOADED profile. A new optional link onto a system
+      // kind stays open to editors; `required`, a default, or re-linking an
+      // existing pair (the repository upserts) needs the profile's owner.
+      const existingLinks = await profilePropertyRepo.getByProfile(profile.id);
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: propertyLinkLevel({
+          required: input.required,
+          defaultValue: input.defaultValue,
+          alreadyLinked: existingLinks.some(
+            (l) => l.propertyDefId === input.propertyDefId
+          ),
+        }),
+        actingWorkspaceId: ctx.workspaceId,
+      });
+
       const link = await profilePropertyRepo.link({
         profileId: input.profileId,
         propertyDefId: input.propertyDefId,
@@ -97,14 +116,6 @@ export const profilePropertiesRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      // Only workspace owners/admins can unlink properties
-      if (!["owner", "admin"].includes(ctx.workspaceRole)) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only workspace owners/admins can unlink properties",
-        });
-      }
-
       logger.warn(
         {
           profileId: input.profileId,
@@ -138,6 +149,12 @@ export const profilePropertiesRouter = router({
           message: "Cannot unlink properties from system profiles",
         });
       }
+
+      // Owners/admins of the PROFILE's workspace — not of the request's.
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: "admin",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       const profilePropertyRepo = new ProfilePropertyRepository(db);
       await profilePropertyRepo.unlink(input.profileId, input.propertyDefId);
@@ -184,6 +201,13 @@ export const profilePropertiesRouter = router({
           message: `Profile not found: ${input.profileId}`,
         });
       }
+
+      // Flipping `required` / `defaultValue` / order on a link changes the
+      // schema for every workspace using the profile — never additive.
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       const profilePropertyRepo = new ProfilePropertyRepository(db);
       const updated = await profilePropertyRepo.update(

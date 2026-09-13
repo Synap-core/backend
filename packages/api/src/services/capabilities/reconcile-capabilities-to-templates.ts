@@ -49,6 +49,7 @@ import {
 import {
   capabilityDefinitionDrift,
   capabilityVerbCatalogDrift,
+  capabilityToolMergeDrift,
   DRIFT_COMPARATOR_VERSION,
   type InstalledSkillRow,
 } from "./capability-drift.js";
@@ -363,7 +364,15 @@ export async function reconcileCapabilitiesToTemplates(
       const memberToolRows = await db
         // `capabilities` = the stored verb catalog, compared below against what
         // `deriveToolVerbs` projects (the surface `intent` actually lands on).
-        .select({ name: tools.name, capabilityCatalog: tools.capabilities })
+        // `config`/`metadata` = the JSONB the applier merges template-UNDER-
+        // existing (PROJECTED_TOOL_MERGE_FIELDS) — omit them and a template
+        // change touching only tool defaults can never be seen as drift.
+        .select({
+          name: tools.name,
+          capabilityCatalog: tools.capabilities,
+          config: tools.config,
+          metadata: tools.metadata,
+        })
         .from(links)
         // `tools.id` is uuid, `links.fromId` is text — same cast trap
         // `loadContainerRefs` (capability-registry.ts) documents for
@@ -405,11 +414,21 @@ export async function reconcileCapabilitiesToTemplates(
         projectedVerbs
       );
 
+      // Tool-row JSONB drift (comparator v4): the template's `config`/
+      // `metadata` defaults the applier merges UNDER live values. Computed with
+      // that same merge, so a user override is never drift and a converged row
+      // never re-applies.
+      const toolMergeDrift = capabilityToolMergeDrift(
+        memberToolRows,
+        cachedDef.tools ?? []
+      );
+
       const hasDrift =
         drift.missing.length > 0 ||
         drift.drifted.length > 0 ||
         missingTools.length > 0 ||
-        catalogDrift.drifted.length > 0;
+        catalogDrift.drifted.length > 0 ||
+        toolMergeDrift.drifted.length > 0;
 
       if (!hasDrift) {
         // Nothing to converge, but a legacy container may still be missing
@@ -450,7 +469,7 @@ export async function reconcileCapabilitiesToTemplates(
       }
 
       const updatePolicy = cachedDef.updatePolicy ?? "auto";
-      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}${catalogDrift.drifted.length > 0 ? ` verbCatalogDrift=[${catalogDrift.drifted.join(",")}]` : ""}`;
+      const driftReason = `missing=[${drift.missing.join(",")}] drifted=[${drift.drifted.join(",")}]${missingTools.length > 0 ? ` missingToolMembership=[${missingTools.join(",")}]` : ""}${catalogDrift.drifted.length > 0 ? ` verbCatalogDrift=[${catalogDrift.drifted.join(",")}]` : ""}${toolMergeDrift.drifted.length > 0 ? ` toolMergeDrift=[${toolMergeDrift.drifted.join(",")}]` : ""}`;
 
       // A template that carries `{{param}}` in a skill NAME needs install-time
       // params the reconcile doesn't have — re-projecting it with `{}` would

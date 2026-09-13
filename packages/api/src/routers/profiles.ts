@@ -42,7 +42,9 @@ import {
   RENDERER_SCOPES,
   type RendererSlot,
 } from "../services/profiles/renderer-slots.js";
+import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { auditLog } from "../utils/audit-log.js";
+import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
@@ -105,7 +107,24 @@ const RendererRefSchema = z.discriminatedUnion("kind", [
     props: z.record(z.string(), z.unknown()).optional(),
     title: z.string().optional(),
   }),
+  // Places — "open where it lives". No url: resolved per entity on the pod.
+  z.object({
+    kind: z.literal("source-app"),
+    title: z.string().optional(),
+  }),
 ]);
+
+/**
+ * A POD-scope default ref for one slot (`profiles.update`). Refuses what the
+ * shared placement rule refuses at pod scope (`source-app`), so this door can
+ * never write what `setProfileRenderer` refuses.
+ */
+function podDefaultRendererRef(slot: RendererSlot) {
+  return RendererRefSchema.superRefine((ref, ctx) => {
+    const violation = rendererRefScopeViolation(ref, "pod", slot);
+    if (violation) ctx.addIssue({ code: "custom", message: violation });
+  });
+}
 
 /**
  * The ContentKinds a profile assigns a renderer to — the canonical taxonomy
@@ -629,11 +648,17 @@ export const profilesRouter = router({
          * Pass `null` to clear the default (so the resolver returns the
          * hardcoded system fallback). See Profile Renderer North Star.
          */
-        defaultListRenderer: RendererRefSchema.nullable().optional(),
+        defaultListRenderer: podDefaultRendererRef("list")
+          .nullable()
+          .optional(),
         /** System-default renderer for the DETAIL slot. */
-        defaultDetailRenderer: RendererRefSchema.nullable().optional(),
+        defaultDetailRenderer: podDefaultRendererRef("detail")
+          .nullable()
+          .optional(),
         /** System-default renderer for the DASHBOARD slot (per-profile bento). */
-        defaultDashboardRenderer: RendererRefSchema.nullable().optional(),
+        defaultDashboardRenderer: podDefaultRendererRef("dashboard")
+          .nullable()
+          .optional(),
         /**
          * Per-kind AI behavioral posture (base layer). `null` clears back to
          * code defaults. Workspace overlay: workspaces.settings.profileAiPosture.
@@ -675,34 +700,23 @@ export const profilesRouter = router({
       // only `scope` was checked here; the rest were written below with no gate
       // at all, so any member of any workspace that could see a shared/system
       // profile could flip pod-wide entity placement and agent posture.
+      //
+      // An OWNED profile (workspace / user / shared-with-a-home) is gated as a
+      // whole on its owner, read from the loaded row — the old check compared
+      // the owning workspace to the REQUEST's workspace, and left every
+      // non-pod-wide field open to anyone who could resolve the profile.
+      // A pod-owned profile (system / unowned shared) keeps cosmetic edits open
+      // and requires pod admin only for the pod-wide fields.
       const changedPodWide = changedPodWideProfileFields(input, existing);
-      if (changedPodWide.length > 0) {
-        const fieldList = changedPodWide.join(", ");
-        const requirement = profileOwnershipRequirement(existing);
-        if (
-          requirement.kind === "owning-workspace" &&
-          requirement.workspaceId !== ctx.workspaceId
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: `Only the owning workspace can change a profile's ${fieldList}`,
-          });
-        }
-        if (
-          requirement.kind === "owning-user" &&
-          requirement.userId !== ctx.userId
-        ) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: `Only the owning user can change a profile's ${fieldList}`,
-          });
-        }
-        if (requirement.kind === "pod-admin") {
-          // System/shared profile — owned by the pod itself. Throws FORBIDDEN
-          // "Pod admin access required" through the SAME check
-          // podAdminProcedure uses.
-          await assertPodAdmin(ctx.userId);
-        }
+      if (profileOwnershipRequirement(existing).kind !== "pod-admin") {
+        await assertProfileSchemaWrite(db, ctx.userId, existing, {
+          level: "editor",
+          actingWorkspaceId: ctx.workspaceId,
+        });
+      } else if (changedPodWide.length > 0) {
+        // Throws FORBIDDEN "Pod admin access required" through the SAME check
+        // podAdminProcedure uses.
+        await assertPodAdmin(ctx.userId);
       }
 
       if (input.scope !== undefined && input.scope !== existing.scope) {
@@ -793,11 +807,14 @@ export const profilesRouter = router({
         ProfileResolutionService.invalidateAiPostureCache(existing.slug);
       }
 
-      // When upgrading to "shared" — grant access to owning workspace + extras
+      // When upgrading to "shared" — grant access to owning workspace + extras.
+      // The OWNING workspace is the row's, not the request's (a user-scoped
+      // profile has none, so it falls back to where the caller acts).
       if (input.scope === "shared") {
-        await profileRepo.grantAccess(input.id, ctx.workspaceId);
+        const owningWorkspaceId = existing.workspaceId ?? ctx.workspaceId;
+        await profileRepo.grantAccess(input.id, owningWorkspaceId);
         for (const wsId of input.allowedWorkspaceIds ?? []) {
-          if (wsId !== ctx.workspaceId) {
+          if (wsId !== owningWorkspaceId) {
             await profileRepo.grantAccess(input.id, wsId);
           }
         }
@@ -846,6 +863,11 @@ export const profilesRouter = router({
           message: "Cannot delete system profiles",
         });
       }
+
+      await assertProfileSchemaWrite(db, ctx.userId, existing, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       await profileRepo.delete(input.id);
 
@@ -964,14 +986,12 @@ export const profilesRouter = router({
           message: "Only shared profiles can have workspace access grants",
         });
       }
-      // Only the workspace that owns the profile can grant access to others
-      if (profile.workspaceId !== ctx.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Only the owning workspace can grant access to a shared profile",
-        });
-      }
+      // Only the profile's owner can grant access to others — decided on the
+      // row's home workspace, not on the request's.
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
 
@@ -1113,13 +1133,10 @@ export const profilesRouter = router({
           message: "Only shared profiles can have workspace access revoked",
         });
       }
-      if (profile.workspaceId !== ctx.workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message:
-            "Only the owning workspace can revoke access to a shared profile",
-        });
-      }
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       await profileRepo.revokeAccess(input.profileId, input.targetWorkspaceId);
 
@@ -1163,6 +1180,13 @@ export const profilesRouter = router({
           message: "Profile not found",
         });
       }
+
+      // Reordering rewrites links (and upserts ones not yet linked) — the
+      // profile's owner decides, never additive.
+      await assertProfileSchemaWrite(db, ctx.userId, profile, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
 
       // Update displayOrder for each property def link
       for (let i = 0; i < input.orderedPropertyDefIds.length; i++) {
@@ -1351,22 +1375,39 @@ export const profilesRouter = router({
    */
   setProfileRendererOverride: workspaceProcedure
     .input(
-      z.object({
-        profileSlug: z.string(),
-        contentKind: ProfileContentKindSchema,
-        ref: RendererRefSchema.nullable(),
-        // WHERE the binding is written: 'workspace' overlays this kind for this
-        // workspace; 'pod' sets the profile-wide default across every workspace;
-        // 'user' is MY personal override, invisible to everyone else.
-        // Derived from RENDERER_SCOPES — never a hand-written copy.
-        scope: z.enum(RENDERER_SCOPES).default("workspace"),
-        /**
-         * Bind for ONE object instead of the whole kind. A GOVERNED EXCEPTION:
-         * the default is kind-level, and this reaches `renderer_bindings`
-         * through the same `profile/renderer.set` gate as any other write.
-         */
-        subjectId: z.string().min(1).optional(),
-      })
+      z
+        .object({
+          profileSlug: z.string(),
+          contentKind: ProfileContentKindSchema,
+          ref: RendererRefSchema.nullable(),
+          // WHERE the binding is written: 'workspace' overlays this kind for this
+          // workspace; 'pod' sets the profile-wide default across every workspace;
+          // 'user' is MY personal override, invisible to everyone else.
+          // Derived from RENDERER_SCOPES — never a hand-written copy.
+          scope: z.enum(RENDERER_SCOPES).default("workspace"),
+          /**
+           * Bind for ONE object instead of the whole kind. A GOVERNED EXCEPTION:
+           * the default is kind-level, and this reaches `renderer_bindings`
+           * through the same `profile/renderer.set` gate as any other write.
+           */
+          subjectId: z.string().min(1).optional(),
+        })
+        .superRefine((value, refineCtx) => {
+          // The shared placement rule, BEFORE governance — a misplaced
+          // `source-app` must not be stored as a proposal only to fail on approval.
+          const violation = rendererRefScopeViolation(
+            value.ref,
+            value.scope,
+            PROFILE_CONTENT_KIND_TO_SLOT[value.contentKind]
+          );
+          if (violation) {
+            refineCtx.addIssue({
+              code: "custom",
+              path: ["ref"],
+              message: violation,
+            });
+          }
+        })
     )
     .mutation(async ({ input, ctx }) => {
       const slot = PROFILE_CONTENT_KIND_TO_SLOT[input.contentKind];

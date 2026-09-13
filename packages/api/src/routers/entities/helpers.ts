@@ -26,6 +26,7 @@ import { entities, profiles, entityFacets } from "@synap/database/schema";
 import { type Entity } from "@synap-core/types";
 import { entityToWire } from "../hub-protocol/rest/_codecs/entity.js";
 import { emitSideEffects, type SideEffectPayload } from "@synap/events";
+import { resolveFanOutOrigin } from "../../utils/domain-mutation.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
@@ -436,49 +437,62 @@ export function emitFacetSideEffects(opts: {
   contextEntityTitle?: string | null;
   /** Automation chain tracking — mirrors entity mutations so the cycle guard sees the true chainDepth. */
   automationContext?: SideEffectPayload["automationContext"];
+  /** Explicit sync origin (see `SideEffectPayload.origin`). */
+  origin?: SideEffectPayload["origin"];
+  /** The proposal that authorized this facet write — origin is derived from it the same way `recordDomainMutation` does. */
+  proposalId?: string | null;
 }): void {
   const commonWs = opts.workspaceId;
-  emitSideEffects({
+  // Origin is resolved INSIDE the fire-and-forget chain, like recordDomainMutation.
+  void resolveFanOutOrigin({
     subjectType: "entity_facet",
-    action: opts.action,
-    subjectId: opts.facetId,
-    userId: opts.userId,
-    workspaceId: commonWs,
-    sessionId: opts.sessionId ?? null,
-    automationContext: opts.automationContext,
-    data: {
-      entityId: opts.entityId,
-      facetId: opts.facetId,
-      ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
-      ...(opts.status !== undefined && opts.status !== null
-        ? { status: opts.status }
-        : {}),
-      ...(opts.changedKeys && opts.changedKeys.length > 0
-        ? { changedKeys: opts.changedKeys }
-        : {}),
-      ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
-      ...(opts.contextEntityTitle
-        ? { contextEntityTitle: opts.contextEntityTitle }
-        : {}),
-    },
-  });
-  // Parent-entity refresh — reuse the entity reactors (search + vector +
-  // automations) so the parent reflects the facet change.
-  emitSideEffects({
-    subjectType: "entity",
-    action: "update",
-    subjectId: opts.entityId,
-    userId: opts.userId,
-    workspaceId: commonWs,
-    sessionId: opts.sessionId ?? null,
-    automationContext: opts.automationContext,
-    data: {
-      facetChange: true,
-      facetAction: opts.action,
-      facetId: opts.facetId,
-      ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
-      ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
-    },
+    origin: opts.origin,
+    proposalId: opts.proposalId,
+  }).then((origin) => {
+    emitSideEffects({
+      subjectType: "entity_facet",
+      action: opts.action,
+      subjectId: opts.facetId,
+      userId: opts.userId,
+      workspaceId: commonWs,
+      sessionId: opts.sessionId ?? null,
+      automationContext: opts.automationContext,
+      data: {
+        entityId: opts.entityId,
+        facetId: opts.facetId,
+        ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
+        ...(opts.status !== undefined && opts.status !== null
+          ? { status: opts.status }
+          : {}),
+        ...(opts.changedKeys && opts.changedKeys.length > 0
+          ? { changedKeys: opts.changedKeys }
+          : {}),
+        ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
+        ...(opts.contextEntityTitle
+          ? { contextEntityTitle: opts.contextEntityTitle }
+          : {}),
+      },
+      ...(origin ? { origin } : {}),
+    });
+    // Parent-entity refresh — reuse the entity reactors (search + vector +
+    // automations) so the parent reflects the facet change.
+    emitSideEffects({
+      subjectType: "entity",
+      action: "update",
+      subjectId: opts.entityId,
+      userId: opts.userId,
+      workspaceId: commonWs,
+      sessionId: opts.sessionId ?? null,
+      automationContext: opts.automationContext,
+      data: {
+        facetChange: true,
+        facetAction: opts.action,
+        facetId: opts.facetId,
+        ...(opts.profileSlug ? { profileSlug: opts.profileSlug } : {}),
+        ...(opts.entityTitle ? { entityTitle: opts.entityTitle } : {}),
+      },
+      ...(origin ? { origin } : {}),
+    });
   });
 }
 

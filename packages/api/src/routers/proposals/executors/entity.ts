@@ -162,9 +162,18 @@ export function registerEntityExecutors(): void {
         userId,
         entityCallerCtx.workspaceId
       );
+      // A kind that did not resolve has no id. Passing the SLUG in its place
+      // (the old `?? profileSlug`) handed a non-uuid to a uuid column; pass
+      // null and let reconciliation store the bag verbatim, and say why.
+      if (!reconciledProfile) {
+        logger.warn(
+          { profileSlug, workspaceId: entityCallerCtx.workspaceId },
+          "entity/create approve: profile did not resolve — property reconciliation skipped, properties stored verbatim"
+        );
+      }
       const reconciledCreate = await reconcileApprovedProperties({
         properties: innerData.properties as Record<string, unknown> | undefined,
-        profileId: reconciledProfile?.id ?? profileSlug,
+        profileId: reconciledProfile?.id ?? null,
         workspaceId: entityCallerCtx.workspaceId,
         userId,
         decisions: input.propertyDecisions,

@@ -20,6 +20,11 @@ import {
   getUserAccessibleWorkspaceIds,
 } from "../../hub-protocol/rest/_shared.js";
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
+import { getDb } from "@synap/database";
+import {
+  listEffectiveRelationTypes,
+  type EffectiveRelationType,
+} from "../../../utils/relation-types.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
   resolveByName,
@@ -452,21 +457,65 @@ export const readHandlers: McpHandlerMap = {
       return base;
     };
 
+    /**
+     * The relation types that resolve for the same lens(es) the profiles were
+     * read under — through the ONE vocabulary read `relations.create` rejects
+     * against, so a slug listed here is a slug a write accepts. `null` is the
+     * pod-wide base layer; a workspace lens adds that workspace's defs. One row
+     * per (workspaceId, slug). A failed read is reported as
+     * `relationTypesError`, never as an empty list.
+     */
+    const relationTypesFor = async (
+      lenses: Array<string | null>
+    ): Promise<
+      | { relationTypes: EffectiveRelationType[] }
+      | { relationTypesError: string }
+    > => {
+      try {
+        const database = await getDb();
+        const seen = new Set<string>();
+        const out: EffectiveRelationType[] = [];
+        for (const lens of lenses) {
+          for (const t of await listEffectiveRelationTypes(database, lens)) {
+            const key = `${t.workspaceId ?? ""}:${t.slug}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(t);
+          }
+        }
+        return { relationTypes: out };
+      } catch (err) {
+        return {
+          relationTypesError: `Relation types could not be read: ${err instanceof Error ? err.message : String(err)}`,
+        };
+      }
+    };
+
     if (wsId) {
       const result = await caller.profiles.listProfiles({
         userId,
         workspaceId: wsId,
       });
-      if (wantFull) return ok(result);
+      const relationTypes = await relationTypesFor([wsId]);
+      if (wantFull) return ok({ ...result, ...relationTypes });
       const profiles = Array.isArray(result)
         ? result
         : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
-      return ok(
-        (profiles as Array<Record<string, unknown>>).map((p) => toDigest(p))
-      );
+      return ok({
+        profiles: (profiles as Array<Record<string, unknown>>).map((p) =>
+          toDigest(p)
+        ),
+        ...relationTypes,
+      });
     }
-    const wsIds = await getUserMemberWorkspaceIds(userId);
-    if (wsIds.length === 0) return ok([]);
+    // Sorted by id: a STABILITY floor so the first-wins dedupe below picks the
+    // same row across calls regardless of membership-query order. This is not
+    // a twin policy — which duplicate-slug row SHOULD win is a pending ontology
+    // decision; this only stops the answer changing between identical calls.
+    const wsIds = [...(await getUserMemberWorkspaceIds(userId))].sort();
+    if (wsIds.length === 0) {
+      return ok({ profiles: [], ...(await relationTypesFor([null])) });
+    }
     const perWs = await Promise.all(
       wsIds.map((id) =>
         caller.profiles
@@ -480,12 +529,25 @@ export const readHandlers: McpHandlerMap = {
                 }) as Record<string, unknown>
             )
           )
-          .catch(() => [] as Array<Record<string, unknown>>)
+          // A failed workspace read is RECORDED, never folded into "this
+          // workspace has no profiles": the answer names it in
+          // `workspacesFailed`, and the other workspaces' profiles still return.
+          .then(
+            (profiles) => ({ ok: true as const, profiles }),
+            (err: unknown) => ({
+              ok: false as const,
+              workspaceId: id,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          )
       )
+    );
+    const workspacesFailed = perWs.flatMap((r) =>
+      r.ok ? [] : [{ workspaceId: r.workspaceId, error: r.error }]
     );
     const seen = new Set<string>();
     const merged: Array<Record<string, unknown>> = [];
-    for (const profiles of perWs) {
+    for (const profiles of perWs.map((r) => (r.ok ? r.profiles : []))) {
       for (const p of profiles) {
         const slug = p.slug as string;
         if (!seen.has(slug)) {
@@ -494,7 +556,11 @@ export const readHandlers: McpHandlerMap = {
         }
       }
     }
-    return ok(merged);
+    return ok({
+      profiles: merged,
+      ...(workspacesFailed.length ? { workspacesFailed } : {}),
+      ...(await relationTypesFor([null, ...wsIds])),
+    });
   },
   synap_get_relations: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;

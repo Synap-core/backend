@@ -39,3 +39,4 @@ export {
   conversionBootSeverity,
   CONVERSION_BOOT_SEVERITY,
 } from "./engine.js";
+export { parseOnlyArgs, selectManifestOps } from "./select.js";

@@ -79,9 +79,14 @@ export function reservedProfileSlugReason(slug: string): string | undefined {
  * Throws if `slug` is reserved. The ONE assertion every profile write path
  * calls — `ProfileRepository.create()` (the floor under every create door:
  * tRPC, MCP, proposal materializer, template install, workspace definition,
- * system seeding), `ProfileRepository.reactivate()` (the only revive door), and
- * the peer-sync materializer's raw insert (the one write that does not go
- * through the repository).
+ * system seeding), `ProfileRepository.reactivate()` (the only revive door),
+ * and the two writes that do not go through the repository:
+ *  - the peer-sync materializer's drizzle insert (`utils/sync-materializer.ts`,
+ *    which restates it via `reservedProfileSlugReason`), and
+ *  - the conversion engine's raw-SQL `seedKindProfile` insert
+ *    (`conversions/engine.ts` `applySeedKindProfile`, and its dry-run count).
+ * The closed set of write sites is enforced by
+ * `packages/api/src/__tripwires__/project-is-not-an-entity-profile.test.ts`.
  */
 export function assertProfileSlugNotReserved(slug: string): void {
   const reason = reservedProfileSlugReason(slug);

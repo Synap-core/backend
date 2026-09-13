@@ -39,6 +39,12 @@ export async function triggerAutoRespond(params: {
    * message metadata so the background job is not always orchestrator.
    */
   agentType?: string | null;
+  /**
+   * Server-built per-turn context (the SAME `turnContext` contract the
+   * interactive door forwards), e.g. the resolved `anchor` of a comment. Never
+   * pass a client payload through unvalidated — see `anchored-comment-turn.ts`.
+   */
+  turnContext?: Record<string, unknown> | null;
 }): Promise<boolean> {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),
@@ -113,6 +119,7 @@ export async function triggerAutoRespond(params: {
         serviceApiKey: resolvedService.serviceApiKey,
         serviceId: resolvedService.serviceId,
         agentUserId: resolvedService.agentUserId,
+        ...(params.turnContext ? { turnContext: params.turnContext } : {}),
       },
       {
         ...A2AI_TRIGGER_JOB_OPTIONS,

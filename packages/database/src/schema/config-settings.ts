@@ -25,7 +25,9 @@ import {
   text,
   jsonb,
   timestamp,
+  integer,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 import type { MessageShapePredicate } from "./automations.js";
@@ -56,6 +58,12 @@ export const configScopeKindEnum = pgEnum("config_scope_kind", [
   "channel",
   "shape",
   "workKind",
+  // 0258 — the DATA-TYPE rungs (see `SCOPE_ORDER` for their placement).
+  //   sourceKind — the kind of INPUT being structured; `scopeRef` is a
+  //                `GUIDELINE_SOURCE_KINDS` token or `import:<import source>`.
+  //   entityKind — the kind of OUTPUT; `scopeRef` is a profile slug.
+  "sourceKind",
+  "entityKind",
 ]);
 export const CONFIG_SCOPE_KINDS = configScopeKindEnum.enumValues;
 export type ConfigScopeKind = (typeof CONFIG_SCOPE_KINDS)[number];
@@ -106,6 +114,13 @@ export const configSettings = pgTable(
       .defaultNow()
       .notNull(),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
+
+    // 0258 — VERSIONS. An edit never updates a row in place: it inserts a new
+    // row with `version = old.version + 1` and `supersedesId = old.id`, and
+    // revokes the old one (`supersedeGuideline`). History = the supersedes
+    // chain. A partial UNIQUE index lets a row be superseded at most once.
+    version: integer("version").notNull().default(1),
+    supersedesId: uuid("supersedes_id"),
   },
   (table) => ({
     // Resolver's primary lookup: active rows for a (key, workspace, scope) tuple,
@@ -116,6 +131,9 @@ export const configSettings = pgTable(
     capabilityActiveIdx: index("config_settings_capability_idx")
       .on(table.capabilityId)
       .where(sql`${table.revokedAt} IS NULL`),
+    supersedesUq: uniqueIndex("config_settings_supersedes_uq")
+      .on(table.supersedesId)
+      .where(sql`${table.supersedesId} IS NOT NULL`),
   })
 );
 

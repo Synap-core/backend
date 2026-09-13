@@ -35,7 +35,7 @@ import {
   capabilityNextAction,
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
-import { resolveNangoConnector } from "../../connectors/index.js";
+import { resolveBroker } from "../../connectors/index.js";
 import {
   fetchCPCapabilityTemplates,
   fetchCPCapabilityTemplateByKey,
@@ -64,6 +64,12 @@ export interface CapabilityCardConnection {
    * "Connect" would dead-end — only claimed when availability is actually KNOWN.
    */
   state: "connected" | "missing" | "expired" | "unavailable";
+  /**
+   * Present when the connection could NOT be checked — the broker faulted or its
+   * list failed — so `state` is only the connectable default, not a verdict.
+   * Surfaces must render "couldn't check" with a retry, never "not connected".
+   */
+  unverified?: { reason: string; message: string };
   /** connectionId (or display account) when connected. */
   account?: string;
   /**
@@ -378,6 +384,12 @@ interface ConnState {
    * caller may claim a provider is unavailable.
    */
   providerAvailable: Set<string> | null;
+  /**
+   * Why `providerConn` could not be read (broker fault / failed list). Absent
+   * when the list answered or no broker is configured — an unread list must not
+   * render as "not connected".
+   */
+  providerConnFault?: { reason: string; message: string } | null;
   /** Real `vault://<id>` secret ids that exist (not soft-deleted). */
   vaultExists: Set<string>;
   /**
@@ -440,6 +452,9 @@ export function deriveConnection(
         kind: "provider",
         provider,
         state: unavailable ? "unavailable" : "missing",
+        ...(conn.providerConnFault
+          ? { unverified: conn.providerConnFault }
+          : {}),
       };
     }
   }
@@ -509,9 +524,10 @@ export { capabilityNextAction } from "./capability-enable-link.js";
 
 /**
  * Resolve the user's live provider connections and the set of existing vault
- * secrets referenced by the given refs. A connector-resolver failure degrades to
- * an EMPTY provider map (every provider reads `missing`) rather than throwing —
- * the catalog must always render.
+ * secrets referenced by the given refs. The catalog must always render, so a
+ * broker fault does not throw — but it is RECORDED (`providerConnFault`) and
+ * carried onto every unconnected provider card as `unverified`, so an unread
+ * list never reads as "not connected".
  */
 async function loadConnState(
   userId: string,
@@ -519,28 +535,36 @@ async function loadConnState(
 ): Promise<ConnState> {
   const providerConn = new Map<string, string>();
   let providerAvailable: Set<string> | null = null;
-  try {
-    const nango = await resolveNangoConnector();
-    if (nango) {
-      const connections = await nango.listConnections(userId);
-      for (const cn of connections) {
+  let providerConnFault: ConnState["providerConnFault"] = null;
+  const resolved = await resolveBroker("nango");
+  if (!resolved.ok) {
+    // No broker at all is a legitimate state (no connectors on this pod).
+    if (resolved.reason !== "not-configured") {
+      providerConnFault = { reason: resolved.reason, message: resolved.error };
+    }
+  } else {
+    const [listed, declared] = await Promise.all([
+      resolved.broker.listConnectionsResult(userId),
+      resolved.broker.listIntegrationsResult(),
+    ]);
+    if (listed.ok) {
+      for (const cn of listed.connections) {
         if (!providerConn.has(cn.provider)) {
           providerConn.set(cn.provider, cn.connectionId);
         }
       }
-      // Availability stays null unless Nango actually ANSWERED — see ConnState.
-      const declared = await nango.listIntegrationsResult();
-      if (declared.ok) {
-        providerAvailable = new Set(
-          declared.integrations.flatMap((i) => [
-            i.uniqueKey.toLowerCase(),
-            i.provider.toLowerCase(),
-          ])
-        );
-      }
+    } else {
+      providerConnFault = { reason: listed.reason, message: listed.error };
     }
-  } catch {
-    // Degrade: no provider connections known → providers read as "missing".
+    // Availability stays null unless the broker actually ANSWERED — see ConnState.
+    if (declared.ok) {
+      providerAvailable = new Set(
+        declared.integrations.flatMap((i) => [
+          i.uniqueKey.toLowerCase(),
+          i.provider.toLowerCase(),
+        ])
+      );
+    }
   }
 
   // Connection-health mirror (0229): which of this user's capability connections
@@ -593,7 +617,13 @@ async function loadConnState(
     }
   }
 
-  return { providerConn, providerAvailable, vaultExists, reauthConnIds };
+  return {
+    providerConn,
+    providerAvailable,
+    providerConnFault,
+    vaultExists,
+    reauthConnIds,
+  };
 }
 
 // ── Template loading (DB rows + on-disk family templates) ─────────────────────

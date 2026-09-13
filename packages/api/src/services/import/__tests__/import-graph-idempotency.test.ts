@@ -192,7 +192,9 @@ describe("findPriorImportGraphProposal", () => {
       { userId: "u1", workspaceId: "ws-1", operations: [entityOp({})] },
       db
     );
-    expect(prior).toEqual({ id: "prop-prior", status: "pending" });
+    // The lookup also carries the prior row's `sessionId` (a re-sent analyze
+    // reuses that run), so match the identity fields rather than the exact shape.
+    expect(prior).toMatchObject({ id: "prop-prior", status: "pending" });
   });
 
   it("returns null when there is no prior proposal (a genuinely new import files)", async () => {

@@ -116,11 +116,29 @@ export function registerRunsRoutes(app: HubHono): void {
     const limitRaw = Number(c.req.query("limit"));
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
 
+    // The same lens the tRPC `runs.list` `scope` takes — a filter WITHIN the
+    // user floor above, never an authorization boundary. A malformed id is a
+    // 400, not a silently unfiltered feed.
+    const scope: Record<string, string> = {};
+    for (const key of [
+      "workspaceId",
+      "projectId",
+      "subjectEntityId",
+    ] as const) {
+      const value = c.req.query(key);
+      if (!value) continue;
+      if (!z.string().uuid().safeParse(value).success) {
+        return c.json({ error: `${key} must be a UUID` }, 400);
+      }
+      scope[key] = value;
+    }
+
     const runs = await listRuns({
       userId,
       flowType: parsedFt?.success ? parsedFt.data : undefined,
       flowId,
       status: parsedSt?.success ? parsedSt.data : undefined,
+      ...(Object.keys(scope).length > 0 ? { scope } : {}),
       limit,
     });
     return c.json({ runs });
