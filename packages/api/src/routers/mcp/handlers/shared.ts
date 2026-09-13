@@ -461,7 +461,16 @@ export async function listOpenFocusSessions(
       .where(
         and(
           eq(focusSessions.userId, userId),
-          inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+          // Open, minus `scheduled`. An appointment is work waiting for a
+          // FUTURE slot — never where a present write belongs. It is also
+          // usually the newest row: `materializeScheduledSession` never sets
+          // `startedAt`, so the column default stamps the cron's materialisation
+          // time, and ordering by `startedAt desc` would pick it over the
+          // person's real current work.
+          inArray(
+            focusSessions.status,
+            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+          ),
           // WORK only. This resolver decides which session an agent's write is
           // FILED UNDER. An open automation run or a receipt is newer than the
           // person's work most mornings (the 08:00 crons), and filing a write
