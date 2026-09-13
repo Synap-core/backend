@@ -10,7 +10,6 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
-  type SQL,
   and,
   assertGrantScoped,
   capabilities,
@@ -18,7 +17,6 @@ import {
   desc,
   eq,
   focusSessions,
-  ilike,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -27,11 +25,11 @@ import {
   attachParentSessionIds,
 } from "../services/focus-sessions/parent-lineage.js";
 import {
-  sessionStatusConditions,
-  type StatusSinceWindows,
-} from "../services/focus-sessions/session-status-filter.js";
+  sessionListConditions,
+  type SessionListQuery,
+} from "../services/focus-sessions/session-list-conditions.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
-import { escapeLikePattern } from "../utils/like-pattern.js";
+
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
   isTerminalSessionStatus,
@@ -56,7 +54,7 @@ import {
   type AttestExpectedOutputResult,
 } from "../services/focus-sessions/satisfy-expected-output.js";
 import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
-import { sessionScopeConditions } from "../services/focus-sessions/session-scope.js";
+
 import {
   expectedOutputWireSchema,
   outputRefWireSchema,
@@ -77,16 +75,12 @@ import {
   discardFromTriage,
   attachTriage,
   projectTriage,
-  triagePendingWhere,
-  notTriagePendingWhere,
   type TriageProjection,
 } from "../services/focus-sessions/triage.js";
 import {
   SESSION_KINDS,
   attachSessionKind,
   projectSessionKind,
-  sessionAutomationWhere,
-  sessionKindWhere,
   type SessionKind,
 } from "../services/focus-sessions/session-kind.js";
 import { spawnProjectFromSession } from "../services/focus-sessions/spawn-project.js";
@@ -101,11 +95,7 @@ import {
 import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
-import {
-  ScopeFilterShape,
-  resolveScope,
-  type ResolvedScope,
-} from "../utils/scope-filter.js";
+import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import {
   attachSessionParticipants,
@@ -233,7 +223,6 @@ const updatableStatusSchema = z.enum(UPDATABLE_SESSION_STATUSES);
 const sessionLensSchema = z
   .enum(["default", "triage", "all"])
   .default("default");
-type SessionLens = z.infer<typeof sessionLensSchema>;
 
 /**
  * WHICH POPULATION. Orthogonal to BOTH `status` (the row's own lifecycle) and
@@ -246,7 +235,6 @@ type SessionLens = z.infer<typeof sessionLensSchema>;
 const sessionKindFilterSchema = z
   .enum([...SESSION_KINDS, "all"])
   .default("work");
-type SessionKindFilter = z.infer<typeof sessionKindFilterSchema>;
 
 // ── Links sub-router (read-only) ───────────────────────────────────────────
 
@@ -308,88 +296,6 @@ const sessionLinksRouter = router({
  *     exposureLensWhere); `null`/`undefined`/`[]` → no narrow.
  * An empty array never narrows (never matches-zero); a lens can only restrict.
  */
-/** Everything that decides WHICH sessions a list door returns. */
-interface SessionListQuery {
-  userId: string | null | undefined;
-  scope: ResolvedScope;
-  status: z.infer<typeof statusFilterSchema>;
-  lens?: SessionLens;
-  kind?: SessionKindFilter;
-  flow?: { playbookId?: string; automationId?: string };
-  statusSince?: StatusSinceWindows;
-  /** Case-insensitive substring match on the session goal. */
-  q?: string;
-}
-
-/**
- * The WHERE clause for a session list, shared by `list` and `browse`.
- *
- * Split out of `queryUserSessions` when `browse` arrived, so the two doors
- * cannot drift into two answers about which sessions match: they differ only
- * in ordering and paging, never in what is selected.
- */
-function sessionListConditions({
-  userId,
-  scope: { workspaceLens, projectLens },
-  status,
-  lens = "default",
-  kind = "work",
-  flow = {},
-  statusSince,
-  q,
-}: SessionListQuery): SQL[] {
-  const conditions: SQL[] = [eq(focusSessions.userId, requireUserId(userId))];
-
-  // Both lenses narrow within the user's own rows (the floor is userId above).
-  // The APPLICATION lives in `sessionScopeConditions` — shared with the owed-slot
-  // read, so the two doors cannot drift into two answers about what a lens means.
-  conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
-
-  // STATUS (and the recently-closed window) — a WHERE clause, never a
-  // post-filter, for the reason the triage and kind lenses below give. See
-  // `session-status-filter.ts` for why the time window lives here too.
-  conditions.push(...sessionStatusConditions(status, statusSince));
-
-  // TRIAGE LENS — applied as a WHERE clause, never as a post-filter. A page is
-  // `limit`-capped in SQL, so filtering after the fact would let unaccepted
-  // agent drafts consume the 50 slots and push real work off the end. That is
-  // the whole reason the lens exists.
-  if (lens === "triage") {
-    conditions.push(triagePendingWhere());
-  } else if (lens === "default") {
-    conditions.push(notTriagePendingWhere());
-  }
-  // lens === "all" adds nothing — the pre-triage behaviour, kept addressable.
-
-  // KIND LENS — a WHERE clause for exactly the reason above: the page is
-  // limit-capped in SQL, and automation runs are the highest-volume population
-  // in this table, so a post-filter would let them eat the page.
-  if (kind !== "all") {
-    conditions.push(sessionKindWhere(kind));
-  }
-
-  // FLOW-DEFINITION filters, so a playbook or automation detail page lists its
-  // OWN run sessions in SQL instead of paging 50 rows and filtering them in the
-  // browser — which silently under-reports the moment the flow has run more
-  // than `limit` times. Both name a DEFINITION, never one execution.
-  if (flow.playbookId) {
-    conditions.push(eq(focusSessions.playbookId, flow.playbookId));
-  }
-  if (flow.automationId) {
-    conditions.push(sessionAutomationWhere(flow.automationId));
-  }
-
-  // SEARCH — a WHERE clause like every other narrowing here. Searching the
-  // rows of an already-limited page would miss every match past the limit,
-  // which is the defect this door exists to avoid.
-  const term = q?.trim();
-  if (term) {
-    conditions.push(ilike(focusSessions.goal, `%${escapeLikePattern(term)}%`));
-  }
-
-  return conditions;
-}
-
 /** `list`: newest-started first, capped. Unchanged ordering for its consumers. */
 function queryUserSessions(query: SessionListQuery, limit: number) {
   return db

@@ -38,22 +38,17 @@ import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
+import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
 import {
   isTerminalSessionStatus,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "../../../services/focus-sessions/session-statuses.js";
-import {
-  attachTriage,
-  notTriagePendingWhere,
-  triagePendingWhere,
-} from "../../../services/focus-sessions/triage.js";
+import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import {
   SESSION_KINDS,
   attachSessionKind,
-  sessionAutomationWhere,
-  sessionKindWhere,
 } from "../../../services/focus-sessions/session-kind.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 import {
@@ -590,24 +585,21 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     const subjectEntityId = c.req.query("subjectEntityId");
 
     try {
-      const conditions = [
-        eq(focusSessions.workspaceId, workspaceIdParam),
-        eq(focusSessions.userId, acting.userId),
-      ];
-      if (status !== "all") {
-        conditions.push(eq(focusSessions.status, status));
-      }
+      // The SAME WHERE clause the tRPC door builds. This door used to hand-write
+      // its own copy (status, triage, kind, flow), the twin that could drift.
+      // What differs here is only what it passes: the agent-facing `"all"`
+      // defaults resolved above, and the one narrowing it owns alone,
+      // `subjectEntityId`. See `session-list-conditions.ts`.
+      const conditions = sessionListConditions({
+        userId: acting.userId,
+        scope: { workspaceLens: workspaceIdParam, projectLens: undefined },
+        status,
+        lens,
+        kind,
+        flow: { playbookId, automationId },
+      });
       if (subjectEntityId) {
         conditions.push(eq(focusSessions.subjectEntityId, subjectEntityId));
-      }
-      if (lens === "triage") conditions.push(triagePendingWhere());
-      else if (lens === "default") conditions.push(notTriagePendingWhere());
-      if (kind !== "all") conditions.push(sessionKindWhere(kind));
-      if (playbookId) {
-        conditions.push(eq(focusSessions.playbookId, playbookId));
-      }
-      if (automationId) {
-        conditions.push(sessionAutomationWhere(automationId));
       }
 
       const rows = await db
