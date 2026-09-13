@@ -23,14 +23,14 @@ import {
 } from "@synap/playbooks";
 
 /** Derived from the contract package's list rather than re-typed. */
-export const playbookScheduleModeSchema = z.enum(
+const playbookScheduleModeSchema = z.enum(
   PLAYBOOK_SCHEDULE_MODES as readonly [
     PlaybookScheduleMode,
     ...PlaybookScheduleMode[],
   ]
 );
 
-export const playbookScheduleSchema = z
+const playbookScheduleSchema = z
   .looseObject({
     /** 5-field cron expression. Absent/blank reads as "no schedule". */
     cron: z.string().optional(),
@@ -40,15 +40,15 @@ export const playbookScheduleSchema = z
   })
   .nullable();
 
-export type PlaybookScheduleInput = z.infer<typeof playbookScheduleSchema>;
-
 /**
  * The DOOR form: validates exactly like `playbookScheduleSchema` and outputs
  * the typed schedule, but its INPUT type is `unknown`. The internal producers
  * (template appliers, the proposal executor, the Hub REST mirror) forward a
- * schedule read off untyped jsonb; they stay on that loose passthrough and the
- * router's parse remains the one place a schedule is interpreted — no casts
- * scattered across call sites.
+ * schedule read off untyped jsonb and all reach the router caller, so this
+ * parse is the one WRITE validation — no casts scattered across call sites.
+ * It is not the only interpreter: READS of the stored jsonb (`readSchedule` in
+ * `services/playbooks/cron-automation.ts`, and the browser's mirror) normalize
+ * `mode` via `normalizePlaybookScheduleMode`.
  */
 export const playbookScheduleInputSchema = z
   .unknown()

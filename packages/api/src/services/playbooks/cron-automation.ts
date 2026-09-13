@@ -91,10 +91,11 @@ function readSchedule(value: unknown): PlaybookSchedule | null {
   if (!value || typeof value !== "object") return null;
   const s = value as Partial<PlaybookSchedule>;
   if (typeof s.cron !== "string" || s.cron.trim() === "") return null;
-  // `mode` goes through the ONE normalizer (@synap/playbooks) rather than a
-  // local cast: the column is untyped JSONB, so an absent, misspelled or
-  // hand-edited mode must resolve to "run" in exactly one place. Defaulting it
-  // here means every reader below sees a settled value.
+  // `mode` goes through the ONE read normalizer (@synap/playbooks) rather than
+  // a local cast: the column is untyped JSONB, so an absent, misspelled or
+  // hand-edited mode must resolve to "run" by one rule. This is a READ; the one
+  // WRITE validation is the router's zod parse (`schemas/playbook-schedule.ts`).
+  // Defaulting it here means every reader below sees a settled value.
   return {
     cron: s.cron,
     enabled: s.enabled === true,

@@ -638,10 +638,21 @@ export type PlaybookScheduleMode = "run" | "appointment";
  * (`packages/api/src/schemas/playbook-schedule.ts`) is derived from this, so the
  * door can never accept a mode the type does not declare.
  */
-export const PLAYBOOK_SCHEDULE_MODES: readonly PlaybookScheduleMode[] = [
+export const PLAYBOOK_SCHEDULE_MODES = [
   "run",
   "appointment",
-];
+] as const satisfies readonly PlaybookScheduleMode[];
+
+// Coverage floor: a mode added to the union but not to the list above makes
+// this `never`, and the BUILD stops. (`satisfies` alone only catches the
+// reverse — a list entry the union does not declare.)
+const _scheduleModesExhaustive: Exclude<
+  PlaybookScheduleMode,
+  (typeof PLAYBOOK_SCHEDULE_MODES)[number]
+> extends never
+  ? true
+  : never = true;
+void _scheduleModesExhaustive;
 
 /**
  * The stored `schedule.mode` → the `playbook_run` flow-node's `mode` field, which
