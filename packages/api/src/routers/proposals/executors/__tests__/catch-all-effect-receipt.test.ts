@@ -76,6 +76,54 @@ vi.mock("../../../../utils/audit-log.js", () => ({
   },
 }));
 
+/** Every `addSessionBlocker` call the executor makes (refused ones included). */
+const blockerCalls: Array<Record<string, unknown>> = [];
+/** Edges the stubbed producer actually INSERTED. */
+const edgeWrites: string[] = [];
+/** session id → owner user id, as the floor would read `focus_sessions`. */
+const sessionOwners = new Map<string, string>();
+/** Edges that exist before the approval (the idempotent-conflict case). */
+const existingEdges = new Set<string>();
+
+vi.mock(
+  "../../../../services/focus-sessions/session-blocked-by.js",
+  async (importOriginal) => {
+    // PARTIAL on purpose (importOriginal + spread): a total replacement goes
+    // dark the moment the executor imports one more export.
+    const actual =
+      await importOriginal<
+        typeof import("../../../../services/focus-sessions/session-blocked-by.js")
+      >();
+    return {
+      ...actual,
+      // Same contract as the real producer: self-edge refused, BOTH sessions
+      // floored on `userId`, idempotent insert whose row count is reported.
+      addSessionBlocker: async (i: {
+        sessionId: string;
+        blockerSessionId: string;
+        userId: string;
+        workspaceId?: string | null;
+      }) => {
+        blockerCalls.push({ ...i });
+        if (i.sessionId === i.blockerSessionId) {
+          return { linked: false, reason: "self_blocker" } as const;
+        }
+        if (
+          sessionOwners.get(i.sessionId) !== i.userId ||
+          sessionOwners.get(i.blockerSessionId) !== i.userId
+        ) {
+          return { linked: false, reason: "not_found" } as const;
+        }
+        const key = `${i.sessionId}->${i.blockerSessionId}`;
+        if (existingEdges.has(key)) return { linked: true, inserted: 0 } as const;
+        existingEdges.add(key);
+        edgeWrites.push(key);
+        return { linked: true, inserted: 1 } as const;
+      },
+    };
+  }
+);
+
 // `vi.mock` is hoisted above these, so the executor module loads against the
 // stubbed `db`.
 import { proposalExecRegistry } from "../../execution-registry.js";
@@ -218,27 +266,116 @@ describe("(3) materialized subject", () => {
   });
 });
 
-// ── (3b) blocked_by MUST NOT REACH THE RAW LINK MATERIALIZER ─────────────────
+// ── (3b) blocked_by IS APPLIED THROUGH THE OWNER FLOOR, NEVER RAW ────────────
+//
+// `materializeLink` inserts raw, so an approved `blocked_by` must never emit
+// `.validated` (zero audit calls is how that is observed). It is applied by
+// `addSessionBlocker`, re-floored at approval time on the proposal's OWNER
+// (`subjectUserId`), never on the approver (`userId`).
 
 describe("(3b) link/create blocked_by", () => {
+  const BLOCKED = "session-blocked";
+  const BLOCKER = "session-blocker";
+  const OWNER = "owner-1";
+  const APPROVER = "admin-approver";
+
+  beforeEach(() => {
+    blockerCalls.length = 0;
+    edgeWrites.length = 0;
+    sessionOwners.clear();
+    existingEdges.clear();
+    sessionOwners.set(BLOCKED, OWNER);
+    sessionOwners.set(BLOCKER, OWNER);
+  });
+
   function blockedByArgs(): Args {
     const a = args("link", "create");
+    a.userId = APPROVER;
+    a.proposal.subjectUserId = OWNER;
     (a.payload as { data: Record<string, unknown> }).data = {
       fromType: "session",
-      fromId: "attacker-session",
+      fromId: BLOCKED,
       toType: "session",
-      toId: "victim-session",
+      toId: BLOCKER,
       linkType: "blocked_by",
     };
     return a;
   }
 
-  it("is refused before any .validated event or status flip", async () => {
+  it("self-guard: the approver and the owner really differ in this fixture", () => {
+    const a = blockedByArgs();
+    expect(a.userId).not.toBe(a.proposal.subjectUserId);
+  });
+
+  it("applies a same-owner edge via addSessionBlocker with the exact direction and a verified row count", async () => {
+    const result = await catchAll().execute(blockedByArgs());
+    expect(blockerCalls).toEqual([
+      {
+        sessionId: BLOCKED, // from = the blocked session
+        blockerSessionId: BLOCKER, // to = the session it waits on
+        userId: OWNER,
+        workspaceId: "ws-1",
+      },
+    ]);
+    expect(edgeWrites).toEqual([`${BLOCKED}->${BLOCKER}`]);
+    expect(result.success).toBe(true);
+    expect(result.effect).toEqual({
+      applied: "verified",
+      rows: 1,
+      subject: "link",
+    });
+    // No `.validated` ⇒ the raw materializer never sees it.
+    expect(auditCalls).toHaveLength(0);
+    expect(dbUpdates).toHaveLength(1); // the APPROVED status flip
+  });
+
+  it("floors on the proposal's OWNER, not the approver: sessions owned by the approver are refused", async () => {
+    sessionOwners.set(BLOCKED, APPROVER);
+    sessionOwners.set(BLOCKER, APPROVER);
     await expect(catchAll().execute(blockedByArgs())).rejects.toThrow(
-      /blocked_by/
+      /refused/
     );
+    expect(blockerCalls.map((c) => c.userId)).toEqual([OWNER]);
+    expect(edgeWrites).toHaveLength(0);
     expect(auditCalls).toHaveLength(0);
     expect(dbUpdates).toHaveLength(0);
+  });
+
+  it("revalidates at approval: sessions that are NOW cross-owner are refused with zero writes and zero audit", async () => {
+    sessionOwners.set(BLOCKER, "someone-else"); // changed hands since filing
+    await expect(catchAll().execute(blockedByArgs())).rejects.toThrow(
+      /PRECONDITION|refused/
+    );
+    expect(edgeWrites).toHaveLength(0);
+    expect(auditCalls).toHaveLength(0);
+    expect(dbUpdates).toHaveLength(0);
+  });
+
+  it("an already-existing edge (0 rows inserted) produces an honest receipt, not a false create", async () => {
+    existingEdges.add(`${BLOCKED}->${BLOCKER}`);
+    const result = await catchAll().execute(blockedByArgs());
+    expect(result.effect).toEqual({
+      applied: "verified",
+      rows: 0,
+      subject: "link",
+    });
+    expect(edgeWrites).toHaveLength(0);
+  });
+
+  it("a proposal with no recorded owner (pre-0248) is refused without calling the producer", async () => {
+    const a = blockedByArgs();
+    a.proposal.subjectUserId = null;
+    await expect(catchAll().execute(a)).rejects.toThrow(/owner/);
+    expect(blockerCalls).toHaveLength(0);
+    expect(dbUpdates).toHaveLength(0);
+  });
+
+  it("a non-session endpoint is refused without calling the producer", async () => {
+    const a = blockedByArgs();
+    (a.payload as { data: Record<string, unknown> }).data.toType = "entity";
+    await expect(catchAll().execute(a)).rejects.toThrow(/two sessions/);
+    expect(blockerCalls).toHaveLength(0);
+    expect(auditCalls).toHaveLength(0);
   });
 
   it("other link types still hand off to the materializer", async () => {
@@ -247,6 +384,7 @@ describe("(3b) link/create blocked_by", () => {
     const result = await catchAll().execute(a);
     expect(result.effect?.applied).toBe("deferred");
     expect(auditCalls).toHaveLength(1);
+    expect(blockerCalls).toHaveLength(0);
   });
 });
 

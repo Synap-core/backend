@@ -78,6 +78,8 @@ type ProposalRow = {
   projectId: string | null;
   agentUserId: string | null;
   createdBy?: string | null;
+  /** The owner floor (0248) — see `proposals.subjectUserId` in the schema. */
+  subjectUserId?: string | null;
   sourceMessageId: string | null;
   data: unknown;
 };

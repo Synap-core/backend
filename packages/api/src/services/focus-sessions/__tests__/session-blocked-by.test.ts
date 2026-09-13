@@ -120,7 +120,7 @@ describe("addSessionBlocker (producer)", () => {
 
   it("writes the edge — idempotently — when both endpoints are owned", async () => {
     queue.push([{ id: A }, { id: B }]);
-    queue.push([]);
+    queue.push([{ id: "link-1" }]); // the INSERT's own RETURNING
     expect(
       await addSessionBlocker({
         sessionId: A,
@@ -129,9 +129,23 @@ describe("addSessionBlocker (producer)", () => {
       })
     ).toEqual({
       linked: true,
+      inserted: 1,
     });
     expect(calls.some((c) => c.method === "insert")).toBe(true);
     expect(calls.some((c) => c.method === "onConflictDoNothing")).toBe(true);
+    expect(calls.some((c) => c.method === "returning")).toBe(true);
+  });
+
+  it("reports inserted: 0 for an edge that already existed — never a false write", async () => {
+    queue.push([{ id: A }, { id: B }]);
+    queue.push([]); // onConflictDoNothing hit the unique edge: RETURNING is empty
+    expect(
+      await addSessionBlocker({
+        sessionId: A,
+        blockerSessionId: B,
+        userId: "u",
+      })
+    ).toEqual({ linked: true, inserted: 0 });
   });
 });
 

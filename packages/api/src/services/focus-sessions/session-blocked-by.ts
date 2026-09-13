@@ -59,7 +59,17 @@ export interface BlockerEdgeInput {
 }
 
 export type BlockerEdgeResult =
-  { linked: true } | { linked: false; reason: "not_found" | "self_blocker" };
+  | {
+      /** The edge exists now — written by this call OR already present. */
+      linked: true;
+      /**
+       * Rows the INSERT itself reported (`returning().length`). `0` when the
+       * edge already existed (the idempotent conflict), so a receipt built on
+       * it never claims a write this call did not make.
+       */
+      inserted: number;
+    }
+  | { linked: false; reason: "not_found" | "self_blocker" };
 
 export type RemoveBlockerResult =
   | { removed: true }
@@ -117,7 +127,7 @@ export async function addSessionBlocker(
   const valid = await validateSessionBlocker(input);
   if (!valid.ok) return { linked: false, reason: valid.reason };
 
-  await db
+  const inserted = await db
     .insert(links)
     .values({
       workspaceId: input.workspaceId ?? null,
@@ -137,9 +147,10 @@ export async function addSessionBlocker(
         links.toId,
         links.linkType,
       ],
-    });
+    })
+    .returning({ id: links.id });
 
-  return { linked: true };
+  return { linked: true, inserted: inserted.length };
 }
 
 /** Remove the `blocked_by` edge. Reports whether an edge was actually there. */

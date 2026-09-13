@@ -2,6 +2,7 @@ import { TRPCError } from "@trpc/server";
 import { db, proposals, eq } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { auditLog } from "../../../utils/audit-log.js";
+import { addSessionBlocker } from "../../../services/focus-sessions/session-blocked-by.js";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -107,6 +108,92 @@ const ACKNOWLEDGED_NOOP_KEYS: Record<string, string> = {
     'supported" and skips rather than hard-failing. Approval records the ack.',
 };
 
+/**
+ * Apply an approved `link/create` whose `linkType` is `blocked_by` THROUGH the
+ * session blocker floor, instead of handing it to the materializer.
+ *
+ * WHY NOT THE MATERIALIZER. `materializeLink` inserts the edge RAW, and
+ * @synap/jobs cannot import @synap/api (api depends on jobs), so the owner floor
+ * cannot live in the worker. The session-blocked-by READERS are deliberately
+ * owner-blind — safe only while every producer floors both endpoints on one
+ * user. So this path never emits `.validated` for a `blocked_by` (that would
+ * hand the same edge to the raw writer); it writes via `addSessionBlocker`.
+ *
+ * REVALIDATION IS THE POINT, not a repeat of `POST /links`: a proposal can sit
+ * for days, and a session can be deleted or change owner between propose and
+ * approve. The floor runs now, against today's rows. A refusal throws, which
+ * `dispatchProposalApproval` records as APPROVAL_FAILED (retryable) with
+ * nothing written.
+ */
+async function applyApprovedBlockedBy(
+  proposal: { workspaceId: string | null; subjectUserId?: string | null },
+  data: Record<string, unknown>,
+  doorKey: string
+): Promise<ProposalEffect> {
+  const refuse = (why: string) =>
+    new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Approval for '${doorKey}' (blocked_by) refused: ${why} Nothing was applied.`,
+    });
+
+  if (
+    data.fromType !== "session" ||
+    data.toType !== "session" ||
+    typeof data.fromId !== "string" ||
+    typeof data.toId !== "string"
+  ) {
+    throw refuse("a blocked_by link must connect two sessions.");
+  }
+
+  // WHOSE FLOOR. `addSessionBlocker` requires both sessions to belong to ONE
+  // user, and here that user must be the one the sessions belong to: the
+  // principal the proposal was FILED FOR.
+  //
+  //   - NOT the approver (`args.userId`). A pod admin approving someone else's
+  //     proposal would become the floor user, so a proposal naming two of the
+  //     ADMIN's sessions would pass. The proposer would then be editing a work
+  //     graph they do not own.
+  //   - NOT anything in `data`. The proposer authored that JSON.
+  //   - NOT `createdBy`, which is overloaded (a userId OR an agentUserId,
+  //     depending on the door; the schema calls it "NOT an owner").
+  //
+  // `proposals.subjectUserId` (0248) is that principal. `checkPermissionOrPropose`
+  // stamps it from the authenticated principal's EFFECTIVE user
+  // (`envelope.access.userId` → `insertPendingProposal`, i.e.
+  // `apiKeys.linkedUserId ?? apiKeys.userId`: an agent key's linked human). It
+  // is the same identity `POST /links` validated these sessions against before
+  // filing. It is a column, not part of the payload, and no door updates it after
+  // insert. A NULL (pre-0248) row has no owner to floor on, so it is refused. An
+  // agent-valued subject (a pod-wide key) floors on the agent itself and fails
+  // closed. It is never resolved through `users.createdByUserId`, which records
+  // who is ACCOUNTABLE for the agent, not who owns a session.
+  const ownerUserId = proposal.subjectUserId;
+  if (!ownerUserId) {
+    throw refuse(
+      "the proposal records no owner (subject_user_id), so whose sessions these are cannot be established."
+    );
+  }
+
+  // `from --blocked_by--> to` ≡ addBlocker(sessionId: from, blocker: to).
+  const result = await addSessionBlocker({
+    sessionId: data.fromId,
+    blockerSessionId: data.toId,
+    userId: ownerUserId,
+    workspaceId: proposal.workspaceId,
+  });
+  if (!result.linked) {
+    throw refuse(
+      result.reason === "self_blocker"
+        ? "a session cannot block itself."
+        : "both sessions must still exist and belong to the proposal's owner. One was deleted or is not theirs. Retry once that is true."
+    );
+  }
+
+  // `rows` is the INSERT's own RETURNING count: `0` means the edge already
+  // existed, and the receipt says so instead of claiming a write.
+  return { applied: "verified", rows: result.inserted, subject: "link" };
+}
+
 /** Register the wildcard catch-all approve executor (must run LAST — see aggregator). */
 export function registerCatchAllExecutor(): void {
   // ── Catch-all (generic request-shaped) — replaces silent NOT_IMPLEMENTED ─────
@@ -125,6 +212,33 @@ export function registerCatchAllExecutor(): void {
       const doorKey = `${proposal.targetType}/${proposal.proposalType}`;
       const acknowledgedNoopReason = ACKNOWLEDGED_NOOP_KEYS[doorKey];
       let effect: ProposalEffect;
+
+      // The shared success tail: status flip, telemetry, review broadcast.
+      // Every successful path settles through it, including the `blocked_by`
+      // apply below, which returns before the materializer handoff.
+      const settle = async (receipt: ProposalEffect) => {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            ...(isRequestShaped(payload) ? { data: payload } : {}),
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+
+        // Report to IS telemetry (fire-and-forget — never blocks)
+        reportApproved(deps, proposal, input.proposalId);
+
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, effect: receipt };
+      };
 
       if (isRequestShaped(payload)) {
         const {
@@ -167,23 +281,18 @@ export function registerCatchAllExecutor(): void {
         // `link/create` hands off to the materializer's `materializeLink`, which
         // inserts the edge RAW. For `blocked_by` that skips the owner floor of
         // `addSessionBlocker` (session endpoints, no self-edge, both sessions
-        // owned by one user) — the floor its owner-blind readers depend on. A
-        // proposal filed before `POST /links` validated, or whose sessions
-        // changed hands since, would otherwise land a cross-user edge. Refused
-        // before any event is appended; the dedicated door writes it.
+        // owned by one user) — the floor its owner-blind readers depend on. So
+        // a `blocked_by` is applied HERE, re-floored on the proposal's owner at
+        // approval time, and settles BEFORE any `.validated` event is appended.
+        // See `applyApprovedBlockedBy` for whose floor, and why.
         if (
           targetType === "link" &&
           changeType === "create" &&
           eventPayload.linkType === "blocked_by"
         ) {
-          throw new TRPCError({
-            code: "PRECONDITION_FAILED",
-            message:
-              `Approval for '${doorKey}' refused: a blocked_by link is only ` +
-              `written by the session blocker door (focusSessions.addBlocker / ` +
-              `POST /api/hub/links), which floors both sessions on their owner. ` +
-              `Nothing was applied.`,
-          });
+          return settle(
+            await applyApprovedBlockedBy(proposal, eventPayload, doorKey)
+          );
         }
 
         // ── THE HONESTY GATE ────────────────────────────────────────────────
@@ -284,27 +393,7 @@ export function registerCatchAllExecutor(): void {
         });
       }
 
-      await db
-        .update(proposals)
-        .set({
-          status: ProposalStatus.APPROVED,
-          ...(isRequestShaped(payload) ? { data: payload } : {}),
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .where(eq(proposals.id, input.proposalId));
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-      return { success: true, effect };
+      return settle(effect);
     },
   });
 }
