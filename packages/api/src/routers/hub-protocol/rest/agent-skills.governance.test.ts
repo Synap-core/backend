@@ -80,7 +80,17 @@ vi.mock("../../../services/skills/visibility.js", () => ({
 // Same reason: the list query lives in `search.js`, which loads the real schema.
 // Search behaviour is pinned by `services/skills/__tests__/search.pglite.test.ts`.
 vi.mock("../../../services/skills/search.js", () => ({
-  searchInstructionSkills: async () => ({ rows: [], total: 0 }),
+  searchInstructionSkills: async () => ({
+    rows: [],
+    total: 0,
+    matches: new Map(),
+  }),
+}));
+
+// Same reason: the reserved-slug lookup reads the real schema. Refusal is
+// pinned behaviourally in `services/skills/__tests__/skill-ranking.pglite.test.ts`.
+vi.mock("../../../services/skills/reserved-slug.js", () => ({
+  reservedSkillSlugReason: async () => null,
 }));
 
 vi.mock("../../skills.js", () => ({

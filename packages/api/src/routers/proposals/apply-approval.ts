@@ -38,6 +38,7 @@ import { proposals } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import type { PropertyDecisionMap } from "@synap/database";
 import { isPodWideConnectionSyncApproval } from "@synap/database";
+import { storedSessionSource } from "@synap/database";
 import type { StoredProposalData } from "@synap-core/types";
 import {
   isDocumentContentProposalData,
@@ -131,6 +132,8 @@ async function stampProjectMembership(
     projectId: string | null;
     sessionId: string | null;
     workspaceId: string | null;
+    /** Carries the persisted `sessionSource` marker (A1). */
+    data?: unknown;
   },
   entityIds: string[],
   userId: string
@@ -142,6 +145,7 @@ async function stampProjectMembership(
     userId,
     explicitProjectId: proposal.projectId,
     sessionId: proposal.sessionId,
+    sessionSource: storedSessionSource(proposal.data),
   });
   if (!placement.projectId) return;
   for (const entityId of entityIds) {

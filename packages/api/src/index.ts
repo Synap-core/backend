@@ -45,6 +45,7 @@ export { fileUploadApp } from "./routers/file-upload.js";
 export { externalSkillsApp } from "./routers/external/skills.js";
 export { externalChatApp } from "./routers/external/chat.js";
 export { chatStreamApp } from "./routers/chat-stream.js";
+export { captureProgressStreamApp } from "./routers/capture-progress-stream.js";
 export { openaiCompatApp } from "./routers/external/openai-compat.js";
 export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
@@ -346,6 +347,8 @@ export {
   expireLapsedProposals,
   expireSessionEphemerals,
 } from "./services/proposals/expire-lapsed-proposals.js";
+// Exported for @synap/jobs' `registerCleanupPackRunner` IoC slot.
+export { fileCleanupPacks } from "./services/pod-hygiene/cleanup-pack.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever

@@ -210,6 +210,10 @@ import {
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
 import {
+  handleCleanupPackCron,
+  POD_HYGIENE_CLEANUP_PACK_QUEUE,
+} from "./pod-hygiene-cleanup-pack-cron.js";
+import {
   handleContextCardRefresh,
   CONTEXT_CARD_REFRESH_QUEUE,
 } from "./context-card-refresh.js";
@@ -311,6 +315,7 @@ const ALL_QUEUES = [
   PAGERANK_CENTRALITY_QUEUE,
   POD_HYGIENE_NEAR_DUP_QUEUE,
   LIBRARIAN_ARCHIVER_QUEUE,
+  POD_HYGIENE_CLEANUP_PACK_QUEUE,
   CONTEXT_CARD_REFRESH_QUEUE,
 ];
 
@@ -939,6 +944,11 @@ export async function registerAllWorkers(): Promise<void> {
     handleLibrarianArchiver()
   );
   logger.info("Registered worker: librarian.project-archiver");
+
+  await boss.work(POD_HYGIENE_CLEANUP_PACK_QUEUE, async () =>
+    handleCleanupPackCron()
+  );
+  logger.info("Registered worker: pod-hygiene.cleanup-pack");
 
   // Context-card refresh (cron: daily 06:10 UTC — enqueues one
   // refresh_context_card egress per Discord client TEAM thread so the bridge

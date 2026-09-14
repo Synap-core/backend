@@ -41,6 +41,53 @@ export interface AiPosture {
   directives?: string[];
 }
 
+/**
+ * PROVENANCE of a profile row (migration 0263) — who brought this kind/role
+ * into the pod. Stamped by every writer at create; never client-writable.
+ *
+ *  - `core`      seeded by the platform (`ensureSystemProfiles`, conversions)
+ *  - `template`  installed by a workspace definition / package apply
+ *  - `authored`  a human defined it through a create door
+ *  - `agent`     an agent defined it (through a proposal — D6)
+ *  - `probe`     written by a TEST key (D8) — excluded from listings, swept
+ *  - `unknown`   pre-0263 row the backfill could not honestly classify
+ */
+export const PROFILE_ORIGINS = [
+  "core",
+  "template",
+  "authored",
+  "agent",
+  "probe",
+  "unknown",
+] as const;
+export type ProfileOrigin = (typeof PROFILE_ORIGINS)[number];
+export const PROFILE_ORIGIN_PROBE = "probe" satisfies ProfileOrigin;
+
+/**
+ * LIFECYCLE of a kind (0263), SEPARATE from `isActive` (the soft-delete
+ * tombstone). `experimental` = not yet vetted, `active` = in use,
+ * `deprecated` = kept readable but no longer advertised for new records.
+ */
+export const PROFILE_LIFECYCLES = [
+  "experimental",
+  "active",
+  "deprecated",
+] as const;
+export type ProfileLifecycle = (typeof PROFILE_LIFECYCLES)[number];
+
+/**
+ * What an `owner_kind`/`owner_id` pair points at (0263) — the thing whose
+ * removal should retire this row (package uninstall, rejected/reverted proposal).
+ */
+export const PROFILE_OWNER_KINDS = [
+  "package",
+  "workspace",
+  "proposal",
+  "agent",
+  "user",
+] as const;
+export type ProfileOwnerKind = (typeof PROFILE_OWNER_KINDS)[number];
+
 export const profiles = pgTable(
   "profiles",
   {
@@ -173,6 +220,16 @@ export const profiles = pgTable(
     // AI teaching substrate: per-kind posture base layer (see AiPosture above).
     // NULL means "fall back to code defaults" in getEffectiveAiPosture().
     aiPosture: jsonb("ai_posture").$type<AiPosture>(),
+
+    // Provenance + lifecycle (0263) — see PROFILE_ORIGINS / PROFILE_LIFECYCLES.
+    origin: text("origin", { enum: PROFILE_ORIGINS })
+      .notNull()
+      .default("unknown"),
+    lifecycle: text("lifecycle", { enum: PROFILE_LIFECYCLES })
+      .notNull()
+      .default("active"),
+    ownerKind: text("owner_kind", { enum: PROFILE_OWNER_KINDS }),
+    ownerId: text("owner_id"),
 
     // Metadata
     isActive: boolean("is_active").default(true).notNull(),

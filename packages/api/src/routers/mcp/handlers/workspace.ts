@@ -42,6 +42,7 @@ export const workspaceHandlers: McpHandlerMap = {
         Array<"workspaces" | "projects" | "profiles"> | undefined,
       workspaceId: args.workspaceId as string | undefined,
       projectId: args.projectId as string | undefined,
+      explain: args.explain === true,
     });
     return ok(result);
   },

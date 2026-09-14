@@ -15,6 +15,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { resolveProjectPlacement } from "./project-resolution-service.js";
+import { runWithDerivedSession } from "../utils/request-write-context.js";
 
 const USER = "user-1";
 const PROJ_A = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
@@ -59,6 +60,112 @@ describe("resolveProjectPlacement — rung 1 (explicit)", () => {
     });
     expect(r.projectId).toBeNull();
     expect(r.rung).toBeNull();
+  });
+});
+
+describe("resolveProjectPlacement — rung 2 and the DERIVED session (A1)", () => {
+  const SESSION = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  // A session row that IS scoped to a project, so the fixture discriminates:
+  // the derived and explicit cases differ ONLY in `sessionSource`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function sessionDb(): any {
+    const db = makeDb();
+    db.query.focusSessions = {
+      findFirst: async () => ({ projectId: PROJ_A }),
+    };
+    return db;
+  }
+
+  it("(b) an EXPLICIT session with a project places the write (rung 2)", async () => {
+    const r = await resolveProjectPlacement(sessionDb(), {
+      userId: USER,
+      sessionId: SESSION,
+      sessionSource: "explicit",
+    });
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(2);
+  });
+
+  it("an omitted sessionSource is explicit — pre-existing callers are unchanged", async () => {
+    const r = await resolveProjectPlacement(sessionDb(), {
+      userId: USER,
+      sessionId: SESSION,
+    });
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(2);
+  });
+
+  it("(a) a DERIVED session with a project contributes NO project", async () => {
+    const r = await resolveProjectPlacement(sessionDb(), {
+      userId: USER,
+      sessionId: SESSION,
+      sessionSource: "derived",
+    });
+    expect(r).toEqual({
+      projectId: null,
+      rung: null,
+      reason: "no deterministic project context",
+    });
+  });
+
+  it("(d) a DERIVED session + a declared focus → the focus places (rung 3.5)", async () => {
+    const r = await resolveProjectPlacement(sessionDb(), {
+      userId: USER,
+      sessionId: SESSION,
+      sessionSource: "derived",
+      focusProjectId: PROJ_B,
+    });
+    expect(r.projectId).toBe(PROJ_B);
+    expect(r.rung).toBe(3.5);
+  });
+});
+
+describe("resolveProjectPlacement — the request's GUESSED session (write context)", () => {
+  const SESSION = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+  const OTHER = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function sessionDb(): any {
+    const db = makeDb();
+    db.query.focusSessions = {
+      findFirst: async () => ({ projectId: PROJ_A }),
+    };
+    return db;
+  }
+
+  it("no source, sessionId IS the guessed session → NONE", async () => {
+    const r = await runWithDerivedSession(SESSION, () =>
+      resolveProjectPlacement(sessionDb(), { userId: USER, sessionId: SESSION })
+    );
+    expect(r.projectId).toBeNull();
+    expect(r.rung).toBeNull();
+  });
+
+  it("DISCRIMINATING: the same id named EXPLICITLY inside the scope still places", async () => {
+    const r = await runWithDerivedSession(SESSION, () =>
+      resolveProjectPlacement(sessionDb(), {
+        userId: USER,
+        sessionId: SESSION,
+        sessionSource: "explicit",
+      })
+    );
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(2);
+  });
+
+  it("a DIFFERENT session inside the scope still places", async () => {
+    const r = await runWithDerivedSession(SESSION, () =>
+      resolveProjectPlacement(sessionDb(), { userId: USER, sessionId: OTHER })
+    );
+    expect(r.projectId).toBe(PROJ_A);
+    expect(r.rung).toBe(2);
+  });
+
+  it("outside any scope the same id places — the guess is per request", async () => {
+    const r = await resolveProjectPlacement(sessionDb(), {
+      userId: USER,
+      sessionId: SESSION,
+    });
+    expect(r.projectId).toBe(PROJ_A);
   });
 });
 

@@ -467,3 +467,50 @@ describe("refusals and misses", () => {
     expect(result).toMatchObject({ automationIds: [ATTACHED] });
   });
 });
+
+// ---------------------------------------------------------------------------
+// R2 — a rule's PROJECT scope reaches the trigger on EDIT and ACTIVATION too.
+// Activation recompiles (property 3 above), so it is also where a project the
+// WHEN cannot carry must be refused — a draft saved with it must not arm.
+// ---------------------------------------------------------------------------
+
+describe("project scope on edit and activation", () => {
+  const RELATION_SENTENCE = {
+    ...GOOD_SENTENCE,
+    trigger: {
+      triggerType: "event" as const,
+      subjectCategory: "relation" as const,
+      actionVerb: "created" as const,
+    },
+  };
+
+  it("an edit rewrites the automation's trigger WITH triggerConfig.projectId and says so", async () => {
+    const result = await update({
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "pod", projectId: "proj-9" },
+    });
+    expect(result).toMatchObject({ status: "updated" });
+    expect((result as { scopeNote?: string }).scopeNote).toMatch(
+      /runs only for events on project proj-9/
+    );
+    const viaRouter = automationUpdates.find((u) => u.viaRouter);
+    expect(
+      (viaRouter?.triggerConfig as Record<string, unknown>).projectId
+    ).toBe("proj-9");
+  });
+
+  it("activating a draft whose WHEN cannot carry the project is REFUSED and writes nothing", async () => {
+    const result = await update({
+      draft: false,
+      sentence: RELATION_SENTENCE,
+      scope: { kind: "pod", projectId: "proj-9" },
+    });
+    expect(result).toMatchObject({ status: "denied" });
+    expect((result as { reason: string }).reason).toMatch(
+      /could not be limited and would run on every matching event/
+    );
+    expect(automationUpdates).toHaveLength(0);
+    expect(materializeCalls).toHaveLength(0);
+    expect(gateCalls).toHaveLength(0);
+  });
+});

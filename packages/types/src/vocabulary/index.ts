@@ -160,6 +160,13 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   discard: { imperative: "Discard", past: "Discarded" },
   // Undo of a conversion — the inverse verb, not a delete.
   revert: { imperative: "Revert", past: "Reverted" },
+  // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
+  // reversible hide of a kind — not a delete, so it never reads "Deleted".
+  // `close` ends an idle session through the close door; `expire` takes a
+  // long-waiting proposal out of the queue without applying it.
+  retire: { imperative: "Retire", past: "Retired" },
+  close: { imperative: "Close", past: "Closed" },
+  expire: { imperative: "Expire", past: "Expired" },
   // Server-side dev-loop HUMAN GATES (`dev.plan_approval` /
   // `dev.deploy_approval`). Verbs are matched on the LAST dotted segment, so
   // these keys resolve the full proposal types. They are NOT bare "approve":

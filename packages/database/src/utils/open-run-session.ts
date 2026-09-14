@@ -3,6 +3,7 @@ import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { recordSessionSpawn } from "./session-spawn.js";
 import { resolveSessionProjectPlacement } from "./resolve-session-project.js";
+import { stampProbeMarker } from "./request-write-context.js";
 
 export interface OpenRunSessionInput {
   /** Owner of the run (the operator on whose behalf the automation/agent acts). */
@@ -151,14 +152,16 @@ export async function openRunSession(
     subjectEntityId: input.subjectEntityId ?? null,
   });
 
-  const metadata: Record<string, unknown> = {
+  // D8: a test-key request's session is a probe (no-op outside that scope —
+  // an automation run in jobs has no request context).
+  const metadata: Record<string, unknown> = stampProbeMarker({
     source: input.source,
     ...(input.automationId ? { automationId: input.automationId } : {}),
     ...(input.automationRunId
       ? { automationRunId: input.automationRunId }
       : {}),
     ...(input.extraMetadata ?? {}),
-  };
+  });
 
   const insert = (channelId: string | null) =>
     db

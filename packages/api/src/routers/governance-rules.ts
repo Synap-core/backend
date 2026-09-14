@@ -61,6 +61,8 @@ import {
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
   ADMIN_ACTIONS,
+  AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
+  nonWidenableFloorFor,
 } from "@synap/governance-policy";
 
 const EDITOR_ROLES = ["editor", "admin", "owner"];
@@ -485,9 +487,10 @@ export const governanceRulesRouter = router({
    * actually enforces:
    *   - `autoApproveFor` — the DEFAULT_AUTO_APPROVE whitelist (rung 8 floor).
    *   - `alwaysPropose`  — the hard floors that always route to a proposal
-   *     regardless of any rule: ADMIN (rung 2), DESTRUCTIVE (rung 2.5), and the
-   *     forcePropose scope/identity floor (rung 2.1, applied dynamically — not a
-   *     fixed action list). Every entry is read-only (not user-editable).
+   *     regardless of any rule: ADMIN (rung 2), AGENT-DEFINED SCHEMA (rung
+   *     2.08), DESTRUCTIVE (rung 2.5), and the forcePropose scope/identity floor
+   *     (rung 2.1, applied dynamically — not a fixed action list). Every entry
+   *     is read-only (not user-editable).
    */
   platformDefaults: protectedProcedure.query(async () => {
     return {
@@ -505,6 +508,14 @@ export const governanceRulesRouter = router({
           rung: "2",
           editable: false as const,
           actions: ADMIN_ACTIONS,
+        },
+        {
+          key: "agent-schema" as const,
+          label: "Agents defining kinds or roles",
+          rung: "2.08",
+          editable: false as const,
+          actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
+          note: "An agent defining a kind or role always goes to review, and no rule can widen it. A person defining one is unaffected.",
         },
         {
           key: "destructive" as const,
@@ -532,6 +543,20 @@ export const governanceRulesRouter = router({
   create: protectedProcedure
     .input(CreateInputSchema)
     .mutation(async ({ ctx, input }) => {
+      // A rule that can never fire is refused, not stored (B3). An exact action
+      // key behind a non-widenable floor resolves ABOVE the rule store (rung
+      // 2.8), so an `auto` row there would be a success toast for a grant that
+      // does nothing. The answer comes from the engine itself, never a list here.
+      if (input.verdict === "auto" && input.targetKind === "action") {
+        const floor = nonWidenableFloorFor(input.targetPattern);
+        if (floor) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `NON_WIDENABLE_FLOOR (${floor}): "${input.targetPattern}" always needs review — no governance rule can auto-approve it.`,
+          });
+        }
+      }
+
       await assertCanManageRule(ctx.userId, input);
       if (input.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, input.targetPattern);

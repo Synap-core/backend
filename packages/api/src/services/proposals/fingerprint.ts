@@ -239,6 +239,8 @@ const ATTENTION_FLOOR_KEYS = [
   "SCOPE_IDENTITY_CHANGE",
   "UNTRUSTED_ORIGIN",
   "POD_ADMIN_SCHEMA_CHANGE",
+  // D6: an agent defining a kind/role — the whole point is that a person looks.
+  "AGENT_SCHEMA_DEFINITION",
   // `satisfies` ties this list to the engine's own key set: renaming or
   // removing a PROPOSE_REASON key is a compile error here, not a silent
   // floor that stops matching. The Set stays string-typed because the

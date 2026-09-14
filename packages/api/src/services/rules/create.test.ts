@@ -448,6 +448,57 @@ describe("the compiled automation carries the metadata its consumer filters on",
     expect((def.metadata as Record<string, unknown>).projectId).toBe("proj-9");
   });
 
+  it("R2: maps scope.projectId into triggerConfig.projectId and SAYS the rule is now limited", async () => {
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: GOOD_SENTENCE,
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-9" },
+    });
+    expect(result.status).toBe("created");
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect((def.triggerConfig as Record<string, unknown>).projectId).toBe(
+      "proj-9"
+    );
+    expect((result as { scopeNote?: string }).scopeNote).toMatch(
+      /runs only for events on project proj-9/
+    );
+  });
+
+  it("R2: REFUSES a project on a WHEN the matcher cannot limit — before the gate, nothing materialized", async () => {
+    const result = await create({
+      intent: BEHAVIOUR,
+      sentence: {
+        ...GOOD_SENTENCE,
+        trigger: {
+          triggerType: "event" as const,
+          subjectCategory: "relation" as const,
+          actionVerb: "created" as const,
+        },
+      },
+      scope: { kind: "workspace", workspaceId: "ws-1", projectId: "proj-9" },
+    });
+    expect(result.status).toBe("denied");
+    expect((result as { failure?: { clause: string } }).failure?.clause).toBe(
+      "WHEN"
+    );
+    // The SCOPE refusal, not some other WHEN refusal the compiler might make
+    // for this family — without this the row would pass on an unrelated denial.
+    expect((result as { reason: string }).reason).toMatch(
+      /could not be limited and would run on every matching event/
+    );
+    expect(materializeCalls).toHaveLength(0);
+    expect(gateCalls).toHaveLength(0);
+  });
+
+  it("an unscoped rule carries no projectId in its trigger and no scope note", async () => {
+    const result = await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
+    const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;
+    expect(def.triggerConfig as Record<string, unknown>).not.toHaveProperty(
+      "projectId"
+    );
+    expect(result).not.toHaveProperty("scopeNote");
+  });
+
   it("omits projectId when the rule is not project-scoped", async () => {
     await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
     const def = materializeCalls.at(-1)!.definition as Record<string, unknown>;

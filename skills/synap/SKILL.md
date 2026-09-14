@@ -37,93 +37,28 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 ---
 
-## Reflexes — the two habits, every session
+## Reflexes — what holds on every door
 
-> Canonical source — MCP instructions and other surfaces derive from this file.
+> Canonical source — the MCP `instructions` field is derived from this file and composed with live grounding under ONE 2 KB budget (pinned by `instructions-budget.test.ts`). Most important first. Depth belongs in a skill, never here.
 
-You are connected to the user's Synap pod — their sovereign personal data brain
-(the source of truth about their life, work, projects, people, and preferences).
-Two reflexes hold on every session, on every door (MCP, IS, CLI, HTTP):
+You are connected to the user's Synap pod, the source of truth about their life, work, projects, people and preferences. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
 
-- **Recall — BEFORE any non-trivial task.** Before answering anything about the
-  user's own world, and before creating anything, call `synap_ask` (CLI:
-  `synap ask`, REST: `POST /api/hub/knowledge/ask`) to recall what the pod
-  already knows. Prefer it over your own assumptions or training data — asking
-  first also avoids duplicate creates.
-- **Capture — AFTER you learn something durable.** A fact, a decision, a new
-  person/company/task — call `synap_capture` (CLI: `synap capture`) to write it
-  back. Don't wait to be asked; this is how the second brain grows.
-- **Remember — when what you learned is about the USER, not the work.** A
-  preference, a habit, a working style, a standing constraint ("always run the
-  gate before claiming done") — call `synap_remember_fact`, NOT `synap_capture`.
-  It writes a `user_observation`, which is the ONE substrate the next agent is
-  briefed from at `synap_orient`. Pass `userStated: true` only when the user
-  told you directly; leave it off for your own inference and the write comes
-  back `proposed` for review, which is correct — an unconfirmed guess about a
-  person should not become fact silently.
+1. **Recall first.** Before answering about the user's world or creating anything, `ask`. It also prevents duplicates.
+2. **Capture after.** A durable fact, decision, person, company or task: `capture`. About the user themself (a preference, a standing constraint): `remember_fact`. No private scratchpad; what you learn goes into the graph.
+3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions.
+4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.
+5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.
+6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace.
 
-  This is the difference between the pod knowing _what you worked on_ and
-  knowing _how to work with you_. A preference filed as generic content is
-  retrievable but never briefs anyone.
-
-- **Scope — DECLARE which work this is, before you write.** The pod has TWO
-  lenses and they compose. A **workspace** is a domain (Builder, CRM, Brand) —
-  a thing has exactly one. A **project** is a cross-cutting engagement thread
-  (a client mandate, a venture, a product line) that runs THROUGH several
-  workspaces — a thing can belong to several. Read both from `synap_orient`.
-
-  When the user says what they are working on, pin it: `synap_set_workspace_focus`
-  and `synap_set_project_focus` make that choice sticky for the rest of the
-  session, so every later write lands in the right place without repeating
-  yourself. Pass `workspaceId` / `projectId` explicitly on a single call to
-  override the pin for that call only. Filtering reads works the same way —
-  pass either, or both, to narrow.
-
-  **Never GUESS a project.** Filing work into one grants access to that
-  project's members, so an inferred project is a silent access change, not a
-  tidy-up. Declare it, ask the user, or leave it unset — the pod deliberately
-  files work with NO project rather than the wrong one, and unset is always the
-  safe answer. Guessing a workspace is merely untidy; guessing a project is not.
-
-Run `synap_orient` (CLI: `synap orient`) once per session. It is a BRIEFING, not
-an inventory: who the user is, the active projects and their state, the standing
-write grammar, and anything awaiting review. Read it before acting — and if the
-`who` block is thin, that is a signal to remember something at the end of the
-session, not a reason to skip it.
-
-**Writes are governed: a `"proposed"` response is normal, never an error.** It
-means the write is queued for the user's review — like a PR, not a failure. Keep
-working; see `writes.md` for the full governance contract and `inline-patterns.md`
-for how to surface a proposal's review link in a Companion reply.
-
-**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.
-
-## Escalation ladder (keep in a corner of your head)
-
-You can always escalate — never dead-end on "I can't." Full detail: `escalation-ladder.md`.
-
-- **L0 Reflexes** — recall before, capture after, proposed ≠ error
-- **L1 OPERATE on data** — capture, create_entity, link, attach KNOWN facets, sessions,
-  and SCOPE the work (`set_workspace_focus` / `set_project_focus`) so it lands where it belongs
-- **L2 DISCOVER before invent** — list_profiles, list_capabilities, market.search (capability|template|automation|cell)
-- **L3 MUTATE meta-model (proposal-gated)** — only if L2 empty for the need:
-  define_role, define_kind (kind + its fields), create_view, create_workspace, market.install.
-  **Template FIRST for new domains:** market.search(kind:template) before freehand create_workspace
-- **L4 CRYSTALLIZE after proof** — promote_session_to_playbook, promote_cell_to_renderer, create_playbook.
-  Never crystallize a one-off that hasn't succeeded once
-
-**Gates:**
-
-- Blocked / can't express need → L2 then L3 propose (never dead-end error; never silent invent)
-- Success / repeatable pattern → one structural suggestion (question first if speculative)
-- Capture placement routes to EXISTING lenses only — never invent a workspace from capture,
-  and never infer a project at all (an unset project is correct; a guessed one widens access)
+Load depth with `load_skill`: `system/synap/lenses` (workspaces, projects, sessions, where writes land), `escalation-ladder`, `writes`, or `catalog`.
 
 ---
 
 # Escalation ladder — discover → invent under proposal → crystallize after proof
 
-The always-on brief lives in `reflexes.md`. This file is the full HOW when you need more than the corner-of-your-head reminder.
+The always-on brief lives in `reflexes.md`, which points here. This file is the full HOW when you need more than the corner-of-your-head reminder.
+
+**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.
 
 ## Why it exists
 
@@ -317,17 +252,29 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 
 You don't work "inside a workspace" the way you'd work inside a folder. You operate **across the whole pod**, and you **focus** through up to three composable lenses. **Lenses narrow; they never silo.** Omitting them is legal and common — that's pod-wide.
 
-| Lens          | What it is                                                                                                                                           | How to set (this session)                        |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| **Project**   | a **company or initiative** — the thing that ties the work together (Synap, a client, a launch). The lens you usually _organize by_.                 | `synap project use <id>` / `clear`               |
-| **Workspace** | an **operational domain** — where data lives (Foundation, CRM, Marketing, Finance, Builder). How the work is separated; the default home for writes. | `synap use <name-or-id>`                         |
-| **Session**   | the **work room** for the current goal (holds goal, deliverables, progress)                                                                          | `synap session start --goal "…"` / `attach <id>` |
+Tool names below are stems; your door may prefix them.
+
+| Lens          | What it is                                                                                                                                                   | Set it (MCP / CLI)                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| **Workspace** | an **operational domain** (CRM, Builder, Marketing). A thing lives in exactly ONE. How the work is separated; the default home for writes.                   | `set_workspace_focus` / `synap use <name-or-id>`                    |
+| **Project**   | a **cross-cutting engagement** (a client mandate, a venture, a product line) that runs THROUGH several workspaces; a thing can belong to several.            | `set_project_focus` or `projectId` / `synap project use <id>`       |
+| **Session**   | the **work room** for the current goal (goal, deliverables, progress). Pass its id on writes that belong to it.                                             | `start_session` / `synap session start --goal "…"` / `attach <id>` |
+
+**The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing work into a project grants its members access, so never infer one from content, and never let a session decide it: a write without a `sessionId` is attributed to your newest open work session (the response says so), and that guessed session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
+
+**Reads:** pod-wide by default; find by name, id or role, and pass `workspaceId` / `projectId` only to narrow a list.
+
+**Writes:** name the kind (profile slug) and, when known, the roles as facets. Omit `workspaceId` unless you are deliberately pinning a domain — the server places the write from installed profile metadata. Never invent a workspace name. Focus sticks for the session; an explicit `workspaceId` / `projectId` on one call overrides it for that call.
+
+**Empty domains:** a workspace holding 0 entities is a scaffold — prefer an active one unless the user names it (`orient` lists active domains; `detail:'full'` shows every one).
+
+**Where the kinds are:** `orient` names the kinds in use, most-used first; the profile-listing tool lists every kind and role. A kind's property schema (fields, enums, required): over MCP, `get_entity` on any existing entity of that kind returns it as `effectiveProperties`; over HTTP, `GET /api/hub/discover?profileSlugs=<slug>`; CLI `synap discover`. A write that breaks the schema is rejected with the valid fields quoted.
 
 **How they compose — this is the whole model:**
 
-- A **project spans workspaces**: one company/initiative has a Foundation, a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
+- A **project spans workspaces**: one engagement has a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
 - A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
-- **Membership is per-entity, filed on write.** An entity belongs to a project because it was created/filed **under the project lens** — not because its workspace is "in" the project (there is no workspace→project link). So **set the project lens before writing** work that belongs to an initiative, and it composes into that project from any workspace.
+- **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** — not because its workspace is "in" the project (there is no workspace→project link). So once the user has named the engagement, set the project lens before writing its work, and it composes into that project from any workspace.
 - Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
@@ -339,7 +286,7 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 **Before the FIRST write of a new unit of work**, check your lens and orient if you're unsure:
 
 1. `synap lens` — am I scoped where this work belongs?
-2. If unsure what exists → `synap orient` — it returns a **light lens map**: the projects and the workspaces (names + ids), so you see the shape without a data dump. Never guess IDs. Drill into a workspace's profiles or a project's contents only when you actually need them.
+2. If unsure what exists → `synap orient` — it returns the **briefing**: pending review, open sessions, the kinds in use, then the projects and workspaces (names + ids), without a data dump. Never guess IDs. Drill into a workspace's profiles or a project's contents only when you actually need them.
 3. **Connect or create:** if the right project / workspace / session doesn't exist yet, create it. A **session is the normal per-task move**. Creating a **workspace (a new operational domain) is a deliberate, expected move as the work grows** — not something to avoid. A **project, though, is a COMMITMENT WITH GRAVITY**: search existing projects first (`synap orient`) and prefer **linking into an existing one** via `belongs_to_project`. Only create a new project for a real initiative that ties work together — never for a task, plan, repo, or theme (those are entities), and **never for the pod owner's own company** (the company _is_ the pod, not a project inside it). An agent-created project must cite **≥5 existing entities** as evidence or the backend rejects it, and near-duplicate names are rejected with the existing candidates.
 
 **Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.

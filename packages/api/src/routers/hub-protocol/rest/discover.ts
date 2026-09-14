@@ -8,10 +8,18 @@
  * descriptions, which drift as custom profiles are added or changed.
  *
  * Tiers (measured live, 2026-09-14, 123-profile pod):
- *   ?summary=true  — slugs + displayNames + scopes + description + icon, NO
- *                     property schemas and NO entityCount (that field is
- *                     declared on the wire but not yet populated by this
- *                     route — see `entityCount` below). ~29.9KB full pod,
+ *   ?summary=true  — slugs + displayNames + scopes + description + icon +
+ *                     usage (`entityCount`, `lastActivityAt`, `rank`) +
+ *                     `origin` per row, top-level `groups`, NO property
+ *                     schemas. Rows are ORDERED BY USAGE RANK by default
+ *                     (founder decision D1): the census found no consumer
+ *                     that reads row position — Raycast / IS / CLI /
+ *                     hub-rest-client all match by slug or id, and the prior
+ *                     order was `profiles.id` (uuid), i.e. arbitrary.
+ *                     `?sort=name` = alphabetical. Usage is read through the
+ *                     ONE aggregate (`services/discover/usage-aggregate.ts`);
+ *                     a failed read yields `usageError` + name order, never
+ *                     zero counts. ~29.9KB full pod before the usage fields,
  *                     ~19.4KB scoped to one workspace lens. Call first.
  *   ?profileSlugs=task,person — full schemas only for named profiles. Use this
  *                     after the summary tier instead of loading every schema.
@@ -35,6 +43,8 @@ import {
   resolveProfileDescription,
   resolveProfileIcon,
 } from "../../../utils/profile-presentation.js";
+import { rankProfilesByUsage } from "../../../services/discover/profile-ranking.js";
+import { PROFILE_ORIGINS } from "@synap/database/schema";
 
 const DiscoverPropertySchema = z.object({
   slug: z.string(),
@@ -248,10 +258,77 @@ const DiscoverQuerySchema = z.object({
   workspaceId: z.string().uuid().optional(),
   summary: z.enum(["true", "false"]).optional(),
   profileSlugs: ProfileSlugListSchema.optional(),
+  /**
+   * Summary-tier row order. `usage` (default) = blended usage rank; `name` =
+   * alphabetical by displayName. The full tier ignores it (listing order).
+   */
+  sort: z.enum(["usage", "name"]).optional(),
+  /**
+   * Opt-in: `origin` adds top-level `groups` (used / core / shared / per
+   * workspace). Off by default — the summary tier is read straight into model
+   * context (Raycast), and the rows already carry `rank` and `origin`.
+   */
+  groups: z.enum(["origin"]).optional(),
 });
 
-/** Summary tier — lightweight, no property schemas, no entity counts. */
+const ProfileOriginSchema = z
+  .object({
+    origin: z
+      .enum(PROFILE_ORIGINS)
+      .describe(
+        "Stored provenance (profiles.origin): core | template | authored | agent | probe | unknown. `unknown` = not recorded; never guessed."
+      ),
+    group: z
+      .enum(["core", "shared", "workspace", "unknown"])
+      .describe(
+        "Where discover lists it: core type, shared across workspaces, defined in `workspaceId`, or unknown."
+      ),
+    workspaceId: z.string().optional(),
+    templateId: z.string().optional(),
+    packageSlug: z.string().optional(),
+  })
+  .describe(
+    "Provenance + placement. `templateId` / `packageSlug` = what the owning workspace was installed from, when recorded."
+  );
+
+const ProfileGroupSchema = z.object({
+  key: z
+    .string()
+    .describe("`used`, `core`, `shared`, `workspace:<id>`, or `unknown`."),
+  label: z.string(),
+  profileIds: z
+    .array(z.string())
+    .describe("References `profiles[].id`; rows are never nested here."),
+});
+
+/**
+ * Usage fields, added to every summary row. Absent together when the usage read
+ * failed — the response then carries `usageError`, never zero counts.
+ */
+const DiscoverUsageFields = {
+  entityCount: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "Entities of this profile row you can see (the lens's workspaces + pod-scoped). Absent = not measured (see `usageError`), never 0."
+    ),
+  lastActivityAt: z.string().nullable().optional(),
+  rank: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      "1 = most used. One blended rank (entity count, recency, what you open) — the same one orient's startHere.topKinds uses."
+    ),
+  origin: ProfileOriginSchema.optional(),
+};
+
+/** Summary tier — lightweight, no property schemas; usage + origin per row. */
 export const DiscoverProfileSummarySchema = z.object({
+  ...DiscoverUsageFields,
   id: z
     .string()
     .describe(
@@ -328,12 +405,12 @@ const DiscoverProfileSchema = z.object({
       "Ready-to-run CLI command template for this profile. ABSENT when `schemaUnavailable` or `slugWritesTo` is set: a create command for a type whose schema this response could not show — or whose slug writes to another row — invites exactly the blind write those markers exist to prevent."
     ),
   /**
-   * NOT YET POPULATED by this route (measured live 2026-09-14: absent on every
-   * profile). Left in the wire schema for the planned P1 consolidation of the
-   * three duplicate entity-count GROUP BYs (orient's `discover.ts`, MCP
-   * `buildGrounding` in `http-handler.ts`, `diagnose/workspace.ts`) into one
-   * source this route can then read. Do not read this field as "0 entities" —
-   * it means "not measured", not "empty".
+   * NOT populated on this FULL tier — the usage fields (`entityCount`,
+   * `lastActivityAt`, `rank`, `origin`) ride on the SUMMARY tier, read through
+   * the one aggregate (`services/discover/usage-aggregate.ts`). The full tier
+   * is the per-write schema read (Raycast create/update call it with
+   * `profileSlugs` before every write), so it does not pay for the aggregate.
+   * Absent here means "not measured", never "0 entities".
    */
   entityCount: z.number().int().nonnegative().optional(),
 });
@@ -372,6 +449,14 @@ export const DiscoverSummaryResponseSchema = z
   .object({
     ...DiscoverRelationTypeFields,
     profiles: z.array(DiscoverProfileSummarySchema),
+    /** The order `profiles` is in: `usage` (default) or `name`. */
+    sort: z.enum(["usage", "name"]),
+    groups: z.array(ProfileGroupSchema).optional(),
+    /**
+     * Present INSTEAD of the usage fields + `groups` when the usage read
+     * failed. Rows are then in `name` order — never ranked on zero counts.
+     */
+    usageError: z.string().optional(),
     commands: z.record(z.string(), z.string()),
     hint: z.string(),
   })
@@ -386,7 +471,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
     description:
       "Returns entity profiles with property schemas and the CLI command tree. " +
       "AI agents call this once at session start for ground-truth schema instead of relying on static skill descriptions. " +
-      "Pass ?summary=true for a lighter tier (~30KB on a 123-profile pod; no property schemas, no entityCount), then pass ?profileSlugs=task,person to load schemas only for the profiles you need.",
+      "Pass ?summary=true for a lighter tier (no property schemas; rows ranked by usage with entityCount / lastActivityAt / rank / origin; ?sort=name for alphabetical; ?groups=origin adds top-level groups), then pass ?profileSlugs=task,person to load schemas only for the profiles you need.",
     request: { query: DiscoverQuerySchema },
     responses: {
       200: { description: "Discovery payload", schema: DiscoverResponseSchema },
@@ -409,12 +494,14 @@ export function registerDiscoverRoutes(app: HubHono): void {
       workspaceId: c.req.query("workspaceId"),
       summary: c.req.query("summary"),
       profileSlugs: c.req.query("profileSlugs"),
+      sort: c.req.query("sort"),
+      groups: c.req.query("groups"),
     });
     if (!query.success) {
       return c.json(
         {
           error:
-            "userId is required; workspaceId is optional and profileSlugs must be a comma-separated list of profile slugs when supplied",
+            "userId is required; workspaceId is optional, profileSlugs must be a comma-separated list of profile slugs when supplied, sort must be usage or name, and groups must be origin",
         },
         400
       );
@@ -447,6 +534,10 @@ export function registerDiscoverRoutes(app: HubHono): void {
         // Visibility axis (who can use the type) — distinct from entityScope
         // (placement), which feeds discover's `scope` field.
         scope?: string | null;
+        // The owning workspace for a workspace-scoped row — what `origin` names.
+        workspaceId?: string | null;
+        // Stored provenance (`profiles.origin`, PROFILE_ORIGINS).
+        origin?: string | null;
         icon?: string | null;
         uiHints?: unknown;
         profileKind?: "kind" | "role";
@@ -473,10 +564,12 @@ export function registerDiscoverRoutes(app: HubHono): void {
           }
         );
 
-      // ── Summary tier: slugs + displayNames + scopes + description + icon,
-      // no property schemas, no entityCount (~30KB on a 123-profile pod) ──
+      // ── Summary tier: slugs + displayNames + scopes + description + icon +
+      // usage (entityCount / lastActivityAt / rank) + origin, no property
+      // schemas. Rows are ranked by usage unless ?sort=name. ──
       if (summary) {
-        const summaryProfiles = selectedProfiles.map((p) => ({
+        const sort = query.data.sort ?? "usage";
+        const baseRow = (p: (typeof selectedProfiles)[number]) => ({
           id: p.id,
           slug: p.slug,
           displayName: p.displayName,
@@ -488,16 +581,58 @@ export function registerDiscoverRoutes(app: HubHono): void {
           icon: resolveProfileIcon(p),
           profileKind: p.profileKind ?? "kind",
           applicableKinds: p.applicableKinds ?? null,
-        }));
+        });
+        const byName = (
+          a: { displayName: string },
+          b: { displayName: string }
+        ) => a.displayName.localeCompare(b.displayName);
+
+        // Usage is floored on the AUTHENTICATED owner — `c.get("userId")`, the
+        // same identity `getCaller` lists profiles as — never the query's
+        // legacy `userId`, which would let a key rank another user's data.
+        // A failed read is reported as `usageError`; rows then fall back to
+        // name order WITHOUT usage fields, never ranked on invented zeros.
+        let ranking:
+          Awaited<ReturnType<typeof rankProfilesByUsage>> | undefined;
+        let usageError: string | undefined;
+        try {
+          ranking = await rankProfilesByUsage({
+            userId: c.get("userId") as string,
+            workspaceId,
+            profiles: selectedProfiles,
+          });
+        } catch (err) {
+          logger.error({ err }, "discover: usage read failed");
+          // The cause is logged above; the client gets a stable, non-leaking message.
+          usageError = "Usage could not be read; rows are in name order.";
+        }
+
+        const summaryProfiles = ranking
+          ? ranking.ranked.map((r) => ({
+              ...baseRow(r.profile as (typeof selectedProfiles)[number]),
+              entityCount: r.entityCount,
+              // Compact: omitted when the kind has no activity at all.
+              ...(r.lastActivityAt ? { lastActivityAt: r.lastActivityAt } : {}),
+              rank: r.rank,
+              origin: r.origin,
+            }))
+          : selectedProfiles.map(baseRow);
+        if (!ranking || sort === "name") summaryProfiles.sort(byName);
 
         return c.json({
           profiles: summaryProfiles,
+          sort: ranking ? sort : "name",
+          ...(!ranking
+            ? { usageError }
+            : query.data.groups === "origin"
+              ? { groups: ranking.groups }
+              : {}),
           ...relationTypes,
           commands: {
             discover: "synap discover --json",
             orient: "synap orient --json",
           },
-          hint: "Summary tier — no property schemas. Call /discover?profileSlugs=task,person for full property detail + create commands only for the profiles you intend to use.",
+          hint: "Summary tier — no property schemas; rows ranked by use (rank 1 = most used; ?sort=name for alphabetical; ?groups=origin adds groups that reference rows by id). Call /discover?profileSlugs=task,person for full property detail + create commands only for the profiles you intend to use.",
         });
       }
 

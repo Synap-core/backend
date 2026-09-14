@@ -375,6 +375,7 @@ export type CaptureDegradedReason =
   | "pdf_scanned_needs_ocr"
   | "pdf_missing_binary"
   | "vision_provider_not_configured"
+  | "vision_provider_failed"
   | "image_missing_binary"
   | "transcription_provider_not_configured"
   | "audio_missing_binary"

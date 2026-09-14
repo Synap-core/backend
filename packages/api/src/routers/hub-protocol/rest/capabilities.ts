@@ -29,7 +29,7 @@ import {
   isAbstractVerb,
   type AbstractVerb,
 } from "@synap/database/schema";
-import { scoreTextMatch } from "../../../services/capabilities/capability-registry.js";
+import { rankByTerms } from "../../../utils/term-match.js";
 import { foldVerbsByIntent } from "../../../services/capabilities/capability-intent-index.js";
 import { reconcileCapabilitiesToTemplates } from "../../../services/capabilities/reconcile-capabilities-to-templates.js";
 import {
@@ -778,23 +778,16 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
       // description (tertiary).
       let result = enriched;
       if (query) {
-        result = result
-          .map((container) => {
-            const memberNames = [
-              ...container.members.connections,
-              ...container.members.builtins,
-              ...container.members.skills,
-            ].map((p) => p.name);
-            const score = scoreTextMatch(query, {
-              primary: container.name,
-              secondary: memberNames,
-              tertiary: container.description,
-            });
-            return { container, score };
-          })
-          .filter((s) => s.score > 0)
-          .sort((a, b) => b.score - a.score)
-          .map((s) => s.container)
+        result = rankByTerms(query, enriched, (container) => ({
+          primary: container.name,
+          secondary: [
+            ...container.members.connections,
+            ...container.members.builtins,
+            ...container.members.skills,
+          ].map((p) => p.name),
+          tertiary: container.description,
+        }))
+          .map((s) => s.item)
           .slice(0, limit ?? 20);
       } else if (limit !== undefined) {
         result = result.slice(0, limit);

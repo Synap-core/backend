@@ -40,7 +40,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { skills } from "@synap/database/schema";
-import { searchInstructionSkills, skillQueryTerms } from "../search.js";
+import { searchInstructionSkills } from "../search.js";
 import { registerAgentSkillsRoutes } from "../../../routers/hub-protocol/rest/agent-skills.js";
 import type { HubHono } from "../../../routers/hub-protocol/rest/_shared.js";
 
@@ -245,22 +245,6 @@ describe("searchInstructionSkills — filters before paging", () => {
     });
     expect(names(rows)).toEqual(["Zeta session guide"]);
     expect(total).toBe(1);
-  });
-});
-
-describe("skillQueryTerms", () => {
-  it("drops stopwords, stems lightly, and never returns nothing for real input", () => {
-    expect(skillQueryTerms("Capturing sessions")).toEqual([
-      "captur",
-      "session",
-    ]);
-    expect(skillQueryTerms("how to create a project")).toEqual([
-      "creat",
-      "project",
-    ]);
-    expect(skillQueryTerms("how to")).toEqual(["how", "to"]);
-    expect(skillQueryTerms("gmail_send")).toEqual(["gmail_send"]);
-    expect(skillQueryTerms("   ")).toEqual([]);
   });
 });
 

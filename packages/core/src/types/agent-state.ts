@@ -90,6 +90,14 @@ export const ConversationMessageMetadataSchema = z.object({
   aiSteps: z.array(AIStepSchema).optional(),
   /** Agent type that produced this message (e.g. "analyst", "meta"). */
   agentType: z.string().optional(),
+  /**
+   * A capture clarification part (question / answer) persisted in a capture
+   * session's room. The contract is `CaptureClarificationPartSchema` in
+   * `@synap-core/types/capture` — read it with `readCapturePart`. Loose here
+   * because `@synap-core/types` depends on this package (importing it back
+   * would be a cycle). A message carrying one never starts an agent turn.
+   */
+  capturePart: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type ConversationMessageMetadata = z.infer<

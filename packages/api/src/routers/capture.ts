@@ -13,7 +13,7 @@ import { deriveGatePairFromOperations } from "@synap/governance-policy";
 import { captureGraphEventKeys } from "../services/capture-agent/capture-graph-policy.js";
 import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import { buildRuleLoopCallers } from "../utils/rule-loop-callers.js";
-import { router, podProcedure } from "../trpc.js";
+import { router, mergeRouters, podProcedure } from "../trpc.js";
 import type { Context } from "../context.js";
 import { entitiesRouter } from "./entities.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -25,6 +25,15 @@ import {
   structureSourceKind,
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
+import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
+import {
+  captureClarificationAnswered,
+  claimCaptureQuestion,
+  followUpIsAsked,
+  persistCaptureQuestion,
+  restructureInput,
+} from "../services/intake/capture-clarification.js";
+import { CaptureAnswerSchema } from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
   PHOTO_RUN_MAX_ITEMS,
@@ -49,6 +58,12 @@ import {
   callStructureWithRetry,
   type StructureRetryReason,
 } from "../utils/is-structure-retry.js";
+import { structureProgressMiddleware } from "../middleware/structure-progress.js";
+import {
+  reportStructureRetry,
+  reportStructureStage,
+  structureProgressSink,
+} from "../utils/structure-progress-bus.js";
 import type { StructuredFollowUp } from "@synap/intelligence-client";
 import {
   eq,
@@ -211,8 +226,12 @@ async function resolveCapturedBody(params: {
   return { documentId: body.documentId, inlineContent: body.inlineContent };
 }
 
-/** Canonical generic kind for unclassified capture material. */
-const DEFAULT_CAPTURE_PROFILE = "item";
+/**
+ * The kind unclassified / degraded capture material files as. `note` is a real
+ * kind again and `item` is retired as the catch-all (founder decision, synap-46).
+ * Pinned with `buildDegradedCaptureFallback` by `capture-contract.test.ts`.
+ */
+export const FALLBACK_CAPTURE_KIND = "note";
 
 // ── Knowledge form normalisation ───────────────────────────────────────────
 // Knowledge has one canonical, mutually-exclusive `knowledgeForm`. Historic
@@ -331,7 +350,7 @@ export function buildDegradedCaptureFallback(
     proposals: [
       {
         tempId: "t1",
-        profileSlug: DEFAULT_CAPTURE_PROFILE,
+        profileSlug: FALLBACK_CAPTURE_KIND,
         title: inputText.slice(0, 80).trim(),
         description: inputText.length > 80 ? inputText : undefined,
         properties: { content: inputText },
@@ -410,7 +429,7 @@ async function semanticDedupCandidates(
     return rows.map((r) => ({
       entityId: r.entityId,
       title: r.title ?? "",
-      profileSlug: r.entityType || DEFAULT_CAPTURE_PROFILE,
+      profileSlug: r.entityType || FALLBACK_CAPTURE_KIND,
       score: 1 - Number(r.distance),
     }));
   } catch (err) {
@@ -584,7 +603,7 @@ export function buildCaptureSummary(
   return `Captured${from}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
 }
 
-export const captureRouter = router({
+const captureBaseRouter = router({
   // ── thought (legacy single-entity) ─────────────────────────────────────
 
   /**
@@ -616,7 +635,7 @@ export const captureRouter = router({
       );
 
       // Step 1: Classify via Intelligence Service
-      let profileSlug = DEFAULT_CAPTURE_PROFILE;
+      let profileSlug = FALLBACK_CAPTURE_KIND;
       let title = input.content.slice(0, 80).trim();
       let properties: Record<string, unknown> = {};
       let mode: "ai" | "fallback" = "fallback";
@@ -861,9 +880,9 @@ export const captureRouter = router({
               { err: retryErr, userId, profileSlug },
               "Same-profile retry failed, falling back to item"
             );
-            const pin = await pinFor(DEFAULT_CAPTURE_PROFILE);
+            const pin = await pinFor(FALLBACK_CAPTURE_KIND);
             const fallback = await entitiesCaller.create({
-              profileSlug: DEFAULT_CAPTURE_PROFILE,
+              profileSlug: FALLBACK_CAPTURE_KIND,
               title,
               properties: salvageProperties,
               documentId,
@@ -875,7 +894,7 @@ export const captureRouter = router({
             });
             entityId = (fallback as { id: string }).id;
             degradedFrom = originalProfileSlug;
-            profileSlug = DEFAULT_CAPTURE_PROFILE;
+            profileSlug = FALLBACK_CAPTURE_KIND;
             mode = "fallback";
           }
         } else {
@@ -885,9 +904,9 @@ export const captureRouter = router({
             { err, userId, profileSlug },
             "Entity creation failed (non-validation), falling back to item"
           );
-          const pin = await pinFor(DEFAULT_CAPTURE_PROFILE);
+          const pin = await pinFor(FALLBACK_CAPTURE_KIND);
           const fallback = await entitiesCaller.create({
-            profileSlug: DEFAULT_CAPTURE_PROFILE,
+            profileSlug: FALLBACK_CAPTURE_KIND,
             title,
             properties: salvageProperties,
             documentId,
@@ -899,7 +918,7 @@ export const captureRouter = router({
           });
           entityId = (fallback as { id: string }).id;
           degradedFrom = originalProfileSlug;
-          profileSlug = DEFAULT_CAPTURE_PROFILE;
+          profileSlug = FALLBACK_CAPTURE_KIND;
           mode = "fallback";
         }
       }
@@ -1040,8 +1059,20 @@ export const captureRouter = router({
          * that already holds a file source is bulk whatever this says.
          */
         bulk: z.boolean().optional(),
+        /**
+         * Never ASK: a followUp in the result is dropped and the capture
+         * continues to dedup. Set by `answerFollowUp` for a skip.
+         */
+        suppressFollowUp: z.boolean().optional(),
+        /**
+         * Live progress: the client opens
+         * `GET /api/capture/runs/:captureRunId/progress` with this id BEFORE
+         * calling. Absent → no progress is reported. Never changes the response.
+         */
+        captureRunId: z.string().uuid().optional(),
       })
     )
+    .use(structureProgressMiddleware)
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
       const workspaceId = ctx.workspaceId; // string | null — pod-wide allowed
@@ -1210,7 +1241,7 @@ export const captureRouter = router({
               "anchor facet load failed (structure proceeds without roles)"
             );
           }
-          const anchorKind = anchor.type ?? DEFAULT_CAPTURE_PROFILE;
+          const anchorKind = anchor.type ?? FALLBACK_CAPTURE_KIND;
           anchorPreviousEntity = {
             tempId: "anchor",
             profileSlug: anchorKind,
@@ -1376,6 +1407,10 @@ export const captureRouter = router({
       // empty, degraded): session ensured, inputs stored as source documents,
       // manifest written. A degraded outcome keeps its source with a `degraded`
       // marker and files NO proposal. Additive response fields only.
+      // Pod-side step timings, filled as each step runs and recorded on the run
+      // manifest by `finishIntake` (null = that step did not run).
+      const podTimings: { dedupMs: number | null; placementMs: number | null } =
+        { dedupMs: null, placementMs: null };
       const finishIntake = async <T extends object>(
         result: T,
         run: { meta?: StructureRunMeta | null; podDegraded?: boolean } = {}
@@ -1388,6 +1423,8 @@ export const captureRouter = router({
             textTruncated?: unknown;
             extractor?: unknown;
             metadata?: { visionModel?: unknown; visionProvider?: unknown };
+            degraded?: unknown;
+            degradedReason?: unknown;
           };
         };
         const str = (v: unknown) => (typeof v === "string" ? v : null);
@@ -1438,11 +1475,21 @@ export const captureRouter = router({
                 },
               }
             : {}),
+          // The caption structured but the FILE was not read: its source must
+          // not enter the ledger as analyzed.
+          ...(r.degraded !== true && r.extraction?.degraded === true
+            ? {
+                fileNotRead: {
+                  reason: str(r.extraction.degradedReason) ?? "unknown",
+                },
+              }
+            : {}),
           guidelines: structureContext.guidelines,
           guidelineStatus: structureContext.guidelineStatus,
           runFacts: runFactsFromStructureMeta(run.meta, {
             podDegraded: run.podDegraded,
             degraded: r.degraded === true,
+            podTimings,
           }),
         });
         return { ...result, ...echo };
@@ -1516,6 +1563,10 @@ export const captureRouter = router({
           "capture.structure: relation types read failed — the structurer falls back to its default slugs"
         );
       }
+      // The pod's vision model is a PREFERENCE the IS honours when it serves it.
+      const visionModelId = input.file
+        ? await readPodVisionModelPreference(database)
+        : undefined;
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
@@ -1537,6 +1588,7 @@ export const captureRouter = router({
         // Which IS spend lane a photo's vision call reserves on (`visionBulk`
         // above). Rides in the POST body; an older IS ignores it.
         visionLane: visionBulk ? ("bulk" as const) : ("single" as const),
+        ...(visionModelId ? { visionModelId } : {}),
         timeoutMs: STRUCTURE_TIMEOUT_MS,
       };
       let structureResult: Awaited<ReturnType<typeof client.structure>>;
@@ -1551,11 +1603,15 @@ export const captureRouter = router({
         // observable — it was invisible until measured by hand during the
         // 2026-08-01 IS outage.
         const outcome = await callStructureWithRetry(
-          () => client.structure(structureInput),
+          () =>
+            client.structure(structureInput, {
+              onProgress: structureProgressSink(),
+            }),
           {
             timeoutMs: STRUCTURE_TIMEOUT_MS,
             maxAttempts: STRUCTURE_MAX_ATTEMPTS,
             onRetry: ({ attempt, maxAttempts, elapsedMs, backoffMs }) => {
+              reportStructureRetry();
               logger.warn(
                 { userId, attempt, maxAttempts, elapsedMs, backoffMs },
                 "IS structure returned a fast null (transient) — retrying before degrading"
@@ -1727,6 +1783,7 @@ export const captureRouter = router({
       //   • no ontology signal (rung 6, e.g. a pod-wide item/knowledge): keep the
       //     IS's name-reconciled pick from step 1a.
       // Best-effort: a resolver/tie-break hiccup leaves the step-1a pick untouched.
+      const placementStart = Date.now();
       const routingSlugs = Array.from(
         new Set(
           structureResult.entities
@@ -1738,6 +1795,7 @@ export const captureRouter = router({
         )
       );
       if (routingSlugs.length > 0) {
+        reportStructureStage("placing");
         try {
           const placement = await resolveWorkspacePlacement(database, {
             userId,
@@ -1793,6 +1851,8 @@ export const captureRouter = router({
         }
       }
 
+      podTimings.placementMs = Date.now() - placementStart;
+
       // Additive extraction summary from the IS response (present when a `file`
       // input was normalized to text upstream). Passed through to the tRPC
       // caller without changing existing fields — published clients ignore it.
@@ -1800,9 +1860,42 @@ export const captureRouter = router({
         ? { extraction: structureResult.extraction }
         : {};
 
-      // 2. If followUp, pass through immediately (no dedup yet)
-      if (structureResult.followUp) {
-        return finishIntake(
+      // 2. If followUp, pass through immediately (no dedup yet) — unless the
+      // caller suppressed it (a skip), in which case it is dropped below.
+      // ONE QUESTION PER CAPTURE: a session whose question was already answered
+      // or skipped never asks again — the followUp is dropped here so the
+      // capture still reaches dedup. A failed read is LOUD and treated as "not
+      // answered"; `persistCaptureQuestion` re-checks and refuses on its own.
+      let clarificationAnswered = false;
+      if (structureResult.followUp && input.suppressFollowUp !== true) {
+        const handle = await resolveVerifiedSessionId(
+          userId,
+          ctx.sessionId,
+          input.sessionId
+        );
+        if (handle) {
+          try {
+            clarificationAnswered = await captureClarificationAnswered({
+              sessionId: handle,
+              userId,
+            });
+          } catch (err) {
+            logger.error(
+              { err, userId, sessionId: handle },
+              "capture.structure: could not read whether this capture's question was answered — the persist door re-checks"
+            );
+          }
+        }
+      }
+      if (
+        followUpIsAsked(
+          structureResult.followUp,
+          input.suppressFollowUp === true || clarificationAnswered
+        )
+      ) {
+        reportStructureStage("asking");
+        const followUp = structureResult.followUp!;
+        const asked = await finishIntake(
           {
             proposals: structureResult.entities,
             relations: structureResult.relations,
@@ -1838,9 +1931,77 @@ export const captureRouter = router({
           },
           { meta: (structureResult as { meta?: StructureRunMeta }).meta }
         );
+        // Persist the question in the session's room ("one conversation, two
+        // views"). A failure is LOUD but never fails the capture: the ids come
+        // back null and the client keeps its local refine.
+        let followUpMessageId: string | null = null;
+        let followUpChannelId: string | null = null;
+        if (asked.sessionId) {
+          try {
+            const extractedText = (
+              structureResult as { extraction?: { text?: unknown } }
+            ).extraction?.text;
+            const persisted = await persistCaptureQuestion({
+              sessionId: asked.sessionId,
+              userId,
+              workspaceId: workspaceId ?? null,
+              followUp,
+              formSpec: structureResult.formSpec ?? undefined,
+              partialCount: structureResult.entities.length,
+              refine: {
+                ...(input.text !== undefined
+                  ? { text: input.text }
+                  : typeof extractedText === "string"
+                    ? { text: extractedText }
+                    : {}),
+                ...(input.url ? { url: input.url } : {}),
+                ...(input.context ? { context: input.context } : {}),
+                ...(input.instructions
+                  ? { instructions: input.instructions }
+                  : {}),
+                ...(input.anchorEntityId
+                  ? { anchorEntityId: input.anchorEntityId }
+                  : {}),
+                ...(input.previousEntities?.length
+                  ? { previousEntities: input.previousEntities }
+                  : {}),
+              },
+            });
+            if (persisted.status === "persisted") {
+              followUpMessageId = persisted.followUpMessageId;
+              followUpChannelId = persisted.channelId;
+            } else {
+              logger.warn(
+                {
+                  userId,
+                  sessionId: asked.sessionId,
+                  reason: persisted.reason,
+                },
+                "capture.structure: follow-up NOT persisted — this capture's question was already answered"
+              );
+            }
+          } catch (err) {
+            logger.error(
+              { err, userId, sessionId: asked.sessionId },
+              "capture.structure: follow-up question NOT persisted — the response carries null ids and the client refines locally"
+            );
+          }
+        } else {
+          logger.error(
+            { userId },
+            "capture.structure: follow-up question NOT persisted — the run has no session"
+          );
+        }
+        return {
+          ...asked,
+          followUpMessageId,
+          channelId: followUpChannelId,
+        };
       }
 
       // 3. Dedup: for each entity, search for existing matches
+      reportStructureStage("matching");
+      const dedupStart = Date.now();
       const dedupCandidates: Record<
         string,
         Array<{
@@ -1884,8 +2045,7 @@ export const captureRouter = router({
                   entityId: r.document.id as string,
                   title: (r.document.title as string) || "",
                   profileSlug:
-                    (r.document.entityType as string) ||
-                    DEFAULT_CAPTURE_PROFILE,
+                    (r.document.entityType as string) || FALLBACK_CAPTURE_KIND,
                   score: titleSimilarity(
                     entity.title,
                     (r.document.title as string) || ""
@@ -1929,6 +2089,7 @@ export const captureRouter = router({
           "Typesense unavailable, skipping dedup search — marking dedupSkipped"
         );
       }
+      podTimings.dedupMs = Date.now() - dedupStart;
 
       logger.info(
         {
@@ -1962,6 +2123,9 @@ export const captureRouter = router({
               }
             : {}),
           dedupCandidates,
+          // No question was asked, so nothing was persisted.
+          followUpMessageId: null as string | null,
+          channelId: null as string | null,
           // Additive: true when one or more dedup searches threw, so the caller
           // can distinguish "checked, no duplicates" from "didn't check". Omitted
           // when all searches succeeded.
@@ -3150,9 +3314,9 @@ export const captureRouter = router({
                   sourceMessageId: input.sourceMessageId ?? ctx.sourceMessageId,
                 }
               : {}),
-            // The deterministically-resolved project (linked below), or the AI's
-            // advisory suggestion — surfaced on the record, never linked.
-            projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
+            // The deterministically-resolved project (linked below), or null
+            // when none resolved. The AI's project suggestion is NOT stored here.
+            projectId: resolvedProjectId ?? null,
             targetType: "entity",
             targetId: randomUUID(),
             proposalType: "capture.graph",
@@ -3280,9 +3444,9 @@ export const captureRouter = router({
               );
             }
             // Item fallback is process-shaped — pin to routed home when present.
-            const fallbackPin = await pinForSlug(DEFAULT_CAPTURE_PROFILE);
+            const fallbackPin = await pinForSlug(FALLBACK_CAPTURE_KIND);
             const fallback = await materializeEntitiesCaller.create({
-              profileSlug: DEFAULT_CAPTURE_PROFILE,
+              profileSlug: FALLBACK_CAPTURE_KIND,
               title: op.title,
               description: op.description,
               properties: salvageProperties,
@@ -3295,7 +3459,7 @@ export const captureRouter = router({
             });
             return {
               id: (fallback as { id: string }).id,
-              profileSlug: DEFAULT_CAPTURE_PROFILE,
+              profileSlug: FALLBACK_CAPTURE_KIND,
               degradedFrom: op.profileSlug,
               ...(documentId ? { documentId } : {}),
             };
@@ -4459,3 +4623,53 @@ export const captureRouter = router({
       };
     }),
 });
+
+/**
+ * `answerFollowUp` re-runs `structure`, so it lives in its own router merged
+ * onto the base one: calling `captureBaseRouter.createCaller` from inside the
+ * base router's own initializer would make its type circular (TS7022).
+ */
+const captureAnswerRouter = router({
+  // ── answerFollowUp (answer a persisted capture question) ────────────────
+
+  /**
+   * Answer (or skip) the follow-up question `capture.structure` persisted in
+   * the session's room, then re-run structure through the SAME procedure and
+   * return its response unchanged — so the review/receipt flow is untouched and
+   * a further question persists as the next round.
+   *
+   * NOT_FOUND on any authorization miss (no existence oracle); CONFLICT when the
+   * question was already resolved differently or superseded. A retry of the
+   * same answer continues. Never an agent turn, never a proposal: the answer is
+   * recorded by `recordCapturePartMessage` inside `claimCaptureQuestion`.
+   */
+  answerFollowUp: podProcedure
+    .use(aiRateLimitMiddleware)
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        questionMessageId: z.string().uuid(),
+        answer: CaptureAnswerSchema,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const claim = await claimCaptureQuestion({
+        userId,
+        sessionId: input.sessionId,
+        questionMessageId: input.questionMessageId,
+        answer: input.answer,
+      });
+      return captureBaseRouter
+        .createCaller(ctx)
+        .structure(
+          restructureInput(claim.refine, input.answer, input.sessionId)
+        );
+    }),
+  // ── end answerFollowUp
+});
+
+export const captureRouter = mergeRouters(
+  captureBaseRouter,
+  captureAnswerRouter
+);

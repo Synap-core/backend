@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import {
-  scoreTextMatch,
+  sectionCapabilities,
   deriveBuiltinVerbParamsSchema,
   deriveProviderVerbParamsSchema,
   buildVerbStates,
@@ -254,44 +254,30 @@ describe("loadContainerRefs — batched fan-out", () => {
   });
 });
 
-describe("scoreTextMatch", () => {
-  it("scores an exact primary match highest", () => {
-    const exact = scoreTextMatch("gmail_send", { primary: "gmail_send" });
-    const partial = scoreTextMatch("gmail", { primary: "gmail_send" });
-    expect(exact).toBeGreaterThan(partial);
-  });
-
-  it("matches on secondary (verb labels) and tertiary (description) fields", () => {
-    const bySecondary = scoreTextMatch("send", {
-      primary: "Gmail",
-      secondary: ["gmail_send"],
-    });
-    const byTertiary = scoreTextMatch("email", {
-      primary: "Gmail",
-      tertiary: "Send an email via the connected account",
-    });
-    expect(bySecondary).toBeGreaterThan(0);
-    expect(byTertiary).toBeGreaterThan(0);
-  });
-
-  it("returns 0 when no token matches anything", () => {
-    expect(
-      scoreTextMatch("nonexistent", {
-        primary: "Gmail",
-        secondary: ["gmail_send"],
-        tertiary: "Send email",
-      })
-    ).toBe(0);
-  });
-
-  it("returns 0 for an empty/whitespace query", () => {
-    expect(scoreTextMatch("   ", { primary: "Gmail" })).toBe(0);
-  });
-
-  it("is case-insensitive", () => {
-    expect(scoreTextMatch("GMAIL", { primary: "gmail_send" })).toBeGreaterThan(
-      0
-    );
+describe("sectionCapabilities — carries why a row matched", () => {
+  it("forwards `match` onto skill and integration rows", () => {
+    const match = { terms: ["send"], fields: ["verbs"] };
+    const out = sectionCapabilities([
+      {
+        id: "s1",
+        name: "summarize",
+        kind: "skill",
+        description: null,
+        governance: "auto",
+        match,
+      },
+      {
+        id: "t1",
+        name: "gmail",
+        kind: "tool",
+        description: null,
+        governance: "auto",
+        verbs: [],
+        match,
+      },
+    ] as never);
+    expect(out.skills[0]?.match).toEqual(match);
+    expect(out.integrations[0]?.match).toEqual(match);
   });
 });
 

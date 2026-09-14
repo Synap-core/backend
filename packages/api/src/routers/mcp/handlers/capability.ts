@@ -331,11 +331,11 @@ export const capabilityHandlers: McpHandlerMap = {
     );
 
     // ── ZERO-HIT RESCUE ───────────────────────────────────────────────────
-    // `query` ranks by scoreTextMatch, which is pure lowercase SUBSTRING
-    // matching, hard-filtered to score > 0 (capability-registry.ts). So a
-    // semantically CORRECT query with no literal overlap — "web search",
-    // "internet research", "look things up online" — returns the EMPTY SET
-    // even when a matching capability is installed and enabled.
+    // `query` ranks by `rankByTerms` (utils/term-match.ts): word matching with
+    // simple stemming, not semantic (capability-registry.ts). So a
+    // semantically CORRECT query sharing no word stem with any capability —
+    // "look things up online" for web search — returns the EMPTY SET even when
+    // a matching capability is installed and enabled.
     //
     // Returning a bare [] hands the agent positive evidence of ABSENCE, and a
     // well-behaved agent then truthfully tells the user the pod cannot do the
@@ -358,10 +358,10 @@ export const capabilityHandlers: McpHandlerMap = {
           : undefined
       );
       zeroHitNote =
-        `No capability NAME, verb label, or description literally contains "${query}" ` +
-        `(matching is substring-based, not semantic). That is NOT proof the pod cannot do this — ` +
+        `No capability name, verb label or description matched any word of "${query}" ` +
+        `(word matching with simple stemming, not semantic). That is NOT proof the pod cannot do this — ` +
         `the full list below is what IS available; scan it before concluding anything is impossible. ` +
-        `If nothing fits, search the marketplace: synap_run_capability({ verbId: "market.search", parameters: { query: "..." } }).`;
+        `If nothing fits, search the marketplace with the market.search capability.`;
     }
 
     // ── ONE PACK (`containerId`) / SYNAP CORE AS ONE LINE ─────────────────

@@ -56,8 +56,11 @@ describe("capture.structure records its run on every exit", () => {
   it("the scan still sees the procedure's exits (non-vacuity)", () => {
     // Five outcomes today: pod auth degrade, pod invalid-response degrade,
     // empty result, follow-up, plan. Fewer means the slice or the regex broke.
+    // The follow-up exit records through `const asked = await finishIntake(`
+    // and returns `{ ...asked, …ids }` (the persisted question's ids).
     expect(
-      returns.filter((r) => r.startsWith("return finishIntake(")).length
+      returns.filter((r) => r.startsWith("return finishIntake(")).length +
+        (slice.match(/const asked = await finishIntake\(/g)?.length ?? 0)
     ).toBeGreaterThanOrEqual(5);
     // Self-check: the pattern still sees a bare AND a single-line-guarded return.
     const sample = [
@@ -82,12 +85,21 @@ describe("capture.structure records its run on every exit", () => {
     // without IS meta record `engine: "degraded"` instead of "unknown".
     // Cannot see: whether `r` is still the finishIntake result (a rename would
     // have to keep the literal to pass).
+    // Also pins `podTimings` (lane LA): the pod's dedup/placement timings reach
+    // the run manifest only through this call.
     expect(slice).toMatch(
-      /runFactsFromStructureMeta\(run\.meta, \{\s*podDegraded: run\.podDegraded,\s*degraded: r\.degraded === true,\s*\}\)/
+      /runFactsFromStructureMeta\(run\.meta, \{\s*podDegraded: run\.podDegraded,\s*degraded: r\.degraded === true,\s*podTimings,\s*\}\)/
     );
   });
 
   it("no exit bypasses finishIntake", () => {
+    // 1 only when the follow-up branch both records through finishIntake AND
+    // returns an object that spreads that result; 0 otherwise.
+    const askedSpreadExits =
+      /const asked = await finishIntake\(/.test(slice) &&
+      /return \{\s*\n\s*\.\.\.asked,/.test(slice)
+        ? 1
+        : 0;
     const bypassing = returns.filter(
       (r) =>
         !r.startsWith("return finishIntake(") &&
@@ -95,9 +107,15 @@ describe("capture.structure records its run on every exit", () => {
         // The ONE exit that records nothing BY DESIGN: the file's bytes were
         // already analyzed into a run of their own (the "already imported"
         // ledger) — staging them again would mint a second room for them.
-        r !== "return alreadyImportedAnswer;"
+        r !== "return alreadyImportedAnswer;" &&
+        // The follow-up exit: an object that SPREADS the finishIntake result.
+        !(r === "return {" && askedSpreadExits === 1)
     );
     expect(bypassing).toEqual([]);
+    // Exactly one `return {` may lean on that allowance, and it must spread `asked`.
+    expect(returns.filter((r) => r === "return {").length).toBe(
+      askedSpreadExits
+    );
   });
 
   it("ONE bulk derivation decides the IS vision lane: the caller's flag OR a run already holding a file", () => {
@@ -111,6 +129,21 @@ describe("capture.structure records its run on every exit", () => {
     );
     // Exactly one assignment site each — a second derivation is a fork.
     expect(slice.match(/visionBulk = /g)).toHaveLength(2);
+  });
+
+  it("a caption-structured outcome whose FILE was not read records it as not read", () => {
+    // Behaviour pinned in `known-source-hashes.pglite.test.ts`. Cannot see:
+    // that `r` is still the finishIntake result.
+    expect(slice.replace(/\s+/g, " ")).toContain(
+      '...(r.degraded !== true && r.extraction?.degraded === true ? { fileNotRead: { reason: str(r.extraction.degradedReason) ?? "unknown", }, } : {}),'
+    );
+  });
+
+  it("forwards the pod's vision model PREFERENCE on the IS structure request", () => {
+    // The IS side (honour when served, else fall back) is pinned in
+    // `context.vision-preference.test.ts`; the read in `pod-vision-preference.test.ts`.
+    expect(slice).toContain("await readPodVisionModelPreference(database)");
+    expect(slice).toContain("...(visionModelId ? { visionModelId } : {}),");
   });
 
   it("the already-imported exit is scoped to THIS workspace and a run still in effect", () => {

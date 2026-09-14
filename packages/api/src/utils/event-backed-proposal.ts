@@ -20,6 +20,8 @@ export interface CreateEventBackedProposalInput {
   commandRunId?: string | null;
   sourceMessageId?: string | null;
   sessionId?: string | null;
+  /** How `sessionId` was arrived at — see `SessionSource` (@synap/database). */
+  sessionSource?: "explicit" | "derived";
   /** Active project lens (or surface override) → proposals.project_id. At
    *  materialization this stamps `entity --belongs_to_project--> project`. */
   projectId?: string | null;
@@ -112,6 +114,7 @@ export async function createEventBackedProposal(
     commandRunId: input.commandRunId,
     sourceMessageId: input.sourceMessageId,
     sessionId: input.sessionId ?? null,
+    sessionSource: input.sessionSource,
     projectId: input.projectId ?? null,
     expiresAt: input.expiresAt,
     notificationDescription: input.summary,

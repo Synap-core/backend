@@ -55,8 +55,73 @@ import {
   resolveProfileDescription,
   resolveProfileIcon,
 } from "../../utils/profile-presentation.js";
+import { loadEntityUsage, usageByWorkspace } from "./usage-aggregate.js";
+import { buildStartHere, type PendingReviewState } from "./start-here.js";
 
 export type DiscoverDetail = "light" | "full";
+
+/**
+ * The ONE skill orient points at for concept depth. Constant, ~40 bytes: the
+ * lens model is taught by the per-conversation instructions + this skill, never
+ * re-taught in every orient response. A skill SLUG, not a tool name — tool
+ * names are rewritten per door (`synap_x` / `pod__x`), slugs are not.
+ */
+export const ORIENT_LEARN_MORE_SKILL = "system/synap/lenses";
+
+/** A briefing section that could not be read — never folded into "none". */
+export interface StartHereUnavailable {
+  status: "unavailable";
+}
+
+/**
+ * The briefing orient LEADS with (founder decision D4 + research F2,
+ * 2026-09-14): dynamic state only, in the order an agent should act on it —
+ * pending review FIRST.
+ */
+export interface StartHere {
+  pendingReview:
+    | {
+        count: number;
+        oldestDays?: number;
+        /** Deep link to the OLDEST pending proposal (the one to review first). */
+        oldestLink?: string;
+        /**
+         * What the count covers: `authored` = proposals filed by this user or
+         * an agent they own. The user's review queue may hold more from others.
+         */
+        lens: "authored";
+      }
+    | StartHereUnavailable;
+  openSessions:
+    | {
+        count: number;
+        /** True when `count` hit the read cap — "at least this many". */
+        countIsLowerBound: boolean;
+        newest?: { id: string; goal: string | null; startedAt: string | null };
+      }
+    | StartHereUnavailable;
+  /** Most-used kinds (not roles), blended rank — the SAME rank discover lists by. */
+  topKinds:
+    | Array<{
+        slug: string;
+        name: string;
+        entityCount: number;
+        lastActivityAt: string | null;
+        rank: number;
+      }>
+    | StartHereUnavailable;
+  /** Runnable actions from the shared runnable projection. */
+  actions:
+    | {
+        count: number;
+        /** First three runnable action labels. */
+        examples: string[];
+        /** The lens the count was read at: a workspace id, or "pod". */
+        lens: string;
+      }
+    | StartHereUnavailable;
+  learnMore: { skill: string };
+}
 export type DiscoverScope = "workspaces" | "projects" | "profiles";
 
 const ALL_SCOPES: DiscoverScope[] = ["workspaces", "projects", "profiles"];
@@ -137,6 +202,12 @@ interface DiscoverOptions {
   scope?: DiscoverScope[];
   workspaceId?: string;
   projectId?: string;
+  /**
+   * Include the lens-model concept prose in `note`. Implied by detail:'full'.
+   * Off by default: the concept is taught once per conversation (instructions
+   * + the `system/synap/lenses` skill), not on every orient call.
+   */
+  explain?: boolean;
 }
 
 export interface DiscoverParams extends DiscoverOptions {
@@ -211,6 +282,8 @@ export interface DiscoverTeamRoster {
 }
 
 interface DiscoverResult {
+  /** The briefing — first key on the wire, pending review first inside it. */
+  startHere: StartHere;
   me: { userId: string; scopes: string[] };
   detail: DiscoverDetail;
   projects: DiscoverProject[];
@@ -285,59 +358,17 @@ function trimProfiles(res: unknown): ProfileSample[] {
 }
 
 /**
- * The lens-map guidance note. Dynamic (counts) + action-oriented; the lens
- * model itself is taught once in the agent prompt, not re-taught per call.
+ * The lens-model CONCEPT prose — served only on detail:'full' or explain:true.
+ *
+ * It used to ride in EVERY orient response (~1,000 static chars), even though
+ * the comment on `buildNote` said the model is "taught once in the agent
+ * prompt, not re-taught per call" (measured 2026-09-14: the lens model was
+ * taught five times per MCP session). The concept now lives in the
+ * per-conversation instructions + the `system/synap/lenses` skill; this copy is
+ * the on-request version.
  */
-function buildNote(
-  projectCount: number,
-  workspaceCount: number,
-  pending: { count: number; oldestDays: number } | undefined,
-  opts: { light: boolean; hiddenEmpty: number }
-): string {
-  // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
-  // Live dogfood (2026-07-24) proved the review queue is a uniform BLIND SPOT:
-  // `ask` does not recall pending proposals, capture's dedup does not see them,
-  // and `resolve_identity` answered match:"none" for a company sitting in TWO
-  // pending proposals. So an unreviewed queue makes the pod amnesiac about its
-  // own recent work AND mechanically drives the next agent to duplicate it.
-  //
-  // Worse, the queue gates the PLATFORM: a workspace-template update carrying
-  // the user's `exa` capability sat unreviewed for days, so an agent correctly
-  // reported the capability as unavailable — it was, pending one click.
-  //
-  // Indexing pending proposals into recall/dedup is the real fix. This is the
-  // cheap half: `orient` is the mandated first call of every session, so naming
-  // the backlog here turns every session start into a review nudge.
-  const queue =
-    pending && pending.count > 0
-      ? `⚠ ${pending.count} proposal(s) awaiting your review` +
-        (pending.oldestDays >= 1 ? `, oldest ${pending.oldestDays}d old` : "") +
-        `. Pending proposals are NOT yet in the graph: recall will not find them and dedup cannot see them, ` +
-        `so unreviewed work looks missing and gets duplicated — and a pending workspace/template update ` +
-        `keeps its capabilities switched off. Surface this to the user early: list the ` +
-        `pending proposals with whichever proposal-listing tool this door exposes ` +
-        `to you, and offer to walk the queue before doing more work. `
-      : "";
-  // NOTE — do NOT name a concrete tool here. This is a RUNTIME RESPONSE
-  // STRING, not a tool description: the Control Plane rewrites `synap_x` ->
-  // `pod__x` only in tool DESCRIPTIONS, so a tool name baked into a response
-  // body reaches claude.ai verbatim and points at a name that door does not
-  // expose. This sentence said "call synap_list_proposals" for three external
-  // test passes; each one reported it as a dead end. Describe the ACTION.
-  // Same rule as the queue sentence above: name the ACTION, never a tool. The
-  // entity-type inventory left the light payload — say where it went, or an
-  // agent reads its absence as "this pod has no types" and invents its own.
-  const light = opts.light
-    ? `Entity types are not listed here — call the profile-listing tool this door exposes ` +
-      `(or re-run this with detail:'full') before creating anything, so you write an existing kind. ` +
-      (opts.hiddenEmpty > 0
-        ? `${opts.hiddenEmpty} empty domain(s) are hidden from this list — they exist and detail:'full' shows them. `
-        : ``)
-    : ``;
+function lensConceptNote(projectCount: number): string {
   return (
-    queue +
-    light +
-    `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
     `WRITE by kind/profile (+ roles as facets when known) — omit workspaceId unless deliberately pinning; ` +
     `server places via installed profile metadata (never invent a workspace name). ` +
     `READ by name/id/role across everything you can access; pass workspaceId only to narrow a list. ` +
@@ -356,6 +387,67 @@ function buildNote(
         `its members, so unset is the correct answer when nobody said. `
       : ``) +
     `If a domain is missing for the job, propose installing/attaching a template — do not invent workspaces.`
+  );
+}
+
+/**
+ * The lens-map guidance note. Dynamic (counts) + action-oriented; the lens
+ * model itself is taught once per conversation (instructions + the lenses
+ * skill), and repeated here only on request — see `lensConceptNote`.
+ */
+function buildNote(
+  projectCount: number,
+  workspaceCount: number,
+  pending: { count: number; oldestDays: number } | undefined,
+  opts: { light: boolean; hiddenEmpty: number; explain: boolean }
+): string {
+  // ── THE REVIEW QUEUE, SURFACED AT THE ONE CALL EVERY SESSION MAKES ─────────
+  // Live dogfood (2026-07-24) proved the review queue is a uniform BLIND SPOT:
+  // `ask` does not recall pending proposals, capture's dedup does not see them,
+  // and `resolve_identity` answered match:"none" for a company sitting in TWO
+  // pending proposals. So an unreviewed queue makes the pod amnesiac about its
+  // own recent work AND mechanically drives the next agent to duplicate it.
+  //
+  // Worse, the queue gates the PLATFORM: a workspace-template update carrying
+  // the user's `exa` capability sat unreviewed for days, so an agent correctly
+  // reported the capability as unavailable — it was, pending one click.
+  //
+  // Indexing pending proposals into recall/dedup is the real fix. This is the
+  // cheap half: `orient` is the mandated first call of every session, so naming
+  // the backlog here turns every session start into a review nudge.
+  const queue =
+    pending && pending.count > 0
+      ? `⚠ ${pending.count} proposal(s) filed by you or your agents are awaiting review` +
+        (pending.oldestDays >= 1 ? `, oldest ${pending.oldestDays}d old` : "") +
+        `. Pending proposals are NOT yet in the graph: recall will not find them and dedup cannot see them, ` +
+        `so unreviewed work looks missing and gets duplicated — and a pending workspace/template update ` +
+        `keeps its capabilities switched off. Surface this to the user early: list the ` +
+        `pending proposals with whichever proposal-listing tool this door exposes ` +
+        `to you, and offer to walk the queue before doing more work. `
+      : "";
+  // NOTE — do NOT name a concrete tool here. This is a RUNTIME RESPONSE
+  // STRING, not a tool description: the Control Plane rewrites `synap_x` ->
+  // `pod__x` only in tool DESCRIPTIONS, so a tool name baked into a response
+  // body reaches claude.ai verbatim and points at a name that door does not
+  // expose. This sentence said "call synap_list_proposals" for three external
+  // test passes; each one reported it as a dead end. Describe the ACTION.
+  // Same rule as the queue sentence above: name the ACTION, never a tool. The
+  // entity-type inventory left the light payload — say where it went, or an
+  // agent reads its absence as "this pod has no types" and invents its own.
+  const light = opts.light
+    ? `Only the most-used entity types are named here (startHere.topKinds) — call the profile-listing tool this door exposes ` +
+      `(or re-run this with detail:'full') before creating anything else, so you write an existing kind. ` +
+      (opts.hiddenEmpty > 0
+        ? `${opts.hiddenEmpty} empty domain(s) are hidden from this list — they exist and detail:'full' shows them. `
+        : ``)
+    : ``;
+  return (
+    queue +
+    light +
+    `Domain map: ${projectCount} project(s), ${workspaceCount} domain app(s). ` +
+    (opts.explain
+      ? lensConceptNote(projectCount)
+      : `How workspaces and projects place a write: load the skill named in startHere.learnMore, or re-run with explain:true.`)
   );
 }
 
@@ -394,12 +486,33 @@ async function buildWhoBlock(userId: string): Promise<string | undefined> {
       // pin narrows WORKSPACES, never who the user is.
       await resolveFacetVisibilityScope(userId, undefined)
     );
+    // QUALIFY IN SQL, THEN LIMIT. This read used to take the first 40 rows of
+    // ANY confidence and filter them in JS, so on a pod holding 40+ weak
+    // guesses a validated observation past row 40 never briefed anyone (the
+    // filter-after-limit class, found 2026-09-14). The predicates mirror the JS
+    // floor below exactly — `uo_validated === true` (a JSON boolean, not the
+    // string "true"), a numeric `uo_confidence` at the floor, and usable text
+    // (`uo_observation` when it is a string, the title when it is absent/null)
+    // — so no row that could never render consumes one of the 40 slots.
+    const props = entities.properties;
+    const qualifies = or(
+      drizzleSql`(jsonb_typeof(${props}->'uo_validated') = 'boolean' and (${props}->>'uo_validated') = 'true')`,
+      drizzleSql`(jsonb_typeof(${props}->'uo_confidence') = 'number' and (${props}->>'uo_confidence')::numeric >= ${WHO_MIN_CONFIDENCE})`
+    );
+    const hasText = drizzleSql`(case when ${props}->'uo_observation' is null or jsonb_typeof(${props}->'uo_observation') = 'null' then nullif(btrim(${entities.title}), '') when jsonb_typeof(${props}->'uo_observation') = 'string' then nullif(btrim(${props}->>'uo_observation'), '') end) is not null`;
     const rows = await db
       .select({ title: entities.title, properties: entities.properties })
       .from(entities)
       .where(
-        and(eq(entities.userId, userId), typeMatch, isNull(entities.deletedAt))
+        and(
+          eq(entities.userId, userId),
+          typeMatch,
+          isNull(entities.deletedAt),
+          qualifies,
+          hasText
+        )
       )
+      .orderBy(drizzleSql`${entities.updatedAt} desc`)
       .limit(40);
 
     const lines: string[] = [];
@@ -470,24 +583,14 @@ export async function discover(
           .from(workspaces)
           .where(inArray(workspaces.id, lensWsIds))
       : Promise.resolve([]),
+    // THE shared usage aggregate (`usage-aggregate.ts`) — the same count MCP
+    // grounding and diagnose report, so the three can no longer disagree.
     needWorkspaces && lensWsIds.length
-      ? db
-          .select({
-            workspaceId: entities.workspaceId,
-            count: drizzleSql<number>`cast(count(*) as integer)`,
-          })
-          .from(entities)
-          .where(
-            and(
-              inArray(entities.workspaceId, lensWsIds),
-              isNull(entities.deletedAt)
-            )
-          )
-          .groupBy(entities.workspaceId)
+      ? loadEntityUsage({ userId, workspaceIds: lensWsIds })
       : Promise.resolve([]),
   ]);
   const entityCountByWs = new Map(
-    countRows.map((r) => [r.workspaceId, r.count])
+    [...usageByWorkspace(countRows)].map(([id, t]) => [id, t.count])
   );
   const wsNameById = new Map(wsRaw.map((w) => [w.id, w.name]));
 
@@ -668,8 +771,16 @@ export async function discover(
   // `count` and `oldest` are aggregated over the SAME floored population as the
   // list: widening the list without widening this would make `oldestDays` a
   // number computed over a different set than the count printed beside it.
-  let pendingSummary: { count: number; oldestDays: number } | undefined;
+  let pendingState: PendingReviewState;
   try {
+    const pendingFloor = and(
+      eq(proposals.status, "pending"),
+      or(
+        eq(proposals.createdBy, userId),
+        ownAgentUserFilter(proposals.agentUserId, userId),
+        ownAgentUserFilter(proposals.createdBy, userId)
+      )
+    );
     // COUNT + MIN in one aggregate row — never load the rows themselves. On a
     // busy pod the pending queue can be large, and orient runs on every session
     // start; a full-row fetch just to count would tax the mandated first call.
@@ -679,35 +790,62 @@ export async function discover(
         oldest: drizzleSql<Date | null>`min(${proposals.createdAt})`,
       })
       .from(proposals)
-      .where(
-        and(
-          eq(proposals.status, "pending"),
-          or(
-            eq(proposals.createdBy, userId),
-            ownAgentUserFilter(proposals.agentUserId, userId),
-            ownAgentUserFilter(proposals.createdBy, userId)
-          )
-        )
-      );
-    if (agg && agg.count > 0) {
-      pendingSummary = {
-        count: agg.count,
-        oldestDays: agg.oldest
+      .where(pendingFloor);
+    const count = agg?.count ?? 0;
+    let oldestId: string | undefined;
+    if (count > 0) {
+      // The oldest proposal's id, for startHere's review link — one indexed
+      // row over the SAME floor as the count. A failed read costs the link
+      // only; the count beside it is still true.
+      try {
+        const [oldestRow] = await db
+          .select({ id: proposals.id })
+          .from(proposals)
+          .where(pendingFloor)
+          .orderBy(drizzleSql`${proposals.createdAt} asc`)
+          .limit(1);
+        oldestId = oldestRow?.id;
+      } catch {
+        // The link only; the count beside it stands.
+      }
+    }
+    pendingState = {
+      status: "ok",
+      count,
+      oldestDays:
+        count > 0 && agg?.oldest
           ? Math.floor(
               (Date.now() - new Date(agg.oldest).getTime()) / 86_400_000
             )
           : 0,
-      };
-    }
+      ...(oldestId ? { oldestId } : {}),
+    };
   } catch {
-    pendingSummary = undefined;
+    // Unreadable is its own state in startHere; the legacy top-level
+    // `pendingReview` key stays omitted, as before.
+    pendingState = { status: "unavailable" };
   }
+  const pendingSummary =
+    pendingState.status === "ok" && pendingState.count > 0
+      ? { count: pendingState.count, oldestDays: pendingState.oldestDays }
+      : undefined;
 
   // Who the user IS — the one thing orient never carried. Best-effort, same
   // rule as the roster: a failed read costs a prose block, never the map.
-  const who = await buildWhoBlock(userId);
+  // The briefing sections read in parallel with it.
+  const [who, startHere] = await Promise.all([
+    buildWhoBlock(userId),
+    buildStartHere({
+      caller,
+      userId,
+      workspaceId,
+      pending: pendingState,
+      learnMoreSkill: ORIENT_LEARN_MORE_SKILL,
+    }),
+  ]);
 
   const result: DiscoverResult = {
+    startHere,
     me: { userId, scopes: authScopes },
     detail,
     projects: projectsOut,
@@ -723,6 +861,7 @@ export async function discover(
     note: buildNote(projectsOut.length, workspacesOut.length, pendingSummary, {
       light: detail !== "full",
       hiddenEmpty: hiddenEmptyWorkspaces,
+      explain: detail === "full" || params.explain === true,
     }),
   };
 

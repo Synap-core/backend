@@ -33,7 +33,10 @@
  */
 
 import { createHash } from "crypto";
-import { ownAgentUserFilter } from "../services/agent-identity-service.js";
+import {
+  authoredByUser,
+  ownAgentUserFilter,
+} from "../services/agent-identity-service.js";
 
 import {
   or,
@@ -646,8 +649,12 @@ export async function findPriorCaptureGraphProposal(
  * A sync re-reads the same records every run, so without this a declined graph
  * is filed again on the next tick; with it, a rejection holds until the content
  * changes. The content key is the one `import.graph` proposals are stamped with
- * (`data.idempotencyKey`). Owner-floored: sync imports are filed as the
- * connection's owner.
+ * (`data.idempotencyKey`). Owner-floored: sync imports are filed on behalf of
+ * the connection's owner — through the ONE authorship predicate
+ * (`authoredByUser`: the owner, or an agent the owner created), because
+ * `createdBy` is overloaded and a row filed by the owner's agent carries the
+ * AGENT's id there. A bare `createdBy = owner` missed that rejection and let the
+ * next sync tick re-file the declined graph.
  */
 export async function findRejectedConnectionSyncImport(
   database: typeof db,
@@ -663,7 +670,7 @@ export async function findRejectedConnectionSyncImport(
     .from(proposals)
     .where(
       and(
-        eq(proposals.createdBy, params.userId),
+        authoredByUser(params.userId),
         eq(proposals.status, ProposalStatus.REJECTED),
         eq(proposals.proposalType, "import.graph"),
         drizzleSql`${proposals.data} ->> 'idempotencyKey' = ${params.idempotencyKey}`,

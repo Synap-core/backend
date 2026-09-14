@@ -50,6 +50,7 @@ import { registerProviderExecutors } from "./executors/provider.js";
 // provider config (`aiProvider/*`). Same English word, unrelated doors.
 import { registerAiProviderExecutors } from "./executors/ai-provider.js";
 import { registerWidgetExecutors } from "./executors/widget.js";
+import { registerPodHygieneExecutors } from "./executors/pod-hygiene.js";
 import { registerCatchAllExecutor } from "./executors/catch-all.js";
 
 let registered = false;
@@ -86,6 +87,7 @@ export function registerApproveExecutors(): void {
   registerProviderExecutors();
   registerAiProviderExecutors();
   registerWidgetExecutors();
+  registerPodHygieneExecutors();
   // Wildcard catch-all — registered LAST (see module docstring).
   registerCatchAllExecutor();
 }

@@ -45,6 +45,7 @@ import {
   externalSkillsApp,
   externalChatApp,
   chatStreamApp,
+  captureProgressStreamApp,
   openaiCompatApp,
   webhooksInboundRouter,
   fetchFederationMetadata,
@@ -1294,6 +1295,11 @@ app.route("/api/external/chat", externalChatApp);
 // POST /api/chat/stream — session-authed IS chat proxy (SSE)
 app.route("/api/chat", chatStreamApp);
 
+// Live structure progress tail (same session auth as /api/chat). Read-only:
+// GET /api/capture/runs/:captureRunId/progress — SSE frames of a running
+// capture.structure call that carries the same captureRunId.
+app.route("/api/capture", captureProgressStreamApp);
+
 // OpenAI-compatible chat completions API (API key auth, scope: chat.stream)
 // POST /v1/chat/completions — OpenAI format request/response with SSE streaming
 // GET  /v1/models           — list available model aliases
@@ -2047,6 +2053,8 @@ try {
               await import("@synap/jobs/workers/stale-proposal-cron.js");
             const { registerBrokenAutomationRunner } =
               await import("@synap/jobs/workers/broken-automation-cron.js");
+            const { registerCleanupPackRunner } =
+              await import("@synap/jobs/workers/pod-hygiene-cleanup-pack-cron.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
             const { registerTightenRecommender } =
@@ -2163,6 +2171,7 @@ try {
               return { stale, lapsed };
             });
             registerBrokenAutomationRunner(() => api.scanBrokenAutomations());
+            registerCleanupPackRunner(() => api.fileCleanupPacks());
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The 2-minute IS health cron used to only log a degraded verdict.

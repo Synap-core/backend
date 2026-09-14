@@ -296,6 +296,50 @@ describe("findKnownSourceHashes — owner-floored", () => {
   });
 });
 
+describe("a caption that structured, with a photo that was NOT read", () => {
+  it("files the photo's source as kept_unanalyzed, keeps its bytes, and names no model", async () => {
+    const bytes = photo("caption-only");
+    const echo = await capturePhoto(bytes, {
+      // The IS returned `extraction.degraded` with an empty text; the outcome
+      // itself (the caption's plan) is NOT degraded.
+      extractedText: "",
+      fileNotRead: { reason: "vision_provider_not_configured" },
+      source: {
+        text: "Sunset at the beach",
+        file: {
+          content: bytes.toString("base64"),
+          mimeType: "image/jpeg",
+          filename: "IMG_2.jpg",
+        },
+      },
+      correlationKey: null,
+    });
+    const known = await findKnownSourceHashes({
+      database: db,
+      userId: ME,
+      hashes: [fileSha256Of(bytes)],
+    });
+    expect(known[0]?.status).toBe("kept_unanalyzed");
+    // Only the FILE is marked — the caption's text source structured.
+    const docs = await Promise.all(
+      echo.intake.sourceDocumentIds.map(sourceDoc)
+    );
+    expect(docs.map((d) => Boolean(d.metadata.intakeSource?.degraded))).toEqual(
+      [false, true]
+    );
+    expect(echo.intake.degradedSourceKept).toBeUndefined();
+    const { rows } = await q<{ metadata: Record<string, any> }>(
+      `select metadata from focus_sessions where id = $1`,
+      [echo.sessionId]
+    );
+    expect(rows[0]!.metadata.run.extractions[0]).toMatchObject({
+      model: null,
+      provider: null,
+      originalKept: true,
+    });
+  });
+});
+
 describe("scope — the capture short-circuit's workspace and 'run still in effect'", () => {
   const WS_A = "11111111-1111-4111-8111-111111111111";
   const WS_B = "22222222-2222-4222-8222-222222222222";

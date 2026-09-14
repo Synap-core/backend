@@ -40,6 +40,7 @@ import {
 import { insertSkillGoverned } from "../../skills.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
+import { reservedSkillSlugReason } from "../../../services/skills/reserved-slug.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -60,6 +61,11 @@ const AgentSkillWireSchema = z.object({
   alwaysOn: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /** Present when the list was searched with `q`: the query terms this row
+   *  hit, rarest (most distinctive) first, and the fields they hit. */
+  match: z
+    .object({ terms: z.array(z.string()), fields: z.array(z.string()) })
+    .optional(),
 });
 
 const CreateAgentSkillBodySchema = z.object({
@@ -401,7 +407,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       // ONE search function owns every gate (visibility + rule expiry,
       // instruction/active/approved, topic/tag/system) AND the text match, all
       // in SQL before paging — `total` is the real match count, not the page.
-      const { rows, total } = await searchInstructionSkills({
+      const { rows, total, matches } = await searchInstructionSkills({
         userId: c.get("userId"),
         workspaceId: workspaceId || undefined,
         q,
@@ -412,7 +418,16 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         offset,
       });
 
-      return c.json({ skills: rows.map(wireSkill), total }, 200);
+      return c.json(
+        {
+          skills: rows.map((row) => {
+            const match = matches.get(row.id);
+            return match ? { ...wireSkill(row), match } : wireSkill(row);
+          }),
+          total,
+        },
+        200
+      );
     } catch (err) {
       logger.error({ err }, "list agent skills failed");
       return c.json({ error: "Internal error" }, 500);
@@ -541,6 +556,13 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         .limit(1);
       if (existing) {
         return c.json({ error: "Skill with this slug already exists" }, 409);
+      }
+      const reserved = await reservedSkillSlugReason(parsed.data.slug);
+      if (reserved) {
+        return c.json(
+          { error: reserved.message, code: reserved.code },
+          reserved.code === "system_namespace_reserved" ? 400 : 409
+        );
       }
 
       const result = await insertSkillGoverned({
@@ -733,6 +755,13 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         .limit(1);
       if (existing) {
         return c.json({ error: "Skill with this slug already exists" }, 409);
+      }
+      const reserved = await reservedSkillSlugReason(skillMeta.slug);
+      if (reserved) {
+        return c.json(
+          { error: reserved.message, code: reserved.code },
+          reserved.code === "system_namespace_reserved" ? 400 : 409
+        );
       }
 
       // Create the skill (instruction kind, pod-wide) through the ONE governed

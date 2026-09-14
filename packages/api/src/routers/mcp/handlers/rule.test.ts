@@ -233,3 +233,24 @@ describe("a valid sentence is forwarded to the compiler", () => {
     expect("sentence" in h.createRule.mock.calls[0][0]).toBe(false);
   });
 });
+
+describe("project scope (R2)", () => {
+  const PROJECT = "55555555-5555-4555-8555-555555555555";
+
+  it("forwards projectId into the door's scope", async () => {
+    h.createRule.mockResolvedValue({
+      status: "created",
+      ruleId: "r",
+      automationIds: [],
+    });
+    await call({
+      intent: "ping me",
+      projectId: PROJECT,
+      sentence: VALID_SENTENCE,
+    });
+    expect(h.createRule.mock.calls[0][0].scope).toEqual({
+      kind: "pod",
+      projectId: PROJECT,
+    });
+  });
+});

@@ -57,6 +57,19 @@ export interface ISChatStreamFrame {
 export async function* iterateISChatStream(
   response: Response
 ): AsyncGenerator<ISChatStreamFrame> {
+  for await (const frame of iterateSSEDataFrames(response)) {
+    yield frame as ISChatStreamFrame;
+  }
+}
+
+/**
+ * The framing half of `iterateISChatStream`, shared by every IS SSE response
+ * (chat, and `/api/structure` when it streams progress). Yields each `data:`
+ * frame's parsed JSON, UNTYPED — the caller owns what a frame means.
+ */
+export async function* iterateSSEDataFrames(
+  response: Response
+): AsyncGenerator<unknown> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
   const decoder = new TextDecoder();
@@ -69,23 +82,34 @@ export async function* iterateISChatStream(
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const raw = line.slice(6).trim();
-        if (!raw || raw === "[DONE]") continue;
-        let frame: ISChatStreamFrame;
-        try {
-          frame = JSON.parse(raw) as ISChatStreamFrame;
-        } catch (parseError) {
-          // Tolerate malformed frames, but surface them — a silently-dropped
-          // frame is exactly how the stream:true / type-drift bugs stayed hidden.
-          console.error("Failed to parse IS SSE frame:", raw, parseError);
-          continue;
-        }
-        yield frame;
+        const parsed = parseDataLine(line);
+        if (parsed) yield parsed.frame;
       }
+    }
+    // Flush: a stream whose LAST frame lacks the trailing newline still ends
+    // with a complete `data:` line. For /api/structure that frame is the
+    // result — dropping it turns a successful structure into a failed one.
+    buffer += decoder.decode();
+    for (const line of buffer.split("\n")) {
+      const parsed = parseDataLine(line);
+      if (parsed) yield parsed.frame;
     }
   } finally {
     reader.releaseLock();
+  }
+}
+
+function parseDataLine(line: string): { frame: unknown } | null {
+  if (!line.startsWith("data: ")) return null;
+  const raw = line.slice(6).trim();
+  if (!raw || raw === "[DONE]") return null;
+  try {
+    return { frame: JSON.parse(raw) };
+  } catch (parseError) {
+    // Tolerate malformed frames, but surface them — a silently-dropped
+    // frame is exactly how the stream:true / type-drift bugs stayed hidden.
+    console.error("Failed to parse IS SSE frame:", raw, parseError);
+    return null;
   }
 }
 

@@ -210,6 +210,9 @@ describe("auto-approved agent write — session provenance", () => {
       projectId: undefined,
       // …so the hoisted session is the pin.
       sessionId: "sess-hoisted",
+      // …but the hoist MINTED/REUSED it — the caller never named it — so it is
+      // DERIVED (A1): it groups the receipt, it places no project.
+      sessionSource: "derived",
       threadId: undefined,
       // Rung 3.5 — the agent's declared sticky focus, consulted only because no
       // explicit projectId was given. `null` here is the agent having declared
@@ -235,6 +238,19 @@ describe("auto-approved agent write — session provenance", () => {
 
     expect(mockResolveSessionOnce).not.toHaveBeenCalled();
     expect(receiptRow()).toMatchObject({ sessionId: "sess-explicit" });
+  });
+
+  it("A1/Q1: a caller's OWN session keeps the caller's source — it is never marked derived", async () => {
+    setupAgentSelectSequence(AUTO_APPROVE_METADATA);
+
+    await gate({ ...AGENT, sessionId: "sess-explicit" });
+
+    expect(mockDeriveProjectId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-explicit",
+        sessionSource: undefined,
+      })
+    );
   });
 
   it("never mints for a focus_session subject — the recursion guard", async () => {
@@ -276,6 +292,28 @@ describe("the mint resolves ONCE per gate call", () => {
     // The session is already on the row, so `createPendingProposalRow`'s
     // legacy mint short-circuits instead of resolving a second time.
     expect(pendingRow()).toMatchObject({ sessionId: "sess-hoisted" });
+  });
+
+  it("A1/Q1 propose branch: a HOISTED session lands on the pending row as derived", async () => {
+    setupAgentSelectSequence(PROPOSE_METADATA);
+
+    await gate({ ...AGENT });
+
+    // Still grouped under the hoisted session, but the insert's ladder is told
+    // the caller never named it — so it contributes no project.
+    expect(pendingRow()).toMatchObject({
+      sessionId: "sess-hoisted",
+      sessionSource: "derived",
+    });
+  });
+
+  it("A1/Q1 propose branch: a caller's OWN session is not marked derived", async () => {
+    setupAgentSelectSequence(PROPOSE_METADATA);
+
+    await gate({ ...AGENT, sessionId: "sess-explicit" });
+
+    expect(pendingRow()).toMatchObject({ sessionId: "sess-explicit" });
+    expect(pendingRow().sessionSource).toBeUndefined();
   });
 });
 

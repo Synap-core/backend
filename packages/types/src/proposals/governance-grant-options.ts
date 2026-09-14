@@ -49,6 +49,38 @@ export interface GovernanceGrantContext {
   actionKey?: string | null;
   /** The entity/facet profile slug this proposal targets. */
   profileSlug?: string | null;
+  /** The proposal's stored `governance_reason` (the engine's reason code).
+   * When it names a non-widenable floor, a rule scoped to exactly this
+   * proposal's action can never fire, so that option is not offered. A human
+   * proposal carries none; `governanceRules.create` refuses the dead rule
+   * server-side for that case. */
+  governanceReason?: string | null;
+}
+
+/**
+ * Governance reason codes of the floors NO rule can widen: the codes
+ * `nonWidenableFloorFor` (`@synap/governance-policy`) can return. This package
+ * cannot import the engine, so the set is MIRRORED under a tripwire —
+ * `governance-policy/src/non-widenable-floor.test.ts` derives it from the
+ * engine and fails when this list drifts.
+ */
+export const NON_WIDENABLE_GOVERNANCE_REASONS = [
+  "ADMIN",
+  "HUMAN_GATE",
+  "ARBITRARY_EXECUTION",
+  "AGENT_SCHEMA_DEFINITION",
+  "DESTRUCTIVE_HARD_FLOOR",
+] as const;
+
+/** Did the engine route this proposal to review through a floor no
+ * governance rule can widen? */
+export function isNonWidenableGovernanceReason(
+  code: string | null | undefined
+): boolean {
+  return (
+    !!code &&
+    (NON_WIDENABLE_GOVERNANCE_REASONS as readonly string[]).includes(code)
+  );
 }
 
 /**
@@ -103,6 +135,10 @@ export function deriveGovernanceGrantOptions(
   const agentUserId = ctx.agentUserId ?? undefined;
   const scopeKind: "workspace" | "pod" = workspaceId ? "workspace" : "pod";
   const isOperator = mode === "operator-any";
+  // A rule scoped to EXACTLY this proposal's action sits below a floor that
+  // already routed it to review, so it could never fire. Wildcard options
+  // ("this agent" in agent-scoped mode, "globally") still widen other actions.
+  const actionFloored = isNonWidenableGovernanceReason(ctx.governanceReason);
 
   // "This capability" — always principalKind:"any" in both menus.
   if (ctx.capabilityTarget) {
@@ -124,9 +160,9 @@ export function deriveGovernanceGrantOptions(
   // "This action type" — operator mode offers it for any proposal;
   // agent-scoped mode only when the proposal is agent-authored, and scopes
   // the rule to that agent rather than every principal.
-  const offerAction = isOperator
-    ? !!ctx.actionKey
-    : !!(ctx.actionKey && agentUserId);
+  const offerAction =
+    !actionFloored &&
+    (isOperator ? !!ctx.actionKey : !!(ctx.actionKey && agentUserId));
   if (offerAction) {
     opts.push({
       id: "action",
@@ -169,7 +205,11 @@ export function deriveGovernanceGrantOptions(
   // "This agent" — agent-scoped mode offers a wildcard action grant whenever
   // an agent authored the proposal; operator mode additionally requires an
   // action key and scopes the rule to that exact action (never a wildcard).
-  if (isOperator ? !!(agentUserId && ctx.actionKey) : !!agentUserId) {
+  if (
+    isOperator
+      ? !!(agentUserId && ctx.actionKey) && !actionFloored
+      : !!agentUserId
+  ) {
     opts.push({
       id: "agent",
       rule: {

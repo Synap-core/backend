@@ -1,0 +1,553 @@
+{
+  "valid": [
+    {
+      "name": "question open, chips with and without entityId",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Which Alice did you meet?",
+        "chips": [
+          {
+            "label": "Alice Martin (Acme)",
+            "value": "alice-martin",
+            "action": "link_entity",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899"
+          },
+          { "label": "Someone new", "value": "new", "action": "confirm" }
+        ],
+        "partialCount": 2,
+        "status": "open",
+        "resolvedByMessageId": null
+      }
+    },
+    {
+      "name": "question open, proposed: why + one recommended chip with descriptions",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "How should this idea be framed?",
+        "why": "Decides whether it lands as a product bet or an open research question.",
+        "chips": [
+          {
+            "label": "A product bet",
+            "value": "bet",
+            "action": "confirm",
+            "recommended": true,
+            "description": "→ creates a positioning note + research question"
+          },
+          {
+            "label": "A research question",
+            "value": "research",
+            "action": "confirm",
+            "recommended": false,
+            "description": "→ files a question to investigate"
+          },
+          { "label": "Just a note", "value": "note", "action": "confirm" }
+        ],
+        "partialCount": 1,
+        "status": "open",
+        "resolvedByMessageId": null
+      }
+    },
+    {
+      "name": "question answered",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Which Alice did you meet?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "answered",
+        "resolvedByMessageId": "9a8b7c6d-5e4f-8a1b-9c2d-3e4f5a6b7c8d"
+      }
+    },
+    {
+      "name": "question superseded, with formSpec enrichment",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "question": "When is the deadline?",
+        "chips": [
+          {
+            "label": "Next Friday",
+            "value": "next-friday",
+            "action": "set_property",
+            "propertyKey": "dueDate"
+          }
+        ],
+        "formSpec": {
+          "title": "Details",
+          "fields": [
+            {
+              "key": "dueDate",
+              "label": "Due",
+              "type": "date",
+              "required": true
+            }
+          ]
+        },
+        "partialCount": 1,
+        "status": "superseded",
+        "resolvedByMessageId": "1c2d3e4f-5a6b-8c7d-8e9f-0a1b2c3d4e5f"
+      }
+    },
+    {
+      "name": "question skipped",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 3,
+        "question": "Anything else?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "skipped"
+      }
+    },
+    {
+      "name": "answer chip",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": {
+          "type": "chip",
+          "chip": {
+            "label": "Alice Martin (Acme)",
+            "value": "alice-martin",
+            "action": "link_entity",
+            "entityId": "7d9c1f00-1111-4c22-8a33-445566778899"
+          }
+        }
+      }
+    },
+    {
+      "name": "answer text",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": {
+          "type": "text",
+          "text": "The one from the Lisbon conference"
+        }
+      }
+    },
+    {
+      "name": "answer form",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": {
+          "type": "form",
+          "values": {
+            "dueDate": "2026-09-20",
+            "tags": ["q3", "sales"],
+            "empty": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "answer skip",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": { "type": "skip" }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown kind",
+      "part": {
+        "kind": "capture_note",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f"
+      }
+    },
+    {
+      "name": "wrong version",
+      "part": {
+        "kind": "capture_question",
+        "v": 2,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "unknown status",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "expired"
+      }
+    },
+    {
+      "name": "question over 500 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "@@Q501@@",
+        "chips": [],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "nine chips",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": "@@CHIPS9@@",
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "chip label over 80 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [{ "label": "@@L81@@", "value": "x", "action": "confirm" }],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "chip with unknown action",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [{ "label": "x", "value": "x", "action": "delete_entity" }],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "answer text over 2000 chars",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": { "type": "text", "text": "@@T2001@@" }
+      }
+    },
+    {
+      "name": "answer form over 8KB",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": { "type": "form", "values": { "blob": "@@B8193@@" } }
+      }
+    },
+    {
+      "name": "answer with unknown type",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
+        "answer": { "type": "voice" }
+      }
+    },
+    {
+      "name": "answer without questionMessageId",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "answer": { "type": "skip" }
+      }
+    },
+    {
+      "name": "chip value over 500 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [{ "label": "x", "value": "@@V501@@", "action": "confirm" }],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "chip icon over 64 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [
+          { "label": "x", "value": "x", "action": "confirm", "icon": "@@I65@@" }
+        ],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "chip entityId over 200 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [
+          {
+            "label": "x",
+            "value": "x",
+            "action": "link_entity",
+            "entityId": "@@E201@@"
+          }
+        ],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "chip propertyKey over 200 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [
+          {
+            "label": "x",
+            "value": "x",
+            "action": "set_property",
+            "propertyKey": "@@P201@@"
+          }
+        ],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "form field key over 200 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "formSpec": {
+          "fields": [{ "key": "@@K201@@", "label": "x", "type": "text" }]
+        },
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "form field label over 200 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "formSpec": {
+          "fields": [{ "key": "k", "label": "@@FL201@@", "type": "text" }]
+        },
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "form field type over 64 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "formSpec": {
+          "fields": [{ "key": "k", "label": "x", "type": "@@Y65@@" }]
+        },
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "round 0",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 0,
+        "question": "Q?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "partialCount -1",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "partialCount": -1,
+        "status": "open"
+      }
+    },
+    {
+      "name": "sessionId with uuid version 9",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-9f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "questionMessageId with uuid variant c",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-4988-c776-655443322110",
+        "answer": { "type": "skip" }
+      }
+    },
+    {
+      "name": "answer form under 8192 chars but over 8192 UTF-8 bytes",
+      "part": {
+        "kind": "capture_answer",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "questionMessageId": "2f3e4d5c-6b7a-4988-a776-655443322110",
+        "answer": { "type": "form", "values": { "a": "@@EA4093@@" } }
+      }
+    },
+    {
+      "name": "chip description over 140 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [
+          {
+            "label": "x",
+            "value": "x",
+            "action": "confirm",
+            "description": "@@D141@@"
+          }
+        ],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "why over 200 chars",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "why": "@@W201@@",
+        "chips": [],
+        "partialCount": 0,
+        "status": "open"
+      }
+    },
+    {
+      "name": "two recommended chips",
+      "part": {
+        "kind": "capture_question",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "question": "Q?",
+        "chips": [
+          {
+            "label": "a",
+            "value": "a",
+            "action": "confirm",
+            "recommended": true
+          },
+          {
+            "label": "b",
+            "value": "b",
+            "action": "confirm",
+            "recommended": true
+          }
+        ],
+        "partialCount": 0,
+        "status": "open"
+      }
+    }
+  ],
+  "placeholders": {
+    "@@D141@@": "141 × 'd'",
+    "@@W201@@": "201 × 'w'",
+    "@@EA4093@@": "4093 × 'é'",
+    "@@V501@@": "501 × 'v'",
+    "@@I65@@": "65 × 'i'",
+    "@@E201@@": "201 × 'e'",
+    "@@P201@@": "201 × 'p'",
+    "@@K201@@": "201 × 'k'",
+    "@@FL201@@": "201 × 'f'",
+    "@@Y65@@": "65 × 'y'",
+    "@@Q501@@": "501 × 'q'",
+    "@@CHIPS9@@": "9 × { label: 'c', value: 'c', action: 'confirm' }",
+    "@@L81@@": "81 × 'l'",
+    "@@T2001@@": "2001 × 't'",
+    "@@B8193@@": "8193 × 'b' (serialized form values then exceed 8192 bytes)"
+  }
+}

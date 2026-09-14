@@ -80,13 +80,11 @@ import { recommendRaiseCeilingForAllAgents } from "../proposals/recommend-raise-
 import { recommendTightenPostureForAllChannels } from "../proposals/recommend-tighten-posture.js";
 import { scanAutomationHealth } from "../proposals/automation-health.js";
 import { assertPodAdmin } from "../../trpc.js";
-// catalog-cache-query.ts imports FROM this module (BUILTIN_VERB_PARAM_SCHEMAS,
-// via capability-registry.ts's scoreTextMatch dependency) and marketplace-
-// install.ts pulls in the full router graph (create-from-definition.ts imports
-// playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top level) —
-// BOTH are lazy-imported inside the two handlers below, exactly like every
-// other router import in this file, so this module's own load graph stays
-// light AND the catalog-cache-query circular reference never resolves eagerly.
+// marketplace-install.ts pulls in the full router graph (create-from-definition.ts
+// imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
+// level) — it and catalog-cache-query.ts are lazy-imported inside the two
+// handlers below, exactly like every other router import in this file, so this
+// module's own load graph stays light.
 
 export interface BuiltinVerbContext {
   /** The acting operator (bearer's user id). */

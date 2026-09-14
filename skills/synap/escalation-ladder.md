@@ -1,6 +1,8 @@
 # Escalation ladder — discover → invent under proposal → crystallize after proof
 
-The always-on brief lives in `reflexes.md`. This file is the full HOW when you need more than the corner-of-your-head reminder.
+The always-on brief lives in `reflexes.md`, which points here. This file is the full HOW when you need more than the corner-of-your-head reminder.
+
+**No private scratchpad.** Everything you learn goes into the shared graph, not a hidden note. Capture a proven tool-fact into `knowledge` immediately; PROMOTE it into a curated skill only once it's proven reusable — a skill is a versioned artifact (one capability, when-to-use + do/don't), never an append-anything log.
 
 ## Why it exists
 

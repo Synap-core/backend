@@ -56,6 +56,7 @@ import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
+import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
 import {
   connectionFromRegistry,
   resolveCapabilityBlock,
@@ -130,6 +131,8 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
   verbs?: CapabilityVerbStateWithResponseShape[];
   /** Skill lifecycle: false for an inactive/errored skill (not launchable). */
   runnable?: boolean;
+  /** Why this row matched a `query`; absent without one. */
+  match?: TermMatch;
   /**
    * The capability CONTAINER this brick belongs to (`tool|skill --member_of-->
    * capability`), or `null` for a brick that is in no container. DERIVED per
@@ -818,18 +821,16 @@ export async function listCapabilities(
   let result = all;
   if (opts?.kind) result = result.filter((c) => c.kind === opts.kind);
   if (opts?.query && opts.query.trim().length > 0) {
-    result = result
-      .map((cap) => ({
-        cap,
-        score: scoreTextMatch(opts.query as string, {
-          primary: cap.name,
-          secondary: (cap.verbs ?? []).map((v) => v.label ?? v.id),
-          tertiary: cap.description,
-        }),
-      }))
-      .filter((s) => s.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map((s) => s.cap);
+    result = rankByTerms(
+      opts.query,
+      result,
+      (cap) => ({
+        primary: cap.name,
+        secondary: (cap.verbs ?? []).map((v) => v.label ?? v.id),
+        tertiary: cap.description,
+      }),
+      { primary: "name", secondary: "verbs", tertiary: "description" }
+    ).map((s) => ({ ...s.item, match: s.match }));
     // `null` means "an explicit caller-owned cap runs later, over deduped
     // rows — don't slice the raw list here." See `ListCapabilitiesOptions.limit`.
     if (opts.limit !== null) {
@@ -898,6 +899,8 @@ export interface SectionedCapabilities {
      * uses (`capability-enable-link.ts`), so the hint can never fork.
      */
     blocked?: CapabilityNextAction;
+    /** Why this row matched the `query` (see `RegistryCapability.match`). */
+    match?: TermMatch;
   }>;
   /** Standalone runnable skills — a skill that BACKS a provider verb is shown
    *  under that integration instead, never duplicated here. */
@@ -913,6 +916,8 @@ export interface SectionedCapabilities {
     /** See `integrations[].blocked` — a skill blocks on approval only (it has no
      *  connection of its own), so this is `kind:"enable"` whenever present. */
     blocked?: CapabilityNextAction;
+    /** Why this row matched the `query` (see `RegistryCapability.match`). */
+    match?: TermMatch;
   }>;
   /** Intelligence commands. */
   commands: Array<{ id: string; name: string; description: string | null }>;
@@ -1035,6 +1040,7 @@ export function sectionCapabilities(
           governance: c.governance,
           ...(c.connection ? { connection: c.connection } : {}),
           verbs: [...(c.verbs ?? [])],
+          ...(c.match ? { match: c.match } : {}),
         });
       } else {
         // Duplicate rows of the SAME integration (the pod had e.g. `discord` ×5,
@@ -1055,6 +1061,7 @@ export function sectionCapabilities(
         if (!existing.description && c.description) {
           existing.description = c.description;
         }
+        if (!existing.match && c.match) existing.match = c.match;
         // Only one of several same-named rows may carry the `member_of` edge —
         // take the first that does rather than letting the representative row's
         // `null` mask a real membership.
@@ -1077,6 +1084,7 @@ export function sectionCapabilities(
           governance: c.governance,
           containerId: c.containerId ?? null,
           containerName: c.containerName ?? null,
+          ...(c.match ? { match: c.match } : {}),
         });
       }
       continue;
@@ -1207,44 +1215,6 @@ function capSectionsByRank(
     builtins: full.builtins.filter((b) => kept.has(`builtin:${b.name}`)),
     excluded: full.excluded,
   };
-}
-
-// ── Shared search matcher (D1) ────────────────────────────────────────────────
-// Simple v1 ranking — tokenized substring match, no embeddings. Pure + exported
-// so both callers of the search feature (the registry above and the capability
-// CONTAINERS REST route, which searches bundles rather than verbs) share the
-// SAME scoring, never a second reimplementation.
-
-/** The searchable text of one candidate, weighted by field. */
-export interface MatchableText {
-  /** Highest weight — e.g. the capability/container name. */
-  primary: string;
-  /** Medium weight — e.g. verb labels or member names. */
-  secondary?: string[];
-  /** Lowest weight — e.g. a free-text description. */
-  tertiary?: string | null;
-}
-
-/**
- * Score a candidate against a query: tokens (lowercased, whitespace-split) are
- * matched as substrings against each weighted field; an exact `primary` match
- * scores highest. Returns 0 when no token matches anything (callers should
- * exclude/rank-last on 0).
- */
-export function scoreTextMatch(query: string, target: MatchableText): number {
-  const tokens = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return 0;
-  const primary = target.primary.toLowerCase();
-  const secondary = (target.secondary ?? []).join(" ").toLowerCase();
-  const tertiary = (target.tertiary ?? "").toLowerCase();
-  let score = 0;
-  for (const t of tokens) {
-    if (primary === t) score += 10;
-    else if (primary.includes(t)) score += 5;
-    if (secondary.includes(t)) score += 3;
-    if (tertiary.includes(t)) score += 1;
-  }
-  return score;
 }
 
 // ── Capability grant listing (polymorphic — all grantableTypes) ───────────────

@@ -57,7 +57,30 @@ export interface SessionRunManifest {
    * that STRUCTURED; this is the one that SAW.
    */
   extractions?: RunSourceExtraction[];
+  /**
+   * Where the latest structure call's time went (ms). IS facts
+   * (`waitMs`/`extractMs`/`modelMs`/`salvaged`) are `null` when the IS did not
+   * report them (degraded answer, older IS); pod facts (`dedupMs`,
+   * `placementMs`) are `null` when that step did not run (a follow-up skips
+   * dedup). Latest writer wins, as a whole.
+   */
+  timings?: RunTimings;
   updatedAt: string;
+}
+
+export interface RunTimings {
+  waitMs: number | null;
+  extractMs: number | null;
+  modelMs: number | null;
+  salvaged: boolean | null;
+  dedupMs: number | null;
+  placementMs: number | null;
+}
+
+/** Pod-side step timings `capture.structure` measures around the IS call. */
+export interface PodStructureTimings {
+  dedupMs: number | null;
+  placementMs: number | null;
 }
 
 export interface RunSourceExtraction {
@@ -87,9 +110,37 @@ export interface StructureRunMeta {
   model: string | null;
   provider: string | null;
   promptVersion: string;
+  timings?: {
+    waitMs: number;
+    extractMs: number;
+    modelMs: number;
+    salvaged: boolean;
+  };
 }
 
 const UNKNOWN = "unknown";
+
+const nonNegativeOrNull = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : null;
+
+/** IS timings (when reported) + pod timings (when measured) → manifest timings. */
+function runTimingsFrom(
+  meta: StructureRunMeta | undefined | null,
+  pod: PodStructureTimings | undefined
+): RunTimings | undefined {
+  if (!meta?.timings && !pod) return undefined;
+  return {
+    waitMs: nonNegativeOrNull(meta?.timings?.waitMs),
+    extractMs: nonNegativeOrNull(meta?.timings?.extractMs),
+    modelMs: nonNegativeOrNull(meta?.timings?.modelMs),
+    salvaged:
+      typeof meta?.timings?.salvaged === "boolean"
+        ? meta.timings.salvaged
+        : null,
+    dedupMs: nonNegativeOrNull(pod?.dedupMs),
+    placementMs: nonNegativeOrNull(pod?.placementMs),
+  };
+}
 
 /**
  * Map what the structure call told us onto manifest facts.
@@ -99,14 +150,24 @@ const UNKNOWN = "unknown";
  */
 export function runFactsFromStructureMeta(
   meta: StructureRunMeta | undefined | null,
-  opts: { podDegraded?: boolean; degraded?: boolean } = {}
-): Pick<SessionRunManifest, "engine" | "model" | "provider" | "promptVersion"> {
+  opts: {
+    podDegraded?: boolean;
+    degraded?: boolean;
+    podTimings?: PodStructureTimings;
+  } = {}
+): Pick<
+  SessionRunManifest,
+  "engine" | "model" | "provider" | "promptVersion" | "timings"
+> {
+  const timings = runTimingsFrom(meta, opts.podTimings);
+  const withTimings = timings ? { timings } : {};
   if (meta) {
     return {
       engine: meta.engine,
       model: meta.model,
       provider: meta.provider,
       promptVersion: meta.promptVersion,
+      ...withTimings,
     };
   }
   // `degraded`: the outcome itself is degraded but the IS sent no `meta` (an IS
@@ -119,6 +180,7 @@ export function runFactsFromStructureMeta(
       model: null,
       provider: null,
       promptVersion: UNKNOWN,
+      ...withTimings,
     };
   }
   return {
@@ -126,6 +188,7 @@ export function runFactsFromStructureMeta(
     model: UNKNOWN,
     provider: UNKNOWN,
     promptVersion: UNKNOWN,
+    ...withTimings,
   };
 }
 
@@ -150,6 +213,7 @@ export function mergeStructureRunMeta(
     model: same(a.model, b.model),
     provider: same(a.provider, b.provider),
     promptVersion: same(a.promptVersion, b.promptVersion),
+    // Timings of two calls do not fold into one run's timings: omitted.
   };
 }
 
@@ -194,7 +258,23 @@ export function readSessionRunManifest(
     ...(Array.isArray(r.extractions)
       ? { extractions: readSourceExtractions(r.extractions) }
       : {}),
+    ...(readRunTimings(r.timings)
+      ? { timings: readRunTimings(r.timings) }
+      : {}),
     updatedAt: typeof r.updatedAt === "string" ? r.updatedAt : "",
+  };
+}
+
+function readRunTimings(raw: unknown): RunTimings | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const t = raw as Record<string, unknown>;
+  return {
+    waitMs: nonNegativeOrNull(t.waitMs),
+    extractMs: nonNegativeOrNull(t.extractMs),
+    modelMs: nonNegativeOrNull(t.modelMs),
+    salvaged: typeof t.salvaged === "boolean" ? t.salvaged : null,
+    dedupMs: nonNegativeOrNull(t.dedupMs),
+    placementMs: nonNegativeOrNull(t.placementMs),
   };
 }
 
@@ -251,6 +331,7 @@ export function mergeRunManifest(
   const guidelineStatus = pick("guidelineStatus");
   const provider = pick("provider");
   const idempotencyNamespace = pick("idempotencyNamespace");
+  const timings = pick("timings");
   // Lineage is set once, at mint; a later structure call's patch never drops it.
   const rerun = pick("rerun");
   return {
@@ -275,6 +356,7 @@ export function mergeRunManifest(
     promptVersion: (pick("promptVersion") as string | undefined) ?? UNKNOWN,
     ...(idempotencyNamespace ? { idempotencyNamespace } : {}),
     ...(rerun ? { rerun } : {}),
+    ...(timings ? { timings } : {}),
     ...(prior?.extractions?.length || patch.extractions?.length
       ? {
           extractions: [

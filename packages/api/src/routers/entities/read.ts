@@ -31,6 +31,7 @@ import {
   facetVisibilityConditions,
   profileSlugScopeConditionFromRows,
   drizzleSql,
+  notProbeEntityWhere,
 } from "@synap/database";
 import { entities, entityFacets } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
@@ -342,7 +343,11 @@ export const readProcs = {
       // `entityLensWhere`/`entityWriteVisibleWhere`, which restrict rows to the user floor
       // (workspace membership + pod-personal + project membership). `userId` is a
       // security predicate there, not mere attribution.
-      const conditions: any[] = [isNull(entities.deletedAt)];
+      // D8: test-key probe rows are not LISTED (still readable by id).
+      const conditions: any[] = [
+        isNull(entities.deletedAt),
+        notProbeEntityWhere(),
+      ];
 
       if (input.sourceProposalId) {
         conditions.push(eq(entities.sourceProposalId, input.sourceProposalId));
@@ -731,7 +736,11 @@ export const readProcs = {
       // from leaking through — both the pod-scoped-profile branch (which
       // previously skipped the workspace filter) and the workspace branch
       // (which had no per-user guard on the NULL case).
-      const conditions: any[] = [entityReadVisibleWhere(ctx.userId)];
+      // D8: test-key probe rows are never search hits.
+      const conditions: any[] = [
+        entityReadVisibleWhere(ctx.userId),
+        notProbeEntityWhere(),
+      ];
 
       // The advertised contract: input.query MATCHES. (This was silently
       // ignored for months — every caller got recent entities regardless of
@@ -851,7 +860,11 @@ export const readProcs = {
       // Floor: every result must belong to the caller (spans all their
       // workspaces + globals + own pod-personal). This is the ONLY scope
       // predicate — there is no workspace narrow, by design.
-      const conditions: any[] = [entityReadVisibleWhere(ctx.userId)];
+      // D8: test-key probe rows are never search hits.
+      const conditions: any[] = [
+        entityReadVisibleWhere(ctx.userId),
+        notProbeEntityWhere(),
+      ];
 
       const trimmedQuery = input.query.trim();
       if (trimmedQuery.length > 0) {

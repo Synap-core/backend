@@ -343,6 +343,12 @@ CREATE TABLE IF NOT EXISTS "profiles" (
   -- Role-category grouping key (0222): a role-profile tagged with a category
   -- joins that category's cohort for `entity.query`'s `roleCategory` selector.
   "role_category"    text,
+  -- Provenance + lifecycle (0263): who brought the kind into the pod, and its
+  -- vetting state (separate from the is_active tombstone). CHECKs live in 0263.
+  "origin"           text    NOT NULL DEFAULT 'unknown',
+  "lifecycle"        text    NOT NULL DEFAULT 'active',
+  "owner_kind"       text,
+  "owner_id"         text,
   "is_active"        boolean NOT NULL DEFAULT true,
   "version"          integer NOT NULL DEFAULT 1,
   "created_at"       timestamp with time zone NOT NULL DEFAULT now(),
@@ -370,6 +376,10 @@ ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_list_renderer"   jsonb;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_detail_renderer" jsonb;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'unknown';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "lifecycle" text NOT NULL DEFAULT 'active';
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "owner_kind" text;
+ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "owner_id" text;
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "default_renderers" jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- Kind + Facets (0174): 'kind' = primary type, 'role' = attachable facet.
 ALTER TABLE "profiles" ADD COLUMN IF NOT EXISTS "profile_kind" text NOT NULL DEFAULT 'kind';

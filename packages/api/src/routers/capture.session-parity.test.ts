@@ -119,7 +119,11 @@ describe("both doors reach the same verified handle", () => {
   it("the MCP door forwards its session under the SAME field name the body uses", () => {
     // Parity is only real because both doors land on `input.sessionId`. If the
     // MCP door invented its own field, the tRPC check would guard nothing.
-    expect(mcpSrc).toMatch(/sessionId \? \{ sessionId \} : \{\}/);
+    // The forwarded key is still `sessionId`; since A1 (2026-09-14) the same
+    // spread may also carry `sessionSource` (explicit vs derived session).
+    expect(mcpSrc).toMatch(
+      /sessionId \? \{ sessionId(?:, sessionSource: ctx\.sessionSource)? \} : \{\}/
+    );
   });
 
   it("capture.execute resolves the handle through the one door, once", () => {
@@ -151,8 +155,26 @@ describe("both doors reach the same verified handle", () => {
       (l) =>
         /^\s*input\.sessionId,?\s*$/.test(l) || // an argument to the verified door
         /input\.sessionId \?\? ctx\.sessionId \?\? null/.test(l) || // execute's requested handle, verified next line
-        /bodyHandle: input\.sessionId \?\? null/.test(l) // structure's intake run verifies bodyHandle
+        /bodyHandle: input\.sessionId \?\? null/.test(l) || // structure's intake run verifies bodyHandle
+        // answerFollowUp: `claimCaptureQuestion` loads the session WHERE userId =
+        // caller and NOT_FOUNDs any miss before the re-run reads it again.
+        /^\s*sessionId: input\.sessionId,\s*$/.test(l) ||
+        /restructureInput\(claim\.refine, input\.answer, input\.sessionId\)/.test(
+          l
+        )
     );
+    // Those two forms must stay inside answerFollowUp, after the ownership claim.
+    const answerSrc = captureSrc.slice(
+      captureSrc.indexOf("\n  answerFollowUp: podProcedure")
+    );
+    expect(answerSrc.indexOf("claimCaptureQuestion(")).toBeGreaterThan(0);
+    expect(answerSrc.indexOf("claimCaptureQuestion(")).toBeLessThan(
+      answerSrc.indexOf("restructureInput(claim.refine")
+    );
+    expect(
+      rawReads.filter((l) => /^\s*sessionId: input\.sessionId,\s*$/.test(l))
+        .length
+    ).toBe(1);
     expect(rawReads.length).toBeGreaterThan(0);
     expect(rawReads).toEqual(knownSafe);
   });
@@ -163,10 +185,18 @@ describe("both doors reach the same verified handle", () => {
     // straggler reintroduces the whole leak.
     // Start AFTER the resolution's own argument list — `input.sessionId` is
     // legitimately named there, as its input.
+    // Scoped to the END of capture.execute: later procedures (answerFollowUp)
+    // own their session read, pinned by the file-wide test above.
     const call = "const sessionId = await resolveVerifiedSessionId(";
-    const after = captureSrc.slice(
-      captureSrc.indexOf(");", captureSrc.indexOf(call))
+    const executeEnd = captureSrc.indexOf(
+      "\n  executeWithSchema: podProcedure"
     );
+    expect(executeEnd).toBeGreaterThan(captureSrc.indexOf(call));
+    const after = captureSrc.slice(
+      captureSrc.indexOf(");", captureSrc.indexOf(call)),
+      executeEnd
+    );
+    expect(after.length).toBeGreaterThan(1000);
     expect(after).not.toContain("input.sessionId");
   });
 });

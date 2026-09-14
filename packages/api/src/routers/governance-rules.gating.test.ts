@@ -135,7 +135,9 @@ describe("governanceRules.create gating", () => {
       scopeKind: "workspace",
       workspaceId: WORKSPACE_ID,
       targetKind: "action",
-      targetPattern: "profile.create",
+      // Not `profile.create`: that key is behind the rung-2.08 floor, so an
+      // `auto` rule on it is refused (see the non-widenable describe below).
+      targetPattern: "property_def.create",
       verdict: "auto",
     });
 
@@ -234,6 +236,49 @@ describe("governanceRules.create gating", () => {
     });
 
     expect(result.rule).toMatchObject({ id: "rule-1" });
+  });
+});
+
+describe("governanceRules.create — a rule that can never fire is refused (B3)", () => {
+  beforeEach(() => {
+    (db.query.workspaces as unknown as { findFirst: unknown }).findFirst =
+      async () => undefined;
+    setMembership(async () => ({ role: "editor" }));
+  });
+
+  it("refuses an `auto` rule on agent profile.create (rung 2.08) and stores nothing", async () => {
+    await expect(
+      caller(OWNER_ID).create({
+        principalKind: "any",
+        scopeKind: "workspace",
+        workspaceId: WORKSPACE_ID,
+        targetKind: "action",
+        targetPattern: "profile.create",
+        verdict: "auto",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("AGENT_SCHEMA_DEFINITION"),
+    });
+    expect(h.insertedValues).toHaveLength(0);
+  });
+
+  it("still stores a widenable exact key, a glob over the floored key, and a `propose` rule on it", async () => {
+    for (const [targetPattern, verdict] of [
+      ["property_def.create", "auto"],
+      ["profile.*", "auto"],
+      ["profile.create", "propose"],
+    ] as const) {
+      await caller(OWNER_ID).create({
+        principalKind: "any",
+        scopeKind: "workspace",
+        workspaceId: WORKSPACE_ID,
+        targetKind: "action",
+        targetPattern,
+        verdict,
+      });
+    }
+    expect(h.insertedValues).toHaveLength(3);
   });
 });
 

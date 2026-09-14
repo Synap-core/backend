@@ -72,8 +72,22 @@ CREATE TABLE profiles (
   is_active boolean DEFAULT true,
   applicable_kinds text[],
   ui_hints jsonb DEFAULT '{}',
+  origin text NOT NULL DEFAULT 'unknown',
+  lifecycle text NOT NULL DEFAULT 'active',
+  owner_kind text,
+  owner_id text,
   created_at timestamptz DEFAULT now(),
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  CONSTRAINT profiles_origin_check
+    CHECK (origin IN ('core', 'template', 'authored', 'agent', 'probe', 'unknown')),
+  CONSTRAINT profiles_lifecycle_check
+    CHECK (lifecycle IN ('experimental', 'active', 'deprecated')),
+  CONSTRAINT profiles_owner_check
+    CHECK (
+      (owner_kind IS NULL AND owner_id IS NULL) OR
+      (owner_kind IN ('package', 'workspace', 'proposal', 'agent', 'user')
+        AND owner_id IS NOT NULL)
+    )
 );
 CREATE TABLE entities (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

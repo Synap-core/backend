@@ -18,6 +18,8 @@
  * writes.
  */
 
+import { PROFILE_ORIGINS, type ProfileOrigin } from "@synap/database/schema";
+
 interface HintBag {
   [key: string]: unknown;
 }
@@ -51,4 +53,79 @@ export function resolveProfileIcon(
   profile: StoredProfilePresentation
 ): string | null {
   return asTrimmedStringOrNull(asBag(profile.uiHints)?.icon);
+}
+
+// ── Origin ───────────────────────────────────────────────────────────────────
+
+/**
+ * A profile's provenance, plus the group discover lists it under.
+ *
+ * `origin` is THE stored vocabulary — `profiles.origin` / `PROFILE_ORIGINS`
+ * (migration 0263), never a copy. Only a stored `unknown` (the column default)
+ * or an absent value falls back to scope, and only to what scope proves:
+ * `system` ⇒ `core`. Nothing is inferred from a template install.
+ *
+ * `group` is presentation placement: `core`, `shared`, the owning `workspace`,
+ * or `unknown` (a user-scoped row, a workspace row with no workspace id).
+ */
+export type ProfileOriginGroup = "core" | "shared" | "workspace" | "unknown";
+
+export interface ResolvedProfileOrigin {
+  origin: ProfileOrigin;
+  group: ProfileOriginGroup;
+  workspaceId?: string;
+  templateId?: string;
+  packageSlug?: string;
+}
+
+export interface StoredProfileOriginSource {
+  scope?: string | null;
+  workspaceId?: string | null;
+  origin?: string | null;
+}
+
+/** What the caller knows about a workspace's install provenance. */
+export interface WorkspaceInstallSource {
+  templateId?: string | null;
+  packageSlug?: string | null;
+}
+
+const isStoredOrigin = (value: unknown): value is ProfileOrigin =>
+  typeof value === "string" &&
+  (PROFILE_ORIGINS as readonly string[]).includes(value);
+
+export function resolveProfileOrigin(
+  profile: StoredProfileOriginSource,
+  workspaceInstall?: (workspaceId: string) => WorkspaceInstallSource | undefined
+): ResolvedProfileOrigin {
+  const stored = isStoredOrigin(profile.origin) ? profile.origin : "unknown";
+  const origin: ProfileOrigin =
+    stored !== "unknown"
+      ? stored
+      : profile.scope === "system"
+        ? "core"
+        : "unknown";
+
+  if (origin === "core" || profile.scope === "system") {
+    return { origin, group: "core" };
+  }
+  if (profile.scope === "shared") return { origin, group: "shared" };
+
+  const workspaceId =
+    profile.scope === "workspace"
+      ? asTrimmedStringOrNull(profile.workspaceId)
+      : null;
+  if (!workspaceId) return { origin, group: "unknown" };
+
+  const out: ResolvedProfileOrigin = {
+    origin,
+    group: "workspace",
+    workspaceId,
+  };
+  const install = workspaceInstall?.(workspaceId);
+  const templateId = asTrimmedStringOrNull(install?.templateId);
+  const packageSlug = asTrimmedStringOrNull(install?.packageSlug);
+  if (templateId) out.templateId = templateId;
+  if (packageSlug) out.packageSlug = packageSlug;
+  return out;
 }

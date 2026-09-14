@@ -25,6 +25,51 @@
 import type { ProfileRepository } from "../repositories/profile-repository.js";
 import { ProfileScope, type Profile } from "../schema/profiles.js";
 
+/**
+ * RETIREMENT TOMBSTONE — `profiles.ui_hints.retired`.
+ *
+ * `delete()` is a SOFT delete, and a soft-deleted row still holds its slug's
+ * unique seat, so this resolver used to REVIVE it on the next apply (every boot
+ * reconcile, every install). That silently undid any deliberate retirement. A
+ * tombstone is the durable record that the row was retired ON PURPOSE:
+ *
+ *   • a tombstoned holder is NEVER reactivated by an apply;
+ *   • `mergedInto` (a canonical profile id) redirects the apply to that
+ *     canonical, when it is active, the same kind, and reachable from the
+ *     target workspace;
+ *   • otherwise the apply is reported as a `conflict` carrying `retired`, which
+ *     every caller already SKIPS (no create — the seat is still held).
+ *
+ * A soft-deleted row WITHOUT a tombstone keeps the old revive behaviour: nobody
+ * recorded that its retirement was deliberate, so nothing changes for it.
+ */
+export interface ProfileRetirement {
+  /** ISO timestamp of the retirement. */
+  at: string;
+  reason?: string;
+  byProposalId?: string;
+  /** Canonical profile id this row was merged into. */
+  mergedInto?: string;
+}
+
+/**
+ * Read a row's tombstone. Any non-null object under `ui_hints.retired` counts —
+ * a malformed tombstone fails CLOSED (never revived), because reviving is the
+ * irreversible-looking outcome and the tombstone's presence is the intent.
+ */
+export function readProfileRetirement(
+  profile: Pick<Profile, "uiHints">
+): ProfileRetirement | null {
+  const hints = profile.uiHints;
+  if (!hints || typeof hints !== "object") return null;
+  const retired = (hints as Record<string, unknown>).retired;
+  if (!retired || typeof retired !== "object") return null;
+  return retired as ProfileRetirement;
+}
+// The WRITE side (`markProfileRetired`) lives in ProfileRepository's module:
+// the `project-is-not-an-entity-profile` tripwire keeps `profiles` write sites
+// closed, and the repository is one of them.
+
 export interface ProfileApplyResolution {
   /**
    * Existing profile to reuse (already granted / promoted as needed), or `null`
@@ -41,7 +86,16 @@ export interface ProfileApplyResolution {
    * The caller MUST skip this profile completely — no reuse, no create, no
    * property overlay. The existing row is NEVER mutated.
    */
-  conflict: { slug: string; existingKind: string; declaredKind: string } | null;
+  conflict: {
+    slug: string;
+    existingKind: string;
+    declaredKind: string;
+    /**
+     * Present when the skip is NOT a kind mismatch but a RETIRED seat-holder
+     * (tombstone set, no usable `mergedInto`). Absent on a kind conflict.
+     */
+    retired?: ProfileRetirement;
+  } | null;
   /**
    * ADVISORY divergence (unlike the structural `conflict` above). On a REUSE,
    * the template declared a `scope`/`entityScope` that differs from the live
@@ -191,6 +245,63 @@ export async function resolveProfileForApply(
   };
 
   /**
+   * A tombstoned holder: RESOLVE to `mergedInto` when that canonical is usable
+   * here, else a `conflict` carrying `retired` (callers skip — never create,
+   * never revive). The canonical is usable when it is active, not itself
+   * retired, the declared kind, and reachable from the target workspace
+   * (pod-wide → granted exactly like the pod-wide reuse below; workspace-scoped
+   * → only in THIS workspace). Chains are not followed. dryRun: no grant.
+   */
+  const resolveRetired = async (
+    holder: Profile,
+    retirement: ProfileRetirement
+  ): Promise<ProfileApplyResolution> => {
+    const retiredConflict: ProfileApplyResolution = {
+      ...base,
+      conflict: {
+        slug: opts.slug,
+        existingKind: normalizeKind(holder.profileKind),
+        declaredKind: normalizeKind(declaredKind),
+        retired: retirement,
+      },
+    };
+    const target = retirement.mergedInto;
+    if (typeof target !== "string" || target === holder.id) {
+      return retiredConflict;
+    }
+    const canonical = await profileRepo.getById(target);
+    if (
+      !canonical ||
+      !canonical.isActive ||
+      readProfileRetirement(canonical) ||
+      kindMismatch(canonical)
+    ) {
+      return retiredConflict;
+    }
+    if (
+      canonical.scope === ProfileScope.SHARED ||
+      canonical.scope === ProfileScope.SYSTEM
+    ) {
+      // NOT swallowed — for a `shared` canonical this grant is the whole reuse
+      // (same reasoning as the pod-wide reuse branch).
+      if (!opts.dryRun) {
+        await profileRepo.grantAccess(canonical.id, opts.workspaceId);
+      }
+    } else if (!(
+      canonical.scope === ProfileScope.WORKSPACE &&
+      canonical.workspaceId === opts.workspaceId
+    )) {
+      return retiredConflict;
+    }
+    return {
+      ...base,
+      profile: canonical,
+      reused: true,
+      scopeConflict: scopeDivergence(canonical),
+    };
+  };
+
+  /**
    * THE WORKSPACE-SEAT PROBE — the is_active-blind sibling of the pod-wide one.
    *
    * `profiles_slug_workspace_uniq` is `ON (slug, workspace_id) WHERE
@@ -221,6 +332,9 @@ export async function resolveProfileForApply(
         );
       const holder = seatHolders.find((p) => !p.isActive);
       if (!holder) return null;
+      // A DELIBERATELY retired holder is never revived — see ProfileRetirement.
+      const retirement = readProfileRetirement(holder);
+      if (retirement) return resolveRetired(holder, retirement);
       if (kindMismatch(holder)) return conflictWith(holder);
       const revived = opts.dryRun
         ? { ...holder, isActive: true }
@@ -295,6 +409,16 @@ export async function resolveProfileForApply(
       const holders = await profileRepo.findPodWideBySlugIncludingInactive(
         opts.slug
       );
+      // Nothing is ACTIVE, so every holder here is soft-deleted. A deliberately
+      // retired pod-wide holder must not be re-minted as a workspace duplicate
+      // through the deferral — resolve to its canonical or report it.
+      const retiredHolder = holders.find((p) => readProfileRetirement(p));
+      if (retiredHolder) {
+        return resolveRetired(
+          retiredHolder,
+          readProfileRetirement(retiredHolder)!
+        );
+      }
       if (holders.length > 0) return defer("slug-taken-pod-wide");
     }
     // The pod-wide probe above has an equally is_active-blind SIBLING index:

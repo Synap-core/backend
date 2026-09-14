@@ -228,7 +228,15 @@ export const API_KEY_SCOPES = [
   // the bridge HTTP endpoint stays guarded by BRIDGE_SECRET as before. See
   // synap-team-docs/content/team/platform/eve-os-vision.mdx §9 Phase 3A.
   "realtime:observe",
+  // Probe key (D8). Writes made with it are marked as dogfood probes, hidden
+  // from listings and swept. Declared explicitly at mint — never inferred from
+  // the key prefix or hubId. A child key can only inherit it (scope subset).
+  "probe",
 ] as const;
+
+/** The scope that makes a key a probe key — see `isProbeApiKey`. */
+export const PROBE_KEY_SCOPE =
+  "probe" as const satisfies (typeof API_KEY_SCOPES)[number];
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
 

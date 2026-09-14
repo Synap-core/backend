@@ -21,17 +21,13 @@
  *    workspace behind its TEMPLATE?" — a version-stamp comparison). It is not
  *    workspace-content health and nothing in it is re-derived or duplicated
  *    here; `listWorkspaceTemplateHealth` stays the one door for drift.
- *  • `services/discover/discover.ts` computes a per-workspace entity count with
- *    the same `GROUP BY` shape, but it is INLINE in `discover()` (no exported
- *    helper) and, critically, it only counts `workspace_id IN (lens)` — it never
- *    sees the pod-scoped (`workspace_id IS NULL`) bucket, which is the half that
- *    makes "this workspace is barely a lens" visible. Its profile inventory
- *    comes from `profiles.listProfiles` (the SCHEMA available in a workspace),
- *    not from what actually LIVES there; on the live pod that call returns an
- *    empty list per workspace at this door. So the aggregate below is net-new:
- *    ONE `GROUP BY (workspace_id, type)` that yields entity counts, the
- *    profile-slug inventory, the last-activity timestamp and the pod-scoped
- *    bucket in a single pass.
+ *  • THE entity aggregate is `loadEntityUsage` (`services/discover/
+ *    usage-aggregate.ts`) — the one GROUP BY that orient, MCP grounding, the
+ *    discover summary tier and this surface all read. This surface asks it for the pod-scoped
+ *    (`workspace_id IS NULL`) bucket too, which is the half that makes "this
+ *    workspace is barely a lens" visible, and folds its (workspace, profile)
+ *    rows into entity counts, the profile-slug inventory and the last-activity
+ *    timestamp in a single pass.
  *
  * ── COST ────────────────────────────────────────────────────────────────────
  * Two queries total, regardless of workspace count: one workspace read, one
@@ -41,21 +37,9 @@
  * SAYS so rather than shipping a quadratic scan.
  */
 
-import {
-  db,
-  and,
-  or,
-  eq,
-  inArray,
-  isNull,
-  drizzleSql,
-  entities,
-  workspaces,
-} from "@synap/database";
-import {
-  userVisibleWhere,
-  ownerPrivateVisibleWhere,
-} from "../../utils/user-visible-where.js";
+import { db, and, eq, workspaces } from "@synap/database";
+import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { loadEntityUsage } from "../discover/usage-aggregate.js";
 import type { ClassReport, ObjectReport } from "./types.js";
 
 /** Beyond this many workspaces the in-memory pairwise pass is skipped. */
@@ -360,31 +344,16 @@ async function loadLandscape(
     .where(userVisibleWhere(workspaces.id, userId));
 
   const aggIds = entityLensIds ?? wsRows.map((w) => w.id);
-  // ONE pass: per (workspace, profile slug) count + newest activity. The
-  // `workspace_id IS NULL` branch is deliberately inside the same scan — that
-  // bucket is the pod-scoped content visible in every workspace, and it is the
-  // half `discover`'s count never sees.
-  const agg = await db
-    .select({
-      workspaceId: entities.workspaceId,
-      type: entities.type,
-      count: drizzleSql<number>`cast(count(*) as integer)`,
-      lastActivityAt: drizzleSql<Date | null>`max(${entities.updatedAt})`,
-    })
-    .from(entities)
-    .where(
-      and(
-        isNull(entities.deletedAt),
-        ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
-        aggIds.length > 0
-          ? or(
-              isNull(entities.workspaceId),
-              inArray(entities.workspaceId, aggIds)
-            )
-          : isNull(entities.workspaceId)
-      )
-    )
-    .groupBy(entities.workspaceId, entities.type);
+  // ONE pass through THE shared usage aggregate (`discover/usage-aggregate.ts`
+  // — the same read orient, MCP grounding and discover rank from): per
+  // (workspace, profile) count + newest activity, with the `workspace_id IS
+  // NULL` bucket inside the same scan — the pod-scoped content visible in every
+  // workspace.
+  const agg = await loadEntityUsage({
+    userId,
+    workspaceIds: aggIds,
+    includePodScoped: true,
+  });
 
   const byWs = new Map<
     string,
@@ -393,7 +362,7 @@ async function loadLandscape(
   const podSlugs = new Set<string>();
   let podCount = 0;
   for (const r of agg) {
-    const last = r.lastActivityAt ? new Date(r.lastActivityAt) : null;
+    const last = r.lastActivityAt;
     if (r.workspaceId == null) {
       podCount += r.count;
       if (r.type) podSlugs.add(r.type);

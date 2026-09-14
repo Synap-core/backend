@@ -54,6 +54,7 @@ import { listCapabilityCompositions } from "../services/diagnose/capability-comp
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
+import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import { entitiesRouter } from "./entities.js";
 import { skillsRouter } from "./skills.js";
 import {
@@ -1582,11 +1583,8 @@ export const capabilitiesRouter = router({
         .where(
           and(
             eq(skills.name, input.verbId),
-            or(
-              isNull(skills.workspaceId),
-              eq(skills.workspaceId, input.workspaceId),
-              eq(skills.userId, ctx.userId)
-            )
+            // The ONE skill lens (workspace tier is membership-checked).
+            visibleSkillsWhere(ctx.userId, input.workspaceId)
           )
         )
         .limit(1);

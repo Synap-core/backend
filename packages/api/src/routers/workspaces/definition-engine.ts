@@ -2214,6 +2214,10 @@ export const definitionEngineProcedures = {
             const newProfile = await profileRepo.create({
               slug: e.profileSlug,
               displayName: hints.displayName ?? e.profileSlug,
+              // Seeded by a workspace definition apply; the workspace owns it.
+              origin: "template",
+              ownerKind: "workspace",
+              ownerId: input.workspaceId,
               uiHints: {
                 icon: hints.icon,
                 color: hints.color,

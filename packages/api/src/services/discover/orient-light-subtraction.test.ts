@@ -46,6 +46,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     const self: Record<string, unknown> = {
       where: () => self,
       limit: () => self,
+      orderBy: () => self,
       groupBy: () => thenable(groupRows),
       then: (
         resolve: (v: unknown[]) => unknown,
@@ -102,6 +103,18 @@ vi.mock("../team-roster-context.js", () => ({
     instructionBlock: null,
   }),
   formatTeamRosterBlock: () => null,
+}));
+
+// The briefing's own sections have their own tests (`start-here.test.ts`,
+// `usage-aggregate.pglite.test.ts`); this file proves the lens map around it.
+vi.mock("./start-here.js", () => ({
+  buildStartHere: async (p: { learnMoreSkill: string }) => ({
+    pendingReview: { count: 0 },
+    openSessions: { count: 0, countIsLowerBound: false },
+    topKinds: [],
+    actions: { count: 0, examples: [], lens: "pod" },
+    learnMore: { skill: p.learnMoreSkill },
+  }),
 }));
 
 import { discover } from "./discover.js";
@@ -196,6 +209,35 @@ describe("orient light — subtraction", () => {
   it("serves the inventory when the caller ASKS for it by scope", async () => {
     const explicit = await run("light", ["workspaces", "profiles"]);
     expect(explicit.profiles?.map((p) => p.slug)).toEqual(["task", "person"]);
+  });
+});
+
+describe("orient note — concept prose only on request", () => {
+  // Both halves: light stays short and points at the skill; explain/full still
+  // deliver the prose.
+  const CONCEPT = /WRITE by kind\/profile/;
+
+  it("light carries no concept prose and points at startHere.learnMore", async () => {
+    const light = await run("light");
+    expect(light.note).not.toMatch(CONCEPT);
+    expect(light.note).toMatch(/startHere\.learnMore/);
+    expect(light.startHere.learnMore).toEqual({ skill: "system/synap/lenses" });
+  });
+
+  it("explain:true adds the concept prose without the rest of full", async () => {
+    const explained = await discover({
+      caller,
+      userId: "u1",
+      authScopes: ["mcp.read"],
+      detail: "light",
+      explain: true,
+    });
+    expect(explained.note).toMatch(CONCEPT);
+    expect(explained.profiles).toBeUndefined();
+  });
+
+  it("detail:'full' carries the concept prose too", async () => {
+    expect((await run("full")).note).toMatch(CONCEPT);
   });
 });
 

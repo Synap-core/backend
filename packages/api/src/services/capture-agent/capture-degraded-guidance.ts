@@ -77,7 +77,12 @@ const INPUT_REASONS = new Set([
 ]);
 
 /** Reachable but did not return a usable structure — worth another attempt. */
-const TRANSIENT_REASONS = new Set(["is_invalid_response"]);
+const TRANSIENT_REASONS = new Set([
+  "is_invalid_response",
+  // A CONFIGURED vision provider failed (bad key, unfunded, outage) — not the
+  // configuration state `vision_provider_not_configured`.
+  "vision_provider_failed",
+]);
 
 /**
  * The IS token budget refused the call. `llm_budget_exceeded` is the named

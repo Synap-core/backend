@@ -237,6 +237,22 @@ export function summarizeSchemaContract(
   };
 }
 
+/**
+ * The profile-row visibility floor: system/shared rows pod-wide, workspace rows
+ * in workspaces the caller can see, user rows only the caller's own. ONE copy —
+ * `schema-hygiene.ts` reads the same floor.
+ */
+export function visibleProfileWhere(userId: string) {
+  return or(
+    inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED]),
+    and(
+      eq(profiles.scope, ProfileScope.WORKSPACE),
+      userVisibleWhere(profiles.workspaceId, userId)
+    ),
+    and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId))
+  );
+}
+
 /** DB tier: read visible active profiles, and every link on the system ones. */
 export async function gatherSchemaContractSignal(params: {
   userId: string;
@@ -253,20 +269,7 @@ export async function gatherSchemaContractSignal(params: {
     })
     .from(profiles)
     .where(
-      and(
-        eq(profiles.isActive, true),
-        or(
-          inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED]),
-          and(
-            eq(profiles.scope, ProfileScope.WORKSPACE),
-            userVisibleWhere(profiles.workspaceId, params.userId)
-          ),
-          and(
-            eq(profiles.scope, ProfileScope.USER),
-            eq(profiles.userId, params.userId)
-          )
-        )
-      )
+      and(eq(profiles.isActive, true), visibleProfileWhere(params.userId))
     );
 
   const systemIds = activeProfiles

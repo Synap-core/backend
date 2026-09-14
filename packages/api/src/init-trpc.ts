@@ -29,11 +29,23 @@ export const t = initTRPC.context<Context>().create({
       );
     }
 
+    // A capture follow-up CONFLICT names the question's status as a stable,
+    // machine-readable field, so clients never parse the message text.
+    const captureQuestionStatus = (
+      error.cause as { captureQuestionStatus?: unknown } | undefined
+    )?.captureQuestionStatus;
+
     return {
       ...shape,
       // Always expose the error message — clients need it for debugging.
       // Stack traces are NOT included (only the message string).
       message: shape.message,
+      data: {
+        ...shape.data,
+        ...(typeof captureQuestionStatus === "string"
+          ? { captureQuestionStatus }
+          : {}),
+      },
     };
   },
 });

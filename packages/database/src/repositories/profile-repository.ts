@@ -4,7 +4,16 @@
  * Handles CRUD operations for profiles (entity types).
  */
 
-import { eq, and, or, sql, isNotNull, inArray } from "drizzle-orm";
+import {
+  eq,
+  and,
+  or,
+  sql,
+  sql as drizzleSql,
+  isNotNull,
+  inArray,
+} from "drizzle-orm";
+import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
 import { unionAll } from "drizzle-orm/pg-core";
 import {
   memberWorkspaceIds as memberWorkspaceIdsQuery,
@@ -16,11 +25,21 @@ import {
   excludeReservedProfiles,
 } from "../utils/reserved-profile-slugs.js";
 import {
+  excludeProbeProfiles,
+  isProbeWriteContext,
+  getActingAgentUserId,
+  AgentKindRequiresProposalError,
+} from "../utils/request-write-context.js";
+import {
   profiles,
   profileWorkspaceAccess,
   type Profile,
   type NewProfile,
   type AiPosture,
+  type ProfileOrigin,
+  type ProfileLifecycle,
+  type ProfileOwnerKind,
+  PROFILE_ORIGIN_PROBE,
   ProfileScope,
 } from "../schema/profiles.js";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -29,6 +48,18 @@ import type * as schema from "../schema/index.js";
 export interface CreateProfileInput {
   id?: string;
   slug: string;
+  /**
+   * PROVENANCE (0263) — REQUIRED, deliberately: a writer that forgets it is a
+   * COMPILE ERROR, not a row silently stamped `unknown`. Never taken from a
+   * client payload. Inside a probe-key request the floor overrides it to
+   * `probe` (D8).
+   */
+  origin: Exclude<ProfileOrigin, "probe" | "unknown">;
+  /** Omit → `active`. A probe write is forced to `experimental`. */
+  lifecycle?: ProfileLifecycle;
+  /** What owns this row (package, proposal, …). Both or neither. */
+  ownerKind?: ProfileOwnerKind;
+  ownerId?: string;
   displayName: string;
   parentProfileId?: string;
   uiHints?: Record<string, unknown>;
@@ -166,6 +197,20 @@ export interface AccessibleProfileFilters {
   slugs?: string[];
 }
 
+/**
+ * THE slug-resolution probe predicate (D8 / R2). A probe kind is hidden from
+ * listings, so outside a probe context it must not resolve by slug either:
+ * otherwise a human `entities.create` lands on a hidden kind, and the template
+ * resolver silently reuses it instead of creating the real one. Inside a probe
+ * context probes still resolve, so dogfood can use its own probe kinds.
+ * `and(...)` drops `undefined`.
+ */
+function slugResolvableWhere() {
+  return isProbeWriteContext()
+    ? undefined
+    : sql`${profiles.origin} <> ${PROFILE_ORIGIN_PROBE}`;
+}
+
 export class ProfileRepository {
   constructor(private db: PostgresJsDatabase<typeof schema>) {}
 
@@ -180,6 +225,13 @@ export class ProfileRepository {
     // materializer, template install, workspace-definition reconcile, and
     // `ensureSystemProfiles` all land on it.
     assertProfileSlugNotReserved(input.slug);
+
+    // D6 floor: an agent never creates a kind or role directly, whichever door
+    // it came through. An approved proposal is materialised by a human door,
+    // which never enters the acting-agent scope.
+    if (getActingAgentUserId()) {
+      throw new AgentKindRequiresProposalError(input.slug);
+    }
 
     // Validate parent profile exists if provided
     if (input.parentProfileId) {
@@ -200,11 +252,76 @@ export class ProfileRepository {
       input.entityScope
     );
 
+    // D8 — the floor, not the door: a TEST-key request's profile is a probe
+    // whatever the caller claimed, and a probe is never vetted.
+    const probe = isProbeWriteContext();
+    const origin: ProfileOrigin = probe ? PROFILE_ORIGIN_PROBE : input.origin;
+    const lifecycle: ProfileLifecycle = probe
+      ? "experimental"
+      : (input.lifecycle ?? "active");
+    if ((input.ownerKind === undefined) !== (input.ownerId === undefined)) {
+      throw new Error(
+        `Profile '${input.slug}': ownerKind and ownerId must be given together.`
+      );
+    }
+
+    // R2: a probe row holding this create's unique-index SEAT never blocks a
+    // real create — it is reclaimed in place (same id, restamped). The seat
+    // predicate mirrors the partial unique indexes exactly (is_active-blind).
+    // Inside a probe context there is no reclaim: probe vs probe collides.
+    if (!probe) {
+      const seatScope = input.scope || ProfileScope.WORKSPACE;
+      const seatWhere =
+        seatScope === ProfileScope.SYSTEM || seatScope === ProfileScope.SHARED
+          ? inArray(profiles.scope, [ProfileScope.SYSTEM, ProfileScope.SHARED])
+          : seatScope === ProfileScope.WORKSPACE && input.workspaceId
+            ? and(
+                eq(profiles.scope, ProfileScope.WORKSPACE),
+                eq(profiles.workspaceId, input.workspaceId)
+              )
+            : seatScope === ProfileScope.USER && input.userId
+              ? and(
+                  eq(profiles.scope, ProfileScope.USER),
+                  eq(profiles.userId, input.userId)
+                )
+              : undefined;
+      const probeSeat = seatWhere
+        ? await this.db.query.profiles.findFirst({
+            where: and(
+              eq(profiles.slug, input.slug),
+              eq(profiles.origin, PROFILE_ORIGIN_PROBE),
+              seatWhere
+            ),
+          })
+        : undefined;
+      if (probeSeat) {
+        const [reclaimed] = await this.db
+          .update(profiles)
+          .set({
+            origin,
+            lifecycle,
+            ownerKind: (input.ownerKind ?? null) as ProfileOwnerKind | null,
+            ownerId: input.ownerId ?? null,
+            displayName: input.displayName,
+            uiHints: input.uiHints || {},
+            isActive: true,
+            updatedAt: new Date(),
+          })
+          .where(eq(profiles.id, probeSeat.id))
+          .returning();
+        return reclaimed;
+      }
+    }
+
     const [profile] = await this.db
       .insert(profiles)
       .values({
         ...(input.id ? { id: input.id } : {}),
         slug: input.slug,
+        origin,
+        lifecycle,
+        ownerKind: (input.ownerKind ?? null) as ProfileOwnerKind | null,
+        ownerId: input.ownerId ?? null,
         displayName: input.displayName,
         parentProfileId: input.parentProfileId || null,
         uiHints: input.uiHints || {},
@@ -287,6 +404,7 @@ export class ProfileRepository {
       where: and(
         eq(profiles.slug, slug),
         eq(profiles.isActive, true),
+        slugResolvableWhere(),
         or(...scopeBranches)
       ),
     });
@@ -337,6 +455,7 @@ export class ProfileRepository {
         and(
           eq(profiles.slug, slug),
           eq(profiles.isActive, true),
+          slugResolvableWhere(),
           or(
             eq(profiles.scope, ProfileScope.SYSTEM),
             and(
@@ -376,7 +495,11 @@ export class ProfileRepository {
    */
   async findActiveBySlugAnyScope(slug: string): Promise<Profile[]> {
     return this.db.query.profiles.findMany({
-      where: and(eq(profiles.slug, slug), eq(profiles.isActive, true)),
+      where: and(
+        eq(profiles.slug, slug),
+        eq(profiles.isActive, true),
+        slugResolvableWhere()
+      ),
     });
   }
 
@@ -588,7 +711,10 @@ export class ProfileRepository {
     // is the ONE read floor every listing door shares, so it is where an
     // already-existing reserved row stops being advertised as a choosable
     // kind. See `excludeReservedProfiles`.
-    return excludeReservedProfiles(rows.map((r) => r.p));
+    //
+    // Probe rows (D8) are not advertised; getById still reads them. Reserved
+    // stays outermost (tripwire pin).
+    return excludeReservedProfiles(excludeProbeProfiles(rows.map((r) => r.p)));
   }
 
   /**
@@ -686,7 +812,14 @@ export class ProfileRepository {
 
     const [profile] = await this.db
       .update(profiles)
-      .set(updateData)
+      .set({
+        ...updateData,
+        // A `uiHints` patch replaces the jsonb — but never the retirement
+        // tombstone, or a patch to a retired row would make it revivable.
+        ...(input.uiHints !== undefined
+          ? { uiHints: uiHintsKeepingRetirement(input.uiHints) }
+          : {}),
+      })
       .where(eq(profiles.id, id))
       .returning();
 
@@ -718,9 +851,16 @@ export class ProfileRepository {
     const current = await this.getById(id);
     if (current) assertProfileSlugNotReserved(current.slug);
 
+    // An explicit restore also lifts the retirement tombstone
+    // (`ui_hints.retired`), or the next template apply would still refuse the
+    // row. Other ui_hints keys are kept.
     const [profile] = await this.db
       .update(profiles)
-      .set({ isActive: true, updatedAt: new Date() })
+      .set({
+        isActive: true,
+        uiHints: drizzleSql`coalesce(${profiles.uiHints}, '{}'::jsonb) - 'retired'`,
+        updatedAt: new Date(),
+      })
       .where(eq(profiles.id, id))
       .returning();
 
@@ -732,12 +872,63 @@ export class ProfileRepository {
   }
 
   /**
-   * Delete profile (soft delete)
+   * Delete profile (soft delete). Goes through `markProfileRetired`, so the row
+   * carries a `ui_hints.retired` tombstone and a template apply will not revive
+   * it. `reactivate()` is the inverse.
    */
   async delete(id: string): Promise<void> {
-    await this.db
-      .update(profiles)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(profiles.id, id));
+    await markProfileRetired(this.db, id, { reason: "deleted" });
   }
+}
+
+/**
+ * `update()`'s `ui_hints` value: the caller's patch MINUS any `retired` key,
+ * plus the row's EXISTING `retired` tombstone when it has one. The tombstone is
+ * written only by `markProfileRetired` (and the conversion engine's raw twin)
+ * and cleared only by `reactivate()` — never forged or wiped by a general patch.
+ * "Has one" matches readProfileRetirement: any object (arrays included).
+ */
+function uiHintsKeepingRetirement(
+  patch: Record<string, unknown> | null | undefined
+) {
+  const { retired: _ignored, ...rest } = patch ?? {};
+  return drizzleSql`${JSON.stringify(rest)}::jsonb || CASE WHEN coalesce(jsonb_typeof(${profiles.uiHints} -> 'retired'), 'null') IN ('object', 'array') THEN jsonb_build_object('retired', ${profiles.uiHints} -> 'retired') ELSE '{}'::jsonb END`;
+}
+
+/**
+ * THE ONE retirement write: `is_active = false` AND the `ui_hints.retired`
+ * tombstone (`ProfileRetirement`, read by `readProfileRetirement`), in ONE
+ * UPDATE. The tombstone is jsonb-MERGED into the existing `ui_hints`, so
+ * icon/color/description survive. `ProfileRepository.delete()` delegates here;
+ * a governed retire or a conversion tail should too — a bare
+ * `is_active = false` flip is revived by the next template apply.
+ *
+ * `db` is the `update` capability of the handle `ProfileRepository` takes, so
+ * the module db and a transaction handle are both accepted.
+ * `ProfileRepository.reactivate()` is the inverse and clears the tombstone.
+ */
+export async function markProfileRetired(
+  db: Pick<PostgresJsDatabase<typeof schema>, "update">,
+  profileId: string,
+  opts: {
+    reason: string;
+    byProposalId?: string;
+    mergedInto?: string;
+    at?: Date;
+  }
+): Promise<void> {
+  const retired: ProfileRetirement = {
+    at: (opts.at ?? new Date()).toISOString(),
+    reason: opts.reason,
+    ...(opts.byProposalId ? { byProposalId: opts.byProposalId } : {}),
+    ...(opts.mergedInto ? { mergedInto: opts.mergedInto } : {}),
+  };
+  await db
+    .update(profiles)
+    .set({
+      isActive: false,
+      uiHints: drizzleSql`coalesce(${profiles.uiHints}, '{}'::jsonb) || jsonb_build_object('retired', ${JSON.stringify(retired)}::jsonb)`,
+      updatedAt: new Date(),
+    })
+    .where(eq(profiles.id, profileId));
 }

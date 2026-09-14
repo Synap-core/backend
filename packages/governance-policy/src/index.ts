@@ -30,6 +30,9 @@
  *                                    onto a pod-admin-owned kind by a principal
  *                                    who is not a pod admin (resolved by the
  *                                    caller). Unwidenable by any rung below.
+ *   2.08 AGENT_SCHEMA_DEFINITION_EVENT_KEYS → always propose; an agent defining
+ *                                    a kind/role (`profile.create`, D6).
+ *                                    Unwidenable by any rung below.
  *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
  *                                    merge), regardless of ANY override rung
  *                                    below (ownership, explicit autoApproveFor,
@@ -128,11 +131,10 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   //   • Executors already exist for every removed create key —
   //     `profile/create`, `property_def/create` — so approval materializes
   //     through the same helper as the direct-apply branch.
-  //   • Widening back is USER-EDITABLE without a code change: a
-  //     `governance_rules` row at action granularity (rung 2.8) can say `auto`
-  //     for a trusted agent. That is the project's own answer for case-by-case
-  //     widening — which is why this stays a platform DEFAULT of propose rather
-  //     than a rung-2.1 `forcePropose` floor (a floor no rule could widen).
+  //   • Widening back is USER-EDITABLE without a code change for
+  //     `property_def.create`: a `governance_rules` row at action granularity
+  //     (rung 2.8) can say `auto` for a trusted agent. `profile.create` is
+  //     floored at rung 2.08 (see AGENT_SCHEMA_DEFINITION_EVENT_KEYS).
   //   • `profile.update` / `property_def.update` were additionally DEAD keys:
   //     no call site passes those (subjectType, action) pairs to
   //     `checkPermissionOrPropose` today, so removing them changes no live
@@ -495,6 +497,27 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
  */
 export const ARBITRARY_EXECUTION_EVENT_KEYS: readonly GateEventKey[] = [
   "command.execute",
+];
+
+/**
+ * AGENT-DEFINED SCHEMA — an agent minting a new KIND or ROLE always proposes (D6).
+ * A profile row defines what the pod IS: a kind is pod-wide by default, so one
+ * agent's `synap_define_kind` changes the vocabulary every workspace chooses from.
+ *
+ * WHY ITS OWN LIST, not ADMIN_ACTIONS: admin names writes that change WHO CAN
+ * DO WHAT. A kind changes WHAT EXISTS — a different question, and a distinct
+ * `reasonCode` lets the review UI say so. HUMANS NEVER REACH THIS: the engine
+ * runs only for an agent principal (and the anonymous AI-source path), so a
+ * human define stays exactly as it was.
+ *
+ * Both roles and kinds land on the one `profile.create` door
+ * (`synap_define_kind` / `synap_define_role` alias it). SAME MATCHING CONTRACT
+ * as the lists above — exact equality on the RAW event key, typed as
+ * {@link GateEventKey} so a string naming no real door is a compile error.
+ */
+export const AGENT_SCHEMA_DEFINITION_EVENT_KEYS: readonly GateEventKey[] = [
+  "profile.create",
+  "profiles.create",
 ];
 
 /**
@@ -981,6 +1004,8 @@ export const PROPOSE_REASON = {
     "This runs an arbitrary shell command inside the pod's API container and always requires human approval; no governance rule can widen it.",
   POD_ADMIN_SCHEMA_CHANGE:
     "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
+  AGENT_SCHEMA_DEFINITION:
+    "An agent is defining a new kind or role, which changes what the pod can hold; a person must approve it, and no governance rule can widen it.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -1060,6 +1085,18 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE,
       reasonCode: "POD_ADMIN_SCHEMA_CHANGE",
+    };
+  }
+
+  // 2.08 AGENT-DEFINED SCHEMA → always propose; above rules (2.8), ownership (3),
+  // autoApproveFor (4) and DEFAULT_AUTO_APPROVE (8).
+  if (
+    (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[]).includes(eventKey)
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.AGENT_SCHEMA_DEFINITION,
+      reasonCode: "AGENT_SCHEMA_DEFINITION",
     };
   }
 
@@ -1332,6 +1369,34 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
   return { verdict: "propose" };
 }
 
+/**
+ * NON-WIDENABLE FLOOR — the reason code of the floor that makes `eventKey`
+ * propose whatever a governance rule says, or `null` when a rule could resolve
+ * it. A stored `auto` rule on such a key can never fire.
+ *
+ * DERIVED, never a list: it asks {@link decideAgentPolicy} itself with a
+ * rung-2.8 `auto` verdict and no other context. The only rungs that can still
+ * answer "propose" are the ones keyed on the event key alone — today ADMIN,
+ * HUMAN_GATE, ARBITRARY_EXECUTION, AGENT_SCHEMA_DEFINITION and
+ * DESTRUCTIVE_HARD_FLOOR — so a new floor of that shape joins by existing.
+ *
+ * NOT covered, on purpose: context-dependent rungs (2.07 pod-admin schema,
+ * 2.1 forcePropose, 2.55 untrusted origin, 2.56 ceiling). A rule on those keys
+ * still fires whenever the context is absent. Globs (`*`, `entity.*`) also
+ * cover widenable keys, so they are never non-widenable here.
+ */
+export function nonWidenableFloorFor(eventKey: string): string | null {
+  if (eventKey.includes("*")) return null;
+  const dot = eventKey.lastIndexOf(".");
+  if (dot <= 0 || dot === eventKey.length - 1) return null;
+  const decided = decideAgentPolicy({
+    subjectType: eventKey.slice(0, dot),
+    action: eventKey.slice(dot + 1),
+    governanceRuleVerdict: "auto",
+  });
+  return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // GOVERNED-WRITE DOOR VOCABULARY
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1528,6 +1593,11 @@ export const DIRECT_PROPOSAL_DOORS = {
   "governance/governance.widen_lane": "direct",
   "messaging/messaging.external.send": "direct",
   "project/archive": "direct",
+  // Pod hygiene (D5/D7/D9): filed directly, never through the gate; approval is
+  // always a human step.
+  "profile/retire": "direct",
+  "profile/merge": "direct",
+  "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
   "workspace/join": "direct",
 } as const satisfies Record<string, GovernedWriteCreator>;

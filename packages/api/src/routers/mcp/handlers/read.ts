@@ -9,10 +9,14 @@
  */
 
 import { ask } from "../../../services/knowledge/ask.js";
+import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
 import {
-  resolveProfileDescription,
-  resolveProfileIcon,
-} from "../../../utils/profile-presentation.js";
+  toProfileDigest,
+  compactRelationTypes,
+  toLeanEntity,
+  PROFILES_DIGEST_NOTE,
+  ENTITIES_LEAN_NOTE,
+} from "./read-lean.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -201,10 +205,22 @@ export const readHandlers: McpHandlerMap = {
       result.length === 0 && lens.length > 0
         ? `No entities matched under this lens (${lens.join(", ")}). This is a SCOPED empty, not proof the user has none — broaden the scope (drop a filter, omit workspaceId for pod-wide) or call synap_ask before concluding anything is absent.`
         : undefined;
+    // `detail: "full"` = today's rows, unprojected. LEAN (default) — see
+    // `read-lean.ts` for the measured reason (70,138 chars for 50 notes).
+    if ((args.detail as string | undefined) === "full") {
+      return ok({
+        entities: result,
+        count: result.length,
+        ...(note ? { note } : {}),
+      });
+    }
     return ok({
-      entities: result,
+      entities: (result as unknown as Array<Record<string, unknown>>).map(
+        toLeanEntity
+      ),
       count: result.length,
-      ...(note ? { note } : {}),
+      detail: "lean",
+      note: note ?? ENTITIES_LEAN_NOTE,
     });
   },
   synap_get_document: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -437,29 +453,23 @@ export const readHandlers: McpHandlerMap = {
     const wsId = args.workspaceId as string | undefined;
     const wantFull = (args.detail as string | undefined) === "full";
 
-    /** Map a raw profile row to the lightweight digest shape. */
+    /**
+     * Map a raw profile row to the lightweight digest shape (`read-lean.ts`:
+     * the default call measured 117,197 chars live — over the MCP output cap).
+     */
     const toDigest = (
       p: Record<string, unknown>,
       workspaceId?: string
-    ): Record<string, unknown> => {
-      const base: Record<string, unknown> = {
-        id: p.id,
-        slug: p.slug,
-        displayName: p.displayName,
-        entityScope: p.entityScope,
-        // Visibility axis (who can use this profile type) — distinct from
-        // entityScope (placement: where its entities live).
-        scope: p.scope ?? null,
-        description: resolveProfileDescription(p),
-        icon: resolveProfileIcon(p),
-        // Kind + Facets discriminator — lets an agent tell a primary type
-        // (kind) from an attachable facet (role) before creating entities.
-        profileKind: p.profileKind ?? "kind",
-        applicableKinds: p.applicableKinds ?? null,
-      };
-      if (workspaceId !== undefined) base.workspaceId = workspaceId;
-      return base;
-    };
+    ): Record<string, unknown> =>
+      toProfileDigest(p, resolveProfileDescription(p), workspaceId);
+
+    /** Default (digest) relation vocabulary: slugs grouped by lens. */
+    const toDigestRelations = (
+      r: Awaited<ReturnType<typeof relationTypesFor>>
+    ) =>
+      "relationTypes" in r
+        ? { relationTypes: compactRelationTypes(r.relationTypes) }
+        : r;
 
     /**
      * The relation types that resolve for the same lens(es) the profiles were
@@ -509,7 +519,9 @@ export const readHandlers: McpHandlerMap = {
         profiles: (profiles as Array<Record<string, unknown>>).map((p) =>
           toDigest(p)
         ),
-        ...relationTypes,
+        ...toDigestRelations(relationTypes),
+        detail: "digest",
+        note: PROFILES_DIGEST_NOTE,
       });
     }
     // Sorted by id: a STABILITY floor so the first-wins dedupe below picks the
@@ -518,7 +530,17 @@ export const readHandlers: McpHandlerMap = {
     // decision; this only stops the answer changing between identical calls.
     const wsIds = [...(await getUserMemberWorkspaceIds(userId))].sort();
     if (wsIds.length === 0) {
-      return ok({ profiles: [], ...(await relationTypesFor([null])) });
+      const podRelations = await relationTypesFor([null]);
+      return ok(
+        wantFull
+          ? { profiles: [], ...podRelations }
+          : {
+              profiles: [],
+              ...toDigestRelations(podRelations),
+              detail: "digest",
+              note: PROFILES_DIGEST_NOTE,
+            }
+      );
     }
     const perWs = await Promise.all(
       wsIds.map((id) =>
@@ -560,10 +582,17 @@ export const readHandlers: McpHandlerMap = {
         }
       }
     }
+    const relations = await relationTypesFor([null, ...wsIds]);
     return ok({
       profiles: merged,
       ...(workspacesFailed.length ? { workspacesFailed } : {}),
-      ...(await relationTypesFor([null, ...wsIds])),
+      ...(wantFull
+        ? relations
+        : {
+            ...toDigestRelations(relations),
+            detail: "digest",
+            note: PROFILES_DIGEST_NOTE,
+          }),
     });
   },
   synap_get_relations: async (ctx: McpToolContext): Promise<CallToolResult> => {

@@ -29,7 +29,13 @@ const ENFORCING = ["routers/skills.ts"];
  * absence inside the call IS the enforcement. The expired-rule exclusion is
  * also asserted behaviourally in `services/skills/__tests__/search.pglite.test.ts`.
  */
-const ENFORCING_VIA_VISIBILITY = ["services/skills/search.ts"];
+const ENFORCING_VIA_VISIBILITY = [
+  "services/skills/search.ts",
+  // `synap_load_skill` catalog + resolver: its prose lands
+  // in an agent's context. Behaviour pinned in
+  // `services/skills/__tests__/skill-ranking.pglite.test.ts`.
+  "services/capability-briefs/load-skill.ts",
+];
 const MUST_NOT_ENFORCE = ["routers/hub-protocol/rest/rules.ts"];
 
 /**

@@ -77,6 +77,14 @@ export function registerProfileExecutors(): void {
         userId,
         workspaceId,
         workspaceRole: membership.role,
+        // Provenance (0263): server-only ctx, never tRPC input. The kind is
+        // the PROPOSAL's — agent-authored when an agent filed it — and the
+        // proposal owns the row (retire-on-revert lineage).
+        profileProvenance: {
+          origin: proposal.agentUserId ? "agent" : "authored",
+          ownerKind: "proposal",
+          ownerId: input.proposalId,
+        },
       } as unknown as Context);
       const result = await profileCaller.create({
         slug,

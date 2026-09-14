@@ -32,6 +32,8 @@ import type {
   ReconcileEntityScopeOp,
   RemapPropertyValuesOp,
   MoveBasePropertyToFacetOp,
+  RenamePropertyKeyOp,
+  MergeIntoScope,
 } from "./manifest.js";
 import {
   validateManifest,
@@ -40,6 +42,11 @@ import {
 } from "./manifest.js";
 import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
 import { foldPropertyKey } from "../services/did-you-mean.js";
+import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
+import {
+  backfillConversionRetirements,
+  type RetirementBackfillResult,
+} from "./retirement-backfill.js";
 
 /**
  * One FIELD-level line of what a repoint does (or did) to a property def or a
@@ -106,6 +113,10 @@ export interface OpCounts {
   entitiesBasePropertyStripped?: number;
   /** moveBasePropertyToFacet: entities with the source value but NO live target facet — left untouched, counted for follow-up. */
   entitiesSkippedNoFacet?: number;
+  /** renamePropertyKey: entities whose sourceKey was renamed/stripped. */
+  entitiesKeyRenamed?: number;
+  /** renamePropertyKey: of those, entities that carried BOTH keys — the losing value was discarded per onConflict. */
+  entitiesKeyConflicts?: number;
 }
 
 export type OpStatus =
@@ -197,6 +208,7 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   // ADVISORY — per-entity value/scope remaps; data stays dual-readable.
   remapPropertyValues: "advisory",
   moveBasePropertyToFacet: "advisory",
+  renamePropertyKey: "advisory",
   reconcileEntityScope: "advisory",
   keep: "advisory",
   extractNonEntity: "advisory",
@@ -228,6 +240,11 @@ export interface RunSummary {
   results: OpResult[];
   /** True if any op ended in `error`. */
   hadError: boolean;
+  /**
+   * The pre-loop tombstone backfill for rows drained by an already-LEDGERED
+   * destructive tail (see retirement-backfill.ts). Counts only in a dry run.
+   */
+  retirementBackfill?: RetirementBackfillResult;
 }
 
 /**
@@ -280,6 +297,18 @@ export async function runConversions(
     SELECT op_key FROM "_conversions" WHERE error IS NULL AND dry_run = false
   `;
   const applied = new Set(appliedRows.map((r) => r.op_key));
+
+  // Tombstone rows an EARLIER run's destructive tail deactivated without one
+  // (tails only started stamping on 2026-09-14). Runs on every real run — boot
+  // included, which runs BEFORE runStartupHooks → reconcileWorkspacesToTemplates
+  // (tripwire: api `conversions-before-template-reconcile`) — so the reconcile
+  // can never revive such a row. Ledgered ops are skipped by the loop below,
+  // which is exactly why this cannot live inside the tail. Dry run: counts only.
+  const retirementBackfill = await backfillConversionRetirements(
+    sql,
+    manifest,
+    { dryRun: options.dryRun }
+  );
 
   const results: OpResult[] = [];
   let hadError = false;
@@ -426,6 +455,7 @@ export async function runConversions(
     destructiveTail: options.destructiveTail,
     results,
     hadError,
+    retirementBackfill,
   };
 }
 
@@ -477,6 +507,8 @@ async function applyOp(
       return applyRemapPropertyValues(tx, op);
     case "moveBasePropertyToFacet":
       return applyMoveBasePropertyToFacet(tx, op);
+    case "renamePropertyKey":
+      return applyRenamePropertyKey(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -514,9 +546,9 @@ async function applySeedKindProfile(
   // never serve.
   assertProfileSlugNotReserved(op.slug);
   const inserted = await tx`
-    INSERT INTO profiles (slug, display_name, ui_hints, scope, entity_scope, profile_kind)
+    INSERT INTO profiles (slug, display_name, ui_hints, scope, entity_scope, profile_kind, origin)
     SELECT ${op.slug}, ${op.displayName}, ${JSON.stringify(op.uiHints ?? {})}::jsonb,
-           'system', ${op.entityScope}, 'kind'
+           'system', ${op.entityScope}, 'kind', 'core'
     WHERE NOT EXISTS (
       SELECT 1 FROM profiles WHERE slug = ${op.slug} AND scope = 'system'
     )
@@ -773,22 +805,114 @@ export async function applyConvertToKind(
 }
 
 /**
- * Resolve the ONE pod-wide canonical row for a slug: `scope='shared'`, active,
- * IGNORING workspace_id (a shared profile always carries workspace_id NULL).
- * Earliest-created wins if a pod somehow carries two. Null when the pod has no
- * shared row for the slug (e.g. foundation never installed).
+ * Resolve the ONE pod-wide canonical row for a slug at a cross-scope target
+ * scope (`'shared'` or `'system'`): active, IGNORING workspace_id (both scopes
+ * carry workspace_id NULL). Earliest-created wins if a pod somehow carries two.
+ * Null when the pod has no such row for the slug (e.g. foundation never
+ * installed, or the system kind was never seeded).
  */
-async function resolveSharedCanonicalId(
+export async function resolveScopedCanonicalId(
   sql: Sql,
-  slug: string
+  slug: string,
+  scope: MergeIntoScope
 ): Promise<string | null> {
   const rows = await sql<Array<{ id: string }>>`
     SELECT id FROM profiles
-    WHERE slug = ${slug} AND scope = 'shared' AND is_active = true
+    WHERE slug = ${slug} AND scope = ${scope} AND is_active = true
     ORDER BY created_at ASC
     LIMIT 1
   `;
   return rows[0]?.id ?? null;
+}
+
+/**
+ * SAME-SCOPE mergeInto pairing: each `from`-slug source row with its canonical
+ * — the earliest active `intoSlug` row at the source's own scope + workspace.
+ * The ONE statement of the rule the same-scope tail and the retirement backfill
+ * share. Two complete queries (active vs inactive sources) rather than an
+ * interpolated predicate, like resolveDedupTarget.
+ */
+export async function sameScopeCanonicalPairs(
+  sql: Sql,
+  intoSlug: string,
+  from: string,
+  sourceActive: boolean
+): Promise<Array<{ id: string; k_id: string }>> {
+  return sourceActive
+    ? sql<Array<{ id: string; k_id: string }>>`
+        SELECT DISTINCT ON (src.id) src.id, k.id AS k_id
+        FROM profiles src
+        JOIN profiles k ON k.slug = ${intoSlug} AND k.scope = src.scope
+          AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
+          AND k.id <> src.id
+        WHERE src.slug = ${from} AND src.is_active = true
+        ORDER BY src.id, k.created_at ASC
+      `
+    : sql<Array<{ id: string; k_id: string }>>`
+        SELECT DISTINCT ON (src.id) src.id, k.id AS k_id
+        FROM profiles src
+        JOIN profiles k ON k.slug = ${intoSlug} AND k.scope = src.scope
+          AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
+          AND k.id <> src.id
+        WHERE src.slug = ${from} AND src.is_active = false
+        ORDER BY src.id, k.created_at ASC
+      `;
+}
+
+// ─── Retirement tombstone (raw-SQL twin of markProfileRetired) ───────────────
+//
+// A destructive tail's drained row is RETIRED ON PURPOSE, so it carries the
+// same `ui_hints.retired` tombstone `markProfileRetired` (profile-repository.ts)
+// writes — otherwise resolveProfileForApply revives it on the next template
+// apply. The engine runs on raw postgres.js `tx`, and the `profiles` raw-write
+// tripwire (api `project-is-not-an-entity-profile`) admits this file only, so
+// the statements live HERE rather than in retirement-backfill.ts. The body is a
+// typed ProfileRetirement and the jsonb expression is markProfileRetired's
+// verbatim; `retirement-tombstone.pglite.test.ts` asserts both writers produce
+// what readProfileRetirement reads identically.
+
+/** The tombstone a conversion writes for a row drained into `mergedInto`. */
+export function conversionRetirement(
+  opKey: string,
+  mergedInto: string,
+  at: Date = new Date()
+): ProfileRetirement {
+  return { at: at.toISOString(), reason: `conversion:${opKey}`, mergedInto };
+}
+
+/** Destructive tail: deactivate ACTIVE drained rows AND stamp the tombstone, in the caller's tx. */
+async function retireDrainedProfiles(
+  tx: Sql,
+  profileIds: string[],
+  retired: ProfileRetirement
+): Promise<number> {
+  if (profileIds.length === 0) return 0;
+  const res = await tx`
+    UPDATE profiles
+    SET is_active = false, ui_hints = coalesce(ui_hints, '{}'::jsonb) || jsonb_build_object('retired', ${JSON.stringify(retired)}::jsonb), updated_at = now()
+    WHERE id = ANY(${profileIds}::uuid[]) AND is_active = true
+  `;
+  return res.count ?? 0;
+}
+
+/**
+ * Backfill: stamp the tombstone on rows ALREADY inactive and not yet
+ * tombstoned. Never touches an active row (a row revived since selection stays
+ * active) and never overwrites an existing tombstone. `is_active` is not written.
+ */
+export async function tombstoneInactiveProfiles(
+  sql: Sql,
+  profileIds: string[],
+  retired: ProfileRetirement
+): Promise<number> {
+  if (profileIds.length === 0) return 0;
+  const res = await sql`
+    UPDATE profiles
+    SET ui_hints = coalesce(ui_hints, '{}'::jsonb) || jsonb_build_object('retired', ${JSON.stringify(retired)}::jsonb), updated_at = now()
+    WHERE id = ANY(${profileIds}::uuid[]) AND is_active = false
+      AND coalesce(jsonb_typeof(coalesce(ui_hints, '{}'::jsonb) -> 'retired'), 'null') NOT IN ('object', 'array')
+  `;
+  return res.count ?? 0;
 }
 
 /**
@@ -801,20 +925,58 @@ async function resolveSharedCanonicalId(
  */
 async function countStrandedSourceRows(
   sql: Sql,
-  slugs: string[]
-): Promise<number> {
-  const rows = await sql<Array<{ n: number }>>`
-    SELECT (
+  sourceProfileIds: string[]
+): Promise<{ entities: number; facets: number }> {
+  // Keyed on source profile IDS (not slugs) so BOTH mergeInto paths share it:
+  // cross-scope passes every row of its source slugs, same-scope passes only
+  // the source rows that have no same-scope canonical to move onto.
+  const rows = await sql<Array<{ entities: number; facets: number }>>`
+    SELECT
       (SELECT COUNT(*) FROM entities e
-        JOIN profiles src ON src.id = e.profile_id
-        WHERE src.slug = ANY(${slugs}::text[]) AND e.deleted_at IS NULL)
-      +
+        WHERE e.profile_id = ANY(${sourceProfileIds}::uuid[]) AND e.deleted_at IS NULL)::int AS entities,
       (SELECT COUNT(*) FROM entity_facets f
-        JOIN profiles src ON src.id = f.profile_id
-        WHERE src.slug = ANY(${slugs}::text[]) AND f.deleted_at IS NULL)
-    )::int AS n
+        WHERE f.profile_id = ANY(${sourceProfileIds}::uuid[]) AND f.deleted_at IS NULL)::int AS facets
   `;
-  return rows[0]?.n ?? 0;
+  return { entities: rows[0]?.entities ?? 0, facets: rows[0]?.facets ?? 0 };
+}
+
+/**
+ * THE stranding refusal, shared by both mergeInto paths. `sources` are source
+ * profile rows the op has NO canonical for. If they carry live data (see
+ * countStrandedSourceRows), throw: runConversions records the failure with
+ * `error` set (never in the applied set), halts, and a later run retries the op
+ * once the canonical exists. Ledgering instead would skip the opKey forever and
+ * strand that data silently. Rows with no live data strand nothing → return, so
+ * a pod that merely declares the legacy slug stays a clean no-op. Throwing
+ * inside applyOp also makes the dry run (planByRollback) report it.
+ */
+async function refuseStrandingNoop(
+  sql: Sql,
+  op: MergeIntoOp,
+  sources: Array<{
+    id: string;
+    slug: string;
+    scope: string | null;
+    workspace_id: string | null;
+  }>,
+  missing: string
+): Promise<void> {
+  if (sources.length === 0) return;
+  const { entities, facets } = await countStrandedSourceRows(
+    sql,
+    sources.map((s) => s.id)
+  );
+  if (entities + facets === 0) return;
+  const rows = sources
+    .map(
+      (s) =>
+        `${s.slug} (scope=${s.scope ?? "NULL"}, workspace=${s.workspace_id ?? "NULL"})`
+    )
+    .join(", ");
+  throw new Error(
+    `mergeInto '${op.opKey}': ${missing}, but ${entities} live entity row(s) and ${facets} live facet row(s) still sit on source row(s) [${rows}] — refusing to record a no-op that would strand them. ` +
+      `Fix: create the '${op.intoSlug}' canonical first (ship the template/seed that creates it BEFORE this op), or defer this op until it exists.`
+  );
 }
 
 /**
@@ -852,19 +1014,35 @@ async function applyMergeIntoCrossScope(
     profilesDeactivated: 0,
   };
 
-  const canonicalId = await resolveSharedCanonicalId(tx, op.intoSlug);
+  const intoScope: MergeIntoScope = op.intoScope ?? "shared";
+  const canonicalId = await resolveScopedCanonicalId(
+    tx,
+    op.intoSlug,
+    intoScope
+  );
   if (!canonicalId) {
     // No pod-wide target. If no data sits on the legacy slugs either, this pod
     // has nothing to move → clean no-op (ledgered, correctly). If live entities
     // or facets DO sit there, ledgering a zero-count "applied" would strand them
     // forever (a later run skips the opKey) — fail loudly instead so the op is
     // retried once the shared role is installed.
-    const stranded = await countStrandedSourceRows(tx, op.fromSlugs);
-    if (stranded > 0) {
-      throw new Error(
-        `mergeInto '${op.opKey}': cross-scope target '${op.intoSlug}' (scope='shared') not found, but ${stranded} live entity/facet row(s) still sit on [${op.fromSlugs.join(", ")}] — refusing to record a no-op that would strand them.`
-      );
-    }
+    const sources = await tx<
+      Array<{
+        id: string;
+        slug: string;
+        scope: string | null;
+        workspace_id: string | null;
+      }>
+    >`
+      SELECT id, slug, scope, workspace_id FROM profiles
+      WHERE slug = ANY(${op.fromSlugs}::text[])
+    `;
+    await refuseStrandingNoop(
+      tx,
+      op,
+      sources,
+      `cross-scope target '${op.intoSlug}' (scope='${intoScope}') not found`
+    );
     return {};
   }
 
@@ -930,12 +1108,15 @@ async function applyMergeIntoCrossScope(
     counts.viewsRewritten! += vw.count ?? 0;
 
     if (destructiveTail) {
-      const deact = await tx`
-        UPDATE profiles
-        SET is_active = false, updated_at = now()
+      const drained = await tx<Array<{ id: string }>>`
+        SELECT id FROM profiles
         WHERE slug = ${from} AND is_active = true AND id <> ${canonicalId}
       `;
-      counts.profilesDeactivated! += deact.count ?? 0;
+      counts.profilesDeactivated! += await retireDrainedProfiles(
+        tx,
+        drained.map((r) => r.id),
+        conversionRetirement(op.opKey, canonicalId)
+      );
     }
   }
 
@@ -948,7 +1129,7 @@ async function applyMergeInto(
   destructiveTail: boolean,
   plan: FieldPlanRow[]
 ): Promise<OpCounts> {
-  if (op.intoScope === "shared") {
+  if (op.intoScope !== undefined) {
     return applyMergeIntoCrossScope(tx, op, destructiveTail, plan);
   }
 
@@ -959,6 +1140,36 @@ async function applyMergeInto(
     viewsRewritten: 0,
     profilesDeactivated: 0,
   };
+
+  // Source rows with NO same-scope canonical (the pairing predicate below,
+  // negated) are skipped by every UPDATE here. If they hold live data, ledgering
+  // this op would strand it forever — refuse the WHOLE op before any write, the
+  // same refusal the cross-scope path makes. A partial apply is refused too:
+  // the ledger cannot record "done except these rows".
+  const unpaired = await tx<
+    Array<{
+      id: string;
+      slug: string;
+      scope: string | null;
+      workspace_id: string | null;
+    }>
+  >`
+    SELECT src.id, src.slug, src.scope, src.workspace_id
+    FROM profiles src
+    WHERE src.slug = ANY(${op.fromSlugs}::text[])
+      AND NOT EXISTS (
+        SELECT 1 FROM profiles k
+        WHERE k.slug = ${op.intoSlug} AND k.scope = src.scope
+          AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
+          AND k.id <> src.id
+      )
+  `;
+  await refuseStrandingNoop(
+    tx,
+    op,
+    unpaired,
+    `no active same-scope/same-workspace '${op.intoSlug}' canonical for some source row(s)`
+  );
 
   for (const from of op.fromSlugs) {
     // property_defs + profile_properties first, then entities, then views.
@@ -1015,18 +1226,24 @@ async function applyMergeInto(
     counts.viewsRewritten! += vw.count ?? 0;
 
     if (destructiveTail) {
-      const deact = await tx`
-        UPDATE profiles src
-        SET is_active = false, updated_at = now()
-        WHERE src.slug = ${from} AND src.is_active = true
-          AND EXISTS (
-            SELECT 1 FROM profiles k
-            WHERE k.slug = ${op.intoSlug} AND k.scope = src.scope
-              AND k.is_active = true AND k.workspace_id IS NOT DISTINCT FROM src.workspace_id
-              AND k.id <> src.id
-          )
-      `;
-      counts.profilesDeactivated! += deact.count ?? 0;
+      // Same row set as the old `EXISTS (canonical)` deactivation; each drained
+      // row's tombstone names ITS canonical (earliest active same-scope row).
+      const drained = await sameScopeCanonicalPairs(
+        tx,
+        op.intoSlug,
+        from,
+        true
+      );
+      const byK = new Map<string, string[]>();
+      for (const d of drained)
+        byK.set(d.k_id, [...(byK.get(d.k_id) ?? []), d.id]);
+      for (const [kId, ids] of byK) {
+        counts.profilesDeactivated! += await retireDrainedProfiles(
+          tx,
+          ids,
+          conversionRetirement(op.opKey, kId)
+        );
+      }
     }
   }
 
@@ -1321,7 +1538,7 @@ class DryRunRollback extends Error {
  */
 async function planByRollback(
   sql: Sql,
-  op: MergeIntoOp | DedupeProfileRowsOp,
+  op: ConversionOp,
   options: RunOptions
 ): Promise<{ counts: OpCounts; planDetail: FieldPlanRow[] }> {
   try {
@@ -1347,7 +1564,7 @@ async function planByRollback(
  * `scope='system'` row (fallback earliest `created_at`); `earliest` takes the
  * earliest outright. Returns null canonical when the slug has no active row.
  */
-async function resolveDedupTarget(
+export async function resolveDedupTarget(
   tx: Sql,
   slug: string,
   canonical: "system" | "earliest"
@@ -1452,12 +1669,15 @@ async function applyDedupeProfileRows(
   counts.viewsRewritten! += vw.count ?? 0;
 
   if (destructiveTail) {
-    const deact = await tx`
-      UPDATE profiles
-      SET is_active = false, updated_at = now()
+    const drained = await tx<Array<{ id: string }>>`
+      SELECT id FROM profiles
       WHERE slug = ${op.slug} AND is_active = true AND id <> ${canonicalId}
     `;
-    counts.profilesDeactivated! += deact.count ?? 0;
+    counts.profilesDeactivated! += await retireDrainedProfiles(
+      tx,
+      drained.map((r) => r.id),
+      conversionRetirement(op.opKey, canonicalId)
+    );
   }
 
   return counts;
@@ -1607,6 +1827,51 @@ export async function applyMoveBasePropertyToFacet(
   return counts;
 }
 
+/**
+ * Rename an entity property key. See RenamePropertyKeyOp for the contract.
+ * ONE statement: the CTE picks the rows (same scoping as
+ * applyRemapPropertyValues — every profile row of `slug`, live entities only,
+ * carrying `sourceKey`) and records whether each already had `targetKey`; the
+ * UPDATE rewrites them and RETURNs that flag, so both counts come from the
+ * rows actually written. `->` carries the value verbatim (any JSON type).
+ * Idempotent: the strip empties the selection for a re-run.
+ */
+export async function applyRenamePropertyKey(
+  tx: Sql,
+  op: RenamePropertyKeyOp
+): Promise<OpCounts> {
+  const keepTarget = op.onConflict === "keepTarget";
+  const r = await tx<Array<{ renamed: number; conflicts: number }>>`
+    WITH picked AS (
+      SELECT e.id, (e.properties ? ${op.targetKey}::text) AS had_target
+      FROM entities e
+      JOIN profiles p ON p.id = e.profile_id AND p.slug = ${op.slug}
+      WHERE e.deleted_at IS NULL
+        AND e.properties ? ${op.sourceKey}::text
+    ),
+    written AS (
+      UPDATE entities e
+      SET properties = CASE
+            WHEN picked.had_target AND ${keepTarget}::boolean
+              THEN e.properties - ${op.sourceKey}::text
+            ELSE (e.properties - ${op.sourceKey}::text)
+              || jsonb_build_object(${op.targetKey}::text, e.properties -> ${op.sourceKey}::text)
+          END,
+          updated_at = now()
+      FROM picked
+      WHERE e.id = picked.id
+      RETURNING picked.had_target
+    )
+    SELECT COUNT(*)::int AS renamed,
+           COUNT(*) FILTER (WHERE had_target)::int AS conflicts
+    FROM written
+  `;
+  const counts: OpCounts = {};
+  if (r[0]?.renamed) counts.entitiesKeyRenamed = r[0].renamed;
+  if (r[0]?.conflicts) counts.entitiesKeyConflicts = r[0].conflicts;
+  return counts;
+}
+
 // ─── Dry-run counting (no writes) ────────────────────────────────────────────
 
 export async function computeCounts(
@@ -1673,7 +1938,10 @@ export async function computeCounts(
     }
     case "mergeInto":
     case "dedupeProfileRows":
-      // Derived, not mirrored: the apply itself, rolled back.
+    case "renamePropertyKey":
+      // Derived, not mirrored: the apply itself, rolled back. (renamePropertyKey
+      // carries no field plan — opCarriesFieldPlan stays merge/dedupe only — but
+      // its counts come from the same rolled-back apply, never a count query.)
       return (await planByRollback(sql, op, options)).counts;
     case "reconcileEntityScope": {
       const r = op.slug

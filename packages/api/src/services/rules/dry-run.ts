@@ -86,6 +86,11 @@ import {
   matchFilters,
   matchTriggerSpecificFilters,
   deriveMessageEnvelope,
+  // Rule scope (entity + project): the SAME gate + fact derivations the live
+  // loop runs, so a scoped rule's preview counts exactly what it could fire on.
+  matchRuleScopeFilters,
+  deriveEventScopeEntityId,
+  resolveEventProjectIds,
 } from "@synap/jobs/workers/automation-trigger-matcher.js";
 // The label SSOT. NEVER hand-write a noun/verb map for a domain token here:
 // `resolveObjectNoun`/`resolveActionLabel` both fall through to `humanizeToken`,
@@ -121,6 +126,8 @@ export const PERSISTED_MESSAGE_TYPES = [
 export interface StoredEventRow {
   id: string;
   type: string;
+  /** Read for rule scope: `entity.*` rows name their entity here. */
+  subjectId: string;
   data: Record<string, unknown> | null;
   timestamp: Date;
 }
@@ -194,9 +201,13 @@ export function toPhysicalEvent(row: {
 }
 
 /**
- * The predicate a dry run evaluates — the SAME three the live worker evaluates
- * at `automation-trigger-matcher.ts` (pattern → filters → trigger-specific),
- * in the same order, over the remapped event.
+ * The predicate a dry run evaluates — the SAME four the live worker evaluates
+ * at `automation-trigger-matcher.ts` (pattern → filters → trigger-specific →
+ * rule scope), in the same order, over the remapped event.
+ *
+ * `projectIds` are the projects the event is on, resolved by the caller
+ * ({@link matchStoredRows}) only for a project-scoped rule. `null` — not read,
+ * or unreadable — never matches a project scope, exactly as live.
  *
  * Everything the live path ALSO does (cycle detection, chain depth, the
  * exactly-once claim, `automation.status`, the governance floor on THEN) is
@@ -204,19 +215,108 @@ export function toPhysicalEvent(row: {
  * and not a firing count.
  */
 export function eventMatchesTrigger(
-  row: { type: string; data: Record<string, unknown> | null },
-  config: AutomationTriggerConfig
+  row: {
+    type: string;
+    data: Record<string, unknown> | null;
+    subjectId?: string | null;
+  },
+  config: AutomationTriggerConfig,
+  projectIds: ReadonlySet<string> | null = null
 ): boolean {
   const physical = toPhysicalEvent(row);
   if (!matchPattern(physical.eventType, config.eventPattern)) return false;
   if (!matchFilters(physical.data, config.filters)) return false;
   const envelope = deriveMessageEnvelope(physical.eventType, physical.data);
-  return matchTriggerSpecificFilters(
-    physical.eventType,
-    physical.data,
-    config,
-    envelope
-  );
+  if (
+    !matchTriggerSpecificFilters(
+      physical.eventType,
+      physical.data,
+      config,
+      envelope
+    )
+  ) {
+    return false;
+  }
+  return matchRuleScopeFilters(physical.eventType, config, {
+    entityId: scopeEntityIdOf(row, physical),
+    projectIds,
+  });
+}
+
+function scopeEntityIdOf(
+  row: { subjectId?: string | null },
+  physical: PhysicalEvent
+): string | undefined {
+  return deriveEventScopeEntityId({
+    eventType: physical.eventType,
+    subjectId: row.subjectId ?? null,
+    data: physical.data,
+  });
+}
+
+/** The live resolver's signature — injectable so the replay is testable without a pod. */
+export type ProjectIdsResolver = typeof resolveEventProjectIds;
+
+/**
+ * Replay stored rows through {@link eventMatchesTrigger}, resolving project
+ * membership only for a project-scoped rule, only for rows that already pass
+ * every other predicate, and ONCE per distinct subject (not per row).
+ *
+ * `unreadableCount` counts rows whose membership could not be read — they are
+ * NOT counted as matches (a failed read is never a match), and the caller says so.
+ */
+export async function matchStoredRows<
+  R extends {
+    type: string;
+    data: Record<string, unknown> | null;
+    subjectId?: string | null;
+  },
+>(
+  rows: readonly R[],
+  config: AutomationTriggerConfig,
+  resolveProjectIds: ProjectIdsResolver = resolveEventProjectIds
+): Promise<{ matched: R[]; unreadableCount: number }> {
+  const matched: R[] = [];
+  let unreadableCount = 0;
+  const cache = new Map<string, Promise<ReadonlySet<string> | null>>();
+  const projectScoped = typeof config.projectId === "string";
+  const withoutProject: AutomationTriggerConfig = projectScoped
+    ? { ...config, projectId: undefined }
+    : config;
+
+  for (const row of rows) {
+    if (!eventMatchesTrigger(row, withoutProject)) continue;
+    if (!projectScoped) {
+      matched.push(row);
+      continue;
+    }
+    const physical = toPhysicalEvent(row);
+    const entityId = scopeEntityIdOf(row, physical);
+    const subjectId = row.subjectId ?? "";
+    const key = [
+      physical.eventType.split(".")[0],
+      subjectId,
+      String(physical.data.channelId ?? ""),
+      entityId ?? "",
+    ].join("|");
+    let pending = cache.get(key);
+    if (!pending) {
+      pending = resolveProjectIds({
+        eventType: physical.eventType,
+        subjectId,
+        data: physical.data,
+        entityId,
+      });
+      cache.set(key, pending);
+    }
+    const projectIds = await pending;
+    if (projectIds === null) {
+      unreadableCount += 1;
+      continue;
+    }
+    if (eventMatchesTrigger(row, config, projectIds)) matched.push(row);
+  }
+  return { matched, unreadableCount };
 }
 
 /**
@@ -285,6 +385,29 @@ export function triggerReplayCaveats(
         break;
       }
     }
+  }
+  return caveats;
+}
+
+/**
+ * What a SCOPED replay cannot see. Membership is read as it is NOW — an entity
+ * moved into the project since the event counts, one moved out does not — and
+ * rows whose membership could not be read are left out, never counted.
+ */
+export function scopeReplayCaveats(
+  config: AutomationTriggerConfig,
+  unreadableCount: number
+): string[] {
+  const caveats: string[] = [];
+  if (typeof config.projectId === "string") {
+    caveats.push(
+      "Project membership is checked as it is today, not as it was when each event happened."
+    );
+  }
+  if (unreadableCount > 0) {
+    caveats.push(
+      `${unreadableCount} event${unreadableCount === 1 ? "" : "s"} could not be checked against the project and ${unreadableCount === 1 ? "was" : "were"} not counted.`
+    );
   }
   return caveats;
 }
@@ -455,6 +578,7 @@ export async function runRuleDryRun(
     .select({
       id: events.id,
       type: events.type,
+      subjectId: events.subjectId,
       data: events.data,
       timestamp: events.timestamp,
     })
@@ -463,10 +587,13 @@ export async function runRuleDryRun(
     .orderBy(desc(events.timestamp))
     .limit(DRY_RUN_SCAN_LIMIT)) as StoredEventRow[];
 
+  const { matched, unreadableCount } = await matchStoredRows(
+    rows,
+    input.triggerConfig
+  );
   let matchingEventCount = 0;
   const samples: RuleDryRunMatch["samples"] = [];
-  for (const row of rows) {
-    if (!eventMatchesTrigger(row, input.triggerConfig)) continue;
+  for (const row of matched) {
     matchingEventCount += 1;
     if (samples.length < SAMPLE_LIMIT) {
       const matchedAs = toPhysicalEvent(row).eventType;
@@ -489,7 +616,10 @@ export async function runRuleDryRun(
     scannedEventCount: rows.length,
     truncated: rows.length >= DRY_RUN_SCAN_LIMIT,
     samples,
-    caveats: triggerReplayCaveats(input.triggerConfig),
+    caveats: [
+      ...triggerReplayCaveats(input.triggerConfig),
+      ...scopeReplayCaveats(input.triggerConfig, unreadableCount),
+    ],
   };
 
   if (input.automationIds && input.automationIds.length > 0) {

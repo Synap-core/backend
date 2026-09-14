@@ -123,6 +123,93 @@ export async function rememberIntakePlanKey(args: {
     );
 }
 
+/**
+ * The refine inputs a capture follow-up answer re-runs structure with. SERVER
+ * ONLY: stored on the session, never in a message. A file source keeps its
+ * EXTRACTED text — the bytes already live in the staged source document.
+ */
+export interface IntakeClarificationRefine {
+  text?: string;
+  url?: string;
+  context?: string;
+  instructions?: string;
+  anchorEntityId?: string;
+  previousEntities?: Array<{
+    tempId: string;
+    profileSlug: string;
+    title: string;
+    description?: string;
+    properties?: Record<string, unknown>;
+  }>;
+}
+
+export interface IntakeClarification {
+  questionMessageId: string;
+  round: number;
+  refine: IntakeClarificationRefine;
+}
+
+/** At most this many previous entities ride a stored refine. */
+export const CLARIFICATION_PREVIOUS_ENTITIES_MAX = 12;
+
+/**
+ * Remember the open clarification on a session (owner-floored), as a jsonb
+ * merge under `metadata.intake.clarification`. Replaces the previous one — only
+ * the latest question can be answered with these inputs. Never touches
+ * `metadata.run` (its single writer is `recordSessionRunManifest`).
+ */
+export async function rememberIntakeClarification(args: {
+  sessionId: string;
+  userId: string;
+  clarification: IntakeClarification;
+}): Promise<void> {
+  const clarification: IntakeClarification = {
+    ...args.clarification,
+    refine: {
+      ...args.clarification.refine,
+      ...(args.clarification.refine.previousEntities
+        ? {
+            previousEntities: args.clarification.refine.previousEntities.slice(
+              0,
+              CLARIFICATION_PREVIOUS_ENTITIES_MAX
+            ),
+          }
+        : {}),
+    },
+  };
+  await db
+    .update(focusSessions)
+    .set({
+      // Merged under `intake` (INTAKE_SESSION_METADATA_KEY) without disturbing
+      // its other keys (door, mintedAt, correlationKey).
+      metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || jsonb_build_object('intake', COALESCE(${focusSessions.metadata} -> 'intake', '{}'::jsonb) || jsonb_build_object('clarification', ${JSON.stringify(clarification)}::jsonb))`,
+    })
+    .where(
+      and(
+        eq(focusSessions.id, args.sessionId),
+        eq(focusSessions.userId, args.userId)
+      )
+    );
+}
+
+/** The stored clarification, or null when absent or malformed. */
+export function readIntakeClarification(
+  metadata: unknown
+): IntakeClarification | null {
+  const c = (metadata as { intake?: { clarification?: unknown } } | null)
+    ?.intake?.clarification as Partial<IntakeClarification> | undefined;
+  if (
+    !c ||
+    typeof c.questionMessageId !== "string" ||
+    typeof c.round !== "number" ||
+    !c.refine ||
+    typeof c.refine !== "object"
+  ) {
+    return null;
+  }
+  return c as IntakeClarification;
+}
+
 function normalizeGoal(goal: string): string {
   return goal.replace(/\s+/g, " ").trim().slice(0, 240) || "Intake";
 }

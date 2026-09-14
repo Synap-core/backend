@@ -58,6 +58,7 @@ export function registerOrientRoutes(app: HubHono): void {
     const detail = c.req.query("detail") === "full" ? "full" : "light";
     const workspaceId = c.req.query("workspaceId") || undefined;
     const projectId = c.req.query("projectId") || undefined;
+    const explain = c.req.query("explain") === "true";
     const scopeParam = c.req.query("scope");
     const scope = scopeParam
       ? (scopeParam
@@ -76,6 +77,7 @@ export function registerOrientRoutes(app: HubHono): void {
         scope,
         workspaceId,
         projectId,
+        explain,
       });
       return c.json(result);
     } catch (err) {

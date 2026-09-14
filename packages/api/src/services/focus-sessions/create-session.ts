@@ -13,6 +13,8 @@ import {
   and,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
+  isProbeWriteContext,
+  stampProbeMarker,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -393,6 +395,8 @@ export async function createFocusSession(
         title,
         goal,
         correlationId: correlationId ?? null,
+        // D8: conditional, so a normal session keeps the metadata column default.
+        ...(isProbeWriteContext() ? { metadata: stampProbeMarker({}) } : {}),
         templateId,
         playbookId: playbook?.id ?? null,
         // Typed origin (migration 0240) — stamped from what this door already

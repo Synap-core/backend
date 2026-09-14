@@ -546,7 +546,9 @@ chatStreamApp.post("/stream", async (c) => {
  *                             the user's personal channel is used.
  *   limit        (optional) — Max messages to return (default 50, max 100).
  *
- * Response: { messages: Array<{ id, role, content, timestamp }> }
+ * Response: { messages: Array<{ id, role, content, timestamp, metadata? }> }
+ *   metadata is present ONLY as `{ capturePart }` on a capture clarification
+ *   message (`@synap-core/types/capture`); every other message omits it.
  * Messages are returned oldest-first so clients can render in order.
  * role is "user" | "assistant" — system messages are excluded.
  */
@@ -632,20 +634,39 @@ chatStreamApp.get("/history", async (c) => {
   // passed here; the helper still owns isNull(deletedAt) + ephemeral=false so
   // catch-me-up recaps never restore into a fresh client's history.
   const rows = await queryChannelMessages<
-    Pick<typeof messages.$inferSelect, "id" | "role" | "content" | "timestamp">
+    Pick<
+      typeof messages.$inferSelect,
+      "id" | "role" | "content" | "timestamp" | "metadata"
+    >
   >(db, {
     channelId,
     order: "desc",
     limit,
-    columns: { id: true, role: true, content: true, timestamp: true },
+    columns: {
+      id: true,
+      role: true,
+      content: true,
+      timestamp: true,
+      metadata: true,
+    },
   });
 
-  // Exclude system messages and return oldest-first for rendering order
+  // Exclude system messages and return oldest-first for rendering order.
+  // Only the capture clarification part rides along (`metadata.capturePart`),
+  // so the chat tab can render a persisted question — never the whole blob
+  // (aiSteps etc. would bloat a restore).
   const filtered = rows
     .filter(
       (m) => m.role === MessageRole.USER || m.role === MessageRole.ASSISTANT
     )
-    .reverse();
+    .reverse()
+    .map(({ metadata, ...m }) => {
+      const capturePart = (metadata as { capturePart?: unknown } | null)
+        ?.capturePart;
+      return capturePart !== undefined && capturePart !== null
+        ? { ...m, metadata: { capturePart } }
+        : m;
+    });
 
   return c.json({ messages: filtered });
 });

@@ -262,6 +262,12 @@ export const CaptureExtractionSchema = z
     text: z.string().optional(),
     /** True when the IS truncated `text`. */
     textTruncated: z.boolean().optional(),
+    /**
+     * The FILE was not read (e.g. `vision_provider_not_configured`) even though
+     * a caption structured — the top-level `degraded` stays false then.
+     */
+    degraded: z.boolean().optional(),
+    degradedReason: z.string().optional(),
   })
   .openapi("CaptureExtraction");
 

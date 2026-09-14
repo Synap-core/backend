@@ -45,7 +45,9 @@ import {
   PropertyValidationService,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
+  deriveProposalProjectId,
 } from "@synap/database";
+import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
@@ -302,6 +304,8 @@ export interface SubmitCaptureGraphInput {
    */
   channelId?: string | null;
   sessionId?: string;
+  /** How `sessionId` was arrived at — see `SessionSource` (@synap/database). */
+  sessionSource?: "explicit" | "derived";
   /**
    * The originating input (the user's instruction, the webhook body, the
    * captured text) retained ONLY in proposal data for review/retry. Not a
@@ -1257,6 +1261,24 @@ export async function submitCaptureGraph(
         // autocommit gives us.
         const captureProposalId = randomUUID();
 
+        // PROJECT LENS parity with the PENDING path (A3). The pending row runs
+        // `insertPendingProposal`'s ladder (explicit → session → channel →
+        // declared focus); this receipt used to stamp only the caller's pin, so
+        // the SAME graph landed in a project when proposed and in none when
+        // auto-applied. Same shared derivation, same inputs — including
+        // `sessionSource`, so a DERIVED session places neither terminal (A1).
+        const receiptProjectId = await deriveProposalProjectId({
+          projectId: resolvedProjectId,
+          sessionId: input.sessionId ?? null,
+          sessionSource: input.sessionSource,
+          threadId: input.channelId ?? null,
+          // Rung 3.5, read exactly as `createPendingProposal` reads it.
+          focusProjectId:
+            !resolvedProjectId && input.agentUserId
+              ? await getAgentFocusProjectId(input.agentUserId)
+              : null,
+        });
+
         // Receipt first. If this insert fails we must NOT stamp the id onto the
         // writes — an id naming no row is the FK failure above. The graph then
         // materializes unstamped (the capture still lands, just without the
@@ -1286,7 +1308,9 @@ export async function submitCaptureGraph(
             summary,
             ...(input.channelId ? { threadId: input.channelId } : {}),
             ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-            ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+            // The LADDER's verdict (above), not only the caller's pin — the
+            // same project the pending row would have stored.
+            ...(receiptProjectId ? { projectId: receiptProjectId } : {}),
             data: {
               operations,
               source,
@@ -1422,7 +1446,7 @@ export async function submitCaptureGraph(
           ? storedScopeOfProposal(captureReceipt)
           : {
               workspaceId,
-              projectId: resolvedProjectId,
+              projectId: receiptProjectId,
               sessionId: input.sessionId ?? null,
             };
         if (captureReceipt?.id) {
@@ -1539,6 +1563,8 @@ export async function submitCaptureGraph(
       : {}),
     ...(input.channelId ? { threadId: input.channelId } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    // A1: the pending insert runs the SAME ladder the receipt above does.
+    ...(input.sessionSource ? { sessionSource: input.sessionSource } : {}),
     ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
     // `bindings` rides alongside operations; the approve flow applies them after
     // materialization (resolving entityRef → real id).

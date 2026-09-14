@@ -1626,6 +1626,8 @@ export const createProcs = {
         const newProfile = await profileRepo.create({
           slug: entity.profileSlug,
           displayName: hints.displayName ?? entity.profileSlug,
+          // An agent is refused at the ProfileRepository floor (D6).
+          origin: "authored",
           uiHints: {
             icon: hints.icon,
             color: hints.color,

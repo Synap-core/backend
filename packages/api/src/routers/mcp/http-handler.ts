@@ -35,18 +35,23 @@ import { apiKeyService } from "../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../access/key-identity.js";
 import { checkHubRateLimit } from "../../utils/hub-protocol-rate-limit.js";
 import { tools } from "./tools/index.js";
-import { createMCPServer } from "./index.js";
+import { createMCPServer, groundingBudgetBytes } from "./index.js";
 import { resolveIssuer } from "../oauth/config.js";
 import {
   db,
-  entities,
   projects,
   workspaceMembers,
   workspaces,
   eq,
   inArray,
-  drizzleSql,
+  runWithProbeWrites,
+  runWithActingAgent,
+  isProbeApiKey,
 } from "@synap/database";
+import {
+  loadEntityUsage,
+  usageByWorkspace,
+} from "../../services/discover/usage-aggregate.js";
 
 /** Workspaces named individually before collapsing to a summary count. */
 const GROUNDING_WS_LIMIT = 12;
@@ -78,36 +83,42 @@ const GROUNDING_WS_LIMIT = 12;
 export function formatGrounding(
   projPart: string,
   workspacesWithCounts: ReadonlyArray<{ id: string; name: string; n: number }>,
-  hasProjects: boolean
+  /**
+   * Byte ceiling (`groundingBudgetBytes()`). Whole workspace entries are
+   * dropped, busiest kept, overflow disclosed; "" when not even the rules fit.
+   */
+  maxBytes = Number.POSITIVE_INFINITY
 ): string {
   // Busiest first: where the user actually works leads, empty scaffolds trail.
   const ranked = [...workspacesWithCounts].sort(
     (a, b) => b.n - a.n || a.name.localeCompare(b.name)
   );
-  const shown = ranked.slice(0, GROUNDING_WS_LIMIT);
-  const hidden = ranked.length - shown.length;
-  const list = shown
-    .map((w) => `${w.name} (${w.id}, ${w.n} entities)`)
-    .join("; ");
-  const more = hidden > 0 ? ` …and ${hidden} more` : "";
   const emptyNote = ranked.some((w) => w.n === 0)
-    ? " Workspaces with 0 entities are empty scaffolds — prefer an active one unless the user names another."
+    ? " 0-entity workspaces are empty scaffolds; prefer an active one unless the user names it."
     : "";
-  const compose = hasProjects
-    ? " Projects organize; workspaces hold the data."
-    : "";
-  // Writes: prefer kind + role (facets); server places via ontology on installed
-  // templates — no hard-coded CRM/Ops ids. Optional workspaceId is an override
-  // pin only. Never invent a random membership as home.
-  return (
-    `${projPart}Domains (installed apps), busiest first: ${list}${more}.${compose}${emptyNote}` +
-    ` For READS omit workspaceId for pod-wide recall across everything you can access.` +
-    ` For WRITES pass kind/profile (+ roles as facets when known); omit workspaceId unless` +
-    ` you deliberately pin one domain — placement is derived from installed profiles.`
-  );
+  // Concept prose lives in the reflexes + lenses skill; grounding carries the
+  // live facts and the one rule a model applies to them.
+  const rules =
+    ` For READS omit workspaceId for pod-wide recall.` +
+    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you deliberately pin one domain.`;
+
+  for (let n = Math.min(ranked.length, GROUNDING_WS_LIMIT); n >= 0; n--) {
+    const shown = ranked.slice(0, n);
+    const hidden = ranked.length - shown.length;
+    const list = shown
+      .map((w) => `${w.name} (${w.id}, ${w.n} entities)`)
+      .join("; ");
+    const more = hidden > 0 ? `${n > 0 ? " " : ""}…and ${hidden} more` : "";
+    const out = `${projPart}Domains, busiest first: ${list}${more}.${emptyNote}${rules}`;
+    if (Buffer.byteLength(out) <= maxBytes) return out;
+  }
+  return "";
 }
 
-async function buildGrounding(userId: string): Promise<string | undefined> {
+/** Exported for the usage-aggregate parity test only. */
+export async function buildGrounding(
+  userId: string
+): Promise<string | undefined> {
   try {
     const memberRows = await db
       .select({ workspaceId: workspaceMembers.workspaceId })
@@ -141,27 +152,17 @@ async function buildGrounding(userId: string): Promise<string | undefined> {
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
 
-    // Entity counts per workspace, so the model can tell a LIVE workspace from
-    // an empty scaffold. One grouped query — `entities.workspaceId` is nullable
-    // (null = pod-wide/global), and those rows simply don't group into any
-    // workspace bucket, which is the behaviour we want here.
-    const countRows = await db
-      .select({
-        workspaceId: entities.workspaceId,
-        n: drizzleSql<number>`count(*)::int`,
-      })
-      .from(entities)
-      .where(inArray(entities.workspaceId, wsIds))
-      .groupBy(entities.workspaceId);
-    const counts = new Map<string, number>();
-    for (const r of countRows) {
-      if (r.workspaceId) counts.set(r.workspaceId, Number(r.n) || 0);
-    }
+    // Counts via the shared usage aggregate (live vs empty scaffold).
+    const counts = usageByWorkspace(
+      await loadEntityUsage({ userId, workspaceIds: wsIds })
+    );
 
-    return formatGrounding(
-      projPart,
-      named.map((w) => ({ ...w, n: counts.get(w.id) ?? 0 })),
-      projNames.length > 0
+    return (
+      formatGrounding(
+        projPart,
+        named.map((w) => ({ ...w, n: counts.get(w.id)?.count ?? 0 })),
+        groundingBudgetBytes()
+      ) || undefined
     );
   } catch {
     return undefined;
@@ -516,7 +517,12 @@ mcpHttpApp.post("/", async (c) => {
   );
   await server.connect(transport);
 
-  return transport.handleRequest(c.req.raw, { parsedBody });
+  // Request write facts: D8 probe key, D6 agent principal.
+  return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
+    runWithActingAgent(agentUserId, () =>
+      transport.handleRequest(c.req.raw, { parsedBody })
+    )
+  );
 });
 
 /**

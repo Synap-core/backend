@@ -29,7 +29,8 @@ export type ConversionOp =
   | DedupeProfileRowsOp
   | ReconcileEntityScopeOp
   | RemapPropertyValuesOp
-  | MoveBasePropertyToFacetOp;
+  | MoveBasePropertyToFacetOp
+  | RenamePropertyKeyOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -193,9 +194,27 @@ export interface MergeIntoOp extends BaseOp {
    *     other workspace.
    *   - If the shared canonical does NOT exist but source rows DO, the op
    *     THROWS rather than ledgering a silent zero-count "applied".
+   *
+   * Set to `"system"` for the same collapse onto the ONE `scope='system'` row
+   * of `intoSlug` (earliest active, workspace_id ignored) — e.g. a
+   * workspace-scoped `devplane_decision_record` kind folding into the system
+   * `decision` kind. Identical semantics (one resolver, parameterized by
+   * scope): facets repointed with collision-skip, a workspace source's BASE
+   * defs land as that workspace's OVERLAY on the system row, entities
+   * repointed (profile_id + type), views rewritten, destructive-tail
+   * deactivation, stranding refusal.
+   *
+   * NOT done by the merge: `entities.workspace_id` is never touched. If the
+   * canonical is `entityScope: pod` and the source was workspace-scoped, the
+   * repointed entities keep their workspace stamp — align them with a
+   * separate, deliberate `reconcileEntityScope` op if pod-wide is intended.
    */
-  intoScope?: "shared";
+  intoScope?: MergeIntoScope;
 }
+
+/** The canonical scopes a cross-scope mergeInto may target (see MergeIntoOp.intoScope). */
+export const MERGE_INTO_SCOPES = ["shared", "system"] as const;
+export type MergeIntoScope = (typeof MERGE_INTO_SCOPES)[number];
 
 /** Ledger-recorded no-op: this slug is intentionally kept as-is. Audit trail. */
 export interface KeepOp extends BaseOp {
@@ -342,6 +361,44 @@ export interface MoveBasePropertyToFacetOp extends BaseOp {
   targetKey?: string;
 }
 
+/**
+ * Rename an entity property KEY (value carried verbatim, any JSON type) — the
+ * data half of folding a kind whose keys differ from the canonical's (e.g.
+ * `rationale` → `decisionRationale`). Property defs move separately.
+ *
+ * Scope mirrors `remapPropertyValues`: every entity whose profile row carries
+ * `slug` (ALL rows of that slug pod-wide, any scope/workspace, active or not);
+ * soft-deleted entities are skipped. Per matching entity that has `sourceKey`:
+ *   - `targetKey` absent → the value moves to `targetKey`;
+ *   - both present → `onConflict` decides: `keepTarget` keeps the existing
+ *     target value, `keepSource` overwrites it with the source value; the
+ *     losing value is discarded and counted (`entitiesKeyConflicts`);
+ *   - `sourceKey` is ALWAYS stripped.
+ *
+ * Idempotent: after a run no matching entity carries `sourceKey`, so a re-run
+ * selects nothing. NOT destructive-tail (no profile row is deactivated), so
+ * `opHasDestructiveTail` is false; mark `deferAtBoot: true` for a cutover an
+ * operator must run deliberately (same posture as `crm.deal-stage.commercial-fold`).
+ */
+export interface RenamePropertyKeyOp extends BaseOp {
+  op: "renamePropertyKey";
+  /** Profile slug whose entities are rewritten. */
+  slug: string;
+  /** Entity-property key read, then always stripped. */
+  sourceKey: string;
+  /** Entity-property key the value is written into. Must differ from sourceKey. */
+  targetKey: string;
+  /** Which value survives when an entity already carries BOTH keys. */
+  onConflict: RenamePropertyKeyConflict;
+}
+
+export const RENAME_PROPERTY_KEY_CONFLICTS = [
+  "keepTarget",
+  "keepSource",
+] as const;
+export type RenamePropertyKeyConflict =
+  (typeof RENAME_PROPERTY_KEY_CONFLICTS)[number];
+
 /** A versioned manifest — the ordered list the engine walks. */
 export interface ConversionManifest {
   version: number;
@@ -359,18 +416,18 @@ export interface ConversionManifest {
 export const CONVERSION_MANIFEST: ConversionManifest = {
   version: 1,
   ops: [
+    // RETIRED 2026-09-14 (founder): `item` is not a kind — everything is an
+    // item. This was a live `seedKindProfile` (2026-07 → 2026-09-14), so pods
+    // that booted it carry an active system `item` row; flipping the op body to
+    // a `keep` in place (same opKey, append-only discipline — mirrors the
+    // w4.convert.* retirements below) only stops FRESH pods seeding it. Existing
+    // `item` rows and their entities fold into `note` via
+    // w10.merge.item-capture-into-note at the tail of the manifest.
     {
-      op: "seedKindProfile",
+      op: "keep",
       opKey: "w3a.seed.item",
       slug: "item",
-      displayName: "Item",
-      entityScope: "pod",
-      uiHints: {
-        icon: "box",
-        color: "#64748B",
-        description: "A generic captured item — the default kind for capture",
-        captureDefault: true,
-      },
+      note: "RETIRED 2026-09-14 (founder): item is not a kind — everything is an item. Fresh pods no longer seed it; existing rows fold via w10.merge.item-capture-into-note.",
     },
     {
       op: "keep",
@@ -388,7 +445,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w3a.keep.note",
       slug: "note",
-      note: "Superseded by w3c.merge.note-capture-into-item — note merges into the universal 'item' kind (entry retained per append-only opKey discipline).",
+      note: "Note is a PRIMARY kind (founder, 2026-09-14 — reverses D2). The w3c.merge.note-capture-into-item fold into 'item' is retired to a keep; item + capture fold INTO note via w10.merge.item-capture-into-note (entry retained per append-only opKey discipline).",
     },
 
     // ─── Wave 3C: CRM-family conversions + merges ──────────────────────────
@@ -543,41 +600,31 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       contextFromProperty: "lead-campaign",
     },
 
-    // note + capture → item, the universal capture kind (item seeded by
-    // w3a.seed.item above — op order keeps that seed first). `capture` is no
-    // longer seeded by ensure-system-profiles.ts (see its comment there), so on
-    // a FRESH pod that fromSlug resolves to zero rows and this half is a no-op.
-    // It is NOT a no-op everywhere: a pod seeded before that removal keeps its
-    // system `capture` row (the live pod still carries an active one). There,
-    // boot applies this op non-destructively (index.ts runs runConversions
-    // with dryRun:false, deferDestructive:true) — capture entities are
-    // repointed onto `item` — and deactivating the drained row waits for an
-    // operator's --destructive-tail run.
+    // ── RETIRED 2026-09-14: note + capture → item.
     //
-    // DECISION D2 (approved): note is retired as a kind and folded into
-    // `item` — a note IS an item with a prose doc. This op is authoritative
-    // over the earlier `w3a.keep.note` audit entry (whose note text now points
-    // here). There is NO runtime contradiction: `keep` ops are pure ledger
-    // no-ops (applyOp returns {} — see engine.ts), so they touch no data; the
-    // engine applies ops in array order and this `mergeInto` is the only op
-    // that acts on `note`. Ordering alone makes the merge win outright, so the
-    // resolution is documentation-only — no clarifying op is required. Per the
-    // append-only discipline the earlier keep was NOT deleted.
+    // DECISION D2 ("note is retired as a kind and folded into `item` — a note
+    // IS an item with a prose doc", approved 2026-07) is REVERSED 2026-09-14 by
+    // the founder: `item` carries no meaning (everything is an item) and `note`
+    // is a first-class kind. This op was a live `mergeInto` from 2026-07-09.
+    // Its entity repoint ran on pods that ledgered it (the live pod did — its
+    // destructive tail never ran, so note/capture/item all stayed active); on
+    // any pod where it is NOT yet ledgered, the next operator
+    // `--destructive-tail` run would either merge today's notes INTO item (the
+    // exact reverse of the decision) or, on a pod with no `item` row, hit the
+    // stranding refusal and halt the whole run.
     //
-    // Data preserved (mergeInto semantics — engine.ts applyMergeInto): each
-    // note/capture entity is repointed to the `item` profile and its
-    // entities.type set to "item"; the row's `properties` JSONB and its
-    // `documentId` (the prose doc) are untouched, so a note survives as an item
-    // carrying the same prose + props. property_defs / profile_properties move
-    // onto `item` (collision-skipped) and views are re-pointed. Deactivation of
-    // the drained `note`/`capture` source profiles is gated behind
-    // --destructive-tail (the canary), so the kind is retired only on a
-    // deliberate operator run.
+    // So the op body is flipped to a `keep` in place (same opKey — append-only
+    // discipline, mirroring the w4.convert.* retirements). A keep has no
+    // destructive tail, so boot ledgers it as a no-op and neither hazard can
+    // fire. Already-merged data moves back via the NEW-opKey
+    // w10.merge.item-capture-into-note at the manifest tail (a ledgered opKey
+    // never re-runs, so the inverse needs its own key — the w6.revert.*
+    // precedent).
     {
-      op: "mergeInto",
+      op: "keep",
       opKey: "w3c.merge.note-capture-into-item",
-      fromSlugs: ["note", "capture"],
-      intoSlug: "item",
+      slug: "note",
+      note: "RETIRED 2026-09-14 (founder reverses D2): note is a primary kind, item is not a kind. No longer merges note/capture into item; pods that applied it are folded back by w10.merge.item-capture-into-note.",
     },
 
     // Primary kinds staying as-is (relationship-objects / time-bound /
@@ -1116,6 +1163,51 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       opKey: "w8.reconcile.person",
       slug: "person",
     },
+
+    // ─── Wave 10: `note` is a primary kind; item + capture fold into it ─────────
+    //
+    // Founder decision 2026-09-14 (reverses D2 — see the retired
+    // w3c.merge.note-capture-into-item above): `item` is not a kind, `note` is.
+    // The dormant `capture` kind (no longer seeded by ensure-system-profiles.ts)
+    // folds in too. Mistyped items (a person captured as an item, agent lessons)
+    // are NOT re-typed here — they land on `note`, and any re-type is a separate
+    // per-entity, human-approved proposal. Never auto re-type in a conversion.
+
+    // (1) Record `note` as a protected primary kind: ui_hints.protected = true so
+    // hygiene/retire UX refuses to demote it again. Not destructive → auto-applies
+    // at boot.
+    {
+      op: "declareKind",
+      opKey: "w10.declare.note",
+      slug: "note",
+      protected: true,
+    },
+
+    // (2) Fold item + capture into note. SAME-SCOPE on purpose: on the live pod
+    // all three rows are `scope=system` with the SAME workspace stamp, which is
+    // exactly the same-scope pairing predicate (k.scope = src.scope AND
+    // k.workspace_id IS NOT DISTINCT FROM src.workspace_id). A source row with no
+    // such canonical and live data is REFUSED (stranding refusal), never ledgered.
+    // Repoints entities (profile_id + type='note'), property defs/links
+    // (collision-skipped) and views.scope_profile_ids; entity_facets are NOT
+    // touched (a facet's profile is its role, not its kind).
+    //
+    // Destructive-tail by type → boot DEFERS it; an operator runs
+    // `--apply --only w10.merge.item-capture-into-note --destructive-tail`
+    // (repoint + deactivation of item/capture as one unit). On a fresh pod there
+    // is no item/capture row, so it is a clean no-op when an operator runs it.
+    //
+    // POST-MIGRATION: entities.type changes item→note, so the Typesense
+    // `entityType` docs and `entity_vectors.entity_type` of the folded entities
+    // are stale until reindexed (same gap as w6).
+    {
+      op: "mergeInto",
+      opKey: "w10.merge.item-capture-into-note",
+      fromSlugs: ["item", "capture"],
+      intoSlug: "note",
+    },
+
+    // No reconcileEntityScope: note is pod-scope and notes keep their home workspace; capture had no live entities (2026-09-14).
   ],
 };
 
@@ -1134,9 +1226,18 @@ export const CONVERSION_OP_TYPES = [
   "reconcileEntityScope",
   "remapPropertyValues",
   "moveBasePropertyToFacet",
-] as const;
+  "renamePropertyKey",
+] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
+
+// Coverage floor: an op added to the `ConversionOp` union but not to
+// CONVERSION_OP_TYPES makes this `never` and stops the build (validateManifest
+// would otherwise reject the new op as "unknown type" at runtime).
+type _OpTypesCoverUnion =
+  Exclude<ConversionOp["op"], ConversionOpType> extends never ? true : never;
+const _opTypesCoverUnion: _OpTypesCoverUnion = true;
+void _opTypesCoverUnion;
 
 /** Collect every opKey in the manifest, in order. */
 export function collectOpKeys(manifest: ConversionManifest): string[] {
@@ -1277,9 +1378,12 @@ export function validateManifest(manifest: ConversionManifest): void {
             );
           }
         }
-        if (op.intoScope !== undefined && op.intoScope !== "shared") {
+        if (
+          op.intoScope !== undefined &&
+          !(MERGE_INTO_SCOPES as readonly string[]).includes(op.intoScope)
+        ) {
           throw new Error(
-            `Conversion manifest: mergeInto '${op.opKey}' has invalid intoScope '${op.intoScope}' (only 'shared' is supported)`
+            `Conversion manifest: mergeInto '${op.opKey}' has invalid intoScope '${op.intoScope}' (supported: ${MERGE_INTO_SCOPES.join(", ")})`
           );
         }
         break;
@@ -1323,6 +1427,25 @@ export function validateManifest(manifest: ConversionManifest): void {
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.sourceKey, "sourceKey");
         requireSlug(op.opKey, op.facetSlug, "facetSlug");
+        break;
+      case "renamePropertyKey":
+        requireSlug(op.opKey, op.slug);
+        requireSlug(op.opKey, op.sourceKey, "sourceKey");
+        requireSlug(op.opKey, op.targetKey, "targetKey");
+        if (op.sourceKey === op.targetKey) {
+          throw new Error(
+            `Conversion manifest: renamePropertyKey '${op.opKey}' sourceKey and targetKey must differ (both '${op.sourceKey}')`
+          );
+        }
+        if (
+          !(RENAME_PROPERTY_KEY_CONFLICTS as readonly string[]).includes(
+            op.onConflict
+          )
+        ) {
+          throw new Error(
+            `Conversion manifest: renamePropertyKey '${op.opKey}' has invalid onConflict '${op.onConflict}' (supported: ${RENAME_PROPERTY_KEY_CONFLICTS.join(", ")})`
+          );
+        }
         break;
     }
   }

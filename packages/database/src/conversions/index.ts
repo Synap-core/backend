@@ -13,6 +13,8 @@ export type {
   SeedKindProfileOp,
   ConvertToFacetOp,
   MergeIntoOp,
+  MergeIntoScope,
+  RenamePropertyKeyOp,
   KeepOp,
   ExtractNonEntityOp,
 } from "./manifest.js";
@@ -41,3 +43,8 @@ export {
   CONVERSION_BOOT_SEVERITY,
 } from "./engine.js";
 export { parseOnlyArgs, selectManifestOps } from "./select.js";
+export {
+  backfillConversionRetirements,
+  type RetirementBackfillResult,
+  type RetirementBackfillOpResult,
+} from "./retirement-backfill.js";

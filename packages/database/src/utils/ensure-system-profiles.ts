@@ -1711,6 +1711,7 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
           uiHints: profile.uiHints,
           scope: ProfileScope.SYSTEM,
           entityScope: expectedScope,
+          origin: "core",
         });
         createdProfiles.set(profile.slug, created.id);
         profilesCreated++;
@@ -2592,6 +2593,7 @@ export async function ensureDevplaneProfiles(): Promise<EnsureSystemProfilesResu
           uiHints: profile.uiHints,
           scope: ProfileScope.SYSTEM,
           entityScope: "workspace",
+          origin: "core",
         });
         createdProfiles.set(profile.slug, created.id);
         profilesCreated++;
@@ -2875,6 +2877,7 @@ export async function ensureTeamMemberRoleProfile(): Promise<EnsureSystemProfile
         profileKind: "role",
         applicableKinds: ["person"],
         scope: ProfileScope.SYSTEM,
+        origin: "core",
         uiHints: {
           icon: "users",
           color: "#22C55E",

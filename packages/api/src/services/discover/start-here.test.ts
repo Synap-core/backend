@@ -1,0 +1,200 @@
+/**
+ * orient `startHere` — the briefing SHAPE and its honesty rules, through the
+ * real `buildStartHere` with its door seams stubbed:
+ *
+ *   - pending review is the FIRST key, and carries a link to the oldest
+ *     proposal (the one to review first);
+ *   - an unreadable section is `{ status: "unavailable" }`, never 0 / [] —
+ *     a failed sessions read must not brief "nothing is open";
+ *   - top kinds are KINDS (roles excluded) with usage, and keep the rank the
+ *     whole listing gave them;
+ *   - the skill pointer is a slug, not a door-specific tool name.
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const h = vi.hoisted(() => ({
+  sessions: [] as Array<{
+    id: string;
+    goal: string | null;
+    startedAt: Date | null;
+  }>,
+  sessionsThrow: false,
+  capsThrow: false,
+}));
+
+vi.mock("../../routers/mcp/handlers/shared.js", () => ({
+  listOpenFocusSessions: async (
+    _userId: string,
+    _limit: number,
+    opts: { onError?: string }
+  ) => {
+    if (h.sessionsThrow) {
+      if (opts?.onError === "throw") throw new Error("pool exhausted");
+      return [];
+    }
+    return h.sessions;
+  },
+}));
+vi.mock("../capabilities/capability-registry.js", () => ({
+  listCapabilities: async () => {
+    if (h.capsThrow) throw new Error("registry down");
+    return [];
+  },
+}));
+vi.mock("../capabilities/action-projection.js", () => ({
+  projectRunnableActions: () => [
+    { label: "Send email" },
+    { label: "Search web" },
+    { label: "List events" },
+    { label: "Fourth" },
+  ],
+}));
+vi.mock("./profile-ranking.js", () => ({
+  USED_MOST_LIMIT: 8,
+  profileDisplayName: (p: { displayName?: string; slug: string }) =>
+    p.displayName ?? p.slug,
+  rankProfilesByUsage: async ({
+    profiles,
+  }: {
+    profiles: Array<{ slug: string }>;
+  }) => ({
+    ranked: profiles.map((p, i) => ({
+      profile: p,
+      rank: i + 1,
+      score: p.slug === "unused" ? 0 : 10 - i,
+      entityCount: p.slug === "unused" ? 0 : 3,
+      lastActivityAt: null,
+      origin: { origin: "core", group: "core" },
+    })),
+    groups: [],
+  }),
+}));
+vi.mock("../../utils/deep-links.js", () => ({
+  openLink: (id: string) => `https://pod.example/open/${id}`,
+}));
+
+import { buildStartHere } from "./start-here.js";
+
+const caller = {
+  profiles: {
+    listProfiles: async () => ({
+      profiles: [
+        {
+          id: "p-client",
+          slug: "client",
+          displayName: "Client",
+          profileKind: "role",
+        },
+        {
+          id: "p-task",
+          slug: "task",
+          displayName: "Task",
+          profileKind: "kind",
+        },
+        {
+          id: "p-unused",
+          slug: "unused",
+          displayName: "Unused",
+          profileKind: "kind",
+        },
+      ],
+    }),
+  },
+} as never;
+
+const build = (pending: Parameters<typeof buildStartHere>[0]["pending"]) =>
+  buildStartHere({
+    caller,
+    userId: "u1",
+    pending,
+    learnMoreSkill: "system/synap/lenses",
+  });
+
+beforeEach(() => {
+  h.sessions = [];
+  h.sessionsThrow = false;
+  h.capsThrow = false;
+});
+
+describe("startHere", () => {
+  it("leads with pending review, linking the oldest proposal", async () => {
+    const s = await build({
+      status: "ok",
+      count: 4,
+      oldestDays: 6,
+      oldestId: "prop-old",
+    });
+    expect(Object.keys(s)).toEqual([
+      "pendingReview",
+      "openSessions",
+      "topKinds",
+      "actions",
+      "learnMore",
+    ]);
+    expect(s.pendingReview).toEqual({
+      count: 4,
+      oldestDays: 6,
+      oldestLink: "https://pod.example/open/prop-old",
+      lens: "authored",
+    });
+  });
+
+  it("an unreadable pending queue is unavailable, not zero", async () => {
+    const s = await build({ status: "unavailable" });
+    expect(s.pendingReview).toEqual({ status: "unavailable" });
+  });
+
+  it("names the newest open work session and flags a capped count", async () => {
+    h.sessions = Array.from({ length: 10 }, (_, i) => ({
+      id: `s${i}`,
+      goal: i === 0 ? "Ship W4" : null,
+      startedAt: new Date("2026-09-14T08:00:00Z"),
+    }));
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.openSessions).toMatchObject({
+      count: 10,
+      countIsLowerBound: true,
+      newest: { id: "s0", goal: "Ship W4" },
+    });
+  });
+
+  it("a failed sessions read is unavailable — never '0 open'", async () => {
+    h.sessionsThrow = true;
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.openSessions).toEqual({ status: "unavailable" });
+  });
+
+  it("top kinds exclude roles and unused kinds, and keep the listing rank", async () => {
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.topKinds).toEqual([
+      {
+        slug: "task",
+        name: "Task",
+        entityCount: 3,
+        lastActivityAt: null,
+        rank: 2,
+      },
+    ]);
+  });
+
+  it("actions: count + three examples + the lens they were read at; failure is unavailable", async () => {
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.actions).toEqual({
+      count: 4,
+      examples: ["Send email", "Search web", "List events"],
+      lens: "pod",
+    });
+    h.capsThrow = true;
+    expect(
+      (await build({ status: "ok", count: 0, oldestDays: 0 })).actions
+    ).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("an empty queue still states its lens", async () => {
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.pendingReview).toEqual({ count: 0, lens: "authored" });
+  });
+});

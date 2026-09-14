@@ -36,6 +36,7 @@ import {
 } from "./index.js";
 import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
+import { applyRuleProjectScope } from "./scope.js";
 import { readRuleSentence } from "./sentence-schema.js";
 import { automations, eq, inArray } from "@synap/database";
 
@@ -139,11 +140,15 @@ export type CreateRuleGovernedResult =
        */
       automationIds: string[];
       needsBehaviour?: RuleBehaviourGap;
+      /** Present when the rule is LIMITED to its project (`./scope.ts`). */
+      scopeNote?: string;
     }
   | {
       status: "proposed";
       proposalId: string;
       needsBehaviour?: RuleBehaviourGap;
+      /** Same as on `created`: what the rule will be limited to once approved. */
+      scopeNote?: string;
     }
   | {
       status: "denied";
@@ -223,6 +228,7 @@ export async function createRuleGoverned(
   // not cost the owner a proposal to review. A refusal names the clause.
   const draft = input.draft === true;
   let compiled: ReturnType<typeof compileRuleSentence> | null = null;
+  let scopeNote: string | undefined;
   if (input.sentence !== undefined && input.sentence !== null) {
     const sentence = readRuleSentence(input.sentence);
     if (!sentence) {
@@ -257,6 +263,17 @@ export async function createRuleGoverned(
           failure: compiled.failure,
         };
       }
+      // ── SCOPE: the project lens must reach the MATCHER, not only metadata ──
+      // Refused by clause when the WHEN cannot be limited — see `./scope.ts`.
+      const scoped = applyRuleProjectScope(compiled, input.scope.projectId);
+      if (!scoped.ok) {
+        return {
+          status: "denied",
+          reason: scoped.failure.reason,
+          failure: scoped.failure,
+        };
+      }
+      ({ compiled, scopeNote } = scoped);
     }
   }
 
@@ -331,6 +348,7 @@ export async function createRuleGoverned(
       status: "proposed",
       proposalId: perm.proposalId,
       ...(needsBehaviour ? { needsBehaviour } : {}),
+      ...(scopeNote ? { scopeNote } : {}),
     };
   }
 
@@ -548,5 +566,6 @@ export async function createRuleGoverned(
     ruleId: materializedId,
     automationIds,
     ...(needsBehaviour ? { needsBehaviour } : {}),
+    ...(scopeNote ? { scopeNote } : {}),
   };
 }

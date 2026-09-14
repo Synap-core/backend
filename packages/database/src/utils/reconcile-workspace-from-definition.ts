@@ -428,6 +428,11 @@ export async function reconcileWorkspaceFromDefinition(
       if (!dryRun) {
         resolved = await profileRepo.create({
           slug: profile.slug,
+          // Installed by a workspace definition; the workspace is the owner
+          // whose removal should retire it.
+          origin: "template",
+          ownerKind: "workspace",
+          ownerId: workspaceId,
           displayName: profile.displayName,
           uiHints: {
             icon: resolvedIcon,

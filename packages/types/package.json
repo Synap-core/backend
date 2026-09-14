@@ -137,6 +137,10 @@
       "types": "./dist/navigation/index.d.ts",
       "import": "./dist/navigation/index.js"
     },
+    "./capture": {
+      "types": "./dist/capture/index.d.ts",
+      "import": "./dist/capture/index.js"
+    },
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"

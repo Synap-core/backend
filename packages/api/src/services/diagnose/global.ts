@@ -63,6 +63,11 @@ import {
   type SchemaContractSignal,
 } from "./schema-contract.js";
 import {
+  gatherSchemaHygieneSignal,
+  summarizeSchemaHygiene,
+  type SchemaHygieneSignal,
+} from "./schema-hygiene.js";
+import {
   readQualityByPromptVersionSignal,
   summarizeQualityByPromptVersion,
   type QualityByPromptVersionSignal,
@@ -130,6 +135,11 @@ export interface GlobalSignals {
    * the same reason: absent means NOT COMPUTED, and no section is emitted.
    */
   schemaContract?: SchemaContractSignal;
+  /**
+   * Pod hygiene (see ./schema-hygiene.ts). Optional: absent means NOT
+   * COMPUTED, and no section is emitted.
+   */
+  schemaHygiene?: SchemaHygieneSignal;
   /**
    * Review outcomes per intake-run prompt version. Optional: absent means NOT
    * COMPUTED (no section); `available: false` means the read FAILED (a section
@@ -334,6 +344,15 @@ export function summarizeGlobalHealth(
 
   if (signals.schemaContract) {
     sections.push(summarizeSchemaContract(signals.schemaContract));
+  }
+
+  if (signals.schemaHygiene) {
+    sections.push(
+      summarizeSchemaHygiene(
+        signals.schemaHygiene,
+        signals.schemaContract?.twins
+      )
+    );
   }
 
   if (signals.qualityByPromptVersion) {
@@ -625,18 +644,24 @@ export async function diagnoseGlobal(params: {
   // this file's counts disagreed with `orient` before. Still independent of
   // `agentActivity` (which depends on `agentRows` from the big Promise.all),
   // so the two awaits run concurrently rather than round-tripping serially.
-  const [agentActivity, reviewQueue, schemaContract, qualityByPromptVersion] =
-    await Promise.all([
-      Promise.all(
-        agentActivityCounts.map(async (a) => ({
-          ...a,
-          cap: await agentDailyProposalCap(a.agentId),
-        }))
-      ),
-      reviewQueueApproval({ userId, workspaceId }),
-      gatherSchemaContractSignal({ userId, workspaceId }),
-      readQualityByPromptVersionSignal({ userId, workspaceId }),
-    ]);
+  const [
+    agentActivity,
+    reviewQueue,
+    schemaContract,
+    qualityByPromptVersion,
+    schemaHygiene,
+  ] = await Promise.all([
+    Promise.all(
+      agentActivityCounts.map(async (a) => ({
+        ...a,
+        cap: await agentDailyProposalCap(a.agentId),
+      }))
+    ),
+    reviewQueueApproval({ userId, workspaceId }),
+    gatherSchemaContractSignal({ userId, workspaceId }),
+    readQualityByPromptVersionSignal({ userId, workspaceId }),
+    gatherSchemaHygieneSignal({ userId, workspaceId }),
+  ]);
 
   return summarizeGlobalHealth(
     {
@@ -651,6 +676,7 @@ export async function diagnoseGlobal(params: {
       agentActivity,
       reviewQueue,
       schemaContract,
+      schemaHygiene,
       qualityByPromptVersion,
     },
     { workspaceId }

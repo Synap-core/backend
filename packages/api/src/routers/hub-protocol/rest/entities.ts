@@ -21,6 +21,7 @@ import {
   and,
   isNull,
   getEffectiveFacets,
+  notProbeEntityWhere,
 } from "@synap/database";
 import { inArray } from "drizzle-orm";
 import { storage } from "@synap/storage";
@@ -830,7 +831,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
           and(
             inArray(entities.id, rankedIds),
             isNull(entities.deletedAt),
-            floor
+            floor,
+            // D8: a test-key probe row is never a search hit.
+            notProbeEntityWhere()
           )
         );
 

@@ -13,7 +13,7 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { proposals, type db as DatabaseHandle } from "@synap/database";
+import { proposals, users, type db as DatabaseHandle } from "@synap/database";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import { findRejectedConnectionSyncImport } from "./pending-capture-dedup.js";
 import {
@@ -22,6 +22,10 @@ import {
 } from "../services/import/structuring.js";
 
 const OWNER = "user-1";
+/** An agent-user the owner created — the owner's authorship lineage. */
+const OWNER_AGENT = "agent-of-user-1";
+/** Another human's agent — outside the owner's lineage. */
+const OTHER_AGENT = "agent-of-user-2";
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
 
@@ -96,6 +100,14 @@ describe("findRejectedConnectionSyncImport", () => {
   beforeAll(async () => {
     client = new PGlite();
     await client.exec(ddlFor(proposals as unknown as PgTable));
+    // The owner floor is the authorship lineage (`authoredByUser`), whose
+    // subquery reads `users`: the owner's agent-users, and another human's.
+    await client.exec(ddlFor(users as unknown as PgTable));
+    await client.query(
+      `insert into users (id, user_type, created_by_user_id) values
+         ($1, 'human', null), ($2, 'agent', $1), ('user-2', 'human', null), ($3, 'agent', 'user-2')`,
+      [OWNER, OWNER_AGENT, OTHER_AGENT]
+    );
     database = drizzle(client) as unknown as typeof DatabaseHandle;
   });
   beforeEach(async () => {
@@ -133,5 +145,28 @@ describe("findRejectedConnectionSyncImport", () => {
     // Non-vacuity: the same fixtures DO match once a matching row exists.
     const id = await fileSyncImport({ status: "rejected", operations: ops });
     expect(await lookup(ops)).toEqual({ id });
+  });
+
+  it("finds a rejection filed through the owner's AGENT (agent id in createdBy), never another human's agent", async () => {
+    // `createdBy` is overloaded: a sync import filed by the owner's agent
+    // carries the AGENT's id. A bare `createdBy = owner` floor missed it, so the
+    // next sync tick re-filed the graph the owner had declined.
+    const ops = contacts("jelle@acme-corp.io");
+    const mine = await fileSyncImport({
+      status: "rejected",
+      operations: ops,
+      createdBy: OWNER_AGENT,
+    });
+    expect(await lookup(ops)).toEqual({ id: mine });
+
+    await client.exec("delete from proposals;");
+    const theirs = await fileSyncImport({
+      status: "rejected",
+      operations: ops,
+      createdBy: OTHER_AGENT,
+    });
+    expect(await lookup(ops)).toBeNull();
+    // Non-vacuity: that rejection IS found for its own owner.
+    expect(await lookup(ops, { userId: "user-2" })).toEqual({ id: theirs });
   });
 });

@@ -246,6 +246,13 @@ export const PROTECTED_ENVELOPE_FIELDS = [
   // revise that could set it would let any reviser suppress automations on an
   // unrelated approval, or plant `keepSyncing` on a pending import.
   "connectionSync",
+  // `sessionSource` — stamped ONLY by `insertPendingProposal` when the row's
+  // session was DERIVED (a guess, not named). It is an AUTHORITY INPUT: both
+  // approve doors read it (`storedSessionSource`) to keep the guessed session's
+  // project off the approved entities, because `belongs_to_project` widens
+  // access. A reviser that could clear it would re-arm that placement on its own
+  // pending proposal; one that could plant it would strip a real project.
+  "sessionSource",
 ] as const;
 
 /**
@@ -285,6 +292,8 @@ const PROTECTED_FIELD_REASON: Record<
     "it is the authority input reviewer eligibility is derived from, not reviewable content",
   connectionSync:
     "it is stamped by the connection-sync door and decides automation fan-out and sync governance, not reviewable content",
+  sessionSource:
+    "it records that the proposal's session was guessed, and decides whether approval places the write into that session's project, not reviewable content",
 };
 
 export interface ComputeRevisedEnvelopeParams {

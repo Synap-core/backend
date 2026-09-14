@@ -816,6 +816,8 @@ export interface PermissionCheckBaseOpts {
   sourceMessageId?: string;
   /** Session ID to link proposals to the active focus session */
   sessionId?: string;
+  /** How `sessionId` was arrived at — see `SessionSource` (@synap/database). */
+  sessionSource?: "explicit" | "derived";
   /** Active project lens → proposals.project_id → belongs_to_project at materialize */
   projectId?: string | null;
   /**
@@ -1089,6 +1091,7 @@ async function evaluatePermission(
     commandRunId,
     sourceMessageId,
     sessionId,
+    sessionSource,
     projectId,
     stepRunId,
     nodeId,
@@ -1639,6 +1642,12 @@ async function evaluatePermission(
           // The slot this draft claims — carried so the human's approval stamps
           // the deliverable the agent was actually working on.
           expectedLabel: sessionSlotClaim,
+          // A1 + Q1: a session the hoist above MINTED/REUSED was never named by
+          // the caller — the pending row it lands on must not take its project.
+          sessionSource:
+            governedSessionId === (sessionId ?? null)
+              ? sessionSource
+              : "derived",
           // gov.reasonCode is the STRUCTURED companion (the PROPOSE_REASON key,
           // e.g. "UNTRUSTED_ORIGIN") — persisted so the review UI can render a
           // distinct "why this needs you" treatment for a force-propose rung.
@@ -1683,6 +1692,12 @@ async function evaluatePermission(
         const receiptProjectId = await deriveProposalProjectId({
           projectId,
           sessionId: governedSessionId,
+          // A session the hoist MINTED or REUSED (agent+goal) was never named by
+          // the caller, so it is derived: it groups the receipt, places nothing.
+          sessionSource:
+            governedSessionId === (sessionId ?? null)
+              ? sessionSource
+              : "derived",
           threadId,
           // Rung 3.5 parity with the PENDING door — an auto-approved write must
           // land in the same project a proposed one would have.
@@ -1965,6 +1980,7 @@ async function evaluatePermission(
         const receiptProjectId = await deriveProposalProjectId({
           projectId,
           sessionId: sessionId ?? null,
+          sessionSource,
           threadId,
         });
         try {
@@ -2378,6 +2394,8 @@ export interface CreatePendingProposalInput {
   correlationId?: string | null;
   requestedEventId?: string | null;
   sessionId?: string | null;
+  /** How `sessionId` was arrived at — see `SessionSource` (@synap/database). */
+  sessionSource?: "explicit" | "derived";
   projectId?: string | null;
   /** Workflow attribution: the automation step run + flow node that produced
    *  this proposal. Both optional — non-automation proposals omit them. */
@@ -2594,6 +2612,12 @@ async function createPendingProposalRow(
       correlationId: input.correlationId,
       requestedEventId: input.requestedEventId,
       sessionId,
+      // A session this door MINTED or REUSED above (agent+goal) was never named
+      // by the caller, so it is derived: it groups the proposal, places nothing.
+      sessionSource:
+        sessionId === (input.sessionId ?? null)
+          ? input.sessionSource
+          : "derived",
       projectId: input.projectId,
       focusProjectId,
       stepRunId: input.stepRunId,
@@ -2818,6 +2842,8 @@ async function createProposal(args: {
   /** Workflow attribution forwarded to the row: automation step run + flow node. */
   stepRunId?: string | null;
   nodeId?: string | null;
+  /** See `SessionSource` (@synap/database). Carried beside the envelope, which has no such slot. */
+  sessionSource?: "explicit" | "derived";
   // Returns PermissionResult — the proposed envelope on success, OR a denial
   // when the agent's daily proposal budget is exhausted (the F2 safety floor).
 }): Promise<PermissionResult> {
@@ -2833,6 +2859,7 @@ async function createProposal(args: {
     governanceReason,
     stepRunId,
     nodeId,
+    sessionSource,
   } = args;
   // Identity off the boundary-minted AccessContext; provenance off the frozen
   // per-request slice. Same values as the old loose params — now single-sourced.
@@ -3114,6 +3141,7 @@ async function createProposal(args: {
         commandRunId: commandRunId ?? null,
         sourceMessageId: sourceMessageId ?? null,
         sessionId: sessionId ?? null,
+        sessionSource,
         projectId: projectId ?? null,
         correlationId: resolvedCorrelationId,
         requestedEventId: reqEventId ?? null,

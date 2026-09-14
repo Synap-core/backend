@@ -48,17 +48,24 @@ export function subjectEntityIdFromPayload(
  * (`emitSideEffects` builds it that way in `@synap/events`), so both parts are
  * read straight off it.
  */
-export function deriveEventSubjectEntityId(input: {
-  eventType: string;
-  subjectId?: string | null;
-  data?: Record<string, unknown> | null;
-}): string | undefined {
+export function deriveEventSubjectEntityId(
+  input: {
+    eventType: string;
+    subjectId?: string | null;
+    data?: Record<string, unknown> | null;
+  },
+  /**
+   * `includeDeleted` — answer what a delete was ABOUT. Rule scope needs it
+   * ("when THIS deal is deleted"); run routing does not (see below).
+   */
+  options: { includeDeleted?: boolean } = {}
+): string | undefined {
   const [subjectType, action] = input.eventType.split(".");
 
   // A run about a just-DELETED entity has no room to post into: routing it per
   // entity would mint a channel bound to a dead row. Degrading to the per-type
-  // feed is the honest behaviour, so a delete never yields a subject.
-  if (action === "delete") return undefined;
+  // feed is the honest behaviour, so a delete never yields a routing subject.
+  if (action === "delete" && !options.includeDeleted) return undefined;
 
   // `entity.*` — `subjectId` IS the entity, and it is authoritative. Preferred
   // over `data.entityId` here because `entity.update.completed` spreads the

@@ -48,10 +48,13 @@ describe("degraded reason → permanence class", () => {
     expect(isDegradedReasonRetryable(reason)).toBe(false);
   });
 
-  it("is_invalid_response is the one genuinely transient reason", () => {
-    expect(classifyDegradedReason("is_invalid_response")).toBe("transient");
-    expect(isDegradedReasonRetryable("is_invalid_response")).toBe(true);
-  });
+  it.each(["is_invalid_response", "vision_provider_failed"])(
+    "%s is transient — a configured upstream failed, retrying may succeed",
+    (reason) => {
+      expect(classifyDegradedReason(reason)).toBe("transient");
+      expect(isDegradedReasonRetryable(reason)).toBe(true);
+    }
+  );
 
   it.each(["llm_budget_exceeded", "extraction_error: BudgetExceededError"])(
     "%s is a BUDGET state — not retryable now, but not unknown/permanent",

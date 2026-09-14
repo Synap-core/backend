@@ -67,13 +67,37 @@ function loadReflexProse(): string {
   }
 }
 
-// Static cueing — the ambient-presence proactivity lever. This text is part of
-// the MCP `instructions` field, so it sits in the model's context for EVERY
-// session by construction. The reflex portion is derived from reflexes.md
-// (SSOT); the non-reflex remainder (main-capability brief pointer) lives here.
-export const SYNAP_INSTRUCTIONS = `${loadReflexProse()}
+const REFLEX_PROSE = loadReflexProse();
 
-Main-capability tools (create document/entity/session/project/view/cell/playbook/workspace) carry a composed teaching brief in their description — read it before first use. Call \`synap_load_skill("catalog")\` to see every deeper reference available, and \`synap_load_skill(slug)\` to load one in full.`;
+/**
+ * Ceiling for the MCP `instructions` field — reflexes (reflexes.md) plus the
+ * live grounding, composed. Clients may truncate this field (a secondary source
+ * reports 2 KB for Claude Code; unverified), so the tail must never be what
+ * matters. Pinned by `instructions-budget.test.ts`.
+ */
+export const INSTRUCTIONS_BUDGET_BYTES = 2048;
+
+const SEPARATOR = "\n\n";
+
+/** Bytes left for grounding once the reflexes are placed. */
+export function groundingBudgetBytes(): number {
+  return Math.max(
+    0,
+    INSTRUCTIONS_BUDGET_BYTES -
+      Buffer.byteLength(REFLEX_PROSE) -
+      Buffer.byteLength(SEPARATOR)
+  );
+}
+
+/** Reflexes first (most important), then the live grounding when it fits. */
+export function composeInstructions(grounding?: string): string {
+  if (grounding && Buffer.byteLength(grounding) <= groundingBudgetBytes()) {
+    return `${REFLEX_PROSE}${SEPARATOR}${grounding}`;
+  }
+  return REFLEX_PROSE;
+}
+
+export const SYNAP_INSTRUCTIONS = composeInstructions();
 
 export function createMCPServer(
   defaultWorkspaceId?: string,
@@ -122,9 +146,7 @@ export function createMCPServer(
       // Auto-grounding: the static reflexes + (when the HTTP handler resolved the
       // authed user) a live one-line snapshot of their pod, so the model is
       // grounded without having to call anything first.
-      instructions: grounding
-        ? `${SYNAP_INSTRUCTIONS}\n\n${grounding}`
-        : SYNAP_INSTRUCTIONS,
+      instructions: composeInstructions(grounding),
     }
   );
 

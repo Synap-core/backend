@@ -24,16 +24,16 @@ describe("CONVERSION_MANIFEST", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("seeds the generic `item` kind", () => {
+  it("does NOT seed `item`: w3a.seed.item is retired to a keep (founder 2026-09-14 — item is not a kind)", () => {
+    // opKey retained per append-only discipline; op flipped seedKindProfile→keep.
     const seed = CONVERSION_MANIFEST.ops.find(
       (o) => o.opKey === "w3a.seed.item"
     );
     expect(seed).toBeDefined();
-    expect(seed?.op).toBe("seedKindProfile");
-    if (seed?.op === "seedKindProfile") {
+    expect(seed?.op).toBe("keep");
+    if (seed?.op === "keep") {
       expect(seed.slug).toBe("item");
-      expect(seed.entityScope).toBe("pod");
-      expect(seed.uiHints?.captureDefault).toBe(true);
+      expect(seed.note).toMatch(/RETIRED 2026-09-14/);
     }
   });
 
@@ -59,7 +59,7 @@ describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("orders the item seed before the note/capture merge into item", () => {
+  it("keeps the retired w3a item seed ordered before the retired w3c merge (append-only order preserved)", () => {
     const seedIdx = CONVERSION_MANIFEST.ops.findIndex(
       (o) => o.opKey === "w3a.seed.item"
     );
@@ -110,14 +110,16 @@ describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
     }
   });
 
-  it("merges note + capture into item", () => {
+  it("w3c no longer merges note + capture into item — retired to a keep (D2 reversed 2026-09-14)", () => {
+    // opKey retained per append-only discipline; op flipped mergeInto→keep.
     const op = CONVERSION_MANIFEST.ops.find(
       (o) => o.opKey === "w3c.merge.note-capture-into-item"
     );
-    expect(op?.op).toBe("mergeInto");
-    if (op?.op === "mergeInto") {
-      expect(op.fromSlugs).toEqual(["note", "capture"]);
-      expect(op.intoSlug).toBe("item");
+    expect(op).toBeDefined();
+    expect(op?.op).toBe("keep");
+    if (op?.op === "keep") {
+      expect(op.slug).toBe("note");
+      expect(op.note).toMatch(/RETIRED 2026-09-14/);
     }
   });
 
@@ -308,6 +310,96 @@ describe("CONVERSION_MANIFEST — CRM deal-stage unification", () => {
   });
 });
 
+describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is not)", () => {
+  const indexOf = (opKey: string) =>
+    CONVERSION_MANIFEST.ops.findIndex((o) => o.opKey === opKey);
+
+  it("w10 declares note protected, then merges [item, capture] into note same-scope — and never re-scopes notes", () => {
+    const declare = CONVERSION_MANIFEST.ops[indexOf("w10.declare.note")];
+    expect(declare).toMatchObject({
+      op: "declareKind",
+      slug: "note",
+      protected: true,
+    });
+
+    const merge =
+      CONVERSION_MANIFEST.ops[indexOf("w10.merge.item-capture-into-note")];
+    expect(merge?.op).toBe("mergeInto");
+    if (merge?.op === "mergeInto") {
+      expect(merge.fromSlugs).toEqual(["item", "capture"]);
+      expect(merge.intoSlug).toBe("note");
+      // Same-scope: the live rows are all scope=system with one workspace stamp.
+      expect(merge.intoScope).toBeUndefined();
+    }
+
+    expect(indexOf("w10.declare.note")).toBeGreaterThan(
+      indexOf("w3c.merge.note-capture-into-item")
+    );
+    expect(indexOf("w10.merge.item-capture-into-note")).toBeGreaterThan(
+      indexOf("w10.declare.note")
+    );
+
+    // Notes keep their home workspace (orchestrator 2026-09-14): no op may
+    // re-scope `note` entities. Behaviour is pinned in note-fold.pglite.test.ts (b).
+    expect(indexOf("w10.reconcile.note")).toBe(-1);
+    expect(
+      CONVERSION_MANIFEST.ops.filter(
+        (o) => o.op === "reconcileEntityScope" && o.slug === "note"
+      )
+    ).toEqual([]);
+  });
+
+  /**
+   * Every way an op makes `slug` a HOME for data: seeding it, merging or
+   * deduping into it, or re-homing converted entities onto it. Moving data OFF
+   * it (convertToKind fromKindSlug, mergeInto fromSlugs) is not homing.
+   */
+  const opsHomingOnto = (
+    ops: ConversionManifest["ops"],
+    slug: string
+  ): string[] =>
+    ops
+      .filter(
+        (o) =>
+          (o.op === "seedKindProfile" && o.slug === slug) ||
+          (o.op === "mergeInto" && o.intoSlug === slug) ||
+          (o.op === "dedupeProfileRows" && o.slug === slug) ||
+          (o.op === "convertToFacet" && o.targetKindSlug === slug)
+      )
+      .map((o) => o.opKey);
+
+  it("no op anywhere in the manifest makes `item` a home for data (derived over ALL ops)", () => {
+    // Non-vacuity: the scan read the real manifest, which holds merges.
+    expect(CONVERSION_MANIFEST.ops.length).toBeGreaterThan(30);
+    expect(
+      CONVERSION_MANIFEST.ops.filter((o) => o.op === "mergeInto").length
+    ).toBeGreaterThanOrEqual(1);
+    // Self-check: the predicate still SEES each homing shape.
+    const samples: ConversionManifest["ops"] = [
+      {
+        op: "seedKindProfile",
+        opKey: "s",
+        slug: "item",
+        displayName: "Item",
+        entityScope: "pod",
+      },
+      { op: "mergeInto", opKey: "m", fromSlugs: ["note"], intoSlug: "item" },
+      { op: "dedupeProfileRows", opKey: "d", slug: "item" },
+      {
+        op: "convertToFacet",
+        opKey: "c",
+        slug: "x",
+        targetKindSlug: "item",
+        applicableKinds: ["item"],
+      },
+      { op: "mergeInto", opKey: "off", fromSlugs: ["item"], intoSlug: "note" },
+    ];
+    expect(opsHomingOnto(samples, "item")).toEqual(["s", "m", "d", "c"]);
+
+    expect(opsHomingOnto(CONVERSION_MANIFEST.ops, "item")).toEqual([]);
+  });
+});
+
 describe("validateManifest", () => {
   it("rejects duplicate op keys", () => {
     const m: ConversionManifest = {
@@ -455,6 +547,74 @@ describe("validateManifest", () => {
       ],
     };
     expect(() => validateManifest(m)).toThrow(/must differ/);
+  });
+
+  const renameOp = (over: Record<string, unknown> = {}) =>
+    ({
+      op: "renamePropertyKey",
+      opKey: "r",
+      slug: "decision",
+      sourceKey: "rationale",
+      targetKey: "decisionRationale",
+      onConflict: "keepTarget",
+      ...over,
+    }) as ConversionManifest["ops"][number];
+
+  it("accepts a well-formed renamePropertyKey", () => {
+    expect(() =>
+      validateManifest({ version: 1, ops: [renameOp()] })
+    ).not.toThrow();
+    expect(() =>
+      validateManifest({
+        version: 1,
+        ops: [renameOp({ onConflict: "keepSource" })],
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects renamePropertyKey whose sourceKey equals targetKey", () => {
+    expect(() =>
+      validateManifest({
+        version: 1,
+        ops: [renameOp({ targetKey: "rationale" })],
+      })
+    ).toThrow(/renamePropertyKey 'r' sourceKey and targetKey must differ/);
+  });
+
+  it("rejects renamePropertyKey with an empty key or an unknown onConflict", () => {
+    expect(() =>
+      validateManifest({ version: 1, ops: [renameOp({ sourceKey: "" })] })
+    ).toThrow(/missing a sourceKey/);
+    expect(() =>
+      validateManifest({ version: 1, ops: [renameOp({ targetKey: " " })] })
+    ).toThrow(/missing a targetKey/);
+    expect(() =>
+      validateManifest({ version: 1, ops: [renameOp({ onConflict: "merge" })] })
+    ).toThrow(/invalid onConflict 'merge'/);
+  });
+
+  it("accepts mergeInto intoScope 'system' and 'shared', rejects any other scope", () => {
+    const merge = (intoScope: unknown) =>
+      ({
+        op: "mergeInto",
+        opKey: "m",
+        fromSlugs: ["devplane_decision_record"],
+        intoSlug: "decision",
+        intoScope,
+      }) as ConversionManifest["ops"][number];
+    expect(() =>
+      validateManifest({ version: 1, ops: [merge("system")] })
+    ).not.toThrow();
+    expect(() =>
+      validateManifest({ version: 1, ops: [merge("shared")] })
+    ).not.toThrow();
+    expect(() =>
+      validateManifest({ version: 1, ops: [merge("workspace")] })
+    ).toThrow(/invalid intoScope 'workspace'/);
+  });
+
+  it("CONVERSION_OP_TYPES includes renamePropertyKey", () => {
+    expect(CONVERSION_OP_TYPES).toContain("renamePropertyKey");
   });
 
   it("accepts a well-formed mixed manifest", () => {

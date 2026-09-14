@@ -40,6 +40,7 @@ import {
   fetchCPCapabilityTemplates,
   fetchCPCapabilityTemplateByKey,
 } from "./cp-template-client.js";
+import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 
 // ── Contract (matched verbatim by the CLI being built in parallel) ────────────
 
@@ -343,34 +344,43 @@ export interface CapabilityCatalogContext {
 // ── Verb type heuristic ───────────────────────────────────────────────────────
 //
 // read if ANY token of the verb (backing skill) name is a read-ish word, else
-// write. Matches the read word as a whole `_`-delimited token ANYWHERE — verb
-// names put the action LAST (gmail_search, calendar_list, drive_search), so a
-// start-anchored test would wrongly classify those as writes.
+// write. Matches the read word as a whole `_`/`.`-delimited token ANYWHERE — verb
+// names put the action LAST (gmail_search, calendar_list, drive_search), and
+// Synap Core builtins are dotted (entity.query, feed.read) — so a start-anchored
+// test, or one that only recognizes `_` as a boundary, would wrongly classify
+// those as writes.
 // TODO: this should become EXPLICIT skill metadata (a `read`/`write` field on the
 // skill row) rather than a name heuristic — the heuristic is the bootstrap.
 const READ_TOKEN =
-  /(^|_)(list|search|get|read|find|fetch|show|query|view|count)(_|$)/i;
+  /(^|[_.])(list|search|get|read|find|fetch|show|query|view|count)([_.]|$)/i;
 // An `action` is a mutating verb that is a DISPATCH (reply/send/run/…) rather than
 // a create/update — a third class layered onto the read/write split. Same token
-// style as READ_TOKEN (whole `_`-delimited token anywhere).
+// style as READ_TOKEN (whole `_`/`.`-delimited token anywhere).
 const ACTION_TOKEN =
-  /(^|_)(reply|invite|send|post|run|trigger|cancel|dispatch)(_|$)/i;
+  /(^|[_.])(reply|invite|send|post|run|trigger|cancel|dispatch)([_.]|$)/i;
 
 type VerbType = "read" | "write" | "action";
 
 /**
- * Classify a verb. An explicit `metadata.verbType` ("read"|"write"|"action") wins;
- * otherwise read-ish names → read, action/dispatch names → action, else write.
- * read is checked before action to keep existing read classification stable.
+ * Classify a verb. An explicit `metadata.verbType` ("read"|"write"|"action") wins.
+ * Next, for a BUILTIN verb, defer to `READ_ONLY_BUILTIN_VERBS` — the same set the
+ * execute gate (`execute-capability.ts`) auto-runs — so the catalog label can never
+ * disagree with what actually runs unattended; this also correctly covers dotted
+ * builtin ids (`entity.query`, `feed.read`, `market.search`, …) that the name
+ * heuristic below would otherwise misclassify. Otherwise, read-ish names → read,
+ * action/dispatch names → action, else write. read is checked before action to
+ * keep existing read classification stable.
  */
-function verbType(
+export function verbType(
   verbId: string,
-  metadata?: Record<string, unknown> | null
+  metadata?: Record<string, unknown> | null,
+  kind?: string | null
 ): VerbType {
   const override = metadata?.verbType;
   if (override === "read" || override === "write" || override === "action") {
     return override;
   }
+  if (kind === "builtin" && READ_ONLY_BUILTIN_VERBS.has(verbId)) return "read";
   if (READ_TOKEN.test(verbId)) return "read";
   if (ACTION_TOKEN.test(verbId)) return "action";
   return "write";
@@ -379,7 +389,7 @@ function verbType(
 // Reads run inline (auto); writes/actions ask approval each run (propose).
 // Independent of `enabled` (the operator's one-time approval gate). Mirrors the
 // north star: "search email (read)" inline vs "send email (action · asks approval)".
-function verbGovernance(type: VerbType): "auto" | "propose" {
+export function verbGovernance(type: VerbType): "auto" | "propose" {
   return type === "read" ? "auto" : "propose";
 }
 
@@ -776,6 +786,7 @@ export async function buildCapabilityCatalog(
             parameters: skills.parameters,
             metadata: skills.metadata,
             category: skills.category,
+            kind: skills.kind,
           })
           .from(skills)
           .where(inArray(skills.id, memberSkillIds))
@@ -854,7 +865,7 @@ export async function buildCapabilityCatalog(
     }
 
     const verbs: CapabilityCardVerb[] = mySkills.map((s) => {
-      const type = verbType(s.name, s.metadata);
+      const type = verbType(s.name, s.metadata, s.kind);
       const enabled = s.approved === true;
       // `skills.category` is the first-class column the capability applier
       // persists from the definition; `metadata.category` is a tolerated
@@ -950,7 +961,7 @@ export async function buildCapabilityCatalog(
       // Honor an explicit `metadata.verbType` override on an AVAILABLE verb too —
       // it was previously only read for installed rows, so the same template
       // rendered a different `type` before vs after install.
-      const type = verbType(s.name, s.metadata);
+      const type = verbType(s.name, s.metadata, s.kind);
       return {
         verbId: s.name,
         skillId: null,

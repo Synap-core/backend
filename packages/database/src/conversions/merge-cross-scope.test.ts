@@ -394,14 +394,20 @@ describe("same-scope mergeInto is unchanged when intoScope is absent", () => {
     // matched at `k.scope = src.scope AND k.workspace_id IS NOT DISTINCT FROM
     // src.workspace_id`), and it is exactly the gap `intoScope` closes. If this
     // ever starts repointing, the default path silently changed.
+    //
+    // It used to ALSO pin `hadError:false` — i.e. a zero-count "applied" ledger
+    // row with a live facet left on a source that has no same-scope canonical:
+    // the silent strand. That is now REFUSED (L3), so this asserts the refusal.
     const { sql, q, ids } = await setupPod();
     const summary = await runConversions(sql, manifestOf(SAME_SCOPE_OP), {
       dryRun: false,
       destructiveTail: true,
     });
-    expect(summary.hadError).toBe(false);
-    expect(summary.results[0].counts.entitiesRepointed ?? 0).toBe(0);
-    expect(summary.results[0].counts.profilesDeactivated ?? 0).toBe(0);
+    expect(summary.hadError).toBe(true);
+    expect(summary.results[0].error).toMatch(/refusing to record a no-op/);
+    expect(
+      await q(`SELECT op_key FROM "_conversions" WHERE error IS NULL`)
+    ).toEqual([]);
 
     const [row] = await q(
       `SELECT profile_id FROM entity_facets WHERE id = $1`,
@@ -448,5 +454,343 @@ describe("same-scope mergeInto is unchanged when intoScope is absent", () => {
     // Facets are NOT part of the same-scope path (unchanged, pre-existing).
     const [facet] = await q(`SELECT profile_id FROM entity_facets LIMIT 1`);
     expect(facet.profile_id).toBe(crmClient.id);
+  });
+});
+
+// ─── L3: same-scope mergeInto refuses to strand live data ───────────────────
+// The discriminating inputs (each rules OUT a wrong rule):
+//   - live entity, no canonical         → refuse   (rules out: today's silent noop)
+//   - only a SOFT-DELETED entity        → noop     (rules out: "any entity row" counts)
+//   - one source paired + one unpaired  → refuse whole op, paired NOT moved
+//                                                  (rules out: "some canonical exists")
+//   - canonical present                 → merges   (regression)
+describe("same-scope mergeInto — stranding refusal (L3)", () => {
+  const WS = "33333333-3333-3333-3333-333333333333";
+  const OP = {
+    op: "mergeInto",
+    opKey: "test.merge.note-into-item",
+    fromSlugs: ["note"],
+    intoSlug: "item",
+  } as const;
+
+  async function pod() {
+    const db = new PGlite();
+    await db.exec(SCHEMA);
+    const q = async (text: string, params: unknown[] = []) =>
+      (await db.query(text, params)).rows as any[];
+    const [wsNote] = await q(
+      `INSERT INTO profiles (slug, scope, workspace_id) VALUES ('note','workspace',$1) RETURNING id`,
+      [WS]
+    );
+    return { sql: makePgliteSql(db), q, wsNote: wsNote.id as string };
+  }
+
+  it("REFUSES (not ledgered as applied) when a source holds a live entity and has no canonical", async () => {
+    const { sql, q, wsNote } = await pod();
+    const [ent] = await q(
+      `INSERT INTO entities (profile_id, user_id, workspace_id, type) VALUES ($1,$2,$3,'note') RETURNING id`,
+      [wsNote, USER, WS]
+    );
+
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(summary.hadError).toBe(true);
+    expect(summary.results[0].status).toBe("error");
+    const msg = summary.results[0].error ?? "";
+    expect(msg).toMatch(/refusing to record a no-op/);
+    expect(msg).toContain("test.merge.note-into-item");
+    expect(msg).toContain("note (scope=workspace");
+    expect(msg).toContain("1 live entity row(s) and 0 live facet row(s)");
+    expect(msg).toMatch(/create the 'item' canonical first/);
+    // The op is NOT in the applied set → a later run retries it.
+    expect(
+      await q(`SELECT op_key FROM "_conversions" WHERE error IS NULL`)
+    ).toEqual([]);
+    const [row] = await q(`SELECT profile_id FROM entities WHERE id = $1`, [
+      ent.id,
+    ]);
+    expect(row.profile_id).toBe(wsNote);
+
+    // The dry run surfaces the same refusal before --apply.
+    const dry = await runConversions(sql, manifestOf(OP), {
+      dryRun: true,
+      destructiveTail: false,
+    });
+    expect(dry.results[0].status).toBe("error");
+    expect(dry.results[0].error).toMatch(/refusing to record a no-op/);
+  });
+
+  it("stays a clean ledgered noop when the source has NO live data (soft-deleted only)", async () => {
+    const { sql, q, wsNote } = await pod();
+    await q(
+      `INSERT INTO entities (profile_id, user_id, workspace_id, type, deleted_at) VALUES ($1,$2,$3,'note', now())`,
+      [wsNote, USER, WS]
+    );
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(summary.hadError).toBe(false);
+    expect(summary.results[0].status).toBe("noop");
+    expect(
+      (await q(`SELECT op_key FROM "_conversions" WHERE error IS NULL`)).map(
+        (r) => r.op_key
+      )
+    ).toEqual(["test.merge.note-into-item"]);
+  });
+
+  it("refuses the WHOLE op when one source is paired and another is stranded — nothing moves", async () => {
+    const { sql, q, wsNote } = await pod();
+    await q(
+      `INSERT INTO entities (profile_id, user_id, workspace_id, type) VALUES ($1,$2,$3,'note')`,
+      [wsNote, USER, WS]
+    );
+    const [sysNote] = await q(
+      `INSERT INTO profiles (slug, scope) VALUES ('note','system') RETURNING id`
+    );
+    await q(`INSERT INTO profiles (slug, scope) VALUES ('item','system')`);
+    const [paired] = await q(
+      `INSERT INTO entities (profile_id, user_id, type) VALUES ($1,$2,'note') RETURNING id`,
+      [sysNote.id, USER]
+    );
+
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(summary.hadError).toBe(true);
+    expect(summary.results[0].error).toMatch(/refusing to record a no-op/);
+    const [row] = await q(`SELECT profile_id FROM entities WHERE id = $1`, [
+      paired.id,
+    ]);
+    expect(row.profile_id).toBe(sysNote.id); // rolled back, not half-applied
+    expect(
+      await q(`SELECT op_key FROM "_conversions" WHERE error IS NULL`)
+    ).toEqual([]);
+  });
+
+  it("still merges when the same-scope canonical exists (regression)", async () => {
+    const { sql, q, wsNote } = await pod();
+    const [ent] = await q(
+      `INSERT INTO entities (profile_id, user_id, workspace_id, type) VALUES ($1,$2,$3,'note') RETURNING id`,
+      [wsNote, USER, WS]
+    );
+    const [wsItem] = await q(
+      `INSERT INTO profiles (slug, scope, workspace_id) VALUES ('item','workspace',$1) RETURNING id`,
+      [WS]
+    );
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(summary.hadError).toBe(false);
+    expect(summary.results[0].status).toBe("applied");
+    expect(summary.results[0].counts.entitiesRepointed).toBe(1);
+    const [row] = await q(
+      `SELECT profile_id, type FROM entities WHERE id = $1`,
+      [ent.id]
+    );
+    expect(row.profile_id).toBe(wsItem.id);
+    expect(row.type).toBe("item");
+  });
+});
+
+// ─── B0: cross-scope mergeInto into a SYSTEM canonical (intoScope:'system') ──
+// The approved fold: workspace-scoped `devplane_decision_record` (Builder) →
+// the system `decision` kind. Discriminating inputs:
+//   - an EARLIER-created `scope='shared'` decision row → rules out a resolver
+//     that ignores the requested scope (it would pick the shared row);
+//   - a BASE def (workspace_id NULL) on the workspace source → rules out a
+//     restamp that lands it pod-wide on the system row;
+//   - canonical missing + live data → rules out ledgering a stranding no-op.
+describe("cross-scope mergeInto into a SYSTEM canonical (intoScope:'system')", () => {
+  const WS_BUILDER = "44444444-4444-4444-4444-444444444444";
+  const OP = {
+    op: "mergeInto",
+    opKey: "test.merge.devplane-decision-record-into-system-decision",
+    fromSlugs: ["devplane_decision_record"],
+    intoSlug: "decision",
+    intoScope: "system",
+  } as const;
+
+  async function pod() {
+    const db = new PGlite();
+    await db.exec(SCHEMA);
+    const q = async (text: string, params: unknown[] = []) =>
+      (await db.query(text, params)).rows as any[];
+    // Decoy: a shared `decision` row created FIRST (earliest created_at).
+    const [sharedDecision] = await q(
+      `INSERT INTO profiles (slug, scope, entity_scope, created_at)
+       VALUES ('decision','shared','pod', now() - interval '2 days') RETURNING id`
+    );
+    const [sysDecision] = await q(
+      `INSERT INTO profiles (slug, scope, entity_scope, created_at)
+       VALUES ('decision','system','pod', now() - interval '1 day') RETURNING id`
+    );
+    const [src] = await q(
+      `INSERT INTO profiles (slug, scope, entity_scope, workspace_id)
+       VALUES ('devplane_decision_record','workspace','workspace',$1) RETURNING id`,
+      [WS_BUILDER]
+    );
+    const ents = await q(
+      `INSERT INTO entities (profile_id, user_id, workspace_id, type, properties)
+       VALUES ($1,$2,$3,'devplane_decision_record','{"title":"one"}'),
+              ($1,$2,$3,'devplane_decision_record','{"title":"two"}')
+       RETURNING id`,
+      [src.id, USER, WS_BUILDER]
+    );
+    const [facet] = await q(
+      `INSERT INTO entity_facets (entity_id, profile_id, user_id, workspace_id, status, properties)
+       VALUES ($1,$2,$3,$4,'open','{"k":"v"}') RETURNING id`,
+      [ents[0].id, src.id, USER, WS_BUILDER]
+    );
+    const [def] = await q(
+      `INSERT INTO property_defs (profile_id, slug, workspace_id) VALUES ($1,'rationale',NULL) RETURNING id`,
+      [src.id]
+    );
+    const [view] = await q(
+      `INSERT INTO views (scope_profile_ids) VALUES (ARRAY[$1::uuid]) RETURNING id`,
+      [src.id]
+    );
+    return {
+      sql: makePgliteSql(db),
+      q,
+      ids: {
+        sharedDecision: sharedDecision.id as string,
+        sysDecision: sysDecision.id as string,
+        src: src.id as string,
+        entities: ents.map((e) => e.id as string),
+        facet: facet.id as string,
+        def: def.id as string,
+        view: view.id as string,
+      },
+    };
+  }
+
+  it("repoints entities (+type), facet, def (as the source workspace's OVERLAY) and views onto the SYSTEM row, and ledgers", async () => {
+    const { sql, q, ids } = await pod();
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(
+      summary.results[0].error ?? null,
+      summary.results[0].error ?? ""
+    ).toBeNull();
+    expect(summary.results[0].status).toBe("applied");
+    expect(summary.results[0].counts).toMatchObject({
+      entitiesRepointed: 2,
+      facetsRepointed: 1,
+      propertyDefsRepointed: 1,
+      viewsRewritten: 1,
+      profilesDeactivated: 1,
+    });
+
+    const ents = await q(
+      `SELECT profile_id, type, workspace_id FROM entities WHERE id = ANY($1::uuid[])`,
+      [ids.entities]
+    );
+    expect(ents).toHaveLength(2);
+    for (const e of ents) {
+      expect(e.profile_id).toBe(ids.sysDecision); // NOT the earlier shared decoy
+      expect(e.type).toBe("decision");
+      // The merge never touches entities.workspace_id (visibility unchanged
+      // until a deliberate reconcileEntityScope).
+      expect(e.workspace_id).toBe(WS_BUILDER);
+    }
+
+    const [f] = await q(
+      `SELECT profile_id, workspace_id, status, properties FROM entity_facets WHERE id = $1`,
+      [ids.facet]
+    );
+    expect(f.profile_id).toBe(ids.sysDecision);
+    expect(f.workspace_id).toBe(WS_BUILDER);
+    expect(f.status).toBe("open");
+    expect(f.properties).toEqual({ k: "v" });
+
+    const [d] = await q(
+      `SELECT profile_id, workspace_id FROM property_defs WHERE id = $1`,
+      [ids.def]
+    );
+    expect(d.profile_id).toBe(ids.sysDecision);
+    expect(d.workspace_id).toBe(WS_BUILDER); // overlay, never pod-wide base
+    expect(summary.results[0].planDetail).toEqual([
+      expect.objectContaining({
+        table: "property_defs",
+        slug: "rationale",
+        action: "restamped",
+        fromWorkspaceId: null,
+        toWorkspaceId: WS_BUILDER,
+      }),
+    ]);
+
+    const [v] = await q(`SELECT scope_profile_ids FROM views WHERE id = $1`, [
+      ids.view,
+    ]);
+    expect(v.scope_profile_ids).toEqual([ids.sysDecision]);
+
+    const [src] = await q(`SELECT is_active FROM profiles WHERE id = $1`, [
+      ids.src,
+    ]);
+    expect(src.is_active).toBe(false);
+    const [shared] = await q(`SELECT is_active FROM profiles WHERE id = $1`, [
+      ids.sharedDecision,
+    ]);
+    expect(shared.is_active).toBe(true); // decoy untouched
+
+    expect(await q(`SELECT op_key, error FROM "_conversions"`)).toEqual([
+      { op_key: OP.opKey, error: null },
+    ]);
+  });
+
+  it("dry-run counts equal the apply counts, and the dry run writes nothing", async () => {
+    const dryPod = await pod();
+    const dry = await runConversions(dryPod.sql, manifestOf(OP), {
+      dryRun: true,
+      destructiveTail: false,
+    });
+    expect(dry.results[0].status).toBe("dry-run");
+    const [still] = await dryPod.q(
+      `SELECT COUNT(*)::int AS n FROM entities WHERE profile_id = $1`,
+      [dryPod.ids.src]
+    );
+    expect(still.n).toBe(2);
+    expect(await dryPod.q(`SELECT op_key FROM "_conversions"`)).toEqual([]);
+
+    const applyPod = await pod();
+    const applied = await runConversions(applyPod.sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    // The dry run is not given destructiveTail, so compare everything but the tail.
+    const { profilesDeactivated: _tail, ...appliedCounts } =
+      applied.results[0].counts;
+    const { profilesDeactivated: _dryTail, ...dryCounts } =
+      dry.results[0].counts;
+    expect(appliedCounts.entitiesRepointed).toBe(2);
+    expect(dryCounts).toEqual(appliedCounts);
+  });
+
+  it("REFUSES (not ledgered as applied) when the system canonical is missing but live data sits on the source", async () => {
+    const { sql, q, ids } = await pod();
+    await q(`DELETE FROM profiles WHERE id = $1`, [ids.sysDecision]);
+
+    const summary = await runConversions(sql, manifestOf(OP), {
+      dryRun: false,
+      destructiveTail: true,
+    });
+    expect(summary.hadError).toBe(true);
+    expect(summary.results[0].status).toBe("error");
+    expect(summary.results[0].error).toMatch(/refusing to record a no-op/);
+    expect(summary.results[0].error).toContain("(scope='system') not found");
+    expect(
+      await q(`SELECT op_key FROM "_conversions" WHERE error IS NULL`)
+    ).toEqual([]);
+    const [e] = await q(`SELECT profile_id FROM entities WHERE id = $1`, [
+      ids.entities[0],
+    ]);
+    expect(e.profile_id).toBe(ids.src); // not moved onto the shared decoy either
   });
 });

@@ -312,3 +312,181 @@ describe("moveBasePropertyToFacet", () => {
     expect(facetRow.properties.driveLink).toBeUndefined();
   });
 });
+
+// ─── B0: renamePropertyKey ───────────────────────────────────────────────────
+// Lives in this PGlite-serial file (same shim + schema) rather than a new file,
+// because a new pglite file would land in the parallel unit project.
+// Discriminating inputs:
+//   - TWO `decision` profile rows (system + workspace) → rules out touching only
+//     one row of the slug;
+//   - a `research` entity carrying the SAME key → rules out a slug-blind UPDATE;
+//   - a soft-deleted decision → rules out touching deleted rows (mirrors
+//     remapPropertyValues);
+//   - a non-string (array) value → rules out a ->> text round-trip;
+//   - an entity carrying BOTH keys → the only input where keepTarget and
+//     keepSource disagree.
+describe("renamePropertyKey", () => {
+  const WS = "55555555-5555-5555-5555-555555555555";
+  const opOf = (onConflict: "keepTarget" | "keepSource") =>
+    ({
+      op: "renamePropertyKey",
+      opKey: `test.rename.rationale.${onConflict}`,
+      slug: "decision",
+      sourceKey: "rationale",
+      targetKey: "decisionRationale",
+      onConflict,
+    }) as const;
+
+  async function pod() {
+    const db = new PGlite();
+    await db.exec(SCHEMA);
+    const q = async (text: string, params: unknown[] = []) =>
+      (await db.query(text, params)).rows as any[];
+    const [sysDecision] = await q(
+      `INSERT INTO profiles (slug, scope) VALUES ('decision','system') RETURNING id`
+    );
+    const [wsDecision] = await q(
+      `INSERT INTO profiles (slug, scope, workspace_id) VALUES ('decision','workspace',$1) RETURNING id`,
+      [WS]
+    );
+    const [research] = await q(
+      `INSERT INTO profiles (slug, scope) VALUES ('research','system') RETURNING id`
+    );
+    const ins = async (profileId: string, props: unknown, deleted = false) =>
+      (
+        await q(
+          `INSERT INTO entities (profile_id, user_id, type, properties, deleted_at)
+           VALUES ($1,$2,'x',$3::jsonb, ${deleted ? "now()" : "NULL"}) RETURNING id`,
+          [profileId, USER, JSON.stringify(props)]
+        )
+      )[0].id as string;
+    return {
+      sql: makePgliteSql(db),
+      q,
+      ids: {
+        moved: await ins(sysDecision.id, { title: "a", rationale: ["x", "y"] }),
+        conflict: await ins(wsDecision.id, {
+          rationale: "SRC",
+          decisionRationale: "TGT",
+        }),
+        deleted: await ins(sysDecision.id, { rationale: "gone" }, true),
+        other: await ins(research.id, { rationale: "R" }),
+        noKey: await ins(sysDecision.id, { title: "b" }),
+      },
+    };
+  }
+
+  const props = async (
+    q: (t: string, p?: unknown[]) => Promise<any[]>,
+    id: string
+  ) =>
+    (await q(`SELECT properties FROM entities WHERE id = $1`, [id]))[0]
+      .properties;
+
+  it("moves the key when the target is absent, keepTarget keeps the target on conflict, always strips the source", async () => {
+    const { sql, q, ids } = await pod();
+    const summary = await runConversions(sql, manifestOf(opOf("keepTarget")), {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(
+      summary.results[0].error ?? null,
+      summary.results[0].error ?? ""
+    ).toBeNull();
+    expect(summary.results[0].status).toBe("applied");
+    expect(summary.results[0].counts).toEqual({
+      entitiesKeyRenamed: 2,
+      entitiesKeyConflicts: 1,
+    });
+
+    expect(await props(q, ids.moved)).toEqual({
+      title: "a",
+      decisionRationale: ["x", "y"], // verbatim JSON, not text
+    });
+    expect(await props(q, ids.conflict)).toEqual({ decisionRationale: "TGT" });
+    // Untouched: soft-deleted, other slug with the same key, entity without it.
+    expect(await props(q, ids.deleted)).toEqual({ rationale: "gone" });
+    expect(await props(q, ids.other)).toEqual({ rationale: "R" });
+    expect(await props(q, ids.noKey)).toEqual({ title: "b" });
+  });
+
+  it("keepSource overwrites the target with the source value on conflict", async () => {
+    const { sql, q, ids } = await pod();
+    const summary = await runConversions(sql, manifestOf(opOf("keepSource")), {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(summary.results[0].counts.entitiesKeyConflicts).toBe(1);
+    expect(await props(q, ids.conflict)).toEqual({ decisionRationale: "SRC" });
+  });
+
+  it("is idempotent — a second real run (ledger cleared) is a noop and changes nothing", async () => {
+    const { sql, q, ids } = await pod();
+    await runConversions(sql, manifestOf(opOf("keepTarget")), {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    const snapshot = await q(`SELECT id, properties FROM entities ORDER BY id`);
+    await q(`DELETE FROM "_conversions"`);
+    const again = await runConversions(sql, manifestOf(opOf("keepTarget")), {
+      dryRun: false,
+      destructiveTail: false,
+    });
+    expect(again.results[0].status).toBe("noop");
+    expect(await q(`SELECT id, properties FROM entities ORDER BY id`)).toEqual(
+      snapshot
+    );
+    expect(await props(q, ids.moved)).toEqual({
+      title: "a",
+      decisionRationale: ["x", "y"],
+    });
+  });
+
+  it("dry-run counts equal the apply counts and write nothing", async () => {
+    const dryPod = await pod();
+    const dry = await runConversions(
+      dryPod.sql,
+      manifestOf(opOf("keepTarget")),
+      {
+        dryRun: true,
+        destructiveTail: false,
+      }
+    );
+    expect(dry.results[0].status).toBe("dry-run");
+    expect(await props(dryPod.q, dryPod.ids.moved)).toEqual({
+      title: "a",
+      rationale: ["x", "y"],
+    });
+    expect(await dryPod.q(`SELECT op_key FROM "_conversions"`)).toEqual([]);
+
+    const applyPod = await pod();
+    const applied = await runConversions(
+      applyPod.sql,
+      manifestOf(opOf("keepTarget")),
+      { dryRun: false, destructiveTail: false }
+    );
+    expect(applied.results[0].counts.entitiesKeyRenamed).toBe(2);
+    expect(dry.results[0].counts).toEqual(applied.results[0].counts);
+  });
+
+  it("deferAtBoot: the boot caller (skipDeferred) defers it — not applied, not ledgered", async () => {
+    const { sql, q, ids } = await pod();
+    const summary = await runConversions(
+      sql,
+      manifestOf({ ...opOf("keepTarget"), deferAtBoot: true }),
+      {
+        dryRun: false,
+        destructiveTail: false,
+        deferDestructive: true,
+        skipDeferred: true,
+      }
+    );
+    expect(summary.results[0].status).toBe("deferred");
+    expect(summary.results[0].deferReason).toBe("defer-at-boot");
+    expect(await props(q, ids.moved)).toEqual({
+      title: "a",
+      rationale: ["x", "y"],
+    });
+    expect(await q(`SELECT op_key FROM "_conversions"`)).toEqual([]);
+  });
+});

@@ -89,6 +89,22 @@ export interface AutomationTriggerConfig {
   /** Webhook subscription ID to listen on */
   webhookSubscriptionId?: string;
 
+  // ── rule scope (entity + project) ──────────────────────────────────────
+  /**
+   * Only fire for events ABOUT this entity. Enforced by the trigger matcher
+   * (`matchRuleScopeFilters`) on the event families in
+   * `RULE_SCOPE_EVENT_PREFIXES.entityId`; on any other family a rule carrying
+   * it never fires (fail closed). Absent = no narrowing.
+   */
+  entityId?: string;
+  /**
+   * Only fire for events ON this project (`projects.id`): the subject belongs to
+   * it via `belongs_to_project`, or its channel / session / proposal carries it.
+   * Enforced by the trigger matcher on `RULE_SCOPE_EVENT_PREFIXES.projectId`;
+   * other families and an unreadable membership never fire. Absent = no narrowing.
+   */
+  projectId?: string;
+
   // ── channel_message domain filters ────────────────────────────────────
   /** Only match messages in this specific channel */
   channelId?: string;

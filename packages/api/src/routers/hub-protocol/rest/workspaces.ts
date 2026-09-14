@@ -22,6 +22,8 @@ import {
   type AgentMetadata,
 } from "@synap/database";
 import { syncAutoApproveRules } from "@synap/database/agent-governance";
+import { ProfileRepository } from "@synap/database";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { sql as drizzleSql } from "drizzle-orm";
 import {
   templateHealthFor,
@@ -981,6 +983,55 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         );
       }
       ownerId = ownerUserId;
+    }
+
+    // D6: governed like POST /packages/apply. An agent whose definition declares
+    // a profile slug with no live row is forced to a proposal — the
+    // ProfileRepository floor would otherwise refuse it mid-install. Approval
+    // re-materialises through the `workspace/create` executor as a human.
+    const agentUserId = c.get("agentUserId") as string | undefined;
+    const declaredSlugs = (
+      (definition as { profiles?: Array<{ slug?: unknown }> }).profiles ?? []
+    )
+      .map((p) => p?.slug)
+      .filter((s): s is string => typeof s === "string");
+    let mintsKind = false;
+    if (agentUserId && declaredSlugs.length > 0) {
+      const profileRepo = new ProfileRepository(await getDb());
+      for (const slug of declaredSlugs) {
+        if ((await profileRepo.findActiveBySlugAnyScope(slug)).length === 0) {
+          mintsKind = true;
+          break;
+        }
+      }
+    }
+    const perm = await checkPermissionOrPropose({
+      userId,
+      agentUserId,
+      workspaceId: null,
+      subjectType: "workspace",
+      action: "create",
+      forcePropose: mintsKind,
+      data: {
+        name: workspaceName ?? templateName ?? "untitled",
+        definition,
+        workspaceName,
+        templateId,
+        workspaceType,
+        proposalId,
+        createdBy: "provisioning",
+        source: "hub.workspaces.from-definition",
+      },
+    });
+    if ("denied" in perm && perm.denied) {
+      return c.json({ error: perm.reason }, 403);
+    }
+    if (
+      "proposalId" in perm &&
+      perm.proposalId &&
+      !("granted" in perm && perm.granted)
+    ) {
+      return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
     }
 
     try {

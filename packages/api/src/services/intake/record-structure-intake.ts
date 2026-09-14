@@ -86,6 +86,13 @@ export interface RecordStructureIntakeInput {
   /** Set when the outcome is a degraded fallback (IS or pod reason). */
   degraded?: { reason: string };
   /**
+   * The FILE was not read (IS `extraction.degraded`, e.g. a photo with no
+   * vision model) while the outcome itself is NOT degraded — its caption
+   * structured. Marks only the file source degraded, so the "already
+   * imported" ledger reads it `kept_unanalyzed` and a re-send re-analyzes.
+   */
+  fileNotRead?: { reason: string };
+  /**
    * Keep the file's ORIGINAL bytes. `undefined` → {@link defaultKeepOriginal}
    * (photos kept: rerun needs the source). `false` = "extract text only" — honoured
    * even when extraction failed, so a user who declined retention is never
@@ -113,7 +120,7 @@ export interface RecordStructureIntakeInput {
   planKey?: string;
   runFacts: Pick<
     SessionRunManifest,
-    "engine" | "model" | "provider" | "promptVersion"
+    "engine" | "model" | "provider" | "promptVersion" | "timings"
   >;
 }
 
@@ -243,7 +250,8 @@ export async function recordStructureIntake(
     args: Omit<
       Parameters<typeof stageIntakeSource>[0],
       "database" | "userId" | "workspaceId" | "sessionId" | "door" | "degraded"
-    >
+    >,
+    degraded: { reason: string } | undefined = input.degraded
   ) => {
     attempted++;
     try {
@@ -253,7 +261,7 @@ export async function recordStructureIntake(
         workspaceId: input.workspaceId,
         sessionId,
         door: "capture",
-        ...(input.degraded ? { degraded: input.degraded } : {}),
+        ...(degraded ? { degraded } : {}),
         ...args,
       });
       sourceDocumentIds.push(staged.documentId);
@@ -280,37 +288,44 @@ export async function recordStructureIntake(
     // bytes, or it could never be re-structured. An extracted file keeps its
     // bytes when the caller chose to (photos by default) — else only its text.
     // An explicit `keepRaw: false` wins over both.
+    const fileDegraded = input.degraded ?? input.fileNotRead;
     const keepBytes =
       input.keepRaw === false
         ? false
-        : Boolean(input.degraded) ||
+        : Boolean(fileDegraded) ||
           !input.extractedText?.trim() ||
           (input.keepRaw ?? defaultKeepOriginal(file.mimeType));
     const before = sourceDocumentIds.length;
-    await stage("file", {
-      kind: "file",
-      ...(keepBytes ? {} : { text: input.extractedText }),
-      file: {
-        buffer,
-        mimeType: file.mimeType,
-        ...(file.filename ? { filename: file.filename } : {}),
-        ...(input.extractedText ? { extractedText: input.extractedText } : {}),
-        ...(input.extractedTextTruncated
-          ? { extractedTextTruncated: true }
-          : {}),
-        keepBytes,
-        ...(input.source.sourceSha256
-          ? { sourceSha256: input.source.sourceSha256 }
-          : {}),
+    await stage(
+      "file",
+      {
+        kind: "file",
+        ...(keepBytes ? {} : { text: input.extractedText }),
+        file: {
+          buffer,
+          mimeType: file.mimeType,
+          ...(file.filename ? { filename: file.filename } : {}),
+          ...(input.extractedText
+            ? { extractedText: input.extractedText }
+            : {}),
+          ...(input.extractedTextTruncated
+            ? { extractedTextTruncated: true }
+            : {}),
+          keepBytes,
+          ...(input.source.sourceSha256
+            ? { sourceSha256: input.source.sourceSha256 }
+            : {}),
+        },
       },
-    });
+      fileDegraded
+    );
     if (sourceDocumentIds.length > before) {
       fileExtraction = {
         sourceDocumentId: sourceDocumentIds[sourceDocumentIds.length - 1]!,
         extractor: input.extraction?.extractor ?? null,
         // A degraded outcome: nothing's answer was used, whatever was sent.
-        model: input.degraded ? null : (input.extraction?.model ?? null),
-        provider: input.degraded ? null : (input.extraction?.provider ?? null),
+        model: fileDegraded ? null : (input.extraction?.model ?? null),
+        provider: fileDegraded ? null : (input.extraction?.provider ?? null),
         originalKept: keepBytes,
       };
     }

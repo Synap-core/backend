@@ -60,6 +60,20 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("revert", "past")).toBe("Reverted");
   });
 
+  it("carries the pod hygiene verbs in both moods (retire is never a delete)", () => {
+    // The cleanup pack's title and a retire receipt: the button asks, the
+    // history reports. Unknown tokens humanize with NO tense, so without these
+    // rows a settled retire would read "Retire".
+    expect(resolveActionLabel("retire", "imperative")).toBe("Retire");
+    expect(resolveActionLabel("retire", "past")).toBe("Retired");
+    expect(resolveActionLabel("close", "past")).toBe("Closed");
+    expect(resolveActionLabel("expire", "past")).toBe("Expired");
+    expect(resolveActionLabel("pause", "past")).toBe("Paused");
+    expect(resolveActionLabel("retire", "past")).not.toBe(
+      resolveActionLabel("delete", "past")
+    );
+  });
+
   it("settles the Refused/Rejected split on one canonical pair", () => {
     expect(resolveActionLabel("reject", "imperative")).toBe("Reject");
     expect(resolveActionLabel("reject", "past")).toBe("Rejected");

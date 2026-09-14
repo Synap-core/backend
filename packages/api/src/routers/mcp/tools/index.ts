@@ -30,6 +30,7 @@ import { ABSTRACT_VERBS } from "@synap/database/schema";
 import { OUTPUT_REF_KINDS } from "@synap/playbooks";
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
+import { PROJECT_SCOPE_EVENT_PREFIXES } from "../../../services/rules/scope.js";
 import { buildCapabilityExecuteAgentJsonSchema } from "../../../contracts/capability-execute-schema.js";
 
 /**
@@ -206,10 +207,16 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Supports limit (default 50).",
+          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Supports limit (default 50). Returns lean rows by default; use synap_get_entity or detail:'full' for full values.",
         inputSchema: {
           type: "object",
           properties: {
+            detail: {
+              type: "string",
+              enum: ["lean", "full"],
+              description:
+                "lean (default) = null columns and systemData omitted, string values over 120 chars truncated with '…[truncated: N chars total]' (every property key kept). full = unprojected rows.",
+            },
             profileSlug: {
               type: "string",
               description:
@@ -453,7 +460,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, entityScope (pod-wide vs workspace-scoped), description, icon), and every relation type that resolves for the same lens (slug, displayName, description, isDirectional, inverseLabel, workspaceId — null means pod-wide). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing from `profiles`), never silently dropped. For full property schemas use synap_orient or GET /discover.",
+          "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, profileKind, entityScope, applicableKinds on roles, description ≤120 chars, workspaceId), and relationTypes as slugs grouped by lens ([{workspaceId:null, slugs}] = valid everywhere, plus per-workspace groups listing only the slugs that workspace adds). detail:'full' returns complete profile rows and full relation-type rows (displayName, description, isDirectional, inverseLabel). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing from `profiles`), never silently dropped. No property schemas here or in synap_orient. A kind's fields, enums and required keys: call synap_get_entity on any existing entity of that kind (its `effectiveProperties`); over HTTP, GET /api/hub/discover?profileSlugs=<slug>. For a kind with no entities yet, a write that breaks the schema is rejected with the valid fields quoted — fix and resend once.",
         inputSchema: {
           type: "object",
           properties: {
@@ -466,7 +473,7 @@ export const tools = {
               type: "string",
               enum: ["full"],
               description:
-                "Pass 'full' to receive the complete profile row including renderer and uiHints columns. Omit for the lightweight digest (default).",
+                "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
             },
           },
           required: [],
@@ -1219,7 +1226,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Returns a lightweight LENS MAP — your identity, what is known about the user, projects (companies/initiatives), and the workspaces (operational domains) that hold data. Call first in every session. This also lists your projects — pass scope:['projects'] and/or workspaceId to narrow. Light omits the entity-type inventory and empty domains: pass detail:'full' for every workspace plus descriptions, full onboarding specs, and per-workspace profiles. For entity types and their property schemas, use the profile-listing tool.",
+          "The session BRIEFING — call first in every session. Leads with `startHere`: proposals you or your agents filed that await review (raise these first; the user's queue may hold more from others), open work sessions, the most-used kinds, runnable actions, and the skill to load for concept depth. Then your identity, what is known about the user, projects (companies/initiatives) and the workspaces (operational domains) that hold data. Pass scope:['projects'] and/or workspaceId to narrow. Light omits empty domains and the full type inventory; detail:'full' adds every workspace, descriptions, onboarding specs and per-workspace profiles. Every kind and role: synap_list_profiles.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1227,7 +1234,12 @@ export const tools = {
               type: "string",
               enum: ["light", "full"],
               description:
-                "light (default) = names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, and per-workspace profiles.",
+                "light (default) = startHere + names/ids/domain/counts + onboarding goal, empty domains and the entity-type inventory omitted; full = every workspace, descriptions, full onboarding spec, per-workspace profiles, and the lens-model explanation in `note`.",
+            },
+            explain: {
+              type: "boolean",
+              description:
+                "Include the lens-model explanation (workspaces vs projects, where writes land) in `note` without the rest of detail:'full'. Omit once you know the model.",
             },
             scope: {
               type: "array",
@@ -1260,10 +1272,15 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another.",
         inputSchema: {
           type: "object",
           properties: {
+            forceCreate: {
+              type: "boolean",
+              description:
+                "Create a new session even if an open one with the same goal already exists in this scope. Default false.",
+            },
             title: {
               type: "string",
               maxLength: 200,
@@ -3151,7 +3168,9 @@ export const tools = {
           "USE THIS INSTEAD OF synap_create_automation / synap_create_skill for a standing intent. Those are raw primitives — they persist whatever you hand them, so a bad trigger installs 'active' and silently never fires, and an instruction skill only ever sits there as text. This door verifies the compiled artifact against the runtime BEFORE anything is saved. (Reach for synap_create_automation directly only when you are authoring a flow that is not a user-stated rule — a multi-step pipeline with its own data contract.)\n" +
           "WHAT IT REJECTS, and why each rejection is real: a WHEN naming an event no emitter produces (the automation could never match); a WHERE row with a field but no value (dropping it would widen the rule beyond what was written); a THEN with no configured action (a trigger wired to nothing); `run_command` (the command step has no receiver and throws every run — use an AI step). A refusal comes back as status='denied' with `failure.clause` (WHEN | WHERE | THEN) and a reason written for a human. FIX THAT CLAUSE AND RESEND — it is a verdict, not a transient error, and re-sending it unchanged will fail identically.\n" +
           "If the intent describes something that should run and you send no `sentence`, the receipt carries `needsBehaviour` — the rule was saved as prose and will not execute; say so rather than reporting it as in effect.\n" +
-          "Scope: pod-wide by default; pass `workspaceId` for a domain rule, `projectId` for the cross-cutting lens. `expiresAt` makes the rule stop applying — pass one whenever the intent is situational ('while we're in the launch push'), because a standing rule with no expiry is one the user must remember to revoke.\n" +
+          "Scope: pod-wide by default; pass `workspaceId` for a domain rule, `projectId` for the cross-cutting lens. A `projectId` limit is only enforceable on WHEN events that carry a project — " +
+          PROJECT_SCOPE_EVENT_PREFIXES.map((p) => `${p}*`).join(", ") +
+          " — and is REFUSED (status='denied', clause WHEN) on any other trigger (e.g. a schedule); drop the project or pick one of those events. `expiresAt` makes the rule stop applying — pass one whenever the intent is situational ('while we're in the launch push'), because a standing rule with no expiry is one the user must remember to revoke.\n" +
           "Governed like every write: status='proposed' is SUCCESS, not an error — surface the returned link as a markdown link and never report a proposed rule as already in effect.",
         inputSchema: {
           type: "object",
@@ -3311,6 +3330,11 @@ export const tools = {
               description:
                 "A skill slug/stem (e.g. 'document-embeds', 'system/synap/document-embeds') or 'catalog'.",
             },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional: also include this workspace's skills (you must be a member). Omit to use your declared workspace focus, if any; otherwise only pod-wide and your own skills are read.",
+            },
           },
           required: ["ref"],
         },
@@ -3368,7 +3392,26 @@ export const tools = {
         const { resolveSkillContent } =
           await import("../../../services/capability-briefs/load-skill.js");
         const ref = args.ref as string;
-        const content = await resolveSkillContent(ref, sessionUserId ?? userId);
+        // The skill LENS (founder decision S2): an explicit workspaceId, else
+        // the agent's DECLARED focus workspace, else none. Never guessed — no
+        // membership[0] fallback. Membership is enforced by the skill
+        // visibility predicate inside `resolveSkillContent`, not here.
+        const explicitWs =
+          typeof args.workspaceId === "string" && args.workspaceId.trim()
+            ? args.workspaceId.trim()
+            : undefined;
+        let workspaceId = explicitWs;
+        if (!workspaceId && agentUserId) {
+          const { getAgentFocusWorkspaceId } =
+            await import("../../../services/agent-identity-service.js");
+          workspaceId =
+            (await getAgentFocusWorkspaceId(agentUserId)) ?? undefined;
+        }
+        const content = await resolveSkillContent(
+          ref,
+          sessionUserId ?? userId,
+          workspaceId ? { workspaceId } : undefined
+        );
         return {
           content: [{ type: "text", text: content }],
         };

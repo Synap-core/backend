@@ -46,6 +46,7 @@ import {
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { auditLog } from "../utils/audit-log.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
+import { proposeProfileRetire } from "../services/pod-hygiene/retire-profile.js";
 import { randomUUID } from "crypto";
 
 const logger = createLogger({ module: "profiles-router" });
@@ -437,9 +438,26 @@ export const profilesRouter = router({
         userId = ctx.userId;
       }
 
+      // Provenance (0263) is SERVER-decided, never a client input: the approve
+      // executor sets `ctx.profileProvenance` when it materializes a proposal
+      // (agent- or human-authored); every other caller reaching this direct
+      // branch is a human (D6 floors every agent create to a proposal).
+      const provenance = (
+        ctx as {
+          profileProvenance?: {
+            origin: "agent" | "authored";
+            ownerKind?: "proposal";
+            ownerId?: string;
+          };
+        }
+      ).profileProvenance;
       const profile = await profileRepo.create({
         id: profileId,
         slug: input.slug,
+        origin: provenance?.origin ?? "authored",
+        ...(provenance?.ownerKind && provenance.ownerId
+          ? { ownerKind: provenance.ownerKind, ownerId: provenance.ownerId }
+          : {}),
         displayName: input.displayName,
         parentProfileId: input.parentProfileId,
         uiHints: input.uiHints,
@@ -881,6 +899,47 @@ export const profilesRouter = router({
       );
 
       return { success: true };
+    }),
+
+  /**
+   * PROPOSE retiring a kind (pod hygiene D5/D7). Never writes the profile: it
+   * files a `profile/retire` proposal a human approves, or — when the kind is
+   * still in use — refuses and files a `profile/merge` suggestion instead.
+   * Retire is soft (`isActive=false`) and reversible via `reactivate()`.
+   */
+  proposeRetire: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        reason: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const db = await getDb();
+      // Same visibility gate as `delete`: the caller's lens must see the row.
+      const existing = await new ProfileResolutionService(db).resolveProfile(
+        input.id,
+        ctx.userId,
+        ctx.workspaceId
+      );
+      if (!existing) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Profile not found: ${input.id}`,
+        });
+      }
+      // The schema-write gate on the LOADED row, before anything is filed —
+      // the same authority every profile schema write passes.
+      await assertProfileSchemaWrite(db, ctx.userId, existing, {
+        level: "editor",
+        actingWorkspaceId: ctx.workspaceId,
+      });
+      return proposeProfileRetire({
+        userId: ctx.userId,
+        profileId: input.id,
+        actingWorkspaceId: ctx.workspaceId,
+        reason: input.reason,
+      });
     }),
 
   /**

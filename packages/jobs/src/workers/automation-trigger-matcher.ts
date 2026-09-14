@@ -27,6 +27,7 @@ import {
   skills,
   workspaceMembers,
   workspaces,
+  BELONGS_TO_PROJECT,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
@@ -701,6 +702,182 @@ export function matchTriggerSpecificFilters(
 }
 
 /**
+ * ── RULE SCOPE: ENTITY + PROJECT (founder decisions R1/R2, 2026-09-14) ─────
+ *
+ * A rule authored "on" an entity or a project carries that lens as
+ * `triggerConfig.entityId` / `triggerConfig.projectId`. Until now nothing here
+ * read either key, so such a rule fired for every matching event while every
+ * list showed it as scoped.
+ *
+ * Both keys are ADDITIVE and ANDed with every other filter: an absent key still
+ * matches everything, so no stored automation without them changes behaviour.
+ * A present key only ever NARROWS.
+ *
+ * `RULE_SCOPE_EVENT_PREFIXES` is the per-key list of event families whose
+ * payload can answer the question, from a census of the emitters:
+ *   - entity subject — `entity.*` (`subjectId` IS the entity), `entity_facet.*`
+ *     (`data.entityId` = the parent; the facet doors and FacetRepository's row
+ *     both carry it), `external_message.*` (`data.entityId` = the channel's
+ *     bound entity, when it has one — inbound-recorder.ts).
+ *   - project — every entity family above (via `belongs_to_project`), plus
+ *     `channel_message.*` / `external_message.*` (the channel's `project_id`),
+ *     `focus_session.*` (`subjectId` = the session, `project_id`) and
+ *     `proposal.*` (`subjectId` = the proposal, `project_id`).
+ * A scope key on any OTHER family fails CLOSED: the rule does not fire. A
+ * relation or capture payload that happens to carry some `entityId` is not a
+ * census'd subject, and "fires for the wrong thing" is the defect this closes.
+ *
+ * MIRRORED, never imported, by two consumers that must not load this worker:
+ * `@synap-core/automation-intent` `ENFORCEABLE_SCOPE_PREFIXES` (the authoring
+ * writer — pinned by `channel-binding-lockstep.test.ts`) and `@synap/api`
+ * `services/rules/scope.ts` (the governed rule door — pinned by
+ * `scope.tripwire.test.ts`). Both parse THIS literal; change it here first.
+ */
+export const RULE_SCOPE_EVENT_PREFIXES = {
+  entityId: ["entity.", "entity_facet.", "external_message."],
+  projectId: [
+    "entity.",
+    "entity_facet.",
+    "external_message.",
+    "channel_message.",
+    "focus_session.",
+    "proposal.",
+  ],
+} as const;
+
+/**
+ * What an event is ABOUT, for scope matching — derived once per event.
+ *
+ * `projectIds` is `null` when membership could not be READ (or was never read,
+ * because no candidate is project-scoped). `null` never matches a project
+ * scope: a failed read is not "belongs to no project" and it is certainly not
+ * "belongs to this one".
+ */
+export interface EventScopeFacts {
+  entityId: string | undefined;
+  projectIds: ReadonlySet<string> | null;
+}
+
+function inRuleScopeFamily(
+  key: keyof typeof RULE_SCOPE_EVENT_PREFIXES,
+  eventType: string
+): boolean {
+  return RULE_SCOPE_EVENT_PREFIXES[key].some((p) => eventType.startsWith(p));
+}
+
+/**
+ * The scope gate. PURE — also replayed by `@synap/api` services/rules/dry-run.ts.
+ */
+export function matchRuleScopeFilters(
+  eventType: string,
+  config: AutomationTriggerConfig,
+  facts: EventScopeFacts
+): boolean {
+  if (config.entityId) {
+    if (!inRuleScopeFamily("entityId", eventType)) return false;
+    if (facts.entityId !== config.entityId) return false;
+  }
+  if (config.projectId) {
+    if (!inRuleScopeFamily("projectId", eventType)) return false;
+    if (facts.projectIds === null || !facts.projectIds.has(config.projectId)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The entity an event is about, FOR SCOPE. Reuses the run-subject door
+ * (`deriveEventSubjectEntityId`) with one deliberate difference: that door
+ * returns nothing for a delete, because a run about a deleted entity has no
+ * channel to post into. Scope has no such concern — "when THIS deal is deleted"
+ * is a legitimate rule, and failing closed on it would ship an entity-scoped
+ * delete rule that can never fire.
+ */
+export function deriveEventScopeEntityId(input: {
+  eventType: string;
+  subjectId?: string | null;
+  data?: Record<string, unknown> | null;
+}): string | undefined {
+  return deriveEventSubjectEntityId(input, { includeDeleted: true });
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const isUuid = (v: unknown): v is string =>
+  typeof v === "string" && UUID_RE.test(v);
+
+/**
+ * The projects an event is ON. ONE call per event (the caller caches it for
+ * every candidate), and only when some candidate is project-scoped.
+ *
+ * Membership is the `belongs_to_project` relation (source = entity, target =
+ * `projects.id`) — the edge `projectLensWhere` (`@synap/api`
+ * utils/project-scope.ts) semi-joins and `linkEntityToProject` is the one
+ * writer of. That predicate cannot be imported here (`@synap/api` depends on
+ * `@synap/jobs`, the same cycle `getAccessibleWorkspaceFloor` below documents),
+ * so its equality is replicated against the same table and constant.
+ *
+ * A thrown read returns `null` — the scoped rule does not fire — and is logged.
+ * A missing row is not a failure: it contributes nothing.
+ */
+export async function resolveEventProjectIds(input: {
+  eventType: string;
+  subjectId: string;
+  data: Record<string, unknown> | undefined;
+  entityId: string | undefined;
+}): Promise<ReadonlySet<string> | null> {
+  const { eventType, subjectId, data, entityId } = input;
+  const ids = new Set<string>();
+  if (!inRuleScopeFamily("projectId", eventType)) return ids;
+  try {
+    if (entityId) {
+      const rows = await db.query.relations.findMany({
+        where: (r, { and, eq }) =>
+          and(eq(r.sourceEntityId, entityId), eq(r.type, BELONGS_TO_PROJECT)),
+        columns: { targetEntityId: true },
+      });
+      for (const row of rows) {
+        if (row.targetEntityId) ids.add(row.targetEntityId);
+      }
+    }
+    const channelId = data?.channelId;
+    if (
+      (eventType.startsWith("channel_message.") ||
+        eventType.startsWith("external_message.")) &&
+      isUuid(channelId)
+    ) {
+      const channel = await db.query.channels.findFirst({
+        where: (c, { eq }) => eq(c.id, channelId),
+        columns: { projectId: true },
+      });
+      if (channel?.projectId) ids.add(channel.projectId);
+    }
+    if (eventType.startsWith("focus_session.") && isUuid(subjectId)) {
+      const session = await db.query.focusSessions.findFirst({
+        where: (f, { eq }) => eq(f.id, subjectId),
+        columns: { projectId: true },
+      });
+      if (session?.projectId) ids.add(session.projectId);
+    }
+    if (eventType.startsWith("proposal.") && isUuid(subjectId)) {
+      const proposal = await db.query.proposals.findFirst({
+        where: (p, { eq }) => eq(p.id, subjectId),
+        columns: { projectId: true },
+      });
+      if (proposal?.projectId) ids.add(proposal.projectId);
+    }
+    return ids;
+  } catch (err) {
+    logger.warn(
+      { err, eventType, subjectId },
+      "Project membership read failed — project-scoped rules will NOT fire for this event"
+    );
+    return null;
+  }
+}
+
+/**
  * Workspace-ID floor for a pod-wide (null-workspace) inbound: the acting user's
  * accessible workspaces — explicit memberships PLUS pod-visible / pod-joinable
  * source workspaces. Mirrors `getUserAccessibleWorkspaceIds`
@@ -1084,6 +1261,29 @@ export async function handleAutomationTriggerMatch(job: {
   // `{{trigger.message.*}}`. `undefined` for a non-message event.
   const messageEnvelope = deriveMessageEnvelope(eventType, data);
 
+  // Scope facts once per event; membership reads only if a candidate is project-scoped.
+  const scopeEntityId = deriveEventScopeEntityId({
+    eventType,
+    subjectId,
+    data,
+  });
+  const needsProjectMembership = allAutomations.some(
+    (a) =>
+      typeof (a.triggerConfig as AutomationTriggerConfig | null)?.projectId ===
+      "string"
+  );
+  const scopeFacts: EventScopeFacts = {
+    entityId: scopeEntityId,
+    projectIds: needsProjectMembership
+      ? await resolveEventProjectIds({
+          eventType,
+          subjectId,
+          data,
+          entityId: scopeEntityId,
+        })
+      : null,
+  };
+
   const boss = getBoss();
 
   const rootRunId =
@@ -1245,6 +1445,9 @@ export async function handleAutomationTriggerMatch(job: {
     // ── Trigger-type-specific filter match ─────────────────────────────
     if (!matchTriggerSpecificFilters(eventType, data, config, messageEnvelope))
       continue;
+
+    // ── Rule scope: entity + project (R1/R2) ───────────────────────────
+    if (!matchRuleScopeFilters(eventType, config, scopeFacts)) continue;
 
     // ── Create automation run ──────────────────────────────────────────
     logger.info(

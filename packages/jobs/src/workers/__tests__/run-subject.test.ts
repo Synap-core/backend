@@ -62,6 +62,15 @@ describe("deriveEventSubjectEntityId", () => {
     ).toBeUndefined();
   });
 
+  it("entity.delete with includeDeleted → the deleted entity (rule scope asks what a delete was about)", () => {
+    expect(
+      deriveEventSubjectEntityId(
+        { eventType: "entity.delete.completed", subjectId: ENTITY, data: {} },
+        { includeDeleted: true }
+      )
+    ).toBe(ENTITY);
+  });
+
   it("external_message.received → data.entityId (the channel's bound context entity)", () => {
     expect(
       deriveEventSubjectEntityId({

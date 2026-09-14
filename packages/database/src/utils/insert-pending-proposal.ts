@@ -8,6 +8,27 @@ import { proposals, ProposalStatus } from "../schema/proposals.js";
 // here moved WITH it, so no caller loses the 22P02 protection.
 import { resolveProjectPlacement } from "../services/project-resolution-service.js";
 import { stableStringify } from "./stable-stringify.js";
+import {
+  isDerivedSession,
+  type SessionSource,
+} from "./request-write-context.js";
+
+/** The `proposals.data` key persisting a derived session for approval time. */
+const SESSION_SOURCE_MARKER_KEY = "sessionSource";
+
+/**
+ * The session source a stored proposal row persisted — read by every door that
+ * re-runs the project ladder at APPROVAL (the request scope is gone by then).
+ * `"derived"` only when `insertPendingProposal` stamped it; otherwise undefined,
+ * which the ladder reads as explicit.
+ */
+export function storedSessionSource(data: unknown): "derived" | undefined {
+  return (data as Record<string, unknown> | null | undefined)?.[
+    SESSION_SOURCE_MARKER_KEY
+  ] === "derived"
+    ? "derived"
+    : undefined;
+}
 
 /**
  * The canonical PENDING-proposal row INSERT.
@@ -89,6 +110,8 @@ export interface InsertPendingProposalInput {
   correlationId?: string | null;
   requestedEventId?: string | null;
   sessionId?: string | null;
+  /** Not a column — see `SessionSource`. A derived one is persisted in `data`. */
+  sessionSource?: SessionSource;
   projectId?: string | null;
   /**
    * Rung 3.5 of the project ladder — the acting agent's DECLARED sticky project
@@ -347,12 +370,15 @@ export async function deriveProposalProjectId(
      * be visible at set time.
      */
     focusProjectId?: string | null;
+    /** Forwarded to the ladder — see `SessionSource`. */
+    sessionSource?: SessionSource;
   },
   executor: typeof db | DbTx = db
 ): Promise<string | null> {
   const placement = await resolveProjectPlacement(executor, {
     explicitProjectId: input.projectId,
     sessionId: input.sessionId,
+    sessionSource: input.sessionSource,
     // Vocabulary bridge: a proposal's `threadId` IS the ladder's `channelId`.
     channelId: input.threadId,
     focusProjectId: input.focusProjectId,
@@ -416,11 +442,20 @@ export async function insertPendingProposal(
     {
       projectId: input.projectId,
       sessionId: input.sessionId,
+      sessionSource: input.sessionSource,
       threadId: input.threadId,
       focusProjectId: input.focusProjectId,
     },
     executor
   );
+
+  // APPROVE-TIME MARKER (A1). Approval re-runs the ladder from the stored
+  // `sessionId`, after the request scope is gone — so a derived session is
+  // PERSISTED (read back by `storedSessionSource`). Stamped AFTER the dedup hash
+  // (computed from `input.data`), so it never splits identical proposals.
+  const storedData = isDerivedSession(input.sessionId, input.sessionSource)
+    ? { ...input.data, [SESSION_SOURCE_MARKER_KEY]: "derived" as const }
+    : input.data;
 
   try {
     const [proposal] = await executor
@@ -430,7 +465,7 @@ export async function insertPendingProposal(
         targetType: input.targetType,
         targetId: input.targetId,
         proposalType: input.proposalType,
-        data: input.data,
+        data: storedData,
         status: ProposalStatus.PENDING,
         createdBy: input.createdBy,
         // C2 lifecycle-hygiene fix: no default TTL. A defaulted expiresAt used

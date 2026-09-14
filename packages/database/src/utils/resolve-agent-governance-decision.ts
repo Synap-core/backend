@@ -1102,6 +1102,8 @@ function reasonToRung(reason: string): string {
       return "force-propose";
     case PROPOSE_REASON.POD_ADMIN_SCHEMA_CHANGE:
       return "pod-admin-schema-change";
+    case PROPOSE_REASON.AGENT_SCHEMA_DEFINITION:
+      return "agent-schema-definition";
     case PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR:
       return "destructive-actions-hard-floor";
     case PROPOSE_REASON.USER_OBSERVATION_INFERENCE:

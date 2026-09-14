@@ -19,6 +19,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { resolveConfinedWorkspace } from "../hub-protocol/confine-workspace.js";
 import { logger, verifyWorkspaceAccess } from "../hub-protocol/rest/_shared.js";
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
+import { runWithDerivedSession } from "@synap/database";
 import {
   createHubProtocolCaller,
   pickAdvisoryWorkspaceId,
@@ -172,22 +173,32 @@ export async function executeMCPToolViaHubProtocol(
       `Unknown MCP tool: ${toolName}. Call synap_load_skill("catalog") for skills or synap_list_capabilities({query}) to find capabilities.`
     );
   }
-  const result = await handler({
-    toolName,
-    args,
-    userId,
-    apiKeyScopes,
-    agentUserId,
-    sessionId,
-    keyType,
-    keyWorkspaceId,
-    caller,
-    lensCaller,
-    requestedWorkspaceId,
-    lensWorkspaceId,
-    confinedWorkspaceId,
-    workspaceAccessible,
-  });
+  const invokeHandler = () =>
+    handler({
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      sessionId,
+      keyType,
+      keyWorkspaceId,
+      caller,
+      lensCaller,
+      requestedWorkspaceId,
+      lensWorkspaceId,
+      confinedWorkspaceId,
+      workspaceAccessible,
+    });
+  // A1: a GUESSED session still groups every write this call makes, but must
+  // never place one into a project. Recorded on the request write context so the
+  // ONE project ladder recognises it at every door below — the ~356 gate call
+  // sites forward `ctx.sessionId` with no source. A session the caller NAMED is
+  // never entered here, even when it happens to be the newest open one.
+  const result =
+    session?.attribution === "derived"
+      ? await runWithDerivedSession(session.sessionId, invokeHandler)
+      : await invokeHandler();
 
   // A GUESS MUST ANNOUNCE ITSELF. When several sessions were open we attributed
   // this write to the most recently started one — usually right, occasionally

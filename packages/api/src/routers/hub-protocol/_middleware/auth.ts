@@ -15,7 +15,14 @@
 
 import type { Context, Next } from "hono";
 import { createLogger } from "@synap-core/core";
-import { db, users, eq } from "@synap/database";
+import {
+  db,
+  users,
+  eq,
+  runWithProbeWrites,
+  runWithActingAgent,
+  isProbeApiKey,
+} from "@synap/database";
 
 import { apiKeyService } from "../../../services/api-keys.js";
 import { resolveKeyIdentity } from "../../../access/key-identity.js";
@@ -336,7 +343,13 @@ export const hubAuthMiddleware = async (
         c.set("linkedUserId", op);
       }
     }
-    return next();
+    // Request write facts for the floors below: D8 probe key, D6 agent principal
+    // (read AFTER every remap above set it). A plain human key enters no scope.
+    return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
+      runWithActingAgent(c.get("agentUserId") as string | undefined, () =>
+        next()
+      )
+    );
   }
 
   // ── 2. Try Kratos session token (browser extension / web clients) ────────

@@ -619,6 +619,9 @@ async function materializeProfile(
         parentProfileId: data.parentProfileId as string | undefined,
         uiHints: data.uiHints ?? {},
         scope: validScope,
+        // A peer pod's claim about where the kind came from is not something
+        // this pod checked — stamp the honest answer (0263).
+        origin: "unknown",
       } as typeof profiles.$inferInsert)
       .onConflictDoUpdate({
         target: profiles.id,

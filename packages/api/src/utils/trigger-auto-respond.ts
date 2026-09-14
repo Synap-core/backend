@@ -19,7 +19,12 @@
  */
 
 import { db, eq, and } from "@synap/database";
-import { channels, ChannelType, focusSessions } from "@synap/database/schema";
+import {
+  channels,
+  ChannelType,
+  focusSessions,
+  messages,
+} from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "trigger-auto-respond" });
@@ -73,6 +78,27 @@ export async function triggerAutoRespond(params: {
         reason: !channel ? "channel_not_found" : "channel_type_not_is_eligible",
       },
       "triggerAutoRespond skipped — user message will never produce an agent turn"
+    );
+    return false;
+  }
+  // A capture clarification part (question / answer) is answered by the
+  // capture door, never by an agent turn — whoever posted it. Defense in depth
+  // behind `recordCapturePartMessage`, which never calls this door; it also
+  // covers an anchored comment aimed at a question block.
+  const triggering = await db.query.messages.findFirst({
+    where: eq(messages.id, params.userMessageId),
+    columns: { metadata: true },
+  });
+  const capturePart = (triggering?.metadata as { capturePart?: unknown } | null)
+    ?.capturePart;
+  if (capturePart !== undefined && capturePart !== null) {
+    logger.warn(
+      {
+        channelId: params.channelId,
+        userMessageId: params.userMessageId,
+        reason: "capture_part",
+      },
+      "triggerAutoRespond skipped — a capture clarification part never produces an agent turn"
     );
     return false;
   }

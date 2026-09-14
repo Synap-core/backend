@@ -119,6 +119,19 @@ CREATE TABLE profiles (
   is_active boolean DEFAULT true,
   applicable_kinds text[],
   ui_hints jsonb DEFAULT '{}',
+  -- Provenance + lifecycle, exactly as migration 0263 declares them
+  -- (seedKindProfile writes origin = 'core').
+  origin text NOT NULL DEFAULT 'unknown'
+    CHECK (origin IN ('core', 'template', 'authored', 'agent', 'probe', 'unknown')),
+  lifecycle text NOT NULL DEFAULT 'active'
+    CHECK (lifecycle IN ('experimental', 'active', 'deprecated')),
+  owner_kind text,
+  owner_id text,
+  CHECK (
+    (owner_kind IS NULL AND owner_id IS NULL) OR
+    (owner_kind IN ('package', 'workspace', 'proposal', 'agent', 'user')
+      AND owner_id IS NOT NULL)
+  ),
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );

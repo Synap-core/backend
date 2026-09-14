@@ -23,6 +23,7 @@
 
 import { db, proposals, and, eq, or, inArray } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { authoredByUser } from "../agent-identity-service.js";
 
 const logger = createLogger({ module: "stored-capture-scope" });
 
@@ -93,11 +94,17 @@ export async function readStoredProposalScope(
           inArray(proposals.id, ids),
           // Owner floor. The ids come from the write this call just made, never
           // from caller input — the floor only keeps this reader from becoming
-          // a way to read anyone else's row if that ever changes. An agent-filed
-          // row carries the agent in `createdBy` and the human in
-          // `subjectUserId`; either names this user.
+          // a way to read anyone else's row if that ever changes.
+          //
+          // `createdBy` is OVERLOADED (the userId OR the agentUserId that filed
+          // the row), so authorship goes through the ONE lineage predicate,
+          // `authoredByUser` (me, or an agent I created). `subjectUserId` stays
+          // as its own branch because the lineage does not cover it: an agent
+          // this human did not create (a pod-seeded agent) files rows whose
+          // author is outside that lineage, yet whose owner floor (0248) names
+          // this human.
           or(
-            eq(proposals.createdBy, params.userId),
+            authoredByUser(params.userId),
             eq(proposals.subjectUserId, params.userId)
           )
         )

@@ -18,8 +18,12 @@ import type {
   AIStep,
   CreatedProposal,
 } from "@synap-core/types";
+import {
+  decodeStructureProgressFrame,
+  type StructureProgressEvent,
+} from "@synap-core/types/capture";
 
-import { iterateISChatStream } from "./is-chat-stream.js";
+import { iterateISChatStream, iterateSSEDataFrames } from "./is-chat-stream.js";
 
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
@@ -35,10 +39,16 @@ export interface FollowUpChip {
   icon?: string;
   entityId?: string;
   propertyKey?: string;
+  /** The AI's recommended answer — at most one per follow-up. */
+  recommended?: boolean;
+  /** One-line imperative consequence of this answer (≤140). */
+  description?: string;
 }
 
 export interface StructuredFollowUp {
   question: string;
+  /** One line: what answering changes (≤200). */
+  why?: string;
   suggestions: FollowUpChip[];
 }
 
@@ -830,85 +840,104 @@ export class IntelligenceHubClient {
    * Used by the capture.structure tRPC procedure.
    * Falls back gracefully — returns null on failure.
    */
-  async structure(input: {
-    text?: string;
-    /**
-     * Binary/text source normalized to text via the hub's ContentExtractor
-     * BEFORE structuring. Either `text` or `file` must be present.
-     */
-    file?: {
-      content: string;
-      mimeType: string;
-      filename?: string;
-      encoding?: "base64" | "utf8";
-    };
-    url?: string;
-    html?: string;
-    context?: string;
-    /**
-     * Optional free-text bias for the structuring pass (e.g. "new-lead intake:
-     * prefer contact/company/lead; link to existing entities, don't duplicate").
-     * Rides in the POST body to /api/structure; the IS prompt may use it.
-     */
-    instructions?: string;
-    hints?: {
-      preferredProfiles?: string[];
-      existingEntityNames?: string[];
-      availableProfiles?: Array<{
-        slug: string;
-        displayName: string;
-        description?: string;
-        propertyHints?: string;
-      }>;
-      availableWorkspaces?: Array<{
-        id: string;
-        name: string;
-        description?: string;
-      }>;
-      availableProjects?: Array<{
-        id: string;
-        name: string;
-        description?: string;
-      }>;
-      previousEntities?: Array<{
-        tempId: string;
-        profileSlug: string;
-        title: string;
-        description?: string;
-        properties?: Record<string, unknown>;
-      }>;
+  async structure(
+    input: {
+      text?: string;
       /**
-       * Routing self-improvement memory: recent user corrections (negatives —
-       * the AI's pick was moved) + confirmed routes (positives). Rendered as
-       * few-shot examples in the workspace-routing prompt so the model learns
-       * from the user's own history. Absent/empty on cold start.
+       * Binary/text source normalized to text via the hub's ContentExtractor
+       * BEFORE structuring. Either `text` or `file` must be present.
        */
-      routingMemory?: {
-        corrections: Array<{
-          textSnippet: string;
-          correctWorkspaceName: string;
-          wrongWorkspaceName?: string | null;
-        }>;
-        confirmations: Array<{
-          textSnippet: string;
-          correctWorkspaceName: string;
-        }>;
-      } | null;
+      file?: {
+        content: string;
+        mimeType: string;
+        filename?: string;
+        encoding?: "base64" | "utf8";
+      };
+      url?: string;
+      html?: string;
+      context?: string;
       /**
-       * The relation types that resolve for the capture's lens (the pod's
-       * effective relation defs). The IS structurer emits only these slugs for
-       * `relationType`. Optional and additive: an older IS ignores it, and an IS
-       * that does not receive it falls back to the default relation-def slugs.
+       * Optional free-text bias for the structuring pass (e.g. "new-lead intake:
+       * prefer contact/company/lead; link to existing entities, don't duplicate").
+       * Rides in the POST body to /api/structure; the IS prompt may use it.
        */
-      availableRelationTypes?: Array<{
-        slug: string;
-        displayName?: string;
-        description?: string;
-      }>;
-    };
-    /** Abort timeout in ms (default 25000). Imports raise this for long notes. */
-    timeoutMs?: number;
-  }): Promise<{
+      instructions?: string;
+      /**
+       * The pod's preferred vision model id (`intelligenceDefaults.visionModelId`).
+       * A PREFERENCE the IS honours only when it serves exactly that id; an older
+       * IS ignores it.
+       */
+      visionModelId?: string;
+      hints?: {
+        preferredProfiles?: string[];
+        existingEntityNames?: string[];
+        availableProfiles?: Array<{
+          slug: string;
+          displayName: string;
+          description?: string;
+          propertyHints?: string;
+        }>;
+        availableWorkspaces?: Array<{
+          id: string;
+          name: string;
+          description?: string;
+        }>;
+        availableProjects?: Array<{
+          id: string;
+          name: string;
+          description?: string;
+        }>;
+        previousEntities?: Array<{
+          tempId: string;
+          profileSlug: string;
+          title: string;
+          description?: string;
+          properties?: Record<string, unknown>;
+        }>;
+        /**
+         * Routing self-improvement memory: recent user corrections (negatives —
+         * the AI's pick was moved) + confirmed routes (positives). Rendered as
+         * few-shot examples in the workspace-routing prompt so the model learns
+         * from the user's own history. Absent/empty on cold start.
+         */
+        routingMemory?: {
+          corrections: Array<{
+            textSnippet: string;
+            correctWorkspaceName: string;
+            wrongWorkspaceName?: string | null;
+          }>;
+          confirmations: Array<{
+            textSnippet: string;
+            correctWorkspaceName: string;
+          }>;
+        } | null;
+        /**
+         * The relation types that resolve for the capture's lens (the pod's
+         * effective relation defs). The IS structurer emits only these slugs for
+         * `relationType`. Optional and additive: an older IS ignores it, and an IS
+         * that does not receive it falls back to the default relation-def slugs.
+         */
+        availableRelationTypes?: Array<{
+          slug: string;
+          displayName?: string;
+          description?: string;
+        }>;
+      };
+      /** Abort timeout in ms (default 25000). Imports raise this for long notes. */
+      timeoutMs?: number;
+    },
+    options: {
+      /**
+       * Live progress. When present the request asks for
+       * `Accept: text/event-stream`; an IS that streams sends decoded
+       * stage/draft frames here before the result. An older IS ignores the
+       * header and answers JSON — then this is never called.
+       */
+      onProgress?: (event: StructureProgressEvent) => void;
+      /** Caller abort, in addition to `timeoutMs`. */
+      signal?: AbortSignal;
+    } = {}
+  ): Promise<{
     entities: Array<{
       tempId: string;
       profileSlug: string;
@@ -992,6 +1021,12 @@ export class IntelligenceHubClient {
       text?: string;
       /** True when `text` was truncated by the IS. */
       textTruncated?: boolean;
+      /**
+       * The FILE was not read (e.g. a photo with no vision model) even when the
+       * caption structured — the top-level `degraded` stays false in that case.
+       */
+      degraded?: boolean;
+      degradedReason?: string;
     };
     /**
      * Run facts for the run manifest (`session.metadata.run`). `model` /
@@ -1005,6 +1040,13 @@ export class IntelligenceHubClient {
       model: string | null;
       provider: string | null;
       promptVersion: string;
+      /** Where the IS time went (ms). Absent on a degraded answer / older IS. */
+      timings?: {
+        waitMs: number;
+        extractMs: number;
+        modelMs: number;
+        salvaged: boolean;
+      };
     };
   } | null> {
     try {
@@ -1013,12 +1055,18 @@ export class IntelligenceHubClient {
         () => controller.abort(),
         input.timeoutMs ?? 25_000
       );
+      const abortFromCaller = () => controller.abort();
+      options.signal?.addEventListener("abort", abortFromCaller, {
+        once: true,
+      });
+      if (options.signal?.aborted) controller.abort();
       try {
         const response = await fetch(`${this.baseUrl}/api/structure`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": this.apiKey,
+            ...(options.onProgress ? { Accept: "text/event-stream" } : {}),
           },
           body: JSON.stringify(input),
           signal: controller.signal,
@@ -1038,11 +1086,20 @@ export class IntelligenceHubClient {
           }
           return null;
         }
+        if (
+          response.headers.get("content-type")?.includes("text/event-stream")
+        ) {
+          return (await this.readStructureStream(
+            response,
+            options.onProgress
+          )) as Awaited<ReturnType<typeof this.structure>> & {};
+        }
         return (await response.json()) as Awaited<
           ReturnType<typeof this.structure>
         > & {};
       } finally {
         clearTimeout(timer);
+        options.signal?.removeEventListener("abort", abortFromCaller);
       }
     } catch (err) {
       // Preserve the auth signal — it must not be flattened into a null.
@@ -1052,6 +1109,59 @@ export class IntelligenceHubClient {
       );
       return null;
     }
+  }
+
+  /**
+   * The streamed `/api/structure` answer: progress frames, then ONE
+   * `{type:"result", body}` whose body is exactly the JSON path's body.
+   *
+   * A stream that errors or ends without a result THROWS, so `structure()`'s
+   * catch returns the same `null` a failed JSON call returns — a broken stream
+   * is a failed read, never an empty structure. Progress frames are forwarded
+   * only after `decodeStructureProgressFrame` accepts them; `done` is the
+   * pod's to emit, not the IS's, so it is not forwarded.
+   */
+  private async readStructureStream(
+    response: Response,
+    onProgress: ((event: StructureProgressEvent) => void) | undefined
+  ): Promise<unknown> {
+    for await (const frame of iterateSSEDataFrames(response)) {
+      if (!frame || typeof frame !== "object") continue;
+      const { type, status, body, error } = frame as Record<string, unknown>;
+      if (type === "result") {
+        // The IS commits to 200 before it knows the outcome, so the real
+        // status rides here. Non-200 means what a non-OK JSON response means.
+        if (status !== 200) {
+          if (typeof status === "number" && isAuthStatus(status)) {
+            throw new IntelligenceAuthError(
+              status,
+              `Intelligence Service rejected credentials: ${status}`
+            );
+          }
+          throw new Error(`structure stream: result status ${String(status)}`);
+        }
+        if (!body || typeof body !== "object") {
+          throw new Error("structure stream: result frame has no body");
+        }
+        return body;
+      }
+      if (type === "error") {
+        throw new Error(
+          `structure stream error: ${typeof error === "string" ? error : "unknown"}`
+        );
+      }
+      const event = decodeStructureProgressFrame(frame);
+      if (!event || event.kind === "done" || !onProgress) continue;
+      try {
+        onProgress(event);
+      } catch (sinkErr) {
+        // Progress is an observer: a broken sink must not fail the structure.
+        console.warn(
+          `[IntelligenceHubClient] structure onProgress threw: ${sinkErr instanceof Error ? sinkErr.message : String(sinkErr)}`
+        );
+      }
+    }
+    throw new Error("structure stream ended without a result frame");
   }
 
   /**

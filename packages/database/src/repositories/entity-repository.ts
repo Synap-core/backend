@@ -34,6 +34,7 @@ import {
   normalizeKnowledgeProperties,
 } from "../utils/knowledge-contract.js";
 import { reservedEntityKindReason } from "../utils/reserved-profile-slugs.js";
+import { stampProbeMarker } from "../utils/request-write-context.js";
 
 /**
  * Typed carrier for `EntityRepository.create`'s TEACHING rejections — the
@@ -481,7 +482,9 @@ export class EntityRepository extends BaseRepository<
       preview: data.preview,
       documentId: data.documentId,
       properties: validatedProperties,
-      systemData: data.systemData ?? {},
+      // D8: a TEST-key write is marked here, at the floor every entity create
+      // door converges on — no door can forget it (request-write-context.ts).
+      systemData: stampProbeMarker(data.systemData ?? {}),
       // Provenance (Wave B3)
       createdByKind: provenance.createdByKind,
       createdByUserId: provenance.createdByUserId,

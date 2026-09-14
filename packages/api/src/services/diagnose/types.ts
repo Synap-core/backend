@@ -94,6 +94,13 @@ export interface HealthSection {
      */
     | "schema_contract"
     /**
+     * What the pod accumulated and nothing retires: zero-entity kinds, twins,
+     * duplicate relation types, never-run automations, long-idle work sessions,
+     * long-waiting objectWork proposals. Present only when computed (see
+     * `GlobalSignals.schemaHygiene`).
+     */
+    | "schema_hygiene"
+    /**
      * Intake runs grouped by run-manifest prompt version: review outcomes and
      * newer-vs-previous regressions. Present only when computed (see
      * `GlobalSignals.qualityByPromptVersion`); an unreadable signal says so.

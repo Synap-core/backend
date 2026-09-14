@@ -43,6 +43,10 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { channels, focusSessions, relations } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BELONGS_TO_PROJECT } from "../utils/entity-project-membership.js";
+import {
+  isDerivedSession,
+  type SessionSource,
+} from "../utils/request-write-context.js";
 
 /**
  * The resolver runs on the CALLER'S executor so that a row minted earlier in the
@@ -99,6 +103,8 @@ export interface ResolveProjectPlacementInput {
   explicitProjectId?: string | null;
   /** Rung 2 — the active focus session; its `projectId` is consulted. */
   sessionId?: string | null;
+  /** How `sessionId` was arrived at — see `SessionSource` / `isDerivedSession`. */
+  sessionSource?: SessionSource;
   /** Rung 3 — a bound channel; its `projectId` is consulted. */
   channelId?: string | null;
   /**
@@ -153,7 +159,13 @@ export async function resolveProjectPlacement(
   // SHAPE-GUARDED (see UUID_SHAPE above): a body-supplied non-uuid is excluded
   // BEFORE the query, not caught after it — inside a transaction a 22P02 has
   // already aborted the tx by the time a catch could run.
-  if (input.sessionId && UUID_SHAPE.test(input.sessionId)) {
+  // A derived session is skipped (A1, see `isDerivedSession`): a guess falls
+  // through to the non-guess rungs — channel, declared focus, relational.
+  if (
+    input.sessionId &&
+    !isDerivedSession(input.sessionId, input.sessionSource) &&
+    UUID_SHAPE.test(input.sessionId)
+  ) {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, input.sessionId),
       columns: { projectId: true },

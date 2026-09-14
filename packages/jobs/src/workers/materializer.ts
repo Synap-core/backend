@@ -45,6 +45,7 @@ import {
   linkEntityToProject,
   resolveProjectPlacement,
   stampProvenance,
+  storedSessionSource,
 } from "@synap/database";
 import {
   entities,
@@ -136,7 +137,7 @@ export async function handleMaterialize(
 
   const proposal = await sharedDb.query.proposals.findFirst({
     where: eq(proposals.id, sourceProposalId),
-    columns: { id: true, status: true, workspaceId: true },
+    columns: { id: true, status: true, workspaceId: true, agentUserId: true },
   });
 
   if (!proposal) {
@@ -180,7 +181,14 @@ export async function handleMaterialize(
   try {
     switch (subjectType) {
       case "entity":
-        await materializeEntity(action, subjectId, userId, workspaceId, data);
+        await materializeEntity(
+          action,
+          subjectId,
+          userId,
+          workspaceId,
+          data,
+          proposal.agentUserId ?? null
+        );
         break;
       // "facet" = the governance targetType (what the */* catch-all executor
       // emits as `facet.<action>.validated`); "entity_facet" = the audit/event
@@ -193,11 +201,19 @@ export async function handleMaterialize(
           subjectId,
           userId,
           workspaceId,
-          data
+          data,
+          proposal.agentUserId ?? null
         );
         break;
       case "profile":
-        await materializeProfile(action, subjectId, userId, workspaceId, data);
+        await materializeProfile(
+          action,
+          subjectId,
+          userId,
+          workspaceId,
+          data,
+          proposal.agentUserId ?? null
+        );
         break;
       case "relation_def":
         await materializeRelationDef(
@@ -340,7 +356,10 @@ async function materializeEntity(
   subjectId: string,
   userId: string,
   workspaceId: string | undefined,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** The APPROVED proposal row's `agent_user_id` — the authoritative author.
+   * The `.validated` event carries the agent on its column, not in `data`. */
+  proposalAgentUserId: string | null
 ): Promise<void> {
   const database = await getDb();
   const eventRepo = new EventRepository(sql);
@@ -397,7 +416,7 @@ async function materializeEntity(
         // stampProvenance verbatim (the ProvenanceStamp shape is a BodyProvenance).
         provenance: stampProvenance({
           userId,
-          agentUserId: (data.agentUserId as string) || undefined,
+          agentUserId: proposalAgentUserId ?? undefined,
           sourceProposalId: (data.sourceProposalId as string) || undefined,
           correlationId: (data.correlationId as string) || undefined,
         }),
@@ -434,7 +453,7 @@ async function materializeEntity(
         // here (materialized-from-proposal path) per the C2 decision.
         ...stampProvenance({
           userId,
-          agentUserId: (data.agentUserId as string) || undefined,
+          agentUserId: proposalAgentUserId ?? undefined,
           sourceProposalId: (data.sourceProposalId as string) || undefined,
           correlationId: (data.correlationId as string) || undefined,
         }),
@@ -502,7 +521,9 @@ async function materializeEntityFacet(
   subjectId: string,
   userId: string,
   workspaceId: string | undefined,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** The APPROVED proposal row's `agent_user_id` (see materializeEntity). */
+  proposalAgentUserId: string | null
 ): Promise<void> {
   const database = await getDb();
   const eventRepo = new EventRepository(sql);
@@ -527,7 +548,7 @@ async function materializeEntityFacet(
         // write from the proposal envelope carried on the .validated event.
         ...stampProvenance({
           userId,
-          agentUserId: (data.agentUserId as string) || undefined,
+          agentUserId: proposalAgentUserId ?? undefined,
           sourceProposalId: (data.sourceProposalId as string) || undefined,
           correlationId: (data.correlationId as string) || undefined,
         }),
@@ -566,7 +587,10 @@ async function materializeProfile(
   subjectId: string,
   userId: string,
   workspaceId: string | undefined,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  /** The APPROVED proposal row's `agent_user_id` — the authoritative author.
+   * The `.validated` event carries the agent on its column, not in `data`. */
+  proposalAgentUserId: string | null
 ): Promise<void> {
   const database = await getDb();
   const profileRepo = new ProfileRepository(database);
@@ -603,6 +627,10 @@ async function materializeProfile(
     await profileRepo.create({
       id: subjectId,
       slug: data.slug as string,
+      // Provenance (0263): a proposal-approved event. Agent-authored iff the
+      // approved PROPOSAL row names an agent — never the event `data`, which
+      // the catch-all emitter does not populate with the agent (R4).
+      origin: proposalAgentUserId ? "agent" : "authored",
       displayName: (data.displayName as string) || (data.slug as string),
       parentProfileId: (data.parentProfileId as string) || undefined,
       uiHints: (data.uiHints as Record<string, unknown>) || undefined,
@@ -978,7 +1006,7 @@ async function linkSessionProduced(
   if (!sourceProposalId) return;
   const proposal = await sharedDb.query.proposals.findFirst({
     where: eq(proposals.id, sourceProposalId),
-    columns: { sessionId: true, projectId: true },
+    columns: { sessionId: true, projectId: true, data: true },
   });
   if (!proposal) return;
 
@@ -1010,6 +1038,7 @@ async function linkSessionProduced(
     userId,
     explicitProjectId: proposal.projectId,
     sessionId: proposal.sessionId,
+    sessionSource: storedSessionSource(proposal.data),
   });
   if (placement.projectId) {
     // Report what the DOOR returned, not that we called it. `linkEntityToProject`

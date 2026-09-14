@@ -76,6 +76,7 @@ import {
 } from "./index.js";
 import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
+import { applyRuleProjectScope } from "./scope.js";
 import { readRuleSentence } from "./sentence-schema.js";
 import { readRuleAutomationIds } from "./lineage.js";
 import { snapshotBehaviours } from "./create.js";
@@ -133,8 +134,10 @@ export type UpdateRuleGovernedResult =
       automationIds: string[];
       /** True when this edit left the rule as a draft (nothing can fire). */
       draft: boolean;
+      /** Present when the edited behaviour is LIMITED to its project (`./scope.ts`). */
+      scopeNote?: string;
     }
-  | { status: "proposed"; proposalId: string }
+  | { status: "proposed"; proposalId: string; scopeNote?: string }
   | { status: "not_found" }
   | {
       status: "denied";
@@ -225,6 +228,7 @@ export async function updateRuleGoverned(
     input.sentence === undefined ? existing.sentence : input.sentence;
 
   let compiled: ReturnType<typeof compileRuleSentence> | null = null;
+  let scopeNote: string | undefined;
   if (sentenceInput !== undefined && sentenceInput !== null) {
     const sentence = readRuleSentence(sentenceInput);
     if (!sentence) {
@@ -251,6 +255,18 @@ export async function updateRuleGoverned(
           failure: compiled.failure,
         };
       }
+      // ── SCOPE: same binding as the create door — see `./scope.ts`. An
+      // activation (draft → live) passes here too, so a draft saved with a
+      // project its WHEN cannot carry is refused at the moment it would arm.
+      const scoped = applyRuleProjectScope(compiled, input.scope.projectId);
+      if (!scoped.ok) {
+        return {
+          status: "denied",
+          reason: scoped.failure.reason,
+          failure: scoped.failure,
+        };
+      }
+      ({ compiled, scopeNote } = scoped);
     }
   }
 
@@ -306,7 +322,11 @@ export async function updateRuleGoverned(
     return { status: "denied", reason: perm.reason };
   }
   if ("proposalId" in perm) {
-    return { status: "proposed", proposalId: perm.proposalId };
+    return {
+      status: "proposed",
+      proposalId: perm.proposalId,
+      ...(scopeNote ? { scopeNote } : {}),
+    };
   }
 
   // ── Reconcile the BEHAVIOUR half ────────────────────────────────────────
@@ -508,5 +528,6 @@ export async function updateRuleGoverned(
     ruleId: input.ruleId,
     automationIds: automationIdsAfter,
     draft,
+    ...(scopeNote ? { scopeNote } : {}),
   };
 }

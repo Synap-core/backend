@@ -60,6 +60,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
 });
 
+// The auto-apply receipt reads the agent's declared project focus (rung 3.5,
+// A3 ladder parity). The spread `db` above has no drizzle `select`; no focus.
+vi.mock("../agent-identity-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agent-identity-service.js")>()),
+  getAgentFocusProjectId: vi.fn(async () => null),
+}));
+
 vi.mock("@synap/database/agent-governance", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("@synap/database/agent-governance")>();

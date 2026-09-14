@@ -542,15 +542,7 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
     }
   });
 
-  it("the meta-model default is a PLATFORM default, not a floor — a rung-2.8 rule and an explicit autoApproveFor can still widen it", () => {
-    // Rung 2.8 (governance_rules store) — the user-editable widening door.
-    expect(
-      decideAgentPolicy({
-        subjectType: "profile",
-        action: "create",
-        governanceRuleVerdict: "auto",
-      }).verdict
-    ).toBe("execute");
+  it("property_def.create stays a widenable platform default (profile.create is floored — agent-schema-definition.test.ts)", () => {
     // Rung 4 (explicit workspace autoApproveFor override).
     expect(
       decideAgentPolicy({

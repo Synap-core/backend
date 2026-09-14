@@ -45,6 +45,7 @@ const IS_EXTRACTION_REASONS = [
   "pdf_scanned_needs_ocr",
   "pdf_missing_binary",
   "vision_provider_not_configured",
+  "vision_provider_failed",
   "image_missing_binary",
   "transcription_provider_not_configured",
   "audio_missing_binary",
@@ -111,6 +112,8 @@ describe("capture degraded-reason door parity", () => {
       // is what the tRPC door passes through as `extractionPassThrough`.
       expect(Object.keys(extractionShape).sort()).toEqual(
         [
+          "degraded",
+          "degradedReason",
           "extractor",
           "kind",
           "metadata",
@@ -119,6 +122,29 @@ describe("capture degraded-reason door parity", () => {
           "warnings",
         ].sort()
       );
+    });
+
+    it("keeps a FILE-not-read state on a plan whose caption structured (top level un-degraded)", () => {
+      // The IS carries a photo it could not read on `extraction`, not at the
+      // top level; zod strips undeclared keys, so an undeclared pair would
+      // silently tell REST callers the photo was read.
+      const parsed = CaptureStructureResponseSchema.parse({
+        proposals: [{ tempId: "t1" }],
+        relations: [],
+        followUp: null,
+        extraction: {
+          kind: "image",
+          extractor: "vision",
+          text: "",
+          degraded: true,
+          degradedReason: "vision_provider_not_configured",
+        },
+      });
+      expect(parsed.degraded).toBeUndefined();
+      expect(parsed.extraction).toMatchObject({
+        degraded: true,
+        degradedReason: "vision_provider_not_configured",
+      });
     });
 
     it.each([...IS_EXTRACTION_REASONS, ...POD_PLUMBING_REASONS])(

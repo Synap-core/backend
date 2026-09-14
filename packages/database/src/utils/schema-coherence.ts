@@ -362,6 +362,29 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "role_category",
     addedBy: "0222_profiles_role_category.sql",
   },
+  // Provenance + lifecycle (0263). Absence means every profile writer's
+  // `origin` stamp and the probe-exclusion listing floor reference a missing
+  // column — the listing read would 42703.
+  {
+    table: "profiles",
+    column: "origin",
+    addedBy: "0263_profiles_origin_lifecycle.sql",
+  },
+  {
+    table: "profiles",
+    column: "lifecycle",
+    addedBy: "0263_profiles_origin_lifecycle.sql",
+  },
+  {
+    table: "profiles",
+    column: "owner_kind",
+    addedBy: "0263_profiles_origin_lifecycle.sql",
+  },
+  {
+    table: "profiles",
+    column: "owner_id",
+    addedBy: "0263_profiles_origin_lifecycle.sql",
+  },
 
   // api_keys
   {

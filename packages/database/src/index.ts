@@ -53,6 +53,7 @@ export * from "./utils/document-version-storage.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
+export * from "./utils/request-write-context.js";
 export * from "./utils/entity-create-guardrails.js";
 export * from "./utils/project-slug.js";
 export * from "./utils/cp-project-sync-trigger.js";
@@ -245,8 +246,11 @@ export {
 } from "./utils/reconcile-workspace-from-definition.js";
 export {
   resolveProfileForApply,
+  readProfileRetirement,
   type ProfileApplyResolution,
+  type ProfileRetirement,
 } from "./utils/resolve-profile-for-apply.js";
+export { markProfileRetired } from "./repositories/profile-repository.js";
 export { normalizeProfileScope } from "./utils/normalize-profile-scope.js";
 export {
   buildStoredConstraints,

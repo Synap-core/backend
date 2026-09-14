@@ -1243,6 +1243,10 @@ export async function createWorkspaceFromDefinition(
           created = await profileRepo.create({
             slug: profile.slug,
             displayName: profile.displayName,
+            // Installed by a workspace definition (0263); the workspace owns it.
+            origin: "template",
+            ownerKind: "workspace",
+            ownerId: workspaceId,
             uiHints: {
               icon: resolvedIcon,
               color: resolvedColor,
