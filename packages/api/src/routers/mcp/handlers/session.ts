@@ -383,6 +383,13 @@ export const sessionHandlers: McpHandlerMap = {
           "You have no open focus session. Start one with synap_start_session.",
       });
     }
+    // A malformed handle (e.g. a display-truncated id) must not reach
+    // `eq(focusSessions.id, wantedId)` — postgres throws invalid-uuid-syntax
+    // there, which surfaces as a tool-call error rather than "not found".
+    // Same as Hub REST GET /focus-sessions/:id.
+    if (!UUID_RE.test(wantedId)) {
+      return ok({ error: `Focus session ${wantedId} not found` });
+    }
     const [session] = await db
       .select()
       .from(focusSessions)

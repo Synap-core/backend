@@ -81,6 +81,7 @@ import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
   httpStatusForTrpcError,
+  isUuid,
   logger,
   rejectAgentReviewer,
   resolveActingContext,
@@ -658,6 +659,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     const id = c.req.param("id");
+    // A malformed id (e.g. a display-truncated uuid) must not reach the
+    // `eq(focusSessions.id, id)` cast below — postgres throws invalid-uuid-
+    // syntax there, which surfaces as a 500 for what is a client typo. Same
+    // shape the caller gets for a well-formed-but-missing id: neither
+    // discloses whether SOME session exists at that handle.
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const workspaceIdParam = c.req.query("workspaceId");
     // Bind acting user; optional workspace membership when a lens is supplied.
     const acting = await resolveActingContext(c, {
@@ -844,6 +853,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     const id = c.req.param("id");
+    // Same malformed-id-as-500 trap as GET /focus-sessions/:id — refuse before
+    // the uuid cast, not after postgres throws.
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = await c.req.json().catch(() => null);
     if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
 
@@ -1184,6 +1198,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = await c.req.json().catch(() => ({}));
     const parsed = CompleteBodySchema.safeParse(raw ?? {});
     if (!parsed.success) {
@@ -1294,6 +1311,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = (await c.req.json().catch(() => ({}))) as { reason?: unknown };
     const reason = typeof raw?.reason === "string" ? raw.reason : undefined;
 
@@ -1398,6 +1418,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (blocked) return blocked;
 
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = (await c.req.json().catch(() => ({}))) as {
       reason?: unknown;
       proposalIds?: unknown;
@@ -1468,6 +1491,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const parsed = z
       .object({
         mode: z.enum(["replace", "add"]),
@@ -1540,6 +1566,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = await c.req.json().catch(() => null);
     const parsed = UsedCapabilityBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -1599,6 +1628,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     try {
       // Load by id, bind to the row's workspace (membership check) — the same
       // two steps `/used` and PATCH take.
@@ -1684,6 +1716,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = await c.req.json().catch(() => null);
     const parsed = DelegateOutputBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -1775,6 +1810,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
       }
       const id = c.req.param("id");
+      if (!isUuid(id)) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
       const raw = await c.req.json().catch(() => null);
       const parsed = schema.safeParse(raw);
       if (!parsed.success) {
@@ -1868,6 +1906,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
     const raw = await c.req.json().catch(() => null);
     const parsed = AttachOutputBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -1968,6 +2009,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     }
 
     const sessionId = c.req.param("sessionId");
+    if (!isUuid(sessionId)) {
+      return c.json({ error: `Focus session ${sessionId} not found` }, 404);
+    }
 
     try {
       // Load the session to resolve the acting context (membership check).
