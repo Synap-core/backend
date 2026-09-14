@@ -58,6 +58,7 @@ import {
   type AttestExpectedOutputResult,
 } from "../services/focus-sessions/satisfy-expected-output.js";
 import { listOwedSlots } from "../services/focus-sessions/owed-outputs.js";
+import { readSessionDocument } from "../services/session-document/upsert-section.js";
 
 import {
   expectedOutputWireSchema,
@@ -1931,4 +1932,23 @@ export const focusSessionsRouter = router({
       }
       return result;
     }),
+
+  /**
+   * THE session's designated document: id, current version (the `baseVersion`
+   * a section write must pass), content, and each section's owner + stamps.
+   *
+   * Pod tRPC mirror of the hub-protocol `getSessionDocument` procedure
+   * (`routers/hub-protocol/documents.ts`) — both call the same
+   * `readSessionDocument`, never a re-implementation. A session the caller
+   * doesn't own (or a malformed id) is NOT_FOUND, enforced by
+   * `loadOwnedSession` inside `readSessionDocument`.
+   */
+  document: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) =>
+      readSessionDocument({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+      })
+    ),
 });
