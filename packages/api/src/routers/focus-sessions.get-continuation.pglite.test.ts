@@ -86,6 +86,10 @@ import {
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
+import {
+  SECTION_UPDATE_ACTION,
+  SESSION_NARRATIVE_ACTION,
+} from "../services/session-document/governance-keys.js";
 
 const USER = "user-1";
 const BASIC =
@@ -735,6 +739,39 @@ describe("focusSessions.get returns the continuation packet", () => {
         ["proposal", expect.stringContaining("Acme"), p2],
       ].sort()
     );
+    const mcp = await mcpGet(session);
+    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+  });
+
+  it("alreadyDone excludes the session's own governance receipts but keeps a child-session create", async () => {
+    await h.client!.exec("delete from links;");
+    const session = randomUUID();
+    const child = randomUUID();
+    await insertSession(session, USER, "Launch billing", "active");
+    await insertSession(child, USER, "Detour", "active");
+    await edge(child, session, "spawned_from");
+    const ownUpdate = randomUUID(); // (a) the session's own lifecycle write
+    const sectionUpdate = randomUUID(); // (b) session-document section write
+    const narrativeUpdate = randomUUID(); // (b) session-document narrative write
+    const childCreate = randomUUID(); // real work: NOT excluded
+    for (const [id, targetType, targetId, proposalType] of [
+      [ownUpdate, "focus_session", session, "update"],
+      [sectionUpdate, "document", randomUUID(), SECTION_UPDATE_ACTION],
+      [narrativeUpdate, "document", randomUUID(), SESSION_NARRATIVE_ACTION],
+      [childCreate, "focus_session", child, "create"],
+    ] as const) {
+      await q(
+        `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, reviewed_at, created_at, updated_at)
+         values ($1, $2, 'auto_approved', $3, $4, $5, '{}'::jsonb, now(), now(), now())`,
+        [id, session, proposalType, targetType, targetId]
+      );
+    }
+
+    const c = (await get(session)).continuation;
+    expect(c.alreadyDone.status).toBe("ok");
+    if (c.alreadyDone.status !== "ok") return;
+    expect(c.alreadyDone.total).toBe(1);
+    expect(c.alreadyDone.items.map((i) => i.sourceId)).toEqual([childCreate]);
     const mcp = await mcpGet(session);
     expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
   });

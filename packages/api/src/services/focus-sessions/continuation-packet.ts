@@ -63,6 +63,10 @@ import {
 import { readSessionRunManifest } from "../intake/record-session-run-manifest.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import {
+  SECTION_UPDATE_ACTION,
+  SESSION_NARRATIVE_ACTION,
+} from "../session-document/governance-keys.js";
+import {
   isTerminalSessionStatus,
   OPEN_SESSION_STATUSES,
 } from "./session-statuses.js";
@@ -583,9 +587,20 @@ const isDoneSlot = (s: ExpectedOutput): boolean =>
   s.retiredAt == null && (s.status === "done" || s.attestedBy != null);
 
 /**
- * Applied proposals of this session, newest first, EXCLUDING the ones a done
- * slot already names (`satisfiedByProposalId`) — that work is listed once, as
- * its deliverable, and the total stays exact.
+ * Applied proposals of this session, newest first, EXCLUDING:
+ *  - the ones a done slot already names (`satisfiedByProposalId`) — that work
+ *    is listed once, as its deliverable;
+ *  - the session's own governance RECEIPTS, which are process, not work: a
+ *    `focus_session` proposal that targets THIS session (its own lifecycle
+ *    write — e.g. the close/cancel auto-approval), same predicate as
+ *    `cancel-session.ts`'s "already landed" read; and a `document` section
+ *    write filed under `SECTION_UPDATE_ACTION` / `SESSION_NARRATIVE_ACTION`
+ *    (`governance-keys.ts`) — its result is already represented by the
+ *    session's document output, so listing the proposal too would tell an
+ *    agent "do not redo" about a receipt, not a deliverable. A `focus_session`
+ *    proposal targeting something ELSE (a spawned CHILD session, say) still
+ *    counts — that is real work.
+ * The total stays exact: excluded here, at the read, not filtered client-side.
  */
 async function readAppliedProposals(
   database: typeof db,
@@ -603,7 +618,12 @@ async function readAppliedProposals(
   const where = and(
     eq(proposals.sessionId, sessionId),
     inArray(proposals.status, APPLIED_PROPOSAL_STATUSES),
-    ...(named.length ? [notInArray(proposals.id, named)] : [])
+    ...(named.length ? [notInArray(proposals.id, named)] : []),
+    drizzleSql`not (
+      (${proposals.targetType} = 'focus_session' and ${proposals.targetId} = ${sessionId})
+      or (${proposals.targetType} = 'document' and ${proposals.proposalType} = ${SECTION_UPDATE_ACTION})
+      or (${proposals.targetType} = 'document' and ${proposals.proposalType} = ${SESSION_NARRATIVE_ACTION})
+    )`
   );
   const [[totalRow], rows] = await Promise.all([
     database.select({ n: count() }).from(proposals).where(where),
