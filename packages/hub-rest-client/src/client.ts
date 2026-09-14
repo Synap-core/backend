@@ -226,6 +226,18 @@ import type {
   CreateAutomationInput,
   UpdateAutomationInput,
   AutomationStatus,
+  CreateProfileInput,
+  HubCreateProfileResult,
+  CreateWorkspaceFromDefinitionInput,
+  HubWorkspaceFromDefinitionResult,
+  DefineCellInput,
+  HubDefineCellResult,
+  ListPlaybooksOptions,
+  HubPlaybookPage,
+  CreatePlaybookInput,
+  HubCreatePlaybookResult,
+  RunPlaybookInput,
+  HubRunPlaybookResult,
   ReactionKind,
   ReactionLens,
   HubReactionEvent,
@@ -1884,6 +1896,110 @@ export class HubRestClient {
         userId,
         ...(workspaceId ? { workspaceId } : {}),
       }
+    );
+  }
+
+  // ─── Structure doors: kinds, roles, workspaces, cells ─────────────────────
+  //
+  // GOVERNED writes. An agent caller gets `status: "proposed"` back as DATA —
+  // success, awaiting the owner's review. Failures throw `HubApiError`; nothing
+  // is swallowed into an empty result.
+
+  /**
+   * Define an entity kind (default) or a role (`profileKind: "role"`),
+   * optionally with fields. Slug-idempotent. Same door as MCP
+   * `synap_define_kind` / `synap_define_role`.
+   */
+  async createProfile(
+    input: CreateProfileInput
+  ): Promise<HubCreateProfileResult> {
+    const userId = input.userId ?? (await this.resolveUserId());
+    const workspaceId = input.workspaceId ?? this.workspaceId;
+    if (!workspaceId)
+      throw new Error("workspaceId is required for createProfile");
+    return this.request<HubCreateProfileResult>("POST", "/api/hub/profiles", {
+      ...input,
+      userId,
+      workspaceId,
+    });
+  }
+
+  /**
+   * Create a workspace from a definition. An agent caller — and any definition
+   * that declares a kind the pod does not have yet — gets
+   * `{ status: "proposed", proposalId }`.
+   */
+  async createWorkspaceFromDefinition(
+    input: CreateWorkspaceFromDefinitionInput
+  ): Promise<HubWorkspaceFromDefinitionResult> {
+    return this.request<HubWorkspaceFromDefinitionResult>(
+      "POST",
+      "/api/hub/workspaces/from-definition",
+      input
+    );
+  }
+
+  /**
+   * Define a cell (renderer source). Omit `workspaceId` for a pod-global cell —
+   * the client's workspace is NOT substituted. An agent caller gets
+   * `status: "proposed"`; a direct define returns `{ success, typeKey }`.
+   */
+  async defineCell(input: DefineCellInput): Promise<HubDefineCellResult> {
+    return this.request<HubDefineCellResult>(
+      "POST",
+      "/api/hub/cells/define",
+      input
+    );
+  }
+
+  // ─── Playbooks ─────────────────────────────────────────────────────────────
+
+  /**
+   * List playbooks visible to the caller across the pod (member workspaces +
+   * pod-wide). `workspaceId` narrows only. Follow `nextCursor` to page.
+   */
+  async listPlaybooks(
+    options?: ListPlaybooksOptions
+  ): Promise<HubPlaybookPage> {
+    const params = new URLSearchParams();
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId);
+    if (options?.status) params.set("status", options.status);
+    if (options?.limit) params.set("limit", String(options.limit));
+    if (options?.cursor) params.set("cursor", options.cursor);
+    const qs = params.toString();
+    return this.request<HubPlaybookPage>(
+      "GET",
+      `/api/hub/playbooks${qs ? `?${qs}` : ""}`
+    );
+  }
+
+  /** Create a playbook. An agent caller gets `status: "proposed"` + `reviewUrl`. */
+  async createPlaybook(
+    input: CreatePlaybookInput
+  ): Promise<HubCreatePlaybookResult> {
+    const workspaceId = input.workspaceId ?? this.workspaceId;
+    if (!workspaceId) {
+      throw new Error("workspaceId is required for createPlaybook");
+    }
+    return this.request<HubCreatePlaybookResult>("POST", "/api/hub/playbooks", {
+      ...input,
+      workspaceId,
+    });
+  }
+
+  /**
+   * Run a playbook. Returns `running`, `proposed` (agent launch awaiting
+   * review), or `blocked` (nothing ran: it uses skills that are not enabled —
+   * `enableProposals` holds the requests filed to enable them).
+   */
+  async runPlaybook(
+    playbookId: string,
+    input?: RunPlaybookInput
+  ): Promise<HubRunPlaybookResult> {
+    return this.request<HubRunPlaybookResult>(
+      "POST",
+      `/api/hub/playbooks/${encodeURIComponent(playbookId)}/run`,
+      input ?? {}
     );
   }
 

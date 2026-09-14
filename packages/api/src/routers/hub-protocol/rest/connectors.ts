@@ -89,6 +89,8 @@ export function registerConnectorsRoutes(app: HubHono): void {
                         // broken vault is not reported as an absent one.
                         "vault-unreadable",
                         "db-unavailable",
+                        // A delivered relay key the vault cannot read.
+                        "vault-unresolved",
                         // A CP-managed pod without its broker credential.
                         "broker-credential-missing",
                         "unsupported-scheme",
@@ -201,6 +203,7 @@ export function registerConnectorsRoutes(app: HubHono): void {
                   ownerIdentityLink: z.object({ present: z.boolean() }),
                   relayCredential: z.object({
                     present: z.boolean(),
+                    resolvable: z.boolean(),
                     validUntil: z.string().nullable(),
                   }),
                   broker: z.object({

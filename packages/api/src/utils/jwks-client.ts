@@ -614,6 +614,15 @@ export const verifyCpJwt = verifyIssuerJwt;
 export const verifyCpJwtWithTrust = verifyTrustedIssuerJwt;
 
 /**
+ * The audience an issuer token addressed to this pod must carry: `PUBLIC_URL`
+ * without trailing slashes, or null when unset (callers refuse the request).
+ */
+export function podAudience(): string | null {
+  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
+  return value || null;
+}
+
+/**
  * Clears the JWKS cache for a given issuer URL (useful for testing or key rotation).
  */
 export function clearJwksCache(issuerUrl?: string): void {

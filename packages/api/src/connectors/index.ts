@@ -24,6 +24,7 @@ import {
   getDb,
   resolveVaultReferences,
   CP_RELAY_SOURCE_NAME,
+  CpRelayVaultUnresolvedError,
   readCpRelayCredential,
   relayKeyExpiry,
 } from "@synap/database";
@@ -367,6 +368,7 @@ export type BrokerResolveResult =
         | "not-configured"
         | "vault-unreadable"
         | "db-unavailable"
+        | "vault-unresolved"
         | "broker-credential-missing"
         | "unsupported-scheme";
       error: string;
@@ -377,7 +379,8 @@ type CpBrokerResolution =
   | { kind: "ok"; broker: CpBrokerConnector }
   | {
       kind: "fault";
-      reason: "broker-credential-missing" | "db-unavailable";
+      reason:
+        "broker-credential-missing" | "db-unavailable" | "vault-unresolved";
       error: string;
     };
 
@@ -427,6 +430,16 @@ async function resolveCpBroker(): Promise<CpBrokerResolution> {
       })
     )?.key;
   } catch (err) {
+    // A delivered key the vault cannot read is not a database fault: the
+    // remedy is a fresh delivery, not a look at the pod's database.
+    if (err instanceof CpRelayVaultUnresolvedError) {
+      return {
+        kind: "fault",
+        reason: "vault-unresolved",
+        error:
+          "This pod holds a relay key from its control plane but cannot read it from the vault. Rotate the pod's relay key from the control plane so it re-delivers a readable key.",
+      };
+    }
     return {
       kind: "fault",
       reason: "db-unavailable",

@@ -15,6 +15,7 @@
  */
 
 import {
+  CpRelayVaultUnresolvedError,
   db,
   resolveVaultReferences,
   TRUSTED_ISSUER_CAPABILITIES,
@@ -37,7 +38,16 @@ export interface BrokerTrustDiagnostics {
     hasSourceConfigWrite: boolean;
   };
   ownerIdentityLink: { present: boolean };
-  relayCredential: { present: boolean; validUntil: string | null };
+  /**
+   * `resolvable` is true only when the key was read. A seeded row whose vault
+   * reference does not resolve is `present` but not `resolvable` — the Control
+   * Plane re-delivers it; nothing on the pod restores it.
+   */
+  relayCredential: {
+    present: boolean;
+    resolvable: boolean;
+    validUntil: string | null;
+  };
   broker: {
     kind: "control-plane" | "local";
     reason: string | null;
@@ -63,11 +73,23 @@ export async function readBrokerTrustDiagnostics(
     : false;
 
   // This module's handles, so the credential read is decided by the same
-  // `db` (and vault resolver) as every other lookup here.
-  const credential = await readCpRelayCredential({
-    database: db,
-    resolveVault: resolveVaultReferences,
-  });
+  // `db` (and vault resolver) as every other lookup here. An unresolvable key
+  // is a FACT this read reports; every other failure still throws.
+  let relayCredential: BrokerTrustDiagnostics["relayCredential"];
+  try {
+    const credential = await readCpRelayCredential({
+      database: db,
+      resolveVault: resolveVaultReferences,
+    });
+    relayCredential = {
+      present: !!credential,
+      resolvable: !!credential,
+      validUntil: credential?.expiresAt?.toISOString() ?? null,
+    };
+  } catch (err) {
+    if (!(err instanceof CpRelayVaultUnresolvedError)) throw err;
+    relayCredential = { present: true, resolvable: false, validUntil: null };
+  }
 
   const resolved = await resolveBroker("nango");
 
@@ -82,10 +104,7 @@ export async function readBrokerTrustDiagnostics(
         ),
     },
     ownerIdentityLink: { present: ownerLinked },
-    relayCredential: {
-      present: !!credential,
-      validUntil: credential?.expiresAt?.toISOString() ?? null,
-    },
+    relayCredential,
     broker: {
       kind: isControlPlaneBrokered() ? "control-plane" : "local",
       reason: resolved.ok ? null : resolved.reason,

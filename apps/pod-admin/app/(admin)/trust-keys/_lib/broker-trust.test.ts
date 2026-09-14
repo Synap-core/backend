@@ -95,6 +95,13 @@ describe("deriveBrokerTrustState", () => {
       }),
     ],
     [
+      "credential-unreadable",
+      with_({
+        relayCredential: { present: true, resolvable: false, validUntil: null },
+        broker: { kind: "control-plane", reason: "vault-unresolved" },
+      }),
+    ],
+    [
       "credential-expired",
       with_({
         relayCredential: {

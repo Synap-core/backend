@@ -457,8 +457,11 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // external connection states (capability card `connection.state`). The card's
   // own token for "no connection" is `missing`, which is too generic for a global
   // table ("missing" means other things elsewhere), so surfaces map it to
-  // `disconnected` before resolving.
+  // `not_connected` before resolving. `not_connected` is also the sync phase for
+  // a sync with no live connection (`SyncPhase`), so one word covers both.
+  // `disconnected` stays for tokens that already carry it.
   connected: "Connected",
+  not_connected: "Not connected",
   disconnected: "Not connected",
   unavailable: "Not available",
   // tool demand (`tool_request.tr_status`): `installable` = the catalog now

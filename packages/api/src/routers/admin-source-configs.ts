@@ -40,7 +40,7 @@ import {
   workspaceMembers,
   workspaces,
 } from "@synap/database";
-import { verifyTrustedIssuerJwt } from "../utils/jwks-client.js";
+import { podAudience, verifyTrustedIssuerJwt } from "../utils/jwks-client.js";
 import { encryptServerSide, isServerVaultAvailable } from "@synap/database";
 import { sourceProviderRegistry } from "@synap/feed-service";
 
@@ -97,11 +97,6 @@ const sourceConfigAssertionSchema = z.object({
   type: z.literal("federated_assertion"),
   purpose: z.literal("source-config-write"),
 });
-
-function podAudience(): string | null {
-  const value = process.env.PUBLIC_URL?.replace(/\/+$/, "");
-  return value || null;
-}
 
 async function canWriteSourceConfig(input: {
   userId: string;

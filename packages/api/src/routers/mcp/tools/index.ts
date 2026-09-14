@@ -3412,8 +3412,21 @@ export const tools = {
           sessionUserId ?? userId,
           workspaceId ? { workspaceId } : undefined
         );
+        // Door-aware teaching: tool names render as THIS door exposes them
+        // (pod `synap_*`, or `pod__*` for the claude.ai connector's key).
+        const [{ resolveSkillDoor }, { renderSkillForDoor }] =
+          await Promise.all([
+            import("../../../services/capability-briefs/resolve-skill-door.js"),
+            import("../../../services/capability-briefs/door-tool-render.js"),
+          ]);
+        const door = await resolveSkillDoor("mcp", agentUserId);
         return {
-          content: [{ type: "text", text: content }],
+          content: [
+            {
+              type: "text",
+              text: door ? renderSkillForDoor(content, door) : content,
+            },
+          ],
         };
       }
       const { executeMCPToolViaHubProtocol } = await import("../adapter.js");

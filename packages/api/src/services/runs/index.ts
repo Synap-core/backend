@@ -126,6 +126,18 @@ function byStartedAtDesc(
  * `outputSummary` verbatim when small; otherwise a truncated preview + a flag so
  * a huge payload never bloats the detail response.
  */
+/** The slim summary a mirror read's `capability_run` event carries instead of a payload. */
+export function isSlimRunSummary(
+  value: unknown
+): value is { itemCount: number | null; bytes: number } {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    (v.itemCount === null || typeof v.itemCount === "number") &&
+    typeof v.bytes === "number"
+  );
+}
+
 function boundRunResult(runResult: unknown): unknown {
   if (runResult === undefined || runResult === null) return null;
   const json = JSON.stringify(runResult);
@@ -761,7 +773,13 @@ async function listCapabilityRuns(
                 }`
               : runResult !== undefined
                 ? `Result: ${JSON.stringify(runResult).slice(0, 200)}`
-                : null,
+                : // A MIRROR read (a sync page) records only a slim summary: no
+                  // payload by design (founder decision 2026-09-14, option b).
+                  isSlimRunSummary(data.runSummary)
+                  ? data.runSummary.itemCount !== null
+                    ? `Synced ${data.runSummary.itemCount} item${data.runSummary.itemCount === 1 ? "" : "s"}`
+                    : "Synced"
+                  : null,
             error: null,
             triggeredBy: null,
             stepsCompleted: null,

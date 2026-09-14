@@ -129,6 +129,35 @@ export const CreateProfileRequestSchema = z
     reasoning: z.string().optional(),
     agentUserId: z.string().optional(),
     sourceMessageId: z.string().optional(),
+    profileKind: z
+      .enum(["kind", "role"])
+      .optional()
+      .describe(
+        "'kind' (default) = a primary entity type; 'role' = an attachable facet type (client, sponsor…)."
+      ),
+    applicableKinds: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "For a role: base-kind slugs it attaches to. Omitted → company, person."
+      ),
+    roleCategory: z
+      .string()
+      .optional()
+      .describe("For a role: category key clustering related roles."),
+    entityScope: z
+      .enum(["pod", "workspace"])
+      .optional()
+      .describe(
+        "Where entities of this type live. Omit to let the pod decide (kind → pod, role → workspace)."
+      ),
+    icon: z.string().optional(),
+    fields: z
+      .array(z.record(z.string(), z.unknown()))
+      .optional()
+      .describe(
+        "Field definitions ({ slug, valueType, displayName?, required?, defaultValue?, constraints?, uiHints?, displayOrder?, overlay? }). Added once the profile exists; deferred while it is proposed. Each field reports its own result."
+      ),
   })
   .openapi("CreateProfileRequest");
 

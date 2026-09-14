@@ -21,9 +21,11 @@ import {
 } from "../../../utils/profile-presentation.js";
 
 import { registerOpenApi } from "./_codecs/_register.js";
+import { defineProfile } from "../define-profile.js";
 import {
   getCaller,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   resolveActingContext,
   resolveActorId,
@@ -76,9 +78,9 @@ export function registerProfilesRoutes(app: HubHono): void {
     method: "post",
     path: "/profiles",
     tags: ["Profiles"],
-    summary: "Create a custom profile",
+    summary: "Define a kind or a role",
     description:
-      "Creates a workspace-scoped profile. AI-authored creations should pass `agentUserId` so a proposal is opened when governance requires.",
+      "Defines an entity kind (`profileKind: 'kind'`, default) or an attachable role (`profileKind: 'role'`), optionally with `fields`. Slug-idempotent. Governed: an agent caller gets `status: 'proposed'` (fields deferred until approval) — that is success, not an error. Same door as MCP synap_define_kind / synap_define_role.",
     request: {
       body: CreateProfileRequestSchema,
     },
@@ -210,19 +212,20 @@ export function registerProfilesRoutes(app: HubHono): void {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = (await c.req.json()) as {
-      userId: string;
-      workspaceId: string;
-      slug: string;
-      displayName: string;
-      description?: string;
-      defaultValues?: Record<string, unknown>;
-      parentProfileId?: string;
-      uiHints?: Record<string, unknown>;
-      reasoning?: string;
-      agentUserId?: string;
-      sourceMessageId?: string;
-    };
+    const parsed = CreateProfileRequestSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json(
+        {
+          error: parsed.error.issues
+            .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+            .join("; "),
+        },
+        400
+      );
+    }
+    const body = parsed.data;
     try {
       // SECURITY — acting identity MUST come from the verified auth context,
       // never `body.userId` directly (that was a governed-agent-write →
@@ -257,32 +260,52 @@ export function registerProfilesRoutes(app: HubHono): void {
         workspaceId,
         sourceMessageId: body.sourceMessageId,
       });
-      const result = await caller.profiles.createProfile({
-        userId: acting.userId,
-        workspaceId,
-        slug: body.slug,
-        displayName: body.displayName,
-        description: body.description,
-        defaultValues: body.defaultValues,
-        parentProfileId: body.parentProfileId,
-        uiHints: body.uiHints,
-        reasoning: body.reasoning,
-        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
-      });
-      return c.json(result);
+      // The ONE define door MCP `synap_define_kind` / `synap_define_role` also
+      // call — role, entity scope and field defs are expressible here too.
+      // Governance (agent structure write → proposal) is decided inside
+      // `profiles.createProfile`, never here.
+      const outcome = await defineProfile(
+        caller,
+        {
+          userId: acting.userId,
+          workspaceId,
+          slug: body.slug,
+          displayName: body.displayName,
+          ...(body.profileKind ? { profileKind: body.profileKind } : {}),
+          ...(body.applicableKinds
+            ? { applicableKinds: body.applicableKinds }
+            : {}),
+          ...(body.roleCategory !== undefined
+            ? { roleCategory: body.roleCategory }
+            : {}),
+          ...(body.entityScope ? { entityScope: body.entityScope } : {}),
+          ...(body.description !== undefined
+            ? { description: body.description }
+            : {}),
+          ...(body.icon !== undefined ? { icon: body.icon } : {}),
+          ...(body.uiHints ? { uiHints: body.uiHints } : {}),
+          ...(body.defaultValues ? { defaultValues: body.defaultValues } : {}),
+          ...(body.parentProfileId
+            ? { parentProfileId: body.parentProfileId }
+            : {}),
+          ...(body.fields !== undefined ? { fields: body.fields } : {}),
+          ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+          ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        },
+        { door: "POST /profiles", fieldsParam: "fields" }
+      );
+      if (!outcome.ok) return c.json({ error: outcome.error }, 400);
+      return c.json(outcome.result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: a bound service key targeting another workspace
-      // throws FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`
-      // (bundled-build TRPCError identity defeats instanceof).
-      if ((err as { code?: unknown })?.code === "FORBIDDEN")
-        return c.json(
-          { error: err instanceof Error ? err.message : "Forbidden" },
-          403
-        );
-      logger.error({ err }, "createProfile failed");
+      // throws FORBIDDEN → 403; a slug the hub door's zod refuses → 400. Never a
+      // blanket 500. Duck-typed on `.code` (bundled-build TRPCError identity
+      // defeats instanceof).
+      const status = httpStatusForTrpcError(err);
+      if (status === 500) logger.error({ err }, "createProfile failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        status
       );
     }
   });

@@ -170,4 +170,23 @@ export type {
   CreateFocusSessionInput,
   HubFocusSession,
   CreateFocusSessionResult,
+  // Structure doors (governed: kinds, roles, workspaces, cells)
+  HubProfileFieldInput,
+  CreateProfileInput,
+  HubProfileFieldResult,
+  HubCreateProfileResult,
+  CreateWorkspaceFromDefinitionInput,
+  HubWorkspaceFromDefinitionResult,
+  DefineCellInput,
+  HubDefineCellResult,
+  // Playbooks
+  PlaybookStatus,
+  HubPlaybook,
+  ListPlaybooksOptions,
+  HubPlaybookPage,
+  CreatePlaybookInput,
+  HubCreatePlaybookResult,
+  RunPlaybookInput,
+  HubCapabilityEnableOffer,
+  HubRunPlaybookResult,
 } from "./types.js";

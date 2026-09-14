@@ -22,7 +22,12 @@
  * classifier/publisher Agent 3 wires up will subscribe to it.
  */
 
-import { db, eq } from "@synap/database";
+import {
+  CpRelayVaultUnresolvedError,
+  db,
+  eq,
+  readCpRelayCredential,
+} from "@synap/database";
 import { sourceSubscriptions, sourceConfigs } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { sourceProviderRegistry, type SourceItem } from "@synap/feed-service";
@@ -179,6 +184,10 @@ export async function handleFeedSourceExecute(job: {
     ...(sourceConfig.config as Record<string, unknown>),
     ...(subscription.params as Record<string, unknown>),
   };
+  // A relay row's `relayKey` is a copy from delivery time; the CP rotates by
+  // delivering a new row, so the key always comes from the ONE current reader.
+  const isCpRelay = sourceConfig.providerType === "cp-relay";
+  if (isCpRelay) delete merged.relayKey;
 
   let resolved: Record<string, unknown>;
   try {
@@ -187,6 +196,27 @@ export async function handleFeedSourceExecute(job: {
     const msg = err instanceof Error ? err.message : String(err);
     await markSubscriptionError(subscriptionId, `Vault resolve: ${msg}`);
     return { ok: false, itemCount: 0, error: msg };
+  }
+
+  if (isCpRelay) {
+    let credential: Awaited<ReturnType<typeof readCpRelayCredential>>;
+    try {
+      credential = await readCpRelayCredential();
+    } catch (err) {
+      const msg =
+        err instanceof CpRelayVaultUnresolvedError
+          ? "The relay key cannot be read from the vault; rotate it from the control plane so it re-delivers a readable key"
+          : `Relay key read: ${err instanceof Error ? err.message : String(err)}`;
+      await markSubscriptionError(subscriptionId, msg);
+      return { ok: false, itemCount: 0, error: msg };
+    }
+    if (!credential) {
+      const msg =
+        "This pod holds no relay key from its control plane; rotate it from the control plane";
+      await markSubscriptionError(subscriptionId, msg);
+      return { ok: false, itemCount: 0, error: msg };
+    }
+    resolved.relayKey = credential.key;
   }
 
   // ── Fan-out over derivedQueries if available ─────────────────────────────
@@ -202,8 +232,7 @@ export async function handleFeedSourceExecute(job: {
 
   const derivedQueries = (
     (subscription.params as Record<string, unknown>)?.derivedQueries as
-      | DerivedQuery[]
-      | undefined
+      DerivedQuery[] | undefined
   )?.filter((q) => q && q.upstreamType && q.config);
 
   let items: SourceItem[] = [];

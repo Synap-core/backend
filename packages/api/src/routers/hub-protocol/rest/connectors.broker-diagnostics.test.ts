@@ -43,7 +43,11 @@ const { registerConnectorsRoutes } = await import("./connectors.js");
 const REPORT = {
   cpIssuer: { present: true, status: "approved", hasSourceConfigWrite: true },
   ownerIdentityLink: { present: true },
-  relayCredential: { present: true, validUntil: "2026-10-01T00:00:00.000Z" },
+  relayCredential: {
+    present: true,
+    resolvable: true,
+    validUntil: "2026-10-01T00:00:00.000Z",
+  },
   broker: { kind: "control-plane", reason: null },
 };
 

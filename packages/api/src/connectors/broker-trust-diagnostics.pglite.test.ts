@@ -100,7 +100,7 @@ const TABLES = [
 
 const CP = "https://cp.example.test";
 const OWNER = "owner-1";
-const RELAY_KEY_REF = "vault://11111111-1111-1111-1111-111111111111/relayKey";
+const RELAY_KEY_REF = "vault://11111111-1111-1111-1111-111111111111";
 
 let client: PGlite;
 
@@ -210,7 +210,11 @@ describe("readBrokerTrustDiagnostics", () => {
         hasSourceConfigWrite: true,
       },
       ownerIdentityLink: { present: true },
-      relayCredential: { present: true, validUntil: exp.toISOString() },
+      relayCredential: {
+        present: true,
+        resolvable: true,
+        validUntil: exp.toISOString(),
+      },
       broker: { kind: "control-plane", reason: null },
     });
   });
@@ -235,7 +239,11 @@ describe("readBrokerTrustDiagnostics", () => {
   it("no relay row: credential absent and the broker names broker-credential-missing", async () => {
     await seedIssuer();
     const d = await readBrokerTrustDiagnostics();
-    expect(d.relayCredential).toEqual({ present: false, validUntil: null });
+    expect(d.relayCredential).toEqual({
+      present: false,
+      resolvable: false,
+      validUntil: null,
+    });
     expect(d.broker).toEqual({
       kind: "control-plane",
       reason: "broker-credential-missing",
@@ -249,9 +257,27 @@ describe("readBrokerTrustDiagnostics", () => {
     const d = await readBrokerTrustDiagnostics();
     expect(d.relayCredential).toEqual({
       present: true,
+      resolvable: true,
       validUntil: exp.toISOString(),
     });
     expect(d.broker.reason).toBe("broker-credential-missing");
+  });
+
+  it("a delivered key the vault cannot read is present, not resolvable, and its own broker fault — the read does not fail", async () => {
+    await seedIssuer();
+    await seedRelayRow("placeholder");
+    // The row stays; its vault ref no longer resolves (the resolver maps it to "").
+    delete h.vaultValues[RELAY_KEY_REF];
+    const d = await readBrokerTrustDiagnostics();
+    expect(d.relayCredential).toEqual({
+      present: true,
+      resolvable: false,
+      validUntil: null,
+    });
+    expect(d.broker).toEqual({
+      kind: "control-plane",
+      reason: "vault-unresolved",
+    });
   });
 
   it("a revoked issuer without source-config:write reports both facts", async () => {

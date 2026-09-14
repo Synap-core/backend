@@ -280,9 +280,8 @@ describe("captures API", () => {
   });
 
   it("derives status and producedCount per row, and the status filter uses the same derivation", async () => {
-    // document edge (live) + a deleted target that must not count; degraded marker too
+    // document edge (live) + a deleted target that must not count; AI ran (no marker)
     const structured = await capture({
-      degraded: true,
       text: "a ".repeat(300),
     });
     await edge("document", structured, "entity", await entity(), "produced");
@@ -293,6 +292,11 @@ describe("captures API", () => {
       await entity({ deleted: true }),
       "produced"
     );
+
+    // Founder decision 2026-09-14: a no-AI capture still creates its fallback
+    // note. It is produced, yet must read "Saved without AI" while the marker stands.
+    const noAiNote = await capture({ degraded: true });
+    await edge("document", noAiNote, "entity", await entity(), "produced");
 
     const saved = await capture({ degraded: true });
     const plain = await capture({});
@@ -321,10 +325,15 @@ describe("captures API", () => {
     expect(byId.get(structured)).toMatchObject({
       status: "structured",
       producedCount: 1,
-      degradedReason: "spend_guard",
+      degradedReason: null,
       door: "capture",
     });
     expect(byId.get(structured)!.preview.length).toBe(200);
+    expect(byId.get(noAiNote)).toMatchObject({
+      status: "saved_without_ai",
+      producedCount: 1,
+      degradedReason: "spend_guard",
+    });
     expect(byId.get(saved)).toMatchObject({
       status: "saved_without_ai",
       producedCount: 0,
@@ -340,7 +349,9 @@ describe("captures API", () => {
     });
 
     const filtered = await caller(A).list({ status: "saved_without_ai" });
-    expect(filtered.items.map((i) => i.documentId)).toEqual([saved]);
+    expect(new Set(filtered.items.map((i) => i.documentId))).toEqual(
+      new Set([saved, noAiNote])
+    );
     expect(filtered.nextCursor).toBeNull();
   });
 

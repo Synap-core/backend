@@ -447,6 +447,19 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("unavailable")).toBe("Not available");
   });
 
+  it("curates not_connected, the one connection-status word surfaces map to", () => {
+    // humanizeToken("not_connected") happens to spell the same words, so the
+    // label alone cannot tell a curated row from the fallback. The row is the
+    // contract: assert it exists, then that it reads like its twin.
+    expect(
+      Object.prototype.hasOwnProperty.call(STATUS_LABELS, "not_connected")
+    ).toBe(true);
+    expect(resolveStatusLabel("not_connected")).toBe("Not connected");
+    expect(resolveStatusLabel("not_connected")).toBe(
+      resolveStatusLabel("disconnected")
+    );
+  });
+
   it("humanizes an unknown status instead of leaking it", () => {
     expect(resolveStatusLabel("some_new_state")).toBe("Some new state");
     expect(resolveStatusLabel("")).toBe("");

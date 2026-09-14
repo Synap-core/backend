@@ -6173,6 +6173,7 @@ export interface SearchResponse {
 	searchTimeMs: number;
 	facetCounts?: Record<string, Record<string, number>>;
 }
+export type FeedQueryPlanFailure = "relay-credential-missing" | "relay-credential-unresolved" | "credential-read-failed" | "planner-failed";
 /**
  * The three states of "is a human's identity behind this agent's act?", read
  * off `proposals.subjectUserId` (RFC 8693 delegation).
@@ -9446,8 +9447,14 @@ export interface BrokerTrustDiagnostics {
 	ownerIdentityLink: {
 		present: boolean;
 	};
+	/**
+	 * `resolvable` is true only when the key was read. A seeded row whose vault
+	 * reference does not resolve is `present` but not `resolvable` — the Control
+	 * Plane re-delivers it; nothing on the pod restores it.
+	 */
 	relayCredential: {
 		present: boolean;
+		resolvable: boolean;
 		validUntil: string | null;
 	};
 	broker: {
@@ -10047,6 +10054,8 @@ export interface OwedSlot {
 	/** The agent's claim that it produced this after all, if it made one. */
 	claimedDone?: boolean;
 }
+/** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
+export type SectionOwner = "ai" | "human";
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
  * enrollment-UI agent — field names are load-bearing, do not rename).
@@ -14627,6 +14636,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				channelId: string;
 				subscriptionId: string | null;
+				queryPlan: {
+					status: "failed";
+					reason: FeedQueryPlanFailure;
+					message: string;
+				} | {
+					status: "unavailable" | "planned";
+					reason?: undefined;
+					message?: undefined;
+				};
 			};
 			meta: object;
 		}>;
@@ -26087,7 +26105,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				tier: string;
 				nangoStatus: "error";
 				nangoError: {
-					reason: "vault-unreadable" | "db-unavailable" | "broker-credential-missing" | "unsupported-scheme";
+					reason: "vault-unreadable" | "db-unavailable" | "vault-unresolved" | "broker-credential-missing" | "unsupported-scheme";
 					message: string;
 				};
 			} | {
@@ -29594,6 +29612,24 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SessionOutputsResult;
 			meta: object;
 		}>;
+		document: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				documentId: string | null;
+				version: number | null;
+				content: string | null;
+				sections: Array<{
+					id: string;
+					owner: SectionOwner;
+					author: string | null;
+					writtenAt: string | null;
+					sessionState: string | null;
+				}>;
+			};
+			meta: object;
+		}>;
 	}>>;
 	playbooks: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
@@ -30005,7 +30041,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					key: string;
 					name: string;
-					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
+					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
 					description?: string | undefined;
 					goal?: string | undefined;
 					grants?: {
@@ -30090,7 +30126,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					[x: string]: unknown;
 					key: string;
 					name: string;
-					category: "paused" | "completed" | "backlog" | "planned" | "started" | "canceled";
+					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
 					description?: string | undefined;
 					goal?: string | undefined;
 					grants?: {

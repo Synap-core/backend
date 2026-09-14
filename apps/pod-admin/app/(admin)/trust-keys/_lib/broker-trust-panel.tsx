@@ -171,6 +171,12 @@ function describe(state: Exclude<BrokerTrustState, { kind: "not-managed" }>): {
         title: "Trust is in place, but no relay key has been delivered",
         body: "Rotate this pod's relay key from the Synap Control Plane.",
       };
+    case "credential-unreadable":
+      return {
+        status: down,
+        title: "This pod's relay key cannot be read",
+        body: "A relay key was delivered, but the pod cannot read it from its vault. Rotate the relay key from the Synap Control Plane — it re-delivers a readable one.",
+      };
     case "credential-expired":
       return {
         status: down,

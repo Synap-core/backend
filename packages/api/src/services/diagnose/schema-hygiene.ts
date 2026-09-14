@@ -137,7 +137,7 @@ export function summarizeSchemaHygiene(
           "active non-system kinds you can see with no live record anywhere in the pod",
         twins: "see the schema_contract section for the rows",
         lens: "kinds and relation types: rows you can see; automations: workspace rows you can see plus pod-wide ones you created; sessions: yours; proposals: your review queue floor",
-        act: "the daily cleanup pack proposes closing, expiring, retiring and pausing these; nothing is applied without your approval",
+        act: "the cleanup pack proposes closing stale work sessions and retiring unused kinds; nothing is applied without your approval",
       },
     },
   };

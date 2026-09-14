@@ -29,7 +29,7 @@ import { connectorsRouter } from "./connectors.js";
 const REPORT = {
   cpIssuer: { present: true, status: "approved", hasSourceConfigWrite: true },
   ownerIdentityLink: { present: false },
-  relayCredential: { present: false, validUntil: null },
+  relayCredential: { present: false, resolvable: false, validUntil: null },
   broker: { kind: "control-plane", reason: "broker-credential-missing" },
 };
 

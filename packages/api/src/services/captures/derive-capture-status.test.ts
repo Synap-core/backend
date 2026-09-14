@@ -14,10 +14,20 @@ const rows: Array<{
   rulesOut: string;
 }> = [
   {
-    name: "degraded + produced > 0 ⇒ structured",
-    facts: { hasOpenQuestion: false, degraded: true, producedCount: 2 },
+    // Founder decision 2026-09-14: a no-AI capture still creates its fallback
+    // note (produced 1), but must read "Saved without AI" until a real AI run
+    // clears the marker.
+    name: "degraded + produced fallback note ⇒ saved_without_ai",
+    facts: { hasOpenQuestion: false, degraded: true, producedCount: 1 },
+    want: "saved_without_ai",
+    rulesOut:
+      "a produced item hides that no AI ran (produced checked before degraded)",
+  },
+  {
+    name: "marker cleared (a real AI restructure) + produced ⇒ structured",
+    facts: { hasOpenQuestion: false, degraded: false, producedCount: 3 },
     want: "structured",
-    rulesOut: "degraded checked before produced",
+    rulesOut: "produced ignored once the marker is cleared",
   },
   {
     name: "degraded + nothing produced ⇒ saved_without_ai",

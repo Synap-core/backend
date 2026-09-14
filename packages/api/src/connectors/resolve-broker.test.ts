@@ -164,8 +164,8 @@ afterEach(() => {
 
 function brokeredWithValidKey() {
   h.controlPlaneUrl = CP;
-  h.relayRows = [seededRow("vault://k/value", "2026-09-01")];
-  h.vaultValues = { "vault://k/value": jwtWithExp(10) };
+  h.relayRows = [seededRow("vault://k", "2026-09-01")];
+  h.vaultValues = { "vault://k": jwtWithExp(10) };
 }
 
 describe("resolveBroker — who is brokered", () => {
@@ -288,8 +288,8 @@ describe("resolveBroker — which relay credential", () => {
 
   it("an admin-created cp-relay row under another name is never the broker credential", async () => {
     h.controlPlaneUrl = CP;
-    h.relayRows = [seededRow("vault://admin/value", "2026-09-10", "My relay")];
-    h.vaultValues = { "vault://admin/value": jwtWithExp(25) };
+    h.relayRows = [seededRow("vault://admin", "2026-09-10", "My relay")];
+    h.vaultValues = { "vault://admin": jwtWithExp(25) };
     expect(await resolveBroker("nango")).toMatchObject({
       ok: false,
       reason: "broker-credential-missing",
@@ -299,14 +299,14 @@ describe("resolveBroker — which relay credential", () => {
   it("of the recent seeded rows, the longest-lived key wins — not merely the newest row", async () => {
     h.controlPlaneUrl = CP;
     h.relayRows = [
-      seededRow("vault://old/value", "2026-08-01"),
-      seededRow("vault://newest-but-short/value", "2026-09-10"),
-      seededRow("vault://long/value", "2026-09-05"),
+      seededRow("vault://old", "2026-08-01"),
+      seededRow("vault://newest-but-short", "2026-09-10"),
+      seededRow("vault://long", "2026-09-05"),
     ];
     h.vaultValues = {
-      "vault://old/value": jwtWithExp(-1),
-      "vault://newest-but-short/value": jwtWithExp(2),
-      "vault://long/value": jwtWithExp(20),
+      "vault://old": jwtWithExp(-1),
+      "vault://newest-but-short": jwtWithExp(2),
+      "vault://long": jwtWithExp(20),
     };
     const fetchMock = vi.fn(
       async (_url: string, _init?: RequestInit) =>
@@ -320,28 +320,26 @@ describe("resolveBroker — which relay credential", () => {
       string,
       string
     >;
-    expect(auth.Authorization).toBe(
-      `Bearer ${h.vaultValues["vault://long/value"]}`
-    );
+    expect(auth.Authorization).toBe(`Bearer ${h.vaultValues["vault://long"]}`);
   });
 
   it("an EXPIRED relay key is a legible fault naming the expiry", async () => {
     h.controlPlaneUrl = CP;
-    h.relayRows = [seededRow("vault://only/value", "2026-08-01")];
-    h.vaultValues = { "vault://only/value": jwtWithExp(-2) };
+    h.relayRows = [seededRow("vault://only", "2026-08-01")];
+    h.vaultValues = { "vault://only": jwtWithExp(-2) };
     const r = await resolveBroker("nango");
     expect(r).toMatchObject({ ok: false, reason: "broker-credential-missing" });
     if (!r.ok) expect(r.error).toMatch(/credential expired on \d{4}-/);
   });
 
-  it("a seeded relay row whose vault reference does not resolve is a FAULT, never 'credential missing'", async () => {
+  it("a seeded relay row whose vault reference does not resolve is its own fault, never 'credential missing' or a database fault", async () => {
     h.controlPlaneUrl = CP;
-    h.relayRows = [seededRow("vault://sealed/value", "2026-09-01")];
+    h.relayRows = [seededRow("vault://sealed", "2026-09-01")];
     // No `vaultValues` entry: the mocked resolver maps it to "" exactly as
     // `resolveVaultReferences` does for an unavailable vault or missing secret.
     const r = await resolveBroker("nango");
-    expect(r).toMatchObject({ ok: false, reason: "db-unavailable" });
-    if (!r.ok) expect(r.error).toMatch(/vault reference unresolved/);
+    expect(r).toMatchObject({ ok: false, reason: "vault-unresolved" });
+    if (!r.ok) expect(r.error).toMatch(/re-delivers a readable key/);
   });
 });
 

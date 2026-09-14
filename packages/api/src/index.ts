@@ -170,6 +170,7 @@ export {
   verifyCpJwt,
   verifyCpJwtWithTrust,
   clearJwksCache,
+  podAudience,
 } from "./utils/jwks-client.js";
 export { normalizeIssuerUrl } from "./utils/issuer-url-safety.js";
 export {

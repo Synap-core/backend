@@ -28,7 +28,8 @@ export function registerProfileExecutors(): void {
   //
   // CONSERVATIVE NOTE: the propose gate (profiles.create) stores only
   // { id, slug, displayName, parentProfileId, uiHints, defaultValues, scope,
-  // entityScope, profileKind, applicableKinds } — so `allowedWorkspaceIds` (the
+  // entityScope, profileKind, applicableKinds, roleCategory } — so
+  // `allowedWorkspaceIds` (the
   // extra shared-scope grants) is NOT carried through and defaults to none here.
   // Widening it would require widening that gate `data` (flagged for review).
   registerProposalExecutor({
@@ -98,6 +99,7 @@ export function registerProfileExecutors(): void {
         entityScope: innerData.entityScope as "pod" | "workspace" | undefined,
         profileKind: innerData.profileKind as "kind" | "role" | undefined,
         applicableKinds: innerData.applicableKinds as string[] | undefined,
+        roleCategory: innerData.roleCategory as string | undefined,
       });
       // The approver IS the authority — the re-entrant gate should auto-grant.
       // A nested proposal means the approver lacks profile.create rights; surface

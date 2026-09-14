@@ -23,11 +23,11 @@ import {
   type ProviderVerbSpec,
 } from "@synap/database";
 import { userVisibleWhere } from "../../../utils/user-visible-where.js";
+import { defineProfile } from "../../hub-protocol/define-profile.js";
 import {
   ok,
   requireScope,
   readReasoning,
-  PROPERTY_VALUE_TYPES,
   McpToolContext,
   CallToolResult,
   McpHandlerMap,
@@ -45,36 +45,40 @@ export const capabilityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const applicableKinds =
-      Array.isArray(args.applicableKinds) && args.applicableKinds.length > 0
-        ? (args.applicableKinds as string[])
-        : ["company", "person"];
-    const uiHints: Record<string, unknown> = {};
-    if (typeof args.icon === "string") uiHints.icon = args.icon;
-    if (typeof args.description === "string")
-      uiHints.description = args.description;
-    const result = await caller.profiles.createProfile({
-      userId,
-      // Confined workspace (service-key clamp) — not the raw model-supplied id.
-      workspaceId: requestedWorkspaceId as string,
-      slug: args.slug as string,
-      displayName: args.displayName as string,
-      profileKind: "role",
-      applicableKinds,
-      ...(typeof args.roleCategory === "string"
-        ? { roleCategory: args.roleCategory }
-        : {}),
-      ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
-      ...(args.properties
-        ? { defaultValues: args.properties as Record<string, unknown> }
-        : {}),
-      // The AGENT's own words win over the machine string — the hard-coded
-      // fallback stays only for a caller that supplied none.
-      reasoning:
-        readReasoning(args) ?? "Role type defined via MCP synap_define_role",
-      ...(agentUserId ? { agentUserId } : {}),
-    });
-    return ok(result);
+    // The shared define door (`hub-protocol/define-profile.ts`) — the same one
+    // Hub REST `POST /profiles` calls. `properties` on this tool are DEFAULT
+    // VALUES; the applicableKinds default lives in the door.
+    const outcome = await defineProfile(
+      caller,
+      {
+        userId,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
+        slug: args.slug as string,
+        displayName: args.displayName as string,
+        profileKind: "role",
+        ...(Array.isArray(args.applicableKinds)
+          ? { applicableKinds: args.applicableKinds as string[] }
+          : {}),
+        ...(typeof args.roleCategory === "string"
+          ? { roleCategory: args.roleCategory }
+          : {}),
+        ...(typeof args.icon === "string" ? { icon: args.icon } : {}),
+        ...(typeof args.description === "string"
+          ? { description: args.description }
+          : {}),
+        ...(args.properties
+          ? { defaultValues: args.properties as Record<string, unknown> }
+          : {}),
+        // The AGENT's own words win over the machine string — the hard-coded
+        // fallback stays only for a caller that supplied none.
+        reasoning:
+          readReasoning(args) ?? "Role type defined via MCP synap_define_role",
+        ...(agentUserId ? { agentUserId } : {}),
+      },
+      { door: "synap_define_role", fieldsParam: "fields" }
+    );
+    return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
   synap_define_kind: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
@@ -87,154 +91,37 @@ export const capabilityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-
-    // `properties` means DEFAULT VALUES on synap_define_role and FIELD DEFS
-    // here. Fail loudly on the role-shaped object instead of silently
-    // dropping the caller's fields.
-    if (args.properties !== undefined && !Array.isArray(args.properties)) {
-      return ok({
-        error:
-          "synap_define_kind: `properties` must be an ARRAY of field definitions ({ slug, valueType }). To set default VALUES for new entities of this kind, use `defaultValues` instead.",
-      });
-    }
-
-    const uiHints: Record<string, unknown> = {};
-    if (typeof args.icon === "string") uiHints.icon = args.icon;
-    if (typeof args.description === "string")
-      uiHints.description = args.description;
-
-    const declaredEntityScope =
-      args.entityScope === "pod" || args.entityScope === "workspace"
-        ? args.entityScope
-        : undefined;
-
-    const result = await caller.profiles.createProfile({
-      userId,
-      // Confined workspace (service-key clamp) — not the raw model-supplied id.
-      workspaceId: requestedWorkspaceId as string,
-      slug: args.slug as string,
-      displayName: args.displayName as string,
-      profileKind: "kind",
-      ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
-      ...(args.defaultValues
-        ? { defaultValues: args.defaultValues as Record<string, unknown> }
-        : {}),
-      ...(declaredEntityScope ? { entityScope: declaredEntityScope } : {}),
-      reasoning:
-        readReasoning(args) ?? "Entity kind defined via MCP synap_define_kind",
-      ...(agentUserId ? { agentUserId } : {}),
-    });
-
-    const propertySpecs = (args.properties ?? []) as Array<
-      Record<string, unknown>
-    >;
-
-    // Governance gated the profile itself → there is no profileId to hang
-    // fields on. Return the proposal and tell the caller the fields are still
-    // pending, rather than half-applying a schema.
-    if (
-      result &&
-      typeof result === "object" &&
-      "status" in result &&
-      result.status === "proposed"
-    ) {
-      return ok({
-        ...result,
-        ...(propertySpecs.length > 0
-          ? {
-              properties: {
-                status: "deferred",
-                message:
-                  "The kind itself is awaiting review. Re-call synap_define_kind with the same slug once the proposal is approved to add these fields (the call is slug-idempotent).",
-                pending: propertySpecs.length,
-              },
-            }
+    // The shared define door — `properties` on THIS tool are FIELD DEFS (on
+    // synap_define_role they are default values). The door fails loudly on the
+    // role-shaped object instead of silently dropping the caller's fields.
+    const outcome = await defineProfile(
+      caller,
+      {
+        userId,
+        // Confined workspace (service-key clamp) — not the raw model-supplied id.
+        workspaceId: requestedWorkspaceId as string,
+        slug: args.slug as string,
+        displayName: args.displayName as string,
+        profileKind: "kind",
+        ...(typeof args.icon === "string" ? { icon: args.icon } : {}),
+        ...(typeof args.description === "string"
+          ? { description: args.description }
           : {}),
-      });
-    }
-
-    const createdProfile = result.profile as {
-      id?: string;
-      slug?: string;
-    } | null;
-    const profileId = createdProfile?.id;
-
-    if (propertySpecs.length === 0 || !profileId) {
-      return ok(result);
-    }
-
-    const properties: Array<Record<string, unknown>> = [];
-    for (const spec of propertySpecs) {
-      const propSlug = typeof spec.slug === "string" ? spec.slug : undefined;
-      const valueType =
-        typeof spec.valueType === "string" ? spec.valueType : undefined;
-      if (!propSlug || !valueType) {
-        properties.push({
-          slug: propSlug ?? null,
-          status: "error",
-          error: "Each property requires `slug` and `valueType`.",
-        });
-        continue;
-      }
-      // The hub door types valueType as `z.string()` and then casts it onto
-      // the `property_defs.value_type` PG enum, so an unknown string fails at
-      // INSERT time with a Postgres error the agent cannot act on. The enum
-      // is PropertyValueType in packages/database/src/schema/property-defs.ts.
-      if (!PROPERTY_VALUE_TYPES.includes(valueType)) {
-        properties.push({
-          slug: propSlug,
-          status: "error",
-          error: `Unsupported valueType '${valueType}'. Valid: ${PROPERTY_VALUE_TYPES.join(", ")}.`,
-        });
-        continue;
-      }
-      try {
-        const propResult = await caller.profiles.createPropertyDef({
-          userId,
-          workspaceId: requestedWorkspaceId as string,
-          profileId,
-          slug: propSlug,
-          valueType,
-          ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
-          ...(spec.constraints
-            ? { constraints: spec.constraints as Record<string, unknown> }
-            : {}),
-          ...(spec.uiHints || spec.displayName
-            ? {
-                uiHints: {
-                  ...((spec.uiHints as Record<string, unknown>) ?? {}),
-                  ...(typeof spec.displayName === "string"
-                    ? { displayName: spec.displayName }
-                    : {}),
-                },
-              }
-            : {}),
-          ...(typeof spec.required === "boolean"
-            ? { required: spec.required }
-            : {}),
-          ...(spec.defaultValue !== undefined
-            ? { defaultValue: spec.defaultValue }
-            : {}),
-          ...(typeof spec.displayOrder === "number"
-            ? { displayOrder: spec.displayOrder }
-            : {}),
-          ...(spec.overlay === true ? { overlay: true } : {}),
-          reasoning: `Field of kind '${args.slug}' defined via MCP synap_define_kind`,
-          ...(agentUserId ? { agentUserId } : {}),
-        });
-        properties.push({ slug: propSlug, ...propResult });
-      } catch (err) {
-        // One rejected field must not discard the fields that did land — the
-        // caller gets a per-field ledger and can retry just the failures.
-        properties.push({
-          slug: propSlug,
-          status: "error",
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    return ok({ ...result, properties });
+        ...(args.defaultValues
+          ? { defaultValues: args.defaultValues as Record<string, unknown> }
+          : {}),
+        ...(args.entityScope === "pod" || args.entityScope === "workspace"
+          ? { entityScope: args.entityScope }
+          : {}),
+        ...(args.properties !== undefined ? { fields: args.properties } : {}),
+        reasoning:
+          readReasoning(args) ??
+          "Entity kind defined via MCP synap_define_kind",
+        ...(agentUserId ? { agentUserId } : {}),
+      },
+      { door: "synap_define_kind", fieldsParam: "properties" }
+    );
+    return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
   synap_governance: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;

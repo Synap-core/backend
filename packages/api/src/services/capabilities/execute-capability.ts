@@ -1005,6 +1005,39 @@ function boundEventRunResult(runResult: unknown): unknown {
 }
 
 /**
+ * The SLIM record for a mirror read. Founder decision, 2026-09-14, option b: a
+ * sync page still leaves a trace in the runs feed (which verb, when, how many
+ * items, how big), but NOT the fetched third-party payload. Email subjects,
+ * senders, snippets, event titles and attendees must never be copied into
+ * `events.data` every 30 minutes.
+ *
+ * `itemCount` counts only the top-level list the provider returned: an array
+ * result, or the first array-valued property of an object result. It is `null`
+ * when there is no such list, never a guess. Nothing from inside an item is read.
+ */
+export function slimMirrorRunSummary(runResult: unknown): {
+  itemCount: number | null;
+  bytes: number;
+} {
+  if (runResult === undefined || runResult === null) {
+    return { itemCount: null, bytes: 0 };
+  }
+  let bytes = 0;
+  try {
+    bytes = JSON.stringify(runResult).length;
+  } catch {
+    bytes = 0;
+  }
+  if (Array.isArray(runResult)) return { itemCount: runResult.length, bytes };
+  if (typeof runResult === "object") {
+    for (const value of Object.values(runResult as Record<string, unknown>)) {
+      if (Array.isArray(value)) return { itemCount: value.length, bytes };
+    }
+  }
+  return { itemCount: null, bytes };
+}
+
+/**
  * Make a DIRECT capability run observable — the SAME two side-effects the
  * `capability.run` approve-executor performs (emit + recall deposit), so the
  * direct-run and proposed→approved paths converge on ONE observability shape.
@@ -1052,8 +1085,16 @@ async function recordDirectCapabilityRun(opts: {
       // stores it under the same condition).
       ...(opts.idempotencyKey ? { idempotencyKey: opts.idempotencyKey } : {}),
       // A direct run has NO proposal to carry the output — stash a bounded copy
-      // on the event so getRun's "capability" branch can surface it.
-      runResult: boundEventRunResult(opts.runResult),
+      // on the event so getRun's "capability" branch can surface it. A MIRROR
+      // read (a sync page) keeps only the slim summary: the trace stays, and the
+      // third-party payload is never copied into events (founder decision,
+      // option b).
+      ...(opts.observability === "mirror"
+        ? {
+            observability: "mirror" as const,
+            runSummary: slimMirrorRunSummary(opts.runResult),
+          }
+        : { runResult: boundEventRunResult(opts.runResult) }),
     },
   });
 

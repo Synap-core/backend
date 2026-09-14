@@ -104,7 +104,8 @@ vi.mock("./execute-provider-verb.js", () => ({
   executeProviderVerb: async () => ({ threads: [{ id: "t1", snippet: "hi" }] }),
 }));
 
-const { executeCapability } = await import("./execute-capability.js");
+const { executeCapability, slimMirrorRunSummary } =
+  await import("./execute-capability.js");
 
 const BASE = {
   verbId: "gmail_list_threads",
@@ -143,6 +144,40 @@ describe("executeCapability — mirror reads deposit no recall fact", () => {
     expect(out.kind).toBe("run");
     expect(receipts).toHaveLength(1);
     expect(saveFact).toHaveBeenCalledTimes(1);
+  });
+
+  // Founder decision 2026-09-14 (option b): a sync page leaves a SLIM trace. The
+  // run event keeps verb + count + size, and NO third-party payload.
+  it("UNGUARDED: a mirror read's run event is SLIM: no payload, only the count and size", async () => {
+    await executeCapability({ ...BASE, observability: "mirror" });
+    const [event] = emitted.filter((e) => e.data?.kind === "capability_run");
+    expect(event.data).not.toHaveProperty("runResult");
+    expect(event.data.observability).toBe("mirror");
+    expect(event.data.runSummary).toEqual({
+      itemCount: 1,
+      bytes: JSON.stringify({ threads: [{ id: "t1", snippet: "hi" }] }).length,
+    });
+    // Discriminating: the provider's content must not appear anywhere on the event.
+    expect(JSON.stringify(event)).not.toContain("hi");
+    expect(JSON.stringify(event)).not.toContain("t1");
+  });
+
+  it("UNGUARDED: a normal direct read keeps the bounded runResult (control)", async () => {
+    await executeCapability(BASE);
+    const [event] = emitted.filter((e) => e.data?.kind === "capability_run");
+    expect(event.data.runResult).toEqual({
+      threads: [{ id: "t1", snippet: "hi" }],
+    });
+    expect(event.data).not.toHaveProperty("runSummary");
+  });
+
+  it("slimMirrorRunSummary counts only the top-level list, never guesses", () => {
+    expect(slimMirrorRunSummary([1, 2, 3]).itemCount).toBe(3);
+    expect(
+      slimMirrorRunSummary({ nextPageToken: "x", events: [1, 2] }).itemCount
+    ).toBe(2);
+    expect(slimMirrorRunSummary({ ok: true }).itemCount).toBeNull();
+    expect(slimMirrorRunSummary(null)).toEqual({ itemCount: null, bytes: 0 });
   });
 
   it("RECEIPTED: a keyed mirror read writes no fact and no embedding", async () => {

@@ -18,7 +18,12 @@ export interface BrokerTrustReport {
     hasSourceConfigWrite: boolean;
   };
   ownerIdentityLink: { present: boolean };
-  relayCredential: { present: boolean; validUntil: string | null };
+  /** `resolvable` is absent on a pod that predates it — read as resolvable. */
+  relayCredential: {
+    present: boolean;
+    resolvable?: boolean;
+    validUntil: string | null;
+  };
   broker: { kind: "control-plane" | "local"; reason: string | null };
 }
 
@@ -32,6 +37,7 @@ export type BrokerTrustState =
   | { kind: "issuer-scope-missing" }
   | { kind: "owner-link-missing" }
   | { kind: "credential-missing" }
+  | { kind: "credential-unreadable" }
   | { kind: "credential-expired"; validUntil: string }
   | { kind: "broker-fault"; reason: string };
 
@@ -48,6 +54,9 @@ export function deriveBrokerTrustState(
   if (!r.cpIssuer.hasSourceConfigWrite) return { kind: "issuer-scope-missing" };
   if (!r.ownerIdentityLink.present) return { kind: "owner-link-missing" };
   if (!r.relayCredential.present) return { kind: "credential-missing" };
+  if (r.relayCredential.resolvable === false) {
+    return { kind: "credential-unreadable" };
+  }
   const validUntil = r.relayCredential.validUntil;
   if (validUntil && Date.parse(validUntil) <= now) {
     return { kind: "credential-expired", validUntil };

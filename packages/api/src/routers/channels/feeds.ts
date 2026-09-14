@@ -27,7 +27,8 @@ import { ensureProactiveFeedChannel } from "../../utils/personal-channel.js";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
 
-import { deriveFeedQueries, listChannelsWithFlags } from "./helpers.js";
+import { listChannelsWithFlags } from "./helpers.js";
+import { deriveFeedQueries } from "./feed-query-plan.js";
 
 const logger = createLogger({ module: "channels" });
 
@@ -214,12 +215,21 @@ export const feedsProcedures = {
       const channelId = feedChannel.id;
 
       // 3. Expand archetype + criteria into concrete fetch targets via the CP query planner.
-      //    Best-effort: derivedQueries is [] if the CP isn't configured or plan-queries fails.
-      const derivedQueries = await deriveFeedQueries(
+      //    Setup proceeds without a plan; a FAILED plan is returned to the caller
+      //    and never erases a subscription's previously planned queries.
+      const queryPlan = await deriveFeedQueries(
         archetypeConfig,
         input.archetype,
         input.criteria
       );
+      if (queryPlan.status === "failed") {
+        logger.warn(
+          { userId, archetype: input.archetype, reason: queryPlan.reason },
+          "Feed query planning failed"
+        );
+      }
+      const derivedQueries =
+        queryPlan.status === "planned" ? queryPlan.queries : [];
 
       // 4. Upsert subscription — idempotent by (sourceConfigId, feedId)
       const existingSub = await db.query.sourceSubscriptions.findFirst({
@@ -262,6 +272,14 @@ export const feedsProcedures = {
         input.relevanceThreshold !== undefined
       ) {
         // Update criteria/schedule and refresh derived queries on existing subscription
+        const previous = (existingSub.params as Record<string, unknown> | null)
+          ?.derivedQueries;
+        const keptDerivedQueries =
+          queryPlan.status === "failed"
+            ? Array.isArray(previous)
+              ? previous
+              : []
+            : derivedQueries;
         await db
           .update(sourceSubscriptions)
           .set({
@@ -275,7 +293,9 @@ export const feedsProcedures = {
                   ? input.relevanceThreshold / 100
                   : 0,
               },
-              ...(derivedQueries.length > 0 && { derivedQueries }),
+              ...(keptDerivedQueries.length > 0 && {
+                derivedQueries: keptDerivedQueries,
+              }),
             },
             updatedAt: new Date(),
           })
@@ -287,7 +307,18 @@ export const feedsProcedures = {
         "Feed setup complete"
       );
 
-      return { channelId, subscriptionId };
+      return {
+        channelId,
+        subscriptionId,
+        queryPlan:
+          queryPlan.status === "failed"
+            ? {
+                status: queryPlan.status,
+                reason: queryPlan.reason,
+                message: queryPlan.message,
+              }
+            : { status: queryPlan.status },
+      };
     }),
 
   /**

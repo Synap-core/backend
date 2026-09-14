@@ -404,6 +404,10 @@ export const profilesRouter = router({
           entityScope: input.entityScope,
           profileKind: input.profileKind,
           applicableKinds: input.applicableKinds,
+          // Carried so the `profile/create` approve-executor materializes the
+          // role's category — dropping it here approves a role that
+          // `entity.query { roleCategory }` can never match.
+          roleCategory: input.roleCategory,
         },
       });
 

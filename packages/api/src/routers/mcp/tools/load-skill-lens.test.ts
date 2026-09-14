@@ -32,6 +32,11 @@ vi.mock(
     },
   })
 );
+// The door read (`users.agentType`) is not what this file proves — see
+// load-skill-door-render.test.ts. Stubbed so no call reaches a real database.
+vi.mock("../../../services/capability-briefs/resolve-skill-door.js", () => ({
+  resolveSkillDoor: async () => "pod-mcp",
+}));
 
 import { tools } from "./index.js";
 

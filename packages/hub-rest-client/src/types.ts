@@ -1729,3 +1729,233 @@ export interface HubWebhookDelivery {
   deliveredAt?: string;
   createdAt: string;
 }
+
+// ─── Structure doors: kinds, roles, workspaces, cells ───────────────────────
+//
+// Every write below is GOVERNED. An agent caller gets `status: "proposed"` —
+// that is SUCCESS (the write awaits the owner's review), never an error. The
+// result types are deliberately wide (all-optional fields, `status: string` on
+// cells) so `ISHubClient`'s pre-existing same-named overrides stay assignable.
+
+/** A field definition sent with `createProfile`. */
+export interface HubProfileFieldInput {
+  slug: string;
+  /** A `property_defs.value_type` value (string, number, date, enum…). */
+  valueType: string;
+  displayName?: string;
+  required?: boolean;
+  defaultValue?: unknown;
+  constraints?: Record<string, unknown>;
+  uiHints?: Record<string, unknown>;
+  displayOrder?: number;
+  /** Workspace overlay instead of a base field. */
+  overlay?: boolean;
+}
+
+/** `POST /api/hub/profiles` — define a kind (default) or a role. */
+export interface CreateProfileInput {
+  slug: string;
+  displayName: string;
+  /** 'kind' (default) = a primary type; 'role' = an attachable facet type. */
+  profileKind?: "kind" | "role";
+  /** For a role: base kinds it attaches to. Omitted → company, person. */
+  applicableKinds?: string[];
+  roleCategory?: string;
+  /** Omit to let the pod decide (kind → pod, role → workspace). */
+  entityScope?: "pod" | "workspace";
+  description?: string;
+  icon?: string;
+  uiHints?: Record<string, unknown>;
+  defaultValues?: Record<string, unknown>;
+  parentProfileId?: string;
+  fields?: HubProfileFieldInput[];
+  reasoning?: string;
+  /** Defaults to the client's workspace. Required by the pod. */
+  workspaceId?: string;
+  userId?: string;
+  agentUserId?: string;
+  sourceMessageId?: string;
+}
+
+/** One field's own outcome — a rejected field never discards the others. */
+export interface HubProfileFieldResult {
+  slug: string | null;
+  status?: string;
+  error?: string;
+  [key: string]: unknown;
+}
+
+export interface HubCreateProfileResult {
+  status?: "created" | "proposed" | "approved" | (string & {});
+  profile?: unknown;
+  existing?: boolean;
+  proposalId?: string | null;
+  message?: string;
+  reviewUrl?: string;
+  /** Per-field ledger, or `deferred` while the profile itself is proposed. */
+  properties?:
+    | HubProfileFieldResult[]
+    | { status: "deferred"; message: string; pending: number };
+  [key: string]: unknown;
+}
+
+/** `POST /api/hub/workspaces/from-definition`. Extra definition fields pass through. */
+export interface CreateWorkspaceFromDefinitionInput {
+  name?: string;
+  workspaceName?: string;
+  /** Idempotency key: same key + same user → same workspace. */
+  proposalId?: string;
+  templateId?: string;
+  templateName?: string;
+  workspaceType?: "personal" | "agent" | "project" | "operational";
+  ownerUserId?: string;
+  profiles?: Array<{
+    slug: string;
+    displayName?: string;
+    [key: string]: unknown;
+  }>;
+  [key: string]: unknown;
+}
+
+export type HubWorkspaceFromDefinitionResult =
+  | { status: "proposed"; proposalId: string }
+  | { workspaceId: string; created: boolean };
+
+/** `POST /api/hub/cells/define`. Omit `workspaceId` for a pod-global cell. */
+export interface DefineCellInput {
+  name: string;
+  rendererSource: string;
+  workspaceId?: string | null;
+  typeKey?: string;
+  description?: string;
+  defaultSize?: { w: number; h: number };
+  viewTypes?: string[];
+  contentKind?: string;
+  deps?: Record<string, string>;
+  agentUserId?: string;
+  reasoning?: string;
+}
+
+export interface HubDefineCellResult {
+  /** `proposed` for an agent caller; absent on a direct define (`success`). */
+  status?: string;
+  proposalId?: string;
+  summary?: string;
+  reasoning?: string;
+  reviewPath?: string;
+  reviewUrl?: string;
+  deduped?: boolean;
+  message?: string;
+  success?: boolean;
+  typeKey?: string;
+}
+
+// ─── Playbooks ────────────────────────────────────────────────────────────────
+
+export type PlaybookStatus = "draft" | "active" | "paused" | "archived";
+
+export interface HubPlaybook {
+  id: string;
+  name: string;
+  description?: string | null;
+  goalTemplate?: string | null;
+  status: PlaybookStatus;
+  workspaceId: string | null;
+  executor?: string | null;
+  createdAt: string;
+  updatedAt?: string;
+  [key: string]: unknown;
+}
+
+export interface ListPlaybooksOptions {
+  /** Narrows only — pod-wide playbooks are still included. */
+  workspaceId?: string;
+  status?: PlaybookStatus;
+  limit?: number;
+  cursor?: string;
+}
+
+export interface HubPlaybookPage {
+  playbooks: HubPlaybook[];
+  nextCursor: string | null;
+}
+
+export interface CreatePlaybookInput {
+  name: string;
+  /** May contain {{param}} placeholders. */
+  goalTemplate: string;
+  description?: string;
+  stages?: Array<Record<string, unknown>>;
+  /** Defaults to active. */
+  status?: PlaybookStatus;
+  /** The playbook's home. Defaults to the client's workspace; required by the pod. */
+  workspaceId?: string;
+  agentUserId?: string;
+}
+
+export interface HubCreatePlaybookResult {
+  status: "created" | "proposed";
+  playbook: HubPlaybook | null;
+  proposalId: string | null;
+  message: string;
+  reviewUrl?: string;
+}
+
+export interface RunPlaybookInput {
+  /** Write home for the run. Omit to use the playbook's own workspace. */
+  workspaceId?: string;
+  subjectId?: string;
+  params?: Record<string, unknown>;
+  agentIds?: string[];
+  reasoning?: string;
+  agentUserId?: string;
+}
+
+/** One request to enable a pack a blocked playbook depends on. */
+export type HubCapabilityEnableOffer =
+  | {
+      status: "proposed";
+      proposalId: string;
+      reviewUrl: string;
+      title: string;
+      skills: Array<{ id: string; name: string; [key: string]: unknown }>;
+      originalActionRan: false;
+      message: string;
+    }
+  | {
+      status: "failed";
+      error: string;
+      originalActionRan: false;
+      message: string;
+    };
+
+export type HubRunPlaybookResult =
+  | {
+      status: "running";
+      run: Record<string, unknown>;
+      session: Record<string, unknown> | null;
+      proposalId: null;
+      message: string;
+    }
+  | {
+      status: "proposed";
+      run: null;
+      session: null;
+      proposalId: string;
+      message: string;
+      reviewUrl?: string;
+    }
+  | {
+      /** Nothing ran: the playbook uses skills that are not enabled yet. */
+      status: "blocked";
+      run: null;
+      session: null;
+      proposalId: null;
+      message: string;
+      unenabledSkills: Array<{
+        id: string;
+        name: string;
+        [key: string]: unknown;
+      }>;
+      enableProposals: HubCapabilityEnableOffer[];
+    };

@@ -60,7 +60,6 @@ import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 
 import { AgentRepository } from "@synap/database";
-import { resolveVaultReferences } from "../../utils/vault-resolver.js";
 
 const logger = createLogger({ module: "channels" });
 
@@ -319,82 +318,6 @@ export function handleCandidatesFor(name: string | null): Set<string> {
   const underscore = lower.replace(/\s+/g, "_").replace(/[^a-z0-9_]+/g, "");
   if (underscore) out.add(underscore); // "antoine_servant"
   return out;
-}
-
-/** A concrete fetch target produced by the CP query planner. */
-export interface DerivedQuery {
-  upstreamType: string;
-  config: Record<string, unknown>;
-  label: string;
-  rationale?: string;
-}
-
-/**
- * Ask the CP relay to expand archetype + criteria into concrete DerivedQuery[].
- * Best-effort: returns [] on any error so setupFeed can proceed unblocked.
- */
-export async function deriveFeedQueries(
-  archetypeConfig: { config: unknown; userId: string },
-  archetype: string,
-  criteria: string | undefined
-): Promise<DerivedQuery[]> {
-  try {
-    const raw = (archetypeConfig.config ?? {}) as Record<string, unknown>;
-    // Fall back to env vars — source_config rows don't always bake in the CP URL.
-    const relayUrl =
-      (raw.relayUrl as string | undefined) ??
-      process.env.CP_URL ??
-      process.env.CONTROL_PLANE_URL;
-    const relayKeyRef =
-      (raw.relayKey as string | undefined) ??
-      process.env.CP_RELAY_KEY ??
-      process.env.SOURCE_RELAY_KEY;
-    if (!relayUrl || !relayKeyRef) return [];
-
-    const resolved = await resolveVaultReferences(
-      { relayKey: relayKeyRef },
-      archetypeConfig.userId
-    );
-    const relayKey = resolved.relayKey;
-    if (!relayKey) return [];
-
-    const res = await fetch(
-      `${relayUrl.replace(/\/$/, "")}/api/sources/plan-queries`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${relayKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ archetype, criteria }),
-        signal: AbortSignal.timeout(10_000),
-      }
-    );
-
-    if (!res.ok) {
-      logger.warn(
-        { archetype, status: res.status },
-        "plan-queries returned non-OK — skipping derived queries"
-      );
-      return [];
-    }
-
-    const json = (await res.json()) as unknown;
-    if (
-      !json ||
-      typeof json !== "object" ||
-      !Array.isArray((json as { queries?: unknown }).queries)
-    ) {
-      return [];
-    }
-    return (json as { queries: DerivedQuery[] }).queries;
-  } catch (err) {
-    logger.warn(
-      { err, archetype },
-      "Failed to derive feed queries (non-fatal)"
-    );
-    return [];
-  }
 }
 
 export const CHANNEL_TYPE_VALUES = [
