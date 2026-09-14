@@ -48,6 +48,7 @@ import {
   setProjectAutomationMembership,
   setProjectSubject,
 } from "../utils/project-subject.js";
+import { getProjectPath } from "../services/projects/project-path.js";
 
 /**
  * Count how many of `entityIds` actually exist and are visible to `userId`,
@@ -337,6 +338,44 @@ export const projectsRouter = router({
           project.settings
         ),
       };
+    }),
+
+  /**
+   * Project Path — the project's work sessions as a dated list (newest
+   * started first), each row with blocked-by / unblocks / next move, plus a
+   * header of open sessions and decisions waiting across the whole path.
+   *
+   * podProcedure for the same reason as `get`: a project spans workspaces, so
+   * its path must not be gated by the active-workspace lens. `workspaceIds`
+   * narrows within the user's own sessions; it never widens. The rows and the
+   * rule live in `services/projects/project-path.ts`.
+   */
+  path: podProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid(),
+        workspaceIds: z.array(z.string().uuid()).max(50).optional(),
+        lens: z.enum(["default", "triage", "all"]).default("default"),
+        limit: z.number().int().min(1).max(100).default(50),
+        offset: z.number().int().min(0).default(0),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const result = await getProjectPath({
+        userId: ctx.userId,
+        projectId: input.projectId,
+        workspaceIds: input.workspaceIds,
+        lens: input.lens,
+        limit: input.limit,
+        offset: input.offset,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+      return result;
     }),
 
   /**

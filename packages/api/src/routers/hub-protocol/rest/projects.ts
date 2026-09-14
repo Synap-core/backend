@@ -35,10 +35,12 @@ import { storage } from "@synap/storage";
 import {
   buildDigestSummary,
   hasScope,
+  httpStatusForTrpcError,
   logger,
   type HubHono,
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { getProjectPath } from "../../../services/projects/project-path.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
@@ -244,6 +246,71 @@ export function registerProjectsRoutes(app: HubHono): void {
       keyEntities,
       summary,
     });
+  });
+
+  // GET /projects/:projectId/path — Project Path: the project's work sessions as
+  // a dated list with blocked-by / unblocks / next move per row. Registered
+  // BEFORE /projects/:id, like /digest. The service floors sessions on the
+  // acting user; a workspace-bound service key is pinned to its workspace
+  // (a request naming another workspace is 403, none named ⇒ the bound one).
+  //
+  // `lens` defaults to `all` here — the agent-door default the session list
+  // doors share (`session-list-doors-project-kind` tripwire); tRPC `path`, the
+  // person's surface, defaults to `default`.
+  app.get("/projects/:projectId/path", async (c) => {
+    const userId = c.get("userId");
+    const parsed = z
+      .object({
+        projectId: z.string().uuid(),
+        workspaceIds: z.array(z.string().uuid()).max(50),
+        lens: z.enum(["default", "triage", "all"]).default("all"),
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).default(0),
+      })
+      .safeParse({
+        projectId: c.req.param("projectId"),
+        workspaceIds: (c.req.query("workspaceIds") ?? "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+        lens: c.req.query("lens") ?? undefined,
+        limit: c.req.query("limit") ?? undefined,
+        offset: c.req.query("offset") ?? undefined,
+      });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request", details: parsed.error.issues },
+        400
+      );
+    }
+    const { projectId, lens, limit, offset } = parsed.data;
+
+    try {
+      const requested = parsed.data.workspaceIds;
+      const pinned = getConfinedWorkspace(c, undefined);
+      const workspaceIds = requested.length
+        ? requested.map((id) => getConfinedWorkspace(c, id) as string)
+        : pinned
+          ? [pinned]
+          : undefined;
+
+      const result = await getProjectPath({
+        userId,
+        projectId,
+        workspaceIds,
+        lens,
+        limit,
+        offset,
+      });
+      if (!result) return c.json({ error: "Project not found" }, 404);
+      return c.json(result);
+    } catch (err) {
+      logger.error({ err, projectId }, "project path failed");
+      return c.json(
+        { error: "Failed to read project path" },
+        httpStatusForTrpcError(err)
+      );
+    }
   });
 
   // POST /projects/:id/purge — DESTRUCTIVE owner teardown.
