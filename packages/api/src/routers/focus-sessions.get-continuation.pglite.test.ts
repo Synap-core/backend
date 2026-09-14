@@ -235,6 +235,95 @@ describe("focusSessions.get returns the continuation packet", () => {
     });
   });
 
+  it("an empty session reads undeclared, never ready to close", async () => {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Blocked by another session', 'active', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+      [id, USER]
+    );
+    const { continuation: c } = await get(id);
+    expect(c.nextMove).toMatchObject({ kind: "undeclared", actor: "ai" });
+  });
+
+  it("an open blocker past PACKET_TOP_N closed ones still makes the session wait", async () => {
+    const id = await seed({ owed: false });
+    await q(`delete from proposals where session_id = $1`, [id]);
+    const blockers: Array<[string, string]> = [
+      ...Array.from(
+        { length: 5 },
+        (_, i) => [`Old ${i}`, "closed"] as [string, string]
+      ),
+      ["Ship pricing", "active"],
+    ];
+    try {
+      for (const [n, [goal, status]] of blockers.entries()) {
+        const bid = randomUUID();
+        await q(
+          `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+           values ($1, $2, $3, $4, '[]'::jsonb, '{}'::jsonb, now() - make_interval(mins => $5::int), now(), now())`,
+          [bid, USER, goal, status, 60 - n]
+        );
+        await q(
+          `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+           values ($1, 'session', $2, 'session', $3, 'blocked_by', '{}'::jsonb, now())`,
+          [randomUUID(), id, bid]
+        );
+      }
+      const { continuation: c } = await get(id);
+      expect(c.blockedBy).toMatchObject({ status: "ok", total: 6 });
+      expect(c.nextMove).toMatchObject({
+        kind: "waiting_on_session",
+        label: 'Waiting on "Ship pricing"',
+      });
+    } finally {
+      await q(`delete from links where link_type = 'blocked_by'`);
+    }
+  });
+
+  it("declared work done but an open sub-session past PACKET_TOP_N closed ones makes the parent wait", async () => {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Parent', 'active', $3::jsonb, '{}'::jsonb, now(), now(), now())`,
+      [
+        id,
+        USER,
+        JSON.stringify([{ kind: "document", label: "Brief", status: "done" }]),
+      ]
+    );
+    const children: Array<[string, string]> = [
+      ...Array.from(
+        { length: 5 },
+        (_, i) => [`Old ${i}`, "closed"] as [string, string]
+      ),
+      ["Pricing detour", "active"],
+    ];
+    try {
+      for (const [n, [goal, status]] of children.entries()) {
+        const cid = randomUUID();
+        await q(
+          `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, created_at, updated_at, started_at)
+           values ($1, $2, $3, $4, '[]'::jsonb, '{}'::jsonb, now() - make_interval(mins => $5::int), now(), now())`,
+          [cid, USER, goal, status, 60 - n]
+        );
+        await q(
+          `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+           values ($1, 'session', $2, 'session', $3, 'spawned_from', '{}'::jsonb, now())`,
+          [randomUUID(), cid, id]
+        );
+      }
+      const { continuation: c } = await get(id);
+      expect(c.children).toMatchObject({ status: "ok", total: 6 });
+      expect(c.nextMove).toMatchObject({
+        kind: "waiting_on_session",
+        label: 'Waiting on "Pricing detour"',
+      });
+    } finally {
+      await q(`delete from links where link_type = 'spawned_from'`);
+    }
+  });
+
   it("a failed outputs read is marked unavailable, not empty", async () => {
     const id = await seed({ owed: true });
     await h.client!.exec(`drop table "links";`);

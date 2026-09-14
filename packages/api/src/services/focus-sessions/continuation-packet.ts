@@ -35,6 +35,8 @@ import {
   and,
   eq,
   asc,
+  desc,
+  inArray,
   count,
   drizzleSql,
   ProposalStatus,
@@ -53,7 +55,10 @@ import {
 } from "./rerun-session.js";
 import { readSessionRunManifest } from "../intake/record-session-run-manifest.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
-import { isTerminalSessionStatus } from "./session-statuses.js";
+import {
+  isTerminalSessionStatus,
+  OPEN_SESSION_STATUSES,
+} from "./session-statuses.js";
 import { projectSessionKind, type SessionKind } from "./session-kind.js";
 import { createLogger } from "@synap-core/core";
 
@@ -105,7 +110,9 @@ export interface PacketChildItem {
 export type NextMoveKind =
   | "owed_slot"
   | "pending_proposal"
+  | "waiting_on_session"
   | "agent_slot"
+  | "undeclared"
   | "ready_to_close"
   | "none"
   | "unknown";
@@ -120,6 +127,8 @@ export interface ContinuationNextMove {
   reason: string;
   /** The proposal id, for `pending_proposal`. */
   proposalId?: string;
+  /** The blocking session's id, for `waiting_on_session`. */
+  sessionId?: string;
 }
 
 export interface ContinuationPacket {
@@ -347,7 +356,12 @@ async function readChildren(
       .from(links)
       .innerJoin(focusSessions, join)
       .where(where)
-      .orderBy(asc(focusSessions.createdAt))
+      // Open first, for the same reason as `readOutboundSessions`: the rule
+      // sees only the top items, and an open child must not fall past the cut.
+      .orderBy(
+        desc(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
+        asc(focusSessions.createdAt)
+      )
       .limit(PACKET_TOP_N),
   ]);
   return {
@@ -367,6 +381,10 @@ async function readChildren(
  * `spawned_from` (the parent) and `blocked_by` (the blockers). Owner-floored on
  * the linked session for the same reason: the producers already floor both
  * ends on one user, and this read must not depend on that staying true.
+ *
+ * OPEN sessions sort first. `deriveNextMove` sees only the top items, so a
+ * still-open blocker created after {@link PACKET_TOP_N} closed ones would
+ * otherwise fall past the cut and the session would read as unblocked.
  */
 async function readOutboundSessions(
   database: typeof db,
@@ -398,7 +416,10 @@ async function readOutboundSessions(
       .from(links)
       .innerJoin(focusSessions, join)
       .where(where)
-      .orderBy(asc(focusSessions.createdAt))
+      .orderBy(
+        desc(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
+        asc(focusSessions.createdAt)
+      )
       .limit(PACKET_TOP_N),
   ]);
   return {
@@ -448,18 +469,49 @@ function readLastCompletion(
   };
 }
 
+const isOpenStatus = (status: string): boolean =>
+  (OPEN_SESSION_STATUSES as readonly string[]).includes(status);
+
 /**
- * THE next-move rule. Pure. Oldest owed human slot, else the oldest pending
- * proposal, else the first open agent slot, else ready to close — and never
- * "ready" while a section it would have consulted is unavailable.
+ * THE next-move rule. Pure. In order:
+ *
+ *  1. the oldest owed human slot, else the oldest pending proposal — what the
+ *     user can do NOW always wins, blocked or not;
+ *  2. `waiting_on_session` while an OPEN session blocks this one (closed,
+ *     cancelled, failed and stale blockers have settled). It OUTRANKS open agent
+ *     slots: a `blocked_by` edge says this session's work depends on the
+ *     blocker's outcome, so producing its deliverables now would build on inputs
+ *     that are not settled — presenting them as the next move is the lie this
+ *     kind exists to stop. Skipped for a terminal session (nothing left to wait for);
+ *  3. the first open agent slot — this session's own work stays actionable
+ *     while its sub-sessions run;
+ *  4. `none` for a terminal session;
+ *  5. `waiting_on_session` while a sub-session is still OPEN: a parent never
+ *     auto-closes, and its children are still producing;
+ *  6. `ready_to_close` ONLY when there is evidence of work — a declared,
+ *     un-retired deliverable, a produced output, or a (settled) sub-session —
+ *     and nothing above remains; with no evidence at all it is `undeclared`:
+ *     an empty session is unplanned, not finished. A retired slot is neither
+ *     owed nor produced, so it declares nothing.
+ *
+ * Never claims a move from a section it could not read: an `unavailable`
+ * section it would have consulted yields `unknown`.
  */
 export function deriveNextMove(input: {
   status: string;
   owedSlots: PacketSection<PacketSlotItem>;
   pendingProposals: PacketSection<PacketProposalItem>;
   aiCanDo: PacketSection<PacketSlotItem>;
+  /** Blocker sessions, OPEN ones first (`readOutboundSessions` orders them so). */
+  blockedBy: PacketSection<PacketChildItem>;
+  /** The session's declared `expectedOutputs`, retired ones included. */
+  expectedOutputs: ExpectedOutput[];
+  outputs: PacketSection<PacketOutputItem>;
+  /** Sub-sessions, OPEN ones first (`readChildren` orders them so). */
+  children: PacketSection<PacketChildItem>;
 }): ContinuationNextMove {
-  const { owedSlots, pendingProposals, aiCanDo } = input;
+  const { owedSlots, pendingProposals, aiCanDo, blockedBy } = input;
+  const terminal = isTerminalSessionStatus(input.status);
   if (owedSlots.status === "ok" && owedSlots.items[0]) {
     const s = owedSlots.items[0];
     return {
@@ -492,6 +544,29 @@ export function deriveNextMove(input: {
       reason: `Part of the session could not be read (${blind.reason}), so nothing is claimed as ready.`,
     };
   }
+  if (!terminal) {
+    if (blockedBy.status === "unavailable") {
+      return {
+        kind: "unknown",
+        actor: "none",
+        label: "Next move unknown",
+        reason: `Whether this session is blocked could not be read (${blockedBy.reason}).`,
+      };
+    }
+    const open = blockedBy.items.filter((b) => isOpenStatus(b.status));
+    const first = open[0];
+    if (first) {
+      const others =
+        open.length > 1 ? ` (and ${open.length - 1} more open blocker(s))` : "";
+      return {
+        kind: "waiting_on_session",
+        actor: "none",
+        label: `Waiting on "${first.title}"`,
+        reason: `This session is blocked by "${first.title}", which is still ${first.statusLabel.toLowerCase()}${others}; its work waits until that settles.`,
+        sessionId: first.id,
+      };
+    }
+  }
   if (aiCanDo.status === "ok" && aiCanDo.items[0]) {
     const s = aiCanDo.items[0];
     return {
@@ -510,7 +585,7 @@ export function deriveNextMove(input: {
       reason: `Open deliverables could not be read (${aiCanDo.reason}).`,
     };
   }
-  if (isTerminalSessionStatus(input.status)) {
+  if (terminal) {
     return {
       kind: "none",
       actor: "none",
@@ -518,11 +593,55 @@ export function deriveNextMove(input: {
       reason: `The session is ${resolveStatusLabel(input.status).toLowerCase()} and nothing is owed or pending.`,
     };
   }
-  return {
+  const readyToClose: ContinuationNextMove = {
     kind: "ready_to_close",
     actor: "ai",
     label: "None: ready to close",
     reason: "Nothing is owed, pending review, or left to produce.",
+  };
+  if (input.children.status === "unavailable") {
+    return {
+      kind: "unknown",
+      actor: "none",
+      label: "Next move unknown",
+      reason: `Whether a sub-session is still open could not be read (${input.children.reason}).`,
+    };
+  }
+  const openChild = input.children.items.find((c) => isOpenStatus(c.status));
+  if (openChild) {
+    return {
+      kind: "waiting_on_session",
+      actor: "none",
+      label: `Waiting on "${openChild.title}"`,
+      reason: `A sub-session is still open: "${openChild.title}" is ${openChild.statusLabel.toLowerCase()}, and this session does not close while it is producing.`,
+      sessionId: openChild.id,
+    };
+  }
+  if (input.expectedOutputs.some((s) => s.retiredAt == null)) {
+    return readyToClose;
+  }
+  // No live declared deliverables: only produced work or sub-sessions separate
+  // a finished session from an empty one, so a failed outputs read is unknown.
+  if (input.outputs.status === "unavailable") {
+    return {
+      kind: "unknown",
+      actor: "none",
+      label: "Next move unknown",
+      reason: `Whether this session produced anything could not be read (${input.outputs.reason}).`,
+    };
+  }
+  if (
+    (input.outputs.status === "ok" && input.outputs.total > 0) ||
+    (input.children.status === "ok" && input.children.total > 0)
+  ) {
+    return readyToClose;
+  }
+  return {
+    kind: "undeclared",
+    actor: "ai",
+    label: "Declare what this session should produce",
+    reason:
+      "No deliverables are declared and nothing has been produced yet, so there is nothing to close; state the plan and its expected outputs first.",
   };
 }
 
@@ -655,6 +774,10 @@ export async function projectContinuationPacket(
       owedSlots,
       pendingProposals,
       aiCanDo,
+      blockedBy,
+      expectedOutputs: all,
+      outputs,
+      children,
     }),
   };
 }
