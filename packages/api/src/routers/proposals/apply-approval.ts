@@ -58,6 +58,10 @@ import {
 } from "./execution-registry.js";
 import { registerApproveExecutors } from "./approve-executors.js";
 import {
+  assertDocumentBaseVersion,
+  readProposalBaseVersion,
+} from "../../utils/document-base-version.js";
+import {
   applyGraphDispositions,
   survivingEntityDecisionSlices,
   survivingEntityFacetSlices,
@@ -1170,6 +1174,16 @@ async function applyProposalApprovalInner(
         code: "BAD_REQUEST",
         message: "Document not found or has no storage key",
       });
+    }
+
+    // BASE VERSION: refuse (CONFLICT, nothing written, proposal stays pending)
+    // when the document moved past the version this edit was drafted against —
+    // otherwise a person's save made after the proposal was filed is silently
+    // overwritten. A proposal filed before base versions were recorded carries
+    // none and applies as before.
+    const baseVersion = readProposalBaseVersion(payload);
+    if (baseVersion !== undefined) {
+      assertDocumentBaseVersion(baseVersion, document.currentVersion);
     }
 
     const newVersion = (document.currentVersion ?? 1) + 1;

@@ -1476,6 +1476,12 @@ export const GATE_WRITE_DOORS = {
   "command/execute": "gate",
   "context/link": "gate",
   "document/create": "gate",
+  // The session-document section write door (services/session-document). Two
+  // keys for one door, chosen server-side: `session_narrative_update` is an
+  // agent writing its OWN session's document (the D10 auto rule names it);
+  // `section_update` is every other section write (no rule → proposal).
+  "document/section_update": "gate",
+  "document/session_narrative_update": "gate",
   "entity/create": "gate+automation",
   "entity/delete": "gate",
   "entity/renderer.set": "gate",

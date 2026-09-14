@@ -38,6 +38,10 @@ import {
 } from "../../utils/write-door-idempotency.js";
 
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import {
+  readSessionDocument,
+  upsertSessionDocumentSection,
+} from "../../services/session-document/upsert-section.js";
 
 const logger = createLogger({ module: "hub-documents" });
 
@@ -516,6 +520,10 @@ export const documentsRouter = router({
           changes: input.changes,
           originalContent: input.originalContent,
           proposedContent: input.proposedContent,
+          // The version this edit was drafted against, read server-side from
+          // the row just loaded. Approval refuses when the document has moved
+          // past it (`apply-approval.ts`, document-content branch).
+          baseVersion: doc.currentVersion,
         },
       });
 
@@ -545,4 +553,53 @@ export const documentsRouter = router({
         requestId: proposal.id,
       };
     }),
+
+  /**
+   * The session's designated document: id, current version (the `baseVersion`
+   * a section write must pass), content, and each section's owner + stamps.
+   */
+  getSessionDocument: scopedProcedure(["hub-protocol.read"])
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ input, ctx }) =>
+      readSessionDocument({ sessionId: input.sessionId, userId: ctx.userId! })
+    ),
+
+  /**
+   * Write ONE section of the session's document (see
+   * `services/session-document/upsert-section.ts`). Applies, or files a
+   * proposal, per governance; refuses human-owned sections and stale bases.
+   */
+  upsertSessionSection: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        sectionId: z.string().min(1).max(64),
+        title: z.string().min(1).max(200),
+        body: z.string().max(100_000),
+        baseVersion: z.number().int().min(1).nullable(),
+        reasoning: z.string().max(2_000).optional(),
+        sourceMessageId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) =>
+      upsertSessionDocumentSection({
+        userId: ctx.userId!,
+        // The authenticated agent key's identity when the body names none — a
+        // body-only agent id is how agent writes previously ran as the human.
+        agentUserId:
+          input.agentUserId ??
+          (ctx.agentUserId as string | undefined) ??
+          null,
+        sessionId: input.sessionId,
+        ambientSessionId: ctx.sessionId ?? null,
+        sectionId: input.sectionId,
+        title: input.title,
+        body: input.body,
+        baseVersion: input.baseVersion,
+        reasoning: input.reasoning,
+        sourceMessageId:
+          input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
+      })
+    ),
 });

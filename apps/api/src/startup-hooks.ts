@@ -31,6 +31,7 @@ import {
   ensureSynapCoreCapability,
   ensureSystemSkills,
   ensureCaptureAgent,
+  ensureSessionNarrativeRule,
   reconcileCapabilitiesToTemplates,
   reconcileStandaloneConfigsToTemplates,
   backfillCapabilityEmits,
@@ -719,6 +720,18 @@ export async function runStartupHooks(): Promise<void> {
     await ensureCaptureAgent();
   } catch (err) {
     logger.warn({ err }, "Failed to seed capture agent on startup (non-fatal)");
+  }
+
+  // Seed the D10 governance rule: an agent's update to a narrative section of
+  // its OWN session's document auto-applies (with undo). A stored rule, so a
+  // person can revoke it; a revoked rule is never re-seeded. Non-fatal.
+  try {
+    await ensureSessionNarrativeRule();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "Failed to seed the session narrative governance rule (non-fatal)"
+    );
   }
 
   // ONE-STORE BACKFILL (Governance Convergence Plan, Phase B) — seed

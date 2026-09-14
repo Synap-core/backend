@@ -76,6 +76,8 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
   recap: "write", // run-session-recap.ts recap write
+  section_update: "write", // services/session-document/upsert-section.ts
+  session_narrative_update: "write", // services/session-document/upsert-section.ts
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
   configure_public_projection: "write", // workspace public-projection config door
   write: "write", // filesystem.write

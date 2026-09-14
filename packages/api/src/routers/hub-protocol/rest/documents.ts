@@ -13,6 +13,7 @@ import {
 } from "./_codecs/document.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  errCode,
   getCaller,
   hasScope,
   httpStatusForTrpcError,
@@ -433,4 +434,106 @@ export function registerDocumentsRoutes(app: HubHono): void {
       );
     }
   });
+
+  /**
+   * GET /focus-sessions/:sessionId/document — the session's designated
+   * document, its current version and each section's owner + stamps.
+   */
+  app.get("/focus-sessions/:sessionId/document", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const sessionId = c.req.param("sessionId");
+    try {
+      const caller = await getCaller(c);
+      return c.json(await caller.documents.getSessionDocument({ sessionId }));
+    } catch (err) {
+      logger.error({ err, sessionId }, "getSessionDocument failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * PUT /focus-sessions/:sessionId/document/sections/:sectionId — write ONE
+   * section. The "own session" signal is ONLY the verified `X-Session-Id`
+   * header (`c.get("sessionId")`), never a body field.
+   */
+  app.put(
+    "/focus-sessions/:sessionId/document/sections/:sectionId",
+    async (c) => {
+      if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+        return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+      }
+      const sessionId = c.req.param("sessionId");
+      const sectionId = c.req.param("sectionId");
+      const body = UpsertSessionSectionBodySchema.safeParse(
+        await c.req.json()
+      );
+      if (!body.success) {
+        return c.json({ error: body.error.message }, 400);
+      }
+      try {
+        const acting = await resolveActingContext(c, {
+          userId: body.data.userId,
+        });
+        if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+        const agentUserId =
+          body.data.agentUserId ??
+          (c.get("agentUserId") as string | undefined);
+        const actorResolution = await resolveActorId(
+          agentUserId,
+          acting.userId
+        );
+        if ("error" in actorResolution)
+          return c.json({ error: actorResolution.error }, 400);
+
+        const caller = await getCaller(c, {
+          sourceMessageId: body.data.sourceMessageId,
+          sessionId: (c.get("sessionId") as string | undefined) ?? null,
+        });
+        const result = await caller.documents.upsertSessionSection({
+          sessionId,
+          sectionId,
+          ...(agentUserId ? { agentUserId } : {}),
+          title: body.data.title,
+          body: body.data.body,
+          baseVersion: body.data.baseVersion,
+          reasoning: body.data.reasoning,
+          sourceMessageId: body.data.sourceMessageId,
+        });
+        return c.json(result);
+      } catch (err) {
+        logger.error(
+          { err, sessionId, sectionId },
+          "upsertSessionSection failed"
+        );
+        // A stale base version and an unlocatable section are the writer's
+        // cue to re-read, so they get their own statuses instead of a 500.
+        const code = errCode(err);
+        const status =
+          code === "CONFLICT"
+            ? 409
+            : code === "PRECONDITION_FAILED"
+              ? 412
+              : httpStatusForTrpcError(err);
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          status
+        );
+      }
+    }
+  );
 }
+
+const UpsertSessionSectionBodySchema = z.object({
+  userId: z.string().optional(),
+  agentUserId: z.string().optional(),
+  title: z.string(),
+  body: z.string(),
+  baseVersion: z.number().int().min(1).nullable(),
+  reasoning: z.string().optional(),
+  sourceMessageId: z.string().optional(),
+});
