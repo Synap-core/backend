@@ -85,6 +85,31 @@ describe("deriveNextMove", () => {
     ).toBe("ready_to_close");
   });
 
+  // Live repro (session 266aeea9 after its child 5e99cb00 was cancelled): a
+  // cancelled child produced nothing, so it is no evidence of work.
+  it.each(["cancelled", "failed", "stale"])(
+    "an undeclared parent whose only sub-session is %s is undeclared, not ready to close",
+    (status) => {
+      expect(
+        deriveNextMove(input({ children: ok([session(status, "Detour")]) }))
+          .kind
+      ).toBe("undeclared");
+    }
+  );
+
+  it("a closed sub-session beside cancelled ones is still evidence of work", () => {
+    expect(
+      deriveNextMove(
+        input({
+          children: ok([
+            session("cancelled", "Dropped"),
+            session("closed", "Detour"),
+          ]),
+        })
+      ).kind
+    ).toBe("ready_to_close");
+  });
+
   it("declared work with nothing left is ready to close", () => {
     expect(deriveNextMove(input({ expectedOutputs: [doneSlot] })).kind).toBe(
       "ready_to_close"

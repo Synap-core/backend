@@ -82,6 +82,7 @@ import {
   views,
   automations,
   playbooks,
+  messages,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
@@ -169,6 +170,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       views,
       automations,
       playbooks,
+      messages,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -178,7 +180,7 @@ describe("focusSessions.get returns the continuation packet", () => {
   });
   beforeEach(async () => {
     await h.client!.exec(
-      "delete from focus_sessions; delete from proposals; delete from artifacts;"
+      "delete from focus_sessions; delete from proposals; delete from artifacts; delete from messages; delete from users;"
     );
   });
 
@@ -504,9 +506,355 @@ describe("focusSessions.get returns the continuation packet", () => {
         status: "unavailable",
         reason: "The sessions this one waits on could not be read.",
       });
+      expect(c.unblocks).toEqual({
+        status: "unavailable",
+        reason: "The sessions waiting on this one could not be read.",
+      });
     } finally {
       await h.client!.exec(ddlFor(links as unknown as PgTable));
     }
+  });
+
+  const insertSession = (
+    id: string,
+    user: string,
+    goal: string,
+    status: string,
+    extra: { minsAgo?: number; channelId?: string; slots?: unknown[] } = {}
+  ) =>
+    q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, channel_id, created_at, updated_at, started_at)
+       values ($1, $2, $3, $4, $5::jsonb, '{}'::jsonb, $6, now() - make_interval(mins => $7::int), now(), now())`,
+      [
+        id,
+        user,
+        goal,
+        status,
+        JSON.stringify(extra.slots ?? []),
+        extra.channelId ?? null,
+        extra.minsAgo ?? 0,
+      ]
+    );
+  const edge = (from: string, to: string, linkType: string) =>
+    q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type)
+       values ($1, 'session', $2, 'session', $3, $4)`,
+      [randomUUID(), from, to, linkType]
+    );
+
+  it("unblocks lists the sessions blocked by this one, open first, owner-floored — the same on both doors", async () => {
+    await h.client!.exec("delete from links;");
+    const session = randomUUID();
+    const waitingOpen = randomUUID();
+    const waitingClosed = randomUUID();
+    const strangers = randomUUID();
+    const myBlocker = randomUUID();
+    await insertSession(session, USER, "Get the Stripe key", "active");
+    await insertSession(waitingClosed, USER, "Old launch", "closed", {
+      minsAgo: 60,
+    });
+    await insertSession(waitingOpen, USER, "Launch billing", "active");
+    await insertSession(strangers, "user-2", "Not yours", "active");
+    await insertSession(myBlocker, USER, "Legal review", "active");
+    await edge(waitingClosed, session, "blocked_by");
+    await edge(waitingOpen, session, "blocked_by");
+    await edge(strangers, session, "blocked_by");
+    // An OUTBOUND edge is `blockedBy`, never `unblocks`.
+    await edge(session, myBlocker, "blocked_by");
+
+    const trpc = (await get(session)).continuation;
+    expect(trpc.unblocks).toEqual({
+      status: "ok",
+      total: 2,
+      items: [
+        {
+          id: waitingOpen,
+          title: "Launch billing",
+          status: "active",
+          statusLabel: expect.any(String),
+        },
+        {
+          id: waitingClosed,
+          title: "Old launch",
+          status: "closed",
+          statusLabel: expect.any(String),
+        },
+      ],
+    });
+    expect(trpc.blockedBy).toMatchObject({
+      total: 1,
+      items: [{ id: myBlocker }],
+    });
+    const mcp = await mcpGet(session);
+    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(trpc)));
+  });
+
+  const questionPart = (sessionId: string, status: string, question: string) =>
+    JSON.stringify({
+      capturePart: {
+        kind: "capture_question",
+        v: 1,
+        sessionId,
+        round: 1,
+        question,
+        why: "It decides which company this lands on",
+        chips: [],
+        partialCount: 0,
+        status,
+        resolvedByMessageId: null,
+      },
+    });
+  const insertMessage = (
+    channelId: string,
+    metadata: string,
+    deleted = false
+  ) =>
+    q(
+      `insert into messages (id, channel_id, role, content, metadata, user_id, "timestamp", hash, deleted_at)
+       values ($1, $2, 'assistant', 'q', $3::jsonb, $4, now(), 'h', $5)`,
+      [randomUUID(), channelId, metadata, USER, deleted ? new Date() : null]
+    );
+
+  it("openQuestions lists only OPEN capture questions in this session's room", async () => {
+    const session = randomUUID();
+    const room = randomUUID();
+    const otherRoom = randomUUID();
+    await insertSession(session, USER, "Capture: Acme call", "active", {
+      channelId: room,
+    });
+    await insertMessage(room, questionPart(session, "open", "Which Acme?"));
+    await insertMessage(room, questionPart(session, "answered", "Answered"));
+    await insertMessage(room, questionPart(session, "superseded", "Old"));
+    await insertMessage(room, questionPart(session, "open", "Deleted"), true);
+    await insertMessage(room, JSON.stringify({ agentState: {} }));
+    await insertMessage(otherRoom, questionPart(session, "open", "Elsewhere"));
+
+    const c = (await get(session)).continuation;
+    expect(c.openQuestions).toEqual({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          id: expect.any(String),
+          question: "Which Acme?",
+          why: "It decides which company this lands on",
+          askedAt: expect.any(String),
+        },
+      ],
+    });
+    // A session with no room was asked nothing: a true empty.
+    const roomless = randomUUID();
+    await insertSession(roomless, USER, "No room", "active");
+    expect((await get(roomless)).continuation.openQuestions).toEqual({
+      status: "ok",
+      total: 0,
+      items: [],
+    });
+  });
+
+  it("a failed questions read is unavailable, not 'no questions'", async () => {
+    const session = randomUUID();
+    await insertSession(session, USER, "Capture", "active", {
+      channelId: randomUUID(),
+    });
+    await h.client!.exec(`drop table "messages";`);
+    try {
+      const c = (await get(session)).continuation;
+      expect(c.openQuestions).toEqual({
+        status: "unavailable",
+        reason: "This session's open questions could not be read.",
+      });
+      expect(c.outputs.status).toBe("ok");
+    } finally {
+      await h.client!.exec(ddlFor(messages as unknown as PgTable));
+    }
+  });
+
+  it("alreadyDone lists landed outputs, done deliverables and applied proposals — each once", async () => {
+    const session = randomUUID();
+    const p1 = randomUUID(); // named by the done Brief slot
+    const p2 = randomUUID(); // auto-approved, named by nothing
+    await insertSession(session, USER, "Launch billing", "active", {
+      slots: [
+        {
+          kind: "document",
+          label: "Brief",
+          status: "done",
+          satisfiedByProposalId: p1,
+        },
+        {
+          kind: "credential",
+          label: "Stripe key",
+          owner: "human",
+          attestedBy: USER,
+          attestedAt: "2026-09-10T00:00:00.000Z",
+        },
+        { kind: "spreadsheet", label: "Pricing sheet" },
+      ],
+    });
+    for (const [title, state] of [
+      ["Pricing notes", "kept"],
+      ["WIP draft", "working"],
+    ]) {
+      await q(
+        `insert into artifacts (id, user_id, kind, ref_id, title, origin_kind, session_id, state, props, created_at, updated_at)
+         values ($1, $2, 'document', $3, $4, 'agent', $5, $6, '{}'::jsonb, now(), now())`,
+        [randomUUID(), USER, randomUUID(), title, session, state]
+      );
+    }
+    for (const [id, status] of [
+      [p1, "approved"],
+      [p2, "auto_approved"],
+      [randomUUID(), "pending"],
+      [randomUUID(), "rejected"],
+    ]) {
+      await q(
+        `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, reviewed_at, created_at, updated_at)
+         values ($1, $2, $3, 'create', 'company', $4, $5::jsonb, now(), now(), now())`,
+        [
+          id,
+          session,
+          status,
+          randomUUID(),
+          JSON.stringify({ targetName: "Acme" }),
+        ]
+      );
+    }
+
+    const c = (await get(session)).continuation;
+    expect(c.alreadyDone.status).toBe("ok");
+    if (c.alreadyDone.status !== "ok") return;
+    expect(c.alreadyDone.total).toBe(4);
+    expect(
+      c.alreadyDone.items.map((i) => [i.source, i.title, i.sourceId]).sort()
+    ).toEqual(
+      [
+        ["output", "Pricing notes", expect.any(String)],
+        ["deliverable", "Brief", p1],
+        ["deliverable", "Stripe key", null],
+        ["proposal", expect.stringContaining("Acme"), p2],
+      ].sort()
+    );
+    const mcp = await mcpGet(session);
+    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+  });
+
+  it("a failed applied-proposals read marks alreadyDone unavailable while outputs still read", async () => {
+    const session = await seed({ owed: false });
+    // Only `updated_at` breaks: the router's participants read and the pending
+    // read never select it, so the failure stays inside the packet.
+    await h.client!.exec(`alter table "proposals" drop column "updated_at";`);
+    try {
+      const c = (await get(session)).continuation;
+      expect(c.alreadyDone).toEqual({
+        status: "unavailable",
+        reason: "What this session already did could not be read.",
+      });
+      expect(c.outputs.status).toBe("ok");
+      expect(c.userMustDecide.pendingProposals.status).toBe("ok");
+    } finally {
+      await h.client!.exec(
+        `alter table "proposals" add column "updated_at" timestamp with time zone;`
+      );
+    }
+  });
+
+  it("lastDecision is the newest approved or rejected proposal, with its reviewer's kind", async () => {
+    const session = randomUUID();
+    await insertSession(session, USER, "Launch billing", "active");
+    expect((await get(session)).continuation.lastDecision).toEqual({
+      status: "ok",
+      decision: null,
+    });
+    await q(
+      `insert into users (id, email, user_type) values ('human-1', 'h@x.io', 'human'), ('agent-1', 'a@x.io', 'agent')`
+    );
+    const rejected = randomUUID();
+    for (const [id, status, by, hoursAgo, reason] of [
+      [randomUUID(), "approved", "human-1", 3, null],
+      [rejected, "rejected", "agent-1", 2, "Wrong Acme"],
+      [randomUUID(), "auto_approved", null, 1, null],
+      [randomUUID(), "pending", null, 0, null],
+    ] as const) {
+      await q(
+        `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, data, reviewed_by, reviewed_at, rejection_reason, created_at, updated_at)
+         values ($1, $2, $3, 'create', 'company', $4, $5::jsonb, $6, now() - make_interval(hours => $7::int), $8, now() - interval '1 day', now() - make_interval(hours => $7::int))`,
+        [
+          id,
+          session,
+          status,
+          randomUUID(),
+          JSON.stringify({ targetName: "Acme" }),
+          by,
+          hoursAgo,
+          reason,
+        ]
+      );
+    }
+
+    const c = (await get(session)).continuation;
+    expect(c.lastDecision).toEqual({
+      status: "ok",
+      decision: {
+        proposalId: rejected,
+        title: 'Create Company "Acme"',
+        outcome: "rejected",
+        outcomeLabel: expect.any(String),
+        decidedAt: expect.any(String),
+        reviewer: "agent",
+        reason: "Wrong Acme",
+      },
+    });
+    const mcp = await mcpGet(session);
+    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+  });
+
+  it("a failed decision read is unavailable, never 'no decision'", async () => {
+    const session = await seed({ owed: false });
+    await h.client!.exec(`drop table "users";`);
+    try {
+      const c = (await get(session)).continuation;
+      expect(c.lastDecision).toEqual({
+        status: "unavailable",
+        reason: "This session's last decision could not be read.",
+      });
+    } finally {
+      await h.client!.exec(ddlFor(users as unknown as PgTable));
+    }
+  });
+
+  // Live repro: session 266aeea9 read `ready_to_close` after its only child
+  // 5e99cb00 was cancelled. A cancelled child produced nothing.
+  it("a parent whose only sub-session was cancelled reads undeclared, not ready to close", async () => {
+    await h.client!.exec("delete from links;");
+    const parent = randomUUID();
+    const child = randomUUID();
+    await insertSession(parent, USER, "Parent", "active");
+    await insertSession(child, USER, "Detour", "cancelled");
+    await edge(child, parent, "spawned_from");
+    const c = (await get(parent)).continuation;
+    expect(c.children).toMatchObject({ status: "ok", total: 1 });
+    expect(c.nextMove).toMatchObject({ kind: "undeclared" });
+  });
+
+  it("a closed sub-session behind PACKET_TOP_N older cancelled ones is still evidence of work", async () => {
+    await h.client!.exec("delete from links;");
+    const parent = randomUUID();
+    await insertSession(parent, USER, "Parent", "active");
+    for (let i = 0; i < 6; i++) {
+      const child = randomUUID();
+      await insertSession(
+        child,
+        USER,
+        `Child ${i}`,
+        i < 5 ? "cancelled" : "closed",
+        { minsAgo: 60 - i }
+      );
+      await edge(child, parent, "spawned_from");
+    }
+    const c = (await get(parent)).continuation;
+    expect(c.children).toMatchObject({ status: "ok", total: 6 });
+    expect(c.nextMove).toMatchObject({ kind: "ready_to_close" });
   });
 
   it("more than PACKET_TOP_N children and outputs: totals stay exact, items stop at 5", async () => {

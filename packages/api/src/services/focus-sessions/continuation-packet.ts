@@ -16,6 +16,8 @@
  *   - run manifest    → `readSessionRunManifest`
  *   - rerun           → `assessRerunAvailability`
  *   - proposal titles → `buildObjectActionTitle` + `extractProposalName`
+ *   - open questions  → the capture clarification part (`readCapturePart`) on
+ *                        the session's room messages
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ──────────────────────────────────────
  * Each part that needs a query is a {@link PacketSection}: `ok` with a total and
@@ -32,11 +34,15 @@ import {
   proposals,
   focusSessions,
   links,
+  messages,
+  users,
   and,
   eq,
   asc,
   desc,
   inArray,
+  notInArray,
+  isNull,
   count,
   drizzleSql,
   ProposalStatus,
@@ -46,9 +52,10 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { readCapturePart } from "@synap-core/types/capture";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
-import { listSessionOutputs } from "./session-outputs.js";
+import { listSessionOutputs, type SessionOutput } from "./session-outputs.js";
 import {
   assessRerunAvailability,
   type RerunAvailability,
@@ -105,6 +112,50 @@ export interface PacketChildItem {
   title: string;
   status: string;
   statusLabel: string;
+}
+
+/** A capture clarification question still waiting for the user's answer. */
+export interface PacketQuestionItem {
+  /** The question message id. */
+  id: string;
+  question: string;
+  /** One line: what answering changes. */
+  why?: string;
+  askedAt: string | null;
+}
+
+/**
+ * Work that already landed — "do not redo". `source` names the ledger:
+ *  - `output`: a produced object that is not in progress or swept;
+ *  - `deliverable`: a declared slot stamped done (approved or attested) with no
+ *    produced object standing for it;
+ *  - `proposal`: an approved or auto-approved proposal filed under this session
+ *    that no done slot already names.
+ */
+export interface PacketDoneItem {
+  source: "output" | "deliverable" | "proposal";
+  /** Object kind (`document`, `company`, …). */
+  kind: string;
+  title: string;
+  /** When it landed; `null` when the ledger recorded no time. */
+  at: string | null;
+  /** Object id / satisfying proposal id / proposal id; `null` when none exists. */
+  sourceId: string | null;
+}
+
+/** The most recent approved or rejected proposal of this session. */
+export interface PacketDecision {
+  proposalId: string;
+  /** Imperative — what the proposal asked to do. */
+  title: string;
+  outcome: "approved" | "rejected";
+  /** `resolveStatusLabel(outcome)` — the one label door, so no reader re-derives it. */
+  outcomeLabel: string;
+  decidedAt: string | null;
+  /** `unknown` when no reviewer is recorded or it no longer resolves. */
+  reviewer: "human" | "agent" | "unknown";
+  /** The reviewer's rejection reason, when one was given. */
+  reason?: string;
 }
 
 export type NextMoveKind =
@@ -172,6 +223,19 @@ export interface ContinuationPacket {
    * which is owed SLOTS, not session edges.
    */
   blockedBy: PacketSection<PacketChildItem>;
+  /**
+   * Sessions waiting on this one (`other --blocked_by--> this`), open first —
+   * the inbound twin of `blockedBy`: closing this session releases them.
+   */
+  unblocks: PacketSection<PacketChildItem>;
+  /** Capture clarification questions still open in this session's room, oldest first. */
+  openQuestions: PacketSection<PacketQuestionItem>;
+  /** What already landed, newest first — an agent must not redo these. */
+  alreadyDone: PacketSection<PacketDoneItem>;
+  /** `decision: null` when nothing was ever approved or rejected here. */
+  lastDecision:
+    | { status: "ok"; decision: PacketDecision | null }
+    | { status: "unavailable"; reason: string };
   /** `null` when the session recorded no run manifest. */
   run: {
     sourcesCount: number;
@@ -298,20 +362,23 @@ async function readPendingProposals(
   };
 }
 
-async function readOutputs(
+/**
+ * Every output, uncut: `outputs` shows the top items, and `alreadyDone` needs
+ * the whole list to keep its total exact. ONE `listSessionOutputs` call feeds both.
+ */
+async function readAllOutputs(
   database: typeof db,
   userId: string,
   sessionId: string
-): Promise<PacketSection<PacketOutputItem>> {
+): Promise<SessionOutput[]> {
   const result = await listSessionOutputs({ db: database, userId, sessionId });
-  if (!result) {
-    return {
-      status: "unavailable",
-      reason: "session not found for outputs read",
-    };
-  }
+  if (!result) throw new Error("session not found for outputs read");
+  return result.outputs;
+}
+
+function outputsSection(all: SessionOutput[]): PacketSection<PacketOutputItem> {
   return section(
-    result.outputs.map((o) => ({
+    all.map((o) => ({
       kind: o.kind,
       refId: o.refId,
       title: o.title,
@@ -322,20 +389,27 @@ async function readOutputs(
 }
 
 /**
- * `child --spawned_from--> sessionId`, owner-floored on the child. The producer
- * (`recordSessionSpawn`) already floors both ends on one user; the floor here is
- * so this read never depends on that staying true.
+ * `other --linkType--> sessionId`, owner-floored on the other session: for
+ * `spawned_from` (the children) and `blocked_by` (the sessions this one
+ * unblocks). The producers already floor both ends on one user; the floor here
+ * is so this read never depends on that staying true.
+ *
+ * Order: OPEN first, then CLOSED, then the rest (cancelled, failed, stale).
+ * `deriveNextMove` sees only the top items — an open child must not fall past
+ * the cut, and with none open, a closed child (the only one that counts as
+ * evidence of work) must not hide behind {@link PACKET_TOP_N} cancelled ones.
  */
-async function readChildren(
+async function readInboundSessions(
   database: typeof db,
   userId: string,
-  sessionId: string
+  sessionId: string,
+  linkType: "spawned_from" | "blocked_by"
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.fromId);
   const where = and(
     eq(links.fromType, "session"),
     eq(links.toType, "session"),
-    eq(links.linkType, "spawned_from"),
+    eq(links.linkType, linkType),
     eq(links.toId, sessionId),
     eq(focusSessions.userId, userId)
   );
@@ -356,10 +430,9 @@ async function readChildren(
       .from(links)
       .innerJoin(focusSessions, join)
       .where(where)
-      // Open first, for the same reason as `readOutboundSessions`: the rule
-      // sees only the top items, and an open child must not fall past the cut.
       .orderBy(
         desc(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
+        desc(eq(focusSessions.status, "closed")),
         asc(focusSessions.createdAt)
       )
       .limit(PACKET_TOP_N),
@@ -452,6 +525,252 @@ async function readParent(
   };
 }
 
+/**
+ * Capture clarification questions still `open` in the session's ROOM — where
+ * `persistCaptureQuestion` writes them (`capture-clarification.ts`). A session
+ * with no room was never asked anything: that is a true empty, not a failure.
+ * A row whose part does not satisfy the contract is not rendered as a question
+ * (`readCapturePart`), the same rule every client applies.
+ */
+async function readOpenQuestions(
+  database: typeof db,
+  row: SessionRow
+): Promise<PacketSection<PacketQuestionItem>> {
+  if (!row.channelId) return { status: "ok", total: 0, items: [] };
+  const where = and(
+    eq(messages.channelId, row.channelId),
+    isNull(messages.deletedAt),
+    drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' = 'capture_question'`,
+    drizzleSql`${messages.metadata} -> 'capturePart' ->> 'status' = 'open'`
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(messages).where(where),
+    database
+      .select({
+        id: messages.id,
+        metadata: messages.metadata,
+        timestamp: messages.timestamp,
+      })
+      .from(messages)
+      .where(where)
+      // Oldest first: the question waiting longest is the one to answer.
+      .orderBy(asc(messages.timestamp))
+      .limit(PACKET_TOP_N),
+  ]);
+  const items: PacketQuestionItem[] = [];
+  for (const r of rows) {
+    const part = readCapturePart(r.metadata);
+    if (part?.kind !== "capture_question" || part.sessionId !== row.id) {
+      continue;
+    }
+    items.push({
+      id: r.id,
+      question: part.question,
+      ...(part.why ? { why: part.why } : {}),
+      askedAt: r.timestamp ? new Date(r.timestamp).toISOString() : null,
+    });
+  }
+  return { status: "ok", total: Number(totalRow?.n ?? 0), items };
+}
+
+const APPLIED_PROPOSAL_STATUSES = [
+  ProposalStatus.APPROVED,
+  ProposalStatus.AUTO_APPROVED,
+];
+
+/** A slot the one `done` door stamped — by approval or by the owner's attestation. */
+const isDoneSlot = (s: ExpectedOutput): boolean =>
+  s.retiredAt == null && (s.status === "done" || s.attestedBy != null);
+
+/**
+ * Applied proposals of this session, newest first, EXCLUDING the ones a done
+ * slot already names (`satisfiedByProposalId`) — that work is listed once, as
+ * its deliverable, and the total stays exact.
+ */
+async function readAppliedProposals(
+  database: typeof db,
+  sessionId: string,
+  expectedOutputs: ExpectedOutput[]
+): Promise<{ total: number; items: PacketDoneItem[] }> {
+  const named = [
+    ...new Set(
+      expectedOutputs
+        .filter(isDoneSlot)
+        .map((s) => s.satisfiedByProposalId)
+        .filter((id): id is string => typeof id === "string" && id !== "")
+    ),
+  ];
+  const where = and(
+    eq(proposals.sessionId, sessionId),
+    inArray(proposals.status, APPLIED_PROPOSAL_STATUSES),
+    ...(named.length ? [notInArray(proposals.id, named)] : [])
+  );
+  const [[totalRow], rows] = await Promise.all([
+    database.select({ n: count() }).from(proposals).where(where),
+    database
+      .select({
+        id: proposals.id,
+        proposalType: proposals.proposalType,
+        targetType: proposals.targetType,
+        data: proposals.data,
+        reviewedAt: proposals.reviewedAt,
+        updatedAt: proposals.updatedAt,
+      })
+      .from(proposals)
+      .where(where)
+      .orderBy(
+        desc(
+          drizzleSql`coalesce(${proposals.reviewedAt}, ${proposals.updatedAt})`
+        )
+      )
+      .limit(PACKET_TOP_N),
+  ]);
+  return {
+    total: Number(totalRow?.n ?? 0),
+    items: rows.map((r) => {
+      const at = r.reviewedAt ?? r.updatedAt;
+      return {
+        source: "proposal" as const,
+        kind: r.targetType,
+        title: buildObjectActionTitle({
+          action: r.proposalType,
+          objectKind: r.targetType,
+          objectName: extractProposalName(r.data) ?? null,
+          mood: "past",
+        }),
+        at: at ? new Date(at).toISOString() : null,
+        sourceId: r.id,
+      };
+    }),
+  };
+}
+
+/**
+ * THE "do not redo" rule. Pure. Three ledgers, each item listed ONCE:
+ *  - outputs that are not `working` (still in progress) or `swept` (discarded);
+ *    an output with no artifact row behind it has no state and counts;
+ *  - done slots (see {@link isDoneSlot}) that no counted output already stands
+ *    for (`expected.label`);
+ *  - applied proposals, already de-duplicated against done slots at the read.
+ * Newest first; an item with no recorded time sorts last. `appliedProposals`
+ * carries at most the top items of its ledger, which is enough: the top items
+ * of a union are drawn from the top items of each part.
+ */
+export function deriveAlreadyDone(input: {
+  outputs: SessionOutput[];
+  expectedOutputs: ExpectedOutput[];
+  appliedProposals: { total: number; items: PacketDoneItem[] };
+}): PacketSection<PacketDoneItem> {
+  const landed = input.outputs.filter(
+    (o) => o.state !== "working" && o.state !== "swept"
+  );
+  const coveredLabels = new Set(
+    landed.map((o) => o.expected?.label).filter(Boolean)
+  );
+  const slotsDone = input.expectedOutputs.filter(
+    (s) => isDoneSlot(s) && !coveredLabels.has(s.label)
+  );
+  const all: PacketDoneItem[] = [
+    ...landed.map((o) => ({
+      source: "output" as const,
+      kind: o.kind,
+      title: o.title,
+      at: new Date(o.producedAt).toISOString(),
+      sourceId: o.refId,
+    })),
+    ...slotsDone.map((s) => ({
+      source: "deliverable" as const,
+      kind: s.kind,
+      title: s.label,
+      at: s.attestedAt ?? null,
+      sourceId: s.satisfiedByProposalId ?? null,
+    })),
+    ...input.appliedProposals.items,
+  ];
+  all.sort((a, b) =>
+    a.at === b.at
+      ? 0
+      : a.at === null
+        ? 1
+        : b.at === null
+          ? -1
+          : a.at < b.at
+            ? 1
+            : -1
+  );
+  return {
+    status: "ok",
+    total: landed.length + slotsDone.length + input.appliedProposals.total,
+    items: all.slice(0, PACKET_TOP_N),
+  };
+}
+
+/**
+ * The newest approved or rejected proposal. Auto-approved rows are governance,
+ * not a decision, and are left out. The reviewer's kind comes from the users
+ * row; a reviewer that is absent or no longer resolves is `unknown`, never
+ * guessed human.
+ */
+async function readLastDecision(
+  database: typeof db,
+  sessionId: string
+): Promise<PacketDecision | null> {
+  const [r] = await database
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      data: proposals.data,
+      reviewedAt: proposals.reviewedAt,
+      updatedAt: proposals.updatedAt,
+      rejectionReason: proposals.rejectionReason,
+      reviewerType: users.userType,
+    })
+    .from(proposals)
+    .leftJoin(users, eq(users.id, proposals.reviewedBy))
+    .where(
+      and(
+        eq(proposals.sessionId, sessionId),
+        inArray(proposals.status, [
+          ProposalStatus.APPROVED,
+          ProposalStatus.REJECTED,
+        ])
+      )
+    )
+    .orderBy(
+      desc(
+        drizzleSql`coalesce(${proposals.reviewedAt}, ${proposals.updatedAt})`
+      )
+    )
+    .limit(1);
+  if (!r) return null;
+  const decidedAt = r.reviewedAt ?? r.updatedAt;
+  const outcome =
+    r.status === ProposalStatus.REJECTED ? "rejected" : "approved";
+  return {
+    proposalId: r.id,
+    title: buildObjectActionTitle({
+      action: r.proposalType,
+      objectKind: r.targetType,
+      objectName: extractProposalName(r.data) ?? null,
+      mood: "imperative",
+    }),
+    outcome,
+    outcomeLabel: resolveStatusLabel(outcome),
+    decidedAt: decidedAt ? new Date(decidedAt).toISOString() : null,
+    reviewer:
+      r.reviewerType === "agent"
+        ? "agent"
+        : r.reviewerType === "human"
+          ? "human"
+          : "unknown",
+    ...(r.status === ProposalStatus.REJECTED && r.rejectionReason
+      ? { reason: r.rejectionReason }
+      : {}),
+  };
+}
+
 function readLastCompletion(
   row: SessionRow
 ): ContinuationPacket["lastCompletion"] {
@@ -489,10 +808,11 @@ const isOpenStatus = (status: string): boolean =>
  *  5. `waiting_on_session` while a sub-session is still OPEN: a parent never
  *     auto-closes, and its children are still producing;
  *  6. `ready_to_close` ONLY when there is evidence of work — a declared,
- *     un-retired deliverable, a produced output, or a (settled) sub-session —
+ *     un-retired deliverable, a produced output, or a CLOSED sub-session —
  *     and nothing above remains; with no evidence at all it is `undeclared`:
  *     an empty session is unplanned, not finished. A retired slot is neither
- *     owed nor produced, so it declares nothing.
+ *     owed nor produced, so it declares nothing; a cancelled, failed or stale
+ *     sub-session produced nothing, so it is no evidence either.
  *
  * Never claims a move from a section it could not read: an `unavailable`
  * section it would have consulted yields `unknown`.
@@ -507,7 +827,7 @@ export function deriveNextMove(input: {
   /** The session's declared `expectedOutputs`, retired ones included. */
   expectedOutputs: ExpectedOutput[];
   outputs: PacketSection<PacketOutputItem>;
-  /** Sub-sessions, OPEN ones first (`readChildren` orders them so). */
+  /** Sub-sessions, OPEN then CLOSED first (`readInboundSessions` orders them so). */
   children: PacketSection<PacketChildItem>;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockedBy } = input;
@@ -632,7 +952,7 @@ export function deriveNextMove(input: {
   }
   if (
     (input.outputs.status === "ok" && input.outputs.total > 0) ||
-    (input.children.status === "ok" && input.children.total > 0)
+    input.children.items.some((c) => c.status === "closed")
   ) {
     return readyToClose;
   }
@@ -679,53 +999,111 @@ export async function projectContinuationPacket(
     }))
   );
 
-  const [pendingProposals, outputs, rerun, children, parent, blockedBy] =
-    await Promise.all([
-      readPendingProposals(database, row.id).catch(
-        unavailable(
-          row.id,
-          "pendingProposals",
-          "This session's pending proposals could not be read."
-        )
-      ),
-      readOutputs(database, ctx.userId, row.id).catch(
+  // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
+  // their own `unavailable` below.
+  const allOutputs = readAllOutputs(database, ctx.userId, row.id);
+  allOutputs.catch(() => undefined);
+
+  const [
+    pendingProposals,
+    outputs,
+    rerun,
+    children,
+    parent,
+    blockedBy,
+    unblocks,
+    openQuestions,
+    alreadyDone,
+    lastDecision,
+  ] = await Promise.all([
+    readPendingProposals(database, row.id).catch(
+      unavailable(
+        row.id,
+        "pendingProposals",
+        "This session's pending proposals could not be read."
+      )
+    ),
+    allOutputs
+      .then(outputsSection)
+      .catch(
         unavailable(
           row.id,
           "outputs",
           "This session's outputs could not be read."
         )
       ),
-      // A failed read is its OWN state — `availability_unknown`, never folded
-      // into `no_manifest` — and it must not fail the whole session read.
-      assessRerunAvailability(database, row).catch((err): RerunAvailability => {
-        logger.warn(
-          { err, sessionId: row.id, section: "rerun" },
-          "continuation packet: section read failed"
-        );
-        return { available: false, reason: "availability_unknown" };
-      }),
-      readChildren(database, ctx.userId, row.id).catch(
+    // A failed read is its OWN state — `availability_unknown`, never folded
+    // into `no_manifest` — and it must not fail the whole session read.
+    assessRerunAvailability(database, row).catch((err): RerunAvailability => {
+      logger.warn(
+        { err, sessionId: row.id, section: "rerun" },
+        "continuation packet: section read failed"
+      );
+      return { available: false, reason: "availability_unknown" };
+    }),
+    readInboundSessions(database, ctx.userId, row.id, "spawned_from").catch(
+      unavailable(
+        row.id,
+        "children",
+        "This session's sub-sessions could not be read."
+      )
+    ),
+    readParent(database, ctx.userId, row.id).catch(
+      unavailable(
+        row.id,
+        "parent",
+        "This session's parent session could not be read."
+      )
+    ),
+    readOutboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
+      unavailable(
+        row.id,
+        "blockedBy",
+        "The sessions this one waits on could not be read."
+      )
+    ),
+    readInboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
+      unavailable(
+        row.id,
+        "unblocks",
+        "The sessions waiting on this one could not be read."
+      )
+    ),
+    readOpenQuestions(database, row).catch(
+      unavailable(
+        row.id,
+        "openQuestions",
+        "This session's open questions could not be read."
+      )
+    ),
+    Promise.all([allOutputs, readAppliedProposals(database, row.id, all)])
+      .then(([outs, appliedProposals]) =>
+        deriveAlreadyDone({
+          outputs: outs,
+          expectedOutputs: all,
+          appliedProposals,
+        })
+      )
+      .catch(
         unavailable(
           row.id,
-          "children",
-          "This session's sub-sessions could not be read."
+          "alreadyDone",
+          "What this session already did could not be read."
         )
       ),
-      readParent(database, ctx.userId, row.id).catch(
+    readLastDecision(database, row.id)
+      .then((decision): ContinuationPacket["lastDecision"] => ({
+        status: "ok",
+        decision,
+      }))
+      .catch(
         unavailable(
           row.id,
-          "parent",
-          "This session's parent session could not be read."
+          "lastDecision",
+          "This session's last decision could not be read."
         )
       ),
-      readOutboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
-        unavailable(
-          row.id,
-          "blockedBy",
-          "The sessions this one waits on could not be read."
-        )
-      ),
-    ]);
+  ]);
 
   const manifest = readSessionRunManifest(row.metadata);
 
@@ -749,6 +1127,10 @@ export async function projectContinuationPacket(
     children,
     parent,
     blockedBy,
+    unblocks,
+    openQuestions,
+    alreadyDone,
+    lastDecision,
     run: manifest
       ? {
           sourcesCount: manifest.sourceDocumentIds.length,
