@@ -209,8 +209,11 @@ function planRecordFields(
   }
   // A project the door REUSED (exact-name match) is not this run's row.
   const ownProjects = projects.filter((p) => !p.linked);
+  // Same for a session the door REUSED (open twin of the same goal + scope):
+  // cancelling it on compensation or revert would close someone's live work.
+  const ownSessions = sessions.filter((s) => !s.linked);
   return {
-    sessionIds: unique(sessions.map((s) => s.sessionId)),
+    sessionIds: unique(ownSessions.map((s) => s.sessionId)),
     projectIds: unique(ownProjects.map((p) => p.projectId)),
     linkIds: unique(
       links
@@ -280,7 +283,11 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
     };
   }
   for (const s of result.sessions ?? []) {
-    byOp[s.ref] = { op: "create_session", sessionId: s.sessionId };
+    byOp[s.ref] = {
+      op: "create_session",
+      sessionId: s.sessionId,
+      ...(s.linked ? { linked: true } : {}),
+    };
   }
   for (const d of result.documents ?? []) {
     byOp[d.ref] = { op: "create_document", documentId: d.documentId };

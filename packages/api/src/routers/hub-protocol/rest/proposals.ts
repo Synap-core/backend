@@ -221,6 +221,18 @@ export function registerProposalsRoutes(app: HubHono): void {
           success: z.boolean(),
           proposalId: z.string(),
           proposal: WireProposalSchema.optional(),
+          primaryId: z
+            .string()
+            .optional()
+            .describe(
+              "The row the approval produced or LINKED to, when the executor reports one — e.g. the focus session a `focus_session/create` approval inserted, or the existing open session it reused."
+            ),
+          linked: z
+            .number()
+            .optional()
+            .describe(
+              "How many existing rows the approval linked to instead of creating (e.g. 1 when an open session of the same goal and scope already existed)."
+            ),
         }),
       },
       400: { description: "Bad request", schema: ErrorSchema },
@@ -570,7 +582,10 @@ export function registerProposalsRoutes(app: HubHono): void {
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
-      await caller.approve({ proposalId: resolvedId });
+      const approval = (await caller.approve({ proposalId: resolvedId })) as {
+        primaryId?: string;
+        linked?: number;
+      } | null;
       // Re-fetch so the caller sees the post-execution state in ONE round trip —
       // e.g. a capability.run's data.runResult (success + returned data, or the
       // exact denial reason like "Capability is not approved") — instead of the
@@ -579,7 +594,23 @@ export function registerProposalsRoutes(app: HubHono): void {
       const proposal = await caller
         .get({ proposalId: resolvedId })
         .catch(() => null);
-      return c.json({ success: true, proposalId: resolvedId, proposal }, 200);
+      // The produced / linked row id rides the response: without it a caller
+      // that approved a session proposal had to guess the session — and a
+      // guess was a second create (the live duplicate pairs, 2026-09-13).
+      return c.json(
+        {
+          success: true,
+          proposalId: resolvedId,
+          proposal,
+          ...(typeof approval?.primaryId === "string"
+            ? { primaryId: approval.primaryId }
+            : {}),
+          ...(typeof approval?.linked === "number"
+            ? { linked: approval.linked }
+            : {}),
+        },
+        200
+      );
     } catch (err) {
       logger.error({ err, proposalId }, "approveProposal failed");
       return c.json(

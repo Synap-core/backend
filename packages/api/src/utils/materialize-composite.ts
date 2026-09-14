@@ -312,6 +312,11 @@ export interface MaterializeSessionResult {
   ref: string;
   opIndex: number;
   sessionId: string;
+  /**
+   * True when the create door REUSED an open session of the same goal and
+   * scope (`status: "deduped"`) — not this run's row, never compensated.
+   */
+  linked?: boolean;
 }
 
 /** One session↔session edge a plan applied. */
@@ -504,7 +509,8 @@ export interface PlanCallers {
       subjectEntityId: string | null;
       projectId: string | null;
       expectedOutputs: Array<Record<string, unknown>>;
-    }) => Promise<{ id: string }>;
+      /** `linked` = the door reused an existing open session (never compensated). */
+    }) => Promise<{ id: string; linked?: boolean }>;
   };
   linkCaller: {
     create: (input: {
@@ -1307,7 +1313,12 @@ export async function materializeCompositeGraph(
           expectedOutputs: op.expectedOutputs ?? [],
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
-        sessionResults.push({ ref: op.ref, opIndex: i, sessionId: session.id });
+        sessionResults.push({
+          ref: op.ref,
+          opIndex: i,
+          sessionId: session.id,
+          ...(session.linked ? { linked: true } : {}),
+        });
       }
 
       // ── Plan pass P2 — SESSION EDGES (parent + blockers + link ops) ────

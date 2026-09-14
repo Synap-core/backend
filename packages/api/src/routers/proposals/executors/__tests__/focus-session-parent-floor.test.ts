@@ -33,9 +33,16 @@ vi.mock("@synap/database", async (importOriginal) => {
     },
     db: {
       select: () => {
+        // Two reads go through this chain: the proposal status (awaited at
+        // `.where`) and the executor's open-twin lookup (`.orderBy().limit()`),
+        // which finds no twin here so the insert — the subject of this suite —
+        // still runs.
         const b: Record<string, unknown> = {
           from: () => b,
-          where: async () => [{ status: "pending" }],
+          where: () =>
+            Object.assign(Promise.resolve([{ status: "pending" }]), {
+              orderBy: () => ({ limit: async () => [] }),
+            }),
         };
         return b;
       },

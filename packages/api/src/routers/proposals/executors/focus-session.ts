@@ -5,6 +5,7 @@ import {
   proposals,
   eq,
   focusSessions,
+  normalizeGoal,
   recordSessionSpawn,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -26,6 +27,7 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import { findOpenSessionTwin } from "../../../services/focus-sessions/find-open-session-twin.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -91,11 +93,88 @@ export function registerFocusSessionExecutors(): void {
         };
       }
 
+      // THE SAME TWIN QUESTION the direct door asks (`createFocusSession`),
+      // before this door inserts. Live, every duplicate pair was THIS insert
+      // plus a direct create of the same goal ms later: two doors, no shared
+      // answer. The proposal's correlation id is asked first (a retry of the
+      // same chain), then the open same-goal + same-scope twin. A hit LINKS the
+      // approval to the existing row — nothing is inserted, no edge or channel
+      // is written, and the receipt names the linked id (`primaryId`).
+      //
+      // A proposal's correlation id groups a whole request CHAIN, which can file
+      // several sessions. So the holder of that id is a twin only when it is
+      // the same user AND the same goal — a sibling on the chain is not a retry.
+      // `focus_sessions.correlation_id` is unique, so a sibling's id is not
+      // stamped again (the insert would hit the index and write nothing).
+      const correlationId = proposal.correlationId ?? null;
+      const correlationHolder = correlationId
+        ? await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.correlationId, correlationId),
+          })
+        : undefined;
+      const retryOfThisChain =
+        correlationHolder &&
+        correlationHolder.userId === userId &&
+        normalizeGoal(correlationHolder.goal) === normalizeGoal(goal)
+          ? correlationHolder
+          : undefined;
+      const twin =
+        retryOfThisChain ??
+        (
+          await findOpenSessionTwin({
+            userId,
+            goal,
+            workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId,
+            parentSessionId:
+              typeof innerData.parentSessionId === "string"
+                ? innerData.parentSessionId
+                : null,
+            templateId:
+              typeof innerData.templateId === "string"
+                ? innerData.templateId
+                : null,
+          })
+        ).exact;
+      if (twin) {
+        await db
+          .update(proposals)
+          .set({
+            status: ProposalStatus.APPROVED,
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          })
+          .where(eq(proposals.id, input.proposalId));
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return {
+          success: true,
+          primaryId: twin.id,
+          linked: 1,
+          effect: {
+            applied: "none",
+            reason:
+              `An open session with the same goal and scope already exists ` +
+              `(${twin.id}); the approval linked to it instead of inserting a second.`,
+          },
+        };
+      }
+
       const insertedSessions = await db
         .insert(focusSessions)
         .values({
           // id = proposal.targetId so any link built at propose time resolves.
           id: proposal.targetId,
+          // The proposal's chain id, so a later create on the same chain finds
+          // this row through the correlation idempotency instead of minting a
+          // twin (the create-session door has always stamped its own).
+          correlationId: correlationHolder ? null : correlationId,
           workspaceId: proposal.workspaceId,
           projectId: proposal.projectId,
           subjectEntityId:
@@ -304,6 +383,9 @@ export function registerFocusSessionExecutors(): void {
       );
       return {
         success: true,
+        // The inserted session's id, so the approve response can name the
+        // session instead of leaving the caller to guess (and re-create) it.
+        ...(created ? { primaryId: created.id } : {}),
         effect,
         ...(lineageRefusals.length > 0 ? { refusals: lineageRefusals } : {}),
       };

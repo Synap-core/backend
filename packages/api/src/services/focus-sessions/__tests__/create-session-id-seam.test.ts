@@ -54,6 +54,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     recordSessionSpawn: vi.fn(),
   };
 });
+// The dedup lookup has its own PGlite suite (`session-dedup.pglite.test.ts`);
+// here no twin exists, so the create reaches the id seam under test.
+vi.mock("../find-open-session-twin.js", () => ({
+  findOpenSessionTwin: vi.fn(async () => ({ exact: null, candidates: [] })),
+}));
 vi.mock("../../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: vi.fn(
     async (args: { data: Record<string, unknown> }) => {

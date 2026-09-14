@@ -168,6 +168,12 @@ const CreateBodySchema = z
      * reported per id on the response's `blockerLinks`.
      */
     blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
+    /**
+     * Open a NEW session even when an open session of the same goal and scope
+     * exists. Without it the response is that existing session, flagged
+     * `deduped: true` (near-goal sessions ride `dedupCandidates`).
+     */
+    forceCreate: z.boolean().optional(),
   })
   .refine((b) => !!b.workspaceId || !!b.projectId, {
     message: "Provide a workspaceId or a projectId",
@@ -805,7 +811,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
         blockedBySessionIds: body.blockedBySessionIds ?? [],
+        forceCreate: body.forceCreate,
       });
+
+      if (result.status === "deduped") {
+        // The EXISTING session, flagged — never silent. The row's own `status`
+        // is its lifecycle, so reuse rides as `deduped: true`.
+        return c.json({
+          ...result.session,
+          deduped: true,
+          ...(result.candidates.length > 0
+            ? { dedupCandidates: result.candidates }
+            : {}),
+        });
+      }
 
       if (result.status === "proposed") {
         return c.json({
@@ -821,6 +840,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
       return c.json({
         ...result.session,
+        ...(result.candidates ? { dedupCandidates: result.candidates } : {}),
         ...(result.blockGuidelines
           ? { blockGuidelines: result.blockGuidelines }
           : {}),

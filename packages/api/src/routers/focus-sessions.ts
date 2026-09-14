@@ -1069,6 +1069,12 @@ export const focusSessionsRouter = router({
          * the SAME predicate the output doors use.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /**
+         * Open a NEW session even when an open session of the same goal and
+         * scope exists. Without it the door returns that session, marked
+         * `deduped: true`.
+         */
+        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1107,12 +1113,25 @@ export const focusSessionsRouter = router({
         agentIds: input.agentIds,
         parentSessionId: input.parentSessionId ?? null,
         blockedBySessionIds: input.blockedBySessionIds ?? [],
+        forceCreate: input.forceCreate,
       });
-      if (result.status !== "created") {
+      if (result.status === "proposed") {
         throw new TRPCError({ code: "FORBIDDEN", message: result.message });
+      }
+      if (result.status === "deduped") {
+        // The EXISTING session — flagged, never silent. The row's own `status`
+        // is the session's lifecycle, so reuse rides as `deduped: true`.
+        return {
+          ...(result.session as FocusSession),
+          deduped: true as const,
+          ...(result.candidates.length > 0
+            ? { dedupCandidates: result.candidates }
+            : {}),
+        };
       }
       // Edge outcomes ride the returned row, only when they were asked for.
       return {
+        ...(result.candidates ? { dedupCandidates: result.candidates } : {}),
         ...(result.session as FocusSession),
         ...(result.parentLink ? { parentLink: result.parentLink } : {}),
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),

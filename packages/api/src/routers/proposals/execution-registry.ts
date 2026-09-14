@@ -81,6 +81,8 @@ type ProposalRow = {
   /** The owner floor (0248) — see `proposals.subjectUserId` in the schema. */
   subjectUserId?: string | null;
   sourceMessageId: string | null;
+  /** The request chain id (`proposals.correlation_id`). */
+  correlationId?: string | null;
   data: unknown;
 };
 

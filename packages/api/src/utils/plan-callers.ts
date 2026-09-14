@@ -145,12 +145,18 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
               }
             : {}),
         });
-        if (out.status !== "created") {
-          throw new Error(
-            `session "${input.title ?? input.goal}" was routed to a proposal instead of being created`
-          );
+        if (out.status === "created") {
+          return { id: out.session.id, linked: false };
         }
-        return { id: out.session.id };
+        // The door reuses an OPEN session of the same goal and scope. Not this
+        // run's row: it is reported `linked` and never compensated — the same
+        // contract as the project step above.
+        if (out.status === "deduped") {
+          return { id: out.session.id, linked: true };
+        }
+        throw new Error(
+          `session "${input.title ?? input.goal}" was routed to a proposal instead of being created`
+        );
       },
     },
 

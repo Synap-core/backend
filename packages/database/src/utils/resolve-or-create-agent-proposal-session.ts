@@ -29,7 +29,12 @@ export interface ResolveOrCreateAgentProposalSessionInput {
   stableCorrelation?: boolean;
 }
 
-function normalizeGoal(goal: string): string {
+/**
+ * The ONE goal normalization: collapse whitespace, trim, cap at 240. Exported
+ * because the session dedup door (`findOpenSessionTwin` in @synap/api) compares
+ * goals with it — a second normalizer would let two doors disagree on "same".
+ */
+export function normalizeGoal(goal: string): string {
   return goal.replace(/\s+/g, " ").trim().slice(0, 240);
 }
 

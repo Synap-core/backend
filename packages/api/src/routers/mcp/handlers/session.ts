@@ -192,7 +192,22 @@ export const sessionHandlers: McpHandlerMap = {
       blockedBySessionIds: Array.isArray(blockedByArg)
         ? (blockedByArg as string[])
         : [],
+      forceCreate: args.forceCreate === true,
     });
+    if (result.status === "deduped") {
+      // Said in words, not only as a status: an agent that reads "ok" here
+      // opens a second session for the same work — the duplicate this door
+      // exists to stop.
+      return ok({
+        status: "deduped",
+        message:
+          "An open session with this goal already exists in this scope — continue it (pass forceCreate: true only if this is genuinely separate work).",
+        session: result.session,
+        sessionId: result.session.id,
+        title: result.session.title,
+        candidates: result.candidates,
+      });
+    }
     return ok(result);
   },
   synap_complete_session: async (

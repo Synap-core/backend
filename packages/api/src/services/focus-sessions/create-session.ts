@@ -41,6 +41,10 @@ import {
   type CreateTimeBlockerReport,
 } from "./session-blocked-by.js";
 import {
+  findOpenSessionTwin,
+  type SessionTwinCandidate,
+} from "./find-open-session-twin.js";
+import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
@@ -123,6 +127,11 @@ export interface CreateFocusSessionParams {
    * the proposal and are written at approval.
    */
   blockedBySessionIds?: string[];
+  /**
+   * Open a NEW session even when an OPEN session of the same user, normalized
+   * goal and scope exists. Without it that session is returned as `deduped`.
+   */
+  forceCreate?: boolean;
 }
 
 /** What happened to the create-time `spawned_from` edge. */
@@ -149,6 +158,18 @@ export type CreateFocusSessionResult =
       parentLink?: CreateTimeParentLink;
       /** Present iff `blockedBySessionIds` was non-empty — one entry per id. */
       blockerLinks?: CreateTimeBlockerReport[];
+      /** Near-goal OPEN sessions in the same scope — suggested, never blocking. */
+      candidates?: SessionTwinCandidate[];
+    }
+  | {
+      /**
+       * An OPEN session of the same user, normalized goal and scope already
+       * existed, so THAT session is returned and nothing was written. Pass
+       * `forceCreate` to open a second one on purpose.
+       */
+      status: "deduped";
+      session: typeof focusSessions.$inferSelect;
+      candidates: SessionTwinCandidate[];
     }
   | {
       status: "proposed";
@@ -233,6 +254,29 @@ export async function createFocusSession(
       subjectEntityId,
     })
   ).projectId;
+
+  // DEDUP — the SAME question the approve executor asks before its insert
+  // (`findOpenSessionTwin`). Live, every duplicate pair was an approved
+  // proposal's session plus a direct create of the same goal ms later. An
+  // exact open twin (same user, normalized goal, scope) is RETURNED, flagged
+  // `deduped` — never silent, never merged. Near goals only ride `candidates`.
+  // After the project lens (the scope compares the DERIVED project) and before
+  // the membrane, so a twin never files a proposal for work that already exists.
+  const twinMatch = await findOpenSessionTwin({
+    userId,
+    goal,
+    workspaceId,
+    projectId,
+    parentSessionId,
+    templateId,
+  });
+  if (twinMatch.exact && !params.forceCreate) {
+    return {
+      status: "deduped",
+      session: twinMatch.exact,
+      candidates: twinMatch.candidates,
+    };
+  }
 
   // VISIBILITY FLOOR for any `ref` a declared slot carries — the SAME
   // `isOutputRefVisible` the attach-output and update doors apply, and BEFORE
@@ -514,5 +558,8 @@ export async function createFocusSession(
     ...(blockGuidelines ? { blockGuidelines } : {}),
     ...(parentLink ? { parentLink } : {}),
     ...(blockerLinks ? { blockerLinks } : {}),
+    ...(twinMatch.candidates.length > 0
+      ? { candidates: twinMatch.candidates }
+      : {}),
   };
 }
