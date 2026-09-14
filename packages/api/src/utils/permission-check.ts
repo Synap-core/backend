@@ -2520,11 +2520,15 @@ async function createPendingProposalRow(
   // Wave 2 — agent writes without a session get packaged into a focus session
   // (teammate metaphor). Humans and already-sessioned callers are untouched.
   // Never mint for focus_session self-writes (recursion). Best-effort.
+  // GUARD on `targetType` (the SUBJECT), not `proposalType`: this door is passed
+  // the bare ACTION ("create" / "update"), so the old `proposalType` test never
+  // fired — every agent session proposal also minted a junk "Start session …"
+  // package session. Same rule as the hoist in `checkPermissionOrPropose`.
   let sessionId = input.sessionId ?? null;
   if (
     input.agentUserId &&
     !sessionId &&
-    !input.proposalType.startsWith("focus_session")
+    !input.targetType.startsWith("focus_session")
   ) {
     try {
       sessionId = await resolveOrCreateAgentProposalSession({
