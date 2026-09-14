@@ -21,10 +21,14 @@ import type { Capability } from "@synap/playbooks";
 import {
   projectRunnableActions,
   runnableVerbIdsByContainer,
+  type ProjectableCapability,
 } from "./action-projection.js";
 import { capabilityNextAction } from "./capability-enable-link.js";
 
-type Row = Capability & { containerId?: string | null; runnable?: boolean };
+type Row = ProjectableCapability & {
+  containerId?: string | null;
+  runnable?: boolean;
+};
 
 function skill(
   id: string,
@@ -39,6 +43,7 @@ function skill(
     inputSchema: {},
     executor: "is-agent",
     governance: "auto",
+    enabled: true,
     containerId,
     runnable: true,
     ...over,
@@ -59,6 +64,7 @@ function tool(
     inputSchema: {},
     executor: "provider",
     governance: "auto",
+    enabled: true,
     containerId,
     verbs: [
       {
@@ -128,8 +134,8 @@ describe("ready card nextAction is judged by the runnable projection", () => {
     expect(nextFor([skill("channel.create", "core")], "core").kind).toBe("run");
   });
 
-  it("a ready pack whose skills are unapproved (governance propose) has no row → none, not run", () => {
-    const next = nextFor([skill("s1", "p1", { governance: "propose" })], "p1");
+  it("a ready pack whose skills are unapproved (enabled:false) has no row → none, not run", () => {
+    const next = nextFor([skill("s1", "p1", { enabled: false })], "p1");
     expect(next.kind).toBe("none");
     expect(next.hint).toContain("none can be launched");
     // Still links to the card — the place a human can look into it.
@@ -162,7 +168,7 @@ describe("ready card nextAction is judged by the runnable projection", () => {
   it("rows are attributed per container — another pack's runnable row never lends run", () => {
     const rows = [
       skill("good", "other"),
-      skill("bad", "p4", { governance: "propose" }),
+      skill("bad", "p4", { enabled: false }),
     ];
     expect([...runnableVerbIdsByContainer(rows).keys()]).toEqual(["other"]);
     expect(nextFor(rows, "p4").kind).toBe("none");

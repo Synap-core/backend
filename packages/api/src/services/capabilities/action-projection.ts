@@ -8,6 +8,8 @@
  * the single projection used by MCP and Hub REST clients.
  */
 import type { Capability } from "@synap/playbooks";
+import { verbType } from "./capability-catalog.js";
+import { runPosture } from "./run-posture.js";
 
 export interface RunnableActionConnection {
   required: boolean;
@@ -24,8 +26,13 @@ export interface RunnableCapabilityAction {
   tool: string | null;
   /** This projection never emits a disconnected action; included for UI truth. */
   connection?: RunnableActionConnection;
-  /** Capability approval state as reflected by the registry. */
+  /**
+   * Run posture — what running this action does for an agent: `auto` runs now,
+   * `propose` files a review. Derived by `runPosture`, never the approval gate.
+   */
   governance: "auto" | "propose";
+  /** The enable/approval gate. Always true here: unapproved rows are omitted. */
+  enabled: true;
   /** The active grant's execution mode where a tool verb has one. */
   executionMode?: string;
   /**
@@ -60,10 +67,13 @@ function inputSchema(value: unknown): Record<string, unknown> {
  * all, so it must not be advertised as one.
  */
 export function projectRunnableActions(
-  capabilities: Capability[]
+  capabilities: ProjectableCapability[]
 ): RunnableCapabilityAction[] {
   return projectWithSource(capabilities).map((row) => row.action);
 }
+
+/** A registry row as the projection reads it: `enabled` is the approval gate. */
+export type ProjectableCapability = Capability & { enabled: boolean };
 
 /**
  * The projection, with each action paired to the registry row that produced it
@@ -71,7 +81,7 @@ export function projectRunnableActions(
  * rule. `projectRunnableActions` is exactly this, minus the source.
  */
 function projectWithSource(
-  capabilities: Capability[]
+  capabilities: ProjectableCapability[]
 ): Array<{ action: RunnableCapabilityAction; source: Capability }> {
   const actions: Array<{
     action: RunnableCapabilityAction;
@@ -91,9 +101,11 @@ function projectWithSource(
   }
 
   for (const capability of capabilities) {
+    // `enabled` is the approval gate; `governance` is the run posture and says
+    // nothing about whether the gate would refuse the row outright.
     if (
       capability.catalogOnly ||
-      capability.governance !== "auto" ||
+      capability.enabled !== true ||
       (capability as Capability & { runnable?: boolean }).runnable === false
     ) {
       continue;
@@ -126,7 +138,15 @@ function projectWithSource(
           description: capability.description,
           tool: capability.name,
           ...(projectedConnection ? { connection: projectedConnection } : {}),
-          governance: capability.governance,
+          // `capability.governance` is the approval gate (constant `auto` past
+          // the filter above) — never the per-run posture.
+          governance: runPosture({
+            verbId: verb.id,
+            skillKind: capability.kind === "builtin-tool" ? "builtin" : null,
+            granted: verb.granted,
+            execMode: verb.effectiveExecMode,
+          }),
+          enabled: true,
           ...(verb.effectiveExecMode
             ? { executionMode: verb.effectiveExecMode }
             : {}),
@@ -144,13 +164,17 @@ function projectWithSource(
     // carry BOTH ids: `skillId`, and `verbId` = the skill NAME — the same key the
     // catalog card's verb and the execute door's `verbId` resolve by (live, all
     // 33 Synap Core verbs were projected with no `verbId`, so nothing could match
-    // them by name). Teaching docs intentionally have governance "none" and are
-    // already excluded above.
+    // them by name). Teaching docs are kind `teaching-doc`, never `skill`, so
+    // this arm cannot reach them.
     if (
       capability.kind === "skill" &&
       (capability.verbs?.length ?? 0) === 0 &&
       !toolVerbIds.has(capability.name)
     ) {
+      const skill = capability as Capability & {
+        skillKind?: string | null;
+        skillMetadata?: Record<string, unknown> | null;
+      };
       actions.push({
         source: capability,
         action: {
@@ -159,7 +183,25 @@ function projectWithSource(
           label: capability.name,
           description: capability.description,
           tool: null,
-          governance: capability.governance,
+          // A skill-only row carries no grant state: unknown reads as none.
+          governance: runPosture({
+            verbId: capability.name,
+            skillKind: skill.skillKind,
+          }),
+          enabled: true,
+          // Direction for the Synap Core builtins too — the same `verbType` the
+          // catalog card uses. Omitted for a non-builtin skill with no
+          // explicit type: a name heuristic is not a fact about a code skill.
+          ...(skill.skillKind === "builtin" ||
+          typeof skill.skillMetadata?.verbType === "string"
+            ? {
+                kind: verbType(
+                  capability.name,
+                  skill.skillMetadata,
+                  skill.skillKind
+                ),
+              }
+            : {}),
           parameters: inputSchema(capability.inputSchema),
         },
       });
@@ -178,7 +220,7 @@ function projectWithSource(
  * say `run`. A brick in no container belongs to no card.
  */
 export function runnableVerbIdsByContainer(
-  capabilities: Array<Capability & { containerId?: string | null }>
+  capabilities: Array<ProjectableCapability & { containerId?: string | null }>
 ): Map<string, Set<string>> {
   const byContainer = new Map<string, Set<string>>();
   for (const { action, source } of projectWithSource(capabilities)) {
@@ -187,6 +229,30 @@ export function runnableVerbIdsByContainer(
     const ids = byContainer.get(containerId) ?? new Set<string>();
     ids.add(action.verbId);
     byContainer.set(containerId, ids);
+  }
+  return byContainer;
+}
+
+/**
+ * The run posture of each launchable verb, per capability CONTAINER — the same
+ * projection and attribution as `runnableVerbIdsByContainer`, carrying the
+ * action's `governance`. The catalog card labels its verbs from this, so a pack
+ * card and `GET /capabilities/actions` can never disagree for one lens. A verb
+ * id projected twice into one container keeps `propose` if either copy does.
+ */
+export function runPostureByContainer(
+  capabilities: Array<ProjectableCapability & { containerId?: string | null }>
+): Map<string, Map<string, "auto" | "propose">> {
+  const byContainer = new Map<string, Map<string, "auto" | "propose">>();
+  for (const { action, source } of projectWithSource(capabilities)) {
+    const containerId = (source as { containerId?: string | null }).containerId;
+    if (!containerId || !action.verbId) continue;
+    const postures = byContainer.get(containerId) ?? new Map();
+    postures.set(
+      action.verbId,
+      postures.get(action.verbId) === "propose" ? "propose" : action.governance
+    );
+    byContainer.set(containerId, postures);
   }
   return byContainer;
 }

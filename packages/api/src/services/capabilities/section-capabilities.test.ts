@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { sectionCapabilities } from "./capability-registry.js";
+import {
+  sectionCapabilities,
+  type RegistryCapability,
+} from "./capability-registry.js";
 import type { Capability, CapabilityVerbState } from "@synap/playbooks";
 
 /**
@@ -25,15 +28,20 @@ function verb(id: string, granted = false): CapabilityVerbState {
 }
 
 function cap(
-  partial: Partial<Capability> & { kind: Capability["kind"]; name: string }
-): Capability {
+  partial: Partial<RegistryCapability> & {
+    kind: Capability["kind"];
+    name: string;
+  }
+): RegistryCapability {
   return {
     id: partial.id ?? `id-${partial.name}`,
     inputSchema: {},
     executor: "is-agent",
     governance: "propose",
+    // The approval gate; `governance` was read as approval before 2026-09-14.
+    enabled: false,
     ...partial,
-  } as Capability;
+  } as RegistryCapability;
 }
 
 describe("sectionCapabilities", () => {
@@ -110,7 +118,7 @@ describe("sectionCapabilities", () => {
       {
         ...cap({ kind: "skill", name: "broken", id: "c" }),
         runnable: false,
-      } as Capability,
+      } as RegistryCapability,
     ]);
     expect(out.skills.map((s) => s.name)).toEqual(["ingest_message"]);
   });
@@ -230,7 +238,7 @@ describe("sectionCapabilities", () => {
         ...cap({ kind: "source-provider", name: "google", id: "tool-1" }),
         containerId: "cap-1",
         containerName: "Google Workspace",
-      } as Capability,
+      } as RegistryCapability,
     ]);
     expect(out.integrations[0].id).toBe("tool-1");
     expect(out.integrations[0].containerId).toBe("cap-1");
@@ -254,7 +262,7 @@ describe("sectionCapabilities", () => {
         ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
         containerId: "cap-2",
         containerName: "Inbox",
-      } as Capability,
+      } as RegistryCapability,
     ]);
     expect(out.skills[0].containerId).toBe("cap-2");
     expect(out.skills[0].containerName).toBe("Inbox");
@@ -267,7 +275,7 @@ describe("sectionCapabilities", () => {
         ...cap({ kind: "source-provider", name: "google", id: "tool-b" }),
         containerId: "cap-1",
         containerName: "Google Workspace",
-      } as Capability,
+      } as RegistryCapability,
     ]);
     expect(out.integrations).toHaveLength(1);
     expect(out.integrations[0].id).toBe("tool-a"); // representative row
@@ -310,7 +318,7 @@ describe("sectionCapabilities", () => {
       {
         ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
         runnable: true,
-      } as Capability,
+      } as RegistryCapability,
       cap({ kind: "tool", name: "exa_api", id: "tool-1" }),
     ];
     const out = sectionCapabilities(caps, { limit: 2 });
@@ -326,7 +334,7 @@ describe("sectionCapabilities", () => {
       {
         ...cap({ kind: "skill", name: "ingest_message", id: "skill-1" }),
         runnable: true,
-      } as Capability,
+      } as RegistryCapability,
       cap({ kind: "tool", name: "exa_api", id: "tool-1" }),
     ];
     const out = sectionCapabilities(caps);
@@ -344,7 +352,7 @@ describe("sectionCapabilities", () => {
       {
         ...cap({ kind: "skill", name: "ingest_message" }),
         runnable: true,
-      } as Capability,
+      } as RegistryCapability,
       cap({ kind: "command", name: "digest" }),
     ];
     const out = sectionCapabilities(caps);

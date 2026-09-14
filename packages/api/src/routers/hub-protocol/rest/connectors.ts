@@ -1340,6 +1340,10 @@ export function registerConnectorsRoutes(app: HubHono): void {
             error: result.error ?? "Unknown error",
             ...(result.errorClass ? { errorClass: result.errorClass } : {}),
             ...(result.providerRef ? { providerRef: result.providerRef } : {}),
+            // An agent refused on a not-enabled tool: the enable request it filed.
+            ...(result.enableProposal
+              ? { enableProposal: result.enableProposal }
+              : {}),
           },
           code
         );

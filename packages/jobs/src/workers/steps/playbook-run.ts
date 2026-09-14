@@ -324,6 +324,9 @@ export async function executePlaybookRun(
     params: resolvedParams,
     subjectId: resolvedSubjectId,
     idempotentBySubject: true,
+    // No caller to ask: a not-enabled skill fails this step with the reason and
+    // files the enable request for the owner (D3).
+    unenabledSkillPreflight: true,
     agentType: data.agentType,
     goalResolver,
     // The `@{arg:...}` half of the goal grammar. `goalResolver` speaks only

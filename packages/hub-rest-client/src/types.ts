@@ -1457,7 +1457,11 @@ export interface HubCapability {
   kind?: string;
   description?: string | null;
   verbs?: HubCapabilityVerb[];
-  governance?: Record<string, unknown>;
+  /** Run posture for an agent: `auto` runs now, `propose` files a review,
+   *  `none` nothing here runs through the execute door. Not approval. */
+  governance?: "auto" | "propose" | "none";
+  /** The approval gate (the row's `approved` column). */
+  enabled?: boolean;
   approved?: boolean;
   [key: string]: unknown;
 }
@@ -1490,7 +1494,10 @@ export interface HubCapabilityCatalogCard {
     verbId: string;
     label: string;
     type: "read" | "write";
+    /** The enable/approval gate (backing skill approved). */
     enabled: boolean;
+    /** Run posture for an agent: `auto` runs now, `propose` files a review.
+     *  Honours the lens's grant; not approval (that is `enabled`). */
     governance: "auto" | "propose";
     runnable: boolean;
   }>;
@@ -1524,10 +1531,13 @@ export interface HubRunnableCapabilityAction {
     state: "connected";
     provider: string;
   };
-  governance: "auto";
+  /** Run posture: `auto` runs now, `propose` files a review. Not approval. */
+  governance: "auto" | "propose";
+  /** The enable/approval gate — always true here (drafts are omitted). */
+  enabled: true;
   executionMode?: string;
-  /** Direction axis of a tool verb — read = pull, write/action = push. Absent
-   *  for a skill-only action (honest-unknown, never defaulted). */
+  /** Direction axis — read = pull, write/action = push. Absent only for a
+   *  non-builtin skill-only action (honest-unknown, never defaulted). */
   kind?: "read" | "write" | "action";
   /** Vendor-independent routing intent (ABSTRACT_VERBS). Absent when the verb
    *  fits none of the closed values, or for a skill-only action. */

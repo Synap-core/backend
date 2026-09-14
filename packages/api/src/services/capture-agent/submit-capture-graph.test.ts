@@ -94,6 +94,15 @@ describe("submitCaptureGraph — workspace placement routing", () => {
       ProfileResolutionService.prototype,
       "resolveProfile"
     ).mockResolvedValue(null as any);
+    // A resolved home runs the scope-aware home stamp, which reads each kind's
+    // entity scope. Stubbed at the same boundary as `resolveProfile`, so this
+    // suite stays DB-free (it had been reaching Postgres through this read).
+    vi.spyOn(
+      ProfileResolutionService.prototype,
+      "getEntityScope"
+    ).mockImplementation(async (slug: string) =>
+      slug === "lead" ? "workspace" : "pod"
+    );
   });
 
   it("resolves a person/company/lead graph into the ontology-implied workspace (deterministic single candidate)", async () => {
@@ -103,7 +112,19 @@ describe("submitCaptureGraph — workspace placement routing", () => {
         await import("../../utils/event-backed-proposal.js"),
         "createEventBackedProposal"
       )
-      .mockResolvedValue({ proposal: { id: "proposal-1" } } as any);
+      // The row AS INSERTED: the receipt's effective workspace is read back off
+      // the stored proposal (`storedScopeOfProposal`), never echoed from input.
+      .mockImplementation(
+        async (row: any) =>
+          ({
+            proposal: {
+              id: "proposal-1",
+              workspaceId: row.workspaceId ?? null,
+              projectId: row.projectId ?? null,
+              sessionId: row.sessionId ?? null,
+            },
+          }) as any
+      );
 
     const result = await submitCaptureGraph({
       userId: "user-1",
@@ -131,6 +152,16 @@ describe("submitCaptureGraph — workspace placement routing", () => {
       expect.objectContaining({ workspaceId: "ws-crm" })
     );
     expect(result.writeReceipt.effectiveWorkspaceId).toBe("ws-crm");
+    // Scope-aware homes: the process kind is pinned to the graph home; the
+    // pod-scope identities (person, company) stay unpinned.
+    const ops = (
+      spy.mock.calls[0]![0] as unknown as {
+        data: { operations: Array<Record<string, unknown>> };
+      }
+    ).data.operations.filter((o) => o.op === "create_entity");
+    expect(
+      Object.fromEntries(ops.map((o) => [o.ref, o.targetWorkspaceId ?? null]))
+    ).toEqual({ p1: null, c1: null, l1: "ws-crm" });
   });
 
   it("abstains (stays pod-wide null) when placement is ambiguous — never guesses", async () => {

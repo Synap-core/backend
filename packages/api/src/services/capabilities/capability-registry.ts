@@ -53,6 +53,11 @@ import type {
 } from "@synap/playbooks";
 import { getDefaultActiveService } from "@synap/intelligence-client";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
+import {
+  capabilityRowPosture,
+  runPosture,
+  type RunPosture,
+} from "./run-posture.js";
 import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
@@ -149,6 +154,20 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
    * row nothing can open. `null` for a legacy row that predates the column.
    */
   slug?: string | null;
+  /**
+   * `skills.kind` (`builtin` | `code` | `declarative`) and `skills.metadata` of
+   * a runnable `skill` row — the facts `runPosture` classifies a verb from.
+   * Absent on every other kind.
+   */
+  skillKind?: string | null;
+  skillMetadata?: Record<string, unknown> | null;
+  /**
+   * The approval gate: the row's `approved` column. `true` for kinds with no
+   * approval column (commands, IS-native tools) — the gate's approval step does
+   * not refuse them (`approved === null`). `governance` is the RUN POSTURE
+   * (`capabilityRowPosture`), never this.
+   */
+  enabled: boolean;
 };
 
 // ── Container membership (derived per read, batched) ──────────────────────────
@@ -267,23 +286,6 @@ function asInputSchema(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-}
-
-/**
- * Derive the read-model `governance` from a capability row's persisted
- * `approved` state instead of a hardcoded literal (C-DEAD-3). This is a
- * DISCOVERY read-model, NOT enforcement (the real gate is `decideAgentPolicy`
- * rung 2.6 + `gate-capability-execution.ts`), so it is intentionally minimal:
- *   - UNAPPROVED (born `false`) → "propose" — never auto-runnable, needs review;
- *   - APPROVED                  → "auto"    — operator-approved capability.
- * The point is to STOP hardcoding `"propose"`: the value now reflects the row.
- * The grant's per-grant exec-mode still narrows this at the gate (an approved
- * capability granted "propose-each" is proposed per run regardless).
- */
-function deriveGovernance(
-  approved: boolean | null | undefined
-): "auto" | "propose" {
-  return approved ? "auto" : "propose";
 }
 
 /** Minimal duck-typed shape a Zod field exposes — avoids importing full ZodTypeAny. */
@@ -506,10 +508,9 @@ async function fetchISNativeCapabilities(): Promise<Capability[]> {
       description: t.description ?? null,
       inputSchema: {},
       executor: "is-agent" as ExecutorRef,
-      // Conservative default (like commands): IS-native tools route through a
-      // proposal until per-tool read/write governance is modeled. Actual
-      // execution is gated separately by the capability gate regardless.
-      governance: deriveGovernance(undefined),
+      // Run posture: catalog-only, so nothing runs through the execute door
+      // (`capabilityRowPosture` stamps the same `none` on the listed row).
+      governance: "none",
       // IS-native tools are discoverable but NOT invokable through this door yet
       // (no run_capability bridge to the IS's in-process tool registry — recon-
       // verified they 404). Flagged explicitly so consumers (the MCP `runnable`
@@ -716,7 +717,9 @@ export async function listCapabilities(
     description: row.description ?? null,
     inputSchema: asInputSchema(row.inputSchema),
     executor: row.executor as ExecutorRef,
-    governance: deriveGovernance(row.approved),
+    // Run posture, stamped once every row is built (below).
+    governance: "none",
+    enabled: row.approved === true,
     containerId:
       containerByMember.get(containerMemberKey("tool", row.id))?.id ?? null,
     containerName:
@@ -758,6 +761,7 @@ export async function listCapabilities(
           inputSchema: asInputSchema(row.parameters),
           executor: "is-agent",
           governance: "none",
+          enabled: row.approved === true,
         }
       : {
           kind: "skill",
@@ -766,7 +770,12 @@ export async function listCapabilities(
           description: row.description ?? null,
           inputSchema: asInputSchema(row.parameters),
           executor: "is-agent",
-          governance: deriveGovernance(row.approved),
+          // Run posture, stamped once every row is built (below).
+          governance: "none",
+          enabled: row.approved === true,
+          skillKind: row.kind,
+          skillMetadata:
+            (row.metadata as Record<string, unknown> | null) ?? null,
           containerId:
             containerByMember.get(containerMemberKey("skill", row.id))?.id ??
             null,
@@ -802,21 +811,19 @@ export async function listCapabilities(
     // a `derivedInputs` key (the contract's inputSchema is an open record).
     inputSchema: { derivedInputs: row.derivedInputs ?? [] },
     executor: "is-agent",
-    // intelligence_commands has no `approved` column → always the conservative
-    // needs-review default (no row state to derive from yet).
-    governance: deriveGovernance(undefined),
+    governance: "none",
   }));
 
   // IS-native tools, fetched (cached) from the IS manifest endpoint — see
   // fetchISNativeCapabilities above. Graceful: [] when the IS is unreachable.
   const builtinCaps: Capability[] = await fetchISNativeCapabilities();
 
-  const all: RegistryCapability[] = [
-    ...builtinCaps,
-    ...toolCaps,
-    ...skillCaps,
-    ...commandCaps,
-  ];
+  const all = assembleRegistryRows({
+    builtinCaps,
+    toolCaps,
+    skillCaps,
+    commandCaps,
+  });
 
   let result = all;
   if (opts?.kind) result = result.filter((c) => c.kind === opts.kind);
@@ -842,6 +849,28 @@ export async function listCapabilities(
   return result;
 }
 
+/**
+ * The flat registry's final rows. `governance` on every row is the RUN POSTURE
+ * (`capabilityRowPosture`), stamped from the facts each row carries; `enabled` is
+ * the approval gate. Commands and IS-native tools have no `approved` column, so
+ * the gate's approval step does not refuse them (`approved === null`) →
+ * `enabled: true`. Pure and exported so the flat door's label is tested at the
+ * seam that stamps it.
+ */
+export function assembleRegistryRows(parts: {
+  builtinCaps: Capability[];
+  toolCaps: RegistryCapability[];
+  skillCaps: RegistryCapability[];
+  commandCaps: Capability[];
+}): RegistryCapability[] {
+  return [
+    ...parts.builtinCaps.map((c) => ({ ...c, enabled: true })),
+    ...parts.toolCaps,
+    ...parts.skillCaps,
+    ...parts.commandCaps.map((c) => ({ ...c, enabled: true })),
+  ].map((c) => ({ ...c, governance: capabilityRowPosture(c) }));
+}
+
 // ── Sectioned, deduped view (agent-facing "what can I DO") ────────────────────
 /**
  * The agent-facing projection of the flat capability list: real, distinct,
@@ -862,6 +891,17 @@ export async function listCapabilities(
  * section (a UI renders it collapsed), each row carrying `runnableHere` so a
  * flow-node picker can filter on a fact instead of on the section's name. Only
  * `teaching-doc`s are still folded out — prompt prose is not a brick at all.
+ */
+/** A verb row in a section, with its own run posture (see `runPosture`). */
+export type SectionVerb = CapabilityVerbStateWithResponseShape & {
+  governance?: RunPosture;
+};
+
+/**
+ * `governance` on every section row is the RUN POSTURE (`runPosture`): what an
+ * agent's run experiences — `auto` runs now, `propose` files a review, `none`
+ * nothing runnable. A multi-verb row is `auto` only when EVERY verb is. The
+ * enable/approval gate is `enabled`, a separate fact, never `governance`.
  */
 export interface SectionedCapabilities {
   /** Integrations (Nango providers + API/MCP tools), one per name, verbs nested. */
@@ -885,9 +925,11 @@ export interface SectionedCapabilities {
     kind: CapabilityKind;
     description: string | null;
     governance: "auto" | "propose" | "none";
+    /** Operator approval of the tool row (any same-named copy approved). */
+    enabled: boolean;
     connection?: { required: boolean; connected: boolean; provider: string };
     /** Verb rows incl. the declarative subset's `responseShape` (what it returns). */
-    verbs: CapabilityVerbStateWithResponseShape[];
+    verbs: SectionVerb[];
     /**
      * What is BLOCKING this integration and the link to where a human unblocks
      * it — `connect` (dead/absent account) or `enable` (unapproved verbs), never
@@ -909,6 +951,8 @@ export interface SectionedCapabilities {
     name: string;
     description: string | null;
     governance: "auto" | "propose" | "none";
+    /** Operator approval of the skill row. */
+    enabled: boolean;
     /** Owning capability container, or `null` for an un-packaged skill. */
     containerId: string | null;
     /** Display name of `containerId`'s container; null when it has none. */
@@ -944,8 +988,10 @@ export interface SectionedCapabilities {
      * back. A picker must offer a built-in as a step only when this is `true`.
      */
     runnableHere: boolean;
+    /** Operator approval of the row (any same-named copy approved). */
+    enabled: boolean;
     /** Verb catalog where the row carries one; `[]` for IS-native manifest tools. */
-    verbs: CapabilityVerbStateWithResponseShape[];
+    verbs: SectionVerb[];
   }>;
   /**
    * Honest accounting of what was folded out of this view. Built-ins are NOT
@@ -1002,11 +1048,14 @@ export function sectionCapabilities(
           id: c.id,
           name: c.name,
           description: c.description ?? null,
-          governance: c.governance,
+          // Run posture, stamped after the merge below.
+          governance: "none",
+          enabled: c.enabled,
           runnableHere: c.catalogOnly !== true,
           verbs: [...(c.verbs ?? [])],
         });
       } else {
+        existing.enabled = existing.enabled || c.enabled;
         // Same built-in described twice: union the verbs and let the runnable
         // copy win — the merge must never DOWNGRADE a launchable brick, and
         // never UPGRADE a catalog-only one.
@@ -1037,12 +1086,15 @@ export function sectionCapabilities(
           name: c.name,
           kind: c.kind,
           description: c.description ?? null,
-          governance: c.governance,
+          // Run posture, stamped after the merge below.
+          governance: "none",
+          enabled: c.enabled,
           ...(c.connection ? { connection: c.connection } : {}),
           verbs: [...(c.verbs ?? [])],
           ...(c.match ? { match: c.match } : {}),
         });
       } else {
+        existing.enabled = existing.enabled || c.enabled;
         // Duplicate rows of the SAME integration (the pod had e.g. `discord` ×5,
         // `google` connected+disconnected): union the verbs (prefer a granted
         // copy), OR the connected flag up, keep the first non-empty description.
@@ -1081,7 +1133,8 @@ export function sectionCapabilities(
           id: c.id,
           name: c.name,
           description: c.description ?? null,
-          governance: c.governance,
+          governance: runPosture({ verbId: c.name, skillKind: c.skillKind }),
+          enabled: c.enabled,
           containerId: c.containerId ?? null,
           containerName: c.containerName ?? null,
           ...(c.match ? { match: c.match } : {}),
@@ -1115,6 +1168,12 @@ export function sectionCapabilities(
   // — so a pre-merge read would report `connect`/`enable` against state the
   // caller never sees, and could point at a container id that only became known
   // one row later.
+  // Run posture per verb, then per row — after the merge, so a verb unioned in
+  // from a duplicate row is classified too. A builtin-tool's verbs are builtin
+  // skills; an integration's are not.
+  for (const row of integrations.values()) stampRunPosture(row, null);
+  for (const row of builtinByName.values()) stampRunPosture(row, "builtin");
+
   for (const row of integrations.values()) {
     const blocked = resolveCapabilityBlock({
       name: row.name,
@@ -1123,11 +1182,9 @@ export function sectionCapabilities(
       // Grants are issued per TOOL today, so every verb shares one grant state
       // (`buildVerbStates`). "Any verb granted" is therefore the honest read of
       // "can anything here run"; a verbless row falls back to the row's own
-      // approval, which is what `governance` is derived from.
+      // approval.
       enabled:
-        row.verbs.length > 0
-          ? row.verbs.some((v) => v.granted)
-          : row.governance === "auto",
+        row.verbs.length > 0 ? row.verbs.some((v) => v.granted) : row.enabled,
     });
     if (blocked) row.blocked = blocked;
   }
@@ -1137,7 +1194,7 @@ export function sectionCapabilities(
     const blocked = resolveCapabilityBlock({
       name: row.name,
       containerId: row.containerId,
-      enabled: row.governance === "auto",
+      enabled: row.enabled,
     });
     if (blocked) row.blocked = blocked;
   }
@@ -1152,6 +1209,29 @@ export function sectionCapabilities(
 
   if (typeof opts?.limit !== "number") return full;
   return capSectionsByRank(full, caps, opts.limit);
+}
+
+/** Stamp each verb's run posture and fold the row's: `auto` only when every
+ *  verb runs now, `none` when the row has no verb to run. */
+function stampRunPosture(
+  row: { verbs: SectionVerb[]; governance: "auto" | "propose" | "none" },
+  skillKind: "builtin" | null
+): void {
+  row.verbs = row.verbs.map((v) => ({
+    ...v,
+    governance: runPosture({
+      verbId: v.id,
+      skillKind,
+      granted: v.granted,
+      execMode: v.effectiveExecMode,
+    }),
+  }));
+  row.governance =
+    row.verbs.length === 0
+      ? "none"
+      : row.verbs.every((v) => v.governance === "auto")
+        ? "auto"
+        : "propose";
 }
 
 /** The dedupe identity `sectionCapabilities` folds each `caps` row onto, or

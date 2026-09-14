@@ -82,7 +82,12 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
-vi.mock("@synap/database", () => ({
+// importOriginal + spread, never a total mock: the webhook's raw door
+// (`stageCaptureSources` → stage-intake-source → known-source-hashes) reads
+// barrel exports (`ProposalStatus`) this list never named, and a total factory
+// dies at COLLECTION the moment any import graph grows (ratchet tripwire).
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     query: {
       webhookSubscriptions: {
@@ -131,6 +136,12 @@ vi.mock("../services/connectors/inbound-recorder.js", () => ({
     recordInboundMessageMock(...args),
 }));
 const submitCaptureGraphMock = vi.fn();
+// The raw door's own behaviour is proven on PGlite (intake/__tests__); here only
+// that the Cal.com lane reaches it — with what — BEFORE anything is filed.
+const stageCaptureSourcesMock = vi.fn();
+vi.mock("../services/intake/record-structure-intake.js", () => ({
+  stageCaptureSources: (...args: unknown[]) => stageCaptureSourcesMock(...args),
+}));
 vi.mock("../services/capture-agent/submit-capture-graph.js", () => ({
   submitCaptureGraph: (...args: unknown[]) => submitCaptureGraphMock(...args),
 }));
@@ -615,6 +626,12 @@ describe("cal.com inbound webhook", () => {
   beforeEach(() => {
     submitCaptureGraphMock.mockClear();
     submitCaptureGraphMock.mockResolvedValue({ proposalId: "p-1" });
+    stageCaptureSourcesMock.mockReset();
+    stageCaptureSourcesMock.mockResolvedValue({
+      sourceDocumentIds: ["raw-1"],
+      attempted: 1,
+      errors: [],
+    });
     vaultSecret = CAL_SIGNING_KEY;
     toolRow = {
       id: "tool-cal",
@@ -655,6 +672,48 @@ describe("cal.com inbound webhook", () => {
     // Byte-identical to what Cal.com sent, not the lossy mapped graph.
     expect(arg.rawSource!.rawText).toBe(body);
     expect(arg.rawSource!.mimeType).toBe("application/json");
+
+    // The RAW capture (founder rule 2026-09-14): the body is kept through the
+    // one raw door, owned by the tool's HUMAN owner, BEFORE the proposal is
+    // filed — and the proposal names it. rawSource above is a bounded copy.
+    expect(stageCaptureSourcesMock).toHaveBeenCalledTimes(1);
+    expect(stageCaptureSourcesMock.mock.calls[0]![0]).toMatchObject({
+      userId: OWNER_ID,
+      workspaceId: WS_ID,
+      door: "calcom.webhook",
+      externalRef: "bk-1",
+      source: { text: body },
+    });
+    expect(stageCaptureSourcesMock.mock.invocationCallOrder[0]).toBeLessThan(
+      submitCaptureGraphMock.mock.invocationCallOrder[0]!
+    );
+    expect(
+      (
+        submitCaptureGraphMock.mock.calls[0]![0] as {
+          sourceDocumentIds?: string[];
+        }
+      ).sourceDocumentIds
+    ).toEqual(["raw-1"]);
+  });
+
+  it("a body whose raw could NOT be kept files nothing and is deferred, never marked handled", async () => {
+    // `markSeen` stops Cal.com retrying — so a booking whose raw was lost must
+    // not be acked as handled; the backfill retries it.
+    stageCaptureSourcesMock.mockResolvedValueOnce({
+      sourceDocumentIds: [],
+      attempted: 1,
+      errors: ["source text: storage down"],
+    });
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      payload: { uid: "bk-3", title: "Lost raw" },
+    });
+
+    const res = await postCalcom(CAL_TOKEN, body);
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ received: true, deferred: true });
+    expect(submitCaptureGraphMock).not.toHaveBeenCalled();
   });
 
   it("rejects a tampered signature and never files a proposal", async () => {

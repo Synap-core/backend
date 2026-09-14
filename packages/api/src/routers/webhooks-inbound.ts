@@ -24,6 +24,7 @@ import { MessagingAccountService } from "../services/messaging-account-service.j
 import { recordInboundMessage } from "../services/connectors/inbound-recorder.js";
 import { markWebhookSeen } from "../services/connectors/mark-webhook-seen.js";
 import { submitCaptureGraph } from "../services/capture-agent/submit-capture-graph.js";
+import { stageCaptureSources } from "../services/intake/record-structure-intake.js";
 import { getCaptureAgentUserId } from "../services/capture-agent/ensure-capture-agent.js";
 import {
   mapBookingToGraph,
@@ -271,7 +272,26 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
     if (trigger === "BOOKING_CREATED") {
       const actor = (await getCaptureAgentUserId()) ?? ownerUserId;
       const { entities: graphEntities, relations } = mapBookingToGraph(payload);
+      // The RAW door: the verified body is staged as a capture source owned by
+      // the tool's HUMAN owner BEFORE anything is filed. `markSeen` stops Cal.com
+      // retrying, so a body we could not store must NOT be marked handled — the
+      // throw lands in the catch below (deferred, backfill retries).
+      const rawStaged = await stageCaptureSources({
+        database: db,
+        userId: ownerUserId,
+        workspaceId,
+        sessionId: null,
+        door: "calcom.webhook",
+        ...(uid ? { externalRef: uid } : {}),
+        source: { text: rawBody },
+      });
+      if (rawStaged.sourceDocumentIds.length === 0) {
+        throw new Error(
+          `cal.com webhook: raw body NOT stored (${rawStaged.errors.join("; ")})`
+        );
+      }
       await submitCaptureGraph({
+        sourceDocumentIds: rawStaged.sourceDocumentIds,
         userId: actor,
         workspaceId,
         entities: graphEntities,

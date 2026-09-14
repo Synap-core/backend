@@ -62,6 +62,7 @@ import {
   DESTRUCTIVE_ACTIONS,
   ADMIN_ACTIONS,
   AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
+  AGENT_STRUCTURE_WRITE_EVENT_KEYS,
   nonWidenableFloorFor,
 } from "@synap/governance-policy";
 
@@ -516,6 +517,14 @@ export const governanceRulesRouter = router({
           editable: false as const,
           actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
           note: "An agent defining a kind or role always goes to review, and no rule can widen it. A person defining one is unaffected.",
+        },
+        {
+          key: "agent-structure" as const,
+          label: "Agents creating workspaces, cells, playbooks or automations",
+          rung: "2.09",
+          editable: false as const,
+          actions: AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[],
+          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it. A person doing the same is unaffected.",
         },
         {
           key: "destructive" as const,

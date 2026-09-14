@@ -203,4 +203,72 @@ export function registerAutomationExecutors(): void {
       return { success: true, primaryId: result.runId ?? undefined };
     },
   });
+
+  // ── automation / activate ────────────────────────────────────────────────────
+  // An AGENT switching an automation on (D2, rung 2.09): `automations.activate`,
+  // or `automations.update` moving it to `active` (then `data.update` carries
+  // the whole update). Materialises through the SAME router door as the
+  // approver. The approver's request carries no acting-agent scope, so the door
+  // cannot re-gate (no proposal loop); RBAC still runs on the loaded row.
+  registerProposalExecutor({
+    key: "automation/activate",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const automationId = innerData.automationId as string | undefined;
+      if (!automationId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Automation activation proposal is missing automationId",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const { automationsRouter } = await import("../../automations.js");
+      const automationCaller = automationsRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+      } as unknown as Context);
+      const update = innerData.update as Record<string, unknown> | undefined;
+      const result = update
+        ? await automationCaller.update({
+            ...update,
+            id: automationId,
+          } as never)
+        : await automationCaller.activate({ id: automationId });
+      if (result.status === "proposed") {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Approved automation activation filed another proposal",
+        });
+      }
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: automationId };
+    },
+  });
 }

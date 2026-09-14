@@ -169,24 +169,53 @@ describe("capture.structure records its run on every exit", () => {
   });
 });
 
-describe("MCP graph lane records sources only after a successful submit", () => {
+describe("MCP graph lane keeps its raw BEFORE the submit, and the submit names it", () => {
+  // Was "records sources only AFTER a successful submit" — overturned by the
+  // founder rule 2026-09-14 (raw is always kept): a refused submit must still
+  // leave the raw stored, and the receipt must carry `data.sourceDocumentIds`,
+  // which only exist once staged. Cannot see: the text actually sent (pinned
+  // literal below), nor what `submitCaptureGraph` writes with the ids (its tests).
   const MCP = readFileSync(
     join(HERE, "../../../routers/mcp/handlers/capture.ts"),
     "utf8"
   );
-  it("the room is keyed by the graph's canonical content, and intake is recorded AFTER submitCaptureGraph", () => {
+  it("the room is keyed by the graph's canonical content; the raw is recorded between the ensure and the submit, exactly once, even when the room failed", () => {
     const ensure = MCP.indexOf("const graphRun = await ensureIntakeSession({");
+    // The record sits inside a try: a throw or a missing echo is SURFACED as a
+    // failed intake (`intakeNotRecorded`), never a crash of the capture.
+    const record = MCP.indexOf("(await recordStructureIntake({", ensure);
+    const submit = MCP.indexOf(
+      "const graphResult = await submitCaptureGraph({",
+      ensure
+    );
+    expect(ensure).toBeGreaterThan(-1);
+    expect(record).toBeGreaterThan(ensure);
+    expect(submit).toBeGreaterThan(record);
+    expect(MCP.slice(ensure, record)).toContain(
+      "computeCaptureGraphIdempotencyKey("
+    );
+    expect(MCP.match(/await recordStructureIntake\(\{/g)).toHaveLength(1);
+    // Never gated on the room: a failed ensure still stages, sessionless.
+    const call = MCP.slice(record, submit).replace(/\s+/g, " ");
+    expect(call).toContain("ensuredSession: graphRun,");
+    expect(call).toContain(
+      '})) ?? intakeNotRecorded("no intake echo returned");'
+    );
+    expect(call).toMatch(
+      /\} catch \(err\) \{ graphIntake = intakeNotRecorded\( err instanceof Error \? err\.message : String\(err\) \); \}/
+    );
+    expect(MCP.slice(ensure, record)).toMatch(
+      /let graphIntake: Awaited<ReturnType<typeof recordStructureIntake>>;\s*try \{\s*graphIntake =\s*$/
+    );
+    expect(MCP.slice(ensure, record)).not.toMatch(/graphSessionId\s*\?/);
+  });
+
+  it("the staged ids ride the submit (absent ⇒ omitted, never [])", () => {
     const submit = MCP.indexOf(
       "const graphResult = await submitCaptureGraph({"
     );
-    const record = MCP.indexOf("await recordStructureIntake({", submit);
-    expect(ensure).toBeGreaterThan(-1);
-    expect(submit).toBeGreaterThan(ensure);
-    expect(record).toBeGreaterThan(submit);
-    // No intake recording between the ensure and the submit.
-    expect(MCP.slice(ensure, submit)).not.toContain("recordStructureIntake(");
-    expect(MCP.slice(ensure, submit)).toContain(
-      "computeCaptureGraphIdempotencyKey("
+    expect(MCP.slice(submit, submit + 400).replace(/\s+/g, " ")).toContain(
+      "...(graphIntake.intake.sourceDocumentIds.length ? { sourceDocumentIds: graphIntake.intake.sourceDocumentIds } : {}),"
     );
   });
 });

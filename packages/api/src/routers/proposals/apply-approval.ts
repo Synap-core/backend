@@ -98,6 +98,7 @@ import {
   governanceApprovalFloorFor,
 } from "../../services/guidelines/guideline-versions.js";
 import { createLogger } from "@synap-core/core";
+import { nonWidenableFloorFor } from "@synap/governance-policy";
 import { entitiesRouter as regularEntitiesRouter } from "../entities.js";
 import { relationsRouter } from "../relations.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
@@ -1337,6 +1338,21 @@ async function applyProposalApprovalInner(
         code: "BAD_REQUEST",
         message: "Malformed governance.widen_lane proposal data.",
       });
+    }
+
+    // A rule that can never fire is refused, not stored — the SAME check and
+    // message as `governanceRules.create` (B3). An exact action key behind a
+    // non-widenable floor resolves above the rule store, so approving would
+    // store an "auto" grant that does nothing. Nothing is written; the proposal
+    // stays pending for a person to reject.
+    if (widenData.targetKind === "action") {
+      const floor = nonWidenableFloorFor(widenData.targetPattern);
+      if (floor) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `NON_WIDENABLE_FLOOR (${floor}): "${widenData.targetPattern}" always needs review — no governance rule can auto-approve it.`,
+        });
+      }
     }
 
     // EVIDENCE (storage engine): the INSERT's own RETURNING row is the receipt

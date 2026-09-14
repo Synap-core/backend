@@ -1104,6 +1104,8 @@ function reasonToRung(reason: string): string {
       return "pod-admin-schema-change";
     case PROPOSE_REASON.AGENT_SCHEMA_DEFINITION:
       return "agent-schema-definition";
+    case PROPOSE_REASON.AGENT_STRUCTURE_WRITE:
+      return "agent-structure-write";
     case PROPOSE_REASON.DESTRUCTIVE_HARD_FLOOR:
       return "destructive-actions-hard-floor";
     case PROPOSE_REASON.USER_OBSERVATION_INFERENCE:

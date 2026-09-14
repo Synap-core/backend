@@ -138,7 +138,11 @@ export type ImportRevealSource =
 
 export type ImportAnalyzeInput = {
   source: ImportRevealSource;
-  items: Array<{ path: string; content: string }>;
+  /**
+   * `sourceDocumentId`: a rerun's replay of an item that is already stored —
+   * its staging reuses that row instead of storing a copy.
+   */
+  items: Array<{ path: string; content: string; sourceDocumentId?: string }>;
   relationType?: string;
   aiStructure?: boolean;
   /**
@@ -968,6 +972,26 @@ export class ImportOrchestrator {
       sessionId = sessionResolution.sessionId;
       if (sessionId) this.ctx.sessionId = sessionId;
     }
+    // The run's inputs as source documents + its manifest — staged BEFORE the
+    // proposal so it names them (`data.sourceDocumentIds`). previewOnly files
+    // nothing durable, so it records nothing either; a deduplicated analyze
+    // already recorded them on the prior run.
+    const intake =
+      sessionResolution && !priorProposal
+        ? await recordImportIntake({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            sessionId,
+            source: input.source,
+            items: input.items,
+            run: {
+              guidelines: importContext.guidelines,
+              guidelineStatus: importContext.guidelineStatus,
+              ...importRunFacts(mode, input.aiStructure, deepStructureMeta),
+            },
+          })
+        : null;
     if (input.previewOnly) {
       logger.info(
         {
@@ -1002,6 +1026,7 @@ export class ImportOrchestrator {
         summary: `${summary} · ${quality.summary}`,
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
+          ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),
           operations: ops,
           source: input.source,
           sourceId: targetId,
@@ -1033,25 +1058,6 @@ export class ImportOrchestrator {
         "import.analyze"
       );
     }
-    // The run's inputs as source documents + its manifest. previewOnly files
-    // nothing durable, so it records nothing either; a deduplicated analyze
-    // already recorded them on the prior run.
-    const intake =
-      sessionResolution && !deduplicated
-        ? await recordImportIntake({
-            database: db,
-            userId,
-            workspaceId: workspaceId ?? null,
-            sessionId,
-            source: input.source,
-            items: input.items,
-            run: {
-              guidelines: importContext.guidelines,
-              guidelineStatus: importContext.guidelineStatus,
-              ...importRunFacts(mode, input.aiStructure, deepStructureMeta),
-            },
-          })
-        : null;
     return {
       workspaceId,
       source: input.source,
@@ -1690,6 +1696,23 @@ export class ImportOrchestrator {
       sessionId = sessionResolution.sessionId;
       if (sessionId) this.ctx.sessionId = sessionId;
     }
+    // Staged BEFORE the proposal so it names them — same contract as analyze().
+    const intake =
+      sessionResolution && !priorProposal
+        ? await recordImportIntake({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            sessionId,
+            source: input.source,
+            items: input.items,
+            run: {
+              guidelines: importContext.guidelines,
+              guidelineStatus: importContext.guidelineStatus,
+              ...importRunFacts("deep", input.aiStructure, largeStructureMeta),
+            },
+          })
+        : null;
     if (input.previewOnly) {
       logger.info(
         {
@@ -1724,6 +1747,7 @@ export class ImportOrchestrator {
         summary: `${summary} · ${quality.summary}`,
         sessionId: sessionId ?? null,
         data: buildImportGraphProposalData({
+          ...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),
           operations,
           source: input.source,
           sourceId: batchId,
@@ -1754,22 +1778,6 @@ export class ImportOrchestrator {
       );
     }
 
-    const intake =
-      sessionResolution && !deduplicated
-        ? await recordImportIntake({
-            database: db,
-            userId,
-            workspaceId: workspaceId ?? null,
-            sessionId,
-            source: input.source,
-            items: input.items,
-            run: {
-              guidelines: importContext.guidelines,
-              guidelineStatus: importContext.guidelineStatus,
-              ...importRunFacts("deep", input.aiStructure, largeStructureMeta),
-            },
-          })
-        : null;
     return {
       workspaceId,
       source: input.source,

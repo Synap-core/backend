@@ -45,6 +45,7 @@ import {
 } from "../connectors/ConnectorRegistry.js";
 import { resolveNangoConnector } from "../connectors/index.js";
 import { gateCapabilityExecution } from "./capabilities/gate-capability-execution.js";
+import { resolveNotEnabledRefusal } from "./capabilities/propose-capability-enable.js";
 import { ImportOrchestrator } from "./import-orchestrator.js";
 import { NotificationService } from "../notifications/NotificationService.js";
 
@@ -211,8 +212,27 @@ export async function pullToImport(
         itemCount: 0,
         source: IMPORT_SOURCE,
         gated: decision.decision === "deny" ? "denied" : "deferred",
+        // The gated row is SYNTHESIZED (no `tools` row, `approved: false`), so
+        // the gate's "installed but not yet enabled" would be false — there is
+        // nothing to enable. The shared refusal says that instead.
         gateReason:
-          decision.decision === "deny" ? decision.reason : "requires approval",
+          decision.decision === "deny"
+            ? (
+                await resolveNotEnabledRefusal({
+                  capability: {
+                    kind: "tool",
+                    id: capabilityId,
+                    name: connector.type,
+                    approved: false,
+                  },
+                  installed: false,
+                  reason: decision.reason,
+                  userId: ctx.userId,
+                  workspaceId: ctx.workspaceId,
+                  agentUserId: gate.agentUserId,
+                })
+              ).message
+            : "requires approval",
       };
     }
   }

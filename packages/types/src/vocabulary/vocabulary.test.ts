@@ -18,11 +18,75 @@ import {
   PROVENANCE_LABELS,
   resolveBlockedReasonLabel,
   BLOCKED_REASON_LABELS,
+  resolveLineageEdgeLabel,
+  LINEAGE_EDGE_LABELS,
+  resolveCaptureDoorLabel,
+  CAPTURE_DOOR_LABELS,
 } from "./index.js";
+
+describe("capture vocabulary", () => {
+  it("names every derived capture status in words humanizing would get wrong", () => {
+    expect(resolveStatusLabel("structured")).toBe("Structured");
+    // Discriminating: humanizeToken says "Saved without ai" / "Needs answer".
+    expect(resolveStatusLabel("saved_without_ai")).toBe("Saved without AI");
+    expect(humanizeToken("saved_without_ai")).not.toBe("Saved without AI");
+    expect(resolveStatusLabel("needs_answer")).toBe("Needs your answer");
+    expect(resolveStatusLabel("not_structured")).toBe("Not structured");
+  });
+
+  it("keys a dotted door by the WHOLE token, never its tail segment", () => {
+    expect(resolveCaptureDoorLabel("capture.graph")).toBe("Agent or app");
+    expect(humanizeToken("capture.graph")).toBe("Graph");
+    expect(resolveCaptureDoorLabel("calcom.webhook")).toBe("Cal.com");
+    expect(resolveCaptureDoorLabel("calcom.backfill")).toBe("Cal.com");
+    expect(resolveCaptureDoorLabel("message.interpret")).toBe("Chat");
+    expect(resolveCaptureDoorLabel("capture.execute")).toBe("Capture");
+    expect(resolveCaptureDoorLabel("structure_again")).toBe("Structure again");
+    // A tail-keyed lookup would miss every dotted row: none of the tails are keys.
+    for (const door of Object.keys(CAPTURE_DOOR_LABELS).filter((d) =>
+      d.includes(".")
+    )) {
+      expect(
+        CAPTURE_DOOR_LABELS[door.slice(door.lastIndexOf(".") + 1)],
+        door
+      ).toBeUndefined();
+    }
+  });
+
+  it("an unknown door humanizes, never leaks; an absent door is empty", () => {
+    expect(resolveCaptureDoorLabel("zapier.hook_in")).toBe("Hook in");
+    expect(resolveCaptureDoorLabel("zapier.hook_in")).not.toMatch(/[._]/);
+    expect(resolveCaptureDoorLabel(null)).toBe("");
+  });
+});
 import { buildFallbackTitle } from "../proposals/proposal-utils.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+
+describe("resolveLineageEdgeLabel", () => {
+  it("reads the produced edge from the side the reader stands on", () => {
+    expect(resolveLineageEdgeLabel("produced", "incoming")).toBe("Made from");
+    expect(resolveLineageEdgeLabel("produced", "outgoing")).toBe("Made");
+  });
+
+  it("names a rerun only through its own key, never spawned_from", () => {
+    expect(resolveLineageEdgeLabel("rerun", "outgoing")).toBe("Rerun of");
+    // A plain fork is also spawned_from — it must not read "Rerun of".
+    expect(resolveLineageEdgeLabel("spawned_from", "outgoing")).toBe(
+      "Spawned from"
+    );
+    expect(LINEAGE_EDGE_LABELS.spawned_from).toBeUndefined();
+  });
+
+  it("humanizes an uncurated edge or direction instead of leaking it", () => {
+    expect(resolveLineageEdgeLabel("rerun", "incoming")).toBe("Rerun");
+    expect(resolveLineageEdgeLabel("blocked_by", "incoming")).toBe(
+      "Blocked by"
+    );
+    expect(resolveLineageEdgeLabel(null, "incoming")).toBe("");
+  });
+});
 
 describe("humanizeToken", () => {
   it("never leaks a raw machine token", () => {

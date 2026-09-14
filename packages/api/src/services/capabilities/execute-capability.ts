@@ -102,6 +102,10 @@ import {
   type CapabilityNextAction,
 } from "./capability-enable-link.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import {
+  proposeCapabilityEnable,
+  type CapabilityEnableOffer,
+} from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
@@ -145,6 +149,13 @@ export type ExecuteCapabilityResult =
        * carries its own `connect` block) — the two fixes stay distinct.
        */
       enable?: CapabilityNextAction;
+      /**
+       * AGENT callers only, on a not-enabled refusal: the enable request filed
+       * for this capability's pack (or why it could not be). Its
+       * `originalActionRan: false` is the explicit "this did not run" — the
+       * request, once approved, enables the pack; it never runs the action.
+       */
+      enableProposal?: CapabilityEnableOffer;
     }
   // A run that REACHED its handler and FAILED (a code skill's sandbox returned
   // success:false, or a declarative provider verb returned an error envelope).
@@ -364,6 +375,17 @@ export async function executeCapability(input: {
    */
   suppressProposal?: boolean;
   /**
+   * How much a DIRECT run leaves behind. `"full"` (default) = the
+   * `capability_run` event AND a recall fact. `"mirror"` = the event only: a
+   * connection-sync page read (`readVerbPage`) runs on a cron, one call per page,
+   * and depositing each page as a "Ran capability …" knowledge fact (plus an
+   * embedding call, no dedup) floods recall with third-party payloads. The sync
+   * itself is what makes that data recallable, through its own reviewed import.
+   * INTERNAL ONLY — a server-side caller's statement about itself, never a
+   * client field (see `SERVER_DERIVED_PARAMS`).
+   */
+  observability?: "full" | "mirror";
+  /**
    * Optional caller idempotency key (C1). Correlates a logical invocation across
    * retries on BOTH paths: it is stamped onto a `capability.run` proposal (approved
    * run + retry), AND it keys the DIRECT-run path's `capability_run_receipts` CAS
@@ -491,10 +513,31 @@ export async function executeCapability(input: {
       reason: decision.reason,
       enable,
     });
+    // D3: an AGENT refused because the skill is installed-but-not-enabled
+    // files ONE enable request for its pack (deduped) and is told the action
+    // did NOT run. `approved === false` is exactly the gate's approval-deny
+    // (its other deny is a policy verdict, which enabling would not fix).
+    // Humans keep the Settings pointer in `enable`; an unattended run has no
+    // review surface to file into.
+    const enableProposal =
+      input.agentUserId &&
+      !input.suppressProposal &&
+      skillRow.approved === false
+        ? (
+            await proposeCapabilityEnable({
+              refused: [{ id: skillRow.id, name: skillRow.name }],
+              userId,
+              workspaceId,
+              agentUserId: input.agentUserId,
+              sessionId: input.sessionId ?? null,
+            })
+          )[0]
+        : undefined;
     return {
       kind: "deny",
       reason: decision.reason,
       ...(enable ? { enable } : {}),
+      ...(enableProposal ? { enableProposal } : {}),
     };
   }
   if (decision.decision === "dry-run") {
@@ -620,6 +663,7 @@ export async function executeCapability(input: {
         agentUserId: input.agentUserId ?? null,
         idempotencyKey: input.idempotencyKey,
         sessionId: input.sessionId ?? null,
+        observability: input.observability ?? "full",
       }),
       skillRow,
       userId,
@@ -656,6 +700,7 @@ export async function executeCapability(input: {
     runResult: ran.result,
     sessionId: input.sessionId ?? null,
     idempotencyKey: input.idempotencyKey,
+    observability: input.observability ?? "full",
   });
   return { ...ran, ackState: "applied" as const, correlationId };
 }
@@ -765,6 +810,7 @@ async function runDirectWriteVerbOnce(opts: {
   agentUserId: string | null;
   idempotencyKey?: string;
   sessionId?: string | null;
+  observability: "full" | "mirror";
 }): Promise<ExecuteCapabilityResult> {
   const key = resolveWriteIdempotencyKey(
     opts.idempotencyKey,
@@ -941,6 +987,7 @@ async function runDirectWriteVerbOnce(opts: {
     runResult: ran.result,
     sessionId: opts.sessionId ?? null,
     idempotencyKey: opts.idempotencyKey,
+    observability: opts.observability,
   });
   return { ...ran, ackState: "applied" as const, correlationId };
 }
@@ -983,6 +1030,8 @@ async function recordDirectCapabilityRun(opts: {
    */
   sessionId?: string | null;
   idempotencyKey?: string;
+  /** `"mirror"` keeps the event and skips the recall deposit — see `executeCapability`. */
+  observability: "full" | "mirror";
 }): Promise<void> {
   const label = opts.verbId ?? opts.skillId;
 
@@ -1011,6 +1060,9 @@ async function recordDirectCapabilityRun(opts: {
   // Recall deposit — the SAME door `remember_fact` uses (knowledgeRepository
   // .saveFact), so a direct run's result is recallable like every other fact.
   // Best-effort: an embedding/index failure must not undo the delivered run.
+  // A mirror read is a page of third-party data, not something the user did:
+  // no fact, no embedding call.
+  if (opts.observability === "mirror") return;
   try {
     const fact = `Ran capability "${label}" → ${JSON.stringify(opts.runResult).slice(0, 1000)}`;
     let embedding: number[];

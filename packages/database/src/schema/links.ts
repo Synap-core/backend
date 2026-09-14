@@ -77,7 +77,12 @@ export type LinkEndpointType =
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
   // Governs lens propagation only — never data movement (see links.ts header).
-  | "workspace";
+  | "workspace"
+  // A `documents` row — the raw capture (an intake source staged by
+  // `stageIntakeSource`). `document --produced--> entity` = "this capture made
+  // that entity". SYSTEM-WRITTEN ONLY, by `stampMaterialized`; the Hub REST
+  // door reads it but refuses to create it.
+  | "document";
 
 // ── `governance_rule` was HERE and was removed, deliberately ────────────────
 // It was added so an intent-rule could hold an edge to the governance rule it

@@ -160,6 +160,11 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
             description:
               "Optional natural-language extraction bias, injected as the structure pass's instructions.",
           },
+          sourceMessageId: {
+            type: "string",
+            description:
+              "Optional id of the Synap message being interpreted (messages.id, a uuid). Stamped on the kept raw capture as its source message. Not the provider's native message id.",
+          },
         },
       },
     },

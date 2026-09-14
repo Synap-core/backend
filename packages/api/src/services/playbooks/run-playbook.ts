@@ -61,6 +61,8 @@ import {
   getLinksFor,
 } from "../links/links-service.js";
 import { resolveExecutor } from "./executors/registry.js";
+import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
+import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "run-playbook" });
@@ -170,6 +172,13 @@ export interface RunPlaybookInput {
    * plus a baseline + schema-coherence edit for no expressive gain.
    */
   agentType?: string | null;
+  /**
+   * UNATTENDED run (the scheduled path): when the playbook depends on skills
+   * that are installed but not enabled, file the enable request on behalf of
+   * the owner and THROW — the automation step then records the reason. Absent
+   * for attended doors, which refuse up front (`playbooks.run` preflight).
+   */
+  unenabledSkillPreflight?: boolean;
 }
 
 export interface RunPlaybookResult {
@@ -434,6 +443,35 @@ export async function runPlaybook(
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+
+  // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
+  // playbook depending on not-enabled skills files ONE enable request per pack
+  // on behalf of the owner and FAILS the step with that reason, before any
+  // session, channel, run row or input-cursor advance exists.
+  if (input.unenabledSkillPreflight) {
+    const unenabled = await findUnenabledPlaybookSkills({
+      playbook,
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+    });
+    if (unenabled.length > 0) {
+      const offers = await proposeCapabilityEnable({
+        refused: unenabled,
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        agentUserId: input.agentUserId ?? null,
+      });
+      const review = offers
+        .filter((o) => o.status === "proposed")
+        .map((o) => o.reviewUrl);
+      const names = unenabled.map((s) => s.name).join(", ");
+      throw new Error(
+        review.length > 0
+          ? `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for the owner's review: ${review.join(" ")}`
+          : `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Enable them in Settings → Capabilities.`
+      );
+    }
+  }
 
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.

@@ -241,6 +241,8 @@ const ATTENTION_FLOOR_KEYS = [
   "POD_ADMIN_SCHEMA_CHANGE",
   // D6: an agent defining a kind/role — the whole point is that a person looks.
   "AGENT_SCHEMA_DEFINITION",
+  // D1/D2: an agent creating a workspace, cell, playbook or automation.
+  "AGENT_STRUCTURE_WRITE",
   // `satisfies` ties this list to the engine's own key set: renaming or
   // removing a PROPOSE_REASON key is a compile error here, not a silent
   // floor that stops matching. The Set stays string-typed because the

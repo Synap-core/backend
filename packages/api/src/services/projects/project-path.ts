@@ -220,7 +220,11 @@ function groupSections<R extends { total: number }, T>(
   const out = new Map<string, { status: "ok"; total: number; items: T[] }>();
   for (const r of rows) {
     const key = keyOf(r);
-    const s = out.get(key) ?? { status: "ok", total: Number(r.total), items: [] };
+    const s = out.get(key) ?? {
+      status: "ok",
+      total: Number(r.total),
+      items: [],
+    };
     s.items.push(itemOf(r));
     out.set(key, s);
   }
@@ -241,7 +245,16 @@ async function readEdges(
 ): Promise<Map<string, PacketSection<PacketChildItem>>> {
   const anchor = direction === "outbound" ? links.fromId : links.toId;
   const other = direction === "outbound" ? links.toId : links.fromId;
-  const openFirst = drizzleSql`${inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])} desc, ${focusSessions.createdAt} asc`;
+  // The packet readers' orderings, mirrored (they are module-private there).
+  // Outbound (blockers, parent): OPEN first. Inbound (children, unblocks): OPEN,
+  // then CLOSED, then the rest — a closed child is the rule's evidence of work
+  // and must not hide behind PACKET_TOP_N cancelled ones. The seam test pins
+  // both against the real packet.
+  const open = inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]);
+  const statusOrder =
+    direction === "inbound"
+      ? drizzleSql`${open} desc, ${eq(focusSessions.status, "closed")} desc`
+      : drizzleSql`${open} desc`;
   const ranked = database
     .select({
       anchor: drizzleSql<string>`${anchor}`.as("anchor"),
@@ -250,12 +263,13 @@ async function readEdges(
       title: focusSessions.title,
       goal: focusSessions.goal,
       status: focusSessions.status,
-      rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${openFirst})`.as(
+      rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${statusOrder}, ${focusSessions.createdAt} asc)`.as(
         "rn"
       ),
-      total: drizzleSql<number>`count(*) over (partition by ${anchor}, ${links.linkType})`.as(
-        "total"
-      ),
+      total:
+        drizzleSql<number>`count(*) over (partition by ${anchor}, ${links.linkType})`.as(
+          "total"
+        ),
     })
     .from(links)
     .innerJoin(focusSessions, eq(drizzleSql`${focusSessions.id}::text`, other))
@@ -302,9 +316,10 @@ async function readPendingProposals(
       rn: drizzleSql<number>`row_number() over (partition by ${proposals.sessionId} order by ${proposals.createdAt} asc)`.as(
         "rn"
       ),
-      total: drizzleSql<number>`count(*) over (partition by ${proposals.sessionId})`.as(
-        "total"
-      ),
+      total:
+        drizzleSql<number>`count(*) over (partition by ${proposals.sessionId})`.as(
+          "total"
+        ),
     })
     .from(proposals)
     .where(
@@ -423,50 +438,85 @@ export async function getProjectPath(
   ];
   const emptyPage = ids.length === 0;
 
-  const [proposalsBy, outbound, inbound, outputsWith, wsNames, open, owed, pending] =
-    await Promise.all([
-      settle(projectId, "pendingProposals", "Pending proposals could not be read.", () =>
+  const [
+    proposalsBy,
+    outbound,
+    inbound,
+    outputsWith,
+    wsNames,
+    open,
+    owed,
+    pending,
+  ] = await Promise.all([
+    settle(
+      projectId,
+      "pendingProposals",
+      "Pending proposals could not be read.",
+      () =>
         emptyPage
-          ? Promise.resolve(new Map<string, PacketSection<PacketProposalItem>>())
+          ? Promise.resolve(
+              new Map<string, PacketSection<PacketProposalItem>>()
+            )
           : readPendingProposals(database, ids)
-      ),
-      settle(projectId, "outboundEdges", "The sessions these wait on could not be read.", () =>
+    ),
+    settle(
+      projectId,
+      "outboundEdges",
+      "The sessions these wait on could not be read.",
+      () =>
         emptyPage
           ? Promise.resolve(new Map<string, PacketSection<PacketChildItem>>())
           : readEdges(database, userId, ids, "outbound")
-      ),
-      settle(projectId, "inboundEdges", "The sessions these unblock could not be read.", () =>
+    ),
+    settle(
+      projectId,
+      "inboundEdges",
+      "The sessions these unblock could not be read.",
+      () =>
         emptyPage
           ? Promise.resolve(new Map<string, PacketSection<PacketChildItem>>())
           : readEdges(database, userId, ids, "inbound")
-      ),
-      settle(projectId, "outputs", "Session outputs could not be read.", () =>
-        emptyPage ? Promise.resolve(new Set<string>()) : readOutputPresence(database, ids)
-      ),
-      // Names only for workspaces the caller can see — a session's stored id is
-      // not permission to learn a workspace's name.
-      wsIds.length
-        ? database
-            .select({ id: workspaces.id, name: workspaces.name })
-            .from(workspaces)
-            .where(
-              and(
-                inArray(workspaces.id, wsIds),
-                userVisibleWhere(workspaces.id, userId)
-              )
+    ),
+    settle(projectId, "outputs", "Session outputs could not be read.", () =>
+      emptyPage
+        ? Promise.resolve(new Set<string>())
+        : readOutputPresence(database, ids)
+    ),
+    // Names only for workspaces the caller can see — a session's stored id is
+    // not permission to learn a workspace's name.
+    wsIds.length
+      ? database
+          .select({ id: workspaces.id, name: workspaces.name })
+          .from(workspaces)
+          .where(
+            and(
+              inArray(workspaces.id, wsIds),
+              userVisibleWhere(workspaces.id, userId)
             )
-            .then((rows) => new Map(rows.map((w) => [w.id, w.name])))
-        : Promise.resolve(new Map<string, string>()),
-      settle(projectId, "openSessions", "Open sessions could not be counted.", () =>
+          )
+          .then((rows) => new Map(rows.map((w) => [w.id, w.name])))
+      : Promise.resolve(new Map<string, string>()),
+    settle(
+      projectId,
+      "openSessions",
+      "Open sessions could not be counted.",
+      () =>
         database
           .select({ n: count() })
           .from(focusSessions)
           .where(
-            and(conditions, inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]))
+            and(
+              conditions,
+              inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+            )
           )
           .then(([r]) => Number(r?.n ?? 0))
-      ),
-      settle(projectId, "owedSlots", "Decisions waiting could not be counted.", () =>
+    ),
+    settle(
+      projectId,
+      "owedSlots",
+      "Decisions waiting could not be counted.",
+      () =>
         database
           .select({
             id: focusSessions.id,
@@ -478,17 +528,23 @@ export async function getProjectPath(
           })
           .from(focusSessions)
           .where(and(conditions, owedSlotPrefilter(), owedSlotWhere()))
-          .then((rows) => rows.reduce((n, r) => n + projectOwedSlots(r).length, 0))
-      ),
-      settle(projectId, "pendingTotal", "Decisions waiting could not be counted.", () =>
+          .then((rows) =>
+            rows.reduce((n, r) => n + projectOwedSlots(r).length, 0)
+          )
+    ),
+    settle(
+      projectId,
+      "pendingTotal",
+      "Decisions waiting could not be counted.",
+      () =>
         database
           .select({ n: count() })
           .from(proposals)
           .innerJoin(focusSessions, eq(proposals.sessionId, focusSessions.id))
           .where(and(conditions, eq(proposals.status, ProposalStatus.PENDING)))
           .then(([r]) => Number(r?.n ?? 0))
-      ),
-    ]);
+    ),
+  ]);
 
   const toCount = (s: Settled<number>): PathCount =>
     s.status === "ok" ? { status: "ok", total: s.value } : s;
@@ -539,7 +595,11 @@ export async function getProjectPath(
       const children = pick(inbound, `${row.id}|spawned_from`);
       const outputs: PacketSection<never> =
         outputsWith.status === "ok"
-          ? { status: "ok", total: outputsWith.value.has(row.id) ? 1 : 0, items: [] }
+          ? {
+              status: "ok",
+              total: outputsWith.value.has(row.id) ? 1 : 0,
+              items: [],
+            }
           : outputsWith;
 
       return {

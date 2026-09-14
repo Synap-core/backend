@@ -90,6 +90,8 @@ export async function runEnrichmentVerb(input: {
     parameters: input.parameters,
     workspaceId: input.workspaceId,
     userId: input.userId,
+    // A user asked for this enrichment: it stays a recallable run.
+    observability: "full",
   });
 
   switch (res.kind) {

@@ -40,6 +40,10 @@
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
     },
+    "./pod-hygiene": {
+      "types": "./dist/pod-hygiene/index.d.ts",
+      "import": "./dist/pod-hygiene/index.js"
+    },
     "./dates": {
       "types": "./dist/dates/index.d.ts",
       "import": "./dist/dates/index.js",

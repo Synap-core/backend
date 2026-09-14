@@ -335,6 +335,77 @@ export function lockParentForUpdate(database: typeof db): ParentLock {
     });
 }
 
+export const REPLACE_IS_A_HUMAN_DECISION_MESSAGE =
+  "`replace` reverts work that was already approved, so it is the user's decision. Rerun with mode `add`, or ask the user to replace it from the session room.";
+
+/**
+ * THE rerun plan for a selection: its source rows, the parent's applied and
+ * pending proposals, and the cap verdict. `rerunSession` builds every plan it
+ * returns from this; `captures.structureAgain` previews a capture that has no
+ * run yet from it too (`parentSessionId: null` — nothing applied, nothing
+ * pending), so a preview can never count differently from the real run.
+ */
+export async function planRerun(
+  database: typeof db,
+  args: {
+    parentSessionId: string | null;
+    userId: string;
+    mode: RerunMode;
+    selectedIds: string[];
+    notInRun: string[];
+  }
+) {
+  const { selectedIds } = args;
+  const withinCap = selectedIds.length <= RERUN_MAX_SOURCES;
+  // Over the cap, only the first cap+1 rows are looked at — enough to count,
+  // never an unbounded scan of a huge run.
+  const rows = await loadSourceRows(
+    database,
+    args.userId,
+    withinCap ? selectedIds : selectedIds.slice(0, RERUN_MAX_SOURCES + 1)
+  );
+
+  const loadApplied = (parentSessionId: string) =>
+    database
+      .select({ id: proposals.id, status: proposals.status })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.sessionId, parentSessionId),
+          inArray(proposals.status, [
+            ProposalStatus.APPROVED,
+            ProposalStatus.AUTO_APPROVED,
+            ProposalStatus.PENDING,
+          ])
+        )
+      );
+  const applied = args.parentSessionId
+    ? await loadApplied(args.parentSessionId)
+    : [];
+  const pendingCount = applied.filter(
+    (p) => p.status === ProposalStatus.PENDING
+  ).length;
+
+  const captureRows = rows.present.filter((r) => r.door === "capture").length;
+  const importRows = rows.present.filter((r) => r.door === "import").length;
+  const plan: RerunPlan = {
+    sources: {
+      selected: selectedIds.length,
+      capture: captureRows,
+      import: importRows,
+      degraded: rows.present.filter((r) => r.degraded).length,
+      missing: rows.missing,
+      notInRun: args.notInRun,
+    },
+    replaceWouldRevert:
+      args.mode === "replace" ? applied.length - pendingCount : 0,
+    parentPending: pendingCount,
+    estimatedStructureCalls: captureRows + importRows,
+    cap: { max: RERUN_MAX_SOURCES, withinCap },
+  };
+  return { plan, rows, applied };
+}
+
 export async function rerunSession(args: {
   sessionId: string;
   userId: string;
@@ -405,49 +476,16 @@ export async function rerunSession(args: {
     ? [...new Set(asked)].filter((id) => inRun.has(id))
     : manifest.sourceDocumentIds;
 
-  const withinCap = selectedIds.length <= RERUN_MAX_SOURCES;
-  // Over the cap, only the first cap+1 rows are looked at — enough to count,
-  // never an unbounded scan of a huge run.
-  const rows = await loadSourceRows(
-    database,
-    args.userId,
-    withinCap ? selectedIds : selectedIds.slice(0, RERUN_MAX_SOURCES + 1)
-  );
-
-  const applied = await database
-    .select({ id: proposals.id, status: proposals.status })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.sessionId, parent.id),
-        inArray(proposals.status, [
-          ProposalStatus.APPROVED,
-          ProposalStatus.AUTO_APPROVED,
-          ProposalStatus.PENDING,
-        ])
-      )
-    );
-  const pendingCount = applied.filter(
-    (p) => p.status === ProposalStatus.PENDING
-  ).length;
-
-  const captureRows = rows.present.filter((r) => r.door === "capture").length;
-  const importRows = rows.present.filter((r) => r.door === "import").length;
-  const plan: RerunPlan = {
-    sources: {
-      selected: selectedIds.length,
-      capture: captureRows,
-      import: importRows,
-      degraded: rows.present.filter((r) => r.degraded).length,
-      missing: rows.missing,
-      notInRun,
-    },
-    replaceWouldRevert:
-      args.mode === "replace" ? applied.length - pendingCount : 0,
-    parentPending: pendingCount,
-    estimatedStructureCalls: captureRows + importRows,
-    cap: { max: RERUN_MAX_SOURCES, withinCap },
-  };
+  const { plan, rows, applied } = await planRerun(database, {
+    parentSessionId: parent.id,
+    userId: args.userId,
+    mode: args.mode,
+    selectedIds,
+    notInRun,
+  });
+  const withinCap = plan.cap.withinCap;
+  const captureRows = plan.sources.capture;
+  const importRows = plan.sources.import;
 
   const availability = await assessRerunAvailability(database, parent);
 
@@ -459,8 +497,7 @@ export async function rerunSession(args: {
       ok: false,
       reason: "replace_is_a_human_decision",
       plan,
-      message:
-        "`replace` reverts work that was already approved, so it is the user's decision. Rerun with mode `add`, or ask the user to replace it from the session room.",
+      message: REPLACE_IS_A_HUMAN_DECISION_MESSAGE,
     };
   }
 
@@ -1059,6 +1096,9 @@ export async function replayCaptureSource(
     // (W4b) — a stored photo/file would otherwise come back not_structured.
     reanalyze: true,
     sessionId: a.childSessionId,
+    // The raw this replays is already stored: staging reuses that row, so a
+    // redo never adds a second copy of its capture.
+    sourceDocumentId: source.sourceDocumentId,
   });
   const plan =
     result as unknown as import("../capture-agent/capture-structure-to-graph.js").CaptureStructureLike;
@@ -1103,6 +1143,9 @@ export async function replayCaptureSource(
     sessionId: a.childSessionId,
     entities,
     relations,
+    // The stored source this replay structured — already the raw; the rerun's
+    // own `capture.structure` dedups it into the child room, never copies it.
+    sourceDocumentIds: [source.sourceDocumentId],
     rawSource: {
       ...(source.input.text ? { rawText: source.input.text } : {}),
       ...(source.input.url ? { sourceUrl: source.input.url } : {}),
@@ -1120,8 +1163,8 @@ export async function replayCaptureSource(
   };
 }
 
-/** The real intake doors — the same ones a first run goes through. */
-function defaultReplayers(
+/** The real intake doors — the same ones a first run goes through. Exported for the replay seam test. */
+export function defaultReplayers(
   userId: string,
   agentUserId: string | null,
   callerContext: Context | undefined
@@ -1142,7 +1185,11 @@ function defaultReplayers(
       });
       const result = await orchestrator.analyze({
         source,
-        items: items.map((s) => s.item),
+        // Each item names its stored row: staging reuses it, never a copy.
+        items: items.map((s) => ({
+          ...s.item,
+          sourceDocumentId: s.sourceDocumentId,
+        })),
         sessionId: a.childSessionId,
         // The rerun's own dedup namespace: the parent's identical graph is
         // never handed back; only a retry inside THIS rerun dedups.

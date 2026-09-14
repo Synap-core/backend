@@ -199,6 +199,8 @@ export function buildImportGraphProposalData(input: {
   quality?: unknown;
   homes?: unknown;
   corpusMap?: unknown;
+  /** Staged raw item documents (`recordImportIntake`). Empty ⇒ omitted. */
+  sourceDocumentIds?: string[];
 }): Record<string, unknown> {
   const idempotencyKey = importGraphIdempotencyKey(input);
   return {
@@ -206,6 +208,9 @@ export function buildImportGraphProposalData(input: {
     source: input.source,
     sourceId: input.sourceId,
     ...(idempotencyKey ? { idempotencyKey } : {}),
+    ...(input.sourceDocumentIds?.length
+      ? { sourceDocumentIds: input.sourceDocumentIds }
+      : {}),
     ...(input.contentRef ? { contentRef: input.contentRef } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.quality ? { quality: input.quality } : {}),
@@ -699,6 +704,22 @@ export async function proposeImportGraph(
     return { proposalId: prior.id, itemCount, deduplicated: true };
   }
 
+  // The RAW door: each file's content is staged as an import_item source
+  // BEFORE the proposal, so the proposal names it. A deduplicated re-run
+  // returned above — its raw was staged by the run that filed the prior.
+  // Failures are counted/named on the result, never fail the import.
+  const { recordImportIntake } =
+    await import("../intake/record-import-intake.js");
+  const intake = await recordImportIntake({
+    database: db,
+    userId,
+    workspaceId: workspaceId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    source,
+    items: raw,
+    run: {},
+  });
+
   const targetId = randomUUID();
   const { proposal: created } = await createEventBackedProposal({
     userId,
@@ -712,6 +733,7 @@ export async function proposeImportGraph(
     sessionId: ctx.sessionId ?? null,
     projectId: ctx.projectId ?? null,
     data: buildImportGraphProposalData({
+      sourceDocumentIds: intake.sourceDocumentIds,
       operations,
       source,
       sourceId: provenance?.sourceId ?? targetId,

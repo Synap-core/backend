@@ -110,6 +110,8 @@ export async function migrateGcalEvents(): Promise<MigrateGcalEventsResult> {
     connectionSelector: eventSync?.connectionId
       ? { connectionId: eventSync.connectionId }
       : undefined,
+    // An ops script reading a page of Google events: no recall fact.
+    observability: "mirror",
   });
   if (cap.kind !== "run") {
     logger.warn(

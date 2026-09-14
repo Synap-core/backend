@@ -88,6 +88,8 @@ import {
   findNonArchivedAutomationByName,
 } from "../services/playbooks/cron-automation.js";
 import { findUnresolvedGoalReferences } from "../services/playbooks/goal-references.js";
+import { findUnenabledPlaybookSkills } from "../services/playbooks/playbook-skill-preflight.js";
+import { proposeCapabilityEnable } from "../services/capabilities/propose-capability-enable.js";
 import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
 import {
   decodeDefinitionCursor,
@@ -2114,6 +2116,44 @@ export const playbooksRouter = router({
         input.subjectId,
         ctx.workspaceId
       );
+
+      // D3 preflight — a playbook that depends on installed-but-not-enabled
+      // skills says so BEFORE anything launches (and before a run proposal is
+      // filed that would only fail on approval). An agent gets a structured
+      // refusal plus one enable request per pack; a human gets the names and
+      // the Settings pointer. Nothing is enabled here.
+      const unenabledSkills = await findUnenabledPlaybookSkills({
+        playbook,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+      });
+      if (unenabledSkills.length > 0) {
+        const names = unenabledSkills.map((s) => s.name).join(", ");
+        if (!input.agentUserId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `"${playbook.name}" uses skills that are not enabled yet: ${names}. Enable them in Settings → Capabilities, then run it again.`,
+          });
+        }
+        const enableProposals = await proposeCapabilityEnable({
+          refused: unenabledSkills,
+          userId: ctx.userId,
+          workspaceId: ctx.workspaceId,
+          agentUserId: input.agentUserId,
+        });
+        const filed = enableProposals.some((o) => o.status === "proposed");
+        return {
+          run: null,
+          session: null as FocusSession | null,
+          status: "blocked" as const,
+          message: filed
+            ? `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}). A request to enable them is waiting for review — run the playbook again after it is approved.`
+            : `Nothing ran: "${playbook.name}" uses skills that are not enabled yet (${names}), and the request to enable them could not be filed. Ask the user to enable them (Settings → Capabilities).`,
+          proposalId: null as string | null,
+          unenabledSkills,
+          enableProposals,
+        };
+      }
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,

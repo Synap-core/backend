@@ -66,7 +66,12 @@ export async function recordImportIntake(input: {
   workspaceId: string | null;
   sessionId: string | null;
   source: string;
-  items: ReadonlyArray<{ path: string; content: string }>;
+  /** `sourceDocumentId`: a replay of a stored item — staging reuses that row. */
+  items: ReadonlyArray<{
+    path: string;
+    content: string;
+    sourceDocumentId?: string;
+  }>;
   /** Manifest facts beyond the sources (guidelines, engine, model, …). */
   run: Omit<RunManifestPatch, "sourceDocumentIds">;
 }): Promise<RecordImportIntakeResult> {
@@ -94,6 +99,9 @@ export async function recordImportIntake(input: {
             path: item.path,
             title: item.path.split("/").pop() || item.path,
             text: item.content,
+            ...(item.sourceDocumentId
+              ? { reuseDocumentId: item.sourceDocumentId }
+              : {}),
           });
           ids[start + offset] = staged.documentId;
         } catch (err) {

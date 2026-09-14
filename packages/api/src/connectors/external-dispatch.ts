@@ -49,6 +49,10 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { resolveIntelligenceService } from "../utils/intelligence-routing.js";
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import { createPendingProposal } from "../utils/permission-check.js";
+import {
+  resolveNotEnabledRefusal,
+  type CapabilityEnableOffer,
+} from "../services/capabilities/propose-capability-enable.js";
 import { recordDomainMutation } from "../utils/domain-mutation.js";
 import { isConnectionAuthError } from "../services/connection-health/notify-connector-unhealthy.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
@@ -713,6 +717,10 @@ export interface SendExternalMessageResult {
   proposed?: boolean;
   /** The created `capability/run` proposal id when `proposed === true`. */
   proposalId?: string;
+  /** Why a gated send did not go out ("Nothing ran …"). */
+  error?: string;
+  /** An agent refused on a not-enabled messaging tool: the enable request filed. */
+  enableProposal?: CapabilityEnableOffer;
   /**
    * The correlationId stamped on this send's `{channel}.send.completed` audit
    * event (see `recordExternalAction`) — pass to `diagnose(correlationId)` to
@@ -776,7 +784,15 @@ export async function sendExternalMessage(
   if (input.agentUserId && !input.alreadyApproved) {
     const gateResult = await gateMessagingSend({ ...input, provider });
     if (gateResult.kind === "deny") {
-      return { success: false };
+      // Say why nothing was sent (this used to return a bare `success: false`),
+      // and hand an agent the enable request it filed, if any.
+      return {
+        success: false,
+        error: gateResult.reason,
+        ...(gateResult.enableProposal
+          ? { enableProposal: gateResult.enableProposal }
+          : {}),
+      };
     }
     if (gateResult.kind === "propose") {
       return {
@@ -878,7 +894,11 @@ export async function sendExternalMessage(
 type MessagingGateResult =
   | { kind: "run" }
   | { kind: "dry-run" }
-  | { kind: "deny"; reason: string }
+  | {
+      kind: "deny";
+      reason: string;
+      enableProposal?: CapabilityEnableOffer;
+    }
   | { kind: "propose"; proposalId: string };
 
 /**
@@ -935,7 +955,29 @@ async function gateMessagingSend(
   });
 
   if (decision.decision === "deny") {
-    return { kind: "deny", reason: decision.reason };
+    // A SEEDED messaging tool row can be enabled (agent → enable request); a
+    // synthesized one has no row, so the refusal says there is nothing to enable.
+    const refusal = await resolveNotEnabledRefusal({
+      capability: {
+        kind: "tool",
+        id: capabilityId,
+        name: `${provider} messaging`,
+        approved: toolRow.approved,
+      },
+      installed: !!seeded,
+      reason: decision.reason,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+    });
+    return {
+      kind: "deny",
+      reason: refusal.message,
+      ...(refusal.enableProposal
+        ? { enableProposal: refusal.enableProposal }
+        : {}),
+    };
   }
   if (decision.decision === "dry-run") {
     return { kind: "dry-run" };
@@ -1113,6 +1155,11 @@ export interface TriggerProviderActionResult {
   errorCode?: "not_found" | "bad_request" | "unavailable";
   /** Human-readable error message. */
   error?: string;
+  /**
+   * An AGENT refused on a not-enabled tool: the enable request it filed (the
+   * call did NOT run; `error` says so). Absent for humans and policy denies.
+   */
+  enableProposal?: CapabilityEnableOffer;
   /**
    * Set when the capability-execution gate routed this run to a reviewable
    * proposal instead of executing it (the ungoverned-door + propose-each ≡
@@ -2097,11 +2144,30 @@ export async function triggerProviderAction(
     });
 
     if (decision.decision === "deny") {
+      // The shared refusal: agent on a not-enabled tool → enable request +
+      // "Nothing ran"; human → "Nothing ran" + Settings; policy deny → as-is.
+      const refusal = await resolveNotEnabledRefusal({
+        capability: {
+          kind: "tool",
+          id: tool.id,
+          name: tool.name,
+          approved: tool.approved,
+        },
+        installed: true,
+        reason: decision.reason,
+        userId: input.userId,
+        workspaceId: input.workspaceId ?? null,
+        agentUserId: input.agentUserId ?? null,
+        sessionId: input.sessionId ?? null,
+      });
       return {
         success: false,
         status: 403,
         errorCode: "bad_request",
-        error: decision.reason,
+        error: refusal.message,
+        ...(refusal.enableProposal
+          ? { enableProposal: refusal.enableProposal }
+          : {}),
       };
     }
 

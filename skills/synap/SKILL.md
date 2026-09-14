@@ -254,11 +254,11 @@ You don't work "inside a workspace" the way you'd work inside a folder. You oper
 
 Tool names below are stems; your door may prefix them.
 
-| Lens          | What it is                                                                                                                                                   | Set it (MCP / CLI)                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
-| **Workspace** | an **operational domain** (CRM, Builder, Marketing). A thing lives in exactly ONE. How the work is separated; the default home for writes.                   | `set_workspace_focus` / `synap use <name-or-id>`                    |
-| **Project**   | a **cross-cutting engagement** (a client mandate, a venture, a product line) that runs THROUGH several workspaces; a thing can belong to several.            | `set_project_focus` or `projectId` / `synap project use <id>`       |
-| **Session**   | the **work room** for the current goal (goal, deliverables, progress). Pass its id on writes that belong to it.                                             | `start_session` / `synap session start --goal "…"` / `attach <id>` |
+| Lens          | What it is                                                                                                                                        | Set it (MCP / CLI)                                                 |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **Workspace** | an **operational domain** (CRM, Builder, Marketing). A thing lives in exactly ONE. How the work is separated; the default home for writes.        | `set_workspace_focus` / `synap use <name-or-id>`                   |
+| **Project**   | a **cross-cutting engagement** (a client mandate, a venture, a product line) that runs THROUGH several workspaces; a thing can belong to several. | `set_project_focus` or `projectId` / `synap project use <id>`      |
+| **Session**   | the **work room** for the current goal (goal, deliverables, progress). Pass its id on writes that belong to it.                                   | `start_session` / `synap session start --goal "…"` / `attach <id>` |
 
 **The project rule (one rule, every door):** a project is set ONLY when the user names it — declare it with `set_project_focus`, or pass `projectId` on the write. Filing work into a project grants its members access, so never infer one from content, and never let a session decide it: a write without a `sessionId` is attributed to your newest open work session (the response says so), and that guessed session never sets the project. When nobody named a project, leave it unset. Guessing a workspace is merely untidy; guessing a project is not.
 

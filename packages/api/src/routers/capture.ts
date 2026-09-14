@@ -25,6 +25,7 @@ import {
   structureSourceKind,
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
+import { stageExecuteSources } from "../services/intake/stage-execute-sources.js";
 import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
 import {
   captureClarificationAnswered,
@@ -1044,6 +1045,13 @@ const captureBaseRouter = router({
          */
         reanalyze: z.boolean().optional(),
         /**
+         * A replay of a raw that is ALREADY stored (rerun, structure again):
+         * the run's staging reuses that source row instead of storing a copy.
+         * Checked against the caller at staging; a foreign or missing id is
+         * named in `intake.errors` and the structure call carries on.
+         */
+        sourceDocumentId: z.string().uuid().optional(),
+        /**
          * sha256 of the ORIGINAL asset when the client re-encoded before
          * sending (relay: HEIC→JPEG, 2048px). A second ledger key, so a
          * camera-roll scan recognises the photo without re-encoding it.
@@ -1435,6 +1443,9 @@ const captureBaseRouter = router({
           agentUserId: ctx.agentUserId ?? null,
           verifiedHandle: ctx.sessionId ?? null,
           bodyHandle: input.sessionId ?? null,
+          ...(input.sourceDocumentId
+            ? { reuseSourceDocumentId: input.sourceDocumentId }
+            : {}),
           // So an execute that was not handed this room's id still finds it.
           planKey: capturePlanKey(
             (result as { proposals?: unknown }).proposals,
@@ -2522,6 +2533,8 @@ const captureBaseRouter = router({
       // one placement consults, so a freshly minted room can never outrank the
       // AI's routing hint. `runSessionId` is what attribution uses (proposal,
       // receipt, produced links) and what the response echoes.
+      // Computed BEFORE the role→facet rewrite below mutates `input.entities`.
+      const executePlanKey = capturePlanKey(input.entities, input.relations);
       const runSession = await ensureIntakeSession({
         userId,
         workspaceId: workspaceId ?? null,
@@ -2536,7 +2549,7 @@ const captureBaseRouter = router({
         // client that forgot to forward the structure `sessionId` still lands in
         // structure's room. Structure minted it in the AMBIENT workspace;
         // execute may have routed — both are allowed, nothing else.
-        planKey: capturePlanKey(input.entities, input.relations),
+        planKey: executePlanKey,
         reuseWorkspaceIds: Array.from(
           new Set([ctx.workspaceId ?? null, workspaceId ?? null])
         ),
@@ -2590,6 +2603,43 @@ const captureBaseRouter = router({
           );
         }
       }
+      // ── The raw capture (founder rule 2026-09-14: always kept) ──────────────
+      // The raw `capture.structure` staged for THIS plan, or — when there is
+      // none (relay's offline queue, a caller that skipped structure, an edited
+      // plan) — what execute received, staged through the one raw door. Its ids
+      // ride every proposal and the receipt (`data.sourceDocumentIds`); a staging
+      // failure rides the response, never only a log.
+      const executeSources = await stageExecuteSources({
+        database,
+        userId,
+        workspaceId: workspaceId ?? null,
+        sessionId: runSessionId ?? null,
+        planKey: executePlanKey,
+        entities: input.entities,
+        ...(input.file ? { file: input.file } : {}),
+        ...(input.keepRaw !== undefined ? { keepRaw: input.keepRaw } : {}),
+      });
+      // `keepRaw: true` and the bytes were just kept as the raw: link THAT
+      // document (decision C) instead of uploading the same file a second time.
+      if (
+        !attachRunSource &&
+        input.keepRaw === true &&
+        executeSources.fileBlob
+      ) {
+        attachRunSource = executeSources.fileBlob;
+      }
+      const sourceDocumentIdsData = executeSources.sourceDocumentIds.length
+        ? { sourceDocumentIds: executeSources.sourceDocumentIds }
+        : {};
+      const sourceIntakeEcho = {
+        sourceIntake: {
+          sourceDocumentIds: executeSources.sourceDocumentIds,
+          origin: executeSources.origin,
+          ...(executeSources.errors.length
+            ? { errors: executeSources.errors }
+            : {}),
+        },
+      };
       // Shared singleton — a fresh EventRepository has no registered hooks, so
       // its emitCompleted() append would silently never reach the
       // realtime/materialization/sync hooks.
@@ -2788,6 +2838,7 @@ const captureBaseRouter = router({
             relations: input.relations,
             resolveRelationType,
             ...(stagedCaptureFile ? { sourceFile: stagedCaptureFile } : {}),
+            sourceDocumentIds: executeSources.sourceDocumentIds,
           }));
         } catch (err) {
           // A hard RBAC/CBAC denial aborts the whole filing, so no proposal
@@ -2826,6 +2877,7 @@ const captureBaseRouter = router({
           captureId,
           correlationId: captureId,
           ...sessionEcho,
+          ...sourceIntakeEcho,
           proposalIds,
           // Edges NOT filed (unknown relation slug) — named, never coerced.
           ...(proposeRelationsFailed.length
@@ -3089,6 +3141,7 @@ const captureBaseRouter = router({
               data: {
                 operations: gateOperations,
                 source: "capture",
+                ...sourceDocumentIdsData,
               },
             });
       if ("denied" in perm && perm.denied) {
@@ -3139,6 +3192,7 @@ const captureBaseRouter = router({
           ...(captureUpdates.length ? { updated: captureUpdates } : {}),
           captureId,
           ...sessionEcho,
+          ...sourceIntakeEcho,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           summary: perm.summary,
@@ -3333,6 +3387,8 @@ const captureBaseRouter = router({
               // Filled by `stampMaterialized` once the capture's writes are
               // done. Empty is the honest value until then.
               materialized: { entityIds: [] as string[] },
+              // The raw this capture was made from — `stampMaterialized` links it.
+              ...sourceDocumentIdsData,
             },
           });
         captureReceipt = receiptRow?.id
@@ -4039,6 +4095,20 @@ const captureBaseRouter = router({
               propertyDiffs: identityMergeDiffs,
             }),
             baseData: captureReceipt.data,
+            // The kept raw FILE is a source too — it can be one the plan-key
+            // match did not name (linked by hash). UNION: `dataPatch` replaces.
+            ...(sourceFile &&
+            "documentId" in sourceFile &&
+            !executeSources.sourceDocumentIds.includes(sourceFile.documentId)
+              ? {
+                  dataPatch: {
+                    sourceDocumentIds: [
+                      ...executeSources.sourceDocumentIds,
+                      sourceFile.documentId,
+                    ],
+                  },
+                }
+              : {}),
           });
         } catch (err) {
           logger.warn(
@@ -4159,6 +4229,7 @@ const captureBaseRouter = router({
         captureId,
         threadId: input.threadId,
         ...sessionEcho,
+        ...sourceIntakeEcho,
         // Disposition of the kept raw file (keepRaw + file only): landed,
         // parked for review with its handle, denied, or failed. Absent when
         // the capture carried no file, so existing consumers are untouched.

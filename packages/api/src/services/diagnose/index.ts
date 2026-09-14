@@ -53,6 +53,11 @@ import {
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
 import { AGENT_PROPOSALS_PER_USER_PER_DAY } from "../../utils/permission-check.js";
+import {
+  getObjectGraph,
+  type GraphNeighbor,
+} from "../object-graph/graph-service.js";
+import { resolveLineageEdgeLabel } from "@synap-core/types/vocabulary";
 import { agentScorecard } from "./agent-scorecard.js";
 import { diagnoseGlobal } from "./global.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
@@ -84,6 +89,51 @@ const CLASS_VALUES: DiagnoseClass[] = [
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` — the agnostic-capability last-mile executor's
  * `proposals.proposalType`, the one whose `data.runResult` carries the run
  * output — is imported from the module that classifies on it. */
+
+/**
+ * An entity's "why", read from the ONE lineage door (`getObjectGraph`): the raw
+ * captures it was made from, the receipt that wrote it, and the session that
+ * write ran in. A failed read is reported as such, never as "no lineage".
+ */
+async function entityWhy(
+  userId: string,
+  id: string
+): Promise<Record<string, unknown>> {
+  let neighbors: GraphNeighbor[];
+  try {
+    neighbors = (await getObjectGraph(userId, "entity", id)).neighbors;
+  } catch (err) {
+    return {
+      lineageError: err instanceof Error ? err.message : String(err),
+    };
+  }
+  const receipt = neighbors.find((n) => n.via === "governed" && n.receipt);
+  return {
+    madeFrom: neighbors
+      .filter(
+        (n) =>
+          n.kind === "capture" &&
+          n.edgeType === "produced" &&
+          n.direction === "incoming"
+      )
+      .map((n) => ({
+        label: resolveLineageEdgeLabel("produced", "incoming"),
+        documentId: n.id,
+        title: n.name,
+      })),
+    receipt: receipt
+      ? {
+          proposalId: receipt.id,
+          title: receipt.name,
+          status: receipt.subtype,
+          ...receipt.receipt,
+        }
+      : null,
+    sessions: neighbors
+      .filter((n) => n.kind === "session" && n.via === "produced-in")
+      .map((n) => ({ sessionId: n.id, goal: n.name })),
+  };
+}
 
 /** Bound a (possibly large) diagnose value for the response — pass small values
  * through verbatim, truncate a huge payload to a preview so diagnose stays lean. */
@@ -471,7 +521,7 @@ async function diagnoseObject(
           type: row.type,
           workspaceId: row.workspaceId,
         },
-        why: null,
+        why: await entityWhy(userId, id),
       };
     }
 

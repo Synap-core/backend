@@ -56,6 +56,7 @@ function row(partial: Partial<RegistryCapability> & { id: string }) {
     inputSchema: {},
     executor: "is-agent",
     governance: "auto",
+    enabled: true,
     runnable: true,
     ...partial,
   } as RegistryCapability;

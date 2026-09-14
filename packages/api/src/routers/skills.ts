@@ -1530,9 +1530,26 @@ export const skillsRouter = router({
       });
 
       if (skillDecision.decision === "deny") {
+        // Operator door: no agent identity reaches it, so a not-enabled skill
+        // gets the human refusal ("Nothing ran" + Settings), never a proposal.
+        const { resolveNotEnabledRefusal } =
+          await import("../services/capabilities/propose-capability-enable.js");
+        const refusal = await resolveNotEnabledRefusal({
+          capability: {
+            kind: "skill",
+            id: skill.id,
+            name: skill.name,
+            approved: skill.approved,
+          },
+          installed: true,
+          reason: skillDecision.reason,
+          userId,
+          workspaceId: skill.workspaceId ?? null,
+          agentUserId: null,
+        });
         throw new TRPCError({
           code: "FORBIDDEN",
-          message: skillDecision.reason,
+          message: refusal.message,
         });
       }
       if (skillDecision.decision === "propose") {

@@ -17,6 +17,7 @@ import { db, tools, eq, drizzleSql } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { executeCapability } from "../capabilities/execute-capability.js";
 import { submitCaptureGraph } from "../capture-agent/submit-capture-graph.js";
+import { stageCaptureSources } from "../intake/record-structure-intake.js";
 import { getCaptureAgentUserId } from "../capture-agent/ensure-capture-agent.js";
 import {
   notifyConnectorUnhealthy,
@@ -78,6 +79,9 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
     connectionSelector: backfill.connectionId
       ? { connectionId: backfill.connectionId }
       : undefined,
+    // A cron listing of bookings: each lands through its own staged raw +
+    // capture graph, so a per-tick recall fact would only be noise.
+    observability: "mirror",
   });
   const capErr = capErrorMessage(cap);
   if (capErr && isConnectionAuthError(capErr)) {
@@ -126,7 +130,26 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
     }
     try {
       const { entities: graphEntities, relations } = mapBookingToGraph(booking);
+      // The RAW door, parity with the webhook lane: the booking is staged as a
+      // capture source (owned by the tool's human owner) BEFORE filing. A
+      // booking whose raw could not be stored is NOT marked seen — the throw
+      // lands in the catch below and the next tick retries it.
+      const rawStaged = await stageCaptureSources({
+        database: db,
+        userId: owner,
+        workspaceId,
+        sessionId: null,
+        door: "calcom.backfill",
+        ...(uid ? { externalRef: uid } : {}),
+        source: { text: JSON.stringify(booking) },
+      });
+      if (rawStaged.sourceDocumentIds.length === 0) {
+        throw new Error(
+          `raw booking NOT stored (${rawStaged.errors.join("; ")})`
+        );
+      }
       await submitCaptureGraph({
+        sourceDocumentIds: rawStaged.sourceDocumentIds,
         userId: actor,
         workspaceId,
         entities: graphEntities,

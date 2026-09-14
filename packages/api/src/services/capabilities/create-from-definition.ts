@@ -33,6 +33,7 @@ import {
   drizzleSql,
   vaultGrants,
   assertGrantScoped,
+  getActingAgentUserId,
 } from "@synap/database";
 import {
   secrets,
@@ -1033,6 +1034,9 @@ export async function createCapabilityFromDefinition(
           executor: p.executor ?? "is-agent",
           status: p.status ?? "draft",
           scope: p.scope,
+          // D2: an agent applying a capability (hub /capabilities/apply) gets
+          // the playbook gate, not the operator path this ctx would take.
+          agentUserId: getActingAgentUserId(),
         });
 
         if (result.proposalId) proposals.push(result.proposalId);
@@ -1114,12 +1118,15 @@ export async function createCapabilityFromDefinition(
           status: a.status ?? "draft",
           metadata: a.metadata,
           state: a.state,
+          // D2: same as the playbook step — an acting agent gets the gate.
+          agentUserId: getActingAgentUserId(),
         });
+        if (created?.proposalId) proposals.push(created.proposalId);
         createdAutomations.push({
           name: a.name,
-          status: "created",
+          status: created?.status === "proposed" ? "proposed" : "created",
           automationId: created?.id ?? null,
-          proposalId: null,
+          proposalId: created?.proposalId ?? null,
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

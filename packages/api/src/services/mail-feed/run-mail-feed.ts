@@ -227,6 +227,8 @@ export async function runMailFeed(): Promise<RunMailFeedResult> {
     connectionSelector: mailFeed.connectionId
       ? { connectionId: mailFeed.connectionId }
       : undefined,
+    // A cron read of inbox snippets: never deposit third-party mail into recall.
+    observability: "mirror",
   });
 
   // Dead Google connection (refresh token expired) surfaces as an error envelope

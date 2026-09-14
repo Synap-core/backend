@@ -287,10 +287,10 @@ export async function gateCapabilityExecution(
   if (approved === false) {
     return {
       decision: "deny",
-      // NOTE: a `capability.enable` proposal type + approve-executor exist
-      // (routers/proposals/approve-executors.ts) so an agent can PROPOSE
-      // enabling instead of only relaying this text — its creation call site
-      // (from this deny path) is deliberately deferred; wire it there.
+      // NOTE: the gate stays write-free. For an AGENT caller, the api's execute
+      // door turns this deny into ONE `capability.enable` proposal for the pack
+      // (`proposeCapabilityEnable`, services/capabilities/propose-capability-enable.ts).
+      // The reason text below is what a human caller still reads.
       reason:
         "This capability is installed but not yet enabled. Ask the user to enable it (Settings → Capabilities), or run with dryRun to preview.",
     };

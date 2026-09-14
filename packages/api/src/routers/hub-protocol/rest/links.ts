@@ -54,7 +54,19 @@ const LINK_ENDPOINT_TYPES = [
   "capability",
   "agent",
   "workspace",
+  "document",
 ] as const;
+
+/**
+ * Endpoint types this door READS but never WRITES. A `document --produced-->
+ * entity` edge asserts "this raw capture made that entity" — only the
+ * materialization record (`stampMaterialized`) knows that, after checking the
+ * document belongs to the receipt's owner. An agent-written one would be a
+ * provenance claim nobody verified.
+ */
+const SYSTEM_WRITTEN_ENDPOINT_TYPES: ReadonlySet<string> = new Set([
+  "document",
+]);
 
 /**
  * The link types an agent may WRITE over the Hub Protocol.
@@ -181,6 +193,18 @@ export function registerLinksRoutes(app: HubHono): void {
         400
       );
     }
+    if (
+      SYSTEM_WRITTEN_ENDPOINT_TYPES.has(parsed.data.fromType) ||
+      SYSTEM_WRITTEN_ENDPOINT_TYPES.has(parsed.data.toType)
+    ) {
+      return c.json(
+        {
+          error:
+            "document links are written by the pod when a capture is structured; they cannot be created here",
+        },
+        400
+      );
+    }
 
     // Bind acting identity + workspace to the authenticated principal, and
     // membership-check the workspace (closes the IDOR — same as POST /relations).
@@ -229,7 +253,10 @@ export function registerLinksRoutes(app: HubHono): void {
     // would create. Populated below only for `blocked_by`.
     let blockedByWorkspaceId: string | null = null;
     if (isBlockedBy) {
-      if (parsed.data.fromType !== "session" || parsed.data.toType !== "session") {
+      if (
+        parsed.data.fromType !== "session" ||
+        parsed.data.toType !== "session"
+      ) {
         return c.json(
           { error: "blocked_by links must connect two sessions" },
           400

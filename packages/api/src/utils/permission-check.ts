@@ -3056,11 +3056,27 @@ async function createProposal(args: {
   )
     ? (data as unknown as { operations: unknown[] }).operations
     : undefined;
+  // Beside `operations`, the raw captures that composite was made from. The
+  // approval's `stampMaterialized` reads the top-level `data.sourceDocumentIds`
+  // to write `document --produced--> entity`; nested under the request-shaped
+  // `data` it is invisible and the approved entities show nothing made-from.
+  // Ownership is checked by the edge writer, not here.
+  const compositeSourceDocumentIds =
+    compositeOperations &&
+    Array.isArray(
+      (data as { sourceDocumentIds?: unknown }).sourceDocumentIds
+    ) &&
+    (data as { sourceDocumentIds: unknown[] }).sourceDocumentIds.length > 0
+      ? (data as { sourceDocumentIds: unknown[] }).sourceDocumentIds
+      : undefined;
 
   const storedData: Record<string, unknown> = {
     ...(proposalData as unknown as Record<string, unknown>),
     ...(authorshipMode ? { authorshipMode } : {}),
     ...(compositeOperations ? { operations: compositeOperations } : {}),
+    ...(compositeSourceDocumentIds
+      ? { sourceDocumentIds: compositeSourceDocumentIds }
+      : {}),
     // The slot claim rides at the TOP LEVEL, beside the request-shaped envelope
     // — `readProposalExpectedLabel` is the ONE reader.
     ...(expectedLabel ? { expectedLabel } : {}),

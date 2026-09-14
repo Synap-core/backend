@@ -63,6 +63,9 @@ export async function runFirefliesIngest(
     parameters: { id: meetingId },
     userId: ownerUserId,
     workspaceId,
+    // Webhook/backfill ingest: the transcript lands as a channel message, which
+    // is its recallable form — a "Ran capability" fact would only duplicate it.
+    observability: "mirror",
   });
   if (cap.kind === "error") {
     // Throw so the pg-boss worker retries; the backfill poller is the last net.

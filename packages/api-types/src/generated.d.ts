@@ -4035,7 +4035,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace";
+export type LinkEndpointType = "playbook" | "tool" | "skill" | "command" | "session" | "source" | "entity" | "channel" | "participant" | "automation" | "project" | "secret" | "capability" | "agent" | "workspace" | "document";
 /** The relationship an edge expresses. */
 export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "targets" | "produced" | "member_of" | "feeds" | "promoted_to" | "provided_by" | "about" | "documents" | "concerns" | "activates"
 /**
@@ -5880,6 +5880,13 @@ export interface IntakeEcho {
 		sourceDocumentIds: string[];
 		/** Present only for a degraded outcome: was the input kept for re-structure? */
 		degradedSourceKept?: boolean;
+		/**
+		 * Present whenever at least one source was attempted, on EVERY outcome:
+		 * false when any input could not be stored (the reason is in `errors`).
+		 */
+		sourcesKept?: boolean;
+		/** `keepRaw: false` was overridden — the file was not read, bytes kept. */
+		originalRetainedUntilStructured?: true;
 		errors?: string[];
 	};
 }
@@ -6422,6 +6429,30 @@ export interface SyncConnectorConnection {
 	 */
 	hasError?: boolean;
 }
+/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
+export interface CapabilityRef {
+	kind?: "skill" | "tool";
+	id: string;
+	name: string;
+}
+/**
+ * What the caller hands back. `originalActionRan: false` is a literal on BOTH
+ * arms: the refused action did not run, whether or not the request was filed.
+ */
+export type CapabilityEnableOffer = {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl: string;
+	title: string;
+	skills: CapabilityRef[];
+	originalActionRan: false;
+	message: string;
+} | {
+	status: "failed";
+	error: string;
+	originalActionRan: false;
+	message: string;
+};
 /**
  * P1 "every failure carries a next action" — the machine-readable failure class a
  * dispatch failure is stamped with (alongside the human `error` string), so the
@@ -6952,6 +6983,258 @@ export interface EmbeddingPipelineHealth {
 	recentCompleted: number;
 	windowMinutes: number;
 }
+declare const CAPTURE_STATUSES: readonly [
+	"structured",
+	"saved_without_ai",
+	"needs_answer",
+	"not_structured"
+];
+export type CaptureStatus = (typeof CAPTURE_STATUSES)[number];
+export type IntakeSourceKind = "text" | "url" | "file" | "import_item";
+export interface IntakeSourceMetadata {
+	version: 1;
+	kind: IntakeSourceKind;
+	/** sha256 over kind + url + path + body (or the file bytes). */
+	contentHash: string;
+	sessionId: string | null;
+	door: string;
+	url?: string;
+	path?: string;
+	filename?: string;
+	mimeType?: string;
+	/**
+	 * Plain sha256 of the file BYTES (no kind/path folded in, unlike
+	 * `contentHash`) — the "already imported" ledger key
+	 * (`known-source-hashes.ts`). Set for every file source, kept or text-only.
+	 */
+	fileSha256?: string;
+	/**
+	 * Client-declared sha256 of the ORIGINAL asset, when the client re-encoded
+	 * before sending (a re-encode is not byte-stable). Second ledger key.
+	 */
+	sourceSha256?: string;
+	degraded?: {
+		reason: string;
+		at: string;
+	};
+	restructuredAt?: string;
+	/**
+	 * The caller asked for text only (`keepRaw: false`) but nothing could be
+	 * read from the file, so its ORIGINAL bytes were kept anyway — raw is never
+	 * lost before it has been structured. Records the declined retention so a
+	 * later purge can honour it. (No purge exists yet.)
+	 */
+	retainedUntilStructured?: true;
+	/**
+	 * `capturePlanKey`s of the plans structured FROM this source in its session
+	 * (a clarification answer re-structures the same raw into a new plan, so a
+	 * list). `capture.execute` finds the raw its plan was made from by these —
+	 * the session alone is too coarse: a person's own session holds many captures.
+	 */
+	planKeys?: string[];
+	/** The `messages.id` the raw came from (a chat message interpreted). */
+	sourceMessageId?: string;
+	/** The outside system's own id for the raw (a Cal.com booking uid). */
+	externalRef?: string;
+}
+declare function revertSkipView(skip: RevertSkip): {
+	kind: RevertTarget["kind"];
+	id: string;
+	key?: string;
+	reason: RevertSkip["reason"];
+	detail: string;
+};
+export type SessionRevertSkipView = ReturnType<typeof revertSkipView>;
+export interface OutcomeBase {
+	proposalId: string;
+	proposalType: string;
+}
+export type SessionProposalRevertOutcome = (OutcomeBase & {
+	outcome: "reverted";
+}) | (OutcomeBase & {
+	outcome: "partial" | "skipped";
+	skipped: SessionRevertSkipView[];
+	stillThere: string[];
+}) | (OutcomeBase & {
+	outcome: "permanent";
+	reason: "external_dispatched";
+	at: string;
+	/** Local items left standing because they were changed since. */
+	skipped?: SessionRevertSkipView[];
+	stillThere?: string[];
+}) | (OutcomeBase & {
+	outcome: "unsupported" | "failed";
+	reason: string;
+})
+/** Asked for by id, but not an applied proposal of this session. */
+ | (OutcomeBase & {
+	outcome: "not_applicable";
+	reason: string;
+});
+export type RerunMode = "replace" | "add";
+export type RerunItemOutcome = "proposed" | "applied" | "deduplicated" | "not_structured" | "needs_input" | "failed";
+export interface RerunItemResult {
+	sourceDocumentIds: string[];
+	door: "capture" | "import";
+	outcome: RerunItemOutcome;
+	proposalId?: string;
+	reviewUrl?: string;
+	reason?: string;
+}
+export interface RerunPlan {
+	sources: {
+		selected: number;
+		capture: number;
+		import: number;
+		degraded: number;
+		/** In the manifest, but the document is gone (deleted / not the owner's). */
+		missing: string[];
+		/** Asked for in `scope`, but not a source of this run. */
+		notInRun: string[];
+	};
+	/** Applied proposals `replace` would revert (0 for `add`). */
+	replaceWouldRevert: number;
+	/** Still-pending proposals of the parent — `replace` withdraws them. */
+	parentPending: number;
+	/** One structure call per capture source; one per import item. */
+	estimatedStructureCalls: number;
+	cap: {
+		max: number;
+		withinCap: boolean;
+	};
+}
+/** `replace` only. `notClean` lists every proposal that did not fully revert. */
+export interface RerunRevertSummary {
+	counts: Record<SessionProposalRevertOutcome["outcome"], number>;
+	notClean: SessionProposalRevertOutcome[];
+	/** The parent's still-pending proposals, withdrawn through `proposals.withdraw`. */
+	withdrawnPending: string[];
+	/** Pending proposals the withdraw door refused (e.g. not the proposer) — still pending. */
+	pendingNotWithdrawn: Array<{
+		proposalId: string;
+		reason: string;
+	}>;
+}
+/** `replace` only: the parent was NOT reverted, so nothing was replayed. */
+export interface RerunRevertNotRun {
+	notRun: true;
+	reason: string;
+}
+/** Why a session cannot be rerun right now, independent of the request. */
+export type RerunAvailabilityReason = "no_manifest" | "in_flight" | "availability_unknown";
+export interface RerunAvailability {
+	available: boolean;
+	reason?: RerunAvailabilityReason;
+}
+export type RerunRefusal = "not_found" | RerunAvailabilityReason | "over_cap" | "replace_is_a_human_decision" | "no_sources" | "mint_failed";
+export type RerunSessionResult = {
+	ok: false;
+	reason: RerunRefusal;
+	message: string;
+	plan?: RerunPlan;
+} | {
+	ok: true;
+	status: "dry_run";
+	parentSessionId: string;
+	mode: RerunMode;
+	plan: RerunPlan;
+	/** Whether the real run would be allowed — the same rule the door applies. */
+	availability: RerunAvailability;
+} | {
+	ok: true;
+	/**
+	 * An identical request (same parent, mode, user) inside the dedupe window
+	 * already started this child: nothing was reverted, withdrawn or replayed
+	 * again. Render the existing child, don't add a second one.
+	 */
+	status: "reused";
+	reused: true;
+	sessionId: string;
+	parentSessionId: string;
+	mode: RerunMode;
+	idempotencyNamespace: string;
+	plan: RerunPlan;
+} | {
+	ok: true;
+	/** `rerun`: every item structured · `partial`: some did not · `failed`: none did. */
+	status: "rerun" | "partial" | "failed";
+	reused: false;
+	sessionId: string;
+	parentSessionId: string;
+	mode: RerunMode;
+	idempotencyNamespace: string;
+	plan: RerunPlan;
+	/** False when the child's lineage (parent, mode, namespace) could not be recorded. */
+	lineageRecorded: boolean;
+	revert?: RerunRevertSummary | RerunRevertNotRun;
+	items: RerunItemResult[];
+	counts: Record<RerunItemOutcome, number>;
+};
+export type CaptureStructureAgainRefusal = "not_found" | "unsupported_kind" | "replace_wider_than_capture" | "manifest_not_recorded";
+export type RerunDryRun = Extract<RerunSessionResult, {
+	status: "dry_run";
+}>;
+export type CaptureStructureAgainResult = (Exclude<RerunSessionResult, RerunDryRun>
+/** A capture with no run yet previews with no parent. */
+ | (Omit<RerunDryRun, "parentSessionId"> & {
+	parentSessionId: string | null;
+}) | {
+	ok: false;
+	reason: CaptureStructureAgainRefusal;
+	message: string;
+}) & {
+	/** The run that holds this capture (null when it has none and none was made). */
+	runSessionId: string | null;
+};
+declare const CAPTURE_DOORS: readonly [
+	"capture",
+	"capture.execute",
+	"capture.graph",
+	"message.interpret",
+	"calcom.webhook",
+	"calcom.backfill",
+	"import",
+	"structure_again"
+];
+export type CaptureDoor = (typeof CAPTURE_DOORS)[number];
+export interface CaptureItem {
+	documentId: string;
+	kind: IntakeSourceMetadata["kind"];
+	preview: string;
+	createdAt: Date;
+	door: CaptureDoor | null;
+	sessionId: string | null;
+	status: CaptureStatus;
+	degradedReason: string | null;
+	producedCount: number;
+}
+export interface CaptureDetail extends CaptureItem {
+	raw: {
+		/** The full text body (latest version), or null for a bytes-only file. */
+		text: string | null;
+		/**
+		 * A stored file. Resolve it through the stored-file door
+		 * (`GET /api/files/documents/:documentId/url` / `useStoredFileUrl`) — the
+		 * pod never signs a blob here.
+		 */
+		file: {
+			documentId: string;
+			filename: string | null;
+			mimeType: string | null;
+			size: number | null;
+		} | null;
+	};
+	produced: Array<{
+		entityId: string;
+		title: string | null;
+		kind: string | null;
+	}>;
+	runs: Array<{
+		sessionId: string;
+		spawnedFrom: string | null;
+		at: Date;
+	}>;
+}
 export interface ToolLog {
 	id?: string;
 	toolName?: string;
@@ -7466,6 +7749,7 @@ export interface CapabilityVerbState extends ToolVerb {
 		description?: string;
 	}>;
 }
+export type RunPosture = "auto" | "propose";
 /**
  * Why a candidate matched, for an agent choosing between results: the query
  * terms it hit, rarest (highest-weighted) first, and the fields they hit.
@@ -7529,6 +7813,11 @@ export interface CapabilityCardVerb {
 	type: "read" | "write" | "action";
 	/** Backing skill `approved === true`. */
 	enabled: boolean;
+	/**
+	 * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
+	 * files a review. Under a lens it honours the grant, exactly as
+	 * `GET /capabilities/actions` does. Not the approval gate — that is `enabled`.
+	 */
 	governance: "auto" | "propose";
 	/** enabled AND (no connection required OR connection connected). */
 	runnable: boolean;
@@ -7690,6 +7979,44 @@ export type RegistryCapability = Omit<Capability, "verbs"> & {
 	 * row nothing can open. `null` for a legacy row that predates the column.
 	 */
 	slug?: string | null;
+	/**
+	 * `skills.kind` (`builtin` | `code` | `declarative`) and `skills.metadata` of
+	 * a runnable `skill` row — the facts `runPosture` classifies a verb from.
+	 * Absent on every other kind.
+	 */
+	skillKind?: string | null;
+	skillMetadata?: Record<string, unknown> | null;
+	/**
+	 * The approval gate: the row's `approved` column. `true` for kinds with no
+	 * approval column (commands, IS-native tools) — the gate's approval step does
+	 * not refuse them (`approved === null`). `governance` is the RUN POSTURE
+	 * (`capabilityRowPosture`), never this.
+	 */
+	enabled: boolean;
+};
+/**
+ * The agent-facing projection of the flat capability list: real, distinct,
+ * runnable capabilities grouped by TYPE, with each integration's verbs nested.
+ *
+ * WHY this exists: the flat `listCapabilities` dump is a management read-model —
+ * it includes 90+ IS-native `builtin-tool`s (already exposed directly as MCP
+ * tools, `catalogOnly` so not even runnable through `run_capability`) and 100+
+ * `teaching-doc`s (prompt prose, not actions), plus duplicate rows (a provider
+ * installed twice, N backing-skill copies of one verb). Handing all of that to
+ * an agent as "your capabilities" buries the ~20 things it can actually do. This
+ * view de-duplicates and nests verbs under their integration so the shape reads
+ * like "a package and the verbs inside it".
+ *
+ * Built-ins are a SECTION, not an exclusion. A capability verb is to a process
+ * what an entity is to the pod — a brick — so a built-in must be browsable and
+ * inspectable even when it cannot be picked as a step. It therefore gets its own
+ * section (a UI renders it collapsed), each row carrying `runnableHere` so a
+ * flow-node picker can filter on a fact instead of on the section's name. Only
+ * `teaching-doc`s are still folded out — prompt prose is not a brick at all.
+ */
+/** A verb row in a section, with its own run posture (see `runPosture`). */
+export type SectionVerb = CapabilityVerbStateWithResponseShape & {
+	governance?: RunPosture;
 };
 /** The grantable kinds the vault_grants table discriminates over. */
 export type CapabilityGrantKind = "secret" | "tool" | "skill" | "command";
@@ -8647,6 +8974,13 @@ export type ExecuteCapabilityResult = {
 	 * carries its own `connect` block) — the two fixes stay distinct.
 	 */
 	enable?: CapabilityNextAction;
+	/**
+	 * AGENT callers only, on a not-enabled refusal: the enable request filed
+	 * for this capability's pack (or why it could not be). Its
+	 * `originalActionRan: false` is the explicit "this did not run" — the
+	 * request, once approved, enables the pack; it never runs the action.
+	 */
+	enableProposal?: CapabilityEnableOffer;
 } | {
 	kind: "error";
 	message: string;
@@ -8808,6 +9142,15 @@ export interface GraphNeighbor extends GraphNode {
 	direction: "outgoing" | "incoming" | "structural";
 	/** Which substrate the edge came from — glass-box provenance. */
 	via: "links" | "relations" | "property" | "channel" | "session" | "grant" | "automation" | "governed" | "produced-in" | "body";
+	/**
+	 * Set only on an entity's materialization RECEIPT — the proposal named by
+	 * `entities.sourceProposalId`: where the write came from.
+	 */
+	receipt?: {
+		sessionId: string | null;
+		sourceMessageId: string | null;
+		agentUserId: string | null;
+	};
 }
 /** "Fetch X, get X + everything it's linked to, typed." */
 export interface GraphEnvelope {
@@ -9377,40 +9720,6 @@ export interface ConversionReceipt {
 	/** ISO deadline after which `revertConversion` refuses. */
 	undoUntil: string;
 }
-declare function revertSkipView(skip: RevertSkip): {
-	kind: RevertTarget["kind"];
-	id: string;
-	key?: string;
-	reason: RevertSkip["reason"];
-	detail: string;
-};
-export type SessionRevertSkipView = ReturnType<typeof revertSkipView>;
-export interface OutcomeBase {
-	proposalId: string;
-	proposalType: string;
-}
-export type SessionProposalRevertOutcome = (OutcomeBase & {
-	outcome: "reverted";
-}) | (OutcomeBase & {
-	outcome: "partial" | "skipped";
-	skipped: SessionRevertSkipView[];
-	stillThere: string[];
-}) | (OutcomeBase & {
-	outcome: "permanent";
-	reason: "external_dispatched";
-	at: string;
-	/** Local items left standing because they were changed since. */
-	skipped?: SessionRevertSkipView[];
-	stillThere?: string[];
-}) | (OutcomeBase & {
-	outcome: "unsupported" | "failed";
-	reason: string;
-})
-/** Asked for by id, but not an applied proposal of this session. */
- | (OutcomeBase & {
-	outcome: "not_applicable";
-	reason: string;
-});
 export interface CancelRecordItem {
 	kind: "job" | "chat_turn" | "proposal";
 	id: string;
@@ -9432,106 +9741,6 @@ export interface SessionCancelRecord extends SessionCancelOutcome {
 	/** `stopping`: committed with the cancel, stop not yet run. `done`: outcome recorded. */
 	state: "stopping" | "done";
 }
-export type IntakeSourceKind = "text" | "url" | "file" | "import_item";
-export type RerunMode = "replace" | "add";
-export type RerunItemOutcome = "proposed" | "applied" | "deduplicated" | "not_structured" | "needs_input" | "failed";
-export interface RerunItemResult {
-	sourceDocumentIds: string[];
-	door: "capture" | "import";
-	outcome: RerunItemOutcome;
-	proposalId?: string;
-	reviewUrl?: string;
-	reason?: string;
-}
-export interface RerunPlan {
-	sources: {
-		selected: number;
-		capture: number;
-		import: number;
-		degraded: number;
-		/** In the manifest, but the document is gone (deleted / not the owner's). */
-		missing: string[];
-		/** Asked for in `scope`, but not a source of this run. */
-		notInRun: string[];
-	};
-	/** Applied proposals `replace` would revert (0 for `add`). */
-	replaceWouldRevert: number;
-	/** Still-pending proposals of the parent — `replace` withdraws them. */
-	parentPending: number;
-	/** One structure call per capture source; one per import item. */
-	estimatedStructureCalls: number;
-	cap: {
-		max: number;
-		withinCap: boolean;
-	};
-}
-/** `replace` only. `notClean` lists every proposal that did not fully revert. */
-export interface RerunRevertSummary {
-	counts: Record<SessionProposalRevertOutcome["outcome"], number>;
-	notClean: SessionProposalRevertOutcome[];
-	/** The parent's still-pending proposals, withdrawn through `proposals.withdraw`. */
-	withdrawnPending: string[];
-	/** Pending proposals the withdraw door refused (e.g. not the proposer) — still pending. */
-	pendingNotWithdrawn: Array<{
-		proposalId: string;
-		reason: string;
-	}>;
-}
-/** `replace` only: the parent was NOT reverted, so nothing was replayed. */
-export interface RerunRevertNotRun {
-	notRun: true;
-	reason: string;
-}
-/** Why a session cannot be rerun right now, independent of the request. */
-export type RerunAvailabilityReason = "no_manifest" | "in_flight" | "availability_unknown";
-export interface RerunAvailability {
-	available: boolean;
-	reason?: RerunAvailabilityReason;
-}
-export type RerunRefusal = "not_found" | RerunAvailabilityReason | "over_cap" | "replace_is_a_human_decision" | "no_sources" | "mint_failed";
-export type RerunSessionResult = {
-	ok: false;
-	reason: RerunRefusal;
-	message: string;
-	plan?: RerunPlan;
-} | {
-	ok: true;
-	status: "dry_run";
-	parentSessionId: string;
-	mode: RerunMode;
-	plan: RerunPlan;
-	/** Whether the real run would be allowed — the same rule the door applies. */
-	availability: RerunAvailability;
-} | {
-	ok: true;
-	/**
-	 * An identical request (same parent, mode, user) inside the dedupe window
-	 * already started this child: nothing was reverted, withdrawn or replayed
-	 * again. Render the existing child, don't add a second one.
-	 */
-	status: "reused";
-	reused: true;
-	sessionId: string;
-	parentSessionId: string;
-	mode: RerunMode;
-	idempotencyNamespace: string;
-	plan: RerunPlan;
-} | {
-	ok: true;
-	/** `rerun`: every item structured · `partial`: some did not · `failed`: none did. */
-	status: "rerun" | "partial" | "failed";
-	reused: false;
-	sessionId: string;
-	parentSessionId: string;
-	mode: RerunMode;
-	idempotencyNamespace: string;
-	plan: RerunPlan;
-	/** False when the child's lineage (parent, mode, namespace) could not be recorded. */
-	lineageRecorded: boolean;
-	revert?: RerunRevertSummary | RerunRevertNotRun;
-	items: RerunItemResult[];
-	counts: Record<RerunItemOutcome, number>;
-};
 export interface RunSourceRow {
 	sourceDocumentId: string;
 	title: string;
@@ -9576,6 +9785,49 @@ export type StructureAgainResult = {
 	/** False when the manifest could not record the source (rerun can't see it). */
 	manifestRecorded: boolean;
 } & Omit<RerunItemResult, "sourceDocumentIds" | "door">);
+/**
+ * One thing a session produced. `id` is the STABLE join coordinate
+ * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
+ * collapse onto one entry, and the frontend can key on it across refetches.
+ */
+export interface SessionOutput {
+	/** `<kind>:<refId>` — stable across ledgers and refetches. */
+	id: string;
+	/** Normalized object kind (`document`, `entity`, `view`, `cell`, `url`, …). */
+	kind: string;
+	/**
+	 * The UNDERLYING object's id — what navigation must use. NOT the artifact
+	 * row id: `SessionRoomGroundCell.tsx` opens an artifact by row id today and
+	 * lands on nothing.
+	 */
+	refId: string;
+	title: string;
+	icon?: string;
+	/** Artifact lifecycle, when an artifact row backs this output. */
+	state?: "working" | "kept" | "swept";
+	producedAt: Date;
+	/** Derivable from artifact provenance or the satisfying proposal's actor. */
+	producedBy?: "agent" | "human";
+	/**
+	 * The declared deliverable this object satisfies, when one matched — the
+	 * WHOLE slot, never a subset.
+	 *
+	 * It was an enumerated subset until 2026-09-08, and the enumeration is what
+	 * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
+	 * readable in `pendingExpected` and invisible the instant the deliverable
+	 * landed. A matched slot and an unmatched one must read identically; the only
+	 * way to guarantee that as the type grows is to carry the type, so this is
+	 * `ExpectedOutput` itself and the assignment spreads.
+	 */
+	expected?: ExpectedOutput;
+	/** Which ledger(s) reported it — provenance for the join itself. */
+	source: Array<"artifact" | "produced_edge" | "expected">;
+}
+export interface SessionOutputsResult {
+	outputs: SessionOutput[];
+	/** Declared deliverables with no produced object behind them. */
+	pendingExpected: ExpectedOutput[];
+}
 export type PacketSection<T> = {
 	status: "ok";
 	total: number;
@@ -9615,6 +9867,47 @@ export interface PacketChildItem {
 	title: string;
 	status: string;
 	statusLabel: string;
+}
+/** A capture clarification question still waiting for the user's answer. */
+export interface PacketQuestionItem {
+	/** The question message id. */
+	id: string;
+	question: string;
+	/** One line: what answering changes. */
+	why?: string;
+	askedAt: string | null;
+}
+/**
+ * Work that already landed — "do not redo". `source` names the ledger:
+ *  - `output`: a produced object that is not in progress or swept;
+ *  - `deliverable`: a declared slot stamped done (approved or attested) with no
+ *    produced object standing for it;
+ *  - `proposal`: an approved or auto-approved proposal filed under this session
+ *    that no done slot already names.
+ */
+export interface PacketDoneItem {
+	source: "output" | "deliverable" | "proposal";
+	/** Object kind (`document`, `company`, …). */
+	kind: string;
+	title: string;
+	/** When it landed; `null` when the ledger recorded no time. */
+	at: string | null;
+	/** Object id / satisfying proposal id / proposal id; `null` when none exists. */
+	sourceId: string | null;
+}
+/** The most recent approved or rejected proposal of this session. */
+export interface PacketDecision {
+	proposalId: string;
+	/** Imperative — what the proposal asked to do. */
+	title: string;
+	outcome: "approved" | "rejected";
+	/** `resolveStatusLabel(outcome)` — the one label door, so no reader re-derives it. */
+	outcomeLabel: string;
+	decidedAt: string | null;
+	/** `unknown` when no reviewer is recorded or it no longer resolves. */
+	reviewer: "human" | "agent" | "unknown";
+	/** The reviewer's rejection reason, when one was given. */
+	reason?: string;
 }
 export type NextMoveKind = "owed_slot" | "pending_proposal" | "waiting_on_session" | "agent_slot" | "undeclared" | "ready_to_close" | "none" | "unknown";
 export interface ContinuationNextMove {
@@ -9675,6 +9968,23 @@ export interface ContinuationPacket {
 	 * which is owed SLOTS, not session edges.
 	 */
 	blockedBy: PacketSection<PacketChildItem>;
+	/**
+	 * Sessions waiting on this one (`other --blocked_by--> this`), open first —
+	 * the inbound twin of `blockedBy`: closing this session releases them.
+	 */
+	unblocks: PacketSection<PacketChildItem>;
+	/** Capture clarification questions still open in this session's room, oldest first. */
+	openQuestions: PacketSection<PacketQuestionItem>;
+	/** What already landed, newest first — an agent must not redo these. */
+	alreadyDone: PacketSection<PacketDoneItem>;
+	/** `decision: null` when nothing was ever approved or rejected here. */
+	lastDecision: {
+		status: "ok";
+		decision: PacketDecision | null;
+	} | {
+		status: "unavailable";
+		reason: string;
+	};
 	/** `null` when the session recorded no run manifest. */
 	run: {
 		sourcesCount: number;
@@ -9736,49 +10046,6 @@ export interface OwedSlot {
 	owedSince: string;
 	/** The agent's claim that it produced this after all, if it made one. */
 	claimedDone?: boolean;
-}
-/**
- * One thing a session produced. `id` is the STABLE join coordinate
- * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
- * collapse onto one entry, and the frontend can key on it across refetches.
- */
-export interface SessionOutput {
-	/** `<kind>:<refId>` — stable across ledgers and refetches. */
-	id: string;
-	/** Normalized object kind (`document`, `entity`, `view`, `cell`, `url`, …). */
-	kind: string;
-	/**
-	 * The UNDERLYING object's id — what navigation must use. NOT the artifact
-	 * row id: `SessionRoomGroundCell.tsx` opens an artifact by row id today and
-	 * lands on nothing.
-	 */
-	refId: string;
-	title: string;
-	icon?: string;
-	/** Artifact lifecycle, when an artifact row backs this output. */
-	state?: "working" | "kept" | "swept";
-	producedAt: Date;
-	/** Derivable from artifact provenance or the satisfying proposal's actor. */
-	producedBy?: "agent" | "human";
-	/**
-	 * The declared deliverable this object satisfies, when one matched — the
-	 * WHOLE slot, never a subset.
-	 *
-	 * It was an enumerated subset until 2026-09-08, and the enumeration is what
-	 * made `delegatedTo`, `delegatedAt`, `returnedReason` and `returnedAt`
-	 * readable in `pendingExpected` and invisible the instant the deliverable
-	 * landed. A matched slot and an unmatched one must read identically; the only
-	 * way to guarantee that as the type grows is to carry the type, so this is
-	 * `ExpectedOutput` itself and the assignment spreads.
-	 */
-	expected?: ExpectedOutput;
-	/** Which ledger(s) reported it — provenance for the join itself. */
-	source: Array<"artifact" | "produced_edge" | "expected">;
-}
-export interface SessionOutputsResult {
-	outputs: SessionOutput[];
-	/** Declared deliverables with no produced object behind them. */
-	pendingExpected: ExpectedOutput[];
 }
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
@@ -9954,6 +10221,68 @@ export interface ProjectAutomation {
 	description: string | null;
 	triggerType: string;
 	status: string | null;
+}
+export type Unavailable = {
+	status: "unavailable";
+	reason: string;
+};
+export type PathCount = {
+	status: "ok";
+	total: number;
+} | Unavailable;
+export interface ProjectPathRow {
+	id: string;
+	/** The stored name, `null` when untitled. */
+	title: string | null;
+	displayTitle: string;
+	goal: string;
+	status: string;
+	statusLabel: string;
+	kind: SessionKind;
+	triage: TriageProjection;
+	/**
+	 * `null` for a session filed in no workspace. `name` is `null` when the
+	 * caller cannot see that workspace.
+	 */
+	workspace: {
+		id: string;
+		name: string | null;
+	} | null;
+	startedAt: string | null;
+	updatedAt: string | null;
+	closedAt: string | null;
+	/** `this --blocked_by--> other`, OPEN ones first. */
+	blockedBy: PacketSection<PacketChildItem>;
+	/** `other --blocked_by--> this`, OPEN ones first. */
+	unblocks: PacketSection<PacketChildItem>;
+	parentCount: PathCount;
+	childrenCount: PathCount;
+	hasOutputs: {
+		status: "ok";
+		value: boolean;
+	} | Unavailable;
+	nextMove: ContinuationNextMove;
+}
+export interface ProjectPathResult {
+	project: {
+		id: string;
+		name: string;
+		description: string | null;
+		status: string;
+		statusLabel: string;
+	};
+	/** Across the WHOLE path under the same filter, not just this page. */
+	summary: {
+		openSessions: PathCount;
+		/** Owed human slots + pending proposals — what the user must decide. */
+		userMustDecide: PathCount;
+	};
+	items: ProjectPathRow[];
+	pagination: {
+		hasMore: boolean;
+		limit: number;
+		offset: number;
+	};
 }
 export interface ActionDescriptor {
 	id: string;
@@ -10708,7 +11037,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		log: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				subjectId: string;
-				subjectType: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "message" | "apiKey" | "chat" | "member" | "document" | "task";
+				subjectType: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "chat" | "member" | "task";
 				eventType: string;
 				data: Record<string, unknown>;
 				version: number;
@@ -10725,7 +11054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				since?: unknown;
 				until?: unknown;
 				type?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "message" | "apiKey" | "chat" | "member" | "document" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "chat" | "member" | "task" | undefined;
 				workspaceId?: string | undefined;
 				sessionId?: string | undefined;
 				limit?: number | undefined;
@@ -10755,7 +11084,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "message" | "apiKey" | "chat" | "member" | "document" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "chat" | "member" | "task" | undefined;
 				subjectId?: string | undefined;
 				subjectIds?: string[] | undefined;
 				correlationId?: string | undefined;
@@ -10821,7 +11150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				subjectId?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "message" | "apiKey" | "chat" | "member" | "document" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "chat" | "member" | "task" | undefined;
 				profileSlug?: string | undefined;
 				eventTypes?: string[] | undefined;
 				period?: "day" | "week" | "month" | undefined;
@@ -10842,7 +11171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				userId?: string | undefined;
 				eventType?: string | undefined;
-				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "message" | "apiKey" | "chat" | "member" | "document" | "task" | undefined;
+				subjectType?: "entity" | "relation" | "project" | "system" | "user" | "workspace" | "document" | "message" | "apiKey" | "chat" | "member" | "task" | undefined;
 				fromDate?: Date | undefined;
 				toDate?: Date | undefined;
 				workspaceId?: string | undefined;
@@ -11109,6 +11438,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requestedSessionIgnored: boolean;
 					sourceDocumentIds: string[];
 					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
 					errors?: string[];
 				};
 			} | {
@@ -11163,6 +11494,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requestedSessionIgnored: boolean;
 					sourceDocumentIds: string[];
 					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
 					errors?: string[];
 				};
 			};
@@ -11229,6 +11562,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				dedupMode?: "title" | "both" | "semantic" | undefined;
 				keepRaw?: boolean | undefined;
 				reanalyze?: boolean | undefined;
+				sourceDocumentId?: string | undefined;
 				sourceSha256?: string | undefined;
 				bulk?: boolean | undefined;
 				suppressFollowUp?: boolean | undefined;
@@ -11448,6 +11782,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requestedSessionIgnored: boolean;
 					sourceDocumentIds: string[];
 					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
 					errors?: string[];
 				};
 			} | {
@@ -11502,6 +11838,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requestedSessionIgnored: boolean;
 					sourceDocumentIds: string[];
 					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
 					errors?: string[];
 				};
 			};
@@ -11581,6 +11919,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | null;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				proposalIds: string[];
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11601,6 +11944,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reviewPath: string;
 				reviewUrl: string;
 				threadId: string | undefined;
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11651,6 +11999,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "failed";
 					entityId: string;
 				} | undefined;
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11714,6 +12067,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "failed";
 					entityId: string;
 				} | undefined;
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11777,6 +12135,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "failed";
 					entityId: string;
 				} | undefined;
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11834,6 +12197,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "failed";
 					entityId: string;
 				} | undefined;
+				sourceIntake: {
+					errors?: string[] | undefined;
+					sourceDocumentIds: string[];
+					origin: "run" | "staged";
+				};
 				sessionId: string | null;
 				intakeSession: {
 					error?: string | undefined;
@@ -11881,7 +12249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					source?: string | undefined;
 					externalId?: string | undefined;
 					signals?: {
-						type: "email" | "phone" | "website" | "telegram_phone" | "linkedin_url" | "github_username" | "twitter_handle";
+						type: "email" | "phone" | "telegram_phone" | "linkedin_url" | "github_username" | "twitter_handle" | "website";
 						value: string;
 					}[] | undefined;
 					existingEntityId?: string | undefined;
@@ -12927,7 +13295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				channelType: "external" | "personal" | "thread" | "sub_thread" | "feed" | "agent_collab";
 				workspaceId?: string | undefined;
-				contextObjectType?: "entity" | "project" | "user" | "workspace" | "proposal" | "external" | "document" | "view" | "task" | undefined;
+				contextObjectType?: "entity" | "project" | "user" | "workspace" | "document" | "proposal" | "external" | "view" | "task" | undefined;
 				contextObjectId?: string | undefined;
 				projectId?: string | undefined;
 				parentChannelId?: string | undefined;
@@ -13077,7 +13445,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				deepAnalysis?: boolean | undefined;
 				channelType?: "personal" | "thread" | "sub_thread" | "agent_collab" | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "proposal" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "document" | "proposal" | "view" | undefined;
 				branchPurpose?: string | undefined;
 				ephemeral?: boolean | undefined;
 				turnContext?: {
@@ -13335,7 +13703,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "proposal" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "document" | "proposal" | "view" | undefined;
 				assignedAgentId?: string | undefined;
 				agentUserId?: string | undefined;
 				includeArchived?: boolean | undefined;
@@ -13432,7 +13800,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				workspaceId?: string | undefined;
 				contextObjectId?: string | undefined;
-				contextObjectType?: "entity" | "proposal" | "document" | "view" | undefined;
+				contextObjectType?: "entity" | "document" | "proposal" | "view" | undefined;
 				limit?: number | undefined;
 				offset?: number | undefined;
 			};
@@ -13651,7 +14019,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					sourceMessageId: string | null;
 					relevanceScore: number | null;
-					objectType: "entity" | "proposal" | "document" | "view" | "inbox_item";
+					objectType: "entity" | "document" | "proposal" | "view" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -13672,7 +14040,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiReactionMode?: "only_mentioned" | "when_confident" | "off" | undefined;
 				addAgentMemberId?: string | undefined;
 				removeAgentMemberId?: string | undefined;
-				contextObjectType?: "entity" | "proposal" | "document" | "view" | null | undefined;
+				contextObjectType?: "entity" | "document" | "proposal" | "view" | null | undefined;
 				contextObjectId?: string | null | undefined;
 				branchPurpose?: string | undefined;
 			};
@@ -13826,7 +14194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getChannelContext: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				channelId: string;
-				objectTypes?: ("entity" | "proposal" | "document" | "view" | "inbox_item")[] | undefined;
+				objectTypes?: ("entity" | "document" | "proposal" | "view" | "inbox_item")[] | undefined;
 				relationshipTypes?: ("created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent")[] | undefined;
 			};
 			output: {
@@ -13839,7 +14207,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					sourceMessageId: string | null;
 					relevanceScore: number | null;
-					objectType: "entity" | "proposal" | "document" | "view" | "inbox_item";
+					objectType: "entity" | "document" | "proposal" | "view" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -13853,7 +14221,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					sourceMessageId: string | null;
 					relevanceScore: number | null;
-					objectType: "entity" | "proposal" | "document" | "view" | "inbox_item";
+					objectType: "entity" | "document" | "proposal" | "view" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -13867,7 +14235,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelId: string;
 					sourceMessageId: string | null;
 					relevanceScore: number | null;
-					objectType: "entity" | "proposal" | "document" | "view" | "inbox_item";
+					objectType: "entity" | "document" | "proposal" | "view" | "inbox_item";
 					objectId: string;
 					relationshipType: "created" | "updated" | "used_as_context" | "referenced" | "inherited_from_parent";
 					conflictStatus: "pending" | "none" | "resolved";
@@ -14426,7 +14794,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				offset?: number | undefined;
 				workspaceId?: string | null | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "profile" | "document" | "view" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "document" | "profile" | "view" | "whiteboard" | undefined;
 				targetId?: string | undefined;
 				proposalIds?: string[] | undefined;
 				threadId?: string | undefined;
@@ -14547,7 +14915,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
-				targetType?: "entity" | "automation" | "skill" | "playbook" | "profile" | "document" | "view" | "whiteboard" | undefined;
+				targetType?: "entity" | "automation" | "skill" | "playbook" | "document" | "profile" | "view" | "whiteboard" | undefined;
 				threadId?: string | undefined;
 				sessionId?: string | undefined;
 				projectId?: string | undefined;
@@ -14948,6 +15316,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					error?: string;
 					errorCode?: import("@trpc/server").TRPCError["code"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
+					refusals?: ProposalExecutorResult["refusals"];
 				}[];
 			};
 			meta: object;
@@ -14965,7 +15334,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		submit: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				targetType: "entity" | "relation" | "workspace" | "profile" | "document" | "view";
+				targetType: "entity" | "relation" | "workspace" | "document" | "profile" | "view";
 				changeType: "update" | "create" | "delete";
 				data: Record<string, any>;
 				targetId?: string | undefined;
@@ -16651,6 +17020,52 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 		}>;
 	}>>;
+	captures: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		list: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				cursor?: string | undefined;
+				limit?: number | undefined;
+				status?: "structured" | "not_structured" | "saved_without_ai" | "needs_answer" | undefined;
+			} | undefined;
+			output: {
+				items: CaptureItem[];
+				nextCursor: string | null;
+			};
+			meta: object;
+		}>;
+		get: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				documentId: string;
+			};
+			output: CaptureDetail;
+			meta: object;
+		}>;
+		structureAgain: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				documentId: string;
+				mode?: "replace" | "add" | undefined;
+				dryRun?: boolean | undefined;
+				reason?: string | undefined;
+			};
+			output: CaptureStructureAgainResult;
+			meta: object;
+		}>;
+	}>>;
 	content: import("@trpc/server").TRPCBuiltRouter<{
 		ctx: Context;
 		meta: object;
@@ -16689,7 +17104,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				file: string;
 				filename: string;
 				contentType: string;
-				targetType: "note" | "document";
+				targetType: "document" | "note";
 				metadata?: {
 					title?: string | undefined;
 					description?: string | undefined;
@@ -18224,7 +18639,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				input: {
 					workspaceId?: string | null | undefined;
 					query?: string | undefined;
-					kind?: "skill" | "tool" | "command" | "source-provider" | "builtin-tool" | "teaching-doc" | undefined;
+					kind?: "skill" | "tool" | "command" | "teaching-doc" | "builtin-tool" | "source-provider" | undefined;
 					limit?: number | undefined;
 				} | undefined;
 				output: {
@@ -18240,12 +18655,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						kind: CapabilityKind;
 						description: string | null;
 						governance: "auto" | "propose" | "none";
+						enabled: boolean;
 						connection?: {
 							required: boolean;
 							connected: boolean;
 							provider: string;
 						};
-						verbs: CapabilityVerbStateWithResponseShape[];
+						verbs: SectionVerb[];
 						blocked?: CapabilityNextAction;
 						match?: TermMatch;
 					}>;
@@ -18254,6 +18670,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 						description: string | null;
 						governance: "auto" | "propose" | "none";
+						enabled: boolean;
 						containerId: string | null;
 						containerName: string | null;
 						blocked?: CapabilityNextAction;
@@ -18270,7 +18687,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						description: string | null;
 						governance: "auto" | "propose" | "none";
 						runnableHere: boolean;
-						verbs: CapabilityVerbStateWithResponseShape[];
+						enabled: boolean;
+						verbs: SectionVerb[];
 					}>;
 					excluded: {
 						teachingDocs: number;
@@ -20129,7 +20547,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							matchUrls?: string[] | undefined;
 							surface?: {
 								[x: string]: unknown;
-								kind: "entity" | "cell" | "channel" | "url" | "document" | "view" | "app";
+								kind: "entity" | "cell" | "channel" | "document" | "url" | "view" | "app";
 								cellKey?: string | undefined;
 								viewId?: string | undefined;
 								viewName?: string | undefined;
@@ -20753,7 +21171,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "graph" | undefined;
+				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "graph" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -24127,6 +24545,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					actions: readonly string[];
 					note: string;
 				} | {
+					key: "agent-structure";
+					label: string;
+					rung: string;
+					editable: false;
+					actions: readonly string[];
+					note: string;
+				} | {
 					key: "destructive";
 					label: string;
 					rung: string;
@@ -27395,6 +27820,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				state?: Record<string, unknown> | undefined;
 			};
 			output: {
+				status: "proposed";
+				proposalId: string;
+				message: string;
+			} | {
 				status: string;
 				message: string;
 			};
@@ -27416,6 +27845,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | null | undefined;
 			};
 			output: {
+				status: "proposed";
+				proposalId: string;
+				message: string;
+			} | {
 				status: string;
 				nextRunAt?: undefined;
 			} | {
@@ -29071,7 +29504,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		attachOutput: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				sessionId: string;
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				refId: string;
 				label?: string | undefined;
 				expectedLabel?: string | undefined;
@@ -29849,9 +30282,19 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				run: null;
 				session: FocusSession | null;
+				status: "blocked";
+				message: string;
+				proposalId: string | null;
+				unenabledSkills: CapabilityRef[];
+				enableProposals: CapabilityEnableOffer[];
+			} | {
+				run: null;
+				session: FocusSession | null;
 				status: "proposed";
 				message: string;
 				proposalId: string;
+				unenabledSkills?: undefined;
+				enableProposals?: undefined;
 			} | {
 				run: {
 					id: string;
@@ -29897,6 +30340,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status: "running";
 				message: string;
 				proposalId: string | null;
+				unenabledSkills?: undefined;
+				enableProposals?: undefined;
 			};
 			meta: object;
 		}>;
@@ -30200,7 +30645,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				workspaceId: string | null;
 				userId: string;
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				refId: string | null;
 				cellKey: string | null;
 				props: unknown;
@@ -30229,7 +30674,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				sessionId: string | null;
 				refId: string | null;
 				cellKey: string | null;
@@ -30244,7 +30689,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				title: string;
 				refId?: string | undefined;
 				cellKey?: string | undefined;
@@ -30262,7 +30707,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				sessionId: string | null;
 				refId: string | null;
 				cellKey: string | null;
@@ -30289,7 +30734,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				createdAt: Date;
 				updatedAt: Date;
 				state: "working" | "kept" | "swept";
-				kind: "entity" | "automation" | "playbook" | "cell" | "url" | "document" | "view";
+				kind: "entity" | "automation" | "playbook" | "cell" | "document" | "url" | "view";
 				sessionId: string | null;
 				refId: string | null;
 				cellKey: string | null;
@@ -30392,6 +30837,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subject: ProjectSubject | null;
 				phaseCategory: PlaybookStageCategory;
 			};
+			meta: object;
+		}>;
+		path: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				projectId: string;
+				workspaceIds?: string[] | undefined;
+				lens?: "default" | "all" | "triage" | undefined;
+				limit?: number | undefined;
+				offset?: number | undefined;
+			};
+			output: ProjectPathResult;
 			meta: object;
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -30915,7 +31371,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				tools: {
 					name: string;
-					state: "wanted" | "connect" | "install";
+					state: "connect" | "wanted" | "install";
 					providerKey?: string | undefined;
 				}[];
 				origin?: "settings" | "onboarding" | undefined;

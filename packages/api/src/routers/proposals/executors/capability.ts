@@ -538,19 +538,29 @@ export function registerCapabilityExecutors(): void {
   // ── capability.enable (Wave 3b) — DRAFT → APPROVED, via the EXISTING gate ───
   // (P2.2-b): approver scope mirrors `skills.setApproved` exactly (workspace
   // owner, or pod-admin for a pod-wide skill) — this executor is a thin call
-  // through that already-gated path, no new authority model. The CREATION call
-  // site (e.g. the DRAFT-deny error hint proposing "enable this capability") is
-  // a different wave's concern; this registers the proposal TYPE + its executor
-  // so that wiring has somewhere to land.
+  // through that already-gated path, no new authority model. Filed by
+  // `proposeCapabilityEnable` (services/capabilities/propose-capability-enable.ts)
+  // — one request per PACK, so `data.skillIds` lists every draft verb of it;
+  // the single `data.skillId` is still accepted.
   registerProposalExecutor({
     key: "capability.enable",
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
-      const skillId = data.skillId as string | undefined;
-      if (!skillId) {
+      const idsOf = (v: unknown) =>
+        Array.isArray(v)
+          ? v.filter((id): id is string => typeof id === "string")
+          : [];
+      const skillIds = Array.isArray(data.skillIds)
+        ? idsOf(data.skillIds)
+        : typeof data.skillId === "string"
+          ? [data.skillId]
+          : [];
+      const toolIds = idsOf(data.toolIds);
+      if (skillIds.length === 0 && toolIds.length === 0) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "capability.enable requires skillId in proposal data",
+          message:
+            "capability.enable requires skillIds or toolIds in proposal data",
         });
       }
 
@@ -572,11 +582,29 @@ export function registerCapabilityExecutors(): void {
         userId,
         workspaceId: proposal.workspaceId ?? null,
       } as unknown as Context);
-      await caller.setApproved({ id: skillId, approved: true });
+      for (const id of skillIds) {
+        await caller.setApproved({ id, approved: true });
+      }
+      // Tools in the pack go through `tools.setApproved` — same owner/pod-admin
+      // gate, re-derived from each tool's own workspace.
+      if (toolIds.length > 0) {
+        const { toolsRouter } = await import("../../tools.js");
+        const toolsCaller = toolsRouter.createCaller({
+          db,
+          authenticated: true as const,
+          userId,
+          workspaceId: proposal.workspaceId ?? null,
+        } as unknown as Context);
+        for (const id of toolIds) {
+          await toolsCaller.setApproved({ id, approved: true });
+        }
+      }
 
       const materializedPayload = {
         ...payload,
         enabled: true,
+        enabledSkillIds: skillIds,
+        enabledToolIds: toolIds,
       } as unknown as typeof payload;
 
       await db

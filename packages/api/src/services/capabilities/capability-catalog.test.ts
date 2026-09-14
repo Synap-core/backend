@@ -3,36 +3,30 @@ import {
   extractParamsSchema,
   deriveConnection,
   verbType,
-  verbGovernance,
 } from "./capability-catalog.js";
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 
 /**
- * `verbType`/`verbGovernance` for BUILTIN verbs must never disagree with the
- * execute gate (`execute-capability.ts:454`, `skillRow.kind === "builtin" &&
- * READ_ONLY_BUILTIN_VERBS.has(skillRow.name)`) — that gate is what actually runs
- * a verb unattended. Reachability, not shape: iterate the REAL exported Set
- * (never a hand-listed copy) so a verb added to the gate is automatically
- * covered here too, and assert the classification comes out the OTHER end
- * (verbGovernance) as "auto", not merely that `type === "read"`.
+ * `verbType` (the direction axis) for BUILTIN verbs must never disagree with the
+ * execute gate (`execute-capability.ts`, `skillRow.kind === "builtin" &&
+ * READ_ONLY_BUILTIN_VERBS.has(skillRow.name)`). Reachability, not shape: iterate
+ * the REAL exported Set (never a hand-listed copy) so a verb added to the gate is
+ * automatically covered here too. The run-posture label is `runPosture`'s job
+ * (run-posture.doors.test.ts), not this classifier's.
  */
 describe("verbType — builtin read classification derives from the execute gate", () => {
   it("is non-vacuous: the gate's read-only set has a plausible number of members", () => {
     expect(READ_ONLY_BUILTIN_VERBS.size).toBeGreaterThan(5);
   });
 
-  it("classifies every READ_ONLY_BUILTIN_VERBS member as read/auto, including dotted names", () => {
+  it("classifies every READ_ONLY_BUILTIN_VERBS member as read, including dotted names", () => {
     for (const verbId of READ_ONLY_BUILTIN_VERBS) {
       expect(verbType(verbId, null, "builtin")).toBe("read");
-      expect(verbGovernance(verbType(verbId, null, "builtin"))).toBe("auto");
     }
   });
 
-  it("keeps a known WRITE builtin non-read (never auto-approved by this path)", () => {
+  it("keeps a known WRITE builtin non-read", () => {
     expect(verbType("entity.create", null, "builtin")).not.toBe("read");
-    expect(verbGovernance(verbType("entity.create", null, "builtin"))).toBe(
-      "propose"
-    );
   });
 
   it("does not classify a non-builtin skill as read merely by sharing a name with a builtin verb", () => {

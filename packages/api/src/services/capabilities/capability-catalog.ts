@@ -106,6 +106,11 @@ export interface CapabilityCardVerb {
   type: "read" | "write" | "action";
   /** Backing skill `approved === true`. */
   enabled: boolean;
+  /**
+   * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
+   * files a review. Under a lens it honours the grant, exactly as
+   * `GET /capabilities/actions` does. Not the approval gate — that is `enabled`.
+   */
   governance: "auto" | "propose";
   /** enabled AND (no connection required OR connection connected). */
   runnable: boolean;
@@ -384,13 +389,6 @@ export function verbType(
   if (READ_TOKEN.test(verbId)) return "read";
   if (ACTION_TOKEN.test(verbId)) return "action";
   return "write";
-}
-
-// Reads run inline (auto); writes/actions ask approval each run (propose).
-// Independent of `enabled` (the operator's one-time approval gate). Mirrors the
-// north star: "search email (read)" inline vs "send email (action · asks approval)".
-export function verbGovernance(type: VerbType): "auto" | "propose" {
-  return type === "read" ? "auto" : "propose";
 }
 
 // ── Credential-ref → connection requirement ───────────────────────────────────
@@ -816,19 +814,27 @@ export async function buildCapabilityCatalog(
   //    catalog's workspace containers. Without a lens `launchable` stays
   //    unmeasured (`null`), never guessed `false`. A failed read throws —
   //    it must not render as "not runnable".
+  //    The same read also gives each verb's run posture (`governance`), so a
+  //    card's label honours the lens's grant exactly as the actions door does.
   const [
     { listCapabilities },
-    { runnableVerbIdsByContainer },
+    { runnableVerbIdsByContainer, runPostureByContainer },
     { SYNAP_CORE_DEFINITION },
+    { catalogVerbPosture },
   ] = await Promise.all([
     import("./capability-registry.js"),
     import("./action-projection.js"),
     import("./ensure-synap-core.js"),
+    import("./run-posture.js"),
   ]);
-  const runnableByContainer = workspaceId
-    ? runnableVerbIdsByContainer(
-        await listCapabilities({ workspaceId, userId })
-      )
+  const lensCapabilities = workspaceId
+    ? await listCapabilities({ workspaceId, userId })
+    : null;
+  const postureByContainer = lensCapabilities
+    ? runPostureByContainer(lensCapabilities)
+    : null;
+  const runnableByContainer = lensCapabilities
+    ? runnableVerbIdsByContainer(lensCapabilities)
     : null;
 
   // ── Installed cards ─────────────────────────────────────────────────────────
@@ -892,7 +898,10 @@ export async function buildCapabilityCatalog(
         description: s.description ?? null,
         type,
         enabled,
-        governance: verbGovernance(type),
+        governance: catalogVerbPosture(
+          s,
+          postureByContainer?.get(container.id)?.get(s.name)
+        ),
         runnable: enabled && connectionOk && projected,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
@@ -969,7 +978,9 @@ export async function buildCapabilityCatalog(
         description: s.description ?? null,
         type,
         enabled: false,
-        governance: verbGovernance(type),
+        // Not installed: no grant can exist yet — the label is what an agent's
+        // run would meet once it is, with the grant still unissued.
+        governance: catalogVerbPosture(s, undefined),
         runnable: false,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),

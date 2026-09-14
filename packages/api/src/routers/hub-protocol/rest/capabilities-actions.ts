@@ -35,7 +35,10 @@ const ActionSchema = z.object({
       provider: z.string(),
     })
     .optional(),
-  governance: z.literal("auto"),
+  // Run posture: `auto` runs now, `propose` files a review. NOT the approval
+  // gate — that is `enabled`, always true on this door (drafts are omitted).
+  governance: z.enum(["auto", "propose"]),
+  enabled: z.literal(true),
   executionMode: z.string().optional(),
   // Per-verb direction axis — pull (read) vs push (write/action). Optional:
   // absent for a skill-only action (honest-unknown, never defaulted).

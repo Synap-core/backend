@@ -165,6 +165,15 @@ export interface GraphNeighbor extends GraphNode {
     // Folded in read-time by `getDocumentBodyNeighbors`, direction "incoming"
     // (the document is the target of the FK).
     | "body";
+  /**
+   * Set only on an entity's materialization RECEIPT — the proposal named by
+   * `entities.sourceProposalId`: where the write came from.
+   */
+  receipt?: {
+    sessionId: string | null;
+    sourceMessageId: string | null;
+    agentUserId: string | null;
+  };
 }
 
 /** "Fetch X, get X + everything it's linked to, typed." */
@@ -373,6 +382,25 @@ function hydrationScopeWhere(
  * never N+1. Unknown/stub kinds resolve to a raw-id node (name = short id) so
  * the neighbour is still listed.
  */
+/**
+ * The graph kind a hydrated row is emitted as. A `documents` row that is a
+ * staged intake source (`metadata.intakeSource`) is a CAPTURE, addressed by the
+ * same documentId, so every surface routes it to its capture page rather than
+ * the prose-document one. Every other document stays `document`. The one place
+ * the graph decides this.
+ */
+export function graphKindOfRow(
+  kind: string,
+  row: Record<string, unknown>
+): string {
+  if (kind !== "document") return kind;
+  const intakeSource = (row.metadata as { intakeSource?: unknown } | null)
+    ?.intakeSource;
+  return intakeSource != null && typeof intakeSource === "object"
+    ? "capture"
+    : "document";
+}
+
 export async function hydrateNodes(
   userId: string,
   refs: { kind: string; id: string }[],
@@ -441,7 +469,7 @@ export async function hydrateNodes(
         if (facetSlugsByEntity)
           subtypes.push(...(facetSlugsByEntity.get(id) ?? []));
         out.set(`${kind}:${id}`, {
-          kind,
+          kind: graphKindOfRow(kind, row),
           id,
           name: (row[spec.name] as string | null) ?? "(untitled)",
           subtype,
@@ -492,16 +520,34 @@ export async function getLinkNeighbors(
     };
   });
 
-  const nodes = await hydrateNodes(
-    userId,
-    refs.map((r) => ({ kind: r.kind, id: r.id })),
-    facetVisibilityScope,
-    workspaceId
-  );
-  return refs.map((r) => {
+  const otherRefs = refs.filter((r) => r.kind !== "document");
+  const documentRefs = refs.filter((r) => r.kind === "document");
+  const [nodes, documentNodes] = await Promise.all([
+    hydrateNodes(
+      userId,
+      otherRefs.map((r) => ({ kind: r.kind, id: r.id })),
+      facetVisibilityScope,
+      workspaceId
+    ),
+    // A raw capture usually lives pod-personal (NULL workspace), so the lens
+    // would hide it from the entity it made. The edge was already lens-filtered
+    // by `getLinksFor`; the document keeps its OWNER floor.
+    hydrateNodes(
+      userId,
+      documentRefs.map((r) => ({ kind: r.kind, id: r.id })),
+      facetVisibilityScope,
+      undefined
+    ),
+  ]);
+  for (const [key, node] of documentNodes) nodes.set(key, node);
+  return refs.flatMap((r) => {
     const node = nodes.get(`${r.kind}:${r.id}`);
+    // A document is owner-private: one the caller cannot see is another
+    // person's raw capture — dropped, never surfaced as a bare id.
+    if (!node && r.kind === "document") return [];
     return {
-      kind: r.kind,
+      // The hydrated kind: an intake-source document is emitted as `capture`.
+      kind: node?.kind ?? r.kind,
       id: r.id,
       name: node?.name ?? r.id,
       subtype: node?.subtype ?? null,
@@ -983,6 +1029,119 @@ export async function getTemporalNeighbors(
   return out;
 }
 
+/**
+ * The RECEIPT of an entity — the proposal its `source_proposal_id` names, plus
+ * the session that proposal ran in. Every materialize door stamps that column
+ * (`entities.create` reads `ctx.governanceProposalId`), so this is the stored
+ * answer to "which write made this", where the temporal fold only finds it if
+ * an event row happens to carry the proposal id.
+ *
+ * Emitted with the SAME `(kind, id, edgeType, via)` as the temporal fold's
+ * proposal row, and merged BEFORE it, so the one row that lands is this one —
+ * the one carrying `receipt` (session, source message, agent).
+ *
+ * Floors: the entity through the canonical entity read scope; the proposal
+ * through the temporal fold's floor (lens OR authored); the session through
+ * `hydrateNodes`. A row failing a floor is dropped, never a bare id.
+ */
+export async function getReceiptNeighbors(
+  userId: string,
+  kind: string,
+  id: string,
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<GraphNeighbor[]> {
+  if (kind !== "entity") return [];
+
+  const db = await getDb();
+  const [entity] = await db
+    .select({ sourceProposalId: entities.sourceProposalId })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, id),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId,
+          workspaceLens: workspaceId,
+          facetLens: true,
+        })
+      )
+    )
+    .limit(1);
+  const proposalId = entity?.sourceProposalId;
+  if (!proposalId) return [];
+
+  const [receipt] = await db
+    .select({
+      id: proposals.id,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      status: proposals.status,
+      workspaceId: proposals.workspaceId,
+      sessionId: proposals.sessionId,
+      sourceMessageId: proposals.sourceMessageId,
+      agentUserId: proposals.agentUserId,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.id, proposalId),
+        or(
+          userVisibleWhere(proposals.workspaceId, userId),
+          authoredByUser(userId)
+        )
+      )
+    )
+    .limit(1);
+  if (!receipt) return [];
+
+  const out: GraphNeighbor[] = [
+    {
+      kind: "proposal",
+      id: receipt.id,
+      name: buildObjectActionTitle({
+        action: receipt.proposalType,
+        objectKind: receipt.targetType,
+        mood: "past",
+      }),
+      subtype: receipt.status,
+      subtypes: [receipt.status],
+      workspaceId: receipt.workspaceId,
+      edgeType: receipt.proposalType,
+      direction: "incoming",
+      via: "governed",
+      receipt: {
+        sessionId: receipt.sessionId,
+        sourceMessageId: receipt.sourceMessageId,
+        agentUserId: receipt.agentUserId,
+      },
+    },
+  ];
+
+  if (receipt.sessionId) {
+    const nodes = await hydrateNodes(
+      userId,
+      [{ kind: "session", id: receipt.sessionId }],
+      facetVisibilityScope,
+      workspaceId
+    );
+    const session = nodes.get(`session:${receipt.sessionId}`);
+    if (session) {
+      out.push({
+        ...session,
+        edgeType: "produced_in",
+        direction: "incoming",
+        via: "produced-in",
+      });
+    }
+  }
+  return out;
+}
+
 /** Max entities returned as the "body of" neighbours of one document. */
 const DOCUMENT_BODY_NEIGHBOR_CAP = 25;
 
@@ -1135,12 +1294,14 @@ export async function getObjectGraph(
   const [
     selfMap,
     linkNeighbors,
+    receiptNeighbors,
     governanceNeighbors,
     temporalNeighbors,
     documentBodyNeighbors,
   ] = await Promise.all([
     hydrateNodes(userId, [{ kind, id }], facetVisibilityScope, workspaceId),
     getLinkNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
+    getReceiptNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     getGovernanceNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     getTemporalNeighbors(userId, kind, id, facetVisibilityScope, workspaceId),
     getDocumentBodyNeighbors(
@@ -1154,8 +1315,11 @@ export async function getObjectGraph(
 
   // Merge config + data graphs through the ONE de-dup door (see `mergeNeighbors`:
   // same-edge-twice, plus the produced / produced-in one-fact-two-rows fold).
+  // `receiptNeighbors` before `temporalNeighbors`: same key, and the receipt
+  // row is the one carrying session / source message / agent.
   const neighbors = mergeNeighbors([
     linkNeighbors,
+    receiptNeighbors,
     governanceNeighbors,
     temporalNeighbors,
     documentBodyNeighbors,

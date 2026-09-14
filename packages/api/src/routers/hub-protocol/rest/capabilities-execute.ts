@@ -191,10 +191,21 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
           // `enable.url`) — a 403 that only says "refused" is the dead end this
           // door existed as until now. 4xx bodies survive the egress sanitizer
           // (only 5xx is redacted), so the link actually reaches the caller.
+          // An agent's refusal may also carry the enable request it filed. Its
+          // "did NOT run" sentence rides in `error` too: the IS client keeps
+          // only `error` from a 403, and a 403 (not 202) is what tells every
+          // caller the action itself was not queued.
           return c.json(
             {
-              error: `Capability refused by gate: ${outcome.reason}`,
+              error:
+                `Capability refused by gate: ${outcome.reason}` +
+                (outcome.enableProposal?.status === "proposed"
+                  ? ` ${outcome.enableProposal.message} Review: ${outcome.enableProposal.reviewUrl}`
+                  : ""),
               ...(outcome.enable ? { enable: outcome.enable } : {}),
+              ...(outcome.enableProposal
+                ? { enableProposal: outcome.enableProposal }
+                : {}),
             },
             403
           );

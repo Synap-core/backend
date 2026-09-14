@@ -18,14 +18,23 @@ import {
 } from "../retire-profile.js";
 import {
   buildCleanupPackItems,
-  buildCleanupPackRows,
   buildCleanupPackSummary,
-  describeCleanupAction,
-  groupCandidatesByOwner,
-  proposalOwner,
-  MAX_ITEMS_PER_ACTION,
+  isSupersedable,
+  suppressedRefs,
+  REFUSED_SETTLE_DAYS,
+  REJECTED_PACK_SILENCE_DAYS,
   type CleanupCandidate,
+  type PackRow,
 } from "../cleanup-pack.js";
+import {
+  CLEANUP_PACK_SCHEMA,
+  KEEP_DAYS,
+  MAX_ITEMS_PER_ACTION,
+  MAX_ITEMS_PER_PACK,
+  SUPERSEDE_AFTER_DAYS,
+  stableItemRef,
+  type CleanupPackItemV2,
+} from "@synap-core/types/pod-hygiene";
 import { retireReviewRows } from "../retire-profile.js";
 import { summarizeSchemaHygiene } from "../../diagnose/schema-hygiene.js";
 
@@ -220,124 +229,208 @@ describe("pickMergeSuggestion", () => {
   });
 });
 
-describe("cleanup pack items", () => {
-  const now = d("2026-09-14T00:00:00Z");
-  const cand = (
-    action: CleanupCandidate["action"],
-    i: number,
-    owner = "u1"
-  ): CleanupCandidate => ({
+const NOW_V2 = d("2026-09-14T00:00:00Z");
+const daysAgo = (n: number) => new Date(NOW_V2.getTime() - n * 86_400_000);
+
+/** A valid schema-2 item (the shared reader rejects anything else). */
+function v2item(
+  action: CleanupPackItemV2["action"],
+  id: string,
+  idleDays = 40
+): CleanupPackItemV2 {
+  const isSession = action === "close_session";
+  return {
+    ref: stableItemRef(action, id),
     action,
-    targetId: `${action}-${i}`,
-    ownerUserId: owner,
-    label: `${action} ${i}`,
-    since: new Date(now.getTime() - (40 + i) * 86_400_000),
+    subject: { kind: isSession ? "session" : "kind", id, name: id },
+    evidence: {
+      createdAt: daysAgo(idleDays + 10).toISOString(),
+      lastActivityAt: isSession ? daysAgo(idleDays).toISOString() : null,
+    },
+    reversible: false,
+    risk: "low",
+    snapshot: { updatedAt: daysAgo(idleDays).toISOString() },
+  };
+}
+
+describe("cleanup pack v2 items", () => {
+  const cand = (item: CleanupPackItemV2): CleanupCandidate => ({
+    item,
+    ownerUserId: "u1",
   });
 
-  it("caps each action, oldest first, and counts what it cut", () => {
-    const many = Array.from({ length: MAX_ITEMS_PER_ACTION + 3 }, (_, i) =>
-      cand("close_session", i)
+  it("caps per action AND per pack, longest-idle first, and counts every cut", () => {
+    const sessions = Array.from({ length: MAX_ITEMS_PER_ACTION + 4 }, (_, i) =>
+      cand(v2item("close_session", `s${i}`, 40 + i))
     );
-    const { items, truncated } = buildCleanupPackItems(
-      [...many, cand("pause_automation", 0)],
-      { now }
+    const kinds = Array.from({ length: MAX_ITEMS_PER_ACTION + 2 }, (_, i) =>
+      cand(v2item("retire_profile", `k${i}`, 40 + i))
     );
-    expect(items.filter((i) => i.action === "close_session")).toHaveLength(
-      MAX_ITEMS_PER_ACTION
+    const { items, truncated } = buildCleanupPackItems([...sessions, ...kinds]);
+    const kept = (a: string) => items.filter((i) => i.action === a).length;
+
+    expect(items.length).toBeLessThanOrEqual(MAX_ITEMS_PER_PACK);
+    expect(kept("close_session")).toBe(MAX_ITEMS_PER_ACTION);
+    expect(truncated.close_session).toBe(4);
+    expect(truncated.retire_profile).toBe(
+      kinds.length - kept("retire_profile")
     );
-    expect(truncated.close_session).toBe(3);
-    expect(items[0]!.targetId).toBe(
-      `close_session-${MAX_ITEMS_PER_ACTION + 2}`
-    );
-    expect(items.map((i) => i.ref)).toEqual(items.map((_, i) => `$item${i}`));
+    expect(items[0]!.subject.id).toBe(`s${MAX_ITEMS_PER_ACTION + 3}`);
+    expect(
+      items.every((i) => i.ref === stableItemRef(i.action, i.subject.id))
+    ).toBe(true);
   });
 
-  it("drops owners that already hold an open pack (idempotency)", () => {
-    const grouped = groupCandidatesByOwner(
-      [cand("close_session", 0, "u1"), cand("close_session", 1, "u2")],
-      new Set(["u1"])
-    );
-    expect([...grouped.keys()]).toEqual(["u2"]);
+  it("titles the pack through the shared vocabulary clause", () => {
+    expect(
+      buildCleanupPackSummary([
+        v2item("close_session", "a"),
+        v2item("close_session", "b"),
+        v2item("retire_profile", "k"),
+      ])
+    ).toBe("Tidy your pod: Close 2 idle sessions, retire 1 unused kind");
+  });
+});
+
+describe("don't-nag rule (suppressedRefs)", () => {
+  const S = stableItemRef("close_session", "s1");
+  const K = stableItemRef("retire_profile", "k1");
+  function pack(p: {
+    status: string;
+    reviewedAt?: Date | null;
+    createdAt?: Date;
+    extra?: Record<string, unknown>;
+  }): PackRow {
+    return {
+      status: p.status,
+      createdAt: p.createdAt ?? daysAgo(2),
+      reviewedAt: p.reviewedAt ?? null,
+      data: {
+        schema: CLEANUP_PACK_SCHEMA,
+        items: [v2item("close_session", "s1"), v2item("retire_profile", "k1")],
+        ...p.extra,
+      },
+    };
+  }
+  const reasons = (rows: PackRow[]) =>
+    Object.fromEntries(suppressedRefs(rows, NOW_V2));
+
+  it("an open pack suppresses its items until it is supersedable", () => {
+    expect(reasons([pack({ status: "pending" })])).toEqual({
+      [S]: "open",
+      [K]: "open",
+    });
+    const old = pack({
+      status: "pending",
+      createdAt: daysAgo(SUPERSEDE_AFTER_DAYS + 1),
+    });
+    expect(isSupersedable(old, NOW_V2)).toBe(true);
+    expect(reasons([old])).toEqual({});
   });
 
-  it("never guesses a proposal's owner", () => {
+  it("Leave out is a keep for KEEP_DAYS of the item's SUBJECT kind", () => {
+    const leftOutBoth = {
+      dispositions: { [S]: { status: "reject" }, [K]: { status: "reject" } },
+    };
+    // Past the session window, inside the kind window: the two diverge.
+    const between = KEEP_DAYS.session + 1;
+    expect(between).toBeLessThan(KEEP_DAYS.kind);
     expect(
-      proposalOwner({
-        subjectUserId: null,
-        createdBy: "agent-9",
-        agentUserId: "agent-9",
-      })
-    ).toBeNull();
+      reasons([
+        pack({
+          status: "approved",
+          reviewedAt: daysAgo(between),
+          extra: leftOutBoth,
+        }),
+      ])
+    ).toEqual({ [K]: "kept" });
+  });
+
+  it("a refused outcome settles for REFUSED_SETTLE_DAYS, then is proposed again", () => {
+    const refusedK = { outcomes: { [K]: { outcome: "refused", reason: "x" } } };
     expect(
-      proposalOwner({ subjectUserId: null, createdBy: "u1", agentUserId: null })
-    ).toBe("u1");
+      reasons([
+        pack({
+          status: "approved",
+          reviewedAt: daysAgo(REFUSED_SETTLE_DAYS - 1),
+          extra: refusedK,
+        }),
+      ])
+    ).toEqual({ [K]: "refused" });
     expect(
-      proposalOwner({
-        subjectUserId: "u3",
-        createdBy: "agent-9",
-        agentUserId: "agent-9",
-      })
-    ).toBe("u3");
+      reasons([
+        pack({
+          status: "approved",
+          reviewedAt: daysAgo(REFUSED_SETTLE_DAYS + 1),
+          extra: refusedK,
+        }),
+      ])
+    ).toEqual({});
+    // A legacy outcomes ARRAY names no id-keyed ref.
+    expect(
+      reasons([
+        pack({
+          status: "approved",
+          reviewedAt: daysAgo(1),
+          extra: { outcomes: [{ ref: K, outcome: "refused" }] },
+        }),
+      ])
+    ).toEqual({});
+  });
+
+  it("a pack rejected whole silences every item for REJECTED_PACK_SILENCE_DAYS", () => {
+    expect(
+      reasons([
+        pack({
+          status: "rejected",
+          reviewedAt: daysAgo(REJECTED_PACK_SILENCE_DAYS - 1),
+        }),
+      ])
+    ).toEqual({ [S]: "rejectedPack", [K]: "rejectedPack" });
+    expect(
+      reasons([
+        pack({
+          status: "rejected",
+          reviewedAt: daysAgo(REJECTED_PACK_SILENCE_DAYS + 1),
+        }),
+      ])
+    ).toEqual({});
+  });
+
+  it("an expired or withdrawn pack buys no silence — even one whose withdraw stamped reviewedAt", () => {
+    const leftOut = { dispositions: { [S]: { status: "reject" } } };
+    expect(
+      reasons([pack({ status: "expired", reviewedAt: null, extra: leftOut })])
+    ).toEqual({});
+    expect(
+      reasons([
+        pack({ status: "withdrawn", reviewedAt: daysAgo(1), extra: leftOut }),
+      ])
+    ).toEqual({});
+  });
+
+  it("a legacy v1 pack (positional refs) suppresses nothing", () => {
+    const v1: PackRow = {
+      status: "pending",
+      createdAt: daysAgo(1),
+      reviewedAt: null,
+      data: {
+        items: [
+          {
+            ref: "$item0",
+            action: "close_session",
+            targetId: "s1",
+            label: "Old",
+            reason: "x",
+          },
+        ],
+      },
+    };
+    expect(reasons([v1])).toEqual({});
   });
 });
 
 describe("review card copy (M1 / M2)", () => {
-  it("names each action group through the vocabulary, singular and plural", () => {
-    expect(describeCleanupAction("close_session", 1)).toBe(
-      "Close 1 idle session"
-    );
-    expect(describeCleanupAction("close_session", 3)).toBe(
-      "Close 3 idle sessions"
-    );
-    expect(describeCleanupAction("retire_profile", 12)).toBe(
-      "Retire 12 unused kinds"
-    );
-    expect(describeCleanupAction("pause_automation", 2)).toBe(
-      "Pause 2 automations that never ran"
-    );
-    // The old hand-humanized title leaked the raw token: "12 retire profile".
-    expect(describeCleanupAction("retire_profile", 12)).not.toMatch(/profile/);
-  });
-
-  it("builds ONE sentence: first clause capitalised, the rest lower-case", () => {
-    expect(
-      buildCleanupPackSummary([
-        ["close_session", 3],
-        ["expire_proposal", 1],
-      ])
-    ).toBe("Tidy your pod: Close 3 idle sessions, expire 1 old proposal");
-  });
-
-  it("lists every item under its group and counts what a later pack gets", () => {
-    const rows = buildCleanupPackRows(
-      [
-        {
-          ref: "$item0",
-          action: "close_session",
-          targetId: "s1",
-          label: "A",
-          reason: "",
-        },
-        {
-          ref: "$item1",
-          action: "close_session",
-          targetId: "s2",
-          label: "B",
-          reason: "",
-        },
-      ],
-      {
-        close_session: 4,
-        expire_proposal: 0,
-        retire_profile: 0,
-        pause_automation: 0,
-      }
-    );
-    expect(rows["Close 2 idle sessions"]).toBe("A; B");
-    expect(rows["left for a later pack"]).toBe(4);
-    expect(rows["on approve"]).toBeTruthy();
-  });
-
   it("a retire card shows every dependent count, and says why automations were not counted", () => {
     const rows = retireReviewRows({
       entities: 0,

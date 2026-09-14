@@ -692,7 +692,10 @@ export type LinkEndpointType =
   | "agent"
   // A workspace (lens). `workspace --feeds--> workspace` = provider→consumer
   // lens propagation; `workspace --requires--> workspace` = install dependency.
-  | "workspace";
+  | "workspace"
+  // A `documents` row — the raw capture. `document --produced--> entity`,
+  // system-written by `stampMaterialized` only.
+  | "document";
 
 // `governance_rule` was removed here in lock-step with the @synap/database
 // union — it had no producer and no reader. See the note in

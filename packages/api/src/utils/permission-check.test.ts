@@ -1918,7 +1918,7 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
       ["document", "create"],
       ["context", "link"],
       ["bento", "arrange"],
-      ["automation", "create"],
+      // automation.create LEFT this list on purpose (D2): see the next test.
       ["focus_session", "create"],
       ["focus_session", "update"],
       ["link", "create"],
@@ -1938,6 +1938,25 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
         result,
         `${subjectType}.${action} must still auto-execute`
       ).toMatchObject({ granted: true });
+    }
+  });
+
+  it("D2: doors that auto-executed before and now PROPOSE on a default pod (agent structure writes, rung 2.09)", async () => {
+    // Intended change, not a regression: an AI-sourced automation create is a
+    // structure write (founder D2) and left DEFAULT_AUTO_APPROVE. Kept as its
+    // own list so the no-regression invariant above still covers every other door.
+    const nowProposes: [string, string][] = [["automation", "create"]];
+    for (const [subjectType, action] of nowProposes) {
+      setupAnonymousFlow({});
+      const result = await anonymousWrite({
+        subjectType,
+        action,
+        data: { id: `${subjectType}-${action}` },
+      });
+      expect(
+        "granted" in result && result.granted === false,
+        `${subjectType}.${action} must now propose (D2)`
+      ).toBe(true);
     }
   });
 

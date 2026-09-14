@@ -193,6 +193,40 @@ export function resolveActionLabel(
   return verb ? verb[mood] : humanizeToken(action);
 }
 
+/** Which end of a lineage edge the reader is standing on. */
+export type LineageDirection = "incoming" | "outgoing";
+
+/**
+ * Lineage edge labels — how "what made this / what this made" reads.
+ *
+ * Keyed by the lineage relation, read from the FOCUSED object's side:
+ *   - `produced` — the `document --produced--> entity` link. On the entity
+ *     (incoming) it reads "Made from" the capture; on the capture (outgoing)
+ *     it reads "Made" the entity.
+ *   - `rerun` — a rerun session is `spawned_from` the run it replays. Keyed
+ *     `rerun`, not `spawned_from`: a plain fork is also `spawned_from`, and
+ *     only a reader that knows the child is a rerun (its run manifest) may
+ *     call it "Rerun of".
+ *
+ * A direction with no curated label humanizes, never leaks.
+ */
+export const LINEAGE_EDGE_LABELS: Readonly<
+  Record<string, Readonly<Partial<Record<LineageDirection, string>>>>
+> = {
+  produced: { incoming: "Made from", outgoing: "Made" },
+  rerun: { outgoing: "Rerun of" },
+};
+
+export function resolveLineageEdgeLabel(
+  edge: string | null | undefined,
+  direction: LineageDirection
+): string {
+  if (!edge) return "";
+  return (
+    LINEAGE_EDGE_LABELS[edge.toLowerCase()]?.[direction] ?? humanizeToken(edge)
+  );
+}
+
 /**
  * Object-kind nouns the kind registry does NOT model.
  *
@@ -476,6 +510,14 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   work: "Work",
   run: "Run",
   receipt: "Receipt",
+  // CAPTURE status — derived by `captures.list` / `captures.get`, never stored
+  // (raw-capture contract §4). Spelled out because humanizing loses the words
+  // that matter: `saved_without_ai` → "Saved without ai", and "Needs answer"
+  // drops who owes it. "Saved without AI" is the one a person must spot.
+  structured: "Structured",
+  saved_without_ai: "Saved without AI",
+  needs_answer: "Needs your answer",
+  not_structured: "Not structured",
 };
 
 /**
@@ -485,6 +527,35 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
 export function resolveStatusLabel(status: string | null | undefined): string {
   if (!status) return "";
   return STATUS_LABELS[status.toLowerCase()] ?? humanizeToken(status);
+}
+
+/**
+ * Where a capture came in — `documents.metadata.intakeSource.door`, as words.
+ *
+ * Keyed by the WHOLE door token. `humanizeToken` keeps only the last dotted
+ * segment, which is exactly wrong here: `capture.graph` would read "Graph" and
+ * `calcom.webhook` "Webhook" — the part that says WHERE is the prefix. Two
+ * doors may share a label when a person cannot tell them apart (`capture` and
+ * `capture.execute` are both "you captured it"; Cal.com live vs backfill).
+ * `capture.graph` is "Agent or app": MCP agents AND Raycast/hub clients use it.
+ * An unknown door humanizes, never leaks.
+ */
+export const CAPTURE_DOOR_LABELS: Readonly<Record<string, string>> = {
+  capture: "Capture",
+  "capture.execute": "Capture",
+  "capture.graph": "Agent or app",
+  "message.interpret": "Chat",
+  "calcom.webhook": "Cal.com",
+  "calcom.backfill": "Cal.com",
+  import: "Import",
+  structure_again: "Structure again",
+};
+
+export function resolveCaptureDoorLabel(
+  door: string | null | undefined
+): string {
+  if (!door) return "";
+  return CAPTURE_DOOR_LABELS[door.trim().toLowerCase()] ?? humanizeToken(door);
 }
 
 /**

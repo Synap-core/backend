@@ -33,6 +33,9 @@
  *     plain `deny` and exists for callers with no interactive review surface
  *     (the automation executor). A client that could set it could suppress its
  *     own governance receipt.
+ *   • `observability` — INTERNAL ONLY. `"mirror"` drops a direct run's recall
+ *     deposit; it exists for connection-sync page reads. A client that could set
+ *     it could run without leaving a recall trace.
  *
  * That split is not documentation: it is what `CLIENT_SUPPLIED_PARAMS` below
  * asserts, and what the input-parity tripwire
@@ -173,6 +176,7 @@ export const SERVER_DERIVED_PARAMS = [
   "userId",
   "agentUserId",
   "suppressProposal",
+  "observability",
 ] as const;
 
 /**

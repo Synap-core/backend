@@ -230,6 +230,50 @@ async function returnRejectedSlot(
   }
 }
 
+/**
+ * The per-item doors (`rejectItem` / `restoreItem`) act on a PENDING proposal
+ * only — a disposition written after approval is a decision nobody reads. And
+ * when the proposal carries an item list whose entries name a `ref` (the
+ * cleanup-pack shape), the ref must be one of them: a typo would otherwise
+ * persist a disposition that silently matches nothing. A composite graph has no
+ * `items[].ref` and keeps its existing `$opN` / op-ref keys unchecked here.
+ */
+function assertItemDoorWritable(
+  proposal: { status: string; data: unknown },
+  itemRef: string
+): void {
+  if (proposal.status !== ProposalStatus.PENDING) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Items can only be reviewed on a pending proposal (this one is ${proposal.status}).`,
+    });
+  }
+  const items = (proposal.data as { items?: unknown } | null)?.items;
+  if (!Array.isArray(items)) return;
+  const refs = items
+    .map((item) =>
+      item && typeof item === "object"
+        ? (item as { ref?: unknown }).ref
+        : undefined
+    )
+    .filter((ref): ref is string => typeof ref === "string");
+  if (refs.length > 0 && !refs.includes(itemRef)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `No item "${itemRef}" in this proposal.`,
+    });
+  }
+}
+
+/** Nothing matched the pending-only write: the proposal was decided meanwhile. */
+function itemDoorRaceConflict(): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message:
+      "Items can only be reviewed on a pending proposal (it was decided meanwhile).",
+  });
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -1452,6 +1496,7 @@ export const proposalsRouter = router({
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
         columns: {
+          status: true,
           workspaceId: true,
           data: true,
           correlationId: true,
@@ -1472,24 +1517,32 @@ export const proposalsRouter = router({
         userId,
         action: "reject",
       });
+      assertItemDoorWritable(proposal, input.itemRef);
 
       const disp = {
         status: "reject" as const,
         ...(input.reason ? { reason: input.reason } : {}),
         ...(input.reasonCode ? { reasonCode: input.reasonCode } : {}),
       };
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
-      const dispositions = {
-        ...((data.dispositions as Record<string, unknown>) ?? {}),
-        [input.itemRef]: disp,
-      };
-      await db
+      // ONE statement: the disposition is merged into the row's CURRENT
+      // `data.dispositions`, so two reviewers toggling different items at once
+      // both land (a read-modify-write here lost one of them). Pending-only in
+      // the WHERE too, so a decision that lands between the check and the write
+      // is refused rather than overwritten.
+      const written = await db
         .update(proposals)
         .set({
-          data: { ...data, dispositions } as never,
+          data: drizzleSql`jsonb_set(coalesce(${proposals.data}, '{}'::jsonb), '{dispositions}', coalesce(${proposals.data} -> 'dispositions', '{}'::jsonb) || jsonb_build_object(${input.itemRef}::text, ${JSON.stringify(disp)}::jsonb), true)`,
           updatedAt: new Date(),
         })
-        .where(eq(proposals.id, input.proposalId));
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        )
+        .returning({ id: proposals.id });
+      if (written.length === 0) throw itemDoorRaceConflict();
 
       // Flywheel — the reasoned per-item rejection, emitted immediately (not at
       // Approve). Best-effort: never fail the deny.
@@ -1518,7 +1571,12 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
       const proposal = await db.query.proposals.findFirst({
         where: eq(proposals.id, input.proposalId),
-        columns: { workspaceId: true, data: true, agentUserId: true },
+        columns: {
+          status: true,
+          workspaceId: true,
+          data: true,
+          agentUserId: true,
+        },
       });
       if (!proposal)
         throw new TRPCError({
@@ -1534,19 +1592,23 @@ export const proposalsRouter = router({
         userId,
         action: "reject",
       });
+      assertItemDoorWritable(proposal, input.itemRef);
 
-      const data = (proposal.data ?? {}) as Record<string, unknown>;
-      const dispositions = {
-        ...((data.dispositions as Record<string, unknown>) ?? {}),
-      };
-      delete dispositions[input.itemRef];
-      await db
+      // ONE statement, pending-only — the same reasons as `rejectItem`.
+      const written = await db
         .update(proposals)
         .set({
-          data: { ...data, dispositions } as never,
+          data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) #- ARRAY['dispositions', ${input.itemRef}::text]`,
           updatedAt: new Date(),
         })
-        .where(eq(proposals.id, input.proposalId));
+        .where(
+          and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          )
+        )
+        .returning({ id: proposals.id });
+      if (written.length === 0) throw itemDoorRaceConflict();
       return { success: true };
     }),
 
@@ -2637,6 +2699,8 @@ export const proposalsRouter = router({
         errorCode?: TRPCError["code"];
         /** Edges of an approved graph that did not land — see ProposalExecutorResult. */
         relationsFailed?: ProposalExecutorResult["relationsFailed"];
+        /** Parts the executor declined to apply, each a reviewer sentence — see ProposalExecutorResult. */
+        refusals?: ProposalExecutorResult["refusals"];
       }> = [];
 
       for (const proposalId of input.proposalIds) {
@@ -2737,6 +2801,9 @@ export const proposalsRouter = router({
               ...(result.relationsFailed?.length
                 ? { relationsFailed: result.relationsFailed }
                 : {}),
+              // What the executor declined to apply — dropping it made a partial
+              // application read as a clean one on the batch door.
+              ...(result.refusals?.length ? { refusals: result.refusals } : {}),
             });
           } else {
             // The shared door returned a falsy `success` WITHOUT throwing, so

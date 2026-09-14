@@ -726,6 +726,18 @@ describe("first run of a connection → ONE grouped import proposal", () => {
     expect(first.connectionSelector).toEqual({ connectionId: "conn-1" });
   });
 
+  it("every page read is a MIRROR read — no recall fact per page", async () => {
+    await runConnectionSync({ provider: "google" });
+    const calls = h.executeCapability.mock.calls.map(
+      (c) => c[0] as { verbId: string; observability?: string }
+    );
+    // Non-vacuity: all three kinds actually read (calendar pages twice).
+    expect(new Set(calls.map((c) => c.verbId))).toEqual(
+      new Set(["calendar_list", "gmail_list_threads", "contacts_list"])
+    );
+    for (const c of calls) expect(c.observability).toBe("mirror");
+  });
+
   it("stops at itemLimit", async () => {
     h.sync.kinds = {
       event: { itemLimit: 1 },

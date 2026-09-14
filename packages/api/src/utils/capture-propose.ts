@@ -99,6 +99,12 @@ export interface FileAnchoredCaptureProposalsParams {
    * otherwise the first existing-entity `entity.update` proposal does.
    */
   sourceFile?: StagedSourceBlob;
+  /**
+   * The staged raw capture documents this capture was made from. Written as
+   * `data.sourceDocumentIds` on every proposal filed, so whichever is approved
+   * can stamp its lineage. Empty/absent ⇒ omitted, never `[]`.
+   */
+  sourceDocumentIds?: string[];
 }
 
 export async function fileAnchoredCaptureProposals(
@@ -131,7 +137,9 @@ export async function fileAnchoredCaptureProposals(
     relations,
     resolveRelationType,
     sourceFile,
+    sourceDocumentIds,
   } = params;
+  const sourceIds = sourceDocumentIds?.length ? { sourceDocumentIds } : {};
 
   const proposalIds: string[] = [];
   // The file rides the composite create when this capture creates anything new;
@@ -209,6 +217,7 @@ export async function fileAnchoredCaptureProposals(
             // `entity/update` executor, and on rejection by
             // `discardProposalSourceBlob`.
             ...(takesFile ? { sourceFile } : {}),
+            ...sourceIds,
           },
         })
       );
@@ -230,6 +239,7 @@ export async function fileAnchoredCaptureProposals(
             ...(f.status ? { status: f.status } : {}),
             ...(f.properties ? { properties: f.properties } : {}),
             ...(contextEntityId ? { contextEntityId } : {}),
+            ...sourceIds,
           },
         })
       );
@@ -346,6 +356,7 @@ export async function fileAnchoredCaptureProposals(
           // branch of `applyProposalApproval` (attached to the materialized
           // primary entity), and on rejection by `discardProposalSourceBlob`.
           ...(compositeCarriesFile ? { sourceFile } : {}),
+          ...sourceIds,
         },
       })
     );
@@ -366,6 +377,7 @@ export async function fileAnchoredCaptureProposals(
           type: rel.type,
           // Persisted placement the relation materializer reads back verbatim.
           resolvedWorkspaceId: workspaceId ?? null,
+          ...sourceIds,
         },
       })
     );

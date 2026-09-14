@@ -179,6 +179,92 @@ describe("graph lane", () => {
   });
 });
 
+describe("graph lane — the raw record (raw-capture wave 1)", () => {
+  const PENDING = {
+    proposalId: "prop-1",
+    entityCount: 1,
+    relationCount: 0,
+    bindingCount: 0,
+    reviewUrl: "https://x/open/prop-1",
+    summary: "summary",
+    applied: false,
+    sessionId: "S-REQUESTED",
+    scope: { workspaceId: null, projectId: null, sessionId: "S-REQUESTED" },
+    writeReceipt: {
+      state: "pending",
+      proposalId: "prop-1",
+      effectiveWorkspaceId: null,
+      projectId: null,
+      source: "agent",
+    },
+  };
+  const mocks = async () => ({
+    submit: vi.mocked(
+      (await import("../../../services/capture-agent/submit-capture-graph.js"))
+        .submitCaptureGraph
+    ),
+    record: vi.mocked(
+      (await import("../../../services/intake/record-structure-intake.js"))
+        .recordStructureIntake
+    ),
+  });
+  const ARGS = {
+    text: "Ada prefers async standups",
+    entities: [{ profileSlug: "note", title: "Ada prefers async" }],
+  };
+
+  beforeEach(async () => {
+    h.submitResult = PENDING;
+    (await mocks()).submit.mockClear();
+  });
+
+  it("a record that returns NO echo does not crash: intake says failed and names it; the graph is still submitted, without ids", async () => {
+    const { submit, record } = await mocks();
+    record.mockResolvedValueOnce(null as never);
+    const out = await call(ARGS);
+    expect(out.status).toBe("proposed");
+    expect(out.intake).toMatchObject({
+      status: "failed",
+      sourceDocumentIds: [],
+      errors: ["intake: no intake echo returned"],
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit.mock.calls[0]![0]).not.toHaveProperty("sourceDocumentIds");
+  });
+
+  it("a record that THROWS does not crash: the error is surfaced on intake, and the graph is still submitted", async () => {
+    const { submit, record } = await mocks();
+    record.mockRejectedValueOnce(new Error("storage down"));
+    const out = await call(ARGS);
+    expect(out.status).toBe("proposed");
+    expect(out.intake).toMatchObject({
+      status: "failed",
+      errors: ["intake: storage down"],
+    });
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it("a kept raw rides the submit as sourceDocumentIds and the intake echo is returned as-is", async () => {
+    const { submit, record } = await mocks();
+    const echo = {
+      sessionId: "S-REQUESTED",
+      intake: {
+        status: "recorded" as const,
+        sessionSource: "provided" as const,
+        requestedSessionIgnored: false,
+        sourceDocumentIds: ["doc-raw-1"],
+        sourcesKept: true,
+      },
+    };
+    record.mockResolvedValueOnce(echo);
+    const out = await call(ARGS);
+    expect(submit.mock.calls[0]![0]).toMatchObject({
+      sourceDocumentIds: ["doc-raw-1"],
+    });
+    expect(out.intake).toEqual(echo.intake);
+  });
+});
+
 describe("text lane — proposed", () => {
   it("(b) reports the project + session the INSERT stored (declared focus, minted session)", async () => {
     h.executeResult = {

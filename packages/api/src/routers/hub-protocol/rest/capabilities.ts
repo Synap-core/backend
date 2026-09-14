@@ -441,8 +441,9 @@ export function registerCapabilitiesRoutes(app: HubHono): void {
     description:
       "Returns the unified `Capability[]` read-model for a workspace (pod-wide + " +
       "the given workspace): tools + skills + commands, each with `verbs` " +
-      "(label/kind/granted/effectiveExecMode/govDefault), `governance`, and the " +
-      "tool's `approved` state. Reuses the same `listCapabilities` adapter the " +
+      "(label/kind/granted/effectiveExecMode/govDefault), `governance` (the run " +
+      "posture for an agent: auto runs now, propose files a review, none nothing " +
+      "runs here) and `enabled` (the approval gate — a separate fact). Reuses the same `listCapabilities` adapter the " +
       "tRPC `playbooks.capabilityRegistry.list` exposes. Requires " +
       "hub-protocol.read scope. Pass `workspaceId` to scope to one workspace; " +
       "OMIT it for the pod-wide read (all accessible workspaces + globals, deduped). " +

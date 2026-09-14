@@ -93,6 +93,7 @@ import {
   events,
   capabilities,
   ChannelRepository,
+  getActingAgentUserId,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -698,6 +699,49 @@ async function findNonArchivedAutomationByName(
     .orderBy(desc(automations.updatedAt), desc(automations.id))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * D2 (rung 2.09): an AGENT switching an automation on — `activate`, or `update`
+ * to `active` — always proposes. The agent is read from the request's
+ * acting-agent scope (entered at the key-auth doors), never from the input, so
+ * no door can forget to pass it. `update` rides in the proposal so the
+ * `automation/activate` executor applies exactly what was reviewed.
+ * Returns the proposal response, or null when no agent is acting.
+ */
+async function proposeAgentActivation(
+  userId: Parameters<typeof checkPermissionOrPropose>[0]["userId"],
+  automation: { id: string; workspaceId: string | null },
+  update?: Record<string, unknown>
+): Promise<{ status: "proposed"; proposalId: string; message: string } | null> {
+  const agentUserId = getActingAgentUserId();
+  if (!agentUserId) return null;
+  const perm = await checkPermissionOrPropose({
+    userId,
+    agentUserId,
+    workspaceId: automation.workspaceId ?? null,
+    subjectType: "automation",
+    action: "activate",
+    data: { automationId: automation.id, ...(update ? { update } : {}) },
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if (
+    "proposalId" in perm &&
+    perm.proposalId &&
+    !("granted" in perm && perm.granted)
+  ) {
+    return {
+      status: "proposed",
+      proposalId: perm.proposalId,
+      message: proposedMessageFor(
+        perm.proposalType,
+        "Automation activation proposed for review"
+      ),
+    };
+  }
+  return null;
 }
 
 async function insertAutomationAfterGovernance(
@@ -1740,7 +1784,7 @@ async function resolveAvailableActions(
   // "capability"` → the shared governed `executeCapability` door), NOT an
   // `output` node — the sentence path now emits that node. Honest twice over:
   // `projectRunnableActions` yields only verbs that WILL fire unattended
-  // (governance:auto + connected + executable), so a verb that would fail
+  // (enabled + connected + executable), so a verb that would fail
   // closed mid-flow (unapproved → suppressProposal → deny) is never offered.
   // `scope.workspaceId ?? null` = pod altitude when the lens is absent (still
   // resolves pod-wide capabilities honestly).
@@ -2417,6 +2461,7 @@ export const automationsRouter = router({
           id: true,
           workspaceId: true,
           createdBy: true,
+          status: true,
           version: true,
           flowDefinition: true,
           triggerType: true,
@@ -2434,6 +2479,17 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
         ownerId: existing.createdBy,
       });
+
+      // D2: an agent moving an automation to `active` proposes the whole update.
+      if (input.status === "active" && existing.status !== "active") {
+        const { workspaceId: _ws, ...update } = input;
+        const proposed = await proposeAgentActivation(
+          ctx.userId,
+          existing,
+          update
+        );
+        if (proposed) return proposed;
+      }
 
       // Validate event pattern on update too
       if (
@@ -2657,6 +2713,9 @@ export const automationsRouter = router({
       if (existing.status === "active") {
         return { status: "already_active" };
       }
+      // D2: an agent switching it on proposes; a person activates directly.
+      const proposed = await proposeAgentActivation(ctx.userId, existing);
+      if (proposed) return proposed;
 
       // For cron triggers, compute the next run time
       let nextRunAt: Date | null = null;

@@ -263,6 +263,67 @@ describe("POST /links — workspace-endpoint membership", () => {
   });
 });
 
+describe("document endpoints — read here, never written here", () => {
+  const DOCUMENT_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveActingContextMock.mockResolvedValue({
+      ok: true,
+      userId: USER_ID,
+      workspaceId: CONSUMER_WS,
+      role: "editor",
+    });
+  });
+
+  it.each([
+    [
+      "from",
+      {
+        fromType: "document",
+        fromId: DOCUMENT_ID,
+        toType: "entity",
+        toId: "entity-1",
+      },
+    ],
+    [
+      "to",
+      {
+        fromType: "entity",
+        fromId: "entity-1",
+        toType: "document",
+        toId: DOCUMENT_ID,
+      },
+    ],
+  ])(
+    "refuses a %s-document edge with 400, before governance, writing nothing",
+    async (_end, endpoints) => {
+      const { createLink } =
+        await import("../../../services/links/links-service.js");
+      const { checkPermissionOrPropose } =
+        await import("../../../utils/permission-check.js");
+      const res = await postLinks(buildTestApp(), {
+        workspaceId: CONSUMER_WS,
+        linkType: "produced",
+        ...endpoints,
+      });
+
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/document links/);
+      expect(checkPermissionOrPropose).not.toHaveBeenCalled();
+      expect(createLink).not.toHaveBeenCalled();
+    }
+  );
+
+  it("still reads a document's links", async () => {
+    const res = await buildTestApp().request(
+      `/links?type=document&id=${DOCUMENT_ID}`
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ links: [] });
+  });
+});
+
 describe("POST /links — blocked_by goes through the session blocker floor", () => {
   const MY_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const MY_OTHER_SESSION = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
@@ -289,15 +350,12 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
   });
 
   async function writeCalls() {
-    const { createLink } = await import(
-      "../../../services/links/links-service.js"
-    );
-    const { addSessionBlocker } = await import(
-      "../../../services/focus-sessions/session-blocked-by.js"
-    );
-    const { checkPermissionOrPropose } = await import(
-      "../../../utils/permission-check.js"
-    );
+    const { createLink } =
+      await import("../../../services/links/links-service.js");
+    const { addSessionBlocker } =
+      await import("../../../services/focus-sessions/session-blocked-by.js");
+    const { checkPermissionOrPropose } =
+      await import("../../../utils/permission-check.js");
     return {
       createLink: vi.mocked(createLink),
       addSessionBlocker: vi.mocked(addSessionBlocker),

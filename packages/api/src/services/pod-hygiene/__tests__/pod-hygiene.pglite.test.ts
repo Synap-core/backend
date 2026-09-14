@@ -39,6 +39,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   closeCalls: [] as Array<{ sessionId: string; userId: string }>,
+  /** Runs before the stubbed close; a throw here is a door failure. */
+  beforeClose: null as null | ((sessionId: string) => Promise<void>),
   pauseCalls: [] as Array<{ id: string; userId: string }>,
   podAdmin: { value: true },
 }));
@@ -132,7 +134,13 @@ vi.mock(
 vi.mock("../../focus-sessions/complete-session.js", () => ({
   completeFocusSession: vi.fn(
     async (p: { sessionId: string; userId: string }) => {
+      if (h.beforeClose) await h.beforeClose(p.sessionId);
       h.closeCalls.push({ sessionId: p.sessionId, userId: p.userId });
+      // The real door's effect, so a rescan sees a closed session as closed.
+      await h.client!.query(
+        `update focus_sessions set status = 'closed', updated_at = now() where id = $1`,
+        [p.sessionId]
+      );
       return { session: { id: p.sessionId, status: "closed" } };
     }
   ),
@@ -174,6 +182,7 @@ import {
   MERGE_NEEDS_POD_ADMIN,
 } from "../retire-profile.js";
 import { buildProposalChanges } from "../../../routers/proposals/changes.js";
+import { stableItemRef } from "@synap-core/types/pod-hygiene";
 import { fileCleanupPacks } from "../cleanup-pack.js";
 import { gatherSchemaHygieneSignal } from "../../diagnose/schema-hygiene.js";
 import { registerPodHygieneExecutors } from "../../../routers/proposals/executors/pod-hygiene.js";
@@ -375,6 +384,7 @@ beforeEach(async () => {
     await q(`delete from ${t}`);
   }
   h.closeCalls.length = 0;
+  h.beforeClose = null;
   h.pauseCalls.length = 0;
   h.podAdmin.value = true;
   await q(
@@ -484,140 +494,365 @@ describe("profile retire (D5 / D7)", () => {
   });
 });
 
-describe("cleanup pack (D9)", () => {
+describe("cleanup pack v2 (filer + executor)", () => {
+  type PackDbRow = {
+    id: string;
+    status: string;
+    subject_user_id: string;
+    reviewed_at: string | null;
+    data: Record<string, any>;
+  };
+  async function packs(owner: string): Promise<PackDbRow[]> {
+    return (
+      await q<PackDbRow>(
+        `select id, status, subject_user_id, reviewed_at, data from proposals
+         where target_type = 'pod_hygiene' and proposal_type = 'cleanup_pack' and subject_user_id = $1
+         order by created_at`,
+        [owner]
+      )
+    ).rows;
+  }
+  const latest = async (owner: string) => (await packs(owner)).at(-1)!;
+  const refsOf = (p: PackDbRow) =>
+    (p.data.items as Array<{ ref: string }>).map((i) => i.ref).sort();
+  const S = (id: string) => stableItemRef("close_session", id);
+  const K = (id: string) => stableItemRef("retire_profile", id);
+
   async function seedPod() {
     const sessionA = await staleSession(A);
-    const freshA = await staleSession(
-      A,
-      new Date(NOW.getTime() - 2 * 86_400_000).toISOString()
-    );
-    const probeA = await kind({ slug: "zero-a" });
+    await q(`update focus_sessions set title = 'Weekly sync' where id = $1`, [
+      sessionA,
+    ]);
+    const probeA = await kind({ slug: "zero-a", displayName: "Zero A" });
     const usedA = await kind({ slug: "used-a" });
     await entity(usedA);
     const autoA = await neverRunAutomation(A, null);
     const propA = await oldProposal({ createdBy: A, workspaceId: WS_A });
-    const agentProp = await oldProposal({
-      createdBy: AGENT,
-      agentUserId: AGENT,
-      workspaceId: WS_A,
-    });
     const sessionB = await staleSession(B);
-    return {
-      sessionA,
-      freshA,
-      probeA,
-      usedA,
-      autoA,
-      propA,
-      agentProp,
-      sessionB,
-    };
+    return { sessionA, probeA, usedA, autoA, propA, sessionB };
   }
 
-  async function packs() {
-    return (
-      await q<{
-        id: string;
-        subject_user_id: string;
-        data: {
-          items: Array<{ ref: string; action: string; targetId: string }>;
-        };
-      }>(
-        `select id, subject_user_id, data from proposals where target_type = 'pod_hygiene' and proposal_type = 'cleanup_pack'`
-      )
-    ).rows;
+  async function setData(packId: string, patch: Record<string, unknown>) {
+    await q(`update proposals set data = data || $2::jsonb where id = $1`, [
+      packId,
+      JSON.stringify(patch),
+    ]);
   }
 
-  it("files exactly ONE pack per owner, is idempotent on re-run, and applies NOTHING", async () => {
+  it("files a schema-2 pack: id-keyed refs, evidence, no expire/pause items, no changeType/properties — and applies NOTHING", async () => {
     const s = await seedPod();
 
-    const first = await fileCleanupPacks(NOW);
-    expect(first.filed).toBe(2);
-    const filed = await packs();
-    expect(filed.map((p) => p.subject_user_id).sort()).toEqual([A, B]);
+    const result = await fileCleanupPacks(NOW);
 
-    const packA = filed.find((p) => p.subject_user_id === A)!;
-    const targets = packA.data.items
-      .map((i) => `${i.action}:${i.targetId}`)
-      .sort();
-    expect(targets).toEqual(
-      [
-        `close_session:${s.sessionA}`,
-        `retire_profile:${s.probeA}`,
-        `pause_automation:${s.autoA}`,
-        `expire_proposal:${s.propA}`,
-      ].sort()
+    expect(result.filed).toBe(2);
+    const packA = await latest(A);
+    expect(packA.data.schema).toBe(2);
+    expect(refsOf(packA)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+    expect(packA.data.changeType).toBeUndefined();
+    expect(packA.data.properties).toBeUndefined();
+    const kindItem = packA.data.items.find((i: any) => i.ref === K(s.probeA));
+    expect(kindItem.evidence).toMatchObject({
+      records: 0,
+      dependents: { views: 0 },
+    });
+    expect(kindItem.subject).toEqual({
+      kind: "kind",
+      id: s.probeA,
+      name: "Zero A",
+    });
+    const sessionItem = packA.data.items.find(
+      (i: any) => i.ref === S(s.sessionA)
     );
-    // Agent-authored proposal with no subject has no owner; a fresh stale session is too young.
-    expect(first.unowned.proposals).toBe(1);
-
-    const second = await fileCleanupPacks(NOW);
-    expect(second.filed).toBe(0);
-    expect(second.skippedOpenPack).toBe(2);
-    expect(await packs()).toHaveLength(2);
+    expect(sessionItem.snapshot.updatedAt).toBe(new Date(OLD).toISOString());
 
     expect((await status("focus_sessions", s.sessionA))!.status).toBe("stale");
     expect((await status("profiles", s.probeA))!.is_active).toBe(true);
     expect((await status("automations", s.autoA))!.status).toBe("active");
     expect((await status("proposals", s.propA))!.status).toBe("pending");
     expect(h.closeCalls).toHaveLength(0);
-    expect(h.pauseCalls).toHaveLength(0);
   });
 
-  it("approval applies ONLY the approved items, each through its own door, as the owner", async () => {
-    const s = await seedPod();
-    const extraSession = await staleSession(A);
+  it("a kind the retire preflight would refuse is NOT packed, and is counted", async () => {
+    const scoped = await kind({ slug: "zero-but-viewed" });
+    await q(
+      `insert into views (id, scope_profile_ids) values ($1, ARRAY[$2]::uuid[])`,
+      [randomUUID(), scoped]
+    );
+    const plain = await kind({ slug: "zero-plain" });
+
+    const result = await fileCleanupPacks(NOW);
+
+    expect(refsOf(await latest(A))).toEqual([K(plain)]);
+    expect(result.notPacked.refusedByPreflight).toBe(1);
+  });
+
+  it("an open pack suppresses its items: an immediate re-scan files nothing", async () => {
+    await seedPod();
     await fileCleanupPacks(NOW);
-    const packA = (await packs()).find((p) => p.subject_user_id === A)!;
-    const rejectRef = packA.data.items.find(
-      (i) => i.targetId === extraSession
-    )!.ref;
-    const rejectAutoRef = packA.data.items.find(
-      (i) => i.targetId === s.autoA
-    )!.ref;
-    // The exact shape `proposals.rejectItem` persists.
-    await q(`update proposals set data = data || $2::jsonb where id = $1`, [
-      packA.id,
-      JSON.stringify({
-        dispositions: {
-          [rejectRef]: { status: "reject" },
-          [rejectAutoRef]: { status: "reject" },
-        },
-      }),
+
+    const second = await fileCleanupPacks(NOW);
+
+    expect(second.filed).toBe(0);
+    expect(second.suppressed.open).toBe(3);
+    expect(await packs(A)).toHaveLength(1);
+  });
+
+  it("Leave out is remembered: a decided pack's left-out item is not proposed again", async () => {
+    const s = await seedPod();
+    await fileCleanupPacks(NOW);
+    const first = await latest(A);
+    await setData(first.id, {
+      dispositions: { [K(s.probeA)]: { status: "reject" } },
+    });
+    await approve(first.id, A);
+    const later = await staleSession(A);
+
+    const rescan = await fileCleanupPacks(NOW);
+
+    expect(refsOf(await latest(A))).toEqual([S(later)]);
+    expect(rescan.suppressed.kept).toBe(1);
+  });
+
+  it("an expired or withdrawn pack buys no silence — its items are proposed again", async () => {
+    const s = await seedPod();
+    await fileCleanupPacks(NOW);
+    await q(`update proposals set status = 'expired' where id = $1`, [
+      (await latest(A)).id,
     ]);
+
+    await fileCleanupPacks(NOW);
+    const refiled = await latest(A);
+    expect(refsOf(refiled)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+
+    // A manual withdraw stamps reviewedAt — still not a decision.
+    await q(
+      `update proposals set status = 'withdrawn', reviewed_at = now() where id = $1`,
+      [refiled.id]
+    );
+    await fileCleanupPacks(NOW);
+    expect(await packs(A)).toHaveLength(3);
+    expect(refsOf(await latest(A))).toEqual(
+      [S(s.sessionA), K(s.probeA)].sort()
+    );
+  });
+
+  it("a whole pack rejected within 30 days silences every item in it", async () => {
+    await seedPod();
+    await fileCleanupPacks(NOW);
+    await q(
+      `update proposals set status = 'rejected', reviewed_at = now() where id = $1`,
+      [(await latest(A)).id]
+    );
+
+    const rescan = await fileCleanupPacks(NOW);
+
+    expect(await packs(A)).toHaveLength(1);
+    expect(rescan.suppressed.rejectedPack).toBe(2);
+  });
+
+  it("a keep past its window is proposed again — sessions (30d) before kinds (90d)", async () => {
+    const s = await seedPod();
+    await fileCleanupPacks(NOW);
+    const first = await latest(A);
+    await setData(first.id, {
+      dispositions: {
+        [S(s.sessionA)]: { status: "reject" },
+        [K(s.probeA)]: { status: "reject" },
+      },
+    });
+    await q(
+      `update proposals set status = 'approved', reviewed_at = $2 where id = $1`,
+      [first.id, new Date(NOW.getTime() - 31 * 86_400_000).toISOString()]
+    );
+
+    await fileCleanupPacks(NOW);
+
+    expect(refsOf(await latest(A))).toEqual([S(s.sessionA)]);
+  });
+
+  it("an undecided pack older than 7 days is WITHDRAWN (not reviewed) and superseded by a fresh one", async () => {
+    const s = await seedPod();
+    await fileCleanupPacks(NOW);
+    const old = await latest(A);
+    await q(`update proposals set created_at = $2 where id = $1`, [
+      old.id,
+      new Date(NOW.getTime() - 8 * 86_400_000).toISOString(),
+    ]);
+
+    const rescan = await fileCleanupPacks(NOW);
+
+    const after = await status("proposals", old.id);
+    const fresh = await latest(A);
+    expect(after!.status).toBe("withdrawn");
+    expect(after!.reviewed_at).toBeNull();
+    expect((after!.data as Record<string, unknown>).supersededBy).toBe(
+      fresh.id
+    );
+    expect(fresh.id).not.toBe(old.id);
+    expect(refsOf(fresh)).toEqual([S(s.sessionA), K(s.probeA)].sort());
+    expect(rescan.superseded).toBe(1);
+  });
+
+  it("approval applies ONLY the kept-in items, records each outcome by ref, then marks approved", async () => {
+    const s = await seedPod();
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    await setData(packA.id, {
+      dispositions: { [K(s.probeA)]: { status: "reject" } },
+    });
 
     const result = await approve(packA.id, A);
 
     expect(h.closeCalls).toEqual([{ sessionId: s.sessionA, userId: A }]);
-    expect(h.pauseCalls).toEqual([]);
-    expect((await status("profiles", s.probeA))!.is_active).toBe(false);
-    expect((await status("proposals", s.propA))!.status).toBe("expired");
-    const pack = await status("proposals", packA.id);
-    expect(pack!.status).toBe("approved");
+    expect((await status("profiles", s.probeA))!.is_active).toBe(true);
+    const row = await status("proposals", packA.id);
+    expect(row!.status).toBe("approved");
     const outcomes = (
-      pack!.data as { outcomes: Array<{ ref: string; outcome: string }> }
+      row!.data as { outcomes: Record<string, { outcome: string }> }
     ).outcomes;
-    expect(outcomes.find((o) => o.ref === rejectRef)!.outcome).toBe(
-      "skipped_by_reviewer"
-    );
-    expect(outcomes.find((o) => o.ref === rejectAutoRef)!.outcome).toBe(
-      "skipped_by_reviewer"
-    );
-    expect(result.effect).toMatchObject({ applied: "verified", rows: 3 });
+    expect(outcomes[S(s.sessionA)]!.outcome).toBe("applied");
+    expect(outcomes[K(s.probeA)]!.outcome).toBe("skipped_by_reviewer");
+    expect(result.effect).toMatchObject({ applied: "verified", rows: 1 });
   });
 
-  it("a retire item whose kind gained a record since filing is REFUSED, not applied", async () => {
+  it("a session active again — or merely touched — since filing is REFUSED by name, not closed, and then settles", async () => {
+    const resumed = await staleSession(A);
+    await q(`update focus_sessions set title = 'Resumed work' where id = $1`, [
+      resumed,
+    ]);
+    const touched = await staleSession(A);
+    await q(`update focus_sessions set title = 'Touched work' where id = $1`, [
+      touched,
+    ]);
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    await q(
+      `update focus_sessions set status = 'active', updated_at = now() where id = $1`,
+      [resumed]
+    );
+    // Still `stale`, but activity after the snapshot the reviewer saw.
+    await q(`update focus_sessions set updated_at = now() where id = $1`, [
+      touched,
+    ]);
+
+    const result = await approve(packA.id, A);
+
+    expect(h.closeCalls).toEqual([]);
+    expect(result.refusals).toEqual(
+      expect.arrayContaining([
+        "Resumed work (session): Active again since this pack was filed",
+        "Touched work (session): Active again since this pack was filed",
+      ])
+    );
+
+    // Both go idle again; the refusal settles, so neither is re-proposed yet.
+    await q(
+      `update focus_sessions set status = 'stale', updated_at = $2 where id = any($1::uuid[])`,
+      [[resumed, touched], OLD]
+    );
+    const rescan = await fileCleanupPacks(NOW);
+    expect(rescan.suppressed.refused).toBe(2);
+    expect(await packs(A)).toHaveLength(1);
+  });
+
+  it("a retire item whose kind gained a record since filing is refused, keyed by the kind's name", async () => {
     const s = await seedPod();
     await fileCleanupPacks(NOW);
-    const packA = (await packs()).find((p) => p.subject_user_id === A)!;
+    const packA = await latest(A);
     await entity(s.probeA, B, WS_B);
 
     const result = await approve(packA.id, A);
 
     expect((await status("profiles", s.probeA))!.is_active).toBe(true);
     expect(
-      result.refusals?.some((r) => /Retire refused at approval/.test(r))
+      result.refusals?.some((r) =>
+        /^Zero A \(kind\): Retire refused at approval/.test(r)
+      )
     ).toBe(true);
+  });
+
+  it("a legacy v1 pack still applies", async () => {
+    const legacySession = await staleSession(A);
+    const id = randomUUID();
+    await q(
+      `insert into proposals (id, status, workspace_id, target_type, target_id, proposal_type, data,
+         created_by, subject_user_id, created_at, updated_at)
+       values ($1, 'pending', null, 'pod_hygiene', $2, 'cleanup_pack', $3::jsonb, $2, $2, now(), now())`,
+      [
+        id,
+        A,
+        JSON.stringify({
+          sourceId: A,
+          items: [
+            {
+              ref: "$item0",
+              action: "close_session",
+              targetId: legacySession,
+              label: "Legacy",
+              reason: "old copy",
+            },
+            {
+              ref: "$item1",
+              action: "close_session",
+              targetId: randomUUID(),
+              label: "Gone",
+              reason: "Can be undone later",
+            },
+          ],
+        }),
+      ]
+    );
+
+    const result = await approve(id, A);
+
+    expect(h.closeCalls).toEqual([{ sessionId: legacySession, userId: A }]);
+    const row = await status("proposals", id);
+    expect(row!.status).toBe("approved");
+    expect(
+      (row!.data as { outcomes: Record<string, { outcome: string }> }).outcomes
+        .$item0!.outcome
+    ).toBe("applied");
+    // The refusal is the door's sentence, never the stored v1 `reason` (it promised undo).
+    expect(result.refusals).toEqual(["Gone (session): No longer exists"]);
+  });
+
+  it("a crash mid-loop leaves a true partial record; re-approving finishes without re-applying", async () => {
+    const first = await staleSession(A, "2026-06-01T00:00:00Z");
+    const second = await staleSession(A, "2026-07-01T00:00:00Z");
+    await fileCleanupPacks(NOW);
+    const packA = await latest(A);
+    // The second item's door fails AND the outcome write after it fails: the
+    // executor dies between items, the way a lost connection would.
+    h.beforeClose = async (sessionId) => {
+      if (sessionId !== second) return;
+      await q(`alter table proposals rename to proposals_offline`);
+      throw new Error("connection lost");
+    };
+
+    await expect(approve(packA.id, A)).rejects.toThrow();
+
+    h.beforeClose = null;
+    await q(`alter table proposals_offline rename to proposals`);
+    const partial = await status("proposals", packA.id);
+    expect(partial!.status).toBe("pending");
+    expect(
+      (partial!.data as { outcomes: Record<string, { outcome: string }> })
+        .outcomes
+    ).toEqual({ [S(first)]: expect.objectContaining({ outcome: "applied" }) });
+    expect(h.closeCalls.map((c) => c.sessionId)).toEqual([first]);
+
+    const retry = await approve(packA.id, A);
+
+    expect(h.closeCalls.map((c) => c.sessionId)).toEqual([first, second]);
+    const done = await status("proposals", packA.id);
+    expect(done!.status).toBe("approved");
+    const outcomes = (
+      done!.data as { outcomes: Record<string, { outcome: string }> }
+    ).outcomes;
+    expect(outcomes[S(first)]!.outcome).toBe("applied");
+    expect(outcomes[S(second)]!.outcome).toBe("applied");
+    expect(retry.refusals).toBeUndefined();
+    expect(retry.effect).toMatchObject({ applied: "verified", rows: 2 });
   });
 });
 
@@ -712,31 +947,6 @@ describe("review card data — what the reviewer actually sees", () => {
     expect(rows.map((x) => x.path)).toContain(
       "properties.needs_a_pod_admin_to_approve"
     );
-  });
-
-  it("a cleanup pack renders one row per action group naming its items, and a vocabulary title", async () => {
-    const session = await staleSession(A);
-    await q(
-      `update focus_sessions set title = 'Dogfood session' where id = $1`,
-      [session]
-    );
-    await neverRunAutomation(A, null);
-    await fileCleanupPacks(NOW);
-    const [pack] = (
-      await q<{ data: Record<string, unknown> }>(
-        `select data from proposals where proposal_type = 'cleanup_pack' and subject_user_id = $1`,
-        [A]
-      )
-    ).rows;
-    expect(pack!.data.summary).toBe(
-      "Tidy your pod: Close 1 idle session, pause 1 automation that never ran"
-    );
-    const rows = renderedRows(pack!.data);
-    expect(rows).toContainEqual({
-      path: "properties.Close 1 idle session",
-      after: "Dogfood session",
-    });
-    expect(rows.map((x) => x.path)).toContain("properties.on approve");
   });
 
   it("a NON-admin is refused a merge at FILING time, with the reason, and nothing is filed", async () => {

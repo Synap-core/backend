@@ -19,9 +19,10 @@ import { z } from "@hono/zod-openapi";
 import { and, eq, getDb, workspaceMembers } from "@synap/database";
 
 import { composeCapabilityBrief } from "../../../services/capability-briefs/compose-capability-brief.js";
+import { MCP_TOOL_TEACHING_KEYS } from "../../mcp/tool-verb-aliases.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { hasScope, type HubHono } from "./_shared.js";
+import { hasScope, logger, type HubHono } from "./_shared.js";
 
 const BriefsQuerySchema = z.object({
   tools: z.string().min(1),
@@ -38,12 +39,16 @@ export function registerBriefsRoutes(app: HubHono): void {
     method: "get",
     path: "/briefs",
     tags: ["Skills"],
-    summary: "Composed just-in-time teaching briefs for a set of tool names",
+    summary:
+      "Composed just-in-time teaching briefs for MCP tool names or action verbIds",
     description:
-      "Returns a composed teaching brief per requested tool name — teaching core " +
+      "Returns a composed teaching brief per requested name — teaching core " +
       "(seeded system skills), a live governance verdict (auto/propose), and " +
-      "per-kind posture emphases. Tools with no brief content are omitted from " +
-      "the response. Requires hub-protocol.read scope.",
+      "per-kind posture emphases. A name may be an MCP `synap_*` tool or a " +
+      "runnable-action `verbId` from GET /capabilities/actions: a verbId " +
+      "resolves its teaching through the MCP tools that teach it and, with " +
+      "`workspaceId`, states its run posture (runs now / files a review). Names " +
+      "with no brief content are omitted. Requires hub-protocol.read scope.",
     request: {
       query: z.object({
         tools: z
@@ -106,6 +111,36 @@ export function registerBriefsRoutes(app: HubHono): void {
       if (!membership) return c.json({ error: "Access denied" }, 403);
     }
 
+    // A name that is not an MCP tool may be a runnable-action verbId (what
+    // list-actions returns). Its run posture comes from the SAME projection the
+    // actions door serves — read once, only when such a name was asked for.
+    const actionPosture = new Map<string, "auto" | "propose">();
+    const verbNames = toolNames.filter((n) => !MCP_TOOL_TEACHING_KEYS[n]);
+    if (parsed.data.workspaceId && verbNames.length > 0) {
+      try {
+        const [{ listCapabilities }, { projectRunnableActions }] =
+          await Promise.all([
+            import("../../../services/capabilities/capability-registry.js"),
+            import("../../../services/capabilities/action-projection.js"),
+          ]);
+        const actions = projectRunnableActions(
+          await listCapabilities({
+            workspaceId: parsed.data.workspaceId,
+            userId,
+          })
+        );
+        for (const a of actions) {
+          if (a.verbId) actionPosture.set(a.verbId, a.governance);
+        }
+      } catch (err) {
+        logger.error({ err }, "briefs: runnable action projection failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    }
+
     const briefs: Record<string, string> = {};
     await Promise.all(
       toolNames.map(async (name) => {
@@ -113,6 +148,7 @@ export function registerBriefsRoutes(app: HubHono): void {
           agentUserId,
           workspaceId: parsed.data.workspaceId ?? null,
           door: parsed.data.door ?? "chat",
+          actionPosture: actionPosture.get(name),
         });
         if (brief) briefs[name] = brief;
       })

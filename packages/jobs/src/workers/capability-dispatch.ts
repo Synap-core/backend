@@ -108,6 +108,11 @@ export interface PlaybookRunnerInput {
   chainContext?: PlaybookRunnerChainContext;
   /** Agent selector (`agents.slug`) — absent ⇒ the default orchestrator. */
   agentType?: string | null;
+  /**
+   * Unattended run: refuse (throw) when the playbook depends on not-enabled
+   * skills, filing the enable request on behalf of the owner. See run-playbook.
+   */
+  unenabledSkillPreflight?: boolean;
 }
 
 export interface PlaybookRunnerResult {

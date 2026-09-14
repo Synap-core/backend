@@ -596,8 +596,8 @@ const captureHandler: McpToolHandler = async (
     // The run ROOM (intake decision 1): the ambient session when there is one,
     // else an intake session KEYED by the graph's canonical content, so a
     // retried payload — including one the submit below refuses — reuses one
-    // room instead of minting another. Sources + manifest are recorded only
-    // AFTER the submit succeeds. The agent structured this graph itself, so no
+    // room instead of minting another. The raw is recorded BEFORE the submit
+    // (below), so it survives a refused submit. The agent structured this graph itself, so no
     // guideline read and no IS facts exist — the manifest says `unknown`.
     const { recordStructureIntake } =
       await import("../../../services/intake/record-structure-intake.js");
@@ -629,7 +629,47 @@ const captureHandler: McpToolHandler = async (
       ).slice(0, 40)}`,
     });
     const graphSessionId = graphRun.sessionId ?? undefined;
+    // The RAW door, BEFORE the submit: the text is staged as a source (and the
+    // manifest recorded on the room) so the receipt can name it in
+    // `data.sourceDocumentIds`. The ensured room is reused — a FAILED ensure
+    // still stages the text with no session instead of skipping it (the
+    // truncated `rawSource` used to be all that survived). A submit refused
+    // below still leaves the raw stored: raw is never lost.
+    // A failure to record is SURFACED on `intake` (status failed + the error),
+    // never a crash of the capture and never a silent "nothing to keep".
+    const intakeNotRecorded = (error: string) => ({
+      sessionId: graphRun.sessionId ?? null,
+      intake: {
+        status: "failed" as const,
+        sessionSource: graphRun.status,
+        requestedSessionIgnored: graphRun.requestedSessionIgnored,
+        sourceDocumentIds: [] as string[],
+        errors: [`intake: ${error}`],
+      },
+    });
+    let graphIntake: Awaited<ReturnType<typeof recordStructureIntake>>;
+    try {
+      graphIntake =
+        (await recordStructureIntake({
+          database: db,
+          userId,
+          workspaceId: graphWsId ?? null,
+          agentUserId: agentUserId ?? null,
+          ensuredSession: graphRun,
+          source: captureNormalizedText ? { text: captureRawText } : {},
+          guidelines: [],
+          runFacts: runFactsFromStructureMeta(undefined),
+          correlationKey: null,
+        })) ?? intakeNotRecorded("no intake echo returned");
+    } catch (err) {
+      graphIntake = intakeNotRecorded(
+        err instanceof Error ? err.message : String(err)
+      );
+    }
     const graphResult = await submitCaptureGraph({
+      ...(graphIntake.intake.sourceDocumentIds.length
+        ? { sourceDocumentIds: graphIntake.intake.sourceDocumentIds }
+        : {}),
       userId,
       ...(agentUserId ? { agentUserId } : {}),
       workspaceId: graphWsId,
@@ -662,21 +702,6 @@ const captureHandler: McpToolHandler = async (
         ? { rawSource: { rawText: captureRawText } }
         : {}),
     });
-    // Submitted — now keep the raw text as a source and record the manifest on
-    // the room the graph was filed into.
-    const graphIntake = graphSessionId
-      ? await recordStructureIntake({
-          database: db,
-          userId,
-          workspaceId: graphWsId ?? null,
-          agentUserId: agentUserId ?? null,
-          verifiedHandle: graphSessionId,
-          source: captureNormalizedText ? { text: captureRawText } : {},
-          guidelines: [],
-          runFacts: runFactsFromStructureMeta(undefined),
-          correlationKey: null,
-        })
-      : null;
     // The terminal is policy-derived: `applied` (materialized now, whitelisted
     // graph), `partial` (entities landed, at least one submitted relation did
     // NOT) or `proposed` (pending review).
@@ -697,17 +722,9 @@ const captureHandler: McpToolHandler = async (
       // in the session and project the first send filed it under.
       scope: graphResult.scope,
       sessionId: graphResult.scope.sessionId,
-      intake: graphIntake
-        ? { ...graphIntake.intake, sessionSource: graphRun.status }
-        : {
-            status: "failed" as const,
-            sessionSource: graphRun.status,
-            requestedSessionIgnored: graphRun.requestedSessionIgnored,
-            sourceDocumentIds: [] as string[],
-            ...(graphRun.status === "failed"
-              ? { errors: [`session: ${graphRun.error}`] }
-              : {}),
-          },
+      // Always recorded now: a failed room still staged the text sessionless,
+      // and the session error rides `intake.errors`.
+      intake: graphIntake.intake,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
       ...(captureNormalizedText
         ? {

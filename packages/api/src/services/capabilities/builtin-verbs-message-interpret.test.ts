@@ -12,6 +12,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const h = vi.hoisted(() => ({
   structure: vi.fn(),
   submitCaptureGraph: vi.fn(),
+  // The raw door (founder rule 2026-09-14): the message is kept on EVERY outcome.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  stageCaptureSources: vi.fn(async (_arg: any) => ({
+    sourceDocumentIds: ["raw-doc-1"] as string[],
+    attempted: 1,
+    errors: [] as string[],
+  })),
   fetchRoutingMemory: vi.fn(async () => null),
   // The extractor's offered kinds. Default: none (no `availableProfiles` hint).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,6 +53,11 @@ vi.mock("../routing-memory.js", () => ({
 }));
 vi.mock("../capture-agent/submit-capture-graph.js", () => ({
   submitCaptureGraph: h.submitCaptureGraph,
+}));
+// The raw door's own behaviour is proven on PGlite (intake/__tests__); here only
+// that the verb reaches it, with what, on which outcome.
+vi.mock("../intake/record-structure-intake.js", () => ({
+  stageCaptureSources: h.stageCaptureSources,
 }));
 // NOTE: capture-agent/capture-structure-to-graph.js is deliberately NOT mocked —
 // the real shared mapper (tempId→ref, contextTempId→contextRef, dangling-drop)
@@ -208,6 +220,60 @@ describe("message.interpret — handler", () => {
     expect(out.status).toBe("proposed");
     expect(out.proposalId).toBe("prop-1");
     expect(out.entityCount).toBe(2);
+
+    // (e) the message was kept as a raw capture BEFORE filing, and the proposal
+    // names it — the lineage `stampMaterialized` links.
+    expect(h.stageCaptureSources).toHaveBeenCalledTimes(1);
+    expect(h.stageCaptureSources.mock.calls[0][0]).toMatchObject({
+      userId: "u1",
+      workspaceId: "ws-1",
+      door: "message.interpret",
+      source: { text: "Met Ada from Acme, she wants a March demo" },
+    });
+    expect(h.stageCaptureSources.mock.invocationCallOrder[0]).toBeLessThan(
+      h.submitCaptureGraph.mock.invocationCallOrder[0]!
+    );
+    expect(graphArg.sourceDocumentIds).toEqual(["raw-doc-1"]);
+    expect(
+      (out as unknown as { sourceDocumentIds?: string[] }).sourceDocumentIds
+    ).toEqual(["raw-doc-1"]);
+  });
+
+  it("stamps the interpreted message's id on the raw only when the caller gives it", async () => {
+    h.structure.mockResolvedValue(null);
+    await BUILTIN_VERBS["message.interpret"](
+      {
+        content: "hi",
+        sourceMessageId: "11111111-1111-4111-8111-111111111111",
+      },
+      { userId: "u1", workspaceId: null }
+    );
+    await BUILTIN_VERBS["message.interpret"](
+      { content: "hi" },
+      { userId: "u1", workspaceId: null }
+    );
+    expect(h.stageCaptureSources.mock.calls[0][0].sourceMessageId).toBe(
+      "11111111-1111-4111-8111-111111111111"
+    );
+    expect(h.stageCaptureSources.mock.calls[1][0]).not.toHaveProperty(
+      "sourceMessageId"
+    );
+    h.structure.mockReset();
+  });
+
+  it("a raw that could NOT be kept rides the result as sourceErrors — never only a log", async () => {
+    h.stageCaptureSources.mockResolvedValueOnce({
+      sourceDocumentIds: [],
+      attempted: 1,
+      errors: ["source text: storage down"],
+    });
+    h.structure.mockResolvedValueOnce(null);
+    const out = (await BUILTIN_VERBS["message.interpret"](
+      { content: "anything" },
+      { userId: "u1", workspaceId: null }
+    )) as { sourceErrors?: string[]; sourceDocumentIds?: string[] };
+    expect(out.sourceErrors).toEqual(["source text: storage down"]);
+    expect(out.sourceDocumentIds).toBeUndefined();
   });
 
   it("merges scoped guidelines (general → specific) with the explicit `guidelines`, explicit LAST (wins)", async () => {
@@ -467,6 +533,14 @@ describe("message.interpret — handler", () => {
     expect(h.submitCaptureGraph).not.toHaveBeenCalled();
     expect(out.status).toBe("no_proposal");
     expect(out.reason).toBe("needs-clarification");
+    // Nothing filed — the message is still kept.
+    expect(h.stageCaptureSources).toHaveBeenCalledTimes(1);
+    expect(h.stageCaptureSources.mock.calls[0][0].door).toBe(
+      "message.interpret"
+    );
+    expect(
+      (out as unknown as { sourceDocumentIds?: string[] }).sourceDocumentIds
+    ).toEqual(["raw-doc-1"]);
   });
 
   it("reports structuring-unavailable (no proposal) when the IS returns null", async () => {
@@ -480,5 +554,13 @@ describe("message.interpret — handler", () => {
     expect(h.submitCaptureGraph).not.toHaveBeenCalled();
     expect(out.status).toBe("no_proposal");
     expect(out.reason).toBe("structuring-unavailable");
+    // AI down — the message is still kept (founder rule: raw always stored).
+    expect(h.stageCaptureSources).toHaveBeenCalledTimes(1);
+    expect(h.stageCaptureSources.mock.calls[0][0].source).toEqual({
+      text: "anything",
+    });
+    expect(
+      (out as unknown as { sourceDocumentIds?: string[] }).sourceDocumentIds
+    ).toEqual(["raw-doc-1"]);
   });
 });

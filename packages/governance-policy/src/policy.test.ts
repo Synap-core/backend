@@ -76,6 +76,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
   recap: "write", // run-session-recap.ts recap write
+  activate: "write", // automations.ts activate (agent activation, rung 2.09)
   section_update: "write", // services/session-document/upsert-section.ts
   session_narrative_update: "write", // services/session-document/upsert-section.ts
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
@@ -520,8 +521,9 @@ describe("decideAgentPolicy — the ladder (precedence order)", () => {
   // ---------------------------------------------------------------------
   // Containment asymmetry: META-MODEL writes are NOT default-auto-approved.
   //
-  // `automation.create` may auto-approve because the write lands INERT
-  // (automations.ts forces status:'draft' for agent callers). Profiles and
+  // `automation.create` used to auto-approve because the write lands INERT
+  // (automations.ts forces status:'draft' for agent callers); it is now floored
+  // at rung 2.09 (D2). Profiles and
   // property defs have NO inert state to land in, and they are POD-WIDE
   // (entityScope defaults to 'pod'; a base property def carries workspace_id
   // NULL). With no containment available, they must propose.
@@ -1679,8 +1681,9 @@ describe("constants are intact", () => {
     expect(isAutoApproved("playbook.create", DEFAULT_AUTO_APPROVE)).toBe(false);
     // Data creates stay instant — the reversal is surgical, not a blanket gate.
     expect(isAutoApproved("entity.create", DEFAULT_AUTO_APPROVE)).toBe(true);
+    // automation.create left the list (D2): floored at rung 2.09 for agents.
     expect(isAutoApproved("automation.create", DEFAULT_AUTO_APPROVE)).toBe(
-      true
+      false
     );
   });
 

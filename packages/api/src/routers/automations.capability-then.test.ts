@@ -87,6 +87,7 @@ describe("capabilityActionOptions (runnable verbs → capability THEN options)",
     label: "Search the web",
     tool: "Exa",
     governance: "auto",
+    enabled: true,
     parameters: {},
     ...over,
   });

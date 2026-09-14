@@ -8,7 +8,7 @@
  * widget_definition change so connected browsers refresh live.
  */
 
-import { getDb, and, eq, isNull } from "@synap/database";
+import { getDb, and, eq, isNull, getActingAgentUserId } from "@synap/database";
 import { execFieldsChanged } from "../capabilities/skill-exec-fields.js";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { ContentKind } from "@synap/database/schema";
@@ -194,9 +194,32 @@ function normalizeStringList(
   return cleaned.length > 0 ? cleaned : null;
 }
 
+/** Machine-readable reason on the refusal below. */
+export const AGENT_CELL_REQUIRES_PROPOSAL =
+  "AGENT_CELL_REQUIRES_PROPOSAL" as const;
+
+export class AgentCellRequiresProposalError extends Error {
+  readonly code = AGENT_CELL_REQUIRES_PROPOSAL;
+  constructor(readonly cellName: string) {
+    super(
+      `An agent cannot define the cell '${cellName}' directly. Define it with ` +
+        `synap_create_cell (REST: POST /api/hub/cells/define) — it is filed as ` +
+        `a proposal — and it materializes once a person approves it.`
+    );
+    this.name = "AgentCellRequiresProposalError";
+  }
+}
+
 export async function defineCell(
   input: DefineCellInput
 ): Promise<{ typeKey: string; changeType: "created" | "updated" }> {
+  // D1 floor: an agent never defines a cell directly, whichever door it came
+  // through (hub /cells/install and an unattributed /cells/define had no gate).
+  // The governed doors propose before reaching here; an approved proposal is
+  // materialised by the human approving it, outside the acting-agent scope.
+  if (getActingAgentUserId()) {
+    throw new AgentCellRequiresProposalError(input.name);
+  }
   const depsError = validateDeps(input.deps);
   if (depsError) {
     throw new Error(`defineCell: ${depsError}`);

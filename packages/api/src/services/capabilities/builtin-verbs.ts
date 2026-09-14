@@ -447,11 +447,42 @@ const messageInterpretParams = z.object({
   entityId: z.string().optional(),
   workspaceId: z.string().optional(),
   guidelines: z.string().optional(),
+  /**
+   * The `messages.id` being interpreted, when the caller has it — stamped on
+   * the raw as `intakeSource.sourceMessageId`. Never derived: the inbound
+   * event's `messageId` is the PROVIDER's id, not ours.
+   */
+  sourceMessageId: z.string().uuid().optional(),
 });
 
 const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = messageInterpretParams.parse(params);
   const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+
+  // The RAW door FIRST: the message is staged as a capture source before any
+  // structuring, so EVERY outcome below — degraded, clarifying, nothing
+  // durable, proposed — keeps it. This verb takes `content`, not a messages
+  // row, so the source is kind `text` with door `message.interpret`. A failed
+  // staging does not stop the interpret; it rides the result as `sourceErrors`.
+  const { stageCaptureSources } =
+    await import("../intake/record-structure-intake.js");
+  const rawStaged = await stageCaptureSources({
+    database: db,
+    userId: ctx.userId,
+    workspaceId,
+    sessionId: null,
+    door: "message.interpret",
+    ...(input.sourceMessageId
+      ? { sourceMessageId: input.sourceMessageId }
+      : {}),
+    source: { text: input.content },
+  });
+  const rawSourceEcho = {
+    ...(rawStaged.sourceDocumentIds.length
+      ? { sourceDocumentIds: rawStaged.sourceDocumentIds }
+      : {}),
+    ...(rawStaged.errors.length ? { sourceErrors: rawStaged.errors } : {}),
+  };
 
   // Routing self-improvement memory — the SAME hint the capture path threads
   // into structure(). Best-effort: a memory hiccup degrades to "no memory",
@@ -707,6 +738,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       status: "no_proposal",
       reason,
       entityCount: 0,
+      // The message was kept as a raw capture even though nothing was proposed.
+      ...rawSourceEcho,
       // Which guideline versions shaped this pass (for a run manifest), and
       // whether they could be read at all.
       guidelines: appliedGuidelines,
@@ -742,6 +775,9 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     instruction: input.content,
   });
   const result = await submitCaptureGraph({
+    ...(rawStaged.sourceDocumentIds.length
+      ? { sourceDocumentIds: rawStaged.sourceDocumentIds }
+      : {}),
     userId: ctx.userId,
     workspaceId,
     entities: graphEntities,
@@ -774,6 +810,7 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
     // cannot report here as a clean success either. The failed edges are named
     // in `result.relationsFailed`, forwarded below.
     status: captureStatusForReceiptState(result.writeReceipt.state),
+    ...rawSourceEcho,
     ...(result.proposalId ? { proposalId: result.proposalId } : {}),
     ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
     entityCount: result.entityCount,
@@ -2655,6 +2692,10 @@ const messagingSendHandler: BuiltinVerbHandler = async (params, ctx) => {
     // so a flow reads it as pending, not errored.
     ...(result.proposed ? { proposed: true } : {}),
     ...(result.proposalId ? { proposalId: result.proposalId } : {}),
+    // A refused send says why ("Nothing ran …") and, for an agent on a
+    // not-enabled messaging tool, carries the enable request it filed.
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.enableProposal ? { enableProposal: result.enableProposal } : {}),
   };
 };
 

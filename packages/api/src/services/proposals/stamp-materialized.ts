@@ -18,7 +18,17 @@
  * written after it as touched by someone else and leaves it alone.
  */
 
-import { db, eq, proposals } from "@synap/database";
+import {
+  and,
+  db,
+  documents,
+  entities,
+  eq,
+  inArray,
+  isNull,
+  links,
+  proposals,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { ProposalMaterializedRecord } from "@synap-core/types";
 import { opRef } from "@synap-core/types/proposals";
@@ -440,7 +450,7 @@ export function subtractFromRecord(
   return remaining;
 }
 
-type StampDatabase = Pick<typeof db, "query" | "update">;
+type StampDatabase = Pick<typeof db, "query" | "update" | "select" | "insert">;
 
 type ProposalColumns = typeof proposals.$inferInsert;
 
@@ -476,14 +486,135 @@ export async function stampMaterialized(args: {
     currentData.materialized as CompleteMaterializedRecord | undefined,
     { ...args.record, stampedAt: new Date().toISOString() }
   );
+  const nextData: Record<string, unknown> = {
+    ...currentData,
+    ...(args.dataPatch ?? {}),
+    materialized: merged,
+  };
   await database
     .update(proposals)
-    .set({
-      ...(args.set ?? {}),
-      data: { ...currentData, ...(args.dataPatch ?? {}), materialized: merged },
-    })
+    .set({ ...(args.set ?? {}), data: nextData })
     .where(eq(proposals.id, args.proposalId));
+
+  const sourceDocumentIds = readSourceDocumentIds(nextData.sourceDocumentIds);
+  if (sourceDocumentIds.length > 0 && (merged.entityIds ?? []).length > 0) {
+    try {
+      // The receipt's owner (`subject_user_id`, the effective user every door
+      // stamps) is who the documents must belong to. No owner links nothing.
+      const receipt = await database.query.proposals.findFirst({
+        where: eq(proposals.id, args.proposalId),
+        columns: { subjectUserId: true },
+      });
+      if (!receipt?.subjectUserId) {
+        logger.warn(
+          { proposalId: args.proposalId },
+          "stampMaterialized: receipt has no owner (subject_user_id) — source documents not linked"
+        );
+      } else {
+        await writeProducedEdges({
+          database,
+          proposalId: args.proposalId,
+          userId: receipt.subjectUserId,
+          sourceDocumentIds,
+          entityIds: merged.entityIds ?? [],
+        });
+      }
+    } catch (err) {
+      // The record above is committed and is what revert reads; a lineage
+      // edge failing must not read as the materialization failing. Loud, and
+      // the next stamp of the same receipt retries (the write is idempotent).
+      logger.error(
+        { err, proposalId: args.proposalId },
+        "stampMaterialized: capture→entity `produced` edges NOT written — entities will not show what they were made from"
+      );
+    }
+  }
   return merged;
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** `data.sourceDocumentIds` as written by the capture doors: uuid strings only. */
+function readSourceDocumentIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return unique(
+    value.filter((v): v is string => typeof v === "string" && UUID_RE.test(v))
+  );
+}
+
+/**
+ * `document --produced--> entity` for every raw capture and every entity given
+ * — THE one writer of that edge. `stampMaterialized` calls it with a receipt's
+ * `data.sourceDocumentIds`; a door with no proposal (steady sync) calls it
+ * directly.
+ *
+ * The ids are never trusted as-is: a document links only when it exists, is
+ * not deleted, and belongs to `userId` (for a receipt, its
+ * `subject_user_id`). Non-uuid ids are dropped. Each edge carries its ENTITY's
+ * workspace, so it is visible exactly where the entity is; the document end
+ * is owner-floored again when the graph hydrates it.
+ *
+ * Idempotent on the links unique edge — a re-stamp (retry, reopen) inserts
+ * nothing new. Returns how many edges were actually inserted.
+ */
+export async function writeProducedEdges(args: {
+  sourceDocumentIds: readonly string[];
+  entityIds: readonly string[];
+  userId: string;
+  /** The receipt that recorded the write, when there is one. */
+  proposalId?: string;
+  database?: Pick<typeof db, "select" | "insert">;
+}): Promise<{ inserted: number }> {
+  const database = args.database ?? db;
+  const sourceDocumentIds = readSourceDocumentIds(args.sourceDocumentIds);
+  const entityIds = readSourceDocumentIds(args.entityIds);
+  if (!args.userId || sourceDocumentIds.length === 0 || entityIds.length === 0)
+    return { inserted: 0 };
+
+  const ownedDocuments = await database
+    .select({ id: documents.id })
+    .from(documents)
+    .where(
+      and(
+        inArray(documents.id, sourceDocumentIds),
+        eq(documents.userId, args.userId),
+        isNull(documents.deletedAt)
+      )
+    );
+  if (ownedDocuments.length === 0) return { inserted: 0 };
+  const liveEntities = await database
+    .select({ id: entities.id, workspaceId: entities.workspaceId })
+    .from(entities)
+    .where(inArray(entities.id, entityIds));
+  if (liveEntities.length === 0) return { inserted: 0 };
+
+  const inserted = await database
+    .insert(links)
+    .values(
+      ownedDocuments.flatMap((doc) =>
+        liveEntities.map((entity) => ({
+          workspaceId: entity.workspaceId,
+          fromType: "document" as const,
+          fromId: doc.id,
+          toType: "entity" as const,
+          toId: entity.id,
+          linkType: "produced" as const,
+          metadata: args.proposalId ? { proposalId: args.proposalId } : {},
+        }))
+      )
+    )
+    .onConflictDoNothing({
+      target: [
+        links.fromType,
+        links.fromId,
+        links.toType,
+        links.toId,
+        links.linkType,
+      ],
+    })
+    .returning({ id: links.id });
+  return { inserted: inserted.length };
 }
 
 /**

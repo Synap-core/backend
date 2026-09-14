@@ -29,11 +29,11 @@
  * `reanalyze` via the replayer — never its bytes decoded as text. Only a `text/*`
  * stored object is read as text.
  *
- * LIMIT (measured by reading the doors, not proven at runtime): a body over the
- * structure text cap is replayed as a markdown FILE (the rerun rule), and the
- * capture door keeps a file as the IS's extracted text — a different content
- * hash, so such a run can hold two source rows for one note. A stored file whose
- * text the IS extracts on replay can likewise hold two rows (bytes, then text).
+ * ONE source row per run: the replay names the row step 3 staged
+ * (`sourceDocumentId` → staging's `reuseDocumentId`), so a body over the
+ * structure text cap replayed as a markdown FILE, or a stored file whose text the
+ * IS extracts, lands on that row instead of a second one with a different hash
+ * (pinned by `intake/__tests__/replay-reuses-raw.pglite.test.ts`).
  */
 
 import { createLogger } from "@synap-core/core";

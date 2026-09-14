@@ -13,6 +13,7 @@ import { apiKeysRouter } from "./routers/api-keys.js";
 import { healthRouter } from "./routers/health.js";
 import { webhooksRouter } from "./routers/webhooks.js";
 import { documentsRouter } from "./routers/documents.js";
+import { capturesRouter } from "./routers/captures.js";
 import { contentRouter } from "./routers/content.js";
 import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
@@ -108,6 +109,7 @@ export const coreRouter = router({
   health: healthRouter,
   integrations: webhooksRouter,
   documents: documentsRouter,
+  captures: capturesRouter,
   content: contentRouter,
   storage: filesRouter,
   notifications: inboxRouter,

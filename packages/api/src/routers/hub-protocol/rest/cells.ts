@@ -8,6 +8,7 @@ import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
 import {
   CellDefinitionError,
   defineCell,
+  AgentCellRequiresProposalError,
   validateDeps,
 } from "../../../services/cells/define-cell.js";
 // The ONE explicit-then-derive-from-viewTypes rule for a package cell's
@@ -235,6 +236,9 @@ export function registerCellsRoutes(app: HubHono): void {
 
       return c.json({ success: true, typeKey });
     } catch (err) {
+      if (err instanceof AgentCellRequiresProposalError) {
+        return c.json({ error: err.message, code: err.code }, 403);
+      }
       logger.error({ err }, "cells.install failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

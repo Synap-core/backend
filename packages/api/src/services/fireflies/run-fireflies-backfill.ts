@@ -73,6 +73,8 @@ export async function runFirefliesBackfill(): Promise<RunFirefliesBackfillResult
     parameters: {},
     userId: owner,
     workspaceId,
+    // A cron listing of meeting ids: no recall fact per tick.
+    observability: "mirror",
   });
   if (cap.kind !== "run") {
     logger.warn(

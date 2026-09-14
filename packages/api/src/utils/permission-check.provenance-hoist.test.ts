@@ -317,6 +317,43 @@ describe("the mint resolves ONCE per gate call", () => {
   });
 });
 
+describe("a composite capture's source ids ride beside its hoisted operations", () => {
+  const OPS = [
+    {
+      op: "create_entity",
+      ref: "n1",
+      profileSlug: "note",
+      title: "Call notes",
+    },
+  ];
+  const DOC = "aaaaaaaa-1111-4111-8111-111111111111";
+
+  it("the pending row carries data.sourceDocumentIds at the TOP level, where the approval stamp reads it", async () => {
+    setupAgentSelectSequence(PROPOSE_METADATA);
+
+    await gate({
+      ...AGENT,
+      data: { operations: OPS, source: "capture", sourceDocumentIds: [DOC] },
+    });
+
+    const data = pendingRow().data as Record<string, unknown>;
+    expect(data.operations).toEqual(OPS);
+    expect(data.sourceDocumentIds).toEqual([DOC]);
+  });
+
+  it("a non-composite write keeps them nested only — never lifted", async () => {
+    setupAgentSelectSequence(PROPOSE_METADATA);
+
+    await gate({
+      ...AGENT,
+      data: { ...AGENT.data, sourceDocumentIds: [DOC] },
+    });
+
+    const data = pendingRow().data as Record<string, unknown>;
+    expect(data.sourceDocumentIds).toBeUndefined();
+  });
+});
+
 describe("workflow attribution reaches the row on BOTH branches", () => {
   const ATTRIBUTION = {
     stepRunId: "step-run-9",

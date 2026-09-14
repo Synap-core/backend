@@ -69,6 +69,7 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { resolveVerifiedSessionId } from "../_middleware/session.js";
+import { stageCaptureSources } from "../../../services/intake/record-structure-intake.js";
 
 /**
  * Body for POST /import/enqueue-corpus.
@@ -684,7 +685,14 @@ export function registerCaptureRoutes(app: HubHono): void {
         // so the session IS the review pack (intake decision 1).
         const runSessionId = (result as { sessionId?: string | null })
           .sessionId;
+        // The raw `structure` already staged for this capture (its intake echo).
+        const structureSourceIds =
+          (result as { intake?: { sourceDocumentIds?: string[] } }).intake
+            ?.sourceDocumentIds ?? [];
         const graph = await submitCaptureGraph({
+          ...(structureSourceIds.length
+            ? { sourceDocumentIds: structureSourceIds }
+            : {}),
           userId,
           workspaceId: targetWorkspaceId,
           ...(runSessionId ? { sessionId: runSessionId } : {}),
@@ -1578,11 +1586,47 @@ export function registerCaptureRoutes(app: HubHono): void {
     const graphActor = await resolveActorId(graphAgentUserId, userId);
     if ("error" in graphActor) return c.json({ error: graphActor.error }, 400);
 
+    // The RAW door (Raycast and every hub-rest-client graph caller): the text /
+    // url this graph was made from is staged as a capture source BEFORE the
+    // submit, so the receipt names it (`data.sourceDocumentIds`). `rawSource`
+    // stays as the reviewer's bounded copy. No room is minted by this door; a
+    // session the caller OWNS files the source into it.
+    const graphRawText = rawSource?.success
+      ? rawSource.data.rawText?.trim()
+        ? rawSource.data.rawText
+        : undefined
+      : undefined;
+    const graphRawUrl = rawSource?.success
+      ? rawSource.data.sourceUrl
+      : undefined;
+    const graphSources =
+      graphRawText || graphRawUrl
+        ? await stageCaptureSources({
+            database: db,
+            userId,
+            workspaceId: workspaceId ?? null,
+            sessionId:
+              (await resolveVerifiedSessionId(
+                userId,
+                c.get("sessionId"),
+                body.sessionId
+              )) ?? null,
+            door: "capture.graph",
+            source: {
+              ...(graphRawText ? { text: graphRawText } : {}),
+              ...(graphRawUrl ? { url: graphRawUrl } : {}),
+            },
+          })
+        : null;
+
     try {
       // The within-batch dedup, persisted-entity dedup, operations build, and
       // event-backed proposal all live in the shared core so in-process
       // producers (Cal.com webhook/backfill) go through the SAME door path.
       const result = await submitCaptureGraph({
+        ...(graphSources?.sourceDocumentIds.length
+          ? { sourceDocumentIds: graphSources.sourceDocumentIds }
+          : {}),
         userId,
         ...(graphAgentUserId ? { agentUserId: graphAgentUserId } : {}),
         workspaceId,
@@ -1629,7 +1673,20 @@ export function registerCaptureRoutes(app: HubHono): void {
         },
         "POST /capture/graph"
       );
-      return c.json(result);
+      return c.json({
+        ...result,
+        // What the raw door kept — a failure is named, never only logged.
+        ...(graphSources
+          ? {
+              sourceIntake: {
+                sourceDocumentIds: graphSources.sourceDocumentIds,
+                ...(graphSources.errors.length
+                  ? { errors: graphSources.errors }
+                  : {}),
+              },
+            }
+          : {}),
+      });
     } catch (err) {
       // Missing-required-property preflight rejection → 400 (client input fault),
       // message preserved. Nothing was queued.

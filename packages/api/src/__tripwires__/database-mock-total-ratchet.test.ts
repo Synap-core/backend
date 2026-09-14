@@ -86,7 +86,12 @@ import { dirname, join, relative } from "node:path";
 // import in `services/focus-sessions/record-session-artifact.ts` killed the file
 // at COLLECTION and it reported "0 tests", so three real tests had stopped
 // running with no red anywhere. Third dark file found in one sweep.
-const BASELINE = 61;
+// 61 → 60 on 2026-09-14: `routers/webhooks-inbound.test.ts` converted (raw-capture
+// lane rc1) — the webhook's raw door import graph (`known-source-hashes`) reads
+// `ProposalStatus`, which killed that file at COLLECTION. Same day, the MCP xp label
+// lane converted `compose-capability-brief.verb-alias.test.ts`, bringing an
+// interim 62 back to 61 before this drop.
+const BASELINE = 60;
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SRC = join(here, "..");

@@ -235,7 +235,23 @@ describe("analyze settles the session after the duplicate lookup (source order)"
       expect(phase1).toBeGreaterThan(-1);
       expect(prior).toBeGreaterThan(phase1);
       expect(settle).toBeGreaterThan(prior);
-      expect(body).toContain("sessionResolution && !deduplicated");
+      // A dedup stages nothing: the intake records only when a session resolved
+      // AND no prior proposal was found (`deduplicated` is set from that same
+      // `priorProposal`, and previewOnly leaves `sessionResolution` null). The
+      // raw is staged BEFORE the proposal (raw-capture wave 1) so the proposal
+      // can name it — after the settle, before the data that carries its ids.
+      const guard = body.indexOf(
+        "sessionResolution && !priorProposal\n        ? await recordImportIntake({"
+      );
+      expect(guard).toBeGreaterThan(settle);
+      expect(body.match(/await recordImportIntake\(/g)).toHaveLength(1);
+      const names = body.indexOf(
+        "...(intake ? { sourceDocumentIds: intake.sourceDocumentIds } : {}),"
+      );
+      expect(names).toBeGreaterThan(guard);
+      expect(body).toMatch(
+        /\} else if \(priorProposal\) \{\s*proposalId = priorProposal\.id;\s*deduplicated = true;/
+      );
     });
   }
 });

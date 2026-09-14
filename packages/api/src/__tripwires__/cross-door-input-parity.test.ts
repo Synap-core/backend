@@ -725,6 +725,28 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "INTERNAL ONLY — same rule, and the caller here is a language model, so the field would be settable by anything that can write into the model's context. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
   },
+  // ── `observability`: an internal caller's statement about itself ──────────
+  {
+    service: "execute-capability",
+    param: "observability",
+    door: "routers/capabilities.ts:execute",
+    reason:
+      'INTERNAL ONLY. `observability: "mirror"` skips a direct run\'s recall-fact deposit; it exists for connection-sync page reads (`readVerbPage`), which run one call per page on a cron and would otherwise flood recall with third-party payloads. A browser run is something the user did and must stay recallable, so the tRPC door has no reason to ever say it. CHECKABLE: it is one of `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`, and the schema-freshness test fails if it ever appears in the published client contract.',
+  },
+  {
+    service: "execute-capability",
+    param: "observability",
+    door: "routers/hub-protocol/rest/capabilities-execute.ts:/capabilities/execute",
+    reason:
+      "INTERNAL ONLY — the door an AGENT KEY reaches. An agent able to set it could run capabilities without leaving a recall trace of what it did. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
+  {
+    service: "execute-capability",
+    param: "observability",
+    door: "routers/mcp/handlers/capability.ts:synap_run_capability",
+    reason:
+      'INTERNAL ONLY — same rule; the caller is a language model, and a model-chosen "mirror" would erase its own recall trace. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.',
+  },
   // ── Identity: derived from the transport, never from the body ─────────────
   {
     service: "execute-capability",

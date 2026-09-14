@@ -23,9 +23,11 @@ import type { db as DbType } from "@synap/database";
 import {
   ensureIntakeSession,
   rememberIntakePlanKey,
+  type EnsureIntakeSessionResult,
 } from "./ensure-intake-session.js";
 import { computeCaptureGraphIdempotencyKey } from "../../utils/pending-capture-dedup.js";
 import { stageIntakeSource } from "./stage-intake-source.js";
+import type { StagedSourceBlob } from "../../utils/store-entity-source-blob.js";
 import {
   recordSessionRunManifest,
   type RunGuidelineRef,
@@ -56,6 +58,13 @@ export interface IntakeEcho {
     sourceDocumentIds: string[];
     /** Present only for a degraded outcome: was the input kept for re-structure? */
     degradedSourceKept?: boolean;
+    /**
+     * Present whenever at least one source was attempted, on EVERY outcome:
+     * false when any input could not be stored (the reason is in `errors`).
+     */
+    sourcesKept?: boolean;
+    /** `keepRaw: false` was overridden — the file was not read, bytes kept. */
+    originalRetainedUntilStructured?: true;
     errors?: string[];
   };
 }
@@ -94,11 +103,19 @@ export interface RecordStructureIntakeInput {
   fileNotRead?: { reason: string };
   /**
    * Keep the file's ORIGINAL bytes. `undefined` → {@link defaultKeepOriginal}
-   * (photos kept: rerun needs the source). `false` = "extract text only" — honoured
-   * even when extraction failed, so a user who declined retention is never
-   * overridden (the echo then says `degradedSourceKept: false`).
+   * (photos kept: rerun needs the source). `false` = "extract text only" —
+   * honoured whenever the file WAS read. When nothing could be read (degraded
+   * or no extracted text) the bytes are kept anyway and marked
+   * `retainedUntilStructured` (founder rule 2026-09-14: raw is never lost
+   * before it is structured); the echo says `originalRetainedUntilStructured`.
    */
   keepRaw?: boolean;
+  /**
+   * The session the door ALREADY ensured (e.g. the MCP graph lane, which must
+   * file its graph into the room before recording). Skips a second ensure; a
+   * `failed` result still stages the sources with no session.
+   */
+  ensuredSession?: EnsureIntakeSessionResult;
   /** Who read the file (IS `extraction.extractor` + the vision identity). */
   extraction?: {
     extractor: string | null;
@@ -118,6 +135,8 @@ export interface RecordStructureIntakeInput {
   goal?: string;
   /** `capturePlanKey` of the plan structure returned — remembered on the room. */
   planKey?: string;
+  /** A replay of a stored raw: staging reuses this row (see `stageCaptureSources`). */
+  reuseSourceDocumentId?: string;
   runFacts: Pick<
     SessionRunManifest,
     "engine" | "model" | "provider" | "promptVersion" | "timings"
@@ -209,41 +228,61 @@ function captureGoal(input: RecordStructureIntakeInput): string {
   return `Capture · ${label.slice(0, 80)}`;
 }
 
-export async function recordStructureIntake(
-  input: RecordStructureIntakeInput
-): Promise<IntakeEcho> {
-  const errors: string[] = [];
-  const session = await ensureIntakeSession({
-    userId: input.userId,
-    workspaceId: input.workspaceId,
-    agentUserId: input.agentUserId ?? null,
-    verifiedHandle: input.verifiedHandle ?? null,
-    bodyHandle: input.bodyHandle ?? null,
-    door: "capture",
-    goal: input.goal ?? captureGoal(input),
-    correlationKey:
-      input.correlationKey === undefined
-        ? captureCorrelationKey(input)
-        : input.correlationKey,
-  });
-  if (session.status === "failed") errors.push(`session: ${session.error}`);
-  const sessionId = session.sessionId;
-  if (sessionId && input.planKey) {
-    try {
-      await rememberIntakePlanKey({
-        sessionId,
-        userId: input.userId,
-        planKey: input.planKey,
-      });
-    } catch (err) {
-      errors.push(
-        `planKey: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
+/** What {@link stageCaptureSources} stages — the staging half of a capture door. */
+export interface StageCaptureSourcesInput {
+  database: typeof DbType;
+  userId: string;
+  workspaceId: string | null;
+  sessionId: string | null;
+  /** Where the raw came in (`intakeSource.door`): "capture", "message.interpret", … */
+  door: string;
+  source: RecordStructureIntakeInput["source"];
+  extractedText?: string;
+  extractedTextTruncated?: boolean;
+  degraded?: { reason: string };
+  fileNotRead?: { reason: string };
+  keepRaw?: boolean;
+  extraction?: RecordStructureIntakeInput["extraction"];
+  /** The plan structured from these inputs — stamped on each source (`planKeys`). */
+  planKey?: string;
+  /** Stamped on each source: the `messages.id` the raw came from. */
+  sourceMessageId?: string;
+  /** Stamped on each source: the outside system's id (a booking uid). */
+  externalRef?: string;
+  /**
+   * A replay of an ALREADY-stored raw (rerun, structure again — one input per
+   * replay): every input stages onto this row instead of a new one. A foreign
+   * or missing id is named in `errors`; the capture itself carries on.
+   */
+  reuseSourceDocumentId?: string;
+}
 
+export interface StagedCaptureSources {
+  sourceDocumentIds: string[];
+  /** Inputs a staging was attempted for (a failure is counted here, not in ids). */
+  attempted: number;
+  fileExtraction?: RunSourceExtraction;
+  originalRetainedUntilStructured?: true;
+  /** The file's stored ORIGINAL bytes, when they were kept. */
+  fileBlob?: StagedSourceBlob;
+  /** One entry per input that could NOT be stored. Never only logged. */
+  errors: string[];
+}
+
+/**
+ * Stage every raw input of ONE capture through the one raw door
+ * (`stageIntakeSource`): text, url, file. Never throws — each failed input is
+ * named in `errors`, so a door decides whether a lost raw defers its work
+ * (webhooks) or rides the response (interactive doors).
+ */
+export async function stageCaptureSources(
+  input: StageCaptureSourcesInput
+): Promise<StagedCaptureSources> {
+  const errors: string[] = [];
   const sourceDocumentIds: string[] = [];
   let fileExtraction: RunSourceExtraction | undefined;
+  let originalRetainedUntilStructured: true | undefined;
+  let fileBlob: StagedSourceBlob | undefined;
   let attempted = 0;
   const stage = async (
     label: string,
@@ -259,15 +298,24 @@ export async function recordStructureIntake(
         database: input.database,
         userId: input.userId,
         workspaceId: input.workspaceId,
-        sessionId,
-        door: "capture",
+        sessionId: input.sessionId,
+        door: input.door,
         ...(degraded ? { degraded } : {}),
+        ...(input.planKey ? { planKey: input.planKey } : {}),
+        ...(input.sourceMessageId
+          ? { sourceMessageId: input.sourceMessageId }
+          : {}),
+        ...(input.externalRef ? { externalRef: input.externalRef } : {}),
+        ...(input.reuseSourceDocumentId
+          ? { reuseDocumentId: input.reuseSourceDocumentId }
+          : {}),
         ...args,
       });
       sourceDocumentIds.push(staged.documentId);
+      if (staged.blob) fileBlob = staged.blob;
     } catch (err) {
       logger.error(
-        { err, userId: input.userId, sessionId, label },
+        { err, userId: input.userId, sessionId: input.sessionId, label },
         "intake source NOT stored"
       );
       errors.push(
@@ -284,17 +332,15 @@ export async function recordStructureIntake(
       file.content,
       file.encoding === "utf8" ? "utf8" : "base64"
     );
-    // A file that was NOT extracted (degraded / nothing extracted) keeps its
-    // bytes, or it could never be re-structured. An extracted file keeps its
-    // bytes when the caller chose to (photos by default) — else only its text.
-    // An explicit `keepRaw: false` wins over both.
+    // A file that was NOT read (degraded / nothing extracted) keeps its bytes —
+    // even under `keepRaw: false`, or it could never be structured and the raw
+    // would be lost (founder rule). A read file keeps its bytes when the caller
+    // chose to (photos by default) — else only its text.
     const fileDegraded = input.degraded ?? input.fileNotRead;
+    const notRead = Boolean(fileDegraded) || !input.extractedText?.trim();
     const keepBytes =
-      input.keepRaw === false
-        ? false
-        : Boolean(fileDegraded) ||
-          !input.extractedText?.trim() ||
-          (input.keepRaw ?? defaultKeepOriginal(file.mimeType));
+      notRead || (input.keepRaw ?? defaultKeepOriginal(file.mimeType));
+    const retainedUntilStructured = notRead && input.keepRaw === false;
     const before = sourceDocumentIds.length;
     await stage(
       "file",
@@ -315,11 +361,13 @@ export async function recordStructureIntake(
           ...(input.source.sourceSha256
             ? { sourceSha256: input.source.sourceSha256 }
             : {}),
+          ...(retainedUntilStructured ? { retainedUntilStructured: true } : {}),
         },
       },
       fileDegraded
     );
     if (sourceDocumentIds.length > before) {
+      if (retainedUntilStructured) originalRetainedUntilStructured = true;
       fileExtraction = {
         sourceDocumentId: sourceDocumentIds[sourceDocumentIds.length - 1]!,
         extractor: input.extraction?.extractor ?? null,
@@ -330,6 +378,75 @@ export async function recordStructureIntake(
       };
     }
   }
+  return {
+    sourceDocumentIds,
+    attempted,
+    ...(fileExtraction ? { fileExtraction } : {}),
+    ...(originalRetainedUntilStructured
+      ? { originalRetainedUntilStructured }
+      : {}),
+    ...(fileBlob ? { fileBlob } : {}),
+    errors,
+  };
+}
+
+export async function recordStructureIntake(
+  input: RecordStructureIntakeInput
+): Promise<IntakeEcho> {
+  const errors: string[] = [];
+  const session =
+    input.ensuredSession ??
+    (await ensureIntakeSession({
+      userId: input.userId,
+      workspaceId: input.workspaceId,
+      agentUserId: input.agentUserId ?? null,
+      verifiedHandle: input.verifiedHandle ?? null,
+      bodyHandle: input.bodyHandle ?? null,
+      door: "capture",
+      goal: input.goal ?? captureGoal(input),
+      correlationKey:
+        input.correlationKey === undefined
+          ? captureCorrelationKey(input)
+          : input.correlationKey,
+    }));
+  if (session.status === "failed") errors.push(`session: ${session.error}`);
+  const sessionId = session.sessionId;
+  if (sessionId && input.planKey) {
+    try {
+      await rememberIntakePlanKey({
+        sessionId,
+        userId: input.userId,
+        planKey: input.planKey,
+      });
+    } catch (err) {
+      errors.push(
+        `planKey: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
+  const staged = await stageCaptureSources({
+    database: input.database,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    sessionId,
+    door: "capture",
+    source: input.source,
+    ...(input.extractedText !== undefined
+      ? { extractedText: input.extractedText }
+      : {}),
+    ...(input.extractedTextTruncated ? { extractedTextTruncated: true } : {}),
+    ...(input.degraded ? { degraded: input.degraded } : {}),
+    ...(input.fileNotRead ? { fileNotRead: input.fileNotRead } : {}),
+    ...(input.keepRaw !== undefined ? { keepRaw: input.keepRaw } : {}),
+    ...(input.extraction ? { extraction: input.extraction } : {}),
+    ...(input.planKey ? { planKey: input.planKey } : {}),
+    ...(input.reuseSourceDocumentId
+      ? { reuseSourceDocumentId: input.reuseSourceDocumentId }
+      : {}),
+  });
+  errors.push(...staged.errors);
+  const { sourceDocumentIds, fileExtraction, attempted } = staged;
 
   if (sessionId) {
     try {
@@ -365,6 +482,7 @@ export async function recordStructureIntake(
       : sessionId || sourceDocumentIds.length > 0
         ? "partial"
         : "failed";
+  const allKept = attempted > 0 && sourceDocumentIds.length === attempted;
   return {
     sessionId,
     intake: {
@@ -372,11 +490,10 @@ export async function recordStructureIntake(
       sessionSource: session.status,
       requestedSessionIgnored: session.requestedSessionIgnored,
       sourceDocumentIds,
-      ...(input.degraded
-        ? {
-            degradedSourceKept:
-              attempted > 0 && sourceDocumentIds.length === attempted,
-          }
+      ...(input.degraded ? { degradedSourceKept: allKept } : {}),
+      ...(attempted > 0 ? { sourcesKept: allKept } : {}),
+      ...(staged.originalRetainedUntilStructured
+        ? { originalRetainedUntilStructured: true as const }
         : {}),
       ...(errors.length ? { errors } : {}),
     },

@@ -74,10 +74,11 @@ describe("rung 2.08 — agent-defined schema floor (D6)", () => {
     ).toBe("deny");
   });
 
-  it("does not over-reach: profile.renderer.set and entity.create keep their verdicts", () => {
+  // profile.renderer.set moved to rung 2.09 (agent-structure-write.test.ts).
+  it("does not over-reach: entity.renderer.set and entity.create keep their verdicts", () => {
     expect(
       decideAgentPolicy({
-        subjectType: "profile",
+        subjectType: "entity",
         action: "renderer.set",
         governanceRuleVerdict: "auto",
       })

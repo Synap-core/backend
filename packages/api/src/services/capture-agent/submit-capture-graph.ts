@@ -326,6 +326,13 @@ export interface SubmitCaptureGraphInput {
     hash?: string;
     idempotencyKey?: string;
   };
+  /**
+   * The staged raw capture documents (`stageIntakeSource`) this graph was made
+   * from. Written as `data.sourceDocumentIds` on the pending proposal AND the
+   * auto-applied receipt, where `stampMaterialized` reads it. Unlike `rawSource`
+   * (a bounded review copy) these ARE the raw. Empty/absent ⇒ omitted, never `[]`.
+   */
+  sourceDocumentIds?: string[];
   entities: CaptureGraphEntity[];
   relations?: CaptureGraphRelation[];
   bindings?: CaptureGraphBinding[];
@@ -1325,6 +1332,9 @@ export async function submitCaptureGraph(
               // Stored so a re-submit of the same graph resolves to THIS record
               // via findPriorCaptureGraphProposal (queries data->>'idempotencyKey').
               idempotencyKey,
+              ...(input.sourceDocumentIds?.length
+                ? { sourceDocumentIds: input.sourceDocumentIds }
+                : {}),
               ...proposalProvenance,
               ...duplicateAdvisory,
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
@@ -1581,6 +1591,9 @@ export async function submitCaptureGraph(
       // findPriorCaptureGraphProposal (queries data->>'idempotencyKey') instead
       // of filing a second row — the core of the anti-duplicate fix.
       idempotencyKey,
+      ...(input.sourceDocumentIds?.length
+        ? { sourceDocumentIds: input.sourceDocumentIds }
+        : {}),
       ...proposalProvenance,
       ...duplicateAdvisory,
       ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),

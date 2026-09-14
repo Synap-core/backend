@@ -44,6 +44,24 @@ export interface CapabilityBriefContext {
   agentUserId?: string | null;
   workspaceId?: string | null;
   door: CapabilityBriefDoor;
+  /**
+   * For a runnable-action verbId: its run posture as the actions projection
+   * (`runPosture`) judged it for this workspace. Absent for MCP tool names —
+   * those compose their verdict from `TOOL_METADATA`.
+   */
+  actionPosture?: "auto" | "propose";
+}
+
+/**
+ * The MCP tools that teach a runnable-action verbId (`entity.create` →
+ * `synap_create_entity`), read off `MCP_TOOL_TEACHING_KEYS` in reverse — never
+ * a second table. Empty for an MCP tool name itself, or a verb no tool teaches.
+ */
+export function resolveTeachingAliases(name: string): string[] {
+  if (MCP_TOOL_TEACHING_KEYS[name]) return [];
+  return Object.entries(MCP_TOOL_TEACHING_KEYS)
+    .filter(([, keys]) => keys.includes(name))
+    .map(([tool]) => tool);
 }
 
 /** One shared footer — appended to every WRITE tool's brief (D-footer). */
@@ -380,8 +398,22 @@ export async function composeCapabilityBrief(
   ctx: CapabilityBriefContext
 ): Promise<string | null> {
   try {
-    const meta = TOOL_METADATA[toolName];
-    const teachingKeys = MCP_TOOL_TEACHING_KEYS[toolName] ?? [toolName];
+    const aliases = resolveTeachingAliases(toolName);
+    const teachingKeys = MCP_TOOL_TEACHING_KEYS[toolName] ?? [
+      ...new Set([
+        toolName,
+        ...aliases.flatMap((a) => MCP_TOOL_TEACHING_KEYS[a] ?? []),
+      ]),
+    ];
+    // An alias lends posture emphases + the write footer, never its governance
+    // door: a verb run through the execute gate is governed by that gate, and
+    // its verdict arrives as `ctx.actionPosture`.
+    const aliasMeta = aliases
+      .map((a) => TOOL_METADATA[a])
+      .find((m) => m !== undefined);
+    const meta =
+      TOOL_METADATA[toolName] ??
+      (aliasMeta ? { ...aliasMeta, governance: null } : undefined);
 
     const sections: string[] = [];
 
@@ -391,6 +423,14 @@ export async function composeCapabilityBrief(
     if (meta?.governance) {
       const govLine = await composeGovernanceLine(meta.governance, ctx);
       if (govLine) sections.push(govLine);
+    }
+
+    if (ctx.actionPosture === "auto") {
+      sections.push("In this workspace this action runs directly when run.");
+    } else if (ctx.actionPosture === "propose") {
+      sections.push(
+        "Running this action files a PROPOSAL for review — explain in one sentence why you're doing it, and give the user the reviewUrl link from the response."
+      );
     }
 
     if (meta?.postureSlug) {

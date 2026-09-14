@@ -174,6 +174,9 @@ export async function readVerbPage(
     // A scheduled mirror has no review surface: an unapproved verb must come
     // back as a refusal, never as a new proposal row per tick.
     suppressProposal: true,
+    // One call per page per tick: keep the run event, never deposit the page
+    // into recall as a fact.
+    observability: "mirror",
   });
   const err = capErrorMessage(cap);
   if (err) throw new SyncReadError(err, verbId);

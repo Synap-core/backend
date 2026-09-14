@@ -51,6 +51,7 @@ import {
   automations,
   playbooks,
   projects,
+  eq,
 } from "@synap/database";
 import { getProjectPath } from "./project-path.js";
 import { projectContinuationPacket } from "../focus-sessions/continuation-packet.js";
@@ -182,8 +183,16 @@ beforeAll(async () => {
     [PROJECT, USER, STRANGERS_PROJECT, STRANGER]
   );
 
-  await session(S.a, { workspaceId: W_BUILDER, goal: "Wire billing", minutesAgo: 40 });
-  await session(S.b, { workspaceId: W_MARKETING, goal: "Price the plans\nin detail", minutesAgo: 30 });
+  await session(S.a, {
+    workspaceId: W_BUILDER,
+    goal: "Wire billing",
+    minutesAgo: 40,
+  });
+  await session(S.b, {
+    workspaceId: W_MARKETING,
+    goal: "Price the plans\nin detail",
+    minutesAgo: 30,
+  });
   await session(S.c, {
     goal: "Collect credentials",
     minutesAgo: 20,
@@ -203,9 +212,23 @@ beforeAll(async () => {
     minutesAgo: 10,
     slots: [{ kind: "document", label: "Brief", status: "done" }],
   });
-  await session(S.hidden, { workspaceId: W_HIDDEN, goal: "Hidden ws work", status: "closed", minutesAgo: 50 });
-  await session(S.strangers, { user: STRANGER, workspaceId: W_BUILDER, goal: "Not yours", minutesAgo: 5 });
-  await session(S.otherProject, { projectId: randomUUID(), goal: "Elsewhere", minutesAgo: 1 });
+  await session(S.hidden, {
+    workspaceId: W_HIDDEN,
+    goal: "Hidden ws work",
+    status: "closed",
+    minutesAgo: 50,
+  });
+  await session(S.strangers, {
+    user: STRANGER,
+    workspaceId: W_BUILDER,
+    goal: "Not yours",
+    minutesAgo: 5,
+  });
+  await session(S.otherProject, {
+    projectId: randomUUID(),
+    goal: "Elsewhere",
+    minutesAgo: 1,
+  });
 
   await edge(S.a, S.b, "blocked_by");
   await edge(S.a, S.strangers, "blocked_by");
@@ -226,11 +249,21 @@ beforeAll(async () => {
 describe("getProjectPath", () => {
   it("lists the user's project sessions across workspaces, newest started first, with workspace names", async () => {
     const r = (await path())!;
-    expect(r.project).toMatchObject({ id: PROJECT, name: "Atlas", description: "Ship the atlas" });
+    expect(r.project).toMatchObject({
+      id: PROJECT,
+      name: "Atlas",
+      description: "Ship the atlas",
+    });
     expect(r.items.map((i) => i.id)).toEqual([S.e, S.c, S.b, S.a, S.hidden]);
     const byId = new Map(r.items.map((i) => [i.id, i]));
-    expect(byId.get(S.a)!.workspace).toEqual({ id: W_BUILDER, name: "Builder" });
-    expect(byId.get(S.b)!.workspace).toEqual({ id: W_MARKETING, name: "Marketing" });
+    expect(byId.get(S.a)!.workspace).toEqual({
+      id: W_BUILDER,
+      name: "Builder",
+    });
+    expect(byId.get(S.b)!.workspace).toEqual({
+      id: W_MARKETING,
+      name: "Marketing",
+    });
     expect(byId.get(S.c)!.workspace).toBeNull();
     // A workspace the caller cannot see keeps its id, never its name.
     expect(byId.get(S.hidden)!.workspace).toEqual({ id: W_HIDDEN, name: null });
@@ -249,14 +282,32 @@ describe("getProjectPath", () => {
     expect(byId.get(S.a)!.blockedBy).toEqual({
       status: "ok",
       total: 1,
-      items: [{ id: S.b, title: "Price the plans", status: "active", statusLabel: expect.any(String) }],
+      items: [
+        {
+          id: S.b,
+          title: "Price the plans",
+          status: "active",
+          statusLabel: expect.any(String),
+        },
+      ],
     });
-    expect(byId.get(S.a)!.unblocks).toEqual({ status: "ok", total: 0, items: [] });
+    expect(byId.get(S.a)!.unblocks).toEqual({
+      status: "ok",
+      total: 0,
+      items: [],
+    });
     // The stranger's inbound edge onto b is not disclosed.
     expect(byId.get(S.b)!.unblocks).toEqual({
       status: "ok",
       total: 1,
-      items: [{ id: S.a, title: "Wire billing", status: "active", statusLabel: expect.any(String) }],
+      items: [
+        {
+          id: S.a,
+          title: "Wire billing",
+          status: "active",
+          statusLabel: expect.any(String),
+        },
+      ],
     });
     expect(byId.get(S.b)!.blockedBy).toMatchObject({ total: 0 });
     expect(byId.get(S.c)!.childrenCount).toEqual({ status: "ok", total: 1 });
@@ -271,14 +322,25 @@ describe("getProjectPath", () => {
     const kinds = new Set<string>();
     for (const item of r.items) {
       const row = rows.find((x) => x.id === item.id)!;
-      const packet = await projectContinuationPacket(row, { database: db, userId: USER });
-      expect(item.nextMove, `nextMove for ${item.displayTitle}`).toEqual(packet.nextMove);
+      const packet = await projectContinuationPacket(row, {
+        database: db,
+        userId: USER,
+      });
+      expect(item.nextMove, `nextMove for ${item.displayTitle}`).toEqual(
+        packet.nextMove
+      );
       expect(item.blockedBy).toEqual(packet.blockedBy);
       kinds.add(item.nextMove.kind);
     }
     // Non-vacuity: the fixture exercises the rule's distinct branches.
     expect([...kinds].sort()).toEqual(
-      ["none", "owed_slot", "pending_proposal", "ready_to_close", "waiting_on_session"].sort()
+      [
+        "none",
+        "owed_slot",
+        "pending_proposal",
+        "ready_to_close",
+        "waiting_on_session",
+      ].sort()
     );
   });
 
@@ -327,10 +389,16 @@ describe("getProjectPath", () => {
 
 describe("the doors carry the same path", () => {
   it("tRPC projects.path", async () => {
-    const caller = projectsRouter.createCaller({ db, authenticated: true, userId: USER } as never);
+    const caller = projectsRouter.createCaller({
+      db,
+      authenticated: true,
+      userId: USER,
+    } as never);
     const r = await caller.path({ projectId: PROJECT });
     expect(r.items.map((i) => i.id)).toEqual([S.e, S.c, S.b, S.a, S.hidden]);
-    await expect(caller.path({ projectId: STRANGERS_PROJECT })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      caller.path({ projectId: STRANGERS_PROJECT })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   function app(vars: Partial<HubVariables> = {}): HubHono {
@@ -346,19 +414,93 @@ describe("the doors carry the same path", () => {
   }
 
   it("Hub GET /projects/:projectId/path", async () => {
-    const res = await app().request(`/projects/${PROJECT}/path?workspaceIds=${W_BUILDER}`);
+    const res = await app().request(
+      `/projects/${PROJECT}/path?workspaceIds=${W_BUILDER}`
+    );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { items: Array<{ id: string }> };
     expect(body.items.map((i) => i.id)).toEqual([S.e, S.a]);
-    expect((await app().request(`/projects/${STRANGERS_PROJECT}/path`)).status).toBe(404);
+    expect(
+      (await app().request(`/projects/${STRANGERS_PROJECT}/path`)).status
+    ).toBe(404);
     expect((await app().request(`/projects/not-a-uuid/path`)).status).toBe(400);
   });
 
   it("a workspace-bound service key is pinned to its workspace on the Hub door", async () => {
-    const bound = app({ keyType: "service", keyWorkspaceId: W_MARKETING } as never);
+    const bound = app({
+      keyType: "service",
+      keyWorkspaceId: W_MARKETING,
+    } as never);
     const pinned = await bound.request(`/projects/${PROJECT}/path`);
     expect(pinned.status).toBe(200);
-    expect(((await pinned.json()) as { items: Array<{ id: string }> }).items.map((i) => i.id)).toEqual([S.b]);
-    expect((await bound.request(`/projects/${PROJECT}/path?workspaceIds=${W_BUILDER}`)).status).toBe(403);
+    expect(
+      ((await pinned.json()) as { items: Array<{ id: string }> }).items.map(
+        (i) => i.id
+      )
+    ).toEqual([S.b]);
+    expect(
+      (
+        await bound.request(
+          `/projects/${PROJECT}/path?workspaceIds=${W_BUILDER}`
+        )
+      ).status
+    ).toBe(403);
+  });
+});
+
+describe("children ordering matches the packet's inbound reader", () => {
+  // Discriminating row: open-first-only ordering cuts the top 5 to the older
+  // cancelled children and reads `undeclared`; open → closed → rest keeps the
+  // closed child (evidence of work) and reads `ready_to_close`.
+  it("a closed child behind PACKET_TOP_N cancelled ones still counts as evidence", async () => {
+    const project = randomUUID();
+    const parent = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1, $2, null, 'Evidence', 'active')`,
+      [project, USER]
+    );
+    await session(parent, {
+      projectId: project,
+      goal: "Parent of detours",
+      minutesAgo: 100,
+    });
+    for (let i = 0; i < 6; i++) {
+      const child = randomUUID();
+      await session(child, {
+        projectId: randomUUID(),
+        goal: `Dropped ${i}`,
+        status: "cancelled",
+        minutesAgo: 90 - i,
+      });
+      await edge(child, parent, "spawned_from");
+    }
+    const closed = randomUUID();
+    await session(closed, {
+      projectId: randomUUID(),
+      goal: "Finished detour",
+      status: "closed",
+      minutesAgo: 1,
+    });
+    await edge(closed, parent, "spawned_from");
+
+    const r = (await getProjectPath({
+      userId: USER,
+      projectId: project,
+      lens: "default",
+      limit: 50,
+      offset: 0,
+    }))!;
+    expect(r.items).toHaveLength(1);
+    const [row] = await db
+      .select()
+      .from(focusSessions)
+      .where(eq(focusSessions.id, parent));
+    const packet = await projectContinuationPacket(row!, {
+      database: db,
+      userId: USER,
+    });
+    expect(r.items[0]!.childrenCount).toEqual({ status: "ok", total: 7 });
+    expect(r.items[0]!.nextMove).toEqual(packet.nextMove);
+    expect(r.items[0]!.nextMove.kind).toBe("ready_to_close");
   });
 });

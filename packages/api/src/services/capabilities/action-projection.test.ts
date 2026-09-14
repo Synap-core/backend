@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { projectRunnableActions } from "./action-projection.js";
+import {
+  projectRunnableActions,
+  type ProjectableCapability,
+} from "./action-projection.js";
 import type { Capability } from "@synap/playbooks";
 
 function capability(
-  overrides: Partial<Capability> & { runnable?: boolean }
-): Capability {
+  overrides: Partial<ProjectableCapability> & { runnable?: boolean }
+): ProjectableCapability {
   return {
     id: "cap-1",
     kind: "source-provider",
@@ -13,9 +16,10 @@ function capability(
     inputSchema: {},
     executor: "provider",
     governance: "auto",
+    enabled: true,
     verbs: [],
     ...overrides,
-  } as Capability;
+  } as ProjectableCapability;
 }
 
 function verb(
@@ -58,7 +62,7 @@ describe("projectRunnableActions", () => {
 
   it("does not advertise drafts, disconnected providers, catalog-only tools, or teaching docs", () => {
     const actions = projectRunnableActions([
-      capability({ governance: "propose" }),
+      capability({ enabled: false }),
       capability({
         connection: { required: true, connected: false, provider: "gmail" },
       }),

@@ -2,39 +2,38 @@
  * Pod hygiene CLEANUP PACK — the scanner half: a reviewable pack PROPOSED to the
  * human, never applied.
  *
- * Daily, per human owner, ONE pending `pod_hygiene/cleanup_pack` proposal that
- * lists:
- *   - `close_session`    work sessions the reaper already marked `stale`, with
- *                        no activity for STALE_SESSION_DAYS;
- *   - `expire_proposal`  pending `objectWork`-class proposals older than
- *                        OLD_PROPOSAL_DAYS (that class has no lifetime, so
- *                        nothing else ever retires them);
- *   - `retire_profile`   active, non-system kinds older than KIND_MIN_AGE_DAYS
- *                        with zero live entities pod-wide;
- *   - `pause_automation` active/draft automations older than
- *                        AUTOMATION_MIN_AGE_DAYS that have never run.
+ * Per human owner, ONE pending `pod_hygiene/cleanup_pack` proposal (schema 2,
+ * the item model in `@synap-core/types/pod-hygiene`) listing:
+ *   - `close_session`  work sessions the reaper already marked `stale`, with no
+ *                      activity for STALE_SESSION_DAYS;
+ *   - `retire_profile` active, non-system kinds older than KIND_MIN_AGE_DAYS with
+ *                      zero live entities pod-wide AND a retire preflight that
+ *                      passes — a kind it would refuse is counted, never packed,
+ *                      so a reviewer never approves a guaranteed refusal.
+ * Old proposals and never-run automations are NOT packed: an expiry cannot be
+ * taken back, and the automation-health warden owns never-run automations.
  *
- * Shape follows `jobs/workers/librarian-archiver.ts` (select → idempotency skip
- * → cap → `insertPendingProposal`), but it lives in @synap/api because two of
- * its rules are api-owned SSOTs that jobs cannot import: the session KIND
- * (`sessionKindWhere`) and the proposal CLASS (`classifyProposal`). The jobs
- * cron reaches it through the `registerCleanupPackRunner` IoC slot, exactly
- * like `stale-proposal-cron` reaches `expireLapsedProposals`.
+ * Lives in @synap/api because the session KIND is an api-owned SSOT; the jobs
+ * worker reaches it through the `registerCleanupPackRunner` IoC slot.
  *
- * ── Why ONE pack with per-item reject, not N proposals in a session ──────────
- * The reviewer's unit of work is "tidy my pod", and the existing per-item
- * channel (`proposals.rejectItem` → `data.dispositions[itemRef]`) is generic
- * over any proposal's `data`, so a pack gets per-item decisions without a new
- * door. The composite plan machinery was NOT reused: its all-or-none
- * compensation exists to undo creates; a pack only retires, each item is
- * independent, and one refused item must not undo the others.
+ * ── Why ONE pack with per-item reject, not N proposals ───────────────────────
+ * The reviewer's unit of work is "tidy my pod", and `proposals.rejectItem` is
+ * generic over any proposal's `data`. A pack only retires, each item is
+ * independent, and one refused item must not undo the others — so the
+ * composite plan machinery (all-or-none compensation for creates) does not fit.
  *
- * Owner rule (who reviews an item): the session's `userId`; the proposal's
- * `subjectUserId`, else its human `createdBy` when no agent authored it; the
- * automation's `createdBy`; a workspace kind's workspace OWNER, a user-scoped
- * kind's `userId`. Shared kinds with no home workspace have no single human
- * owner and are NOT packed (counted in the result). Agent principals never
- * own a pack.
+ * ── Don't nag (item-level, modelled on the automation-health warden) ─────────
+ * Refs are id-keyed (`stableItemRef`), so a decision about an object outlives
+ * the pack it was made in. See `suppressedRefs` for the rule.
+ *
+ * ── Supersede ────────────────────────────────────────────────────────────────
+ * A pack left undecided for SUPERSEDE_AFTER_DAYS is WITHDRAWN — the filer
+ * recalling its own stale ask — with `data.supersededBy`, WITHOUT `reviewedAt`,
+ * and whatever is still worth tidying is refiled fresh.
+ *
+ * Owner rule: the session's `userId`; a workspace kind's workspace OWNER, a
+ * user-scoped kind's `userId`. Shared kinds with no home workspace have no single
+ * human owner and are NOT packed (counted). Agent principals never own a pack.
  */
 
 import {
@@ -42,15 +41,15 @@ import {
   and,
   eq,
   lt,
+  gte,
   ne,
+  or,
   inArray,
-  isNull,
   drizzleSql,
   focusSessions,
   proposals,
   profiles,
   entities,
-  automations,
   workspaces,
   users,
   ProposalStatus,
@@ -59,239 +58,228 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
-  buildObjectActionTitle,
-  resolveActionLabel,
-  resolveObjectNoun,
-  resolveObjectNounPlural,
-} from "@synap-core/types/vocabulary";
+  CLEANUP_PACK_SCHEMA,
+  CLEANUP_PACK_ACTIONS,
+  CLEANUP_ACTION_SUBJECT_KIND,
+  CLEANUP_ACTION_REVERSIBLE,
+  KEEP_DAYS,
+  MAX_ITEMS_PER_ACTION,
+  MAX_ITEMS_PER_PACK,
+  SUPERSEDE_AFTER_DAYS,
+  describeCleanupAction,
+  readPackItems,
+  stableItemRef,
+  type CleanupPackAction,
+  type CleanupPackItemV2,
+} from "@synap-core/types/pod-hygiene";
 import { emitSideEffects } from "@synap/events";
+import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
+import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
-import { classifyProposal } from "../proposals/proposal-class.js";
-import { profilesWithPendingRetire } from "./retire-profile.js";
+import {
+  inspectProfileRetirement,
+  profilesWithPendingRetire,
+} from "./retire-profile.js";
 
 const logger = createLogger({ module: "pod-hygiene-cleanup-pack" });
 
 export const STALE_SESSION_DAYS = 30;
+/** Read by the diagnose section. Old proposals are not packed: an expiry cannot be taken back. */
 export const OLD_PROPOSAL_DAYS = 30;
 export const KIND_MIN_AGE_DAYS = 30;
-export const AUTOMATION_MIN_AGE_DAYS = 30;
-/** Per action, per pack. The rest is counted in `truncated`, never dropped silently. */
-export const MAX_ITEMS_PER_ACTION = 25;
+/** A refused item is left to settle this long before it is proposed again. */
+export const REFUSED_SETTLE_DAYS = 7;
+/** A pack rejected whole silences every item in it this long. */
+export const REJECTED_PACK_SILENCE_DAYS = 30;
 /** Safety cap: packs filed in one run. */
 export const MAX_PACKS_PER_RUN = 100;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export const CLEANUP_PACK_ACTIONS = [
-  "close_session",
-  "expire_proposal",
-  "retire_profile",
-  "pause_automation",
-] as const;
-export type CleanupPackAction = (typeof CLEANUP_PACK_ACTIONS)[number];
+const PACK_REASONING =
+  "Found by the pod hygiene scan. Nothing is applied until you approve, and every item is checked again when you do. Leaving an item out keeps it: it will not be proposed again for a while.";
 
-export interface CleanupPackItem {
-  /** Stable per pack — the key `proposals.rejectItem` writes a disposition under. */
-  ref: string;
-  action: CleanupPackAction;
-  targetId: string;
-  label: string;
-  reason: string;
-}
-
+/** One packable item and the human who reviews it. */
 export interface CleanupCandidate {
-  action: CleanupPackAction;
-  targetId: string;
+  item: CleanupPackItemV2;
   ownerUserId: string;
-  label: string;
-  /** Age anchor, used for ordering (oldest first) and the reason line. */
-  since: Date;
 }
 
+/** The stored `data` of a schema-2 pack — no `changeType`, no `properties`. */
 export interface CleanupPackData {
+  schema: typeof CLEANUP_PACK_SCHEMA;
   sourceId: string;
-  /**
-   * `update`, on purpose: the review renderers (desktop `ProposalKindBody`,
-   * relay `[id].tsx`) show an update's `properties.*` rows. Without an explicit
-   * changeType the card defaulted to update anyway, but with no rows — blank.
-   */
-  changeType: "update";
   summary: string;
   reasoning: string;
-  /** Reviewer-facing rows: one per action group, naming every item. */
-  properties: Record<string, string | number>;
-  items: CleanupPackItem[];
+  items: CleanupPackItemV2[];
   truncated: Record<CleanupPackAction, number>;
   thresholds: {
     staleSessionDays: number;
-    oldProposalDays: number;
     kindMinAgeDays: number;
-    automationMinAgeDays: number;
+    keepDays: typeof KEEP_DAYS;
+    refusedSettleDays: number;
+    rejectedPackSilenceDays: number;
+    supersedeAfterDays: number;
   };
   generatedAt: string;
 }
 
 // ── Pure ─────────────────────────────────────────────────────────────────────
 
-function reasonFor(c: CleanupCandidate, now: Date): string {
-  const days = Math.floor((now.getTime() - c.since.getTime()) / DAY_MS);
-  switch (c.action) {
-    case "close_session":
-      return `No activity for ${days} days. Closing keeps its history; nothing is deleted.`;
-    case "expire_proposal":
-      return `Waiting for a decision for ${days} days. Expiring removes it from the queue without applying it.`;
-    case "retire_profile":
-      return `No records have used this kind in the ${days} days since it was created. Retiring hides it and can be undone; its dependencies are checked again when you approve.`;
-    case "pause_automation":
-      return `Created ${days} days ago and has never run. Pausing stops it from firing; it can be resumed.`;
-  }
+const iso = (value: Date | string): string => new Date(value).toISOString();
+
+/** Longest-idle first: last activity when known, else creation. */
+function idleSince(item: CleanupPackItemV2): number {
+  return Date.parse(item.evidence.lastActivityAt ?? item.evidence.createdAt);
 }
 
 /**
- * PURE: one owner's candidates → the pack's items. Oldest first per action,
- * capped per action, refs assigned in a stable order.
+ * PURE: candidates → the pack's items. Oldest first per action, at most
+ * MAX_ITEMS_PER_ACTION per action and MAX_ITEMS_PER_PACK in all; everything cut
+ * is counted in `truncated`, never dropped silently.
  */
 export function buildCleanupPackItems(
-  candidates: readonly CleanupCandidate[],
-  opts: { now: Date; maxPerAction?: number }
-): { items: CleanupPackItem[]; truncated: Record<CleanupPackAction, number> } {
-  const cap = opts.maxPerAction ?? MAX_ITEMS_PER_ACTION;
-  const items: CleanupPackItem[] = [];
+  candidates: readonly CleanupCandidate[]
+): {
+  items: CleanupPackItemV2[];
+  truncated: Record<CleanupPackAction, number>;
+} {
+  const items: CleanupPackItemV2[] = [];
   const truncated = {} as Record<CleanupPackAction, number>;
   for (const action of CLEANUP_PACK_ACTIONS) {
     const mine = candidates
-      .filter((c) => c.action === action)
-      .sort((a, b) => a.since.getTime() - b.since.getTime());
-    truncated[action] = Math.max(0, mine.length - cap);
-    for (const c of mine.slice(0, cap)) {
-      items.push({
-        ref: `$item${items.length}`,
-        action,
-        targetId: c.targetId,
-        label: c.label,
-        reason: reasonFor(c, opts.now),
-      });
-    }
+      .map((c) => c.item)
+      .filter((i) => i.action === action)
+      .sort((a, b) => idleSince(a) - idleSince(b));
+    const take = Math.min(
+      mine.length,
+      MAX_ITEMS_PER_ACTION,
+      MAX_ITEMS_PER_PACK - items.length
+    );
+    truncated[action] = mine.length - take;
+    items.push(...mine.slice(0, take));
   }
   return { items, truncated };
 }
 
-/**
- * Per action: the vocabulary verb and noun tokens (resolved through the one
- * door), plus the product adjective, which is copy and stays local.
- */
-const ACTION_PHRASE: Record<
-  CleanupPackAction,
-  { verb: string; noun: string; qualify: (noun: string) => string }
-> = {
-  close_session: {
-    verb: "close",
-    noun: "session",
-    qualify: (n) => `idle ${n}`,
-  },
-  expire_proposal: {
-    verb: "expire",
-    noun: "proposal",
-    qualify: (n) => `old ${n}`,
-  },
-  retire_profile: {
-    verb: "retire",
-    noun: "kind",
-    qualify: (n) => `unused ${n}`,
-  },
-  pause_automation: {
-    verb: "pause",
-    noun: "automation",
-    qualify: (n) => `${n} that never ran`,
-  },
-};
-
-/** PURE: "Close 3 idle sessions" — verb and noun from the vocabulary door. */
-export function describeCleanupAction(
-  action: CleanupPackAction,
-  count: number
-): string {
-  const phrase = ACTION_PHRASE[action];
-  const noun = (
-    count === 1
-      ? resolveObjectNoun(phrase.noun)
-      : resolveObjectNounPlural(phrase.noun)
-  ).toLowerCase();
-  return `${resolveActionLabel(phrase.verb, "imperative")} ${count} ${phrase.qualify(noun)}`;
-}
-
-/** PURE: the pack title, one clause per non-empty action group. */
+/** PURE: the pack title, one shared-vocabulary clause per non-empty group. */
 export function buildCleanupPackSummary(
-  counts: ReadonlyArray<readonly [CleanupPackAction, number]>
+  items: readonly CleanupPackItemV2[]
 ): string {
-  return `Tidy your pod: ${counts
+  const clauses = CLEANUP_PACK_ACTIONS.map(
+    (action) =>
+      [action, items.filter((i) => i.action === action).length] as const
+  )
+    .filter(([, n]) => n > 0)
     .map(([action, n], i) => {
       const clause = describeCleanupAction(action, n);
       return i === 0
         ? clause
         : clause.charAt(0).toLowerCase() + clause.slice(1);
-    })
-    .join(", ")}`;
+    });
+  return `Tidy your pod: ${clauses.join(", ")}`;
+}
+
+/** A stored pack row, as the don't-nag rule and the supersede read it. */
+export interface PackRow {
+  status: string;
+  createdAt: Date;
+  reviewedAt: Date | null;
+  data: unknown;
+}
+
+export type SuppressionReason = "open" | "kept" | "refused" | "rejectedPack";
+
+/** PURE: an undecided pack this old is superseded instead of left to block. */
+export function isSupersedable(row: PackRow, now: Date): boolean {
+  return (
+    row.status === ProposalStatus.PENDING &&
+    row.createdAt.getTime() < now.getTime() - SUPERSEDE_AFTER_DAYS * DAY_MS
+  );
 }
 
 /**
- * PURE: the rows the review card renders — one per action group, listing its
- * items, plus what is left for a later pack and what one Approve does.
+ * PURE — THE don't-nag RULE: which item refs must not be proposed again, and why.
+ *
+ *   open          named in a pending pack that is not yet supersedable
+ *   rejectedPack  in a pack REJECTED whole within REJECTED_PACK_SILENCE_DAYS
+ *   kept          left out (`dispositions[ref].status === "reject"`) in a pack
+ *                 decided within KEEP_DAYS for the item's subject kind
+ *   refused       refused at apply in a pack decided within REFUSED_SETTLE_DAYS
+ *
+ * "Decided" is a STATUS (approved / rejected) with `reviewedAt` inside the
+ * window — never `reviewedAt` alone, because the proposer withdraw door stamps
+ * it too. Expired and withdrawn packs buy no silence: an expiry is not a
+ * decision. v1 packs carry positional refs that name no object, so they buy
+ * none either.
+ *
+ * The SQL read that feeds this only bounds the rows. This function is the rule,
+ * so deleting any arm of it is visible to a test (the warden's lesson: a guard
+ * living only in a WHERE clause is invisible to every mocked query).
  */
-export function buildCleanupPackRows(
-  items: readonly CleanupPackItem[],
-  truncated: Record<CleanupPackAction, number>
-): Record<string, string | number> {
-  const rows: Record<string, string | number> = {};
-  for (const action of CLEANUP_PACK_ACTIONS) {
-    const mine = items.filter((i) => i.action === action);
-    if (mine.length === 0) continue;
-    rows[describeCleanupAction(action, mine.length)] = mine
-      .map((i) => i.label)
-      .join("; ");
+export function suppressedRefs(
+  rows: readonly PackRow[],
+  now: Date
+): Map<string, SuppressionReason> {
+  const out = new Map<string, SuppressionReason>();
+  const mark = (ref: string, reason: SuppressionReason) => {
+    if (!out.has(ref)) out.set(ref, reason);
+  };
+  const within = (at: Date | null, days: number) =>
+    at instanceof Date && at.getTime() >= now.getTime() - days * DAY_MS;
+
+  for (const row of rows) {
+    const items = readPackItems(row.data).items.filter((i) => !i.legacy);
+    if (items.length === 0) continue;
+
+    if (row.status === ProposalStatus.PENDING) {
+      if (isSupersedable(row, now)) continue;
+      for (const i of items) mark(i.ref, "open");
+      continue;
+    }
+
+    const decided =
+      row.status === ProposalStatus.APPROVED ||
+      row.status === ProposalStatus.REJECTED;
+    if (!decided) continue;
+
+    const data = (row.data ?? {}) as {
+      dispositions?: Record<string, { status?: string } | undefined>;
+      outcomes?: unknown;
+    };
+    const outcomes =
+      data.outcomes &&
+      typeof data.outcomes === "object" &&
+      !Array.isArray(data.outcomes)
+        ? (data.outcomes as Record<string, { outcome?: string } | undefined>)
+        : undefined;
+    for (const i of items) {
+      if (
+        row.status === ProposalStatus.REJECTED &&
+        within(row.reviewedAt, REJECTED_PACK_SILENCE_DAYS)
+      ) {
+        mark(i.ref, "rejectedPack");
+        continue;
+      }
+      const keepDays =
+        KEEP_DAYS[CLEANUP_ACTION_SUBJECT_KIND[i.action as CleanupPackAction]];
+      if (
+        data.dispositions?.[i.ref]?.status === "reject" &&
+        within(row.reviewedAt, keepDays)
+      ) {
+        mark(i.ref, "kept");
+        continue;
+      }
+      if (
+        outcomes?.[i.ref]?.outcome === "refused" &&
+        within(row.reviewedAt, REFUSED_SETTLE_DAYS)
+      ) {
+        mark(i.ref, "refused");
+      }
+    }
   }
-  const later = CLEANUP_PACK_ACTIONS.reduce(
-    (n, a) => n + (truncated[a] ?? 0),
-    0
-  );
-  if (later > 0) rows["left for a later pack"] = later;
-  rows["on approve"] =
-    "Applies every item listed. Each is checked again first; anything that changed since is skipped and reported.";
-  return rows;
+  return out;
 }
-
-/** PURE: group candidates by owner, dropping owners that already hold a pack. */
-export function groupCandidatesByOwner(
-  candidates: readonly CleanupCandidate[],
-  ownersWithOpenPack: ReadonlySet<string>
-): Map<string, CleanupCandidate[]> {
-  const byOwner = new Map<string, CleanupCandidate[]>();
-  for (const c of candidates) {
-    if (ownersWithOpenPack.has(c.ownerUserId)) continue;
-    const list = byOwner.get(c.ownerUserId) ?? [];
-    list.push(c);
-    byOwner.set(c.ownerUserId, list);
-  }
-  return byOwner;
-}
-
-/** PURE: the owner of a pending proposal — never an agent, never a guess. */
-export function proposalOwner(row: {
-  subjectUserId: string | null;
-  createdBy: string | null;
-  agentUserId: string | null;
-}): string | null {
-  if (row.subjectUserId) return row.subjectUserId;
-  if (!row.agentUserId && row.createdBy) return row.createdBy;
-  return null;
-}
-
-/** Proposal pairs the pack must never pack (its own lineage). */
-const HYGIENE_PAIRS = new Set([
-  "pod_hygiene/cleanup_pack",
-  "profile/retire",
-  "profile/merge",
-]);
 
 // ── DB tier ──────────────────────────────────────────────────────────────────
 
@@ -300,17 +288,81 @@ export function cutoffIso(now: Date, days: number): string {
   return new Date(now.getTime() - days * DAY_MS).toISOString();
 }
 
+interface StoredPack extends PackRow {
+  id: string;
+  ownerUserId: string;
+}
+
+/** Every pack the don't-nag rule or the supersede can act on — SQL-bounded only. */
+async function loadPackRows(now: Date): Promise<StoredPack[]> {
+  const widest = Math.max(
+    KEEP_DAYS.kind,
+    KEEP_DAYS.session,
+    REFUSED_SETTLE_DAYS,
+    REJECTED_PACK_SILENCE_DAYS
+  );
+  const rows = await db
+    .select({
+      id: proposals.id,
+      status: proposals.status,
+      createdAt: proposals.createdAt,
+      reviewedAt: proposals.reviewedAt,
+      data: proposals.data,
+      subjectUserId: proposals.subjectUserId,
+      targetId: proposals.targetId,
+    })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.targetType, "pod_hygiene"),
+        eq(proposals.proposalType, "cleanup_pack"),
+        or(
+          eq(proposals.status, ProposalStatus.PENDING),
+          and(
+            inArray(proposals.status, [
+              ProposalStatus.APPROVED,
+              ProposalStatus.REJECTED,
+            ]),
+            gte(
+              proposals.reviewedAt,
+              drizzleSql`${cutoffIso(now, widest)}::timestamptz`
+            )
+          )
+        )
+      )
+    );
+  return rows.map((r) => ({
+    id: r.id,
+    ownerUserId: r.subjectUserId ?? r.targetId,
+    status: r.status,
+    createdAt: new Date(r.createdAt),
+    reviewedAt: r.reviewedAt ? new Date(r.reviewedAt) : null,
+    data: r.data,
+  }));
+}
+
+/** A zero-entity kind before its retire preflight has run. */
+interface KindCandidate {
+  profileId: string;
+  name: string;
+  ownerUserId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface GatheredCandidates {
-  candidates: CleanupCandidate[];
+  sessions: CleanupCandidate[];
+  kinds: KindCandidate[];
   /** Found but not packable: no single human owner. */
-  unowned: { proposals: number; sharedKinds: number };
+  unowned: { sharedKinds: number };
 }
 
 export async function gatherCleanupCandidates(
   now: Date
 ): Promise<GatheredCandidates> {
-  const candidates: CleanupCandidate[] = [];
-  const unowned = { proposals: 0, sharedKinds: 0 };
+  const sessions: CleanupCandidate[] = [];
+  const kinds: KindCandidate[] = [];
+  const unowned = { sharedKinds: 0 };
 
   const sessionRows = await db
     .select({
@@ -318,6 +370,7 @@ export async function gatherCleanupCandidates(
       userId: focusSessions.userId,
       title: focusSessions.title,
       goal: focusSessions.goal,
+      createdAt: focusSessions.createdAt,
       updatedAt: focusSessions.updatedAt,
     })
     .from(focusSessions)
@@ -332,58 +385,25 @@ export async function gatherCleanupCandidates(
       )
     );
   for (const s of sessionRows) {
-    candidates.push({
-      action: "close_session",
-      targetId: s.id,
+    sessions.push({
       ownerUserId: s.userId,
-      label: s.title ?? s.goal.split("\n")[0]!.slice(0, 120),
-      since: new Date(s.updatedAt),
-    });
-  }
-
-  const proposalRows = await db
-    .select({
-      id: proposals.id,
-      proposalType: proposals.proposalType,
-      targetType: proposals.targetType,
-      subjectUserId: proposals.subjectUserId,
-      createdBy: proposals.createdBy,
-      agentUserId: proposals.agentUserId,
-      createdAt: proposals.createdAt,
-      data: proposals.data,
-    })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.status, ProposalStatus.PENDING),
-        lt(
-          proposals.createdAt,
-          drizzleSql`${cutoffIso(now, OLD_PROPOSAL_DAYS)}::timestamptz`
-        )
-      )
-    );
-  for (const p of proposalRows) {
-    if (HYGIENE_PAIRS.has(`${p.targetType}/${p.proposalType}`)) continue;
-    if (classifyProposal(p.proposalType, p.targetType) !== "objectWork")
-      continue;
-    const owner = proposalOwner(p);
-    if (!owner) {
-      unowned.proposals += 1;
-      continue;
-    }
-    const data = (p.data ?? {}) as Record<string, unknown>;
-    candidates.push({
-      action: "expire_proposal",
-      targetId: p.id,
-      ownerUserId: owner,
-      label:
-        typeof data.summary === "string"
-          ? data.summary.slice(0, 120)
-          : buildObjectActionTitle({
-              action: p.proposalType,
-              objectKind: p.targetType,
-            }),
-      since: new Date(p.createdAt),
+      item: {
+        ref: stableItemRef("close_session", s.id),
+        action: "close_session",
+        subject: {
+          kind: CLEANUP_ACTION_SUBJECT_KIND.close_session,
+          id: s.id,
+          name: s.title ?? s.goal.split("\n")[0]!.slice(0, 120),
+        },
+        evidence: {
+          createdAt: iso(s.createdAt ?? s.updatedAt),
+          lastActivityAt: iso(s.updatedAt),
+        },
+        reversible: CLEANUP_ACTION_REVERSIBLE.close_session,
+        risk: "low",
+        // Apply-time re-validation: the session must still be idle SINCE this.
+        snapshot: { updatedAt: iso(s.updatedAt) },
+      },
     });
   }
 
@@ -397,6 +417,7 @@ export async function gatherCleanupCandidates(
       workspaceId: profiles.workspaceId,
       ownerId: workspaces.ownerId,
       createdAt: profiles.createdAt,
+      updatedAt: profiles.updatedAt,
     })
     .from(profiles)
     .leftJoin(workspaces, eq(workspaces.id, profiles.workspaceId))
@@ -426,47 +447,23 @@ export async function gatherCleanupCandidates(
       unowned.sharedKinds += 1;
       continue;
     }
-    candidates.push({
-      action: "retire_profile",
-      targetId: k.id,
+    kinds.push({
+      profileId: k.id,
+      name: k.displayName,
       ownerUserId: owner,
-      label: `${k.displayName} (${k.slug})`,
-      since: new Date(k.createdAt),
-    });
-  }
-
-  const automationRows = await db
-    .select({
-      id: automations.id,
-      name: automations.name,
-      createdBy: automations.createdBy,
-      createdAt: automations.createdAt,
-    })
-    .from(automations)
-    .where(
-      and(
-        inArray(automations.status, ["active", "draft"]),
-        eq(automations.runCount, 0),
-        isNull(automations.lastRunAt),
-        lt(
-          automations.createdAt,
-          drizzleSql`${cutoffIso(now, AUTOMATION_MIN_AGE_DAYS)}::timestamptz`
-        )
-      )
-    );
-  for (const a of automationRows) {
-    candidates.push({
-      action: "pause_automation",
-      targetId: a.id,
-      ownerUserId: a.createdBy,
-      label: a.name,
-      since: new Date(a.createdAt),
+      createdAt: iso(k.createdAt),
+      updatedAt: iso(k.updatedAt),
     });
   }
 
   // Agent principals never own a pack — an agent cannot approve one anyway
   // (the review ladder's agent-class floor), so a pack for it is a dead row.
-  const ownerIds = [...new Set(candidates.map((c) => c.ownerUserId))];
+  const ownerIds = [
+    ...new Set([
+      ...sessions.map((c) => c.ownerUserId),
+      ...kinds.map((k) => k.ownerUserId),
+    ]),
+  ];
   const agentIds =
     ownerIds.length === 0
       ? new Set<string>()
@@ -481,139 +478,242 @@ export async function gatherCleanupCandidates(
           ).map((u) => u.id)
         );
 
+  const byHuman = <T extends { ownerUserId: string }>(list: T[]) =>
+    list.filter((c) => !agentIds.has(c.ownerUserId));
+  return { sessions: byHuman(sessions), kinds: byHuman(kinds), unowned };
+}
+
+/**
+ * Run the retire preflight for a kind and build its item from the evidence.
+ * `null` when the preflight would refuse — that kind is counted, never packed.
+ */
+async function preflightKindItem(
+  k: KindCandidate
+): Promise<CleanupPackItemV2 | null> {
+  const inspection = await inspectProfileRetirement(k.profileId);
+  if (!inspection || inspection.decision.verdict !== "retirable") return null;
+  const d = inspection.dependents;
   return {
-    candidates: candidates.filter((c) => !agentIds.has(c.ownerUserId)),
-    unowned,
+    ref: stableItemRef("retire_profile", k.profileId),
+    action: "retire_profile",
+    subject: {
+      kind: CLEANUP_ACTION_SUBJECT_KIND.retire_profile,
+      id: k.profileId,
+      name: k.name,
+    },
+    evidence: {
+      createdAt: k.createdAt,
+      lastActivityAt: null,
+      records: d.entities,
+      dependents: {
+        views: d.views,
+        automations: d.automations,
+        relationTypes: d.profileRelations,
+        facets: d.liveFacets,
+      },
+    },
+    reversible: CLEANUP_ACTION_REVERSIBLE.retire_profile,
+    risk: "low",
+    snapshot: { updatedAt: k.updatedAt },
   };
+}
+
+/**
+ * Withdraw an undecided pack the filer is replacing. `withdrawn` is "retracted by
+ * its own proposer" — here the filer recalling its own stale ask. `reviewedAt`
+ * is deliberately NOT set: a supersede is not a decision and buys no silence.
+ * PENDING is re-asserted, so a pack the owner decided meanwhile is never touched.
+ */
+async function supersedePack(
+  id: string,
+  supersededBy: string | null,
+  now: Date
+): Promise<boolean> {
+  const reason = supersededBy
+    ? "Superseded by a fresher cleanup pack."
+    : "Nothing in it is left to tidy.";
+  const rows = await db
+    .update(proposals)
+    .set({
+      status: ProposalStatus.WITHDRAWN,
+      updatedAt: now,
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('supersededBy', ${supersededBy}::text, 'withdrawReason', ${reason}::text)`,
+    })
+    .where(
+      and(eq(proposals.id, id), eq(proposals.status, ProposalStatus.PENDING))
+    )
+    .returning({ id: proposals.id, data: proposals.data });
+  if (rows.length === 0) return false;
+  markProposalNotificationsActioned([id]);
+  // WITHDRAWN is terminal: the same discard every terminal door makes. A no-op
+  // for a pack (it stages no source blob); `null` because, like the expiry
+  // scanners, the filer acts as no user.
+  await discardProposalSourceBlob({
+    database: db,
+    userId: null,
+    proposalData: rows[0]!.data,
+  });
+  return true;
 }
 
 export interface FileCleanupPacksResult {
   owners: number;
   filed: number;
-  skippedOpenPack: number;
+  superseded: number;
+  suppressed: Record<SuppressionReason, number>;
   capped: number;
-  unowned: GatheredCandidates["unowned"];
+  unowned: { sharedKinds: number };
+  notPacked: { refusedByPreflight: number };
 }
 
 /**
- * The scanner. Files at most ONE pending pack per owner (idempotent: an owner
- * with a pending pack is skipped until they decide it), at most
- * MAX_PACKS_PER_RUN per run. NEVER applies anything.
+ * The scanner. Per owner: files ONE pack of the items no rule suppresses, and
+ * withdraws that owner's supersedable packs in favour of it. At most
+ * MAX_PACKS_PER_RUN owners per run. NEVER applies anything.
  */
 export async function fileCleanupPacks(
   now: Date = new Date()
 ): Promise<FileCleanupPacksResult> {
-  const { candidates, unowned } = await gatherCleanupCandidates(now);
+  const packRows = await loadPackRows(now);
+  const suppressed = suppressedRefs(packRows, now);
+  const { sessions, kinds, unowned } = await gatherCleanupCandidates(now);
 
-  const openPacks = await db
-    .select({
-      subjectUserId: proposals.subjectUserId,
-      targetId: proposals.targetId,
-    })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.targetType, "pod_hygiene"),
-        eq(proposals.proposalType, "cleanup_pack"),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    );
-  const ownersWithOpenPack = new Set(
-    openPacks.map((p) => p.subjectUserId ?? p.targetId)
-  );
-  const allOwners = new Set(candidates.map((c) => c.ownerUserId));
-  const byOwner = groupCandidatesByOwner(candidates, ownersWithOpenPack);
-  const owners = [...byOwner.keys()].sort();
-  const toFile = owners.slice(0, MAX_PACKS_PER_RUN);
+  const suppressedCounts: Record<SuppressionReason, number> = {
+    open: 0,
+    kept: 0,
+    refused: 0,
+    rejectedPack: 0,
+  };
+  const isFree = (ref: string): boolean => {
+    const why = suppressed.get(ref);
+    if (why) suppressedCounts[why] += 1;
+    return !why;
+  };
+  const pushTo = <T>(map: Map<string, T[]>, owner: string, value: T) => {
+    const list = map.get(owner) ?? [];
+    list.push(value);
+    map.set(owner, list);
+  };
+
+  const sessionsByOwner = new Map<string, CleanupCandidate[]>();
+  for (const c of sessions) {
+    if (isFree(c.item.ref)) pushTo(sessionsByOwner, c.ownerUserId, c);
+  }
+  const kindsByOwner = new Map<string, KindCandidate[]>();
+  for (const k of kinds) {
+    if (isFree(stableItemRef("retire_profile", k.profileId))) {
+      pushTo(kindsByOwner, k.ownerUserId, k);
+    }
+  }
+  const stalePacksByOwner = new Map<string, StoredPack[]>();
+  for (const row of packRows) {
+    if (isSupersedable(row, now))
+      pushTo(stalePacksByOwner, row.ownerUserId, row);
+  }
+
+  const owners = [
+    ...new Set([
+      ...sessionsByOwner.keys(),
+      ...kindsByOwner.keys(),
+      ...stalePacksByOwner.keys(),
+    ]),
+  ].sort();
 
   let filed = 0;
-  for (const ownerUserId of toFile) {
-    const { items, truncated } = buildCleanupPackItems(
-      byOwner.get(ownerUserId)!,
-      {
-        now,
-      }
+  let superseded = 0;
+  let refusedByPreflight = 0;
+  for (const ownerUserId of owners.slice(0, MAX_PACKS_PER_RUN)) {
+    const candidates: CleanupCandidate[] = [
+      ...(sessionsByOwner.get(ownerUserId) ?? []),
+    ];
+    // Kinds: preflight oldest first until the action cap is full. A kind the
+    // retire preflight would refuse is counted and never packed.
+    const ownerKinds = (kindsByOwner.get(ownerUserId) ?? []).sort(
+      (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt)
     );
-    if (items.length === 0) continue;
-    const counts = CLEANUP_PACK_ACTIONS.map(
-      (a) => [a, items.filter((i) => i.action === a).length] as const
-    ).filter(([, n]) => n > 0);
-    const data: CleanupPackData = {
-      sourceId: ownerUserId,
-      changeType: "update",
-      summary: buildCleanupPackSummary(counts),
-      reasoning:
-        "Found by the pod hygiene scan. Nothing is applied until you approve, and every item is checked again when you do.",
-      properties: buildCleanupPackRows(items, truncated),
-      items,
-      truncated,
-      thresholds: {
-        staleSessionDays: STALE_SESSION_DAYS,
-        oldProposalDays: OLD_PROPOSAL_DAYS,
-        kindMinAgeDays: KIND_MIN_AGE_DAYS,
-        automationMinAgeDays: AUTOMATION_MIN_AGE_DAYS,
-      },
-      generatedAt: now.toISOString(),
-    };
-    try {
-      const { proposal } = await insertPendingProposal({
-        workspaceId: null,
-        targetType: "pod_hygiene",
-        targetId: ownerUserId,
-        proposalType: "cleanup_pack",
-        data: data as unknown as Record<string, unknown>,
-        createdBy: ownerUserId,
-        proposedByUserId: null,
-        // OWNER FLOOR (0248): the owner IS the subject of their own pack.
-        subjectUserId: ownerUserId,
-      });
-      void emitSideEffects({
-        subjectType: "proposal",
-        action: "created",
-        subjectId: proposal.id,
-        userId: ownerUserId,
-        data: {
-          proposalStatus: "created",
-          targetType: "pod_hygiene",
-          changeType: "update",
+    let packedKinds = 0;
+    let checked = 0;
+    for (const k of ownerKinds) {
+      if (packedKinds >= MAX_ITEMS_PER_ACTION) break;
+      checked += 1;
+      const item = await preflightKindItem(k);
+      if (!item) {
+        refusedByPreflight += 1;
+        continue;
+      }
+      candidates.push({ item, ownerUserId });
+      packedKinds += 1;
+    }
+    const { items, truncated } = buildCleanupPackItems(candidates);
+    truncated.retire_profile += ownerKinds.length - checked;
+
+    let newPackId: string | null = null;
+    if (items.length > 0) {
+      const data: CleanupPackData = {
+        schema: CLEANUP_PACK_SCHEMA,
+        sourceId: ownerUserId,
+        summary: buildCleanupPackSummary(items),
+        reasoning: PACK_REASONING,
+        items,
+        truncated,
+        thresholds: {
+          staleSessionDays: STALE_SESSION_DAYS,
+          kindMinAgeDays: KIND_MIN_AGE_DAYS,
+          keepDays: KEEP_DAYS,
+          refusedSettleDays: REFUSED_SETTLE_DAYS,
+          rejectedPackSilenceDays: REJECTED_PACK_SILENCE_DAYS,
+          supersedeAfterDays: SUPERSEDE_AFTER_DAYS,
         },
-      }).catch((err) => {
-        logger.warn(
-          { err, proposalId: proposal.id },
-          "cleanup-pack: emitSideEffects failed (non-fatal)"
+        generatedAt: now.toISOString(),
+      };
+      try {
+        const { proposal } = await insertPendingProposal({
+          workspaceId: null,
+          targetType: "pod_hygiene",
+          targetId: ownerUserId,
+          proposalType: "cleanup_pack",
+          data: data as unknown as Record<string, unknown>,
+          createdBy: ownerUserId,
+          proposedByUserId: null,
+          // OWNER FLOOR (0248): the owner IS the subject of their own pack.
+          subjectUserId: ownerUserId,
+        });
+        newPackId = proposal.id;
+        void emitSideEffects({
+          subjectType: "proposal",
+          action: "created",
+          subjectId: proposal.id,
+          userId: ownerUserId,
+          data: { proposalStatus: "created", targetType: "pod_hygiene" },
+        }).catch((err) => {
+          logger.warn(
+            { err, proposalId: proposal.id },
+            "cleanup-pack: emitSideEffects failed (non-fatal)"
+          );
+        });
+        filed += 1;
+      } catch (err) {
+        logger.error(
+          { err, ownerUserId },
+          "cleanup-pack: failed to file pack, skipping"
         );
-      });
-      filed += 1;
-    } catch (err) {
-      logger.error(
-        { err, ownerUserId },
-        "cleanup-pack: failed to file pack, skipping"
-      );
+        // Keep the old pack: the owner must never be left with nothing to decide.
+        continue;
+      }
+    }
+
+    for (const stale of stalePacksByOwner.get(ownerUserId) ?? []) {
+      if (await supersedePack(stale.id, newPackId, now)) superseded += 1;
     }
   }
 
   return {
-    owners: allOwners.size,
+    owners: owners.length,
     filed,
-    skippedOpenPack: [...allOwners].filter((o) => ownersWithOpenPack.has(o))
-      .length,
+    superseded,
+    suppressed: suppressedCounts,
     capped: Math.max(0, owners.length - MAX_PACKS_PER_RUN),
     unowned,
+    notPacked: { refusedByPreflight },
   };
-}
-
-/** Tolerant read of `data.items` (the stored pack JSON). */
-export function readPackItems(data: unknown): CleanupPackItem[] {
-  const items = (data as { items?: unknown } | null)?.items;
-  if (!Array.isArray(items)) return [];
-  return items.filter(
-    (i): i is CleanupPackItem =>
-      !!i &&
-      typeof i === "object" &&
-      typeof (i as CleanupPackItem).ref === "string" &&
-      typeof (i as CleanupPackItem).targetId === "string" &&
-      (CLEANUP_PACK_ACTIONS as readonly string[]).includes(
-        (i as CleanupPackItem).action
-      )
-  );
 }

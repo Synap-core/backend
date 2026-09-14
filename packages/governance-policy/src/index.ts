@@ -33,6 +33,10 @@
  *   2.08 AGENT_SCHEMA_DEFINITION_EVENT_KEYS → always propose; an agent defining
  *                                    a kind/role (`profile.create`, D6).
  *                                    Unwidenable by any rung below.
+ *   2.09 AGENT_STRUCTURE_WRITE_EVENT_KEYS → always propose; an agent creating
+ *                                    a workspace, cell, playbook or automation,
+ *                                    or activating one (D1/D2). Same guarantees
+ *                                    as 2.08.
  *   2.5 DESTRUCTIVE_ACTIONS hard floor → always propose (delete/archive/purge/
  *                                    merge), regardless of ANY override rung
  *                                    below (ownership, explicit autoApproveFor,
@@ -161,10 +165,11 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   //     grant-gated (action="run"), so this key isn't consulted yet. Wiring the
   //     create-new→proposal gate on the Hub route (create-vs-resolve + a channel
   //     proposal executor) is a tracked follow-up — see policy.test.ts.
-  // Automation/link creates stay instant (they wire existing capabilities, no new
-  // durable surface). `tool.create` / `skill.create` were already excluded (they
-  // define new EGRESS abilities).
-  "automation.create",
+  // Link creates stay instant (they wire existing things, no new durable
+  // surface). `automation.create` was removed (D2, 2026-09-14): an agent's
+  // automation is a structure write, floored at rung 2.09 — an entry here would
+  // be dead for agents and mislabel the platform-defaults list. `tool.create` /
+  // `skill.create` were already excluded (they define new EGRESS abilities).
   "link.create",
   // Focus-session lifecycle = non-destructive work-orchestration (open a
   // session, advance its stage, update progress), less sensitive than the data
@@ -460,7 +465,21 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "dev.deploy_approval",
   "focus_session.plan_approval",
   "focus_session.deploy_approval",
+  // A cleanup pack NEVER auto-applies (founder, 2026-09-14). Packs are filed
+  // directly (`insertPendingProposal`, pod-hygiene cron) and never reach this
+  // engine, so no rule matches one today; flooring the key is what makes
+  // `nonWidenableFloorFor` refuse "Make a rule from this" in
+  // `governanceRules.create`, and keeps a rule inert if a pack ever routes
+  // through the gate. Typed against the direct-door vocabulary.
+  "pod_hygiene.cleanup_pack" satisfies DirectProposalEventKey,
 ];
+
+/** `${targetType}.${proposalType}` for a direct proposal door. */
+type DirectProposalEventKey = DirectProposalDoor extends infer K
+  ? K extends `${infer S}/${infer A}`
+    ? `${S}.${A}`
+    : never
+  : never;
 
 /**
  * ARBITRARY CODE EXECUTION — doors that hand an agent a shell, not a record.
@@ -519,6 +538,72 @@ export const AGENT_SCHEMA_DEFINITION_EVENT_KEYS: readonly GateEventKey[] = [
   "profile.create",
   "profiles.create",
 ];
+
+/** Gate doors on the subjects that carry the pod's STRUCTURE. */
+type StructureDoor = Extract<
+  GateWriteDoor,
+  `${"automation" | "cell" | "playbook" | "profile" | "widget" | "workspace"}/${string}`
+>;
+
+/**
+ * AGENT STRUCTURE WRITES — an agent adding to what the pod DOES or how it is
+ * ORGANISED always proposes (D1/D2): a workspace, a cell definition or
+ * placement, a renderer promotion, a playbook, an automation or its activation.
+ * The narrow doors (Raycast, claude.ai) expose these, so the pod guarantees
+ * review before any door does.
+ *
+ * Sibling of rung 2.08 with the same guarantees (above rules 2.8, ownership 3,
+ * autoApproveFor 4, DEFAULT_AUTO_APPROVE 8; humans never reach the engine). Its
+ * own `reasonCode` because the review copy differs from "a kind or role".
+ *
+ * CLASSIFIED, not listed: every gate door on a structure subject must appear
+ * here, so a new `cell/…` or `automation/…` door nobody classified does not
+ * compile. The floored event keys below are DERIVED from this map.
+ */
+export const AGENT_STRUCTURE_DOOR_CLASS = {
+  "automation/activate": "floored",
+  "automation/create": "floored",
+  "cell/create": "floored",
+  "cell/define": "floored",
+  "playbook/create": "floored",
+  "playbook/promote": "floored",
+  // Editing a playbook can switch on its schedule, which materialises an ACTIVE
+  // cron automation (services/playbooks/cron-automation.ts).
+  "playbook/update": "floored",
+  // Promoting a cell to a kind's renderer changes how every entity of it renders.
+  "profile/renderer.set": "floored",
+  // The second writer of `widget_definitions` — a cell definition by another name.
+  "widget/register": "floored",
+  "workspace/create": "floored",
+  // Already behind another non-widenable floor.
+  "playbook/archive": "other-floor", // 2.5 destructive
+  "profile/create": "other-floor", // 2.08
+  "workspace/delete": "other-floor", // 2 admin
+  "workspace/update": "other-floor", // 2 admin (also package apply onto a workspace)
+  // Widenable on purpose.
+  "automation/execute": "widenable", // runs an automation a person activated
+  "cell/update": "widenable", // config patch of an existing placement
+  "playbook/run": "widenable", // runs an existing playbook
+  // Outside D1/D2 — open questions in plans/reports/door-g.md.
+  "workspace/adopt": "widenable",
+  "workspace/configure_public_projection": "widenable",
+  "workspace/declare_source": "widenable",
+} as const satisfies Record<
+  StructureDoor,
+  "floored" | "other-floor" | "widenable"
+>;
+
+export const AGENT_STRUCTURE_WRITE_EVENT_KEYS: readonly GateEventKey[] = (
+  Object.keys(AGENT_STRUCTURE_DOOR_CLASS) as StructureDoor[]
+)
+  .filter((door) => AGENT_STRUCTURE_DOOR_CLASS[door] === "floored")
+  .flatMap((door) => {
+    const slash = door.indexOf("/");
+    const subject = door.slice(0, slash);
+    const action = door.slice(slash + 1);
+    // Both spellings, for the same reason as ADMIN_ACTIONS_LIVE.
+    return [`${subject}.${action}`, `${subject}s.${action}`] as GateEventKey[];
+  });
 
 /**
  * Filesystem paths ALWAYS blocked for external agent writes, regardless of user
@@ -601,6 +686,7 @@ export type KnownGovernanceAction =
   | "arrange"
   | "invite"
   | "recap"
+  | "activate"
   | "declare_source"
   | "configure_public_projection"
   | "write";
@@ -664,6 +750,8 @@ export function requiredPermissionFor(
     action === "invite" ||
     // run-session-recap.ts gates the recap write under this verb.
     action === "recap" ||
+    // automations.ts: an agent switching an automation on (rung 2.09).
+    action === "activate" ||
     // Enterprise-OS Wave 0: declaring a workspace data edge
     // (synap_declare_workspace_source / Hub source-edges) is a governed write.
     action === "declare_source" ||
@@ -1006,6 +1094,8 @@ export const PROPOSE_REASON = {
     "This adds a required field or a default to a system kind, which changes every workspace at once; a pod admin must approve it.",
   AGENT_SCHEMA_DEFINITION:
     "An agent is defining a new kind or role, which changes what the pod can hold; a person must approve it, and no governance rule can widen it.",
+  AGENT_STRUCTURE_WRITE:
+    "An agent is creating a workspace, cell, playbook or automation (or switching one on), which changes what the pod does; a person must approve it, and no governance rule can widen it.",
 } as const;
 
 const CHANNEL_BLOCK_REASON =
@@ -1097,6 +1187,18 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
       verdict: "propose",
       reason: PROPOSE_REASON.AGENT_SCHEMA_DEFINITION,
       reasonCode: "AGENT_SCHEMA_DEFINITION",
+    };
+  }
+
+  // 2.09 AGENT STRUCTURE WRITE → always propose; same placement and guarantees
+  // as 2.08 (see AGENT_STRUCTURE_DOOR_CLASS).
+  if (
+    (AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[]).includes(eventKey)
+  ) {
+    return {
+      verdict: "propose",
+      reason: PROPOSE_REASON.AGENT_STRUCTURE_WRITE,
+      reasonCode: "AGENT_STRUCTURE_WRITE",
     };
   }
 
@@ -1377,8 +1479,9 @@ export function decideAgentPolicy(input: AgentPolicyInput): AgentPolicyVerdict {
  * DERIVED, never a list: it asks {@link decideAgentPolicy} itself with a
  * rung-2.8 `auto` verdict and no other context. The only rungs that can still
  * answer "propose" are the ones keyed on the event key alone — today ADMIN,
- * HUMAN_GATE, ARBITRARY_EXECUTION, AGENT_SCHEMA_DEFINITION and
- * DESTRUCTIVE_HARD_FLOOR — so a new floor of that shape joins by existing.
+ * HUMAN_GATE, ARBITRARY_EXECUTION, AGENT_SCHEMA_DEFINITION,
+ * AGENT_STRUCTURE_WRITE and DESTRUCTIVE_HARD_FLOOR — so a new floor of that
+ * shape joins by existing.
  *
  * NOT covered, on purpose: context-dependent rungs (2.07 pod-admin schema,
  * 2.1 forcePropose, 2.55 untrusted origin, 2.56 ceiling). A rule on those keys
@@ -1459,6 +1562,8 @@ export const GATE_WRITE_DOORS = {
   "apiKey/update": "gate",
   "artifact/create": "gate",
   "artifact/setState": "gate",
+  // An agent switching an automation on (`activate`, or `update` to active).
+  "automation/activate": "gate",
   "automation/create": "gate",
   "automation/execute": "gate",
   "bento/arrange": "gate",
@@ -1566,6 +1671,9 @@ export const GATE_WRITE_DOORS = {
  */
 export const DIRECT_PROPOSAL_DOORS = {
   "capability/capability.install": "direct",
+  // Lane E: an agent hitting an installed-but-not-enabled pack files ONE
+  // enable request (never auto-enables); executor already registered.
+  "capability/capability.enable": "direct",
   "capability/capability.run": "direct",
   "capability/run": "direct",
   "document/user_edit": "direct",

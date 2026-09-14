@@ -41,7 +41,10 @@ import {
   drizzleSql,
   type db as DbType,
 } from "@synap/database";
-import { stageSourceBlob } from "../../utils/store-entity-source-blob.js";
+import {
+  stageSourceBlob,
+  type StagedSourceBlob,
+} from "../../utils/store-entity-source-blob.js";
 import { fileSha256Of } from "./known-source-hashes.js";
 
 export const INTAKE_SOURCE_METADATA_KEY = "intakeSource";
@@ -72,6 +75,24 @@ export interface IntakeSourceMetadata {
   sourceSha256?: string;
   degraded?: { reason: string; at: string };
   restructuredAt?: string;
+  /**
+   * The caller asked for text only (`keepRaw: false`) but nothing could be
+   * read from the file, so its ORIGINAL bytes were kept anyway — raw is never
+   * lost before it has been structured. Records the declined retention so a
+   * later purge can honour it. (No purge exists yet.)
+   */
+  retainedUntilStructured?: true;
+  /**
+   * `capturePlanKey`s of the plans structured FROM this source in its session
+   * (a clarification answer re-structures the same raw into a new plan, so a
+   * list). `capture.execute` finds the raw its plan was made from by these —
+   * the session alone is too coarse: a person's own session holds many captures.
+   */
+  planKeys?: string[];
+  /** The `messages.id` the raw came from (a chat message interpreted). */
+  sourceMessageId?: string;
+  /** The outside system's own id for the raw (a Cal.com booking uid). */
+  externalRef?: string;
 }
 
 export interface StageIntakeSourceInput {
@@ -97,9 +118,25 @@ export interface StageIntakeSourceInput {
     keepBytes: boolean;
     /** Client-declared sha256 of the original asset (64 hex), when re-encoded. */
     sourceSha256?: string;
+    /** See {@link IntakeSourceMetadata.retainedUntilStructured}. */
+    retainedUntilStructured?: boolean;
   };
   /** Structuring did not run — the source is kept for re-structure. */
   degraded?: { reason: string };
+  /** The plan structured from this source — appended to `planKeys`. */
+  planKey?: string;
+  /** See {@link IntakeSourceMetadata.sourceMessageId}. */
+  sourceMessageId?: string;
+  /** See {@link IntakeSourceMetadata.externalRef}. */
+  externalRef?: string;
+  /**
+   * A replay of a raw that is ALREADY stored (rerun, structure again): reuse
+   * that row — the caller's own, live intake source — instead of matching by
+   * session + content hash, so a redo never stages a second copy of its raw.
+   * Not found (foreign, deleted, not an intake source) ⇒
+   * {@link IntakeSourceNotFoundError}; never a silent copy.
+   */
+  reuseDocumentId?: string;
 }
 
 export interface StagedIntakeSource {
@@ -107,6 +144,8 @@ export interface StagedIntakeSource {
   contentHash: string;
   deduplicated: boolean;
   degraded: boolean;
+  /** The stored ORIGINAL bytes, when this source kept them (a file with `keepBytes`). */
+  blob?: StagedSourceBlob;
 }
 
 export class IntakeSourceEmptyError extends Error {
@@ -114,6 +153,14 @@ export class IntakeSourceEmptyError extends Error {
   constructor() {
     super("Intake source has no body to store");
     this.name = "IntakeSourceEmptyError";
+  }
+}
+
+export class IntakeSourceNotFoundError extends Error {
+  readonly code = "INTAKE_SOURCE_NOT_FOUND" as const;
+  constructor(documentId: string) {
+    super(`Intake source ${documentId} not found`);
+    this.name = "IntakeSourceNotFoundError";
   }
 }
 
@@ -162,42 +209,94 @@ export async function stageIntakeSource(
   });
   const now = new Date().toISOString();
 
-  if (input.sessionId) {
+  if (input.reuseDocumentId || input.sessionId) {
     const [existing] = await database
-      .select({ id: documentsTable.id, metadata: documentsTable.metadata })
+      .select({
+        id: documentsTable.id,
+        metadata: documentsTable.metadata,
+        storageKey: documentsTable.storageKey,
+        storageUrl: documentsTable.storageUrl,
+        size: documentsTable.size,
+        mimeType: documentsTable.mimeType,
+      })
       .from(documentsTable)
       .where(
         and(
           eq(documentsTable.userId, userId),
           isNull(documentsTable.deletedAt),
-          drizzleSql`${documentsTable.metadata} #>> '{intakeSource,sessionId}' = ${input.sessionId}`,
-          drizzleSql`${documentsTable.metadata} #>> '{intakeSource,contentHash}' = ${contentHash}`
+          ...(input.reuseDocumentId
+            ? [
+                eq(documentsTable.id, input.reuseDocumentId),
+                drizzleSql`${documentsTable.metadata} ? ${INTAKE_SOURCE_METADATA_KEY}`,
+              ]
+            : [
+                drizzleSql`${documentsTable.metadata} #>> '{intakeSource,sessionId}' = ${input.sessionId}`,
+                drizzleSql`${documentsTable.metadata} #>> '{intakeSource,contentHash}' = ${contentHash}`,
+              ])
         )
       )
       .limit(1);
+    if (!existing && input.reuseDocumentId) {
+      throw new IntakeSourceNotFoundError(input.reuseDocumentId);
+    }
     if (existing) {
       const meta = (existing.metadata ?? {}) as Record<string, unknown>;
       const source = meta[INTAKE_SOURCE_METADATA_KEY] as
         IntakeSourceMetadata | undefined;
       const wasDegraded = Boolean(source?.degraded);
-      if (wasDegraded && !input.degraded && source) {
-        const { degraded: _cleared, ...rest } = source;
+      const clearDegraded = wasDegraded && !input.degraded;
+      const addPlanKey =
+        input.planKey !== undefined &&
+        !(source?.planKeys ?? []).includes(input.planKey);
+      if (source && (clearDegraded || addPlanKey)) {
+        const { degraded: priorDegraded, ...rest } = source;
         await new DocumentRepository(database, eventRepository).update(
           existing.id,
           {
             metadata: {
               ...meta,
-              [INTAKE_SOURCE_METADATA_KEY]: { ...rest, restructuredAt: now },
+              [INTAKE_SOURCE_METADATA_KEY]: {
+                ...rest,
+                ...(clearDegraded
+                  ? { restructuredAt: now }
+                  : priorDegraded
+                    ? { degraded: priorDegraded }
+                    : {}),
+                ...(addPlanKey
+                  ? { planKeys: [...(source.planKeys ?? []), input.planKey] }
+                  : {}),
+              },
             },
           },
           userId
         );
       }
+      // Bytes kept ⇔ the row stores the file's own mime (the rule
+      // `findRunStagedSource` reads), not a markdown rendition.
+      const keptBytes =
+        source?.kind === "file" &&
+        Boolean(existing.storageKey) &&
+        existing.mimeType !== null &&
+        existing.mimeType === source.mimeType;
       return {
         documentId: existing.id,
-        contentHash,
+        // A reused row keeps the hash it was stored under (a replay may send
+        // the same raw in another form, e.g. a long text as a .md file).
+        contentHash: source?.contentHash ?? contentHash,
         deduplicated: true,
         degraded: wasDegraded && Boolean(input.degraded),
+        ...(keptBytes
+          ? {
+              blob: {
+                documentId: existing.id,
+                storageKey: existing.storageKey!,
+                storageUrl: existing.storageUrl ?? "",
+                size: existing.size,
+                mimeType: existing.mimeType!,
+                ...(source?.filename ? { filename: source.filename } : {}),
+              },
+            }
+          : {}),
       };
     }
   }
@@ -221,6 +320,14 @@ export async function stageIntakeSource(
     ...(input.degraded
       ? { degraded: { reason: input.degraded.reason, at: now } }
       : {}),
+    ...(input.file?.retainedUntilStructured
+      ? { retainedUntilStructured: true as const }
+      : {}),
+    ...(input.planKey ? { planKeys: [input.planKey] } : {}),
+    ...(input.sourceMessageId
+      ? { sourceMessageId: input.sourceMessageId }
+      : {}),
+    ...(input.externalRef ? { externalRef: input.externalRef } : {}),
   };
   const title = deriveTitle(input);
 
@@ -246,6 +353,7 @@ export async function stageIntakeSource(
       contentHash,
       deduplicated: false,
       degraded: Boolean(input.degraded),
+      blob: staged,
     };
   }
 
