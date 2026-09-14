@@ -33,6 +33,7 @@ import {
   db,
   proposals,
   focusSessions,
+  projects,
   links,
   messages,
   users,
@@ -46,6 +47,7 @@ import {
   count,
   drizzleSql,
   ProposalStatus,
+  ownerPrivateVisibleWhere,
 } from "@synap/database";
 import {
   buildObjectActionTitle,
@@ -201,6 +203,18 @@ export interface ContinuationPacket {
     currentStage: string | null;
     progress: number | null;
   };
+  /**
+   * The PROJECT this session's work serves — name + goal, so a reader sees the
+   * short-term session beside the long-term vision it belongs to. `project:
+   * null` means the session has no project (a true state, not a failure).
+   * `goal` is the project's own `description` column — the same field
+   * `ProjectDetail.tsx`'s header renders under the name — `null` when the
+   * project has none. A project the caller cannot see reads as `null` too,
+   * never leaking its name; only a FAILED read is `unavailable`.
+   */
+  project:
+    | { status: "ok"; project: { id: string; name: string; goal: string | null } | null }
+    | { status: "unavailable"; reason: string };
   userMustDecide: {
     owedSlots: PacketSection<PacketSlotItem>;
     pendingProposals: PacketSection<PacketProposalItem>;
@@ -527,6 +541,37 @@ async function readParent(
     status: "ok",
     session: found.status === "ok" ? (found.items[0] ?? null) : null,
   };
+}
+
+/**
+ * The session's project, `null` when it has none — same visibility predicate
+ * as `projects.get` / `getProjectPath` (`ownerPrivateVisibleWhere`): a
+ * workspace-scoped project follows the caller's workspace access, a
+ * NULL-workspace project is owner-private. A project the caller cannot see
+ * matches no row and reads as `null`, same as no project at all — never a
+ * leaked name. Only a driver-level failure is `unavailable`.
+ */
+async function readProject(
+  database: typeof db,
+  userId: string,
+  projectId: string | null
+): Promise<ContinuationPacket["project"]> {
+  if (!projectId) return { status: "ok", project: null };
+  const [row] = await database
+    .select({
+      id: projects.id,
+      name: projects.name,
+      goal: projects.description,
+    })
+    .from(projects)
+    .where(
+      and(
+        eq(projects.id, projectId),
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)
+      )
+    )
+    .limit(1);
+  return { status: "ok", project: row ?? null };
 }
 
 /**
@@ -1025,6 +1070,7 @@ export async function projectContinuationPacket(
   allOutputs.catch(() => undefined);
 
   const [
+    project,
     pendingProposals,
     outputs,
     rerun,
@@ -1036,6 +1082,13 @@ export async function projectContinuationPacket(
     alreadyDone,
     lastDecision,
   ] = await Promise.all([
+    readProject(database, ctx.userId, row.projectId ?? null).catch(
+      unavailable(
+        row.id,
+        "project",
+        "This session's project could not be read."
+      )
+    ),
     readPendingProposals(database, row.id).catch(
       unavailable(
         row.id,
@@ -1140,6 +1193,7 @@ export async function projectContinuationPacket(
       currentStage: row.currentStage ?? null,
       progress: row.progress ?? null,
     },
+    project,
     userMustDecide: { owedSlots, pendingProposals },
     aiCanDo,
     blockers,

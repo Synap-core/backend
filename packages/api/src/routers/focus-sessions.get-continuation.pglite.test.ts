@@ -83,6 +83,7 @@ import {
   automations,
   playbooks,
   messages,
+  projects,
 } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
 import { sessionHandlers } from "./mcp/handlers/session.js";
@@ -175,6 +176,7 @@ describe("focusSessions.get returns the continuation packet", () => {
       automations,
       playbooks,
       messages,
+      projects,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -184,7 +186,7 @@ describe("focusSessions.get returns the continuation packet", () => {
   });
   beforeEach(async () => {
     await h.client!.exec(
-      "delete from focus_sessions; delete from proposals; delete from artifacts; delete from messages; delete from users;"
+      "delete from focus_sessions; delete from proposals; delete from artifacts; delete from messages; delete from users; delete from projects;"
     );
   });
 
@@ -928,5 +930,77 @@ describe("focusSessions.get returns the continuation packet", () => {
     ).toEqual(kids.slice(0, 5));
     expect(c.outputs).toMatchObject({ status: "ok", total: 7 });
     expect(c.outputs.status === "ok" ? c.outputs.items : null).toHaveLength(5);
+  });
+
+  it("the project section carries name + goal for a session filed under a project", async () => {
+    const session = randomUUID();
+    const project = randomUUID();
+    await q(
+      `insert into projects (id, user_id, name, description, status, created_at, updated_at)
+       values ($1, $2, 'Q3 Launch', 'Ship the Q3 billing overhaul', 'active', now(), now())`,
+      [project, USER]
+    );
+    await insertSession(session, USER, "Wire Stripe", "active");
+    await q(`update focus_sessions set project_id = $1 where id = $2`, [
+      project,
+      session,
+    ]);
+    const c = (await get(session)).continuation;
+    expect(c.project).toEqual({
+      status: "ok",
+      project: {
+        id: project,
+        name: "Q3 Launch",
+        goal: "Ship the Q3 billing overhaul",
+      },
+    });
+    const mcp = await mcpGet(session);
+    expect(mcp.continuation).toEqual(JSON.parse(JSON.stringify(c)));
+  });
+
+  it("no project reads project: null", async () => {
+    const session = randomUUID();
+    await insertSession(session, USER, "No project", "active");
+    const c = (await get(session)).continuation;
+    expect(c.project).toEqual({ status: "ok", project: null });
+  });
+
+  it("a project not visible to the caller reads null, never leaking its name", async () => {
+    const session = randomUUID();
+    const project = randomUUID();
+    // Owned by another user, no workspace: owner-private, invisible to USER.
+    await q(
+      `insert into projects (id, user_id, name, description, status, created_at, updated_at)
+       values ($1, $2, 'Secret plan', 'Their own thing', 'active', now(), now())`,
+      [project, "user-2"]
+    );
+    await insertSession(session, USER, "Mine", "active");
+    await q(`update focus_sessions set project_id = $1 where id = $2`, [
+      project,
+      session,
+    ]);
+    const c = (await get(session)).continuation;
+    expect(c.project).toEqual({ status: "ok", project: null });
+    expect(JSON.stringify(c.project)).not.toMatch(/Secret plan/);
+  });
+
+  it("a failed project read marks project unavailable while the other sections stay ok", async () => {
+    const session = await seed({ owed: true });
+    await q(`update focus_sessions set project_id = $1 where id = $2`, [
+      randomUUID(),
+      session,
+    ]);
+    await h.client!.exec(`drop table "projects";`);
+    try {
+      const c = (await get(session)).continuation;
+      expect(c.project).toEqual({
+        status: "unavailable",
+        reason: "This session's project could not be read.",
+      });
+      expect(c.outputs.status).toBe("ok");
+      expect(c.userMustDecide.pendingProposals.status).toBe("ok");
+    } finally {
+      await h.client!.exec(ddlFor(projects as unknown as PgTable));
+    }
   });
 });
