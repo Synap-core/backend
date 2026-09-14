@@ -77,6 +77,12 @@ vi.mock("../../../services/skills/visibility.js", () => ({
   visibleSkillsWhere: () => ({ op: "visible" }),
 }));
 
+// Same reason: the list query lives in `search.js`, which loads the real schema.
+// Search behaviour is pinned by `services/skills/__tests__/search.pglite.test.ts`.
+vi.mock("../../../services/skills/search.js", () => ({
+  searchInstructionSkills: async () => ({ rows: [], total: 0 }),
+}));
+
 vi.mock("../../skills.js", () => ({
   insertSkillGoverned: async (input: Record<string, unknown>) => {
     h.governedCalls.push(input);

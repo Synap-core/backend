@@ -7,11 +7,17 @@
  * Agents call this once per session instead of relying on static skill file
  * descriptions, which drift as custom profiles are added or changed.
  *
- * Tiers:
- *   ?summary=true  — slugs + displayNames + scopes + entityCounts. ~2KB. Call first.
+ * Tiers (measured live, 2026-09-14, 123-profile pod):
+ *   ?summary=true  — slugs + displayNames + scopes + description + icon, NO
+ *                     property schemas and NO entityCount (that field is
+ *                     declared on the wire but not yet populated by this
+ *                     route — see `entityCount` below). ~29.9KB full pod,
+ *                     ~19.4KB scoped to one workspace lens. Call first.
  *   ?profileSlugs=task,person — full schemas only for named profiles. Use this
  *                     after the summary tier instead of loading every schema.
- *   (default)       — full property schemas + create commands for every profile.
+ *   (default)       — full property schemas + create commands for every
+ *                     profile. ~203KB full pod. Expensive — prefer the two
+ *                     tiers above.
  */
 
 import { z } from "@hono/zod-openapi";
@@ -25,6 +31,10 @@ import { listEffectiveRelationTypes } from "../../../utils/relation-types.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  resolveProfileDescription,
+  resolveProfileIcon,
+} from "../../../utils/profile-presentation.js";
 
 const DiscoverPropertySchema = z.object({
   slug: z.string(),
@@ -317,6 +327,14 @@ const DiscoverProfileSchema = z.object({
     .describe(
       "Ready-to-run CLI command template for this profile. ABSENT when `schemaUnavailable` or `slugWritesTo` is set: a create command for a type whose schema this response could not show — or whose slug writes to another row — invites exactly the blind write those markers exist to prevent."
     ),
+  /**
+   * NOT YET POPULATED by this route (measured live 2026-09-14: absent on every
+   * profile). Left in the wire schema for the planned P1 consolidation of the
+   * three duplicate entity-count GROUP BYs (orient's `discover.ts`, MCP
+   * `buildGrounding` in `http-handler.ts`, `diagnose/workspace.ts`) into one
+   * source this route can then read. Do not read this field as "0 entities" —
+   * it means "not measured", not "empty".
+   */
   entityCount: z.number().int().nonnegative().optional(),
 });
 
@@ -368,7 +386,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
     description:
       "Returns entity profiles with property schemas and the CLI command tree. " +
       "AI agents call this once at session start for ground-truth schema instead of relying on static skill descriptions. " +
-      "Pass ?summary=true for a lightweight (~2KB) tier with no property schemas, then pass ?profileSlugs=task,person to load schemas only for the profiles you need.",
+      "Pass ?summary=true for a lighter tier (~30KB on a 123-profile pod; no property schemas, no entityCount), then pass ?profileSlugs=task,person to load schemas only for the profiles you need.",
     request: { query: DiscoverQuerySchema },
     responses: {
       200: { description: "Discovery payload", schema: DiscoverResponseSchema },
@@ -430,6 +448,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
         // (placement), which feeds discover's `scope` field.
         scope?: string | null;
         icon?: string | null;
+        uiHints?: unknown;
         profileKind?: "kind" | "role";
         applicableKinds?: string[] | null;
       }[];
@@ -454,7 +473,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
           }
         );
 
-      // ── Summary tier: slugs + displayNames + scopes only (~2KB) ──
+      // ── Summary tier: slugs + displayNames + scopes + description + icon,
+      // no property schemas, no entityCount (~30KB on a 123-profile pod) ──
       if (summary) {
         const summaryProfiles = selectedProfiles.map((p) => ({
           id: p.id,
@@ -464,8 +484,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
             "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
             "system" | "shared" | "workspace" | "user" | undefined,
-          description: p.description ?? null,
-          icon: p.icon ?? null,
+          description: resolveProfileDescription(p),
+          icon: resolveProfileIcon(p),
           profileKind: p.profileKind ?? "kind",
           applicableKinds: p.applicableKinds ?? null,
         }));
@@ -526,8 +546,8 @@ export function registerDiscoverRoutes(app: HubHono): void {
             "pod" | "workspace",
           visibility: (p.scope ?? undefined) as
             "system" | "shared" | "workspace" | "user" | undefined,
-          description: p.description ?? null,
-          icon: p.icon ?? null,
+          description: resolveProfileDescription(p),
+          icon: resolveProfileIcon(p),
           profileKind: p.profileKind ?? "kind",
           applicableKinds: p.applicableKinds ?? null,
           properties,

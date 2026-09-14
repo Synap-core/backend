@@ -25,6 +25,7 @@ import {
   resolveSessionHandle,
   type McpHandlerMap,
   type ResolvedSession,
+  type SessionAttributionReport,
 } from "./handlers/shared.js";
 import { readHandlers } from "./handlers/read.js";
 import { entityHandlers } from "./handlers/entity.js";
@@ -75,7 +76,8 @@ export async function executeMCPToolViaHubProtocol(
   keyType?: string | null,
   keyWorkspaceId?: string | null
 ): Promise<CallToolResult> {
-  const session = await resolveSessionHandle(toolName, args, userId);
+  const resolution = await resolveSessionHandle(toolName, args, userId);
+  const session = resolution?.session;
   const sessionId = session?.sessionId;
 
   const caller = await createHubProtocolCaller(
@@ -196,7 +198,51 @@ export async function executeMCPToolViaHubProtocol(
   //
   // Deliberately NOT threaded through every handler's own payload shape — one
   // place, no per-handler drift.
-  return session?.ambiguous ? withSessionDisclosure(result, session) : result;
+  const disclosed = session?.ambiguous
+    ? withSessionDisclosure(result, session)
+    : result;
+  // The same fact as data. The Note above stays (clients may read it); this is
+  // what a client can branch on — including an explicit `sessionId` that was
+  // DROPPED, which the Note never covered. Reads carry no attribution.
+  return resolution
+    ? withSessionAttribution(disclosed, resolution.attribution)
+    : disclosed;
+}
+
+/**
+ * Adds `attribution` to the tool result's JSON payload (the first text block
+ * that parses as a JSON object — what `ok()` emits). A result with no JSON
+ * object payload (a plain-text error) is returned unchanged: there is no
+ * structure to add a field to, and wrapping it would change its shape.
+ */
+function withSessionAttribution(
+  result: CallToolResult,
+  attribution: SessionAttributionReport
+): CallToolResult {
+  if (!Array.isArray(result.content)) return result;
+  const index = result.content.findIndex(
+    (block) => block.type === "text" && parseJsonObject(block.text) !== null
+  );
+  if (index === -1) return result;
+  const block = result.content[index] as { type: "text"; text: string };
+  const payload = parseJsonObject(block.text)!;
+  const content = [...result.content];
+  content[index] = {
+    ...block,
+    text: JSON.stringify({ ...payload, attribution }),
+  };
+  return { ...result, content };
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Appends the ambiguity note to a tool result without disturbing its payload. */

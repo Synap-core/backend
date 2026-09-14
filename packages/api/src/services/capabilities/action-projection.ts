@@ -62,7 +62,33 @@ function inputSchema(value: unknown): Record<string, unknown> {
 export function projectRunnableActions(
   capabilities: Capability[]
 ): RunnableCapabilityAction[] {
-  const actions: RunnableCapabilityAction[] = [];
+  return projectWithSource(capabilities).map((row) => row.action);
+}
+
+/**
+ * The projection, with each action paired to the registry row that produced it
+ * — so a caller can attribute a runnable verb to its container without a second
+ * rule. `projectRunnableActions` is exactly this, minus the source.
+ */
+function projectWithSource(
+  capabilities: Capability[]
+): Array<{ action: RunnableCapabilityAction; source: Capability }> {
+  const actions: Array<{
+    action: RunnableCapabilityAction;
+    source: Capability;
+  }> = [];
+
+  // A skill whose NAME is a tool verb id is that verb's BACKING skill (registry
+  // contract: a verb's catalog id mirrors its requiring skill's name). The tool
+  // verb row governs it — including the connection gate — so it must never also
+  // surface as a standalone skill row. Live (2026-09-14) it did: 15 duplicate
+  // rows, 5 of them Gmail/Calendar/Drive advertised runnable with the Google
+  // connection missing. Same rule `sectionCapabilities` applies.
+  const toolVerbIds = new Set<string>();
+  for (const capability of capabilities) {
+    if (capability.kind === "skill") continue;
+    for (const verb of capability.verbs ?? []) toolVerbIds.add(verb.id);
+  }
 
   for (const capability of capabilities) {
     if (
@@ -93,38 +119,74 @@ export function projectRunnableActions(
         continue;
       }
       actions.push({
-        verbId: verb.id,
-        label: verb.label ?? verb.id,
-        description: capability.description,
-        tool: capability.name,
-        ...(projectedConnection ? { connection: projectedConnection } : {}),
-        governance: capability.governance,
-        ...(verb.effectiveExecMode
-          ? { executionMode: verb.effectiveExecMode }
-          : {}),
-        // Per-verb direction — projected straight off the catalog entry, never
-        // defaulted. `kind` is required on ToolVerb; `intent` is optional and
-        // stays undefined for a verb outside the closed vocabulary.
-        ...(verb.kind ? { kind: verb.kind } : {}),
-        ...(verb.intent ? { intent: verb.intent } : {}),
-        parameters: inputSchema(verb.paramsSchema),
+        source: capability,
+        action: {
+          verbId: verb.id,
+          label: verb.label ?? verb.id,
+          description: capability.description,
+          tool: capability.name,
+          ...(projectedConnection ? { connection: projectedConnection } : {}),
+          governance: capability.governance,
+          ...(verb.effectiveExecMode
+            ? { executionMode: verb.effectiveExecMode }
+            : {}),
+          // Per-verb direction — projected straight off the catalog entry, never
+          // defaulted. `kind` is required on ToolVerb; `intent` is optional and
+          // stays undefined for a verb outside the closed vocabulary.
+          ...(verb.kind ? { kind: verb.kind } : {}),
+          ...(verb.intent ? { intent: verb.intent } : {}),
+          parameters: inputSchema(verb.paramsSchema),
+        },
       });
     }
 
-    // Code/declarative/builtin skills with no tool verb remain executable by
-    // skillId. Teaching docs intentionally have governance "none" and are
+    // Code/declarative/builtin skills with no tool verb remain executable. They
+    // carry BOTH ids: `skillId`, and `verbId` = the skill NAME — the same key the
+    // catalog card's verb and the execute door's `verbId` resolve by (live, all
+    // 33 Synap Core verbs were projected with no `verbId`, so nothing could match
+    // them by name). Teaching docs intentionally have governance "none" and are
     // already excluded above.
-    if (capability.kind === "skill" && (capability.verbs?.length ?? 0) === 0) {
+    if (
+      capability.kind === "skill" &&
+      (capability.verbs?.length ?? 0) === 0 &&
+      !toolVerbIds.has(capability.name)
+    ) {
       actions.push({
-        skillId: capability.id,
-        label: capability.name,
-        description: capability.description,
-        tool: null,
-        governance: capability.governance,
-        parameters: inputSchema(capability.inputSchema),
+        source: capability,
+        action: {
+          skillId: capability.id,
+          verbId: capability.name,
+          label: capability.name,
+          description: capability.description,
+          tool: null,
+          governance: capability.governance,
+          parameters: inputSchema(capability.inputSchema),
+        },
       });
     }
   }
 
   return actions;
+}
+
+/**
+ * The verb ids the execute door can launch, per capability CONTAINER — judged by
+ * the projection itself over the WHOLE registry list (so a backing skill is
+ * governed by its tool verb exactly as `GET /capabilities/actions` governs it),
+ * then attributed through the producing row's derived `containerId`. The catalog
+ * card reads this for each verb's `runnable` and for whether a `ready` pack may
+ * say `run`. A brick in no container belongs to no card.
+ */
+export function runnableVerbIdsByContainer(
+  capabilities: Array<Capability & { containerId?: string | null }>
+): Map<string, Set<string>> {
+  const byContainer = new Map<string, Set<string>>();
+  for (const { action, source } of projectWithSource(capabilities)) {
+    const containerId = (source as { containerId?: string | null }).containerId;
+    if (!containerId || !action.verbId) continue;
+    const ids = byContainer.get(containerId) ?? new Set<string>();
+    ids.add(action.verbId);
+    byContainer.set(containerId, ids);
+  }
+  return byContainer;
 }

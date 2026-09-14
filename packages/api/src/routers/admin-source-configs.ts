@@ -4,7 +4,9 @@
  * Trusted-issuer assertion protected endpoint for provisioning a
  * `source_configs` row programmatically. Unlike the tRPC router, this one accepts inline
  * secrets — each `secrets[]` entry is encrypted with the server vault key
- * and replaced with a `vault://<uuid>/value` reference in the stored config.
+ * and replaced with a bare `vault://<uuid>` reference in the stored config.
+ * The secret holds the raw string, so the reference carries no field suffix
+ * (a suffix makes the resolver parse the plaintext as JSON).
  *
  * Use case: any Pod-approved issuer can provision a source config for an
  * already-linked, locally authorized Pod user. The Pod stores supplied secrets
@@ -193,6 +195,50 @@ function setDeep(
   }
 }
 
+/**
+ * Encrypt each inline secret into its own vault row and return a copy of
+ * `config` with every secret's field replaced by a bare `vault://<uuid>`
+ * reference, which `resolveVaultReferences` resolves back to the raw value.
+ */
+export async function writeInlineSourceConfigSecrets(
+  tx: Pick<typeof db, "insert">,
+  input: {
+    userId: string;
+    sourceName: string;
+    config: Record<string, unknown>;
+    secrets: ReadonlyArray<{ field: string; value: string }>;
+  }
+): Promise<{ configOut: Record<string, unknown>; createdSecretIds: string[] }> {
+  const configOut = structuredClone(input.config);
+  const createdSecretIds: string[] = [];
+
+  for (const entry of input.secrets) {
+    const blob = encryptServerSide(entry.value);
+    // Direct insert (not upsert) — each inline field needs a distinct
+    // vault value. The caller re-tags them after the config exists.
+    const [secret] = await tx
+      .insert(secrets)
+      .values({
+        userId: input.userId,
+        serviceId: "source:admin-provisioned",
+        name: `source-config "${input.sourceName}" — ${entry.field}`,
+        type: "api_key",
+        category: "feed-sources",
+        description: `Inline secret provisioned by a trusted issuer for source "${input.sourceName}" field "${entry.field}"`,
+        encryptedData: blob.encryptedData,
+        iv: blob.iv,
+        authTag: blob.authTag,
+        encryptionMode: "server",
+        encryptionVersion: 1,
+      })
+      .returning();
+    createdSecretIds.push(secret.id);
+    setDeep(configOut, entry.field, `vault://${secret.id}`);
+  }
+
+  return { configOut, createdSecretIds };
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 adminSourceConfigsRouter.post("/", async (c) => {
@@ -325,34 +371,13 @@ adminSourceConfigsRouter.post("/", async (c) => {
   // re-tag fails. A retry receives a new signed assertion rather than a
   // partially provisioned config.
   const { row, secretCount } = await db.transaction(async (tx) => {
-    const configOut = structuredClone(input.config) as Record<string, unknown>;
-    const createdSecretIds: string[] = [];
-
-    if (input.secrets?.length) {
-      for (const entry of input.secrets) {
-        const blob = encryptServerSide(entry.value);
-        // Direct insert (not upsert) — each inline field needs a distinct
-        // vault value. The transaction re-tags them after the config exists.
-        const [secret] = await tx
-          .insert(secrets)
-          .values({
-            userId: linkedUserId,
-            serviceId: "source:admin-provisioned",
-            name: `source-config "${input.name}" — ${entry.field}`,
-            type: "api_key",
-            category: "feed-sources",
-            description: `Inline secret provisioned by a trusted issuer for source "${input.name}" field "${entry.field}"`,
-            encryptedData: blob.encryptedData,
-            iv: blob.iv,
-            authTag: blob.authTag,
-            encryptionMode: "server",
-            encryptionVersion: 1,
-          })
-          .returning();
-        createdSecretIds.push(secret.id);
-        setDeep(configOut, entry.field, `vault://${secret.id}/value`);
-      }
-    }
+    const { configOut, createdSecretIds } =
+      await writeInlineSourceConfigSecrets(tx, {
+        userId: linkedUserId,
+        sourceName: input.name,
+        config: input.config,
+        secrets: input.secrets ?? [],
+      });
 
     const [row] = await tx
       .insert(sourceConfigs)

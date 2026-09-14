@@ -1496,7 +1496,15 @@ export interface HubCapabilityCatalogCard {
   nextAction: {
     kind: "add" | "connect" | "enable" | "run" | "none";
     hint: string;
+    /** Where the human step happens, when there is one. */
+    url?: string;
+    opensIn?: "desktop";
   };
+  /**
+   * The pod's built-in pack (Synap Core). Listings show it as one line; pass
+   * `key` to `getCapabilityCatalog` to list its verbs. Absent on older pods.
+   */
+  builtIn?: boolean;
 }
 
 export interface HubCapabilityCatalogResult {

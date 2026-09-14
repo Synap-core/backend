@@ -286,6 +286,13 @@ export interface CapabilityCard {
    */
   installParams: CapabilityCardInstallParam[];
   /**
+   * True for the pod-wide "Synap Core" pack — Synap's own first-party verbs,
+   * not a connector. Additive and optional (absent on every other card, and on
+   * older pods): agent-facing listings summarise such a pack as ONE line and
+   * expand it only when asked for by `key`.
+   */
+  builtIn?: true;
+  /**
    * The ONE thing to do next, and WHERE. `url` is a deep link to this card
    * (absent for an available-only template, which has no installed container);
    * `opensIn` says which client can follow it — see `CapabilityNextAction`.
@@ -328,6 +335,9 @@ export interface CapabilityCatalogContext {
   /** Resolve this key/name even if excluded from the default-sync list
    *  (syncByDefault=false) — see `loadTemplates`'s doc. */
   extraKey?: string;
+  /** Return only the card whose `key` (or container `id`) matches,
+   *  case-insensitive — e.g. to expand the Synap Core verbs. */
+  key?: string;
 }
 
 // ── Verb type heuristic ───────────────────────────────────────────────────────
@@ -788,6 +798,28 @@ export async function buildCapabilityCatalog(
   }
   const conn = await loadConnState(userId, vaultSecretIds);
 
+  // 6. What the execute door can actually launch, per container — the SAME
+  //    registry read + runnable projection `GET /capabilities/actions` serves.
+  //    Only under a workspace lens: that door requires one, and the pod-altitude
+  //    registry sees pod-wide rows only, so it would under-report a lens-less
+  //    catalog's workspace containers. Without a lens `launchable` stays
+  //    unmeasured (`null`), never guessed `false`. A failed read throws —
+  //    it must not render as "not runnable".
+  const [
+    { listCapabilities },
+    { runnableVerbIdsByContainer },
+    { SYNAP_CORE_DEFINITION },
+  ] = await Promise.all([
+    import("./capability-registry.js"),
+    import("./action-projection.js"),
+    import("./ensure-synap-core.js"),
+  ]);
+  const runnableByContainer = workspaceId
+    ? runnableVerbIdsByContainer(
+        await listCapabilities({ workspaceId, userId })
+      )
+    : null;
+
   // ── Installed cards ─────────────────────────────────────────────────────────
   const cards: CapabilityCard[] = [];
   const installedNames = new Set<string>();
@@ -835,6 +867,13 @@ export async function buildCapabilityCatalog(
           : undefined);
       const connectionOk =
         !connection.required || connection.state === "connected";
+      // Under a lens, "runnable" is the execute door's own answer (the runnable
+      // projection), still narrowed by this card's LIVE connection health — the
+      // registry reads a stored connection pointer, the card reads Nango + the
+      // reauth mirror. Without a lens it is unmeasured: enabled + connected.
+      const projected = runnableByContainer
+        ? (runnableByContainer.get(container.id)?.has(s.name) ?? false)
+        : true;
       return {
         verbId: s.name,
         skillId: s.id,
@@ -843,7 +882,7 @@ export async function buildCapabilityCatalog(
         type,
         enabled,
         governance: verbGovernance(type),
-        runnable: enabled && connectionOk,
+        runnable: enabled && connectionOk && projected,
         params: extractParamNames(s.parameters),
         paramsSchema: extractParamsSchema(s.parameters),
         ...(category ? { category } : {}),
@@ -880,11 +919,18 @@ export async function buildCapabilityCatalog(
       installParams: matchedTemplate
         ? extractInstallParams(matchedTemplate.def)
         : [],
+      // Same identity `ensureSynapCore` converges on: the pod-wide container
+      // carrying the definition's name.
+      ...(container.workspaceId === null &&
+      container.name === SYNAP_CORE_DEFINITION.name
+        ? { builtIn: true as const }
+        : {}),
       nextAction: capabilityNextAction(
         status,
         container.name,
         connection,
-        container.id
+        container.id,
+        runnableByContainer ? verbs.some((v) => v.runnable) : undefined
       ),
     });
   }
@@ -948,5 +994,9 @@ export async function buildCapabilityCatalog(
     });
   }
 
-  return cards;
+  if (!ctx.key) return cards;
+  const wanted = ctx.key.toLowerCase();
+  return cards.filter(
+    (c) => c.key.toLowerCase() === wanted || c.id?.toLowerCase() === wanted
+  );
 }

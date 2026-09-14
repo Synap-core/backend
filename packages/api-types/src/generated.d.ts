@@ -7573,6 +7573,13 @@ export interface CapabilityCard {
 	 */
 	installParams: CapabilityCardInstallParam[];
 	/**
+	 * True for the pod-wide "Synap Core" pack — Synap's own first-party verbs,
+	 * not a connector. Additive and optional (absent on every other card, and on
+	 * older pods): agent-facing listings summarise such a pack as ONE line and
+	 * expand it only when asked for by `key`.
+	 */
+	builtIn?: true;
+	/**
 	 * The ONE thing to do next, and WHERE. `url` is a deep link to this card
 	 * (absent for an available-only template, which has no installed container);
 	 * `opensIn` says which client can follow it — see `CapabilityNextAction`.

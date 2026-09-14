@@ -1524,6 +1524,8 @@ export class HubRestClient {
   async getCapabilityCatalog(options?: {
     workspaceId?: string;
     extraKey?: string;
+    /** Only the card whose key or id matches (e.g. the built-in Synap Core pack). */
+    key?: string;
   }): Promise<HubCapabilityCatalogResult> {
     const workspaceId = options?.workspaceId ?? this.workspaceId;
     if (!workspaceId) {
@@ -1531,6 +1533,7 @@ export class HubRestClient {
     }
     const params = new URLSearchParams({ workspaceId });
     if (options?.extraKey) params.set("extraKey", options.extraKey);
+    if (options?.key) params.set("key", options.key);
     return this.request<HubCapabilityCatalogResult>(
       "GET",
       `/api/hub/capabilities/catalog?${params}`

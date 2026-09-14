@@ -11,7 +11,10 @@ import {
   ownedWorkspaceIds as ownedWorkspaceIdsQuery,
   podVisibleWorkspaceIds as podVisibleWorkspaceIdsQuery,
 } from "../utils/user-visible-where.js";
-import { assertProfileSlugNotReserved } from "../utils/reserved-profile-slugs.js";
+import {
+  assertProfileSlugNotReserved,
+  excludeReservedProfiles,
+} from "../utils/reserved-profile-slugs.js";
 import {
   profiles,
   profileWorkspaceAccess,
@@ -580,7 +583,12 @@ export class ProfileRepository {
       .where(and(...selectionConditions))
       .orderBy(profiles.id, profiles.displayName);
 
-    return rows.map((r) => r.p);
+    // A reserved slug (e.g. `project`) can have an active row that predates
+    // the reservation — the write floors refuse creating a NEW one, but this
+    // is the ONE read floor every listing door shares, so it is where an
+    // already-existing reserved row stops being advertised as a choosable
+    // kind. See `excludeReservedProfiles`.
+    return excludeReservedProfiles(rows.map((r) => r.p));
   }
 
   /**

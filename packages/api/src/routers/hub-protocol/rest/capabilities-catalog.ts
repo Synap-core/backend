@@ -124,7 +124,14 @@ const CapabilityCardSchema = z.object({
   // What the caller must supply to APPLY an available template. Without these
   // a REST client cannot prompt for them and installs without a credential.
   installParams: z.array(InstallParamSchema),
+  // The pod-wide Synap Core pack (first-party verbs, not a connector). Absent
+  // on every other card — agent listings summarise it as one line and expand
+  // it with `?key=`.
+  builtIn: z.boolean().optional(),
   nextAction: z.object({
+    // `run` only when the execute door can launch one of the pack's verbs
+    // (the shared runnable projection); a ready pack it cannot launch is
+    // `none` with the reason in `hint`.
     kind: z.enum(["add", "connect", "enable", "run", "none"]),
     hint: z.string(),
     // Deep link to THIS card — where `kind` is actually performed. Absent for an
@@ -180,7 +187,12 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       "container/template name) so duplicate bare tools/skills collapse under " +
       "their pack. Requires hub-protocol.read scope and a `workspaceId` query param.",
     request: {
-      query: z.object({ workspaceId: z.string().uuid() }),
+      query: z.object({
+        workspaceId: z.string().uuid(),
+        // Only the card whose key (or container id) matches — e.g. expand the
+        // Synap Core verbs a listing summarised as one line.
+        key: z.string().optional(),
+      }),
     },
     responses: {
       200: {
@@ -221,12 +233,14 @@ export function registerCapabilitiesCatalogRoutes(app: HubHono): void {
       // default-sync list (syncByDefault=false) — the CLI's fallback when a
       // name search comes up empty, before it gives up.
       const extraKey = c.req.query("extraKey");
+      const key = c.req.query("key")?.trim() || undefined;
       const catalogCtx = {
         // workspaceId is a required, validated query param here (wsCheck above),
         // so the membership branch of resolveActingContext returns it non-null.
         workspaceId: wsCheck.data,
         userId: acting.userId,
         ...(extraKey ? { extraKey } : {}),
+        ...(key ? { key } : {}),
       };
       // Capability read path is untouched; automations are surfaced additively
       // as a separate kind via a sibling builder.

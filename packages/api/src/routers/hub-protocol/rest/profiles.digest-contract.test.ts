@@ -40,11 +40,17 @@ describe("GET /profiles digest", () => {
               displayName: "Investor",
               entityScope: "workspace",
               scope: "shared",
-              description: "An investable relationship",
-              icon: "coins",
               profileKind: "role",
               applicableKinds: ["person", "company"],
-              uiHints: { hidden: true },
+              // `description`/`icon` are NOT top-level columns on a Profile row
+              // (schema/profiles.ts) — they live in uiHints. A real caller can
+              // never hand this route the top-level fields this fixture used
+              // to assert; this is the actual live shape.
+              uiHints: {
+                hidden: true,
+                description: "An investable relationship",
+                icon: "coins",
+              },
             },
           ],
         }),

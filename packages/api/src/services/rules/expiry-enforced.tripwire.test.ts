@@ -19,10 +19,17 @@ import { join } from "node:path";
  */
 const API_SRC = join(__dirname, "../..");
 
-const ENFORCING = [
-  "routers/skills.ts",
-  "routers/hub-protocol/rest/agent-skills.ts",
-];
+const ENFORCING = ["routers/skills.ts"];
+/**
+ * Agent-facing doors that enforce expiry THROUGH `visibleSkillsWhere`'s default
+ * rather than typing `ruleNotExpiredWhere(` themselves. `GET /agent-skills`
+ * moved its list query here (lane X1, 2026-09-14) and dropped the redundant
+ * explicit call. What is measurable per file: the call exists and it never
+ * types the waiver — opting out requires the literal `includeExpired`, so its
+ * absence inside the call IS the enforcement. The expired-rule exclusion is
+ * also asserted behaviourally in `services/skills/__tests__/search.pglite.test.ts`.
+ */
+const ENFORCING_VIA_VISIBILITY = ["services/skills/search.ts"];
 const MUST_NOT_ENFORCE = ["routers/hub-protocol/rest/rules.ts"];
 
 /**
@@ -99,10 +106,31 @@ function read(rel: string): string {
 
 describe("rule expiry is enforced at the agent-facing doors", () => {
   it("finds every file it claims to guard (never vacuously green)", () => {
-    for (const rel of [...ENFORCING, ...MUST_NOT_ENFORCE]) {
+    for (const rel of [
+      ...ENFORCING,
+      ...ENFORCING_VIA_VISIBILITY,
+      ...MUST_NOT_ENFORCE,
+    ]) {
       expect(() => read(rel), rel).not.toThrow();
     }
   });
+
+  it.each(ENFORCING_VIA_VISIBILITY)(
+    "%s reads through visibleSkillsWhere and never waives expiry",
+    (rel) => {
+      const calls = visibleSkillsWhereCalls(read(rel));
+      expect(
+        calls.length,
+        `${rel} has no visibleSkillsWhere call`
+      ).toBeGreaterThan(0);
+      for (const call of calls) {
+        expect(
+          call.text,
+          `${rel}: agent-facing read waives expiry`
+        ).not.toMatch(/includeExpired/);
+      }
+    }
+  );
 
   // Assert the CALL, not the mention: the import line alone satisfies a bare
   // `toContain`, so the first version of this test passed with the door

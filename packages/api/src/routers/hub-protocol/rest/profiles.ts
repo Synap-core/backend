@@ -15,6 +15,10 @@ import {
   WirePropertyDefSchema,
 } from "./_codecs/profile.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import {
+  resolveProfileDescription,
+  resolveProfileIcon,
+} from "../../../utils/profile-presentation.js";
 
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -171,6 +175,7 @@ export function registerProfilesRoutes(app: HubHono): void {
           scope?: "system" | "shared" | "workspace" | "user" | null;
           description?: string | null;
           icon?: string | null;
+          uiHints?: unknown;
           profileKind?: "kind" | "role";
           applicableKinds?: string[] | null;
         }>
@@ -182,8 +187,8 @@ export function registerProfilesRoutes(app: HubHono): void {
         // Visibility axis (who can use this profile type) — distinct from
         // entityScope (placement: where its entities live).
         scope: p.scope ?? null,
-        description: p.description ?? null,
-        icon: p.icon ?? null,
+        description: resolveProfileDescription(p),
+        icon: resolveProfileIcon(p),
         // An omitted discriminator is a legacy primary kind, never a role.
         profileKind: p.profileKind ?? "kind",
         applicableKinds: p.applicableKinds ?? null,

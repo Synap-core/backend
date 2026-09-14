@@ -111,6 +111,14 @@ export const PROBE_ORDER: ObjectKind[] = [
   "entity",
 ];
 
+const FULL_UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** True for a complete UUID — the only shape any probed column can hold. */
+export function isFullUuid(id: string): boolean {
+  return FULL_UUID_RE.test(id);
+}
+
 /** What a probe returns on a hit: the display metadata off the matched row.
  *  `null` = miss. `{}` is a legitimate hit for a table with nothing to show. */
 type ProbeHit = Omit<ResolvedObject, "kind" | "id">;
@@ -124,6 +132,11 @@ export async function resolveObjectKind(
   id: string,
   userId: string
 ): Promise<ResolvedObject | null> {
+  // Every column probed below — row ids AND both correlationId fallbacks — is a
+  // Postgres `uuid`. A fragment ("4d3e8f37") reached them as 22P02 and surfaced
+  // on `synap_diagnose` as a pod "storage layer" fault (live, 2026-09-14). It
+  // can match nothing, so it resolves to nothing, before any query.
+  if (!isFullUuid(id)) return null;
   // Each probe is its own tiny query — kept explicit (not a table-map loop) so
   // each table's OWN user-floor predicate is visible and correct. A probe
   // returns the display metadata off the row it matched (or `{}` when the table

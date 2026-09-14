@@ -119,3 +119,29 @@ export function reservedEntityKindReason(slug: string): string | undefined {
 export function reservedProfileSlugs(): readonly string[] {
   return [...RESERVED_PROFILE_SLUGS.keys()];
 }
+
+/**
+ * Drops reserved-slug rows from a list of profiles before it reaches a
+ * CREATE- or CLASSIFY-facing listing door (discover, `synap_list_profiles`,
+ * `GET /profiles`, the capture structurer's candidate kinds, kind pickers).
+ *
+ * The reservation module already refuses a *new* reserved-slug profile at
+ * every write floor (`assertProfileSlugNotReserved`). It cannot refuse an
+ * already-existing active row — and two `project`-slug rows predate the
+ * reservation, so they still surface as choosable "kind" profiles even though
+ * creating an entity on them is refused at the `entities.create` floor. That
+ * gap is what let an agent file a proposal (`homed in Builder... project
+ * profile is installed there`) that could never apply.
+ *
+ * Call this at the ONE read floor every listing door shares
+ * (`ProfileRepository.getAccessibleProfiles`), never re-filter per door — a
+ * second filter is how the two lists drift.
+ *
+ * This does not delete or deactivate the rows (that is a separate pod-hygiene
+ * data plan); it only stops them being advertised as available kinds.
+ */
+export function excludeReservedProfiles<T extends { slug: string }>(
+  profiles: readonly T[]
+): T[] {
+  return profiles.filter((p) => !isReservedProfileSlug(p.slug));
+}

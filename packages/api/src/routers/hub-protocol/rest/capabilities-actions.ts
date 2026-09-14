@@ -133,8 +133,14 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
     }
 
     try {
+      // `limit: null` — never slice the RAW registry list. It leads with ~90
+      // catalog-only IS-native rows and unapproved tools, all of which the
+      // projection drops; slicing before projecting returned `limit=20` → 0
+      // actions and `limit=100` → 2 on a pod with 57 runnable ones (live,
+      // 2026-09-14). The caller's cap applies to ACTIONS, after projection and
+      // the intent filter below. Same fix as the MCP door.
       const options: ListCapabilitiesOptions | undefined =
-        query || kind || limit !== undefined
+        query || kind
           ? {
               ...(query ? { query } : {}),
               // The registry validates its own string union at the type boundary;
@@ -142,15 +148,20 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
               ...(kind
                 ? { kind: kind as ListCapabilitiesOptions["kind"] }
                 : {}),
-              ...(limit !== undefined ? { limit } : {}),
+              limit: null,
             }
           : undefined;
       const capabilities = await listCapabilities(
         { workspaceId: acting.workspaceId!, userId: acting.userId },
         options
       );
-      const actions = projectRunnableActions(capabilities);
-      if (intentRaw === undefined) return c.json({ actions }, 200);
+      const projected = projectRunnableActions(capabilities);
+      const cap = <T>(rows: T[]): T[] =>
+        limit === undefined ? rows : rows.slice(0, limit);
+      if (intentRaw === undefined) {
+        return c.json({ actions: cap(projected) }, 200);
+      }
+      const actions = projected;
       // Fold through the SHARED reverse index so this door's notion of "declares
       // intent X" is byte-for-byte the MCP door's (same dedup, same
       // no-intent-means-absent rule). Never re-derive `verb.intent === x` here.
@@ -162,7 +173,11 @@ export function registerCapabilitiesActionsRoutes(app: HubHono): void {
       return c.json(
         // A skill-only action carries no `verbId` and therefore no intent — it
         // is correctly absent from an intent-filtered answer.
-        { actions: actions.filter((a) => !!a.verbId && matched.has(a.verbId)) },
+        {
+          actions: cap(
+            actions.filter((a) => !!a.verbId && matched.has(a.verbId))
+          ),
+        },
         200
       );
     } catch (err) {

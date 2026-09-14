@@ -746,8 +746,14 @@ export function registerCaptureRoutes(app: HubHono): void {
           bindingCount: graph.bindingCount,
           applied: graph.applied,
           writeReceipt: graph.writeReceipt,
-          // The session actually used + what was recorded for the run.
-          sessionId: runSessionId ?? null,
+          // Where the graph was STORED — the submit core reads it off the
+          // proposal row (a re-submit returns the PRIOR row, which keeps the
+          // session and project the first send filed it under). `sessionId` is
+          // that row's session, not `runSessionId`: the run room this call used
+          // is still reported, inside `intake`.
+          scope: graph.scope,
+          sessionId: graph.scope.sessionId,
+          ...(graph.deduped ? { deduped: true } : {}),
           ...((result as { intake?: unknown }).intake
             ? { intake: (result as { intake?: unknown }).intake }
             : {}),

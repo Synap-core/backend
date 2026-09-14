@@ -366,7 +366,7 @@ export async function buildGraphEnvelope(
  * to the hub caller as a grouping hint.
  *
  * A prefix rule covers the bulk (`synap_get_*` / `synap_list_*`); the rest are
- * named. Ownership is still enforced downstream (`ownsFocusSession`), so this
+ * named. Ownership is still enforced downstream (`checkFocusSessionOwnership`), so this
  * list is a performance boundary, never an authorization one.
  */
 export const READ_ONLY_TOOL_PREFIXES = ["synap_get_", "synap_list_"] as const;
@@ -408,10 +408,10 @@ export {
  * links at somebody else's session. This is a SCOPE HINT, not authorization, so
  * a mismatch is ignored (and logged), never thrown.
  */
-async function ownsFocusSession(
+async function checkFocusSessionOwnership(
   userId: string,
   sessionId: string
-): Promise<boolean> {
+): Promise<"owned" | "not-owned" | "ownership-check-failed"> {
   try {
     const [row] = await db
       .select({ id: focusSessions.id })
@@ -420,14 +420,16 @@ async function ownsFocusSession(
         and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
       )
       .limit(1);
-    return Boolean(row);
+    return row ? "owned" : "not-owned";
   } catch (err) {
-    // A lookup failure must not silently widen the handle's reach.
+    // A lookup failure must not silently widen the handle's reach — it is
+    // treated as not owned. It is still REPORTED as its own outcome: "we could
+    // not check" and "it is not yours" are different facts.
     logger.warn(
       { err, sessionId },
       "mcp: focus-session ownership check failed"
     );
-    return false;
+    return "ownership-check-failed";
   }
 }
 
@@ -448,7 +450,14 @@ async function ownsFocusSession(
  */
 export async function listOpenFocusSessions(
   userId: string,
-  limit = 5
+  limit = 5,
+  /**
+   * `"empty"` (default) keeps the historical swallow for callers that only want
+   * a best-effort list. `"throw"` is for a caller that REPORTS the count: a
+   * failed read is not "zero sessions open", and folding one into the other is
+   * how a broken lookup renders as a calm, confident, wrong answer.
+   */
+  options: { onError?: "empty" | "throw" } = {}
 ): Promise<Array<{ id: string; goal: string | null; startedAt: Date | null }>> {
   try {
     return await db
@@ -486,6 +495,7 @@ export async function listOpenFocusSessions(
       .limit(limit);
   } catch (err) {
     logger.warn({ err, userId }, "mcp: list open focus sessions failed");
+    if (options.onError === "throw") throw err;
     return [];
   }
 }
@@ -534,11 +544,35 @@ export async function resolveAmbientSession(
 ): Promise<
   { sessionId: string; ambiguous: boolean; openCount: number } | undefined
 > {
+  const measured = await measureAmbientSession(userId);
+  return measured.ok ? measured.ambient : undefined;
+}
+
+/**
+ * `resolveAmbientSession`, but a FAILED session read stays distinguishable from
+ * "no session open" — the attribution report needs the difference (a count it
+ * could not take is `null`, never `0`).
+ */
+async function measureAmbientSession(userId: string): Promise<
+  | {
+      ok: true;
+      ambient:
+        | { sessionId: string; ambiguous: boolean; openCount: number }
+        | undefined;
+    }
+  | { ok: false }
+> {
   // Fetch >2 so `openCount` is informative rather than clamped at the old
   // "is there more than one" boundary.
-  const open = await listOpenFocusSessions(userId, 10);
+  let open: Awaited<ReturnType<typeof listOpenFocusSessions>>;
+  try {
+    open = await listOpenFocusSessions(userId, 10, { onError: "throw" });
+  } catch {
+    // Already logged by the reader.
+    return { ok: false };
+  }
   const newest = open[0]?.id;
-  if (!newest) return undefined;
+  if (!newest) return { ok: true, ambient: undefined };
   const ambiguous = open.length > 1;
   if (ambiguous) {
     logger.info(
@@ -551,7 +585,43 @@ export async function resolveAmbientSession(
       "mcp: multiple open focus sessions — attributing to the most recently started; pass sessionId to override"
     );
   }
-  return { sessionId: newest, ambiguous, openCount: open.length };
+  return {
+    ok: true,
+    ambient: { sessionId: newest, ambiguous, openCount: open.length },
+  };
+}
+
+/**
+ * HOW THIS CALL WAS ATTRIBUTED, as data — the structured twin of the adapter's
+ * trailing "Note: …" text (which stays, for clients that read it).
+ *
+ * Carried on every attributed (non-read) tool result, so a caller never has to
+ * parse prose to learn its write was grouped by a guess.
+ */
+export interface SessionAttributionReport {
+  /** `none` = no session: none open, the read failed, or the explicit id was dropped. */
+  session: "explicit" | "derived" | "none";
+  /** Several work sessions were open and the newest was chosen. */
+  ambiguous: boolean;
+  /**
+   * Open work sessions counted while resolving. `null` = NOT counted — an
+   * explicit handle never lists them, and a failed read is not zero.
+   */
+  openCount: number | null;
+  /**
+   * The explicit `sessionId` the caller sent and the resolver DROPPED. The call
+   * then carries no session at all (no ambient fallback), which the caller must
+   * be able to see without reading logs.
+   */
+  ignoredSession?: {
+    sessionId: string;
+    reason: "not-owned" | "ownership-check-failed";
+  };
+}
+
+export interface SessionResolution {
+  session: ResolvedSession | undefined;
+  attribution: SessionAttributionReport;
 }
 
 /**
@@ -561,13 +631,15 @@ export async function resolveAmbientSession(
  * The explicit id is ownership-checked before it becomes `ctx.sessionId`; a
  * handle that isn't the caller's is dropped rather than rejected — it is a
  * grouping hint, and failing the whole tool call over it would be a worse
- * outcome than losing the grouping.
+ * outcome than losing the grouping. The drop is REPORTED in `attribution`.
+ *
+ * `undefined` only for a read-only tool: reads are never attributed.
  */
 export async function resolveSessionHandle(
   toolName: string,
   args: Record<string, unknown>,
   userId: string
-): Promise<ResolvedSession | undefined> {
+): Promise<SessionResolution | undefined> {
   if (isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
   // dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
@@ -577,8 +649,12 @@ export async function resolveSessionHandle(
       ? args.sessionId
       : undefined;
   if (explicit) {
-    if (await ownsFocusSession(userId, explicit)) {
-      return { sessionId: explicit, attribution: "explicit" };
+    const ownership = await checkFocusSessionOwnership(userId, explicit);
+    if (ownership === "owned") {
+      return {
+        session: { sessionId: explicit, attribution: "explicit" },
+        attribution: { session: "explicit", ambiguous: false, openCount: null },
+      };
     }
     logger.warn(
       {
@@ -586,19 +662,47 @@ export async function resolveSessionHandle(
         sessionId: explicit,
         toolName,
         source: "arg",
+        ownership,
       },
       "mcp: focus-session handle does not belong to the caller — ignoring"
     );
-    return undefined;
+    return {
+      session: undefined,
+      attribution: {
+        session: "none",
+        ambiguous: false,
+        openCount: null,
+        ignoredSession: { sessionId: explicit, reason: ownership },
+      },
+    };
   }
-  const ambient = await resolveAmbientSession(userId);
-  if (!ambient) return undefined;
+  const measured = await measureAmbientSession(userId);
+  if (!measured.ok) {
+    return {
+      session: undefined,
+      attribution: { session: "none", ambiguous: false, openCount: null },
+    };
+  }
+  const ambient = measured.ambient;
+  if (!ambient) {
+    return {
+      session: undefined,
+      attribution: { session: "none", ambiguous: false, openCount: 0 },
+    };
+  }
   return {
-    sessionId: ambient.sessionId,
-    attribution: "derived",
-    ...(ambient.ambiguous
-      ? { ambiguous: true, openCount: ambient.openCount }
-      : {}),
+    session: {
+      sessionId: ambient.sessionId,
+      attribution: "derived",
+      ...(ambient.ambiguous
+        ? { ambiguous: true, openCount: ambient.openCount }
+        : {}),
+    },
+    attribution: {
+      session: "derived",
+      ambiguous: ambient.ambiguous,
+      openCount: ambient.openCount,
+    },
   };
 }
 

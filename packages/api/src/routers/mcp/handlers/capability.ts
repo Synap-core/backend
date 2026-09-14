@@ -266,6 +266,10 @@ export const capabilityHandlers: McpHandlerMap = {
         : undefined;
     const kind = typeof args.kind === "string" ? args.kind : undefined;
     const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const containerId =
+      typeof args.containerId === "string" && args.containerId.trim()
+        ? args.containerId.trim()
+        : undefined;
 
     // ── INTENT LOOKUP (the reverse index) ─────────────────────────────────
     // "Which installed capability can send a message?" answered WITHOUT the
@@ -360,6 +364,43 @@ export const capabilityHandlers: McpHandlerMap = {
         `If nothing fits, search the marketplace: synap_run_capability({ verbId: "market.search", parameters: { query: "..." } }).`;
     }
 
+    // ── ONE PACK (`containerId`) / SYNAP CORE AS ONE LINE ─────────────────
+    // Synap Core's ~33 first-party verbs are standalone skills, so the default
+    // view listed each as its own `skills` row and buried the connectors. By
+    // DEFAULT they fold into ONE `builtInPack` summary (counted by the same
+    // `sectionCapabilities` fold); an explicit ask — `containerId`, `query`, or
+    // `kind` — is the caller taking responsibility for the rows, as above.
+    let containerNote: string | undefined;
+    if (containerId) {
+      capabilities = capabilities.filter((c) => c.containerId === containerId);
+      if (capabilities.length === 0) {
+        containerNote = `No visible capability belongs to container ${containerId}${query ? ` and matches "${query}"` : ""}. Call without containerId to see every pack.`;
+      }
+    }
+    let builtInPack:
+      | { containerId: string; name: string; verbCount: number; note: string }
+      | undefined;
+    if (!containerId && !query && !kind) {
+      const { SYNAP_CORE_DEFINITION } =
+        await import("../../../services/capabilities/ensure-synap-core.js");
+      const coreRows = capabilities.filter(
+        (c) => !!c.containerId && c.containerName === SYNAP_CORE_DEFINITION.name
+      );
+      const coreId = coreRows[0]?.containerId;
+      if (coreId) {
+        const core = sectionCapabilities(coreRows);
+        capabilities = capabilities.filter((c) => !coreRows.includes(c));
+        builtInPack = {
+          containerId: coreId,
+          name: SYNAP_CORE_DEFINITION.name,
+          verbCount:
+            core.skills.length +
+            core.integrations.reduce((n, i) => n + i.verbs.length, 0),
+          note: `Synap's own first-party verbs (channels, entities, documents, feed, AI…), runnable with synap_run_capability. Call synap_list_capabilities again with containerId:"${coreId}" to list them.`,
+        };
+      }
+    }
+
     // Agent-facing view: real, distinct, runnable capabilities grouped by
     // type with each integration's verbs nested — NOT the flat management dump
     // (which buries the ~20 real actions under 90+ built-in MCP tools + 100+
@@ -436,6 +477,7 @@ export const capabilityHandlers: McpHandlerMap = {
       commands: sections.commands,
       ...(askedForBuiltins ? { builtins: sections.builtins } : {}),
       ...(askedForTeachingDocs ? { teachingDocs } : {}),
+      ...(builtInPack ? { builtInPack } : {}),
       // Honest, not hidden: these were folded out of the actionable view.
       //
       // `sections.builtins` now carries built-in tools as real ROWS (the
@@ -464,7 +506,9 @@ export const capabilityHandlers: McpHandlerMap = {
           'Pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, ' +
           'or call synap_load_skill("catalog") for every teaching doc grouped by topic (your own authored skills included, under "yours").',
       },
-      ...(zeroHitNote ? { note: zeroHitNote } : {}),
+      ...(zeroHitNote || containerNote
+        ? { note: [zeroHitNote, containerNote].filter(Boolean).join(" ") }
+        : {}),
     });
   },
   synap_run_capability: async (

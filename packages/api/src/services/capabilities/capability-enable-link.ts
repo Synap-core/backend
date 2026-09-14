@@ -90,12 +90,20 @@ export function capabilityCardLink(
  * MOVED from `capability-catalog.ts`'s `nextActionFor` — hint strings verbatim.
  * `add` and `none` carry no link on purpose: an AVAILABLE template has no
  * installed container to open, and `unavailable` has no action at all.
+ *
+ * `launchable` — whether the execute door can launch at least one of this
+ * card's verbs, judged by the shared runnable-action projection
+ * (`action-projection.ts`, via `runnableVerbIdsByContainer`). `ready` only means
+ * "every verb is enabled"; it becomes `run` ONLY when that projection agrees.
+ * `false` → `none` with the reason. `undefined` = not measured by this caller
+ * (the agent-path doors below never reach `ready`), which keeps `run`.
  */
 export function capabilityNextAction(
   status: CapabilityCardStatus,
   name: string,
   connection?: CapabilityCardConnection,
-  containerId?: string | null
+  containerId?: string | null,
+  launchable?: boolean
 ): CapabilityNextAction {
   const link = capabilityCardLink(containerId);
   switch (status) {
@@ -136,6 +144,13 @@ export function capabilityNextAction(
         ...link,
       };
     case "ready":
+      if (launchable === false) {
+        return {
+          kind: "none",
+          hint: `Every verb of "${name}" is enabled, but none can be launched through the execute door yet — no verb has an active, approved backing skill on an approved tool.`,
+          ...link,
+        };
+      }
       return { kind: "run", hint: `Run a verb of "${name}".`, ...link };
     case "unavailable": {
       const prov = connection?.provider;

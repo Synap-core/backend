@@ -23,7 +23,6 @@
 
 import { z } from "@hono/zod-openapi";
 import { db, eq, and, skills } from "@synap/database";
-import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -40,7 +39,7 @@ import {
 } from "./_shared.js";
 import { insertSkillGoverned } from "../../skills.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
-import { ruleNotExpiredWhere } from "../../../services/rules/expiry.js";
+import { searchInstructionSkills } from "../../../services/skills/search.js";
 
 // ── Wire schemas ───────────────────────────────────────────────────────────
 
@@ -395,70 +394,25 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
     ) {
       return c.json({ error: "workspaceId query param must be a UUID" }, 400);
     }
-    const limit = Math.min(parseInt(c.req.query("limit") ?? "50", 10), 200);
+    const limit = parseInt(c.req.query("limit") ?? "50", 10);
     const offset = parseInt(c.req.query("offset") ?? "0", 10);
 
     try {
-      const conditions: SQL[] = [
-        visibleSkillsWhere(c.get("userId"), workspaceId || undefined),
-        eq(skills.kind, "instruction"),
-        eq(skills.status, "active"),
-        eq(skills.approved, true),
-        // Expiry is a lifecycle gate, exactly like status/approved: a lapsed
-        // standing intent must not reach an agent. Vacuously true for non-rules.
-        ruleNotExpiredWhere(),
-      ];
+      // ONE search function owns every gate (visibility + rule expiry,
+      // instruction/active/approved, topic/tag/system) AND the text match, all
+      // in SQL before paging — `total` is the real match count, not the page.
+      const { rows, total } = await searchInstructionSkills({
+        userId: c.get("userId"),
+        workspaceId: workspaceId || undefined,
+        q,
+        topic,
+        tag,
+        system,
+        limit,
+        offset,
+      });
 
-      if (topic) {
-        // topics is text[] — use array containment
-        conditions.push(
-          drizzleSql`${skills.topics} @> ARRAY[${topic}]::text[]`
-        );
-      }
-
-      if (tag) {
-        conditions.push(drizzleSql`${skills.tags} @> ARRAY[${tag}]::text[]`);
-      }
-
-      if (system) {
-        conditions.push(drizzleSql`${skills.slug} LIKE 'system/%'`);
-      }
-
-      const where = conditions.length > 0 ? and(...conditions) : undefined;
-
-      const rows = await db
-        .select()
-        .from(skills)
-        .where(where)
-        .limit(limit)
-        .offset(offset)
-        .orderBy(skills.name);
-
-      if (q) {
-        // Post-filter by string matching on name/description/topics
-        const lowered = q.toLowerCase();
-        const filtered = rows.filter(
-          (r) =>
-            r.name.toLowerCase().includes(lowered) ||
-            (r.description ?? "").toLowerCase().includes(lowered) ||
-            (r.topics ?? []).some((t) => t.toLowerCase().includes(lowered))
-        );
-        return c.json(
-          {
-            skills: filtered.map(wireSkill),
-            total: filtered.length,
-          },
-          200
-        );
-      }
-
-      return c.json(
-        {
-          skills: rows.map(wireSkill),
-          total: rows.length,
-        },
-        200
-      );
+      return c.json({ skills: rows.map(wireSkill), total }, 200);
     } catch (err) {
       logger.error({ err }, "list agent skills failed");
       return c.json({ error: "Internal error" }, 500);

@@ -51,6 +51,10 @@ import {
   loadTeamRosterForCapture,
 } from "../team-roster-context.js";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
+import {
+  resolveProfileDescription,
+  resolveProfileIcon,
+} from "../../utils/profile-presentation.js";
 
 export type DiscoverDetail = "light" | "full";
 export type DiscoverScope = "workspaces" | "projects" | "profiles";
@@ -162,6 +166,10 @@ interface ProfileSample {
   scope?: string | null;
   /** Placement — where its entities live (pod|workspace). */
   entityScope?: string | null;
+  /** From `uiHints.description` — see `utils/profile-presentation.ts`. */
+  description?: string | null;
+  /** From `uiHints.icon` — see `utils/profile-presentation.ts`. */
+  icon?: string | null;
 }
 
 interface DiscoverWorkspace {
@@ -254,6 +262,7 @@ function trimProfiles(res: unknown): ProfileSample[] {
     applicableKinds?: string[] | null;
     scope?: string | null;
     entityScope?: string | null;
+    uiHints?: unknown;
   }>;
   return list.flatMap((p) =>
     p.slug
@@ -267,6 +276,8 @@ function trimProfiles(res: unknown): ProfileSample[] {
             // Visibility (who can see) + placement (where entities live).
             scope: p.scope ?? null,
             entityScope: p.entityScope ?? null,
+            description: resolveProfileDescription(p),
+            icon: resolveProfileIcon(p),
           },
         ]
       : []

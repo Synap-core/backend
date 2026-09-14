@@ -58,6 +58,7 @@ import {
   captureStatusForReceiptState,
   materializedReceiptState,
 } from "../../../services/capture-agent/capture-receipt-state.js";
+import { readStoredProposalScope } from "../../../services/capture-agent/stored-capture-scope.js";
 
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
@@ -689,10 +690,13 @@ const captureHandler: McpToolHandler = async (
     // that array believed the graph landed.
     return ok({
       status: captureStatusForReceiptState(graphResult.writeReceipt.state),
-      scope: graphScope,
       ...graphResult,
-      // The session this graph was filed into, and what the run recorded.
-      sessionId: graphSessionId ?? null,
+      // Where the graph was STORED, read off the proposal row by the submit
+      // core — not `graphScope` (this call's inputs) and not `graphSessionId`
+      // (the run room). On a re-submit they differ: the prior proposal stays
+      // in the session and project the first send filed it under.
+      scope: graphResult.scope,
+      sessionId: graphResult.scope.sessionId,
       intake: graphIntake
         ? { ...graphIntake.intake, sessionSource: graphRun.status }
         : {
@@ -773,9 +777,13 @@ const captureHandler: McpToolHandler = async (
     //
     // NULL is also what makes the lane's own promise true: a cross-cutting
     // runbook should be readable from every workspace, not one arbitrary one.
+    // What the `knowledge_keys` row stores: no workspace, and no project or
+    // session column at all. Spreading `textScope` here reported the ambient
+    // session and a derived project for a row that carries neither.
     const globalScope: CaptureScope = {
-      ...textScope,
       workspaceId: null,
+      projectId: null,
+      sessionId: null,
     };
     const text = args.text as string;
     const key =
@@ -798,9 +806,8 @@ const captureHandler: McpToolHandler = async (
       state: "applied",
       // Honest echo: this row is pod-wide, not placed in a workspace.
       effectiveWorkspaceId: null,
-      // Same derived value `globalScope` reports (it spreads `textScope`), so
-      // the receipt and the scope echo of one response cannot disagree.
-      ...(scopeProjectId ? { projectId: scopeProjectId } : {}),
+      // No `projectId`: a `knowledge_keys` row has no project column (see
+      // `globalScope`).
       source: "agent",
     };
     return ok({
@@ -1119,6 +1126,8 @@ const captureHandler: McpToolHandler = async (
     movedToWorkspace?: string;
     pendingWorkspaceSwitch?: unknown;
     proposalId?: string;
+    /** The anchored-proposal lane files one proposal per op. */
+    proposalIds?: string[];
     proposalType?: string;
     reviewUrl?: string;
     reviewPath?: string;
@@ -1187,14 +1196,33 @@ const captureHandler: McpToolHandler = async (
   // construction, and emitting an "applied" receipt for an unwritten capture is
   // the false-success bug the receipt exists to prevent.
   if (ex.status === "proposed") {
+    // Where the proposal(s) were STORED, read back off the rows. The insert
+    // runs the project ladder itself (session, channel, declared focus) and may
+    // mint an agent receipt session — `scopeProjectId` (rungs 1–2) and the
+    // run-session echo both missed what it chose.
+    const storedProposed = await readStoredProposalScope(db, {
+      userId,
+      proposalIds: ex.proposalId ? [ex.proposalId] : (ex.proposalIds ?? []),
+    });
+    const proposedScope: CaptureScope =
+      storedProposed.status === "read"
+        ? storedProposed.scope
+        : {
+            // Unreadable: NOT a stored fact — flagged below, never passed off
+            // as one.
+            workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
+            projectId: null,
+            sessionId: ex.sessionId ?? null,
+          };
     return ok({
       status: "proposed",
-      scope: {
-        workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
-        projectId: scopeProjectId,
-        sessionId: ex.sessionId ?? runSessionId ?? null,
-      },
-      sessionId: ex.sessionId ?? runSessionId ?? null,
+      scope: proposedScope,
+      ...(storedProposed.status === "read"
+        ? storedProposed.proposalScopes
+          ? { proposalScopes: storedProposed.proposalScopes }
+          : {}
+        : { scopeUnverified: storedProposed.reason }),
+      sessionId: proposedScope.sessionId,
       threadId: channel.id,
       ...(ex.proposalId ? { proposalId: ex.proposalId } : {}),
       ...(ex.proposalType ? { proposalType: ex.proposalType } : {}),
@@ -1218,11 +1246,14 @@ const captureHandler: McpToolHandler = async (
   // have moved it (movedToWorkspace), and a project only counts when it was
   // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
   const landedWsId = ex.movedToWorkspace ?? captureWsId ?? null;
-  // A LINKED outcome is the ground truth (the write ran the full ladder,
-  // rungs 3/4 included); otherwise fall back to the derived scope, which is
-  // still the caller's pin when there is one.
+  // The LINKED outcome is the only project this lane stored: execute stamps
+  // `belongs_to_project` from its own ladder and nothing else. There is no
+  // fallback — `scopeProjectId` (rungs 1–2) reported a pin that failed to link,
+  // or a session project the write never applied, as where it landed. (The
+  // execute receipt row's `project_id` can carry an AI ADVISORY id that was
+  // deliberately not linked, so it is not read here either.)
   const landedProjectId =
-    ex.project?.status === "linked" ? ex.project.projectId : scopeProjectId;
+    ex.project?.status === "linked" ? (ex.project.projectId ?? null) : null;
   // Edges execute() could not create (unknown slug, failed defs read) — the
   // text lane reports them like the graph lane: named, and `partial`, never a
   // bare `applied` with the failures buried inside `executed`.
@@ -1248,12 +1279,16 @@ const captureHandler: McpToolHandler = async (
     ...(textRelationsFailed.length
       ? { relationsFailed: textRelationsFailed }
       : {}),
+    // `ex.sessionId` is the session execute filed under (its receipt row and
+    // `produced` links). No `runSessionId` fallback: when execute stored none,
+    // reporting the one this handler forwarded would name a session nothing
+    // was filed in.
     scope: {
       workspaceId: landedWsId,
       projectId: landedProjectId,
-      sessionId: ex.sessionId ?? runSessionId ?? null,
+      sessionId: ex.sessionId ?? null,
     },
-    sessionId: ex.sessionId ?? runSessionId ?? null,
+    sessionId: ex.sessionId ?? null,
     threadId: channel.id,
     writeReceipt: textReceipt,
     // The note LANDED, so the receipt is honestly "applied" — but what landed

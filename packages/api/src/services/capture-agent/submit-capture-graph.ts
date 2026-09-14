@@ -92,6 +92,10 @@ import {
 import { loadRelationTypeValidator } from "../../utils/relation-types.js";
 import { resolveCaptureProjectRef } from "./resolve-capture-project.js";
 import {
+  storedScopeOfProposal,
+  type StoredCaptureScope,
+} from "./stored-capture-scope.js";
+import {
   collapseDuplicateEntities,
   type CaptureGraphEntity,
   type CaptureGraphRelation,
@@ -347,6 +351,17 @@ export interface SubmitCaptureGraphResult {
   plan?: { steps: CapturePlanStepReceipt[] };
   /** The session this proposal was filed in (its room is where it is discussed). */
   sessionId?: string | null;
+  /**
+   * Where the write was STORED — read off the proposal row the insert returned
+   * (or, on a re-submit, the PRIOR row), never the call's inputs: the insert
+   * runs the project ladder (incl. declared focus) and may mint an agent
+   * receipt session. Only when an auto-apply's receipt row failed to insert
+   * (no row exists) does it fall back to the values the entities were
+   * materialized with.
+   */
+  scope: StoredCaptureScope;
+  /** True when this call returned a PRIOR proposal instead of filing one. */
+  deduped?: true;
   /**
    * ADVISORY: entities whose properties carry keys their profile does not
    * model (stored verbatim, not queryable), with a `didYouMean` when a real
@@ -946,6 +961,10 @@ export async function submitCaptureGraph(
       ).length;
       const priorApplied = prior.status === "auto_approved";
       const priorReviewUrl = priorApplied ? undefined : openLink(prior.id);
+      // What the PRIOR row stored — not this call's session/project/workspace.
+      // A re-send from another session returns the first send's proposal, and
+      // that proposal stays where the first send filed it.
+      const priorScope = storedScopeOfProposal(prior);
       return {
         proposalId: prior.id,
         entityCount: priorEntityCount,
@@ -957,15 +976,20 @@ export async function submitCaptureGraph(
         ...(isPlanBatch(priorOps)
           ? { plan: { steps: planStepReceipts(priorOps) } }
           : {}),
-        sessionId: prior.sessionId ?? input.sessionId ?? null,
+        sessionId: priorScope.sessionId,
+        scope: priorScope,
+        // Reuses the flag the MCP `ok()` shaper already reads: a deduped
+        // PENDING proposal surfaces as `status: "duplicate"` with a
+        // stop-re-proposing hint.
+        deduped: true,
         ...(projectCandidate ? { projectCandidate } : {}),
         ...(projectOutcome ? { project: projectOutcome } : {}),
         writeReceipt: {
           state: priorApplied ? "applied" : "pending",
           proposalId: prior.id,
           ...(priorReviewUrl ? { reviewUrl: priorReviewUrl } : {}),
-          effectiveWorkspaceId: workspaceId,
-          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+          effectiveWorkspaceId: priorScope.workspaceId,
+          ...(priorScope.projectId ? { projectId: priorScope.projectId } : {}),
           ...(projectOutcome ? { project: projectOutcome } : {}),
           source,
         },
@@ -1238,7 +1262,14 @@ export async function submitCaptureGraph(
         // materializes unstamped (the capture still lands, just without the
         // governance join), which is strictly better than losing the capture.
         let captureReceipt:
-          { id?: string; data?: Record<string, unknown> } | undefined;
+          | {
+              id?: string;
+              data?: Record<string, unknown>;
+              workspaceId?: string | null;
+              projectId?: string | null;
+              sessionId?: string | null;
+            }
+          | undefined;
         try {
           const { proposal } = await createAutoApprovedProposal({
             id: captureProposalId,
@@ -1275,10 +1306,7 @@ export async function submitCaptureGraph(
               ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
             },
           });
-          captureReceipt = proposal as {
-            id?: string;
-            data?: Record<string, unknown>;
-          };
+          captureReceipt = proposal as NonNullable<typeof captureReceipt>;
         } catch (err) {
           logger.warn(
             { err, userId },
@@ -1387,6 +1415,16 @@ export async function submitCaptureGraph(
         // (correlationId, requestedEventId, summary) survive. Best-effort: a
         // recording hiccup must never fail the already-committed capture.
         let recordId: string | undefined = captureReceipt?.id;
+        // Stored scope: the receipt row as the insert returned it. When that
+        // insert FAILED there is no row — the entities were materialized under
+        // exactly these values, so they are what was stored.
+        const appliedScope: StoredCaptureScope = captureReceipt?.id
+          ? storedScopeOfProposal(captureReceipt)
+          : {
+              workspaceId,
+              projectId: resolvedProjectId,
+              sessionId: input.sessionId ?? null,
+            };
         if (captureReceipt?.id) {
           try {
             // The COMPLETE record (relations, facets, config rows, merge
@@ -1440,7 +1478,8 @@ export async function submitCaptureGraph(
                 },
               }
             : {}),
-          sessionId: input.sessionId ?? null,
+          sessionId: appliedScope.sessionId,
+          scope: appliedScope,
           ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
           ...(pendingDuplicateCandidates.length > 0
             ? { pendingDuplicateCandidates }
@@ -1462,8 +1501,10 @@ export async function submitCaptureGraph(
               materialized.relationsFailed.length
             ),
             ...(recordId ? { proposalId: recordId } : {}),
-            effectiveWorkspaceId: workspaceId,
-            ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+            effectiveWorkspaceId: appliedScope.workspaceId,
+            ...(appliedScope.projectId
+              ? { projectId: appliedScope.projectId }
+              : {}),
             ...(projectOutcome ? { project: projectOutcome } : {}),
             source,
             created: materialized.created,
@@ -1522,6 +1563,13 @@ export async function submitCaptureGraph(
 
   const proposalId = (created as { id?: string })?.id;
   const reviewUrl = proposalId ? openLink(proposalId) : undefined;
+  // Stored scope, off the row the insert returned: `insertPendingProposal`
+  // runs the project ladder (session → channel → declared focus), and an agent
+  // write with no session is packaged into a receipt session it MINTS — neither
+  // is visible in `input`.
+  const pendingScope = storedScopeOfProposal(
+    (created ?? {}) as Parameters<typeof storedScopeOfProposal>[0]
+  );
 
   return {
     proposalId,
@@ -1532,7 +1580,8 @@ export async function submitCaptureGraph(
     summary,
     applied: false,
     ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
-    sessionId: input.sessionId ?? null,
+    sessionId: pendingScope.sessionId,
+    scope: pendingScope,
     ...(unmodeledProperties.length > 0 ? { unmodeledProperties } : {}),
     ...(pendingDuplicateCandidates.length > 0
       ? { pendingDuplicateCandidates }
@@ -1543,8 +1592,8 @@ export async function submitCaptureGraph(
       state: "pending",
       ...(proposalId ? { proposalId } : {}),
       ...(reviewUrl ? { reviewUrl } : {}),
-      effectiveWorkspaceId: workspaceId,
-      ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
+      effectiveWorkspaceId: pendingScope.workspaceId,
+      ...(pendingScope.projectId ? { projectId: pendingScope.projectId } : {}),
       ...(projectOutcome ? { project: projectOutcome } : {}),
       source,
     },

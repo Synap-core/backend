@@ -18,6 +18,7 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { randomUUID } from "node:crypto";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
@@ -254,6 +255,12 @@ export async function createFocusSession(
 
   // Governance membrane — AI callers route through proposals. A session with no
   // workspace is a personal resource and auto-grants via checkPermissionOrPropose.
+  // The session's id is minted ONCE, here, and travels as `data.id`: the
+  // auto-approve receipt stamps it as its targetId and the PROPOSED path makes
+  // it the prospective id the executor inserts at. Left to the column default,
+  // the receipt minted its own random id that no row ever had (live receipt
+  // 91191f04, 2026-09-14). The dedup hash strips `id`, so retries still dedup.
+  const sessionId = randomUUID();
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
@@ -267,6 +274,7 @@ export async function createFocusSession(
     // full session — otherwise they'd be lost on the PROPOSED path. Only include
     // when present to keep the persisted data lean.
     data: {
+      id: sessionId,
       goal,
       // Also the proposal's display name (`extractProposalName` reads `title`).
       ...(title ? { title } : {}),
@@ -333,6 +341,7 @@ export async function createFocusSession(
     const [session] = await tx
       .insert(focusSessions)
       .values({
+        id: sessionId,
         workspaceId,
         projectId,
         subjectEntityId,

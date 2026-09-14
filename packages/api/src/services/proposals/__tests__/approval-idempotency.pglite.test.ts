@@ -183,11 +183,17 @@ describe("the composite approval branch passes it", () => {
       ),
       "utf8"
     );
-    const call = src.indexOf(
-      "await materializeCompositeGraph(\n      reconciledOperations,"
+    // Indentation-free anchors: the connected-plan wave wrapped this call in a
+    // try (`materializeResult = await …`), which moved it two spaces and left
+    // the old literal anchor matching nothing — red, not vacuous, but blind.
+    const call = src.search(
+      /await materializeCompositeGraph\(\s*reconciledOperations,/
     );
     expect(call).toBeGreaterThan(-1);
-    const options = src.slice(call, src.indexOf("\n    );", call));
+    const close = src.slice(call).search(/\n\s*\);/);
+    expect(close).toBeGreaterThan(-1);
+    const options = src.slice(call, call + close);
+    expect(options).toContain("reconciledOperations");
     expect(options).toContain(
       "idempotency: approvalIdempotency(db, { userId, proposal })"
     );

@@ -2543,6 +2543,10 @@
             "type": "string",
             "description": "Optional exact kind filter: tool | skill | command | source-provider | builtin-tool | teaching-doc."
           },
+          "containerId": {
+            "type": "string",
+            "description": "Only rows belonging to this capability pack (the `containerId` on integrations/skills, or `builtInPack.containerId`). The default view summarises Synap Core's first-party verbs as ONE `builtInPack` line — pass its containerId to list them."
+          },
           "intent": {
             "type": "string",
             "enum": [

@@ -56,7 +56,7 @@ import { AGENT_PROPOSALS_PER_USER_PER_DAY } from "../../utils/permission-check.j
 import { agentScorecard } from "./agent-scorecard.js";
 import { diagnoseGlobal } from "./global.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
-import { resolveObjectKind } from "./resolve-object-kind.js";
+import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
 import {
   diagnoseWorkspaceClass,
   diagnoseWorkspaceObject,
@@ -143,7 +143,11 @@ export async function diagnoseRouter(
   if (input.id) {
     const resolved = await resolveObjectKind(input.id, userId);
     if (!resolved) {
-      return { error: `No diagnosable object found for id ${input.id}` };
+      return {
+        error: isFullUuid(input.id)
+          ? `No diagnosable object found for id ${input.id}`
+          : `"${input.id}" is not a full id — pass the complete UUID (the list tools return it verbatim)`,
+      };
     }
     // An agent-user id is really "OBJECT where kind=agent" → the quality view.
     // Use `resolved.id`, not `input.id`: the correlationId fallback in

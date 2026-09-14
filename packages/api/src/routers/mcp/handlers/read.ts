@@ -9,6 +9,10 @@
  */
 
 import { ask } from "../../../services/knowledge/ask.js";
+import {
+  resolveProfileDescription,
+  resolveProfileIcon,
+} from "../../../utils/profile-presentation.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
 import {
@@ -446,8 +450,8 @@ export const readHandlers: McpHandlerMap = {
         // Visibility axis (who can use this profile type) — distinct from
         // entityScope (placement: where its entities live).
         scope: p.scope ?? null,
-        description: p.description ?? null,
-        icon: p.icon ?? null,
+        description: resolveProfileDescription(p),
+        icon: resolveProfileIcon(p),
         // Kind + Facets discriminator — lets an agent tell a primary type
         // (kind) from an attachable facet (role) before creating entities.
         profileKind: p.profileKind ?? "kind",

@@ -99,24 +99,29 @@ describe("the derivation the receipt now shares with the write", () => {
   });
 });
 
-describe("every MCP capture receipt reports the DERIVED project", () => {
+describe("MCP capture receipts: derived scope before a write, stored scope after", () => {
   const src = readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "capture.ts"),
     "utf8"
   );
 
-  it("derives the receipt scope through the one door, not a second helper", () => {
+  it("derives the pre-write scope through the one door, not a second helper", () => {
     expect(src).toContain("const scopeProjectId =");
     expect(src).toContain("resolveProjectPlacement(db, {");
     expect(src).toContain("explicitProjectId: captureProjectId");
   });
 
-  it("every receipt lane echoes it — graph, text, global, proposed, applied", () => {
-    // graphScope / textScope / the global-lane receipt / the `proposed` early
-    // return, plus the landed echo asserted separately below.
-    expect(src.match(/projectId: scopeProjectId/g) ?? []).toHaveLength(4);
+  it("the derived value is echoed ONLY by lanes that wrote nothing", () => {
+    // `graphScope` / `textScope` — rejects, dry run, needs_input. A lane that
+    // WROTE reports what it stored instead (behaviour pinned in
+    // `capture.stored-scope.test.ts`): the graph lane forwards the submit
+    // core's row-read scope, `proposed` reads its rows back, `applied` reports
+    // the linked outcome with no fallback, and `global` stores no project.
+    expect(src.match(/projectId: scopeProjectId/g) ?? []).toHaveLength(2);
+    expect(src).toContain("scope: graphResult.scope,");
+    expect(src).toContain("readStoredProposalScope(db, {");
     expect(src).toContain(
-      'ex.project?.status === "linked" ? ex.project.projectId : scopeProjectId'
+      'ex.project?.status === "linked" ? (ex.project.projectId ?? null) : null'
     );
   });
 
