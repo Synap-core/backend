@@ -1599,6 +1599,30 @@ describe("checkPermissionOrPropose — legacy AI-sourced path (no agentUserId)",
     expect("granted" in result && result.granted === false).toBe(true);
   });
 
+  it("FLOOR: a LOOSENING settings.update proposes on the legacy path even when aiAutoApprove=true", async () => {
+    // The unified settings door's loosening floor, mirrored on the anonymous
+    // path: raising a ceiling (or widening a rule / posture:auto / any revoke)
+    // is always a human decision. `aiAutoApprove=true` is the legacy lever that
+    // auto-approves any action outside the modern whitelist — exactly the hole
+    // the floor closes (same class as command.execute above).
+    setupWorkspaceSettings({ aiGovernance: { autoApprove: true } });
+
+    const result = await checkPermissionOrPropose({
+      ...BASE_OPTS,
+      source: "intelligence",
+      subjectType: "settings",
+      action: "update",
+      data: {
+        store: "governance_ceilings",
+        op: "set",
+        axis: "pending_proposal_cap",
+        limitValue: 50,
+      },
+    } as unknown as Parameters<typeof checkPermissionOrPropose>[0]);
+
+    expect("granted" in result && result.granted === false).toBe(true);
+  });
+
   it("FLOOR: a human gate (dev.plan_approval) proposes on the legacy path under both levers", async () => {
     // Pre-existing gap of the same class — rung 2.05 is likewise unreachable
     // from here. An agent that could auto-approve its own plan gate has
