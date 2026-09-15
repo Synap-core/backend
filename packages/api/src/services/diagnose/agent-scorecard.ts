@@ -35,8 +35,8 @@ import { collapseProposalsToClusters } from "../proposals/fingerprint.js";
 import type { ClusterInputRow } from "../proposals/fingerprint.js";
 import {
   AGENT_PROPOSALS_PER_USER_PER_DAY,
-  agentDailyProposalCap,
-  countTodayAgentProposals,
+  agentProposalCap,
+  countPendingAgentProposals,
 } from "../../utils/permission-check.js";
 import type { AgentScorecard } from "./types.js";
 
@@ -91,7 +91,7 @@ export function computeAgentScorecard(
     agentId: string;
     agentName: string | null;
     agentType: string | null;
-    todayCount: number;
+    pendingCount: number;
     cap?: number;
   }
 ): AgentScorecard {
@@ -184,9 +184,9 @@ export function computeAgentScorecard(
     },
     rejectionReasons,
     dailyCap: {
-      todayCount: opts.todayCount,
+      pendingCount: opts.pendingCount,
       cap,
-      atOrOverCap: opts.todayCount >= cap,
+      atOrOverCap: opts.pendingCount >= cap,
     },
   };
 }
@@ -257,26 +257,26 @@ export async function agentScorecard(params: {
 
   // Daily-cap posture: the cap is per-AGENT (not shared across the owner's
   // roster) and scales with this agent's own trust (base 10, x3 for a proven
-  // agent) — see `agentDailyProposalCap()`, the same helper `createProposal`
+  // agent) — see `agentProposalCap()`, the same helper `createProposal`
   // enforces against.
   //
   // Both halves of the posture are now the ENFORCER's own functions, called —
   // not re-derived. This query used to be a hand-copied
   // `createdBy = <human> AND agentUserId = <agent>`, the same overloaded-column
-  // pair that made the cap inert (see `countTodayAgentProposals`); a reported
+  // pair that made the cap inert (see `countPendingAgentProposals`); a reported
   // posture computed by a second copy of the predicate can drift from what the
   // membrane actually enforces, and did. Keying on `agentUserId` alone also
   // matches the `rows` query above, so this file's two proposal reads agree.
-  const [todayCount, cap] = await Promise.all([
-    countTodayAgentProposals(agentId),
-    agentDailyProposalCap(agentId),
+  const [pendingCount, cap] = await Promise.all([
+    countPendingAgentProposals(agentId),
+    agentProposalCap(agentId),
   ]);
 
   return computeAgentScorecard(rows, {
     agentId,
     agentName: agent.name ?? agent.email ?? null,
     agentType: agent.agentType ?? null,
-    todayCount,
+    pendingCount,
     cap,
   });
 }

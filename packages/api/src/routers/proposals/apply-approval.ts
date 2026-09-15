@@ -31,8 +31,11 @@ import {
   governanceRules,
   governanceCeilings,
   createGuideline,
+  revokeGuideline,
   type GovernanceScope,
   type GovernanceTarget,
+  type GovernanceCeilingAxis,
+  type ConfigScopeKind,
 } from "@synap/database";
 import { proposals } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
@@ -441,12 +444,50 @@ export interface GovernanceRaiseCeilingProposalData {
   agentUserId: string;
   scopeKind: "pod";
   workspaceId?: string | null;
+  /**
+   * Which ceiling axis this proposal raises. Defaults to `daily_write_count`
+   * (the recommender's own axis). `pending_proposal_cap` raises the F2
+   * proposal cap instead — the axis `resolvePendingProposalCap` reads.
+   */
+  axis?: "daily_write_count" | "pending_proposal_cap";
   currentLimit: number;
   proposedLimit: number;
   evidence: {
     daysAtCeiling: number;
     sampleDays: Array<{ day: string; count: number }>;
   };
+}
+
+/**
+ * The unified gov-config settings payload — the ONE door for AI/cron/human to
+ * propose a change to `governance_rules` / `governance_ceilings` /
+ * `config_settings`. Sensitivity is enforced at the GATE (a loosening change
+ * always proposes — see `isLooseningSettingsChange` in permission-check.ts);
+ * on approval (B5) the change is applied through the same insert/revoke shapes
+ * the bespoke B4a–B4d branches use, dispatched on `store` + `op`.
+ */
+export interface SettingsUpdateProposalData {
+  store: "governance_rules" | "governance_ceilings" | "config_settings";
+  op: "set" | "revoke";
+  // governance_rules / governance_ceilings (flat, mirrors B4b/B4d):
+  principalKind?: "agent" | "any";
+  agentUserId?: string | null;
+  scopeKind?: "pod" | "workspace";
+  workspaceId?: string | null;
+  targetKind?: "action" | "profile" | "capability";
+  targetPattern?: string;
+  targetProfile?: string | null;
+  verdict?: "auto" | "propose";
+  axis?: "daily_write_count" | "pending_proposal_cap";
+  limitValue?: number;
+  // config_settings:
+  configScopeKind?: ConfigScopeKind;
+  scopeRef?: string | null;
+  capabilityId?: string | null;
+  text?: string;
+  posture?: "auto" | "propose";
+  // revoke: the id of the row to soft-delete.
+  targetId?: string;
 }
 
 /**
@@ -1648,28 +1689,33 @@ async function applyProposalApprovalInner(
   }
 
   // B4d: governance.raise_ceiling — the numeric-limit twin of B4b. Approving
-  // INSERTS a `governance_ceilings` row (axis daily_write_count) at the proposed
-  // higher limit + source_proposal_id lineage, and SUPERSEDES (soft-revokes) the
-  // agent's prior active pod-scoped ceiling so exactly one is effective. Mirrors
-  // the ceilings router's `.create` insert shape. Floor-safe: a ceiling can only
-  // downgrade execute→propose at rung 2.56 — raising one never widens a floor.
+  // INSERTS a `governance_ceilings` row (axis from payload, default
+  // daily_write_count) at the proposed higher limit + source_proposal_id
+  // lineage, and SUPERSEDES (soft-revokes) the agent's prior active pod-scoped
+  // ceiling on that SAME axis so exactly one is effective. Mirrors the ceilings
+  // router's `.create` insert shape. Floor-safe: a ceiling can only downgrade
+  // execute→propose at rung 2.56 — raising one never widens a floor.
   if (proposal.proposalType === "governance.raise_ceiling") {
     const raiseData = payload as GovernanceRaiseCeilingProposalData | null;
     if (
       !raiseData ||
       typeof raiseData !== "object" ||
       !raiseData.agentUserId ||
-      typeof raiseData.proposedLimit !== "number"
+      typeof raiseData.proposedLimit !== "number" ||
+      (raiseData.axis != null &&
+        raiseData.axis !== "daily_write_count" &&
+        raiseData.axis !== "pending_proposal_cap")
     ) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: "Malformed governance.raise_ceiling proposal data.",
       });
     }
+    const axis = raiseData.axis ?? "daily_write_count";
 
-    // Supersede the agent's prior active pod-scoped daily-write ceiling (if any)
-    // so the new one is the single effective row — same soft-revoke the ceilings
-    // router uses, scoped to this agent's pod ceilings.
+    // Supersede the agent's prior active pod-scoped ceiling ON THIS AXIS (if
+    // any) so the new one is the single effective row — same soft-revoke the
+    // ceilings router uses, scoped to this agent's pod ceilings on this axis.
     // EVIDENCE (storage engine): the supersede UPDATE and the new-ceiling
     // INSERT each RETURN their rows; `rows` is their sum. A supersede that
     // matched nothing (no prior ceiling) is legal and shows as 1, not 2.
@@ -1678,7 +1724,7 @@ async function applyProposalApprovalInner(
       .set({ revokedAt: new Date() })
       .where(
         and(
-          eq(governanceCeilings.axis, "daily_write_count"),
+          eq(governanceCeilings.axis, axis),
           eq(governanceCeilings.principalKind, "agent"),
           eq(governanceCeilings.agentUserId, raiseData.agentUserId),
           eq(governanceCeilings.scopeKind, "pod"),
@@ -1690,7 +1736,7 @@ async function applyProposalApprovalInner(
     const insertedCeilings = await db
       .insert(governanceCeilings)
       .values({
-        axis: "daily_write_count",
+        axis,
         principalKind: "agent",
         agentUserId: raiseData.agentUserId,
         scopeKind: "pod",
@@ -1736,6 +1782,196 @@ async function applyProposalApprovalInner(
         ids: insertedCeilings.map((r) => r.id),
         subject: "governance_ceilings",
       },
+    };
+  }
+
+  // The unified gov-config settings payload — the ONE door for AI/cron/human to
+  // propose a change to `governance_rules` / `governance_ceilings` /
+  // `config_settings`. Sensitivity is enforced at the GATE (a loosening change
+  // always proposes — see `isLooseningSettingsChange` in permission-check.ts);
+  // here, on approval, the change is applied through the same insert/revoke
+  // shapes the bespoke B4a–B4d branches use, dispatched on `store` + `op`.
+  // B5: settings.update — the unified gov-config settings door. Approving
+  // applies a `set` (insert) or `revoke` (soft-delete) to exactly one of the
+  // three stores. Floor-safe at apply: a ceiling/rule change never widens a
+  // floor beyond what a human-reviewed proposal already implies (the loosening
+  // floor at the gate means no loosening change ever auto-applied to get here).
+  if (proposal.proposalType === "settings.update") {
+    const s = payload as SettingsUpdateProposalData | null;
+    if (
+      !s ||
+      typeof s !== "object" ||
+      (s.store !== "governance_rules" &&
+        s.store !== "governance_ceilings" &&
+        s.store !== "config_settings") ||
+      (s.op !== "set" && s.op !== "revoke")
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Malformed settings.update proposal data.",
+      });
+    }
+
+    let subject = s.store;
+    let rows = 0;
+    let ids: string[] = [];
+
+    if (s.store === "governance_ceilings") {
+      if (s.op === "revoke") {
+        if (!s.targetId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "settings.update: revoke requires targetId.",
+          });
+        }
+        const revoked = await db
+          .update(governanceCeilings)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(governanceCeilings.id, s.targetId),
+              isNull(governanceCeilings.revokedAt)
+            )
+          )
+          .returning({ id: governanceCeilings.id });
+        ids = revoked.map((r) => r.id);
+        rows = revoked.length;
+      } else {
+        const axis = (s.axis ?? "daily_write_count") as GovernanceCeilingAxis;
+        const agentUserId = s.agentUserId ?? null;
+        // Supersede the prior active pod-scoped ceiling on this axis so the new
+        // one is the single effective row (mirrors B4d's supersede).
+        await db
+          .update(governanceCeilings)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(governanceCeilings.axis, axis),
+              eq(
+                governanceCeilings.principalKind,
+                agentUserId ? "agent" : "any"
+              ),
+              agentUserId
+                ? eq(governanceCeilings.agentUserId, agentUserId)
+                : isNull(governanceCeilings.agentUserId),
+              eq(governanceCeilings.scopeKind, "pod"),
+              isNull(governanceCeilings.revokedAt)
+            )
+          );
+        const inserted = await db
+          .insert(governanceCeilings)
+          .values({
+            axis,
+            principalKind: agentUserId ? "agent" : "any",
+            agentUserId,
+            scopeKind: "pod",
+            workspaceId: null,
+            limitValue: typeof s.limitValue === "number" ? s.limitValue : 0,
+            sourceProposalId: proposal.id,
+            createdBy: userId,
+          })
+          .returning({ id: governanceCeilings.id });
+        ids = inserted.map((r) => r.id);
+        rows = inserted.length;
+      }
+    } else if (s.store === "governance_rules") {
+      if (s.op === "revoke") {
+        if (!s.targetId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "settings.update: revoke requires targetId.",
+          });
+        }
+        const revoked = await db
+          .update(governanceRules)
+          .set({ revokedAt: new Date() })
+          .where(
+            and(
+              eq(governanceRules.id, s.targetId),
+              isNull(governanceRules.revokedAt)
+            )
+          )
+          .returning({ id: governanceRules.id });
+        ids = revoked.map((r) => r.id);
+        rows = revoked.length;
+      } else {
+        const inserted = await db
+          .insert(governanceRules)
+          .values({
+            principalKind: s.principalKind ?? "agent",
+            agentUserId: s.agentUserId ?? null,
+            scopeKind: s.scopeKind ?? "pod",
+            workspaceId:
+              s.scopeKind === "workspace" ? (s.workspaceId ?? null) : null,
+            targetKind: s.targetKind ?? "action",
+            targetPattern: s.targetPattern ?? "*",
+            targetProfile: s.targetProfile ?? null,
+            verdict: s.verdict ?? "propose",
+            sourceProposalId: proposal.id,
+            createdBy: userId,
+          })
+          .returning({ id: governanceRules.id });
+        ids = inserted.map((r) => r.id);
+        rows = inserted.length;
+      }
+    } else {
+      // config_settings
+      if (s.op === "revoke") {
+        if (!s.targetId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "settings.update: revoke requires targetId.",
+          });
+        }
+        const revoked = await revokeGuideline({ db, id: s.targetId });
+        ids = revoked ? [revoked.id] : [];
+        rows = revoked ? 1 : 0;
+      } else {
+        const created = await createGuideline({
+          db,
+          text: typeof s.text === "string" ? s.text : "",
+          ...(s.posture ? { posture: s.posture } : {}),
+          scopeKind: s.configScopeKind ?? "default",
+          scopeRef: s.scopeRef ?? null,
+          capabilityId: s.capabilityId ?? null,
+          workspaceId: s.workspaceId ?? null,
+          createdBy: userId,
+        });
+        ids = [created.id];
+        rows = 1;
+      }
+    }
+
+    await db
+      .update(proposals)
+      .set({
+        status: ProposalStatus.APPROVED,
+        reviewedBy: userId,
+        reviewedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(proposals.id, input.proposalId));
+
+    reportProposalOutcome({
+      proposalId: input.proposalId,
+      outcome: "approved",
+      sourceMessageId: proposal.sourceMessageId,
+      agentUserId: proposal.agentUserId,
+      targetType: proposal.targetType,
+      proposalType: proposal.proposalType,
+      source: (proposal.data as Record<string, unknown> | null)?.source as
+        string | undefined,
+    });
+
+    emitProposalReviewed(
+      input.proposalId,
+      proposal.workspaceId,
+      "approved",
+      userId
+    );
+    return {
+      success: true,
+      effect: { applied: "verified", rows, ids, subject },
     };
   }
 

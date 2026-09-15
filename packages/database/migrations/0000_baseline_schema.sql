@@ -4455,6 +4455,7 @@ DO $$ BEGIN
   CREATE TYPE governance_ceiling_axis AS ENUM ('daily_write_count');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'pending_proposal_cap';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,

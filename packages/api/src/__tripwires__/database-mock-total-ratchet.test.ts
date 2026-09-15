@@ -75,7 +75,7 @@ import { dirname, join, relative } from "node:path";
 // which the module error had been hiding.
 // 63 → 62 on 2026-09-09: `utils/permission-check.dry-run.test.ts` converted.
 // Also already dark, on the same day and by the same mechanism:
-// `countTodayAgentProposals` started calling `ne(...)` and the propose test died
+// `countPendingAgentProposals` started calling `ne(...)` and the propose test died
 // with *No "ne" export is defined on the mock*. That file's own comment records
 // a PREVIOUS instance ("a total mock must name them or every governed write
 // throws") patched by adding three more names to the hand-list — which fixes the

@@ -1,0 +1,19 @@
+-- 0266_governance_ceiling_proposal_cap.sql
+--
+-- A governance ceiling can cap an agent's SIMULTANEOUSLY-PENDING proposals
+-- (axis `pending_proposal_cap`), not just its auto-executed daily writes.
+--
+-- The F2 anti-flood floor on the agent PROPOSE path (`createProposal` in
+-- packages/api/src/utils/permission-check.ts) counts how many proposals an agent
+-- currently has PENDING and refuses the next one at the cap. `pending_proposal_cap`
+-- is the user-editable override for that cap's base value (default 10, x3 for a
+-- proven-trustworthy agent), stored in `governance_ceilings` alongside the
+-- existing `daily_write_count` axis. Scoping mirrors `daily_write_count`: per-agent
+-- (principal `agent`) or pod-wide (principal `any`), pod scope only.
+--
+-- TRANSACTION NOTE: `scripts/migrate.ts` runs every migration inside
+-- `sql.begin()`. `ALTER TYPE … ADD VALUE` is legal inside a transaction from
+-- Postgres 12 onward (this deployment is 16) provided the new value is not USED
+-- in the same transaction — nothing here uses it (same precedent as 0253, 0258,
+-- and 0260). `IF NOT EXISTS` makes a re-run a no-op.
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'pending_proposal_cap';

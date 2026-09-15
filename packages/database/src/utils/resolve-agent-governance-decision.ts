@@ -757,6 +757,72 @@ export async function resolveDailyWriteCeiling(
   return best ? best.limitValue : DEFAULT_DAILY_WRITE_CEILING;
 }
 
+export interface ResolvePendingProposalCapInput {
+  db: DbHandle;
+  agentUserId: string;
+}
+
+/**
+ * Resolve the effective cap on an agent's SIMULTANEOUSLY-PENDING proposals — the
+ * F2 anti-flood floor's LIMIT half on the PROPOSE path (`createProposal` in
+ * @synap/api). Reads `governance_ceilings` (axis `pending_proposal_cap`) and
+ * returns the most-specific ACTIVE row's `limit_value`, ranked like
+ * `resolveDailyWriteCeiling` (principal agent=2 > any=0, newest `created_at`
+ * breaks ties). Pod scope only: the proposal cap is a per-agent pod-wide budget,
+ * exactly like the daily write ceiling. Returns `null` when no row matches — the
+ * fallback (base 10 × trust multiplier) lives in the API's `agentProposalCap`,
+ * NOT here, so the trust logic stays single-sourced in one package.
+ */
+export async function resolvePendingProposalCap(
+  input: ResolvePendingProposalCapInput
+): Promise<number | null> {
+  const { db, agentUserId } = input;
+
+  const candidates = (await db
+    .select({
+      principalKind: governanceCeilings.principalKind,
+      limitValue: governanceCeilings.limitValue,
+      createdAt: governanceCeilings.createdAt,
+    })
+    .from(governanceCeilings)
+    .where(
+      and(
+        eq(governanceCeilings.axis, "pending_proposal_cap"),
+        isNull(governanceCeilings.revokedAt),
+        or(
+          isNull(governanceCeilings.expiresAt),
+          gt(governanceCeilings.expiresAt, new Date())
+        ),
+        eq(governanceCeilings.scopeKind, "pod"),
+        or(
+          eq(governanceCeilings.principalKind, "any"),
+          and(
+            eq(governanceCeilings.principalKind, "agent"),
+            eq(governanceCeilings.agentUserId, agentUserId)
+          )
+        )
+      )
+    )) as Array<{
+    principalKind: "agent" | "any";
+    limitValue: number;
+    createdAt: Date;
+  }>;
+
+  let best: { score: number; createdAt: Date; limitValue: number } | undefined;
+  for (const row of candidates) {
+    const score = row.principalKind === "agent" ? 2 : 0;
+    if (
+      !best ||
+      score > best.score ||
+      (score === best.score && row.createdAt > best.createdAt)
+    ) {
+      best = { score, createdAt: row.createdAt, limitValue: row.limitValue };
+    }
+  }
+
+  return best ? best.limitValue : null;
+}
+
 /**
  * Count the acting agent's auto-executed writes so far in the current UTC day —
  * rung 2.56's COUNT half. Uses the partial index `idx_events_ungoverned_agent`

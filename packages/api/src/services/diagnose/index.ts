@@ -837,10 +837,11 @@ async function diagnoseClass(
         summary:
           cards.length === 0
             ? "No agents registered for this owner."
-            : // Per-agent cap: each agent gets its OWN daily budget (base
-              // AGENT_PROPOSALS_PER_USER_PER_DAY, scaled up for a proven agent) —
-              // not a pool shared across the owner's roster.
-              `${cards.length} agent(s). Base cap: ${AGENT_PROPOSALS_PER_USER_PER_DAY}/day per agent (trusted agents get more — see each agent's dailyCap).`,
+            : // Per-agent cap: each agent gets its OWN budget of simultaneously-
+              // PENDING proposals (default AGENT_PROPOSALS_PER_USER_PER_DAY,
+              // scaled up for a proven agent, or overridden by a governance
+              // ceiling) — not a pool shared across the owner's roster.
+              `${cards.length} agent(s). Default cap: ${AGENT_PROPOSALS_PER_USER_PER_DAY} pending proposals per agent (trusted agents get more — see each agent's dailyCap).`,
         detail: { agents: cards },
       };
     }

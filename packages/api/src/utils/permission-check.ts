@@ -19,13 +19,11 @@ import {
   or,
   isNull,
   gt,
-  gte,
   desc,
   drizzleSql,
   entities,
   ProfileResolutionService,
   insertPendingProposal,
-  ne,
   findExistingPendingDuplicate,
   resolveOrCreateAgentProposalSession,
   deriveAgentProposalSessionGoal,
@@ -37,6 +35,7 @@ import {
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
   resolveOriginTrust,
+  resolvePendingProposalCap,
 } from "@synap/database/agent-governance";
 import {
   users,
@@ -96,9 +95,11 @@ import {
   getWorkspaceGovernanceMode,
   DEFAULT_AUTO_APPROVE,
   DESTRUCTIVE_ACTIONS,
+  classifySettingSensitivity,
   type AgentPolicyInput,
   type ChannelCapabilityGrant,
   type GovernedWritePair,
+  type GovConfigStore,
 } from "@synap/governance-policy";
 
 // Back-compat: these governance-policy symbols historically lived in this
@@ -1439,8 +1440,37 @@ async function evaluatePermission(
       isAiWrite && sessionId
         ? await loadSessionGovernanceContext(sessionId)
         : null;
+    // A LOOSENING settings change (raise a ceiling, widen a rule to auto,
+    // guideline posture:auto, or revoke any guard) is a hard floor — it must
+    // always be a human decision, so it can never auto-apply via DEFAULT_
+    // AUTO_APPROVE, a governance rule, or the legacy aiAutoApprove toggle.
+    // `classifySettingSensitivity` is conservative (unknown → loosening), so a
+    // malformed settings payload also lands in the human's lap, never auto.
+    // `(subjectType as string)` mirrors the `filesystem` special-case below:
+    // `subjectType` is a compile-time union ("door-vocabulary narrowing") that
+    // does not yet name "settings", and the cast stops `data` narrowing to
+    // `never` with it.
+    const rawSettings = data as Record<string, unknown> | undefined;
+    const isLooseningSettingsChange =
+      (subjectType as string) === "settings" &&
+      action === "update" &&
+      classifySettingSensitivity({
+        store: (rawSettings?.store as GovConfigStore) ?? "governance_ceilings",
+        op: rawSettings?.op === "revoke" ? "revoke" : "set",
+        spec: {
+          verdict:
+            typeof rawSettings?.verdict === "string"
+              ? rawSettings.verdict
+              : undefined,
+          posture:
+            typeof rawSettings?.posture === "string"
+              ? rawSettings.posture
+              : undefined,
+        },
+      }) === "loosening";
+
     const effectiveForcePropose =
-      opts.forcePropose === true
+      opts.forcePropose === true || isLooseningSettingsChange
         ? true
         : sessionGovernance && !opts.ignoreSessionForcePropose
           ? sessionGovernance.forceProposeWrites
@@ -2214,6 +2244,33 @@ export function buildProposalSummary(
     if (goal) return `Start session "${goal}"`;
   }
 
+  // `settings.update` — a gov-config settings change. The store + op + a
+  // one-line spec make the title readable ("Update governance ceiling",
+  // "Revoke governance rule", "Update guideline") instead of the bare
+  // "Update setting" the generic fallback would render — review-theatre
+  // (approving what you cannot read) is the failure this avoids. Keyed on the
+  // payload's `store` (the settings door's discriminator), not the singularised
+  // subjectType, so it survives the "settings"→"setting" singularisation.
+  if (
+    typeof data.store === "string" &&
+    (data.store === "governance_ceilings" ||
+      data.store === "governance_rules" ||
+      data.store === "config_settings")
+  ) {
+    const op = data.op === "revoke" ? "Revoke" : "Update";
+    const storeNoun =
+      data.store === "governance_ceilings"
+        ? "governance ceiling"
+        : data.store === "governance_rules"
+          ? "governance rule"
+          : "guideline";
+    const axis =
+      data.store === "governance_ceilings" && typeof data.axis === "string"
+        ? ` (${data.axis})`
+        : "";
+    return `${op} ${storeNoun}${axis}`;
+  }
+
   // A RULE is identified by the sentence the user actually said — its `intent`.
   // Without this it falls through to the generic branch, which finds no
   // targetName/title/name/goal/slug on a rule payload and renders a bare
@@ -2642,12 +2699,16 @@ async function createPendingProposalRow(
  * Create a proposal for an AI-sourced action that requires review.
  */
 /**
- * Hard per-AGENT daily budget for agent-created proposals (UTC day). A
- * scheduled or chained agent that keeps proposing must not be able to flood a
- * user's review queue: past this count, the agent write is REFUSED (neither
- * executed nor proposed) for the rest of the day. Base cap; a trusted agent's
- * effective ceiling may be scaled up — see `agentDailyProposalCap()`. Mirrors
- * the deterministic hygiene worker's MAX_PROPOSALS_PER_USER_PER_DAY.
+ * Default BASE cap on how many proposals an agent may have SIMULTANEOUSLY
+ * PENDING — the F2 anti-flood floor's fallback. A scheduled or chained agent
+ * that keeps proposing must not be able to flood a user's review queue: past
+ * this many still-unreviewed proposals, the agent write is REFUSED (neither
+ * executed nor proposed). This is a DEFAULT, not the ceiling: the user-editable
+ * override lives in `governance_ceilings` (axis `pending_proposal_cap`, read by
+ * `resolvePendingProposalCap`), and a trusted agent's fallback is scaled up —
+ * see `agentProposalCap()`. The hygiene worker's MAX_PROPOSALS_PER_USER_PER_DAY
+ * is a DIFFERENT concept (per-user merge proposals filed per night) and is
+ * deliberately not consolidated with this.
  */
 export const AGENT_PROPOSALS_PER_USER_PER_DAY = 10;
 
@@ -2661,7 +2722,7 @@ const TRUSTED_AGENT_MIN_APPROVE_RATE = 0.95;
  * Recent-proposal window the trust check scores over. MUST match
  * `agent-scorecard.ts`'s `SCORECARD_SCAN_LIMIT` (not imported directly — that
  * would create a module cycle, since agent-scorecard.ts already imports
- * `agentDailyProposalCap` from here) so the cap's trust verdict and the
+ * `agentProposalCap` from here) so the cap's trust verdict and the
  * scorecard's DISPLAYED approve rate are computed over the identical set of
  * rows and can never visibly disagree. Trust is earnable back over an agent's
  * RECENT behavior rather than accumulating forever over its lifetime.
@@ -2677,48 +2738,39 @@ export function startOfUtcDay(): Date {
 }
 
 /**
- * Count proposals attributed to THIS agent (not its owner's whole roster)
- * created today (UTC). Per-agent — `agentUserId` + the UTC-day bound are the
- * WHOLE predicate, and `agent-scorecard.ts` CALLS this function rather than
- * re-deriving it, so the enforced count and the reported posture are one query.
+ * Count the proposals attributed to THIS agent (not its owner's whole roster)
+ * that are STILL PENDING review — the population the F2 cap protects. Per-agent:
+ * `agentUserId` + `status = PENDING` are the WHOLE predicate, and
+ * `agent-scorecard.ts` CALLS this function rather than re-deriving it, so the
+ * enforced count and the reported posture are one query.
  *
- * D4b — why `createdBy` is NOT in the predicate.
+ * Why PENDING (and why no `createdBy`, and no UTC-day bound) — the three prior
+ * defects this predicate exists to end:
  *
- * It used to be, ANDed as `createdBy = <the human> AND agentUserId = <the
- * agent>`. Be precise about what that did and did not break, because the first
- * telling of this was WRONG and the wrong version is the more attractive story:
- * it did NOT make the cap inert. `createProposal` — the only function that
- * enforces the cap — builds its insert with `createdBy: userId` EXPLICITLY
- * (see the `pendingInput` in its transaction), and `countTodayAgentProposals`
- * was called with that SAME `userId` binding, never reassigned in between. Count
- * predicate and inserted value were one expression in one scope, so they matched
- * by construction and the cap fired correctly for every row that path created.
- *
- * What the pair actually cost was rows the capped path did NOT create. The
- * `?? input.agentUserId` fallback in `createPendingProposalRow` fires only for
- * doors that call it directly without a `createdBy` — `connectors/external-dispatch.ts`
- * is the live example — so those rows land `createdBy = agentUserId` and the
- * old pair could never see them. The counter under-counted total queue pressure;
- * it never mis-counted its own budget.
- *
- * Dropping the term is still correct, for reasons independent of that history:
- *   1. It counts the bypass doors' rows, which are real queue pressure.
- *   2. It cannot admit another human's rows, because an agent-user belongs to
- *      exactly ONE human: `users.createdByUserId` is a single-valued FK, and
- *      migration 0228 adds a partial UNIQUE (created_by_user_id, agent_type)
- *      making a service agent a singleton per owner x type. `agentUserId`
- *      already implies its owner, so the human term was redundant.
- *   3. It matches `agentDailyProposalCap()` — the ceiling half of the same
- *      decision — which has ALWAYS keyed on `agentUserId` alone. A human floor
- *      here with none there would let an agent earn a 3x ceiling from rows the
- *      counter could not see.
+ *   1. The budget's docstring is "must not be able to flood a user's REVIEW
+ *      QUEUE", and its gate sits on the PROPOSE path only — an auto-approved
+ *      write returns `{ granted: true, autoApprovedProposalId }` earlier and
+ *      never reaches it. Counting "created today, not auto-approved" therefore
+ *      measured WRITE VOLUME against a QUEUE-PRESSURE budget: approving a
+ *      pending proposal (status → `approved`) did NOT free budget, so "review
+ *      or clear pending to free budget" was a lie and only UTC midnight helped.
+ *      Counting PENDING makes clearing the queue genuinely free budget; an
+ *      approved / rejected / withdrawn / expired row — all RESOLVED, none still
+ *      in the queue — stops consuming it.
+ *   2. No UTC-day bound: a stale-but-unexpired pending row is still unreviewed
+ *      backlog. `expire-lapsed-proposals` retires it on its own schedule; until
+ *      then it is exactly the pressure the cap exists to bound.
+ *   3. `createdBy` is deliberately absent (it is an OVERLOADED column — "userId
+ *      or agentUserId that authored this row" — and its old AND-pair made the
+ *      cap inert for MCP-shaped rows). `agentUserId` alone is sufficient and
+ *      admits no other human's rows: an agent-user belongs to exactly ONE human
+ *      (`users.createdByUserId`, partial UNIQUE via migration 0228).
  *
  * This predicate is pinned by `agent-daily-cap-counter.test.ts`. Before that,
- * every cap test MOCKED `todayCount` as an input, so nothing would have caught
- * a wrong predicate here — which is how the incorrect story above survived
- * long enough to be believed.
+ * every cap test MOCKED the count as an input, so nothing would have caught a
+ * wrong predicate here.
  */
-export async function countTodayAgentProposals(
+export async function countPendingAgentProposals(
   agentUserId: string
 ): Promise<number> {
   const [row] = await db
@@ -2727,33 +2779,23 @@ export async function countTodayAgentProposals(
     .where(
       and(
         eq(proposals.agentUserId, agentUserId),
-        // COUNT WHAT THE CAP PROTECTS. This budget's own docstring is
-        // "must not be able to flood a user's REVIEW QUEUE", and the gate that
-        // consumes this count sits on the PROPOSE path only — an auto-approved
-        // write returns `{ granted: true, autoApprovedProposalId }` ~768 lines
-        // earlier and never reaches it, correctly, because it never enters the
-        // queue. Counting its audit RECEIPT here measured a different
-        // population than the gate enforces: live, this read 64 against a cap
-        // of 30 while the entire pod held 11 pending rows, and the health door
-        // announced an agent "hit the daily proposal cap" that was never
-        // gated and never blocked.
-        //
-        // A receipt is an audit row for a write that already executed. It is
-        // not queue pressure, and it must not consume a queue-pressure budget.
-        ne(proposals.status, ProposalStatus.AUTO_APPROVED),
-        gte(proposals.createdAt, startOfUtcDay())
+        eq(proposals.status, ProposalStatus.PENDING)
       )
     );
   return row?.count ?? 0;
 }
 
 /**
- * Lightweight trust check for the daily cap: scored over the agent's most
- * recent `CAP_TRUST_WINDOW` proposals (NOT its unbounded lifetime), NOT the
- * full `diagnose` scorecard (which also runs fingerprint-clustering for a
- * duplicate rate — too heavy for this hot path). A proven agent
- * (>=100 proposals, >=95% approve rate, both within that recent window) gets
- * a 3x ceiling; everyone else gets the base cap.
+ * Resolve the effective cap on how many proposals this agent may have
+ * simultaneously PENDING. An explicit user-editable ceiling wins — a
+ * `governance_ceilings` row (axis `pending_proposal_cap`) for this agent (or
+ * pod-wide `any`), read by `resolvePendingProposalCap`. Absent one, fall back to
+ * a lightweight trust check: scored over the agent's most recent
+ * `CAP_TRUST_WINDOW` proposals (NOT its unbounded lifetime), NOT the full
+ * `diagnose` scorecard (which also runs fingerprint-clustering for a duplicate
+ * rate — too heavy for this hot path). A proven agent (>=100 proposals, >=95%
+ * approve rate, both within that recent window) gets a 3x ceiling; everyone
+ * else gets the base cap.
  *
  * D4a: previously scored the agent's ENTIRE lifetime, which could silently
  * disagree with the recent-500 approve rate `agent-scorecard.ts` displays —
@@ -2761,9 +2803,10 @@ export async function countTodayAgentProposals(
  * holding the 3x cap earned from old history. Scoring the same window makes
  * the two agree and lets trust be earned back / lost based on recent conduct.
  */
-export async function agentDailyProposalCap(
-  agentUserId: string
-): Promise<number> {
+export async function agentProposalCap(agentUserId: string): Promise<number> {
+  const explicit = await resolvePendingProposalCap({ db, agentUserId });
+  if (explicit != null) return explicit;
+
   // `isPartial` is computed IN SQL rather than fetching `data`: this is a hot
   // path (every proposal creation) and `data` is an unbounded JSONB payload we
   // would otherwise pull for up to CAP_TRUST_WINDOW rows just to read one flag.
@@ -2944,30 +2987,32 @@ async function createProposal(args: {
   // both an explicit agent write and a legacy AI-source write whose personal
   // agent we just resolved. Human-member proposals (proposedByUserId, no agent
   // attribution) are never capped. The cap is PER AGENT (not shared across an
-  // owner's whole roster) and scales with the agent's own trust — see
-  // `agentDailyProposalCap()`. `governance.*` proposals (e.g.
+  // owner's whole roster), counts SIMULTANEOUSLY-PENDING proposals (so clearing
+  // the queue genuinely frees budget), and resolves from a user-editable
+  // `governance_ceilings` override with a trust-scaled fallback — see
+  // `agentProposalCap()`. `governance.*` proposals (e.g.
   // `governance.widen_lane`) are meta-actions, not a data flood, and are
-  // exempt. Past the daily cap the write is REFUSED (neither executed nor
-  // proposed) — the agent gets a denial it can surface.
+  // exempt. At the cap the write is REFUSED (neither executed nor proposed) —
+  // the agent gets a denial it can surface.
   const isGovernanceMetaProposal = action.startsWith("governance.");
   if (attributionAgentUserId && !isGovernanceMetaProposal) {
-    const [alreadyToday, cap] = await Promise.all([
-      countTodayAgentProposals(attributionAgentUserId),
-      agentDailyProposalCap(attributionAgentUserId),
+    const [pendingCount, cap] = await Promise.all([
+      countPendingAgentProposals(attributionAgentUserId),
+      agentProposalCap(attributionAgentUserId),
     ]);
-    if (alreadyToday >= cap) {
+    if (pendingCount >= cap) {
       logger.warn(
         {
           userId,
           agentUserId: attributionAgentUserId,
-          alreadyToday,
+          pendingCount,
           cap,
           subjectType,
           action,
         },
-        "Agent daily proposal budget reached — refusing further agent proposals"
+        "Agent proposal cap reached — refusing further agent proposals"
       );
-      const capReason = `Daily agent proposal limit reached (${cap}/day). Ask the user to review pending proposals, or try again tomorrow.`;
+      const capReason = `Agent proposal limit reached (${cap} pending). Review or clear this agent's pending proposals to free budget.`;
       // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
       // a capped agent and a dead agent were byte-identical from the UI: the
       // write neither executed nor proposed, and NOTHING said so. This event is
@@ -2995,12 +3040,12 @@ async function createProposal(args: {
           subjectType,
           writeAction: action,
           agentUserId: attributionAgentUserId,
-          alreadyToday,
+          pendingCount,
           cap,
           reason: capReason,
           // Read by getRun's agent_write branch as the activity row's hint.
           fixHint:
-            "Review or clear this agent's pending proposals to free budget, or raise its cap by widening its lane.",
+            "Review or clear this agent's pending proposals to free budget, or raise its cap via a governance ceiling.",
         },
       });
       return {

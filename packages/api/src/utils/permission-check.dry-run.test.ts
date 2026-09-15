@@ -52,7 +52,7 @@ const {
 /**
  * PARTIAL mock (`importOriginal` + spread) — see
  * `src/__tripwires__/database-mock-total-ratchet.test.ts`. This was TOTAL and it
- * had already gone dark: `countTodayAgentProposals` started calling `ne(...)`
+ * had already gone dark: `countPendingAgentProposals` started calling `ne(...)`
  * and the propose test failed with *No "ne" export is defined on the mock*.
  * That comment below about the provenance hoist is the SECOND time the same
  * thing happened to this file — it was patched by adding more names to the

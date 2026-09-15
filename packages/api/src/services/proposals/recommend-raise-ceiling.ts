@@ -70,6 +70,12 @@ export interface GovernanceRaiseCeilingProposalData {
   agentUserId: string;
   scopeKind: "pod";
   workspaceId?: string | null;
+  /**
+   * Which ceiling axis this proposal raises. Defaults to `daily_write_count`
+   * (the recommender's own axis). `pending_proposal_cap` raises the F2
+   * proposal cap instead — the axis `resolvePendingProposalCap` reads.
+   */
+  axis?: "daily_write_count" | "pending_proposal_cap";
   /** The agent's resolved ceiling today (the limit it keeps hitting). */
   currentLimit: number;
   /** The proposed new ceiling (currentLimit * RAISE_FACTOR, rounded up). */

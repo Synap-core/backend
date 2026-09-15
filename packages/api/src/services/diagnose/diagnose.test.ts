@@ -35,7 +35,7 @@ describe("computeAgentScorecard", () => {
       agentId: "agent-1",
       agentName: null,
       agentType: null,
-      todayCount: 0,
+      pendingCount: 0,
       cap: 10,
     };
     const rev = (over: Record<string, unknown>) =>
@@ -100,7 +100,7 @@ describe("computeAgentScorecard", () => {
       agentId: "agent-1",
       agentName: "Twin",
       agentType: "meta",
-      todayCount: 3,
+      pendingCount: 3,
       cap: 10,
     });
 
@@ -116,7 +116,7 @@ describe("computeAgentScorecard", () => {
       count: 2,
     });
     expect(card.dailyCap).toEqual({
-      todayCount: 3,
+      pendingCount: 3,
       cap: 10,
       atOrOverCap: false,
     });
@@ -153,7 +153,7 @@ describe("computeAgentScorecard", () => {
       agentId: "agent-1",
       agentName: "Twin",
       agentType: "meta",
-      todayCount: 0,
+      pendingCount: 0,
       cap: 10,
     });
 
@@ -178,7 +178,7 @@ describe("computeAgentScorecard", () => {
       agentId: "a",
       agentName: null,
       agentType: null,
-      todayCount: 0,
+      pendingCount: 0,
     });
     expect(card.rates.duplicateRate).toBeCloseTo(0.75, 5);
   });
@@ -188,7 +188,7 @@ describe("computeAgentScorecard", () => {
       agentId: "a",
       agentName: null,
       agentType: null,
-      todayCount: 0,
+      pendingCount: 0,
     });
     expect(card.counts.total).toBe(0);
     expect(card.rates.approveRate).toBe(0);
@@ -370,7 +370,10 @@ describe("summarizeGlobalHealth", () => {
 
   it("flags an agent over the daily cap as degraded", () => {
     const report = summarizeGlobalHealth(
-      { ...clean, agentActivity: [{ agentId: "a", todayCount: 10, cap: 10 }] },
+      {
+        ...clean,
+        agentActivity: [{ agentId: "a", pendingCount: 10, cap: 10 }],
+      },
       { workspaceId: null }
     );
     expect(

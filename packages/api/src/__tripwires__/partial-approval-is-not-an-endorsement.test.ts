@@ -27,7 +27,7 @@ import type { ScorecardProposalRow } from "../services/diagnose/agent-scorecard.
  * fires at `total >= 100 && approveRate > 0.95`: an agent whose packages are
  * routinely gutted would read 100% and earn a wider auto-approve lane — trust
  * granted on a signal that means the opposite of what it was counted as. The
- * daily-cap trust check (`agentDailyProposalCap`, 3x ceiling) has the same
+ * daily-cap trust check (`agentProposalCap`, 3x ceiling) has the same
  * shape.
  *
  * Behavioural half: `computeAgentScorecard` is pure, so it is exercised
@@ -72,7 +72,7 @@ describe("partial approval is not an endorsement — scorecard", () => {
       agentId: "a1",
       agentName: null,
       agentType: null,
-      todayCount: 0,
+      pendingCount: 0,
     });
     expect(card.counts.approved).toBe(0);
     expect(card.counts.partiallyApproved).toBe(1);
@@ -82,11 +82,11 @@ describe("partial approval is not an endorsement — scorecard", () => {
   it("scores 1-of-2-gutted BELOW 2 clean approvals", () => {
     const clean = computeAgentScorecard(
       [row({ targetId: "a" }), row({ targetId: "b" })],
-      { agentId: "a1", agentName: null, agentType: null, todayCount: 0 }
+      { agentId: "a1", agentName: null, agentType: null, pendingCount: 0 }
     );
     const gutted = computeAgentScorecard(
       [row({ targetId: "a" }), row({ targetId: "b", data: GUTTED })],
-      { agentId: "a1", agentName: null, agentType: null, todayCount: 0 }
+      { agentId: "a1", agentName: null, agentType: null, pendingCount: 0 }
     );
     expect(clean.rates.approveRate).toBe(1);
     expect(gutted.rates.approveRate).toBeLessThan(clean.rates.approveRate);
@@ -97,7 +97,7 @@ describe("partial approval is not an endorsement — scorecard", () => {
   it("an all-accept disposition map is still a full approval", () => {
     const card = computeAgentScorecard(
       [row({ data: { dispositions: { $op0: { status: "accept" } } } })],
-      { agentId: "a1", agentName: null, agentType: null, todayCount: 0 }
+      { agentId: "a1", agentName: null, agentType: null, pendingCount: 0 }
     );
     expect(card.counts.approved).toBe(1);
     expect(card.counts.partiallyApproved).toBe(0);
@@ -131,9 +131,9 @@ describe("partial approval is not an endorsement — widening gate (source)", ()
 describe("partial approval is not an endorsement — daily-cap trust (source)", () => {
   const permissionCheck = read(join(API_SRC, "utils", "permission-check.ts"));
 
-  it("agentDailyProposalCap excludes partial applies from its approve rate", () => {
+  it("agentProposalCap excludes partial applies from its approve rate", () => {
     const cap = permissionCheck.slice(
-      permissionCheck.indexOf("export async function agentDailyProposalCap")
+      permissionCheck.indexOf("export async function agentProposalCap")
     );
     expect(cap).toMatch(/isPartial/);
     expect(cap).toMatch(/!r\.isPartial &&/);

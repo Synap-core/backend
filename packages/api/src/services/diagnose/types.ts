@@ -163,8 +163,8 @@ export interface AgentScorecard {
   /** Top rejection reasons, most frequent first. */
   rejectionReasons: Array<{ reason: string; count: number }>;
   /** Daily-cap posture. The cap is PER-AGENT (scales with this agent's own
-   *  trust — see `agentDailyProposalCap`), not shared across the owner's roster. */
-  dailyCap: { todayCount: number; cap: number; atOrOverCap: boolean };
+   *  trust — see `agentProposalCap`), not shared across the owner's roster. */
+  dailyCap: { pendingCount: number; cap: number; atOrOverCap: boolean };
 }
 
 /** CLASS mode — a diagnosable class as a product surface. */

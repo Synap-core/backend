@@ -29,7 +29,7 @@ function scoredRevised(revision: unknown): number {
       agentId: "agent-1",
       agentName: null,
       agentType: null,
-      todayCount: 0,
+      pendingCount: 0,
       cap: 10,
     }
   ).counts.revised;

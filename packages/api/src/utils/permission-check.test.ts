@@ -113,7 +113,7 @@ vi.mock("@synap/database", async () => {
     users: { id: "id", userType: "userType", agentMetadata: "agentMetadata" },
     workspaces: { id: "id", settings: "settings" },
     eq: vi.fn((a, b) => ({ field: a, value: b })),
-    // `ne` is used by `countTodayAgentProposals` (permission-check.ts:2013) to
+    // `ne` is used by `countPendingAgentProposals` (permission-check.ts:2013) to
     // exclude AUTO_APPROVED receipts from the daily queue-pressure count. It was
     // missing here, and because `vi.mock` with a factory is a TOTAL replacement,
     // one absent export threw inside every test that reaches the daily-cap path
@@ -177,7 +177,7 @@ import {
   DEFAULT_AUTO_APPROVE,
   buildProposalSummary,
   buildProposalResponseFields,
-  agentDailyProposalCap,
+  agentProposalCap,
 } from "./permission-check.js";
 
 // We also need checkPermissionOrPropose for the integration-style unit tests.
@@ -1069,7 +1069,7 @@ describe("checkPermissionOrPropose — ADMIN_ACTIONS always propose", () => {
 // Tests: F2 safety floor — per-user daily AGENT proposal cap
 // ---------------------------------------------------------------------------
 
-describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () => {
+describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
   beforeEach(() => {
     mockVerifyPermission.mockResolvedValue({ allowed: true });
     mockEmitAiDecision.mockClear();
@@ -1078,11 +1078,11 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
   /**
    * Mock the agent-row + workspace-settings selects (via `.limit`) AND the
    * agent daily-budget count query (the only select awaited directly, via
-   * `.then`) so it resolves to `todayCount` proposals already filed today.
+   * `.then`) so it resolves to `pendingCount` proposals already filed today.
    * `writesRequireProposal` forces the governance decision to "propose".
    */
   function setupAgentBudget(
-    todayCount: number,
+    pendingCount: number,
     agentMetadata: Record<string, unknown> = { writesRequireProposal: true }
   ) {
     let callCount = 0;
@@ -1099,14 +1099,14 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
         limit: vi.fn().mockResolvedValue(limitResult),
         // The count query awaits the builder directly.
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
-          Promise.resolve([{ count: todayCount }]).then(res, rej),
+          Promise.resolve([{ count: pendingCount }]).then(res, rej),
       };
       return b;
     });
   }
 
   /**
-   * Like `setupAgentBudget`, but also mocks `agentDailyProposalCap`'s
+   * Like `setupAgentBudget`, but also mocks `agentProposalCap`'s
    * recent-window trust query (D4a: `.select({ status })...orderBy(desc(
    * createdAt)).limit(CAP_TRUST_WINDOW)`, scored the same way as this test's
    * `mockRecentWindow` helper below — most-recent-first rows, the first
@@ -1117,7 +1117,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
    * mock would silently mis-route once that ladder does more than one query.
    */
   function setupWeightedAgentBudget(opts: {
-    todayCount: number;
+    pendingCount: number;
     windowTotal: number;
     /** FULL approvals — nothing denied inside. */
     windowApproved: number;
@@ -1131,7 +1131,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     agentMetadata?: Record<string, unknown>;
   }) {
     const {
-      todayCount,
+      pendingCount,
       windowTotal,
       windowApproved,
       windowPartiallyApproved = 0,
@@ -1151,7 +1151,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
       const isTodayCountQuery = keys.length === 1 && keys[0] === "count";
       // Key on the FIELDS PRESENT, never on arity. The previous
       // `keys.length === 1 && keys[0] === "status"` broke the moment
-      // `agentDailyProposalCap` began selecting a second column: the branch
+      // `agentProposalCap` began selecting a second column: the branch
       // stopped matching, the trust window was never returned, and the
       // "proven agent" path silently stopped being exercised at all — a green
       // suite over an unrun code path.
@@ -1175,7 +1175,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
                   : []
           ),
         then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => {
-          const row = isTodayCountQuery ? { count: todayCount } : undefined;
+          const row = isTodayCountQuery ? { count: pendingCount } : undefined;
           return Promise.resolve(row ? [row] : []).then(res, rej);
         },
       };
@@ -1183,7 +1183,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     });
   }
 
-  it("refuses the 11th agent proposal in a day (10 already filed → denied)", async () => {
+  it("refuses the 11th agent proposal (10 already pending → denied)", async () => {
     setupAgentBudget(10);
 
     const result = await checkPermissionOrPropose({
@@ -1195,7 +1195,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
 
     expect("denied" in result && result.denied === true).toBe(true);
     expect((result as { reason: string }).reason).toContain(
-      "Daily agent proposal limit"
+      "Agent proposal limit"
     );
     // The refusal must leave a HUMAN-facing record, not just a logger.warn:
     // past the cap the write neither executes nor proposes, so this event is
@@ -1217,7 +1217,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     });
   });
 
-  it("still proposes when under the cap (9 filed → 10th is allowed to propose)", async () => {
+  it("still proposes when under the cap (9 pending → 10th is allowed to propose)", async () => {
     setupAgentBudget(9);
 
     const result = await checkPermissionOrPropose({
@@ -1250,9 +1250,9 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     expect(agentIdArgs).toContain("agent-b");
   });
 
-  it("gives a proven agent (>=100 proposals, >=95% approve rate) a 3x (30/day) ceiling", async () => {
+  it("gives a proven agent (>=100 proposals, >=95% approve rate) a 3x (30 pending) ceiling", async () => {
     setupWeightedAgentBudget({
-      todayCount: 15,
+      pendingCount: 15,
       windowTotal: 100,
       windowApproved: 96,
     });
@@ -1264,14 +1264,14 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
       action: "create",
     });
 
-    // 15 filed today is over the base cap of 10 but under the trusted 30 cap.
+    // 15 pending is over the base cap of 10 but under the trusted 30 cap.
     expect("granted" in result && result.granted === false).toBe(true);
     expect((result as { proposalId: string }).proposalId).toBeDefined();
   });
 
-  it("keeps the flat 10/day cap for an agent that hasn't earned trust yet (same today-count denied)", async () => {
+  it("keeps the flat 10-pending cap for an agent that hasn't earned trust yet (same pending-count denied)", async () => {
     setupWeightedAgentBudget({
-      todayCount: 15,
+      pendingCount: 15,
       windowTotal: 100,
       windowApproved: 80, // 80% approve rate — below the 95% trust bar
     });
@@ -1285,7 +1285,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
 
     expect("denied" in result && result.denied === true).toBe(true);
     expect((result as { reason: string }).reason).toContain(
-      "Daily agent proposal limit reached (10/day)"
+      "Agent proposal limit reached (10 pending)"
     );
   });
 
@@ -1297,7 +1297,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
     // hands the agent 3x throughput on the strength of work that was largely
     // thrown away. The real rate is 50%.
     setupWeightedAgentBudget({
-      todayCount: 15,
+      pendingCount: 15,
       windowTotal: 100,
       windowApproved: 50,
       windowPartiallyApproved: 46,
@@ -1312,7 +1312,7 @@ describe("checkPermissionOrPropose — daily agent proposal cap (F2 floor)", () 
 
     expect("denied" in result && result.denied === true).toBe(true);
     expect((result as { reason: string }).reason).toContain(
-      "Daily agent proposal limit reached (10/day)"
+      "Agent proposal limit reached (10 pending)"
     );
   });
 
@@ -2159,13 +2159,13 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 });
 
 // ---------------------------------------------------------------------------
-// Tests: agentDailyProposalCap — direct unit tests (not via checkPermissionOrPropose)
+// Tests: agentProposalCap — direct unit tests (not via checkPermissionOrPropose)
 //
 // Locks the branch logic in isolation: given the RECENT-WINDOW rows the query
 // returns (ordered by createdAt desc, capped at CAP_TRUST_WINDOW — the same
 // window agent-scorecard.ts's SCORECARD_SCAN_LIMIT scans), does the trust
 // threshold (>=100 in-window, >=95% in-window approve rate) correctly gate the
-// 3x (30/day) ceiling vs the flat 10/day base cap.
+// 3x (30 pending) ceiling vs the flat 10-pending base cap.
 //
 // D4a: this used to score the agent's UNBOUNDED lifetime, which could
 // silently disagree with the scorecard's displayed recent-500 approve rate
@@ -2176,7 +2176,7 @@ describe("checkPermissionOrPropose — human-proposer (insufficient-role member)
 // numbers can no longer visibly disagree.
 // ---------------------------------------------------------------------------
 
-describe("agentDailyProposalCap", () => {
+describe("agentProposalCap", () => {
   /**
    * Build `total` rows (most-recent-first, matching `orderBy(desc(createdAt))
    * .limit(CAP_TRUST_WINDOW)`) with `approved` of them AUTO_APPROVED and the
@@ -2192,6 +2192,12 @@ describe("agentDailyProposalCap", () => {
         where: vi.fn(() => b),
         orderBy: vi.fn(() => b),
         limit: vi.fn().mockResolvedValue(rows),
+        // The explicit-ceiling read (`resolvePendingProposalCap`) has NO
+        // `.limit`/`.orderBy` — it awaits the builder directly. Resolve it
+        // empty so the explicit-ceiling check finds nothing and the trust
+        // fallback below is what's actually under test.
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([]).then(res, rej),
       };
       return b;
     });
@@ -2200,23 +2206,23 @@ describe("agentDailyProposalCap", () => {
   it("gives a proven agent (500 in-window, 487 approved → 97.4%) the 3x (30/day) ceiling", async () => {
     mockRecentWindow({ total: 500, approved: 487 });
 
-    const cap = await agentDailyProposalCap("agent-trusted");
+    const cap = await agentProposalCap("agent-trusted");
 
     expect(cap).toBe(30);
   });
 
-  it("keeps the flat 10/day cap when the in-window approve rate is below 95% (500 in-window, 400 approved → 80%)", async () => {
+  it("keeps the flat 10-pending cap when the in-window approve rate is below 95% (500 in-window, 400 approved → 80%)", async () => {
     mockRecentWindow({ total: 500, approved: 400 });
 
-    const cap = await agentDailyProposalCap("agent-untrusted");
+    const cap = await agentProposalCap("agent-untrusted");
 
     expect(cap).toBe(10);
   });
 
-  it("keeps the flat 10/day cap below the minimum in-window volume even at 100% approval (50 in-window, 50 approved)", async () => {
+  it("keeps the flat 10-pending cap below the minimum in-window volume even at 100% approval (50 in-window, 50 approved)", async () => {
     mockRecentWindow({ total: 50, approved: 50 });
 
-    const cap = await agentDailyProposalCap("agent-too-new");
+    const cap = await agentProposalCap("agent-too-new");
 
     expect(cap).toBe(10);
   });
@@ -2229,9 +2235,32 @@ describe("agentDailyProposalCap", () => {
     // ever visible to this function — the mock returns exactly that shape.
     mockRecentWindow({ total: 500, approved: 450 }); // 90% — below 95%
 
-    const cap = await agentDailyProposalCap("agent-regressed");
+    const cap = await agentProposalCap("agent-regressed");
 
     expect(cap).toBe(10);
+  });
+
+  it("an explicit pending_proposal_cap ceiling OVERRIDES the trust-scaled default (config-over-code)", async () => {
+    // The ceiling read (`resolvePendingProposalCap`) resolves one active
+    // pod-scoped agent row; the trust window is never consulted — the explicit
+    // ceiling wins. Proves the configurable-cap path, not just the fallback.
+    mockDbSelect.mockImplementation(() => {
+      const b: Record<string, unknown> = {
+        from: vi.fn(() => b),
+        where: vi.fn(() => b),
+        orderBy: vi.fn(() => b),
+        limit: vi.fn().mockResolvedValue([]),
+        then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+          Promise.resolve([
+            { principalKind: "agent", limitValue: 50, createdAt: new Date() },
+          ]).then(res, rej),
+      };
+      return b;
+    });
+
+    const cap = await agentProposalCap("agent-explicit-ceiling");
+
+    expect(cap).toBe(50);
   });
 });
 

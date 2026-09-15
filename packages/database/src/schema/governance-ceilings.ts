@@ -38,6 +38,7 @@ import {
 
 export const governanceCeilingAxisEnum = pgEnum("governance_ceiling_axis", [
   "daily_write_count",
+  "pending_proposal_cap",
 ]);
 export const GOVERNANCE_CEILING_AXES = governanceCeilingAxisEnum.enumValues;
 export type GovernanceCeilingAxis = (typeof GOVERNANCE_CEILING_AXES)[number];

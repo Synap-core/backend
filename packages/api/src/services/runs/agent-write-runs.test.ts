@@ -204,7 +204,7 @@ describe("runs.listRuns — agent_write flow type", () => {
             writeAction: "create",
             agentUserId: AGENT,
             workspaceId: "ws-1",
-            reason: "Daily agent proposal limit reached (10/day).",
+            reason: "Agent proposal limit reached (10 pending).",
           },
         },
       ])
@@ -230,7 +230,7 @@ describe("runs.listRuns — agent_write flow type", () => {
       workspaceId: "ws-1",
     });
     expect(runs[0]?.summary).toContain("capped");
-    expect(runs[0]?.summary).toContain("Daily agent proposal limit");
+    expect(runs[0]?.summary).toContain("Agent proposal limit");
   });
 
   it("contributes nothing when the caller filters a status this ledger cannot produce", async () => {

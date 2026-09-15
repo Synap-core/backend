@@ -233,6 +233,60 @@ export const DESTRUCTIVE_ACTIONS: readonly string[] = [
 export const DEFAULT_DAILY_WRITE_CEILING = 500;
 
 /**
+ * The three gov-config stores the unified `settings.update` door can target.
+ */
+export type GovConfigStore =
+  "governance_rules" | "governance_ceilings" | "config_settings";
+
+/**
+ * How consequential a `settings.update` is — the settings-door analogue of the
+ * ACTION floors (DESTRUCTIVE_ACTIONS / ADMIN_ACTIONS). Unlike those, which key
+ * on the bare action verb, a settings change's consequence lives in WHAT it
+ * sets (a rule widening to `auto` loosens; tightening to `propose` does not),
+ * so it is classified from the (store, op, spec) tuple.
+ *
+ *   loosening  — the agent becomes MORE autonomous (raise a ceiling, widen a
+ *                rule to auto, guideline posture:auto, or remove any guard).
+ *                Always a human decision → PROPOSE.
+ *   tightening — the agent becomes LESS autonomous (rule → propose). Safe → AUTO.
+ *   benign     — no autonomy change (guideline text). AUTO for a trusted agent,
+ *                else propose (trust is resolved by the I/O caller, not here).
+ *
+ * Safe by default: anything the classifier cannot confidently call tightening
+ * or benign is `loosening` (→ propose). Over-classifying as loosening only costs
+ * a review; under-classifying (auto-applying a loosening) would be the bug.
+ */
+export type SettingSensitivity = "loosening" | "tightening" | "benign";
+
+export function classifySettingSensitivity(input: {
+  store: GovConfigStore;
+  op: "set" | "revoke";
+  spec?: { verdict?: string; posture?: string };
+}): SettingSensitivity {
+  const { store, op, spec } = input;
+  // Removing a stored guard/rule/guideline changes what auto-applies — always a
+  // human decision (a revoke can loosen OR tighten depending on the row, so the
+  // safe answer is propose).
+  if (op === "revoke") return "loosening";
+
+  switch (store) {
+    case "governance_ceilings":
+      // A ceiling is a limit; setting/raising one loosens the agent's guard.
+      return "loosening";
+    case "governance_rules":
+      // A rule set to `auto` widens auto-approve (loosens); `propose` tightens.
+      return spec?.verdict === "auto" ? "loosening" : "tightening";
+    case "config_settings":
+      // A guideline with posture:auto would auto-apply (loosens); plain text is
+      // benign guidance.
+      return spec?.posture === "auto" ? "loosening" : "benign";
+    default:
+      // Unknown store at runtime — err toward the human (propose).
+      return "loosening";
+  }
+}
+
+/**
  * The ONE canonical reader of `workspaces.settings.governanceMode`. Both
  * `resolveAgentGovernanceDecision` (@synap/database) and
  * `getEffectiveGovernance` (@synap/api's permission-check.ts) used to read

@@ -28,6 +28,7 @@
 import { getTableConfig } from "drizzle-orm/pg-core";
 import { sql } from "../client-pg.js";
 import { governanceTargetEnum } from "../schema/governance-rules.js";
+import { governanceCeilingAxisEnum } from "../schema/governance-ceilings.js";
 import { entityExternalLinks } from "../schema/entity-external-links.js";
 
 /**
@@ -1552,7 +1553,10 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
  * DERIVED from the drizzle enum definitions — adding a value to the schema adds
  * it to this check.
  */
-const REQUIRED_ENUMS = [governanceTargetEnum] as const;
+const REQUIRED_ENUMS = [
+  governanceTargetEnum,
+  governanceCeilingAxisEnum,
+] as const;
 
 /** A tagged-template query function shaped like postgres.js's `sql`. */
 type EnumQuery = <T>(

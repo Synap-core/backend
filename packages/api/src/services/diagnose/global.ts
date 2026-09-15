@@ -17,14 +17,12 @@ import {
   db,
   and,
   eq,
-  gte,
   desc,
   drizzleSql,
   proposals,
   ProposalStatus,
   capabilities,
 } from "@synap/database";
-import { ne } from "@synap/database";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
   ownAgentUserFilter,
@@ -35,10 +33,7 @@ import {
   collapseProposalsToClusters,
   type ClusterInputRow,
 } from "../proposals/fingerprint.js";
-import {
-  agentDailyProposalCap,
-  startOfUtcDay,
-} from "../../utils/permission-check.js";
+import { agentProposalCap } from "../../utils/permission-check.js";
 import {
   DEFAULT_STUCK_THRESHOLD_HOURS,
   type GlobalHealthReport,
@@ -122,7 +117,7 @@ export interface GlobalSignals {
   };
   duplicateClusters: Array<{ targetLabel: string; count: number }>;
   capabilities: { enabled: number; unapproved: number };
-  agentActivity: Array<{ agentId: string; todayCount: number; cap: number }>;
+  agentActivity: Array<{ agentId: string; pendingCount: number; cap: number }>;
   /**
    * How often the human APPROVES what the pod asks about — the decide queue's
    * own effectiveness. Optional for the same reason `stall` is: absent means
@@ -276,10 +271,10 @@ export function summarizeGlobalHealth(
   });
 
   // Agent activity — degraded when an agent is at/over the daily cap.
-  const overCap = signals.agentActivity.filter((a) => a.todayCount >= a.cap);
+  const overCap = signals.agentActivity.filter((a) => a.pendingCount >= a.cap);
   const nearCap = signals.agentActivity.filter(
     (a) =>
-      a.todayCount < a.cap && a.todayCount >= a.cap * CAP_ATTENTION_FRACTION
+      a.pendingCount < a.cap && a.pendingCount >= a.cap * CAP_ATTENTION_FRACTION
   );
   sections.push({
     key: "agent_activity",
@@ -502,40 +497,38 @@ export async function diagnoseGlobal(params: {
           workspaceId ? eq(capabilities.workspaceId, workspaceId) : undefined
         )
       ),
-    // Agent activity today: per-agent proposal counts for this owner.
+    // Agent activity: per-agent PENDING proposal counts for this owner — the
+    // population the F2 cap protects (the review queue, not write volume).
     //
     // Floored by LINEAGE (`agentUserId` is one of MY agents), not by
     // `createdBy = <human> AND agentUserId IS NOT NULL`. That pair excluded
     // the MAJORITY row shape: `proposals.createdBy` is overloaded ("userId or
     // agentUserId that authored this row"), so an agent write that passes no
     // explicit createdBy lands `createdBy = agentUserId = <agent>` — measured
-    // live at 4 of 6 pending on this pod. The hard daily cap
-    // (`countTodayAgentProposals`) counts `agentUserId` alone, so the old pair
-    // here displayed a SMALLER number than the counter enforcing the refusal
-    // this panel exists to explain. Same floor as the cap = the two agree.
+    // live at 4 of 6 pending on this pod. The cap (`countPendingAgentProposals`)
+    // counts `agentUserId` alone, so the old pair here displayed a SMALLER
+    // number than the counter enforcing the refusal this panel exists to
+    // explain. Same floor as the cap = the two agree.
     db
       .select({
         agentId: proposals.agentUserId,
-        todayCount: drizzleSql<number>`count(*)::int`,
+        pendingCount: drizzleSql<number>`count(*)::int`,
       })
       .from(proposals)
       .where(
         and(
           ownAgentUserFilter(proposals.agentUserId, userId),
-          // SAME POPULATION AS THE ENFORCER. `countTodayAgentProposals`
-          // (utils/permission-check.ts) excludes auto-approved receipts,
-          // because the budget this panel reports protects the REVIEW QUEUE
-          // and an auto-approved write never enters it. Counting receipts here
-          // made the display announce "hit the daily proposal cap" at 73/30
-          // while the enforcer — the thing that actually refuses — was
-          // counting a far smaller set and refusing nothing.
-          //
-          // This is the FOURTH time in this area that two queries answering
-          // one question diverged (broken createdBy pair; hardcoded base cap;
-          // counter vs gate population; now display vs enforcer). Pinned by
+          // SAME POPULATION AS THE ENFORCER. `countPendingAgentProposals`
+          // (utils/permission-check.ts) counts ONLY still-PENDING proposals —
+          // the review queue the budget protects. An approved / rejected /
+          // auto-approved row never sits in that queue, so none of them may be
+          // counted here; counting anything wider made the display announce a
+          // cap hit the enforcer was never enforcing. This is the FOURTH time
+          // in this area that two queries answering one question diverged
+          // (broken createdBy pair; hardcoded base cap; counter vs gate
+          // population; now display vs enforcer). Pinned by
           // `__tripwires__/diagnose-surface-parity.test.ts`.
-          ne(proposals.status, ProposalStatus.AUTO_APPROVED),
-          gte(proposals.createdAt, startOfUtcDay())
+          eq(proposals.status, ProposalStatus.PENDING)
         )
       )
       .groupBy(proposals.agentUserId),
@@ -622,14 +615,14 @@ export async function diagnoseGlobal(params: {
   };
 
   const agentActivityCounts = agentRows
-    .filter((a): a is { agentId: string; todayCount: number } =>
+    .filter((a): a is { agentId: string; pendingCount: number } =>
       Boolean(a.agentId)
     )
-    .map((a) => ({ agentId: a.agentId, todayCount: a.todayCount }));
+    .map((a) => ({ agentId: a.agentId, pendingCount: a.pendingCount }));
 
   // Resolve the REAL cap per agent, not the base constant.
   //
-  // `agentDailyProposalCap` applies the trust multiplier (a proven agent —
+  // `agentProposalCap` applies the trust multiplier (a proven agent —
   // >=100 recent proposals at >=95% approve rate — earns 3x). Hardcoding
   // `AGENT_PROPOSALS_PER_USER_PER_DAY` here made this door announce
   // "1 agent(s) hit the daily proposal cap" for an agent sitting at 13/30,
@@ -654,7 +647,7 @@ export async function diagnoseGlobal(params: {
     Promise.all(
       agentActivityCounts.map(async (a) => ({
         ...a,
-        cap: await agentDailyProposalCap(a.agentId),
+        cap: await agentProposalCap(a.agentId),
       }))
     ),
     reviewQueueApproval({ userId, workspaceId }),

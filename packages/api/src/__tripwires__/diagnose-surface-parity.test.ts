@@ -16,7 +16,7 @@ import { fileURLToPath } from "node:url";
  *
  * ── FAILURE 1: a FALSE ALARM (the worse kind) ───────────────────────────────
  * `global.ts` hardcoded `cap: AGENT_PROPOSALS_PER_USER_PER_DAY` (the BASE 10)
- * for every agent, while `agentDailyProposalCap()` applies a 3x multiplier for
+ * for every agent, while `agentProposalCap()` applies a 3x multiplier for
  * a proven agent (>=100 recent proposals at >=95% approve rate). Live, the
  * global door announced "1 agent(s) hit the daily proposal cap" for an agent
  * at 13/30 that `diagnose(agentId)` simultaneously reported as
@@ -68,15 +68,15 @@ describe("tripwire: diagnose's two surfaces agree", () => {
   it("the per-agent cap is RESOLVED, never the hardcoded base constant", () => {
     expect(
       globalSrc,
-      "global diagnose must call agentDailyProposalCap() per agent — the base " +
+      "global diagnose must call agentProposalCap() per agent — the base " +
         "constant ignores the 3x trust multiplier and produced a FALSE " +
         "'hit the daily proposal cap' alarm for an agent at 13/30."
-    ).toContain("agentDailyProposalCap(");
+    ).toContain("agentProposalCap(");
 
     expect(
       /cap:\s*AGENT_PROPOSALS_PER_USER_PER_DAY/.test(globalSrc),
       "global diagnose assigns the BASE constant as a per-agent cap. Use " +
-        "agentDailyProposalCap(agentId) so this door and diagnose(agentId) " +
+        "agentProposalCap(agentId) so this door and diagnose(agentId) " +
         "cannot disagree about whether an agent is blocked."
     ).toBe(false);
   });
@@ -134,22 +134,22 @@ describe("the DISPLAY counts what the ENFORCER counts", () => {
   );
 
   it("scans a real enforcer — not asserting over an empty read", () => {
-    expect(enforcer).toContain("countTodayAgentProposals");
+    expect(enforcer).toContain("countPendingAgentProposals");
   });
 
-  it("both exclude auto-approved receipts from the daily budget", () => {
-    const pattern =
-      /ne\(\s*proposals\.status,\s*ProposalStatus\.AUTO_APPROVED\s*\)/;
+  it("both count ONLY still-pending proposals — the review queue the budget protects", () => {
+    const pattern = /eq\(\s*proposals\.status,\s*ProposalStatus\.PENDING\s*\)/;
     expect(
       pattern.test(enforcer),
-      "the ENFORCER must exclude auto-approved receipts — they record a write " +
-        "that already executed and never entered the review queue."
+      "the ENFORCER must count only still-PENDING proposals — an approved / " +
+        "rejected / auto-approved row has left the queue and must not consume " +
+        "the budget, or 'clear pending to free budget' would be a lie."
     ).toBe(true);
     expect(
       pattern.test(globalSrc),
-      "global diagnose's agent-activity count must exclude them TOO. It is the " +
-        "panel that reports this budget; counting a wider population than the " +
-        "gate enforces is how it announced a cap hit that never happened."
+      "global diagnose's agent-activity count must count the SAME population. " +
+        "It is the panel that reports this budget; counting a wider population " +
+        "than the gate enforces is how it announced a cap hit that never happened."
     ).toBe(true);
   });
 });

@@ -8660,9 +8660,9 @@ export interface AgentScorecard {
 		count: number;
 	}>;
 	/** Daily-cap posture. The cap is PER-AGENT (scales with this agent's own
-	 *  trust — see `agentDailyProposalCap`), not shared across the owner's roster. */
+	 *  trust — see `agentProposalCap`), not shared across the owner's roster. */
 	dailyCap: {
-		todayCount: number;
+		pendingCount: number;
 		cap: number;
 		atOrOverCap: boolean;
 	};
@@ -24688,7 +24688,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				ceilings: {
 					id: string;
-					axis: "daily_write_count";
+					axis: "daily_write_count" | "pending_proposal_cap";
 					principalKind: "agent" | "any";
 					agentUserId: string | null;
 					agentLabel: string | null;
@@ -24736,7 +24736,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expiresAt: Date | null;
 					revokedAt: Date | null;
 					principalKind: "agent" | "any";
-					axis: "daily_write_count";
+					axis: "daily_write_count" | "pending_proposal_cap";
 					limitValue: number;
 				};
 			};
@@ -24758,7 +24758,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					expiresAt: Date | null;
 					revokedAt: Date | null;
 					principalKind: "agent" | "any";
-					axis: "daily_write_count";
+					axis: "daily_write_count" | "pending_proposal_cap";
 					limitValue: number;
 				};
 			};
