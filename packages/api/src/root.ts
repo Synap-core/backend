@@ -45,6 +45,7 @@ import { agentUsersRouter } from "./routers/agent-users.js";
 import { governanceRulesRouter } from "./routers/governance-rules.js";
 import { governanceCeilingsRouter } from "./routers/governance-ceilings.js";
 import { guidelinesRouter } from "./routers/guidelines.js";
+import { govConfigRouter } from "./routers/gov-config.js";
 import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
@@ -144,6 +145,7 @@ export const coreRouter = router({
   governanceRules: governanceRulesRouter,
   governanceCeilings: governanceCeilingsRouter,
   guidelines: guidelinesRouter,
+  govConfig: govConfigRouter,
   mcpServers: mcpServersRouter,
   agentConfigs: agentConfigsRouter,
   agents: agentsRouter,

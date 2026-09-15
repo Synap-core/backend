@@ -31,11 +31,8 @@ import {
   governanceRules,
   governanceCeilings,
   createGuideline,
-  revokeGuideline,
   type GovernanceScope,
   type GovernanceTarget,
-  type GovernanceCeilingAxis,
-  type ConfigScopeKind,
 } from "@synap/database";
 import { proposals } from "@synap/database/schema";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
@@ -60,6 +57,10 @@ import {
   type ProposalExecutorResult,
 } from "./execution-registry.js";
 import { registerApproveExecutors } from "./approve-executors.js";
+import {
+  applyGovConfigChange,
+  type SettingsUpdateProposalData,
+} from "../../services/proposals/gov-config.js";
 import {
   assertDocumentBaseVersion,
   readProposalBaseVersion,
@@ -456,38 +457,6 @@ export interface GovernanceRaiseCeilingProposalData {
     daysAtCeiling: number;
     sampleDays: Array<{ day: string; count: number }>;
   };
-}
-
-/**
- * The unified gov-config settings payload — the ONE door for AI/cron/human to
- * propose a change to `governance_rules` / `governance_ceilings` /
- * `config_settings`. Sensitivity is enforced at the GATE (a loosening change
- * always proposes — see `isLooseningSettingsChange` in permission-check.ts);
- * on approval (B5) the change is applied through the same insert/revoke shapes
- * the bespoke B4a–B4d branches use, dispatched on `store` + `op`.
- */
-export interface SettingsUpdateProposalData {
-  store: "governance_rules" | "governance_ceilings" | "config_settings";
-  op: "set" | "revoke";
-  // governance_rules / governance_ceilings (flat, mirrors B4b/B4d):
-  principalKind?: "agent" | "any";
-  agentUserId?: string | null;
-  scopeKind?: "pod" | "workspace";
-  workspaceId?: string | null;
-  targetKind?: "action" | "profile" | "capability";
-  targetPattern?: string;
-  targetProfile?: string | null;
-  verdict?: "auto" | "propose";
-  axis?: "daily_write_count" | "pending_proposal_cap";
-  limitValue?: number;
-  // config_settings:
-  configScopeKind?: ConfigScopeKind;
-  scopeRef?: string | null;
-  capabilityId?: string | null;
-  text?: string;
-  posture?: "auto" | "propose";
-  // revoke: the id of the row to soft-delete.
-  targetId?: string;
 }
 
 /**
@@ -1360,6 +1329,18 @@ async function applyProposalApprovalInner(
     await assertPodAdmin(userId);
   }
 
+  // ═══════════════════════════════════════════════════════════════════════
+  // @deprecated — LEGACY `governance.*` executors (B4a–B4g). SUPERSEDED by the
+  // unified `settings.update` door (B5 below), which routes through the ONE
+  // store-write `applyGovConfigChange` (`services/proposals/gov-config.ts`).
+  //
+  // Kept ONLY to apply proposals of these types that were already PENDING when
+  // the unified door shipped. Their recommenders now file `settings.update`.
+  // DELETE these branches (and their `Governance*ProposalData` types above)
+  // once no PENDING proposals of these types remain — see the engineering-memory
+  // record "gov-config executors B4a–B4g deprecated 2026-09-15".
+  // ═══════════════════════════════════════════════════════════════════════
+
   // B4: governance.widen_lane — Phase D trusted-lane widen. Keyed off
   // proposalType (not payload shape) so it stays inline rather than in the
   // registry (execution-registry.ts is out of scope for this change). The
@@ -1812,135 +1793,14 @@ async function applyProposalApprovalInner(
       });
     }
 
-    let subject = s.store;
-    let rows = 0;
-    let ids: string[] = [];
-
-    if (s.store === "governance_ceilings") {
-      if (s.op === "revoke") {
-        if (!s.targetId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "settings.update: revoke requires targetId.",
-          });
-        }
-        const revoked = await db
-          .update(governanceCeilings)
-          .set({ revokedAt: new Date() })
-          .where(
-            and(
-              eq(governanceCeilings.id, s.targetId),
-              isNull(governanceCeilings.revokedAt)
-            )
-          )
-          .returning({ id: governanceCeilings.id });
-        ids = revoked.map((r) => r.id);
-        rows = revoked.length;
-      } else {
-        const axis = (s.axis ?? "daily_write_count") as GovernanceCeilingAxis;
-        const agentUserId = s.agentUserId ?? null;
-        // Supersede the prior active pod-scoped ceiling on this axis so the new
-        // one is the single effective row (mirrors B4d's supersede).
-        await db
-          .update(governanceCeilings)
-          .set({ revokedAt: new Date() })
-          .where(
-            and(
-              eq(governanceCeilings.axis, axis),
-              eq(
-                governanceCeilings.principalKind,
-                agentUserId ? "agent" : "any"
-              ),
-              agentUserId
-                ? eq(governanceCeilings.agentUserId, agentUserId)
-                : isNull(governanceCeilings.agentUserId),
-              eq(governanceCeilings.scopeKind, "pod"),
-              isNull(governanceCeilings.revokedAt)
-            )
-          );
-        const inserted = await db
-          .insert(governanceCeilings)
-          .values({
-            axis,
-            principalKind: agentUserId ? "agent" : "any",
-            agentUserId,
-            scopeKind: "pod",
-            workspaceId: null,
-            limitValue: typeof s.limitValue === "number" ? s.limitValue : 0,
-            sourceProposalId: proposal.id,
-            createdBy: userId,
-          })
-          .returning({ id: governanceCeilings.id });
-        ids = inserted.map((r) => r.id);
-        rows = inserted.length;
-      }
-    } else if (s.store === "governance_rules") {
-      if (s.op === "revoke") {
-        if (!s.targetId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "settings.update: revoke requires targetId.",
-          });
-        }
-        const revoked = await db
-          .update(governanceRules)
-          .set({ revokedAt: new Date() })
-          .where(
-            and(
-              eq(governanceRules.id, s.targetId),
-              isNull(governanceRules.revokedAt)
-            )
-          )
-          .returning({ id: governanceRules.id });
-        ids = revoked.map((r) => r.id);
-        rows = revoked.length;
-      } else {
-        const inserted = await db
-          .insert(governanceRules)
-          .values({
-            principalKind: s.principalKind ?? "agent",
-            agentUserId: s.agentUserId ?? null,
-            scopeKind: s.scopeKind ?? "pod",
-            workspaceId:
-              s.scopeKind === "workspace" ? (s.workspaceId ?? null) : null,
-            targetKind: s.targetKind ?? "action",
-            targetPattern: s.targetPattern ?? "*",
-            targetProfile: s.targetProfile ?? null,
-            verdict: s.verdict ?? "propose",
-            sourceProposalId: proposal.id,
-            createdBy: userId,
-          })
-          .returning({ id: governanceRules.id });
-        ids = inserted.map((r) => r.id);
-        rows = inserted.length;
-      }
-    } else {
-      // config_settings
-      if (s.op === "revoke") {
-        if (!s.targetId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "settings.update: revoke requires targetId.",
-          });
-        }
-        const revoked = await revokeGuideline({ db, id: s.targetId });
-        ids = revoked ? [revoked.id] : [];
-        rows = revoked ? 1 : 0;
-      } else {
-        const created = await createGuideline({
-          db,
-          text: typeof s.text === "string" ? s.text : "",
-          ...(s.posture ? { posture: s.posture } : {}),
-          scopeKind: s.configScopeKind ?? "default",
-          scopeRef: s.scopeRef ?? null,
-          capabilityId: s.capabilityId ?? null,
-          workspaceId: s.workspaceId ?? null,
-          createdBy: userId,
-        });
-        ids = [created.id];
-        rows = 1;
-      }
-    }
+    const { store, op, ...spec } = s;
+    const { rows, ids, subject } = await applyGovConfigChange({
+      store,
+      op,
+      spec,
+      sourceProposalId: proposal.id,
+      createdBy: userId,
+    });
 
     await db
       .update(proposals)

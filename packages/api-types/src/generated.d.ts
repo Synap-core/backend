@@ -4227,6 +4227,17 @@ export interface EffectiveCapabilityRenderer {
 	pages: CapabilityRendererPage[];
 	source: CapabilityRendererSource;
 }
+declare const CONFIG_SCOPE_KINDS: [
+	"default",
+	"bridge",
+	"channelType",
+	"channel",
+	"shape",
+	"workKind",
+	"sourceKind",
+	"entityKind"
+];
+export type ConfigScopeKind = (typeof CONFIG_SCOPE_KINDS)[number];
 /**
  * The `value` payload of a GUIDELINE row (key = 'guideline'). `posture` is
  * stored intent only — NOT yet an executor (see file header).
@@ -9296,6 +9307,38 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
+}
+/**
+ * The unified gov-config settings payload — the ONE door for AI/cron/human to
+ * propose a change to `governance_rules` / `governance_ceilings` /
+ * `config_settings`. Sensitivity is enforced at the GATE (a loosening change
+ * always proposes — see `isLooseningSettingsChange` in permission-check.ts);
+ * on approval the change is applied here, dispatched on `store` + `op`.
+ */
+export interface SettingsUpdateProposalData {
+	store: "governance_rules" | "governance_ceilings" | "config_settings";
+	op: "set" | "revoke";
+	principalKind?: "agent" | "any";
+	agentUserId?: string | null;
+	scopeKind?: "pod" | "workspace";
+	workspaceId?: string | null;
+	targetKind?: "action" | "profile" | "capability";
+	targetPattern?: string;
+	targetProfile?: string | null;
+	verdict?: "auto" | "propose";
+	axis?: "daily_write_count" | "pending_proposal_cap";
+	limitValue?: number;
+	configScopeKind?: ConfigScopeKind;
+	scopeRef?: string | null;
+	capabilityId?: string | null;
+	text?: string;
+	posture?: "auto" | "propose";
+	targetId?: string;
+}
+export interface ApplyGovConfigChangeResult {
+	rows: number;
+	ids: string[];
+	subject: SettingsUpdateProposalData["store"];
 }
 /** A column→property routing decision for ONE CSV header. Mirrors the IS plan's
  *  `ColumnMappingProposal` but only the fields ingestion needs. */
@@ -24962,6 +25005,53 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId?: undefined;
 				alreadyProposed?: undefined;
 			};
+			meta: object;
+		}>;
+	}>>;
+	govConfig: import("@trpc/server").TRPCBuiltRouter<{
+		ctx: Context;
+		meta: object;
+		errorShape: {
+			message: string;
+			data: {
+				captureQuestionStatus?: string | undefined;
+				code: import("@trpc/server").TRPC_ERROR_CODE_KEY;
+				httpStatus: number;
+				path?: string;
+				stack?: string;
+			};
+			code: import("@trpc/server").TRPC_ERROR_CODE_NUMBER;
+		};
+		transformer: true;
+	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		set: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				store: "governance_rules" | "governance_ceilings" | "config_settings";
+				principalKind?: "agent" | "any" | undefined;
+				agentUserId?: string | null | undefined;
+				scopeKind?: "pod" | "workspace" | undefined;
+				workspaceId?: string | null | undefined;
+				targetKind?: "capability" | "action" | "profile" | undefined;
+				targetPattern?: string | undefined;
+				targetProfile?: string | null | undefined;
+				verdict?: "auto" | "propose" | undefined;
+				axis?: "daily_write_count" | "pending_proposal_cap" | undefined;
+				limitValue?: number | undefined;
+				configScopeKind?: string | undefined;
+				scopeRef?: string | null | undefined;
+				capabilityId?: string | null | undefined;
+				text?: string | undefined;
+				posture?: "auto" | "propose" | undefined;
+			};
+			output: ApplyGovConfigChangeResult;
+			meta: object;
+		}>;
+		revoke: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				store: "governance_rules" | "governance_ceilings" | "config_settings";
+				targetId: string;
+			};
+			output: ApplyGovConfigChangeResult;
 			meta: object;
 		}>;
 	}>>;
