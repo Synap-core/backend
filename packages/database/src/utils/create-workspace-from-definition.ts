@@ -63,11 +63,13 @@ function kebabToPascalCase(str: string): string {
  * Build the default bento block set for a profile dashboard.
  * Layout: section-header (row 0) → stat-card count (row 2) → view-table (row 5)
  */
-function buildDefaultProfileBentoBlocks(profile: {
+export function buildDefaultProfileBentoBlocks(profile: {
   slug: string;
   displayName: string;
   icon?: string;
   color?: string;
+  /** The profile row's stored `plural` — data, preferred over the fallback label. */
+  plural?: string | null;
 }): Array<Record<string, unknown>> {
   const color = profile.color ?? "#6366F1";
   const icon = profile.icon ? kebabToPascalCase(profile.icon) : "Database";
@@ -86,7 +88,12 @@ function buildDefaultProfileBentoBlocks(profile: {
       widgetType: "stat-card",
       pos: { x: 0, y: 2, w: 3, h: 3 },
       config: {
-        label: `Total ${profile.displayName}s`,
+        // The row's stored `plural` when it has one. The fallback is the legacy
+        // hand-built label, kept until a founder decision (types dep on
+        // @synap/database vs render-time plural in synap-app) — never a new pluralizer.
+        label: profile.plural
+          ? `Total ${profile.plural}`
+          : `Total ${profile.displayName}s`,
         aggregation: "count",
         profileSlug: slug,
         icon,
@@ -1038,8 +1045,10 @@ export async function createWorkspaceFromDefinition(
       workspaceId
     );
     const profileMap_: Record<string, string> = {};
-    const profileHintsMap_: Record<string, { icon?: string; color?: string }> =
-      {};
+    const profileHintsMap_: Record<
+      string,
+      { icon?: string; color?: string; plural?: string | null }
+    > = {};
     const profileIds_: string[] = [];
     for (const p of existingProfiles) {
       profileMap_[p.slug] = p.id;
@@ -1048,6 +1057,7 @@ export async function createWorkspaceFromDefinition(
           string | undefined,
         color: (p.uiHints as Record<string, unknown> | null)?.color as
           string | undefined,
+        plural: p.plural,
       };
       profileIds_.push(p.id);
     }
@@ -1118,7 +1128,10 @@ export async function createWorkspaceFromDefinition(
   // 3. Create profiles and collect slug → id mapping
   const profileMap: Record<string, string> = {};
   /** Resolved icon/color per slug — used later for auto-generated bento blocks. */
-  const profileHintsMap: Record<string, { icon?: string; color?: string }> = {};
+  const profileHintsMap: Record<
+    string,
+    { icon?: string; color?: string; plural?: string | null }
+  > = {};
   const profileRepo = new ProfileRepository(dbConn);
   const propDefRepo = new PropertyDefRepository(dbConn);
   const profilePropRepo = new ProfilePropertyRepository(dbConn);
@@ -1290,6 +1303,7 @@ export async function createWorkspaceFromDefinition(
       profileHintsMap[profile.slug] = {
         icon: resolvedIcon,
         color: resolvedColor,
+        plural: created!.plural,
       };
       profileIds.push(created!.id);
 
@@ -1689,6 +1703,7 @@ export async function createWorkspaceFromDefinition(
         ...profile,
         icon: hints.icon,
         color: hints.color,
+        plural: hints.plural,
       });
 
       let viewResult;

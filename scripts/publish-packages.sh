@@ -15,14 +15,14 @@ PACKAGES=(
   "packages/core"
   "packages/types"
   "packages/auth"
+  "packages/auth-bootstrap"
   "packages/hub-protocol"
   "packages/database"
-  "packages/domain"
   "packages/storage"
   "packages/jobs"
-  "packages/hub-protocol-client"
-  "packages/hub-orchestrator-base"
+  "packages/hub-rest-client"
   "packages/api"
+  "packages/api-types"
 )
 
 # Build all packages first
@@ -47,4 +47,3 @@ done
 
 echo ""
 echo "🎉 All packages published successfully!"
-

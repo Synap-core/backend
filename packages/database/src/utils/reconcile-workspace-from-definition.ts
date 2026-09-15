@@ -285,6 +285,98 @@ export interface ReconcileReport {
   layers?: InstallLayerReport[];
 }
 
+/** A live view row, narrowed to what definition view-reference resolution reads. */
+export interface ViewRefCandidate {
+  id: string;
+  name: string | null;
+  type: string | null;
+  config: unknown;
+}
+
+export type ViewRefResolution =
+  | { viewId: string }
+  | { skip: "unknown" | "ambiguous"; candidateIds: string[] };
+
+/**
+ * Resolve a definition's `{ viewSlug?, viewName }` reference to exactly ONE live
+ * view — or refuse.
+ *
+ * Replaces a `name → id` map built by iterating the workspace's views, where the
+ * LAST row with a given name won. View names are not unique: a workspace home
+ * bento named after the graph it embeds ("Ecosystem Map") shares that name with
+ * the graph, so an overlay block naming the graph resolved to the home bento
+ * itself and the reconcile appended a block that embeds its own dashboard.
+ *
+ * Rules, in order:
+ *   • `excludeViewId` is never a candidate — a bento block must never resolve to
+ *     the bento that contains it.
+ *   • A slug matches a live row's `config.slug` (the create path stamps it); an
+ *     unstamped slug falls through to the name its definition view declares.
+ *   • Several rows share the name/slug → keep the one whose type the definition
+ *     declares for that view; else the single non-bento row.
+ *   • Still more than one → `ambiguous`. Never guess.
+ */
+export function resolveDefinitionViewRef(
+  ref: { viewName?: string; viewSlug?: string },
+  liveViews: ReadonlyArray<ViewRefCandidate>,
+  definitionViews: ReadonlyArray<{
+    name?: string;
+    displayName?: string;
+    slug?: string;
+    type?: string;
+  }>,
+  excludeViewId?: string
+): ViewRefResolution {
+  const pool = liveViews.filter((v) => v.id !== excludeViewId);
+  const slugOf = (v: ViewRefCandidate): string | undefined => {
+    const slug = (v.config as Record<string, unknown> | null)?.slug;
+    return typeof slug === "string" ? slug : undefined;
+  };
+  const pick = (
+    matches: ViewRefCandidate[],
+    declaredType: string | undefined
+  ): ViewRefResolution | undefined => {
+    if (matches.length === 0) return undefined;
+    if (matches.length === 1) return { viewId: matches[0]!.id };
+    const typed = declaredType
+      ? matches.filter((v) => v.type === declaredType)
+      : [];
+    if (typed.length === 1) return { viewId: typed[0]!.id };
+    const nonBento = matches.filter((v) => v.type !== "bento");
+    if (nonBento.length === 1) return { viewId: nonBento[0]!.id };
+    return { skip: "ambiguous", candidateIds: matches.map((v) => v.id) };
+  };
+
+  const declaredBySlug = ref.viewSlug
+    ? definitionViews.find((dv) => dv.slug === ref.viewSlug)
+    : undefined;
+  if (ref.viewSlug) {
+    const bySlug = pick(
+      pool.filter((v) => slugOf(v) === ref.viewSlug),
+      declaredBySlug?.type
+    );
+    if (bySlug) return bySlug;
+  }
+
+  const names = [
+    declaredBySlug?.name ?? declaredBySlug?.displayName,
+    ref.viewName,
+  ].filter((n, i, all): n is string => !!n && all.indexOf(n) === i);
+  for (const name of names) {
+    const declared =
+      declaredBySlug &&
+      (declaredBySlug.name ?? declaredBySlug.displayName) === name
+        ? declaredBySlug
+        : definitionViews.find((dv) => (dv.name ?? dv.displayName) === name);
+    const byName = pick(
+      pool.filter((v) => v.name === name),
+      declared?.type
+    );
+    if (byName) return byName;
+  }
+  return { skip: "unknown", candidateIds: [] };
+}
+
 export async function reconcileWorkspaceFromDefinition(
   opts: ReconcileOptions
 ): Promise<ReconcileReport> {
@@ -781,17 +873,14 @@ export async function reconcileWorkspaceFromDefinition(
       const wsViews = await dbConn.query.views.findMany({
         where: eq(views.workspaceId, workspaceId),
       });
-      const viewIdByName: Record<string, string> = {};
-      for (const v of wsViews) if (v.name) viewIdByName[v.name] = v.id;
-      // Resolve a bentoViewBlock's `viewSlug`/`viewName` → live viewId. Slugs are
-      // matched through the definition's own view list (slug is not a DB column).
-      const viewIdBySlug: Record<string, string> = {};
-      for (const dv of definition.views ?? []) {
-        const nm = dv.name ?? dv.displayName;
-        const slug = (dv as { slug?: string }).slug;
-        if (slug && nm && viewIdByName[nm])
-          viewIdBySlug[slug] = viewIdByName[nm];
-      }
+      // Found BEFORE resolving view blocks: the home bento must be excluded as a
+      // resolution target, or a block naming a same-named view embeds the home
+      // dashboard inside itself.
+      const home = wsViews.find(
+        (v) =>
+          (v.metadata as Record<string, unknown> | null)?.homeScope ===
+          "workspace"
+      );
 
       const overlayWidgetBlocks: Array<Record<string, unknown>> = (
         definition.bentoLayout ?? []
@@ -806,30 +895,35 @@ export async function reconcileWorkspaceFromDefinition(
         definition.bentoViewBlocks ?? []
       )
         .map((vb, idx) => {
-          const resolvedId =
-            viewIdBySlug[vb.viewSlug ?? ""] ?? viewIdByName[vb.viewName];
-          if (!resolvedId) {
+          const resolved = resolveDefinitionViewRef(
+            vb,
+            wsViews,
+            definition.views ?? [],
+            home?.id
+          );
+          if ("skip" in resolved) {
             logger.warn(
-              { viewName: vb.viewName, viewSlug: vb.viewSlug, workspaceId },
-              "reconcile: overlay bentoViewBlock references unknown view — skipping"
+              {
+                viewName: vb.viewName,
+                viewSlug: vb.viewSlug,
+                workspaceId,
+                candidateIds: resolved.candidateIds,
+              },
+              resolved.skip === "ambiguous"
+                ? "reconcile: overlay bentoViewBlock names several views — skipping, never guessing"
+                : "reconcile: overlay bentoViewBlock references unknown view — skipping"
             );
             return null;
           }
           return {
             id: `overlay-view-${idx}`,
             kind: "view" as const,
-            viewId: resolvedId,
+            viewId: resolved.viewId,
             pos: vb.pos,
             overrides: vb.overrides,
           };
         })
         .filter(Boolean) as Array<Record<string, unknown>>;
-
-      const home = wsViews.find(
-        (v) =>
-          (v.metadata as Record<string, unknown> | null)?.homeScope ===
-          "workspace"
-      );
 
       const blockSig = (b: Record<string, unknown>): string =>
         `${b.widgetType}:${JSON.stringify(b.config ?? {})}`;
@@ -1026,8 +1120,6 @@ export async function reconcileWorkspaceFromDefinition(
       const wsViews2 = await dbConn.query.views.findMany({
         where: eq(views.workspaceId, workspaceId),
       });
-      const viewIdByName2: Record<string, string> = {};
-      for (const v of wsViews2) if (v.name) viewIdByName2[v.name] = v.id;
 
       type SidebarItem = NonNullable<
         WorkspaceLayoutConfig["sidebarItems"]
@@ -1045,13 +1137,26 @@ export async function reconcileWorkspaceFromDefinition(
       const appended: SidebarItem[] = [];
       for (const raw of overlaySidebar) {
         // Resolve viewName → viewId (create-path parity) before keying/appending.
-        const item: SidebarItem =
-          raw.kind === "view" &&
-          !raw.viewId &&
-          raw.viewName &&
-          viewIdByName2[raw.viewName]
-            ? { ...raw, viewId: viewIdByName2[raw.viewName] }
-            : raw;
+        // Same resolver as the bento pass: a name shared by several views picks
+        // the declared/non-bento one, or stays unresolved rather than guessing.
+        let item: SidebarItem = raw;
+        if (raw.kind === "view" && !raw.viewId && raw.viewName) {
+          const resolved = resolveDefinitionViewRef(
+            { viewName: raw.viewName },
+            wsViews2,
+            definition.views ?? []
+          );
+          if ("viewId" in resolved) item = { ...raw, viewId: resolved.viewId };
+          else if (resolved.skip === "ambiguous")
+            logger.warn(
+              {
+                viewName: raw.viewName,
+                workspaceId,
+                candidateIds: resolved.candidateIds,
+              },
+              "reconcile: sidebar item names several views — left unresolved, never guessing"
+            );
+        }
         const k = keyOf(item);
         if (baseKeys.has(k)) continue;
         baseKeys.add(k);

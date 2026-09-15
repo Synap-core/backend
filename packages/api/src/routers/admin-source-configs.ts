@@ -234,6 +234,22 @@ export async function writeInlineSourceConfigSecrets(
   return { configOut, createdSecretIds };
 }
 
+/**
+ * Re-tag the inline secrets written by `writeInlineSourceConfigSecrets` to the
+ * source config that now references them (`source:<config id>`).
+ */
+export async function retagInlineSourceConfigSecrets(
+  tx: Pick<typeof db, "update">,
+  configId: string,
+  secretIds: string[]
+): Promise<void> {
+  if (secretIds.length === 0) return;
+  await tx
+    .update(secrets)
+    .set({ serviceId: `source:${configId}` })
+    .where(inArray(secrets.id, secretIds));
+}
+
 // ── Routes ───────────────────────────────────────────────────────────────────
 
 adminSourceConfigsRouter.post("/", async (c) => {
@@ -387,12 +403,7 @@ adminSourceConfigsRouter.post("/", async (c) => {
       })
       .returning();
 
-    if (createdSecretIds.length > 0) {
-      await tx
-        .update(secrets)
-        .set({ serviceId: `source:${row.id}` })
-        .where(inArray(secrets.id, createdSecretIds));
-    }
+    await retagInlineSourceConfigSecrets(tx, row.id, createdSecretIds);
     return { row, secretCount: createdSecretIds.length };
   });
   logger.info(

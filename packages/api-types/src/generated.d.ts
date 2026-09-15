@@ -9945,6 +9945,26 @@ export interface ContinuationPacket {
 		currentStage: string | null;
 		progress: number | null;
 	};
+	/**
+	 * The PROJECT this session's work serves — name + goal, so a reader sees the
+	 * short-term session beside the long-term vision it belongs to. `project:
+	 * null` means the session has no project (a true state, not a failure).
+	 * `goal` is the project's own `description` column — the same field
+	 * `ProjectDetail.tsx`'s header renders under the name — `null` when the
+	 * project has none. A project the caller cannot see reads as `null` too,
+	 * never leaking its name; only a FAILED read is `unavailable`.
+	 */
+	project: {
+		status: "ok";
+		project: {
+			id: string;
+			name: string;
+			goal: string | null;
+		} | null;
+	} | {
+		status: "unavailable";
+		reason: string;
+	};
 	userMustDecide: {
 		owedSlots: PacketSection<PacketSlotItem>;
 		pendingProposals: PacketSection<PacketProposalItem>;
