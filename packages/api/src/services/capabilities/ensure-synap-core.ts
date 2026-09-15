@@ -683,6 +683,17 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "governance.recommend_raise_proposal_cap",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Governance calibration: scan each agent's CURRENT pending-proposal count against its resolved pending_proposal_cap and file a pending settings.update cap-raise proposal for any agent that is BLOCKED (at/over its cap). The pending_proposal_cap twin of governance.recommend_raise_ceiling — approving it inserts a higher governance_ceilings row (axis pending_proposal_cap) via the unified settings door. Takes NO params (scans pod-wide agent behaviour). Read-only w.r.t. graph data (files review items only): auto-runs inside the daily calibration cron. Returns { proposalsFiled, proposalIds }.",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
       name: "automation.recommend_health",
       kind: "builtin",
       scope: "pod",

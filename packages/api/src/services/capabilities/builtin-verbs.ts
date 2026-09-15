@@ -77,6 +77,7 @@ import { generateViaIS } from "../mail-feed/generate.js";
 import { resolveTool } from "../tools/resolve-tool.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
 import { recommendRaiseCeilingForAllAgents } from "../proposals/recommend-raise-ceiling.js";
+import { recommendRaiseProposalCapForAllAgents } from "../proposals/recommend-raise-proposal-cap.js";
 import { recommendTightenPostureForAllChannels } from "../proposals/recommend-tighten-posture.js";
 import { scanAutomationHealth } from "../proposals/automation-health.js";
 import { assertPodAdmin } from "../../trpc.js";
@@ -2749,6 +2750,24 @@ const governanceRecommendRaiseCeilingHandler: BuiltinVerbHandler = async (
 };
 
 /**
+ * governance.recommend_raise_proposal_cap — the pending_proposal_cap twin of
+ * governance.recommend_raise_ceiling. Scans each agent's CURRENT pending-proposal
+ * count against its resolved pending_proposal_cap and files a pending
+ * `settings.update` cap-raise proposal for any agent that is BLOCKED (at/over
+ * its cap). Same pod-admin gate + no params + read-only-w.r.t.-graph-data
+ * (files review items only) rationale.
+ */
+const governanceRecommendRaiseProposalCapParams = z.object({});
+
+const governanceRecommendRaiseProposalCapHandler: BuiltinVerbHandler = async (
+  _params,
+  ctx
+) => {
+  await assertPodAdmin(ctx.userId);
+  return recommendRaiseProposalCapForAllAgents();
+};
+
+/**
  * governance.recommend_tighten_posture — the channel-scoped twin of
  * governance.recommend_tighten. Scans rejected agent proposals GROUPED BY CHANNEL
  * (across all agents) and files a pending `governance.tighten_posture` proposal
@@ -2854,6 +2873,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Governance RAISE-CEILING recommender — numeric-limit twin. Files
   // governance.raise_ceiling review items when an agent keeps hitting its cap.
   "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingHandler,
+  // Governance RAISE-PROPOSAL-CAP recommender — pending_proposal_cap twin. Files
+  // settings.update cap-raise items when an agent is blocked at its pending cap.
+  "governance.recommend_raise_proposal_cap":
+    governanceRecommendRaiseProposalCapHandler,
   // Governance TIGHTEN-POSTURE recommender — channel-scoped twin. Files
   // governance.tighten_posture review items for consistently-rejected channels.
   "governance.recommend_tighten_posture":
@@ -2907,6 +2930,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "messaging.send": messagingSendParams,
   "governance.recommend_tighten": governanceRecommendTightenParams,
   "governance.recommend_raise_ceiling": governanceRecommendRaiseCeilingParams,
+  "governance.recommend_raise_proposal_cap":
+    governanceRecommendRaiseProposalCapParams,
   "governance.recommend_tighten_posture":
     governanceRecommendTightenPostureParams,
   "automation.recommend_health": automationRecommendHealthParams,
@@ -2964,6 +2989,7 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // the two calibration twins. Same "files review items only → auto-run inside
   // the daily calibration cron" rationale as governance.recommend_tighten.
   "governance.recommend_raise_ceiling",
+  "governance.recommend_raise_proposal_cap",
   "governance.recommend_tighten_posture",
   // automation.recommend_health — the automation-health warden. Same rationale
   // again: it mutates NO graph data (it files PENDING automation.health_advisory
