@@ -30,6 +30,7 @@ import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
   ensureSystemSkills,
+  ensureIntentFirstProject,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
   reconcileCapabilitiesToTemplates,
