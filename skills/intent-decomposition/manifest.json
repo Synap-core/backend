@@ -1,0 +1,7 @@
+{
+  "name": "intent-decomposition",
+  "version": "1.0.0",
+  "description": "Decomposes natural language intent into structured project plans with workspaces, sub-projects, and entities",
+  "files": ["intent-decomposition.md", "intent-plan-schema.md"],
+  "entryPoint": "intent-decomposition.md"
+}

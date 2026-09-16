@@ -177,4 +177,48 @@ describe("settings.update approval — B5 executor", () => {
       targetKind: "action",
     });
   });
+
+  // The unified door now carries EVERY recommender's rule write, so the floor
+  // check the legacy `governance.widen_lane` branch performed has to live here
+  // too — otherwise this door is the one way to store an `auto` rule that can
+  // never fire (rung 2.8 sits below the floor). Same refusal, same message.
+  it("refuses an `auto` rule behind a NON-WIDENABLE floor — writes nothing", async () => {
+    await expect(
+      applyProposalApproval(
+        settings({
+          store: "governance_rules",
+          op: "set",
+          verdict: "auto",
+          targetKind: "action",
+          targetPattern: "profile.create",
+        })
+      )
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message:
+        'NON_WIDENABLE_FLOOR (AGENT_SCHEMA_DEFINITION): "profile.create" always needs review — no governance rule can auto-approve it.',
+    });
+    expect(inserts).toEqual([]);
+    expect(updates).toEqual([]);
+  });
+
+  // The floor only forbids WIDENING. A `propose` rule on the same key is the
+  // tighten direction — it pins to review, which no floor can object to.
+  it("still writes a `propose` rule on the same floored key", async () => {
+    insertReturning = [[{ id: "rule-1" }]];
+    const result = await applyProposalApproval(
+      settings({
+        store: "governance_rules",
+        op: "set",
+        verdict: "propose",
+        targetKind: "action",
+        targetPattern: "profile.create",
+      })
+    );
+    expect(result.success).toBe(true);
+    expect(inserts.find((i) => i.verdict === "propose")).toMatchObject({
+      verdict: "propose",
+      targetPattern: "profile.create",
+    });
+  });
 });

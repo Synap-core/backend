@@ -416,18 +416,28 @@ export interface ConversionManifest {
 export const CONVERSION_MANIFEST: ConversionManifest = {
   version: 1,
   ops: [
-    // RETIRED 2026-09-14 (founder): `item` is not a kind — everything is an
-    // item. This was a live `seedKindProfile` (2026-07 → 2026-09-14), so pods
-    // that booted it carry an active system `item` row; flipping the op body to
-    // a `keep` in place (same opKey, append-only discipline — mirrors the
-    // w4.convert.* retirements below) only stops FRESH pods seeding it. Existing
-    // `item` rows and their entities fold into `note` via
-    // w10.merge.item-capture-into-note at the tail of the manifest.
+    // RESTORED 2026-09-15 (founder reverses the 2026-09-14 retirement): "item
+    // should still exist" — `item` REMAINS a real kind, and `note` remains a
+    // kind too (the note half is NOT reversed). The op body is restored to its
+    // original `seedKindProfile` shape (same opKey — append-only discipline, the
+    // key was never reused). This was briefly a `keep` for one day; the flip is
+    // undone in place, so a pod that booted the keep re-seeds on its next boot
+    // (the insert is create-if-missing) and a fresh pod seeds it outright.
+    // The item→note fold is CANCELLED: w10.merge.item-capture-into-note is
+    // flipped to a keep below. The note→item direction (w3c) stays a keep, so
+    // neither direction can fire.
     {
-      op: "keep",
+      op: "seedKindProfile",
       opKey: "w3a.seed.item",
       slug: "item",
-      note: "RETIRED 2026-09-14 (founder): item is not a kind — everything is an item. Fresh pods no longer seed it; existing rows fold via w10.merge.item-capture-into-note.",
+      displayName: "Item",
+      entityScope: "pod",
+      uiHints: {
+        icon: "box",
+        color: "#64748B",
+        description: "A generic captured item — the default kind for capture",
+        captureDefault: true,
+      },
     },
     {
       op: "keep",
@@ -445,7 +455,7 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "keep",
       opKey: "w3a.keep.note",
       slug: "note",
-      note: "Note is a PRIMARY kind (founder, 2026-09-14 — reverses D2). The w3c.merge.note-capture-into-item fold into 'item' is retired to a keep; item + capture fold INTO note via w10.merge.item-capture-into-note (entry retained per append-only opKey discipline).",
+      note: "Note is a PRIMARY kind (founder, 2026-09-14 — reverses D2). The w3c.merge.note-capture-into-item fold into 'item' is retired to a keep, and the proposed item→note fold was ALSO cancelled 2026-09-15 — BOTH `item` and `note` are primary kinds. No fold runs in either direction (entry retained per append-only opKey discipline).",
     },
 
     // ─── Wave 3C: CRM-family conversions + merges ──────────────────────────
@@ -600,31 +610,33 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       contextFromProperty: "lead-campaign",
     },
 
-    // ── RETIRED 2026-09-14: note + capture → item.
+    // ── RETIRED 2026-09-14: note + capture → item. STAYS RETIRED (2026-09-15).
     //
     // DECISION D2 ("note is retired as a kind and folded into `item` — a note
     // IS an item with a prose doc", approved 2026-07) is REVERSED 2026-09-14 by
-    // the founder: `item` carries no meaning (everything is an item) and `note`
-    // is a first-class kind. This op was a live `mergeInto` from 2026-07-09.
-    // Its entity repoint ran on pods that ledgered it (the live pod did — its
-    // destructive tail never ran, so note/capture/item all stayed active); on
-    // any pod where it is NOT yet ledgered, the next operator
-    // `--destructive-tail` run would either merge today's notes INTO item (the
-    // exact reverse of the decision) or, on a pod with no `item` row, hit the
-    // stranding refusal and halt the whole run.
+    // the founder: `note` is a first-class kind. This op was a live `mergeInto`
+    // from 2026-07-09. Its entity repoint ran on pods that ledgered it (the live
+    // pod did — its destructive tail never ran, so note/capture/item all stayed
+    // active); on any pod where it is NOT yet ledgered, the next operator
+    // `--destructive-tail` run would have merged today's notes INTO item — the
+    // exact reverse of the decision.
     //
     // So the op body is flipped to a `keep` in place (same opKey — append-only
     // discipline, mirroring the w4.convert.* retirements). A keep has no
-    // destructive tail, so boot ledgers it as a no-op and neither hazard can
-    // fire. Already-merged data moves back via the NEW-opKey
-    // w10.merge.item-capture-into-note at the manifest tail (a ledgered opKey
-    // never re-runs, so the inverse needs its own key — the w6.revert.*
-    // precedent).
+    // destructive tail, so boot ledgers it as a no-op and the hazard cannot fire.
+    //
+    // 2026-09-15 (founder): D2 stays reversed and this stays a keep. Re-enabling
+    // it would swallow NOTES into item, which nobody wants. Note that `item`
+    // IS once again a kind (see w3a.seed.item above) — so the 2026-09-14 reason
+    // ("item is not a kind") no longer applies, but the conclusion does: the two
+    // are SEPARATE kinds and neither folds into the other. The intended inverse
+    // (item + capture → note, w10.merge.item-capture-into-note) was cancelled on
+    // the same day, so no fold-back op exists or should exist.
     {
       op: "keep",
       opKey: "w3c.merge.note-capture-into-item",
       slug: "note",
-      note: "RETIRED 2026-09-14 (founder reverses D2): note is a primary kind, item is not a kind. No longer merges note/capture into item; pods that applied it are folded back by w10.merge.item-capture-into-note.",
+      note: "RETIRED 2026-09-14 (founder reverses D2): note is a primary kind — and so is item (both remain kinds, 2026-09-15). This op stays retired; it never merges note/capture into item.",
     },
 
     // Primary kinds staying as-is (relationship-objects / time-bound /
@@ -1164,14 +1176,16 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       slug: "person",
     },
 
-    // ─── Wave 10: `note` is a primary kind; item + capture fold into it ─────────
+    // ─── Wave 10: `note` is a protected primary kind (the fold is cancelled) ────
     //
     // Founder decision 2026-09-14 (reverses D2 — see the retired
-    // w3c.merge.note-capture-into-item above): `item` is not a kind, `note` is.
-    // The dormant `capture` kind (no longer seeded by ensure-system-profiles.ts)
-    // folds in too. Mistyped items (a person captured as an item, agent lessons)
-    // are NOT re-typed here — they land on `note`, and any re-type is a separate
-    // per-entity, human-approved proposal. Never auto re-type in a conversion.
+    // w3c.merge.note-capture-into-item above): `note` is a first-class kind.
+    // 2026-09-15 (founder): `item` ALSO remains a kind — "item should still
+    // exist" — so the item+capture fold into `note` planned here is CANCELLED
+    // (op (2) below is now a keep). What survives from this wave is op (1): the
+    // protection stamp. Mistyped items (a person captured as an item, agent
+    // lessons) are NOT re-typed anywhere — re-typing is a separate per-entity,
+    // human-approved proposal. Never auto re-type in a conversion.
 
     // (1) Record `note` as a protected primary kind: ui_hints.protected = true so
     // hygiene/retire UX refuses to demote it again. Not destructive → auto-applies
@@ -1183,7 +1197,15 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       protected: true,
     },
 
-    // (2) Fold item + capture into note. SAME-SCOPE on purpose: on the live pod
+    // (2) CANCELLED 2026-09-15 (founder): `item` remains a kind, so the fold
+    // into `note` is off. The op body is flipped to a `keep` in place (same
+    // opKey — append-only discipline). This op is PENDING on the live pod and
+    // was never applied, so there is no data to undo; it no longer appears in
+    // /status/release pending and no operator run can fold item/capture.
+    //
+    // The 2026-09-14 rationale below is retained for the record.
+    //
+    // (was) Fold item + capture into note. SAME-SCOPE on purpose: on the live pod
     // all three rows are `scope=system` with the SAME workspace stamp, which is
     // exactly the same-scope pairing predicate (k.scope = src.scope AND
     // k.workspace_id IS NOT DISTINCT FROM src.workspace_id). A source row with no
@@ -1192,19 +1214,14 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
     // (collision-skipped) and views.scope_profile_ids; entity_facets are NOT
     // touched (a facet's profile is its role, not its kind).
     //
-    // Destructive-tail by type → boot DEFERS it; an operator runs
-    // `--apply --only w10.merge.item-capture-into-note --destructive-tail`
-    // (repoint + deactivation of item/capture as one unit). On a fresh pod there
-    // is no item/capture row, so it is a clean no-op when an operator runs it.
-    //
-    // POST-MIGRATION: entities.type changes item→note, so the Typesense
-    // `entityType` docs and `entity_vectors.entity_type` of the folded entities
-    // are stale until reindexed (same gap as w6).
+    // POST-MIGRATION (no longer reachable): entities.type would have changed
+    // item→note, so the Typesense `entityType` docs and `entity_vectors.entity_type`
+    // of folded entities would have been stale until reindexed (same gap as w6).
     {
-      op: "mergeInto",
+      op: "keep",
       opKey: "w10.merge.item-capture-into-note",
-      fromSlugs: ["item", "capture"],
-      intoSlug: "note",
+      slug: "item",
+      note: "RETIRED 2026-09-15 (founder): item remains a kind; the fold into note is cancelled.",
     },
 
     // No reconcileEntityScope: note is pod-scope and notes keep their home workspace; capture had no live entities (2026-09-14).

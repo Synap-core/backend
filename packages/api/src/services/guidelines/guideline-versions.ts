@@ -404,6 +404,14 @@ export function governanceApprovalFloorFor(
   if (proposalType === STRUCTURE_GUIDELINE_PROPOSAL_TYPE) {
     return "guideline-audience";
   }
+  // The unified gov-config door writes the SAME privileged rows the prefixed
+  // `governance.*` meta-proposals do (`governance_rules` / `governance_ceilings`
+  // / `config_settings`), and it is now what the recommenders file — but it
+  // carries no `governance.` prefix, so the prefix rule below misses it. Without
+  // this exact match the identical pod-wide row is pod-admin-only through the
+  // legacy branch and approvable by ANY authenticated pod user through this one
+  // (both review-authority helpers short-circuit on `workspaceId: null`).
+  if (proposalType === "settings.update") return "pod-admin";
   if (proposalType.startsWith("governance.")) return "pod-admin";
   return "none";
 }

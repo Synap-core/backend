@@ -24,16 +24,19 @@ describe("CONVERSION_MANIFEST", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("does NOT seed `item`: w3a.seed.item is retired to a keep (founder 2026-09-14 — item is not a kind)", () => {
-    // opKey retained per append-only discipline; op flipped seedKindProfile→keep.
+  it("SEEDS `item`: w3a.seed.item is a live seedKindProfile (founder 2026-09-15 — item remains a kind)", () => {
+    // The 2026-09-14 keep flip is REVERSED in place; opKey retained per
+    // append-only discipline. A fresh pod grows the `item` row again.
     const seed = CONVERSION_MANIFEST.ops.find(
       (o) => o.opKey === "w3a.seed.item"
     );
     expect(seed).toBeDefined();
-    expect(seed?.op).toBe("keep");
-    if (seed?.op === "keep") {
+    expect(seed?.op).toBe("seedKindProfile");
+    if (seed?.op === "seedKindProfile") {
       expect(seed.slug).toBe("item");
-      expect(seed.note).toMatch(/RETIRED 2026-09-14/);
+      expect(seed.displayName).toBe("Item");
+      expect(seed.entityScope).toBe("pod");
+      expect(seed.uiHints?.captureDefault).toBe(true);
     }
   });
 
@@ -59,7 +62,7 @@ describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("keeps the retired w3a item seed ordered before the retired w3c merge (append-only order preserved)", () => {
+  it("keeps the live w3a item seed ordered before the retired w3c merge (append-only order preserved)", () => {
     const seedIdx = CONVERSION_MANIFEST.ops.findIndex(
       (o) => o.opKey === "w3a.seed.item"
     );
@@ -110,8 +113,10 @@ describe("CONVERSION_MANIFEST — Wave 3C (CRM-family)", () => {
     }
   });
 
-  it("w3c no longer merges note + capture into item — retired to a keep (D2 reversed 2026-09-14)", () => {
+  it("w3c no longer merges note + capture into item — STAYS a keep: both are kinds (D2 reversed 2026-09-14, item re-instated 2026-09-15)", () => {
     // opKey retained per append-only discipline; op flipped mergeInto→keep.
+    // The 2026-09-15 item re-instatement does NOT re-open this direction:
+    // note must never be swallowed into item.
     const op = CONVERSION_MANIFEST.ops.find(
       (o) => o.opKey === "w3c.merge.note-capture-into-item"
     );
@@ -310,11 +315,11 @@ describe("CONVERSION_MANIFEST — CRM deal-stage unification", () => {
   });
 });
 
-describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is not)", () => {
+describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is a kind too)", () => {
   const indexOf = (opKey: string) =>
     CONVERSION_MANIFEST.ops.findIndex((o) => o.opKey === opKey);
 
-  it("w10 declares note protected, then merges [item, capture] into note same-scope — and never re-scopes notes", () => {
+  it("w10 declares note protected, then keeps the item fold off — and never re-scopes notes", () => {
     const declare = CONVERSION_MANIFEST.ops[indexOf("w10.declare.note")];
     expect(declare).toMatchObject({
       op: "declareKind",
@@ -322,14 +327,14 @@ describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is not)", () => 
       protected: true,
     });
 
-    const merge =
+    // 2026-09-15: the planned [item, capture] → note fold is CANCELLED to a
+    // keep in place (same opKey). It was never applied on the live pod.
+    const fold =
       CONVERSION_MANIFEST.ops[indexOf("w10.merge.item-capture-into-note")];
-    expect(merge?.op).toBe("mergeInto");
-    if (merge?.op === "mergeInto") {
-      expect(merge.fromSlugs).toEqual(["item", "capture"]);
-      expect(merge.intoSlug).toBe("note");
-      // Same-scope: the live rows are all scope=system with one workspace stamp.
-      expect(merge.intoScope).toBeUndefined();
+    expect(fold?.op).toBe("keep");
+    if (fold?.op === "keep") {
+      expect(fold.slug).toBe("item");
+      expect(fold.note).toMatch(/RETIRED 2026-09-15/);
     }
 
     expect(indexOf("w10.declare.note")).toBeGreaterThan(
@@ -340,7 +345,7 @@ describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is not)", () => 
     );
 
     // Notes keep their home workspace (orchestrator 2026-09-14): no op may
-    // re-scope `note` entities. Behaviour is pinned in note-fold.pglite.test.ts (b).
+    // re-scope `note` entities. Behaviour is pinned in note-fold.pglite.test.ts.
     expect(indexOf("w10.reconcile.note")).toBe(-1);
     expect(
       CONVERSION_MANIFEST.ops.filter(
@@ -350,53 +355,48 @@ describe("CONVERSION_MANIFEST — Wave 10 (note is a kind; item is not)", () => 
   });
 
   /**
-   * Every way an op makes `slug` a HOME for data: seeding it, merging or
-   * deduping into it, or re-homing converted entities onto it. Moving data OFF
-   * it (convertToKind fromKindSlug, mergeInto fromSlugs) is not homing.
+   * Every op that MERGES `from` INTO `into` — the shape that swallows one kind
+   * into another. Derived over ALL ops; a new mergeInto joins the scan by
+   * existing, never by being listed here.
    */
-  const opsHomingOnto = (
+  const foldsInto = (
     ops: ConversionManifest["ops"],
-    slug: string
+    from: string,
+    into: string
   ): string[] =>
     ops
       .filter(
         (o) =>
-          (o.op === "seedKindProfile" && o.slug === slug) ||
-          (o.op === "mergeInto" && o.intoSlug === slug) ||
-          (o.op === "dedupeProfileRows" && o.slug === slug) ||
-          (o.op === "convertToFacet" && o.targetKindSlug === slug)
+          o.op === "mergeInto" &&
+          o.intoSlug === into &&
+          o.fromSlugs.includes(from)
       )
       .map((o) => o.opKey);
 
-  it("no op anywhere in the manifest makes `item` a home for data (derived over ALL ops)", () => {
-    // Non-vacuity: the scan read the real manifest, which holds merges.
+  it("no op anywhere merges `note` INTO `item` (the D2 fold must never come back — derived over ALL ops)", () => {
+    // Non-vacuity: the scan read the real manifest, which holds mergeInto ops.
     expect(CONVERSION_MANIFEST.ops.length).toBeGreaterThan(30);
     expect(
       CONVERSION_MANIFEST.ops.filter((o) => o.op === "mergeInto").length
     ).toBeGreaterThanOrEqual(1);
-    // Self-check: the predicate still SEES each homing shape.
+    // Self-check: the predicate still SEES the note→item merge shape — both the
+    // bare ["note"] form and the retired ["note","capture"] form.
     const samples: ConversionManifest["ops"] = [
-      {
-        op: "seedKindProfile",
-        opKey: "s",
-        slug: "item",
-        displayName: "Item",
-        entityScope: "pod",
-      },
       { op: "mergeInto", opKey: "m", fromSlugs: ["note"], intoSlug: "item" },
-      { op: "dedupeProfileRows", opKey: "d", slug: "item" },
       {
-        op: "convertToFacet",
-        opKey: "c",
-        slug: "x",
-        targetKindSlug: "item",
-        applicableKinds: ["item"],
+        op: "mergeInto",
+        opKey: "m2",
+        fromSlugs: ["note", "capture"],
+        intoSlug: "item",
       },
       { op: "mergeInto", opKey: "off", fromSlugs: ["item"], intoSlug: "note" },
     ];
-    expect(opsHomingOnto(samples, "item")).toEqual(["s", "m", "d", "c"]);
+    expect(foldsInto(samples, "note", "item")).toEqual(["m", "m2"]);
+    expect(foldsInto(samples, "item", "note")).toEqual(["off"]);
 
-    expect(opsHomingOnto(CONVERSION_MANIFEST.ops, "item")).toEqual([]);
+    expect(foldsInto(CONVERSION_MANIFEST.ops, "note", "item")).toEqual([]);
+    // The reverse direction is cancelled too (w10 is a keep, not a mergeInto).
+    expect(foldsInto(CONVERSION_MANIFEST.ops, "item", "note")).toEqual([]);
   });
 });
 

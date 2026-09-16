@@ -278,6 +278,15 @@ describe("D1 — approval authority: whoever the guideline applies to decides", 
     expect(governanceApprovalFloorFor("capture.graph")).toBe("none");
   });
 
+  // The unified gov-config door writes the SAME privileged rows (rules /
+  // ceilings / guidelines) the prefixed types do, but carries no `governance.`
+  // prefix — so the prefix rule alone would leave it at "none", i.e. approvable
+  // by any authenticated pod user. Exact match, asserted here so a future
+  // refactor of the prefix rule cannot silently re-open it.
+  it("the unified settings.update door keeps the pod-admin floor", () => {
+    expect(governanceApprovalFloorFor("settings.update")).toBe("pod-admin");
+  });
+
   it("a member approves their OWN personal (pod-wide) structure-guideline proposal", async () => {
     await expect(
       assertCanApproveStructureGuideline(

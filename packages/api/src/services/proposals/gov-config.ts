@@ -14,6 +14,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
+import { nonWidenableFloorFor } from "@synap/governance-policy";
 import {
   db,
   and,
@@ -163,6 +164,24 @@ export async function applyGovConfigChange(
       ids = revoked.map((r) => r.id);
       rows = revoked.length;
     } else {
+      const targetKind = spec.targetKind ?? "action";
+      const targetPattern = spec.targetPattern ?? "*";
+      const verdict = spec.verdict ?? "propose";
+      // A rule that can never fire is refused, not stored — the SAME refusal
+      // `governanceRules.create` (B3) and the legacy `governance.widen_lane`
+      // approval branch give. The unified door is now the ONE every recommender
+      // files through, so the check has to live HERE: an exact action key behind
+      // a non-widenable floor resolves ABOVE the rule store (rung 2.8), so an
+      // `auto` row there is a success receipt for a grant that does nothing.
+      if (verdict === "auto" && targetKind === "action") {
+        const floor = nonWidenableFloorFor(targetPattern);
+        if (floor) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `NON_WIDENABLE_FLOOR (${floor}): "${targetPattern}" always needs review — no governance rule can auto-approve it.`,
+          });
+        }
+      }
       const inserted = await db
         .insert(governanceRules)
         .values({
@@ -171,10 +190,10 @@ export async function applyGovConfigChange(
           scopeKind: spec.scopeKind ?? "pod",
           workspaceId:
             spec.scopeKind === "workspace" ? (spec.workspaceId ?? null) : null,
-          targetKind: spec.targetKind ?? "action",
-          targetPattern: spec.targetPattern ?? "*",
+          targetKind,
+          targetPattern,
           targetProfile: spec.targetProfile ?? null,
-          verdict: spec.verdict ?? "propose",
+          verdict,
           sourceProposalId: sourceProposalId ?? null,
           createdBy,
         })
