@@ -49,7 +49,10 @@ import {
   setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
-import { listWorkspacesUsedByProjects } from "../utils/project-workspace.js";
+import {
+  hydrateUsedWorkspaces,
+  listWorkspacesUsedByProjects,
+} from "../utils/project-workspace.js";
 
 /**
  * Count how many of `entityIds` actually exist and are visible to `userId`,
@@ -336,9 +339,9 @@ export const projectsRouter = router({
       }
 
       const subjects = await loadProjectSubjects(db, [project.id], ctx.userId);
-      const usedWorkspaces = await listWorkspacesUsedByProjects(db, [
-        project.id,
-      ]);
+      const usedMap = await listWorkspacesUsedByProjects(db, [project.id]);
+      const usedWorkspaceIds = usedMap.get(project.id) ?? [];
+      const usedWorkspaces = await hydrateUsedWorkspaces(db, usedWorkspaceIds);
       return {
         project,
         subject: subjects.get(project.id) ?? null,
@@ -348,7 +351,8 @@ export const projectsRouter = router({
           project.settings
         ),
         // Additive INDEX: workspaces this project uses. Not an ACL.
-        usedWorkspaceIds: usedWorkspaces.get(project.id) ?? [],
+        usedWorkspaceIds,
+        usedWorkspaces,
       };
     }),
 
@@ -737,6 +741,9 @@ export const projectsRouter = router({
 
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
+        // Parity with create: agents must be attributed or the gate treats
+        // the write as human and can auto-apply ungoverned.
+        agentUserId: ctx.agentUserId ?? undefined,
         workspaceId: target.workspaceId ?? undefined,
         subjectType: "project",
         action: "update",

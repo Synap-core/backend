@@ -1,5 +1,5 @@
 /**
- * projectToSuitePackageDefinition — project uses-edges → suite PackageDefinition.
+ * projectToSuitePackageDefinition — project uses-edges → suite + constituents.
  * =================================================================================
  *
  * Pod-native door for `synap market publish --from-project <id>`:
@@ -7,10 +7,12 @@
  *   2. Walk `listWorkspacesUsedByProject` (the uses-edge INDEX).
  *   3. Serialise each workspace via `workspaceToPackageDefinition` (lossy —
  *      same drop-list as `--from-workspace`).
- *   4. Compose ONE suite package via `composeSuitePackageDefinition`
- *      (`suite` tag, `require` deps, embedded playbooks).
+ *   4. Compose ONE thin suite via `composeSuitePackageDefinition`
+ *      (`suite` tag, `require` deps, harvested playbooks).
+ *   5. ALSO return the full constituent workspace definitions so a one-go
+ *      publish can post them first — otherwise install hits required-absent.
  *
- * READ-ONLY. Does not publish — the CLI posts the result to `POST /api/packages`.
+ * READ-ONLY. Does not publish — the CLI posts constituents then the suite.
  */
 
 import {
@@ -26,7 +28,13 @@ import { workspaceToPackageDefinition } from "./workspace-to-package-definition.
 import { composeSuitePackageDefinition } from "./compose-suite-package-definition.js";
 
 export interface ProjectToSuitePackageDefinitionResult {
+  /** Thin command-tower suite (require-deps + harvested playbooks). */
   definition: PackageDefinition;
+  /**
+   * Full workspace package bodies for each uses-edge. Publish these BEFORE
+   * the suite so `require` resolves. Same lossy projection as --from-workspace.
+   */
+  constituents: PackageDefinition[];
   projectId: string;
   projectName: string;
   /** Workspace ids that were serialised into the suite. */
@@ -52,6 +60,7 @@ export async function projectToSuitePackageDefinition(opts: {
       id: projects.id,
       name: projects.name,
       description: projects.description,
+      settings: projects.settings,
     })
     .from(projects)
     .where(
@@ -86,8 +95,15 @@ export async function projectToSuitePackageDefinition(opts: {
     workspaceDefs,
   });
 
+  // Round-trip engagement UI if the live project has settings.layout.
+  const layout = (project.settings as { layout?: unknown } | null)?.layout;
+  if (layout && typeof layout === "object") {
+    definition.projectSurface = layout as PackageDefinition["projectSurface"];
+  }
+
   return {
     definition,
+    constituents: workspaceDefs,
     projectId: project.id,
     projectName: project.name,
     workspaceIds,

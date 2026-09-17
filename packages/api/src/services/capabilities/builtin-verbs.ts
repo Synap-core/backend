@@ -2133,6 +2133,13 @@ const marketInstallParams = z.object({
   ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
+  /** Stamp uses-edges / seed filing onto this existing project. */
+  projectId: z.string().uuid().optional(),
+  /**
+   * Human-typed engagement name. Mint/reuse Project then stamp uses.
+   * Agents must pass projectId (gravity); projectName alone is refused for agents.
+   */
+  projectName: z.string().min(1).max(255).optional(),
   // RC4 payload-in: an already-CP-authenticated client can hand us the FULL
   // package definition so the pod installs a PRIVATE package WITHOUT re-fetching
   // the CP by slug (that fetch is unauthenticated → 404s for private packages).
@@ -2191,6 +2198,8 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     userId: ctx.userId,
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
+    projectId: input.projectId,
+    projectName: input.projectName,
   });
 };
 

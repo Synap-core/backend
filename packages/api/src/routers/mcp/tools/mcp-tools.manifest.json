@@ -797,7 +797,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Escalation L3: call ONLY after synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed: may return 'proposed' — NEVER treat that as an error.",
+      "description": "Define or WIDEN a role (facet): a hat on ANY entity kind, not only person/company. Example: applicableKinds ['item'] means 'this item is an X'. Call ONLY after synap_list_profiles. If the slug already exists, extra applicableKinds are MERGED (widen only — never a second slug for the same hat). Prefer attach_facet; widen when kind_mismatch. NULL stored allowlist = any kind. Governed: may return 'proposed' — NEVER treat that as an error.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -814,7 +814,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Base-kind slugs this role can attach to. REQUIRED, non-empty. Defaults to ['company','person']."
+            "description": "Kind slugs this hat can attach to (item, person, company, task, …). Merged on an existing role. Defaults to ['company','person'] only when omitted on CREATE — that default is a convenience, not a model limit."
           },
           "description": {
             "type": "string",
@@ -852,7 +852,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Define a NEW entity KIND (a primary type: 'podcast', 'workout', 'invoice') and, optionally, its fields — the data model an app is built on. A kind is a thing that HAS identity; a hat that thing WEARS (client, sponsor, mentor) is a ROLE — use synap_define_role for those, never a kind. Escalation L3: call ONLY after synap_list_profiles shows no existing kind that fits; extending an existing kind with new fields is almost always better than minting a near-duplicate. Kinds are POD-WIDE by default (their entities are visible in every workspace) — pass entityScope:'workspace' only for a kind that is genuinely app-specific. Slug-idempotent: re-calling with an existing slug returns that profile and adds any new fields, so it is also the door for growing a kind's schema. Governed: may return 'proposed' — NEVER treat that as an error (when the kind itself is proposed, its fields are deferred until approval).",
+      "description": "Define a NEW entity KIND only after list_profiles + extend-first (load_skill system/synap-schema/extend-first). A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. Slug-idempotent for fields. POD-WIDE default. Governed: 'proposed' is success.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2292,6 +2292,103 @@
       }
     },
     {
+      "name": "synap_get_project",
+      "annotations": {
+        "title": "Get project",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "Project UUID"
+          }
+        },
+        "required": ["projectId"]
+      }
+    },
+    {
+      "name": "synap_update_project",
+      "annotations": {
+        "title": "Update project",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Rename or retitle a project (name, description, status). Reuse this instead of creating a twin. Governed: may return proposed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "Project UUID"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "archived", "completed"]
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the reviewer. One line."
+          }
+        },
+        "required": ["projectId"]
+      }
+    },
+    {
+      "name": "synap_project_use_workspace",
+      "annotations": {
+        "title": "Project uses workspace",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          },
+          "workspaceId": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why this project uses this domain, in the person's words. One line."
+          }
+        },
+        "required": ["projectId", "workspaceId"]
+      }
+    },
+    {
+      "name": "synap_export_project_pack",
+      "annotations": {
+        "title": "Export project as suite pack",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Serialize a live project for marketplace: returns { definition: thin suite, constituents: full workspace packages[] }. Publish constituents first, then the suite (CLI --from-project does both). NOT live entity data. Empty uses-index → error. Read-only.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string"
+          }
+        },
+        "required": ["projectId"]
+      }
+    },
+    {
       "name": "synap_create_view",
       "annotations": {
         "title": "Create view",
@@ -3327,5 +3424,5 @@
       }
     }
   ],
-  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work, projects, people and preferences. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask`. It also prevents duplicates.\n2. **Capture after.** A durable fact, decision, person, company or task: `capture`. About the user themself (a preference, a standing constraint): `remember_fact`. No private scratchpad; what you learn goes into the graph.\n3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions.\n4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.\n5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.\n6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace.\n\nLoad depth with `load_skill`: `system/synap/lenses` (workspaces, projects, sessions, where writes land), `escalation-ladder`, `writes`, or `catalog`."
+  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work, projects, people and preferences. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask`. It also prevents duplicates.\n2. **Capture after.** A durable fact, decision, person, company or task: `capture`. About the user themself (a preference, a standing constraint): `remember_fact`. No private scratchpad; what you learn goes into the graph.\n3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions.\n4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.\n5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.\n6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet on any kind, overlay, parent) — never a twin slug. New area of work: `load_skill` `system/synap/from-intent`.\n\nLoad depth with `load_skill`: `system/synap/lenses`, `from-intent`, `escalation-ladder`, `writes`, or `catalog`."
 }

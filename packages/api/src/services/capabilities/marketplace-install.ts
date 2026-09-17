@@ -348,6 +348,11 @@ export interface ApplyMarketInstallInput {
   params?: Record<string, unknown>;
   userId: string;
   workspaceId: string | null;
+  agentUserId?: string | null;
+  /** Stamp uses / seed filing onto this project. */
+  projectId?: string;
+  /** Human-typed engagement name — mint/reuse Project (agents must use projectId). */
+  projectName?: string;
   /**
    * RC4 payload-in: the FULL package definition supplied by an
    * already-CP-authenticated client. When present it IS the resolved definition
@@ -559,7 +564,59 @@ export async function applyMarketInstall(
           message: `Package "${input.slug}" has an invalid definition for its living layers (capabilities/automations/playbooks). The workspace was created; nothing further was applied.`,
         });
       }
-      const postBody = parsed.data as unknown as PackagePostWorkspaceBody;
+      const postBody = parsed.data as unknown as PackagePostWorkspaceBody & {
+        projectId?: string;
+        projectName?: string;
+        projectSurface?: unknown;
+      };
+      // Engagement project (named install): resolve before layer 2 so uses-edges
+      // and seed filing stamp onto the project.
+      if (input.projectId || input.projectName) {
+        const { resolveProjectForPackInstall } =
+          await import("../resolve-project-for-pack-install.js");
+        const resolved = await resolveProjectForPackInstall({
+          userId: input.userId,
+          agentUserId: input.agentUserId ?? undefined,
+          projectId: input.projectId,
+          projectName: input.projectName,
+          packageSlug: input.slug,
+          homeWorkspaceId: result.workspaceId,
+        });
+        if ("error" in resolved) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: resolved.error,
+          });
+        }
+        postBody.projectId = resolved.projectId;
+        if (
+          postBody.projectSurface &&
+          typeof postBody.projectSurface === "object"
+        ) {
+          const {
+            getDb,
+            sql,
+            projects,
+            eq,
+            ProjectRepository,
+            EventRepository,
+          } = await import("@synap/database");
+          const dbConn = await getDb();
+          const [existing] = await dbConn
+            .select({ settings: projects.settings })
+            .from(projects)
+            .where(eq(projects.id, resolved.projectId))
+            .limit(1);
+          const prev = (existing?.settings ?? {}) as Record<string, unknown>;
+          const eventRepo = new EventRepository(sql);
+          const projectRepo = new ProjectRepository(dbConn, eventRepo);
+          await projectRepo.update(
+            resolved.projectId,
+            { settings: { ...prev, layout: postBody.projectSurface } },
+            input.userId
+          );
+        }
+      }
       // ⚠️ KNOWN, DELIBERATE UNDER-CONVERGENCE — read before "fixing" the gate.
       // The `outcome !== "unchanged"` condition below is copied from the Hub
       // door, but the two callers are NOT in the same situation. Hub REST ran
@@ -1109,6 +1166,8 @@ export interface RunMarketInstallInput {
   workspaceId: string | null;
   /** The acting AGENT (agent-user id), when this call originates from an agent. */
   agentUserId?: string | null;
+  projectId?: string;
+  projectName?: string;
 }
 
 export type MarketInstallOutcome =
@@ -1158,6 +1217,8 @@ export async function runMarketInstall(
         version: input.version ?? entry?.version ?? null,
         source: entry?.source ?? null,
         params: input.params ?? {},
+        ...(input.projectId ? { projectId: input.projectId } : {}),
+        ...(input.projectName ? { projectName: input.projectName } : {}),
       },
       notificationDescription: `Install "${entry?.name ?? input.slug}" (${input.kind}) v${entry?.version ?? "latest"} from the marketplace`,
     });
@@ -1176,6 +1237,9 @@ export async function runMarketInstall(
     definition: input.definition,
     userId: input.userId,
     workspaceId: input.workspaceId,
+    agentUserId: input.agentUserId,
+    projectId: input.projectId,
+    projectName: input.projectName,
   });
   return { status: "installed", result };
 }

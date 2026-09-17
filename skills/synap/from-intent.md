@@ -74,4 +74,4 @@ Empty workspace ≠ broken. An empty Finance is fine until this intent needs a r
 
 ### After it works
 
-Offer L4: session → playbook, cell → renderer, lived setup → package. Never crystallize a guess.
+Offer L4, one at a time: session → playbook; cell → renderer; **project → suite pack** (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.

@@ -295,6 +295,13 @@ export interface PackageDefinition {
    * shared `installCellFromDefinition` → `defineCell` door.
    */
   cells?: PackageCellDef[];
+  /**
+   * Engagement UI for a Project minted by suite install (P2 "project as a place").
+   * Applied into `projects.settings.layout` — same descriptor vocabulary as
+   * workspace `layoutConfig` (primarySurface, sidebarItems, …). NOT a seventh
+   * PACKAGE_TYPE. Browser ProjectDetail reads it; Relay ignores workbench layout.
+   */
+  projectSurface?: WorkspaceDefinitionInput["layoutConfig"];
 }
 
 // ─── Card (frame-cell) definitions ────────────────────────────────────────

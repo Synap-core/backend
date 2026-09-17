@@ -24,6 +24,39 @@ import {
   workspaces,
   ownerPrivateVisibleWhere,
 } from "@synap/database";
+
+/** INDEX projection a UI/agent can name, not just id. */
+export type UsedWorkspaceRef = {
+  id: string;
+  name: string;
+  domain: string | null;
+};
+
+/**
+ * Hydrate uses-edge ids to {id, name, domain}. Order of `ids` is preserved.
+ * Missing rows are omitted (deleted workspace) — never invented.
+ */
+export async function hydrateUsedWorkspaces(
+  db: Awaited<ReturnType<typeof getDb>>,
+  ids: readonly string[]
+): Promise<UsedWorkspaceRef[]> {
+  if (ids.length === 0) return [];
+  const rows = await db
+    .select({
+      id: workspaces.id,
+      name: workspaces.name,
+      domain: workspaces.domain,
+    })
+    .from(workspaces)
+    .where(inArray(workspaces.id, [...ids]));
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out: UsedWorkspaceRef[] = [];
+  for (const id of ids) {
+    const row = byId.get(id);
+    if (row) out.push(row);
+  }
+  return out;
+}
 import { createLink } from "../services/links/links-service.js";
 
 export type LinkProjectToWorkspaceResult =

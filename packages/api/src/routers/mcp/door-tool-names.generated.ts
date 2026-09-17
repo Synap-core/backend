@@ -105,6 +105,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__diagnose",
     raycast: "diagnose",
   },
+  synap_export_project_pack: {
+    "pod-mcp": "synap_export_project_pack",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_get_channel: {
     "pod-mcp": "synap_get_channel",
     "cp-connector": null,
@@ -129,6 +134,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_get_graph",
     "cp-connector": "pod__get_graph",
     raycast: "get-connections",
+  },
+  synap_get_project: {
+    "pod-mcp": "synap_get_project",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_get_relations: {
     "pod-mcp": "synap_get_relations",
@@ -215,6 +225,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__post_message",
     raycast: "send-to-channel",
   },
+  synap_project_use_workspace: {
+    "pod-mcp": "synap_project_use_workspace",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_promote_cell_to_renderer: {
     "pod-mcp": "synap_promote_cell_to_renderer",
     "cp-connector": null,
@@ -299,6 +314,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_update_entity",
     "cp-connector": "pod__update_entity",
     raycast: "update-entity",
+  },
+  synap_update_project: {
+    "pod-mcp": "synap_update_project",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_update_session: {
     "pod-mcp": "synap_update_session",

@@ -8,7 +8,10 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import { db, workspaces, projects, inArray } from "@synap/database";
+import { db, getDb, workspaces, projects, inArray } from "@synap/database";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
 import {
@@ -425,5 +428,154 @@ export const workspaceHandlers: McpHandlerMap = {
         : undefined,
     });
     return ok(result);
+  },
+  synap_get_project: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const projectId = args.projectId as string;
+    if (!projectId) return ok({ error: "projectId is required" });
+    const projectCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      null,
+      undefined,
+      undefined,
+      undefined
+    );
+    const projectCaller = projectsRouter.createCaller(projectCtx);
+    try {
+      const result = await projectCaller.get({ id: projectId });
+      return ok(result);
+    } catch (err) {
+      return ok({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+  synap_update_project: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      sessionId,
+      requestedWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const projectId = args.projectId as string;
+    if (!projectId) return ok({ error: "projectId is required" });
+    // podProcedure update — home workspace may be null. Prefer focus, else null.
+    const projectCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      requestedWorkspaceId ?? null,
+      undefined,
+      sessionId,
+      agentUserId
+    );
+    const projectCaller = projectsRouter.createCaller(projectCtx);
+    const result = await projectCaller.update({
+      id: projectId,
+      ...(typeof args.name === "string" ? { name: args.name } : {}),
+      ...(typeof args.description === "string"
+        ? { description: args.description }
+        : {}),
+      ...(args.status === "active" ||
+      args.status === "archived" ||
+      args.status === "completed"
+        ? { status: args.status }
+        : {}),
+    });
+    return ok(result);
+  },
+  synap_project_use_workspace: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const projectId = args.projectId as string;
+    const workspaceId = args.workspaceId as string;
+    if (!projectId || !workspaceId) {
+      return ok({ error: "projectId and workspaceId are required" });
+    }
+    const perm = await checkPermissionOrPropose({
+      userId,
+      agentUserId,
+      workspaceId,
+      subjectType: "link",
+      action: "create",
+      reasoning:
+        readReasoning(args) ??
+        "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace",
+      data: {
+        fromType: "project",
+        fromId: projectId,
+        toType: "workspace",
+        toId: workspaceId,
+        linkType: "uses",
+      },
+    });
+    if ("denied" in perm && perm.denied) {
+      return ok({ error: perm.reason });
+    }
+    if ("proposalId" in perm) {
+      return ok({
+        status: "proposed",
+        proposalId: perm.proposalId,
+      });
+    }
+    const database = await getDb();
+    const uses = await linkProjectToWorkspace(database, {
+      projectId,
+      workspaceId,
+      userId,
+    });
+    if (!uses.linked) {
+      return ok({
+        error:
+          uses.reason === "workspace_not_found"
+            ? "Workspace not found"
+            : "Project not found",
+      });
+    }
+    return ok({ status: "linked", projectId, workspaceId });
+  },
+  synap_export_project_pack: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const projectId = args.projectId as string;
+    if (!projectId) return ok({ error: "projectId is required" });
+    try {
+      const pack = await projectToSuitePackageDefinition({
+        projectId,
+        userId,
+      });
+      return ok({
+        definition: pack.definition,
+        constituents: pack.constituents,
+        projectId: pack.projectId,
+        projectName: pack.projectName,
+        workspaceIds: pack.workspaceIds,
+        requiredSlugs: pack.requiredSlugs,
+        drops: [
+          "commands",
+          "relationDefs",
+          "loops",
+          "widgets",
+          "sourceRoles",
+          "live entity data",
+        ],
+        note: "Read-only. Publish EACH constituent workspace package first, then the thin suite (CLI --from-project does this). Install with projectName to mint a named engagement.",
+      });
+    } catch (err) {
+      return ok({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   },
 };

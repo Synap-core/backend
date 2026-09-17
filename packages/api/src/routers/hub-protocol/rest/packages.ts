@@ -17,6 +17,16 @@ import {
 } from "../../../services/workspace-materialization-service.js";
 import { applyPackagePostWorkspace } from "../../../services/package-apply-post-workspace.js";
 import type { DependencySeedOutcome } from "../../../services/package-dependency-resolver.js";
+import { resolveProjectForPackInstall } from "../../../services/resolve-project-for-pack-install.js";
+import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import {
+  getDb,
+  sql,
+  projects,
+  eq,
+  ProjectRepository,
+  EventRepository,
+} from "@synap/database";
 import {
   preflightWorkspaceFromDefinition,
   type WorkspaceDefinitionInput,
@@ -197,6 +207,12 @@ export const PackageApplySchema = z.object({
    * the workspace's data. This is what unifies an Agent OS under one project.
    */
   projectId: z.string().uuid().optional(),
+  /**
+   * Mint (or reuse by exact name) an engagement Project for this install.
+   * Humans only — agents must pass projectId after a gravity-gated create.
+   * Stamps project --uses--> every materialized/reused domain workspace.
+   */
+  projectName: z.string().min(1).max(255).optional(),
   workspaceVisibility: z
     .enum(["private", "members", "pod_visible", "pod_joinable", "public_link"])
     .optional(),
@@ -238,6 +254,16 @@ export const PackageApplySchema = z.object({
     .record(z.string(), z.record(z.string(), z.unknown()))
     .optional(),
   layoutConfig: z
+    .object({
+      primarySurface: workspacePrimarySurfaceSchema.nullish(),
+    })
+    .catchall(z.unknown())
+    .optional(),
+  /**
+   * Engagement UI applied into `projects.settings.layout` when projectId /
+   * projectName mints or reuses a Project. Same shape as layoutConfig.
+   */
+  projectSurface: z
     .object({
       primarySurface: workspacePrimarySurfaceSchema.nullish(),
     })
@@ -710,6 +736,55 @@ export function registerPackagesRoutes(app: HubHono): void {
     // no stamp) is unaffected: `postWorkspaceOutcome` is only ever
     // `"unchanged"` when `reconcileWorkspaceIfStale` did a real version
     // comparison AND found no drift.
+
+    // Engagement project: reuse projectId, or mint/reuse by projectName (human).
+    let engagementProjectId = body.projectId;
+    if (body.projectId || body.projectName) {
+      const resolved = await resolveProjectForPackInstall({
+        userId,
+        agentUserId,
+        projectId: body.projectId,
+        projectName: body.projectName,
+        packageSlug: body._meta?.slug,
+        homeWorkspaceId: workspaceId ?? null,
+      });
+      if ("error" in resolved) {
+        return c.json({ error: resolved.error }, 400);
+      }
+      engagementProjectId = resolved.projectId;
+      result.project = {
+        projectId: resolved.projectId,
+        created: resolved.created,
+        reused: resolved.reused,
+      };
+      // Thread into post-workspace so seed entities + uses-edge stamp land.
+      body.projectId = resolved.projectId;
+
+      // Apply engagement UI pack into projects.settings.layout (P2 surface).
+      if (body.projectSurface && typeof body.projectSurface === "object") {
+        const dbConn = await getDb();
+        const [existing] = await dbConn
+          .select({ settings: projects.settings })
+          .from(projects)
+          .where(eq(projects.id, resolved.projectId))
+          .limit(1);
+        const prev = (existing?.settings ?? {}) as Record<string, unknown>;
+        const eventRepo = new EventRepository(sql);
+        const projectRepo = new ProjectRepository(dbConn, eventRepo);
+        await projectRepo.update(
+          resolved.projectId,
+          {
+            settings: {
+              ...prev,
+              layout: body.projectSurface,
+            },
+          },
+          userId
+        );
+        result.projectSurfaceApplied = true;
+      }
+    }
+
     if (workspaceId && postWorkspaceOutcome !== "unchanged") {
       const post = await applyPackagePostWorkspace({
         workspaceId,
@@ -719,6 +794,24 @@ export function registerPackagesRoutes(app: HubHono): void {
         scopes: c.get("scopes") ?? [],
       });
       Object.assign(result, post);
+    }
+
+    // Stamp uses-edges onto every resolved require/compose workspace (shared
+    // domains the engagement spans). Main workspace is stamped in post above;
+    // deps may only have been "found" without a post-workspace call.
+    if (engagementProjectId && Array.isArray(result.dependencies)) {
+      const dbConn = await getDb();
+      const depIds = (result.dependencies as Array<{ workspaceId?: string }>)
+        .map((d) => d.workspaceId)
+        .filter((id): id is string => typeof id === "string");
+      for (const depWsId of depIds) {
+        if (depWsId === workspaceId) continue;
+        await linkProjectToWorkspace(dbConn, {
+          projectId: engagementProjectId,
+          workspaceId: depWsId,
+          userId,
+        });
+      }
     }
 
     return c.json(result, 201);

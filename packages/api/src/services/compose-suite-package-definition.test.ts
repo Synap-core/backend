@@ -86,6 +86,25 @@ describe("composeSuitePackageDefinition", () => {
     expect(def.profiles?.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("caller must publish workspaceDefs as constituents separately (suite stays thin)", () => {
+    // Contract: composeSuite only builds the tower + require deps. Depth lives
+    // in the input workspaceDefs — projectToSuite returns them as constituents.
+    const crm = fakeWorkspace("crm");
+    const content = fakeWorkspace("content-os");
+    const def = composeSuitePackageDefinition({
+      projectName: "Acme",
+      workspaceDefs: [crm, content],
+    });
+    expect(def.profiles?.[0]?.slug).toBe("suite-home");
+    expect(def.views).toBeUndefined();
+    expect(def.cells).toBeUndefined();
+    // Constituents are the full defs the CLI publishes first.
+    expect([crm, content].map((d) => d._meta?.slug)).toEqual([
+      "crm",
+      "content-os",
+    ]);
+  });
+
   it("dedupes duplicate workspace slugs and playbook names", () => {
     const def = composeSuitePackageDefinition({
       projectName: "Dupes",

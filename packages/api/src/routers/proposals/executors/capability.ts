@@ -504,6 +504,11 @@ export function registerCapabilityExecutors(): void {
         params: (data.params ?? {}) as Record<string, unknown>,
         userId,
         workspaceId: proposal.workspaceId ?? null,
+        // Approver is human authority — projectName mint is allowed here.
+        projectId:
+          typeof data.projectId === "string" ? data.projectId : undefined,
+        projectName:
+          typeof data.projectName === "string" ? data.projectName : undefined,
       });
 
       const materializedPayload = {

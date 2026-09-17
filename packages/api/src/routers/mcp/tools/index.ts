@@ -2603,6 +2603,93 @@ export const tools = {
         },
       },
       {
+        name: "synap_get_project",
+        annotations: {
+          title: "Get project",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Read one project: name, description, home workspace, and usedWorkspaces (domains this engagement spans via the uses INDEX). Call after orient when you need the span map. Not an ACL.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: { type: "string", description: "Project UUID" },
+          },
+          required: ["projectId"],
+        },
+      },
+      {
+        name: "synap_update_project",
+        annotations: {
+          title: "Update project",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Rename or retitle a project (name, description, status). Reuse this instead of creating a twin. Governed: may return proposed.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: { type: "string", description: "Project UUID" },
+            name: { type: "string" },
+            description: { type: "string" },
+            status: {
+              type: "string",
+              enum: ["active", "archived", "completed"],
+            },
+            reasoning: {
+              type: "string",
+              description:
+                "Why you are making this write, in the person's words — shown to the reviewer. One line.",
+            },
+          },
+          required: ["projectId"],
+        },
+      },
+      {
+        name: "synap_project_use_workspace",
+        annotations: {
+          title: "Project uses workspace",
+          readOnlyHint: false,
+          destructiveHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Stamp the INDEX edge project --uses--> workspace: this engagement runs through that domain. NOT an ACL (does not grant workspace membership). packages/apply with projectId already stamps this; call this when the workspace already exists. Idempotent. Governed: may return proposed.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: { type: "string" },
+            workspaceId: { type: "string" },
+            reasoning: {
+              type: "string",
+              description:
+                "Why this project uses this domain, in the person's words. One line.",
+            },
+          },
+          required: ["projectId", "workspaceId"],
+        },
+      },
+      {
+        name: "synap_export_project_pack",
+        annotations: {
+          title: "Export project as suite pack",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "Serialize a live project for marketplace: returns { definition: thin suite, constituents: full workspace packages[] }. Publish constituents first, then the suite (CLI --from-project does both). NOT live entity data. Empty uses-index → error. Read-only.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            projectId: { type: "string" },
+          },
+          required: ["projectId"],
+        },
+      },
+      {
         name: "synap_create_view",
         annotations: {
           title: "Create view",

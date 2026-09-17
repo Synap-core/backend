@@ -172,10 +172,10 @@ Hats are **not** limited to people and companies. A role is a hat on **whatever 
 After orient, your first user-facing message is:
 
 1. **Reuse or not** — name the existing project(s) that already match. If none, say you would create one (human / capture-plan / ≥5 evidence). Stop if they must choose.
-2. **What already covers the intent** — existing workspaces (do not onboard an **empty** domain unless this session's goal needs data there *now*). Existing kinds/roles (extend-first).
+2. **What already covers the intent** — existing workspaces (do not onboard an **empty** domain unless this session's goal needs data there _now_). Existing kinds/roles (extend-first).
 3. **Exactly one next write** you want confirmed. Examples of ONE: reuse+pin project lens; install one overlay template; start one session; widen one role. Not: project + template + onboard Finance + declare all edges + playbook.
 
-Then **wait**. After that write lands (`proposed` is success), the *next* turn may offer the next one move.
+Then **wait**. After that write lands (`proposed` is success), the _next_ turn may offer the next one move.
 
 Do **not** declare every provides/consumes/trigger edge in the opening. Edges are a later turn, and only for the pair this work actually reads.
 
@@ -210,7 +210,7 @@ Empty workspace ≠ broken. An empty Finance is fine until this intent needs a r
 
 ### After it works
 
-Offer L4: session → playbook, cell → renderer, lived setup → package. Never crystallize a guess.
+Offer L4, one at a time: session → playbook; cell → renderer; **project → suite pack** (`synap_export_project_pack` / CLI `--from-project`). Export returns a thin suite **plus** full constituent workspace packages — publish constituents first, then the suite (CLI does both). Install with `projectName` (human) or `projectId` (agent) to mint/reuse a named engagement and stamp uses-edges. Optional `projectSurface` lands in `projects.settings.layout` (engagement UI). Not live entity rows. Never crystallize a guess. No `app` package type.
 
 ---
 

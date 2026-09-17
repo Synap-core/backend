@@ -41,7 +41,10 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
-import { listWorkspacesUsedByProjects } from "../../../utils/project-workspace.js";
+import {
+  hydrateUsedWorkspaces,
+  listWorkspacesUsedByProjects,
+} from "../../../utils/project-workspace.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
@@ -584,11 +587,14 @@ export function registerProjectsRoutes(app: HubHono): void {
     });
 
     if (!row) return c.json({ error: "Project not found" }, 404);
-    const usedWorkspaces = await listWorkspacesUsedByProjects(db, [row.id]);
+    const usedWorkspaceIds =
+      (await listWorkspacesUsedByProjects(db, [row.id])).get(row.id) ?? [];
+    const usedWorkspaces = await hydrateUsedWorkspaces(db, usedWorkspaceIds);
     return c.json({
       ...row,
       // Additive INDEX: workspaces this project uses. Not an ACL.
-      usedWorkspaceIds: usedWorkspaces.get(row.id) ?? [],
+      usedWorkspaceIds,
+      usedWorkspaces,
     });
   });
 
@@ -630,6 +636,8 @@ export function registerProjectsRoutes(app: HubHono): void {
           workspaceIds: result.workspaceIds,
           requiredSlugs: result.requiredSlugs,
           definition: result.definition,
+          /** Full workspace packages — publish these before the suite. */
+          constituents: result.constituents,
         },
         200
       );
@@ -795,6 +803,7 @@ export function registerProjectsRoutes(app: HubHono): void {
 
     const perm = await checkPermissionOrPropose({
       userId,
+      agentUserId: c.get("agentUserId") as string | undefined,
       subjectType: "project",
       action: "update",
       // The WHOLE patch, matching the tRPC twin. This gate stored `{ id }`

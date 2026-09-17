@@ -43,6 +43,11 @@ import {
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
 import {
+  hydrateUsedWorkspaces,
+  listWorkspacesUsedByProjects,
+  type UsedWorkspaceRef,
+} from "../../utils/project-workspace.js";
+import {
   getUserAccessibleWorkspaceIds,
   type HubProtocolCaller,
 } from "../../routers/hub-protocol/rest/_shared.js";
@@ -268,6 +273,8 @@ interface DiscoverProject {
   status: string | null;
   workspaceId: string | null;
   homeWorkspace: string | null;
+  /** INDEX: domains this engagement runs through (project --uses--> workspace). */
+  usedWorkspaces: UsedWorkspaceRef[];
 }
 
 /**
@@ -745,16 +752,29 @@ export async function discover(
         .where(inArray(workspaces.id, missingWsIds));
       for (const w of names) wsNameById.set(w.id, w.name);
     }
-    projectsOut = rows.map((p) => ({
-      id: p.id,
-      name: p.name,
-      description: p.description,
-      status: p.status,
-      workspaceId: p.workspaceId,
-      homeWorkspace: p.workspaceId
-        ? (wsNameById.get(p.workspaceId) ?? null)
-        : null,
-    }));
+    const usedByProject = await listWorkspacesUsedByProjects(
+      db,
+      rows.map((p) => p.id)
+    );
+    const allUsedIds = [...new Set([...usedByProject.values()].flat())];
+    const usedRefs = await hydrateUsedWorkspaces(db, allUsedIds);
+    const usedRefById = new Map(usedRefs.map((r) => [r.id, r]));
+    projectsOut = rows.map((p) => {
+      const ids = usedByProject.get(p.id) ?? [];
+      return {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        status: p.status,
+        workspaceId: p.workspaceId,
+        homeWorkspace: p.workspaceId
+          ? (wsNameById.get(p.workspaceId) ?? null)
+          : null,
+        usedWorkspaces: ids
+          .map((id) => usedRefById.get(id))
+          .filter((r): r is UsedWorkspaceRef => !!r),
+      };
+    });
   }
 
   // Pending-review backlog. Best-effort: orient must never fail because the
