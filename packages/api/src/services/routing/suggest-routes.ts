@@ -173,7 +173,11 @@ export interface EntityRouteSuggestions {
  */
 export function suggestRoutesForEntities(input: {
   entities: ReadonlyArray<
-    RouteEntity & { candidates: readonly RouteCandidate[] }
+    RouteEntity & {
+      /** Capture follow-up always has a kind; omit those rows, don't invent "". */
+      profileSlug: string;
+      candidates: readonly RouteCandidate[];
+    }
   >;
   intentText?: string | null;
   /** Per entity. Default 3 — an inline suggestion, not a catalogue. */
