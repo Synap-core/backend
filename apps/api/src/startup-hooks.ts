@@ -30,7 +30,6 @@ import {
   setDynamicCorsOrigins,
   ensureSynapCoreCapability,
   ensureSystemSkills,
-  ensureIntentFirstProject,
   ensureCaptureAgent,
   ensureSessionNarrativeRule,
   reconcileCapabilitiesToTemplates,
@@ -721,18 +720,6 @@ export async function runStartupHooks(): Promise<void> {
     await ensureCaptureAgent();
   } catch (err) {
     logger.warn({ err }, "Failed to seed capture agent on startup (non-fatal)");
-  }
-
-  // Seed intent-first project creation — auto-installed on every pod startup,
-  // following the same pattern as ensureSynapCoreCapability and ensureSystemSkills.
-  // Installs the workspace template + capability + seeds the system intent-decomposition skill.
-  try {
-    await ensureIntentFirstProject();
-  } catch (err) {
-    logger.warn(
-      { err },
-      "Failed to seed intent-first project on startup (non-fatal)"
-    );
   }
 
   // Seed the D10 governance rule: an agent's update to a narrative section of

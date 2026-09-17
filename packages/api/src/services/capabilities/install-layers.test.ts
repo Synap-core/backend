@@ -17,6 +17,16 @@ describe("summarizePostWorkspaceLayers", () => {
     expect(summarizePostWorkspaceLayers(bag)).toEqual([]);
   });
 
+  it("a linked project with zero seed entities is NOT a failure", () => {
+    // Clean template install: uses-edge landed, entities: 0. layers[] is an
+    // exception channel — `linked` with no seed rows is success, not an error.
+    expect(
+      summarizePostWorkspaceLayers({
+        projectLink: { status: "linked", projectId: "p1", entities: 0 },
+      })
+    ).toEqual([]);
+  });
+
   it("reports a FAILED post-workspace layer for a per-item error inside an array", () => {
     const bag = {
       capabilities: [

@@ -115,6 +115,7 @@ const LINK_TYPES = [
   "activates",
   "spawned_from",
   "blocked_by",
+  "uses",
 ] as const;
 
 /**

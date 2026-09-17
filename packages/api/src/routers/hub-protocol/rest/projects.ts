@@ -41,6 +41,7 @@ import {
 } from "./_shared.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
+import { listWorkspacesUsedByProjects } from "../../../utils/project-workspace.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import {
@@ -583,7 +584,12 @@ export function registerProjectsRoutes(app: HubHono): void {
     });
 
     if (!row) return c.json({ error: "Project not found" }, 404);
-    return c.json(row);
+    const usedWorkspaces = await listWorkspacesUsedByProjects(db, [row.id]);
+    return c.json({
+      ...row,
+      // Additive INDEX: workspaces this project uses. Not an ACL.
+      usedWorkspaceIds: usedWorkspaces.get(row.id) ?? [],
+    });
   });
 
   // Create a project

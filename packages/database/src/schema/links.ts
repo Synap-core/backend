@@ -22,6 +22,7 @@
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
+ *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -59,10 +60,12 @@ export type LinkEndpointType =
   // automations, so playbook automations fire for their session's entities.
   | "automation"
   // A row of the `projects` TABLE (migration 0151 consolidated projects off the
-  // `project` entity profile — this is NOT an entity id). Two edges use it:
+  // `project` entity profile — this is NOT an entity id). Edges that use it:
   //   session --targets--> project   (session scoped to a container)
   //   project --targets--> entity    (the container's SUBJECT — the real-world
   //                                   thing it is about; drives the UI noun)
+  //   project --uses--> workspace    (INDEX of domains the engagement runs
+  //                                   through; NOT an ACL — see LinkType)
   | "project"
   // A vault secret, as the TARGET of a `provides_credential` edge (dynamic
   // tool auth binding: a principal/entity provides the credential for a tool).
@@ -158,7 +161,18 @@ export type LinkType =
    * Unrelated to the run status `blocked_by_policy` — that is a governance
    * outcome on a single run, not an edge between sessions.
    */
-  | "blocked_by";
+  | "blocked_by"
+  /**
+   * project --uses--> workspace. INDEX of which domains (workspaces) an
+   * engagement runs through. Stamped at provision time so a clean template
+   * install (zero seed entities) still answers "which workspaces does this
+   * project use?" / "which projects use this workspace?".
+   *
+   * NOT an ACL: project members do NOT gain workspace membership from this
+   * edge. Entity membership stays `belongs_to_project` on the relations table.
+   * Distinct from live `used` (session --used--> tool, run provenance).
+   */
+  | "uses";
 
 export const links = pgTable(
   "links",

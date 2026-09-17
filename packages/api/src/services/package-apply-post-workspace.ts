@@ -7,7 +7,7 @@
  * must run the same steps so agent package install is never a silent partial.
  *
  * Steps: enroll acting agent → capabilities → automations → playbooks → loops
- * → optional project entity links.
+ * → optional project INDEX (`project --uses--> workspace`) + seed entity links.
  */
 
 import {
@@ -16,6 +16,7 @@ import {
 } from "./capabilities/create-from-definition.js";
 import { createLoopFromDefinition } from "./loops/create-from-definition.js";
 import { createLinks } from "./links/links-service.js";
+import { linkProjectToWorkspace } from "../utils/project-workspace.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import {
   installCellFromDefinition,
@@ -880,11 +881,22 @@ async function applyPackagePostWorkspaceInner(
     }
   }
 
-  // ── Project link (seed entities) ────────────────────────────────────────
+  // ── Project link (INDEX + seed entities) ────────────────────────────────
+  // Stamp `project --uses--> workspace` FIRST, even when the template installs
+  // CLEAN (zero seed entities). Entity filing is a separate axis
+  // (`belongs_to_project`); the uses-edge is the INDEX of which domains this
+  // engagement runs through. A receipt of `not_linked` because entities === 0
+  // was a lie — the project exists, the workspace exists, they just have no
+  // seed rows yet.
   if (body.projectId && workspaceId) {
     try {
       const { db, entities, eq, linkEntityToProject } =
         await import("@synap/database");
+      const uses = await linkProjectToWorkspace(db, {
+        projectId: body.projectId,
+        workspaceId,
+        userId,
+      });
       const rows = await db
         .select({ id: entities.id })
         .from(entities)
@@ -907,8 +919,12 @@ async function applyPackagePostWorkspaceInner(
         if (link.linked) linked++;
         else refused++;
       }
+      // The INDEX landing is enough for `linked`. "Project not visible" only
+      // when the uses-edge could not be written (project missing) AND no
+      // entity was filed — `linkEntityToProject` refused or there was nothing
+      // to file.
       result.projectLink =
-        linked > 0
+        uses.linked || linked > 0
           ? {
               status: "linked",
               projectId: body.projectId,
@@ -916,8 +932,6 @@ async function applyPackagePostWorkspaceInner(
               ...(refused > 0 ? { refused } : {}),
             }
           : {
-              // Nothing landed. Say so — the project lens will show zero, and a
-              // "linked" receipt here is how that becomes a silent mystery.
               status: "not_linked",
               projectId: body.projectId,
               entities: 0,

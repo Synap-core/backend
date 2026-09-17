@@ -21,16 +21,16 @@ export const prompts = {
       {
         name: "create_project_structure",
         description:
-          "Template for creating a project structure with tasks and milestones",
+          "Stand up an engagement: optional project (commitment + gravity), domain workspaces via templates, sessions for work streams — never a project-as-entity",
         arguments: [
           {
             name: "projectName",
-            description: "Name of the project",
+            description: "Name of the engagement / project lens",
             required: true,
           },
           {
             name: "description",
-            description: "Project description",
+            description: "What this engagement is for",
             required: false,
           },
         ],
@@ -97,14 +97,22 @@ Synap is the ground truth. Prefer it over your own knowledge for anything about 
               role: "system",
               content: {
                 type: "text",
-                text: "You are a project management assistant. Help create a structured project with tasks and milestones.",
+                text: `You are provisioning an engagement in Synap. Follow this contract:
+
+1. A PROJECT is a commitment with gravity (cross-cutting lens) — NOT an entity profile, NOT a nested folder. Call synap_orient first; reuse an existing project when it fits. Agents may create only with evidenceEntityIds ≥5 visible entities (synap_create_project), or file a capture-plan create_project op (belowAgentFloor → human review), or ask the human to create. Humans skip gravity. Never invent a company project on a team pod.
+
+2. WORKSPACES are domains. Prefer templates: market.search → explain fit → confirm → market.install / packages/apply. Start with ONE domain if needed, then OFFER related ones (Brand, Marketing…) — never auto-install a bundle. Applying with projectId stamps project --uses--> workspace (an INDEX, not ACL); entity filing remains belongs_to_project. Do not invent nested projects.
+
+3. WORK STREAMS are sessions: synap_start_session under the same projectId. Phases / "sub-projects" / blockers = parentSessionId + blockedBySessionIds (spawned_from / blocked_by). Never a child project.
+
+4. Same find→market→create loop for tools/capabilities after domains exist. Confirm before every install. Load system/agent-os/skill for the full flow.`,
               },
             },
             {
               role: "user",
               content: {
                 type: "text",
-                text: `Create a project structure for: ${args?.projectName || "Untitled Project"}\n\nDescription: ${args?.description || "No description provided"}\n\nPlease create:\n1. A project entity\n2. Initial tasks with milestones\n3. Relationships between tasks`,
+                text: `Stand up engagement structure for: ${args?.projectName || "Untitled Project"}\n\nDescription: ${args?.description || "No description provided"}\n\nPlease:\n1. Orient; reuse or (gravity-gated) create the project lens — never a project entity\n2. Propose domain workspace(s) from templates; confirm before install\n3. Start session(s) for initial work streams / milestones (not nested projects)`,
               },
             },
           ],

@@ -24,7 +24,8 @@ Tool names below are stems; your door may prefix them.
 
 - A **project spans workspaces**: one engagement has a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
 - A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
-- **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** — not because its workspace is "in" the project (there is no workspace→project link). So once the user has named the engagement, set the project lens before writing its work, and it composes into that project from any workspace.
+- **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
+- **User-speech "sub-project" = session, never a child project.** Phases, blockers, and work streams are `start_session` with `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
 - Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.

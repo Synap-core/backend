@@ -731,7 +731,11 @@ export type LinkType =
   // FROM session cannot proceed until the TO session closes. Blocked-ness is
   // DERIVED from the set of edges whose target is still open — there is no
   // stored `blocked` status, deliberately (see `session-blocked-by.ts`).
-  | "blocked_by";
+  | "blocked_by"
+  // project --uses--> workspace. INDEX of which domains an engagement runs
+  // through. NOT an ACL — project members do not gain workspace membership
+  // from this edge. Distinct from live `used` (session --used--> tool).
+  | "uses";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

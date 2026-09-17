@@ -886,5 +886,23 @@
       "cliBundle": true,
       "capability": null
     }
+  },
+  "agent-os/SKILL": {
+    "teachesTools": [
+      "synap_orient",
+      "synap_create_project",
+      "market.search",
+      "market.install",
+      "synap_run_capability",
+      "synap_start_session"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Find→market→create loops for domains (workspaces) then tools (capabilities); confirm before install; sessions for sub-work.",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
   }
 }

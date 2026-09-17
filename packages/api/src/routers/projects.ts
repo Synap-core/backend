@@ -49,6 +49,7 @@ import {
   setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
+import { listWorkspacesUsedByProjects } from "../utils/project-workspace.js";
 
 /**
  * Count how many of `entityIds` actually exist and are visible to `userId`,
@@ -281,6 +282,10 @@ export const projectsRouter = router({
         items.map((p) => p.id),
         ctx.userId
       );
+      const usedWorkspaces = await listWorkspacesUsedByProjects(
+        db,
+        items.map((p) => p.id)
+      );
       const withSubject = items.map((p) => ({
         ...p,
         subject: subjects.get(p.id) ?? null,
@@ -289,6 +294,8 @@ export const projectsRouter = router({
         // board can group without re-deriving it (and without a second
         // defaulting site) — `phase` itself is untouched.
         phaseCategory: resolveProjectPhaseCategory(p.phase, p.settings),
+        // Additive INDEX: workspaces this project uses. Not an ACL.
+        usedWorkspaceIds: usedWorkspaces.get(p.id) ?? [],
       }));
 
       return {
@@ -329,6 +336,9 @@ export const projectsRouter = router({
       }
 
       const subjects = await loadProjectSubjects(db, [project.id], ctx.userId);
+      const usedWorkspaces = await listWorkspacesUsedByProjects(db, [
+        project.id,
+      ]);
       return {
         project,
         subject: subjects.get(project.id) ?? null,
@@ -337,6 +347,8 @@ export const projectsRouter = router({
           project.phase,
           project.settings
         ),
+        // Additive INDEX: workspaces this project uses. Not an ACL.
+        usedWorkspaceIds: usedWorkspaces.get(project.id) ?? [],
       };
     }),
 
