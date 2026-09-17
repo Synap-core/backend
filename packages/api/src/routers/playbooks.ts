@@ -1233,22 +1233,25 @@ export const playbooksRouter = router({
    * canonical `loadFacetSlugsBatch` — the SAME workspace-lens + owner-floor door
    * every other facet read uses, never a raw `entity_facets` query.
    *
-   * Filter: status='active' AND subject_profile->>'profileSlug' = ANY(matchSet).
-   * With no `entityId` (or no facets) the set is just `[profileSlug]`, so the
-   * match is unchanged (backward compatible). Returns the lean candidate shape
-   * the capture picker needs; [] when none.
+   * Filter: status='active' AND the access predicate. When `profileSlug` is
+   * given, also require a kind/facet match OR a NULL `subjectProfile` (a
+   * null-subject playbook like Content OS "Plan Next Content" stays findable
+   * when talking about a post). When `profileSlug` is omitted, the pool is
+   * every active visible playbook — ranked by `intentText`, not narrowed to
+   * null-subject rows. Returns the lean candidate shape; [] when none.
    */
   matchForEntity: workspaceProcedure
     .input(
       z.object({
-        profileSlug: z.string().min(1),
+        profileSlug: z.string().min(1).optional(),
         // When provided, its live facet-role slugs WIDEN the match set (below);
         // also round-tripped by the caller into `instantiate`/`run` as `subjectId`.
         entityId: z.string().uuid().optional(),
         workspaceId: z.string().uuid(),
         /**
          * What the user said they want (capture note / intent). Ranks the
-         * candidates — never filters them; see `rankRouteCandidates`.
+         * candidates — never filters them; see `rankRouteCandidates`. Sufficient
+         * on its own when `profileSlug` is omitted.
          */
         intentText: z.string().max(2000).optional(),
       })
@@ -1257,11 +1260,14 @@ export const playbooksRouter = router({
       const database = await getDb();
       const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
 
-      // Build the match set: the passed KIND slug plus, when an entity is given,
-      // its live facet-role slugs (deduped). loadFacetSlugsBatch enforces the
-      // canonical facet visibility lens (this workspace's facets + pod-wide,
-      // owner-floored), so a caller can only widen the set with facets it can see.
-      const matchSlugs = [input.profileSlug];
+      // Build the match set: the passed KIND slug (if any) plus, when an entity
+      // is given, its live facet-role slugs (deduped). loadFacetSlugsBatch
+      // enforces the canonical facet visibility lens (this workspace's facets +
+      // pod-wide, owner-floored), so a caller can only widen the set with
+      // facets it can see.
+      const matchSlugs: string[] = [];
+      if (input.profileSlug) matchSlugs.push(input.profileSlug);
+      const facetSlugs: string[] = [];
       if (input.entityId) {
         const facetSlugsByEntity = await loadFacetSlugsBatch(
           database,
@@ -1270,6 +1276,7 @@ export const playbooksRouter = router({
         );
         for (const slug of facetSlugsByEntity.get(input.entityId) ?? []) {
           if (!matchSlugs.includes(slug)) matchSlugs.push(slug);
+          if (slug !== input.profileSlug) facetSlugs.push(slug);
         }
       }
 
@@ -1280,18 +1287,23 @@ export const playbooksRouter = router({
           and(
             visibility,
             eq(playbooks.status, "active"),
-            // Match the subject KIND (plus any facet slugs) by scalar-equality.
+            // When a kind/facet set is named: match those slugs OR a NULL
+            // subject (null-subject playbooks stay in the pool). When omitted,
+            // skip the subject filter so the pool is every active visible row.
             // NOTE: do NOT use `= ANY(${matchSlugs})` — binding a JS array into
             // the SQL template serializes it as a Postgres array literal, which
             // the pod image's postgres.js driver faults on (same class of gotcha
             // as `sql.json()` — see driver notes). An OR of scalar `=` params is
             // the portable form (mirrors automations.matchForEntity).
-            or(
-              ...matchSlugs.map(
-                (slug) =>
-                  drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${slug}`
-              )
-            )
+            matchSlugs.length > 0
+              ? or(
+                  ...matchSlugs.map(
+                    (slug) =>
+                      drizzleSql`${playbooks.subjectProfile}->>'profileSlug' = ${slug}`
+                  ),
+                  isNull(playbooks.subjectProfile)
+                )
+              : undefined
           )
         )
         .orderBy(desc(playbooks.updatedAt));
@@ -1301,8 +1313,8 @@ export const playbooksRouter = router({
       const ranked = rankRouteCandidates({
         entity: {
           entityId: input.entityId,
-          profileSlug: input.profileSlug,
-          facetSlugs: matchSlugs.slice(1),
+          ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
+          facetSlugs,
         },
         intentText: input.intentText,
         candidates: rows.map((p) => ({
@@ -1312,22 +1324,26 @@ export const playbooksRouter = router({
           text: [p.goalTemplate],
           subjectProfileSlug:
             (p.subjectProfile as { profileSlug?: string } | null)
-              ?.profileSlug ?? input.profileSlug,
+              ?.profileSlug ?? null,
           row: p,
         })),
       });
 
-      return ranked.map(({ candidate, score, reason, signals }) => ({
-        id: candidate.row.id,
-        name: candidate.row.name,
-        goalTemplate: candidate.row.goalTemplate,
-        subjectProfileSlug: candidate.subjectProfileSlug,
-        params: candidate.row.params,
-        executor: candidate.row.executor,
-        score,
-        reason,
-        signals,
-      }));
+      const MATCH_LIMIT = 20;
+      return ranked
+        .filter((r) => r.signals.length > 0)
+        .slice(0, MATCH_LIMIT)
+        .map(({ candidate, score, reason, signals }) => ({
+          id: candidate.row.id,
+          name: candidate.row.name,
+          goalTemplate: candidate.row.goalTemplate,
+          subjectProfileSlug: candidate.subjectProfileSlug,
+          params: candidate.row.params,
+          executor: candidate.row.executor,
+          score,
+          reason,
+          signals,
+        }));
     }),
 
   /**

@@ -4025,6 +4025,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
+ *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -4062,7 +4063,18 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  * Unrelated to the run status `blocked_by_policy` — that is a governance
  * outcome on a single run, not an edge between sessions.
  */
- | "blocked_by";
+ | "blocked_by"
+/**
+ * project --uses--> workspace. INDEX of which domains (workspaces) an
+ * engagement runs through. Stamped at provision time so a clean template
+ * install (zero seed entities) still answers "which workspaces does this
+ * project use?" / "which projects use this workspace?".
+ *
+ * NOT an ACL: project members do NOT gain workspace membership from this
+ * edge. Entity membership stays `belongs_to_project` on the relations table.
+ * Distinct from live `used` (session --used--> tool, run provenance).
+ */
+ | "uses";
 /**
  * Playbook Runs Schema — the run ledger (executor spine, Phase 3)
  *
@@ -30920,6 +30932,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				items: {
 					subject: ProjectSubject | null;
 					phaseCategory: PlaybookStageCategory;
+					usedWorkspaceIds: string[];
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -30943,6 +30956,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projects: {
 					subject: ProjectSubject | null;
 					phaseCategory: PlaybookStageCategory;
+					usedWorkspaceIds: string[];
 					id: string;
 					userId: string;
 					workspaceId: string | null;
@@ -30982,6 +30996,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				subject: ProjectSubject | null;
 				phaseCategory: PlaybookStageCategory;
+				usedWorkspaceIds: string[];
 			};
 			meta: object;
 		}>;

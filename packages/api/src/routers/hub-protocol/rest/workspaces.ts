@@ -55,6 +55,10 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import {
+  listProjectsUsingWorkspace,
+  listProjectsUsingWorkspaces,
+} from "../../../utils/project-workspace.js";
 
 const eveProviderIdSchema = z.enum([
   "ollama",
@@ -165,6 +169,21 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         schema: ListWorkspacesResponseSchema,
       },
       403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/workspaces/{workspaceId}",
+    tags: ["Workspaces"],
+    summary: "Get a workspace by id",
+    description:
+      "Returns the workspace plus usedByProjectIds (projects that use this domain via the project --uses--> workspace INDEX). Floored to projects the caller can see. Not an ACL.",
+    responses: {
+      200: { description: "Workspace" },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -540,90 +559,95 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         )
       );
 
-      const list = rows
-        .filter((workspace) => workspace.archivedAt == null)
-        .map((workspace) => {
-          const settings = (workspace.settings ?? {}) as Record<
-            string,
-            unknown
-          >;
-          const membership = membershipByWorkspace.get(workspace.id);
-          const pkgSlug =
-            typeof settings.packageSlug === "string"
-              ? settings.packageSlug
-              : null;
-          const installedVersion =
-            typeof settings.packageVersion === "string"
-              ? settings.packageVersion
-              : null;
-          // Compose the health axes through the ONE authority (template-health.ts)
-          // rather than re-deriving them here — so this door can never disagree
-          // with the MCP verb / the shared service on the same data.
-          const health = templateHealthFor(
-            pkgSlug,
-            installedVersion,
-            latestBySlug
-          );
-          return {
-            id: workspace.id,
-            name: workspace.name,
-            description: workspace.description,
-            role: membership?.role ?? "viewer",
-            accessKind: membership ? "member" : "pod_visible",
-            workspaceType: workspace.workspaceType,
-            workspaceSubtype: settings.workspaceSubtype ?? null,
-            onboarding: settings.onboarding ?? null,
-            workspaceVisibility: settings.workspaceVisibility ?? "members",
-            workspaceCapabilities: settings.workspaceCapabilities ?? [],
-            sourceRoles: settings.sourceRoles ?? {},
-            defaultSources: settings.defaultSources ?? {},
-            appId: settings.appId ?? null,
-            packageSlug: pkgSlug,
-            // CP content-hash stamp ("h-<hash>") of the version this workspace
-            // is CURRENTLY on. Kept for back-compat; drift is computed
-            // server-side (health.*) so clients don't re-derive it.
-            packageVersion: installedVersion,
-            // ── TemplateHealth (computed server-side via the ONE authority) ──
-            // `drifted` = the single truthful "an update is available" signal;
-            // `attached`/`stamped` make the tri-state explicit, not client-derived.
-            latestVersion: health.latestVersion,
-            attached: health.attached,
-            stamped: health.stamped,
-            drifted: health.drifted,
-            // Additive-pack installs (profile/view/bento) never set
-            // `packageSlug` — they carry their own identity here instead. The
-            // CLI unions this with `packageSlug` to match the browser's
-            // `useInstalledPackageSlugs` "installed" set (see that hook's doc).
-            installedPacks: settings.installedPacks ?? [],
-            systemSlug: settings.systemSlug ?? null,
-            entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
-            // ── INSTALL HEALTH (A1) ──────────────────────────────────────────
-            // `applyPackagePostWorkspace` stamps these three into
-            // `workspace.settings` before rethrowing, so after a swallowed
-            // layer-2 failure the pod DURABLY knows which workspace is partial
-            // and why. This projection dropped all three — which is the single
-            // line where "partially installed" became "installed" for every
-            // client of this door (CLI `market installed`, the browser install
-            // banner, pod-admin). Distinct from the TemplateHealth triad above:
-            // that answers "is it BEHIND its template", this answers "did it
-            // fully LAND". `null` = never stamped = the install completed.
-            //
-            // Recoverable, not fatal: the workspace exists and is usable, and
-            // re-running the install resumes exactly this layer (`resumeIfFailed`).
-            provisioningStatus:
-              typeof settings.provisioningStatus === "string"
-                ? settings.provisioningStatus
-                : null,
-            failedStep:
-              typeof settings.failedStep === "string"
-                ? settings.failedStep
-                : null,
-            failedStepError:
-              typeof settings.failedStepError === "string"
-                ? settings.failedStepError
-                : null,
-          };
-        });
+      const active = rows.filter((workspace) => workspace.archivedAt == null);
+      // Additive INDEX: projects using each workspace, floored to what the
+      // caller can see. One batch JOIN — not N+1. Not an ACL.
+      const usedBy = await listProjectsUsingWorkspaces(
+        db,
+        active.map((w) => w.id),
+        userId
+      );
+      const list = active.map((workspace) => {
+        const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+        const membership = membershipByWorkspace.get(workspace.id);
+        const pkgSlug =
+          typeof settings.packageSlug === "string"
+            ? settings.packageSlug
+            : null;
+        const installedVersion =
+          typeof settings.packageVersion === "string"
+            ? settings.packageVersion
+            : null;
+        // Compose the health axes through the ONE authority (template-health.ts)
+        // rather than re-deriving them here — so this door can never disagree
+        // with the MCP verb / the shared service on the same data.
+        const health = templateHealthFor(
+          pkgSlug,
+          installedVersion,
+          latestBySlug
+        );
+        return {
+          id: workspace.id,
+          name: workspace.name,
+          description: workspace.description,
+          role: membership?.role ?? "viewer",
+          accessKind: membership ? "member" : "pod_visible",
+          workspaceType: workspace.workspaceType,
+          workspaceSubtype: settings.workspaceSubtype ?? null,
+          onboarding: settings.onboarding ?? null,
+          workspaceVisibility: settings.workspaceVisibility ?? "members",
+          workspaceCapabilities: settings.workspaceCapabilities ?? [],
+          sourceRoles: settings.sourceRoles ?? {},
+          defaultSources: settings.defaultSources ?? {},
+          appId: settings.appId ?? null,
+          packageSlug: pkgSlug,
+          // CP content-hash stamp ("h-<hash>") of the version this workspace
+          // is CURRENTLY on. Kept for back-compat; drift is computed
+          // server-side (health.*) so clients don't re-derive it.
+          packageVersion: installedVersion,
+          // ── TemplateHealth (computed server-side via the ONE authority) ──
+          // `drifted` = the single truthful "an update is available" signal;
+          // `attached`/`stamped` make the tri-state explicit, not client-derived.
+          latestVersion: health.latestVersion,
+          attached: health.attached,
+          stamped: health.stamped,
+          drifted: health.drifted,
+          // Additive-pack installs (profile/view/bento) never set
+          // `packageSlug` — they carry their own identity here instead. The
+          // CLI unions this with `packageSlug` to match the browser's
+          // `useInstalledPackageSlugs` "installed" set (see that hook's doc).
+          installedPacks: settings.installedPacks ?? [],
+          systemSlug: settings.systemSlug ?? null,
+          entityCount: entityCountByWorkspace.get(workspace.id) ?? 0,
+          // Additive INDEX: projects that use this workspace. Not an ACL.
+          usedByProjectIds: usedBy.get(workspace.id) ?? [],
+          // ── INSTALL HEALTH (A1) ──────────────────────────────────────────
+          // `applyPackagePostWorkspace` stamps these three into
+          // `workspace.settings` before rethrowing, so after a swallowed
+          // layer-2 failure the pod DURABLY knows which workspace is partial
+          // and why. This projection dropped all three — which is the single
+          // line where "partially installed" became "installed" for every
+          // client of this door (CLI `market installed`, the browser install
+          // banner, pod-admin). Distinct from the TemplateHealth triad above:
+          // that answers "is it BEHIND its template", this answers "did it
+          // fully LAND". `null` = never stamped = the install completed.
+          //
+          // Recoverable, not fatal: the workspace exists and is usable, and
+          // re-running the install resumes exactly this layer (`resumeIfFailed`).
+          provisioningStatus:
+            typeof settings.provisioningStatus === "string"
+              ? settings.provisioningStatus
+              : null,
+          failedStep:
+            typeof settings.failedStep === "string"
+              ? settings.failedStep
+              : null,
+          failedStepError:
+            typeof settings.failedStepError === "string"
+              ? settings.failedStepError
+              : null,
+        };
+      });
       return c.json({ workspaces: list, podEntityCount });
     } catch (err) {
       logger.error({ err }, "GET /workspaces failed");
@@ -1629,6 +1653,77 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         "PATCH /workspaces/:workspaceId/public-projection failed"
       );
       return c.json({ error: "Failed to set public-projection config" }, 500);
+    }
+  });
+
+  /**
+   * GET /workspaces/:workspaceId — single workspace, plus the reverse
+   * `project --uses--> workspace` INDEX (`usedByProjectIds`). Floored to
+   * projects the caller can see. Not an ACL.
+   *
+   * Registered alongside the other `/:workspaceId/*` reads; more-specific
+   * subpaths (`/governance`, `/home`, …) stay distinct routes.
+   */
+  app.get("/workspaces/:workspaceId", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string;
+    const workspaceId = c.req.param("workspaceId");
+    if (!workspaceId) return c.json({ error: "workspaceId is required" }, 400);
+
+    const allowed = await verifyWorkspaceReadAccess(userId, workspaceId);
+    if (!allowed) return c.json({ error: "Access denied" }, 403);
+
+    try {
+      const workspace = await db.query.workspaces.findFirst({
+        where: eq(workspaces.id, workspaceId),
+        columns: {
+          id: true,
+          name: true,
+          description: true,
+          workspaceType: true,
+          archivedAt: true,
+          settings: true,
+        },
+      });
+      if (!workspace || workspace.archivedAt != null) {
+        return c.json({ error: "Workspace not found" }, 404);
+      }
+
+      const membership = await db.query.workspaceMembers.findFirst({
+        where: and(
+          eq(workspaceMembers.workspaceId, workspaceId),
+          eq(workspaceMembers.userId, userId)
+        ),
+        columns: { role: true },
+      });
+      const usedByProjectIds = await listProjectsUsingWorkspace(
+        db,
+        workspaceId,
+        userId
+      );
+      const settings = (workspace.settings ?? {}) as Record<string, unknown>;
+      return c.json({
+        id: workspace.id,
+        name: workspace.name,
+        description: workspace.description,
+        workspaceType: workspace.workspaceType,
+        role: membership?.role ?? "viewer",
+        accessKind: membership ? "member" : "pod_visible",
+        packageSlug:
+          typeof settings.packageSlug === "string"
+            ? settings.packageSlug
+            : null,
+        // Additive INDEX: projects that use this workspace. Not an ACL.
+        usedByProjectIds,
+      });
+    } catch (err) {
+      logger.error({ err, workspaceId }, "GET /workspaces/:workspaceId failed");
+      return c.json({ error: "Failed to get workspace" }, 500);
     }
   });
 

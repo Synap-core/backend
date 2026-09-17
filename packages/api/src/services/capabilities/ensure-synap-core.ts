@@ -518,7 +518,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       kind: "builtin",
       scope: "pod",
       description:
-        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
+        "Search the Control-Plane marketplace catalog (capabilities, automations, workspace templates, cells, skills, views) — the pod-local cache, never a live CP fetch. Use this AFTER list_capabilities finds nothing installed. Agents must send kind:template not kind:workspace. Returns { entries[] } with an honest `installed` flag per entry (undefined when not cheaply checkable) or, on zero hits, a message pointing to tool.request for a missing tool. Read-only.",
       parameters: {
         type: "object",
         properties: {

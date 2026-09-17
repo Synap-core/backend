@@ -248,4 +248,56 @@ describe("automations.matchForEntity", () => {
     expect(result).toEqual([]);
     expect(mockScopedDb).toHaveBeenCalledTimes(1);
   });
+
+  it("omitted profileSlug skips the kind filter and ranks by intentText", async () => {
+    const chain = selectChain([
+      {
+        id: "auto-archive",
+        name: "Archive stale people",
+        description: "Move old contacts away",
+        status: "active",
+        triggerType: "event",
+        triggerConfig: {
+          eventPattern: "entity.create.completed",
+          filters: { profileSlug: "person" },
+        },
+      },
+      {
+        id: "auto-review",
+        name: "Weekly review of people",
+        description: "Read and triage who you met",
+        status: "active",
+        triggerType: "event",
+        triggerConfig: { eventPattern: "entity.*" },
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = automationsRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "review them weekly",
+    });
+
+    expect(result.map((r) => r.id)).toEqual(["auto-review"]);
+    expect(result[0]!.id).toBe("auto-review");
+    // Honest: an unfiltered trigger is anyKind, not a guessed kind.
+    expect(result[0]!.signals).toEqual(
+      expect.arrayContaining([
+        { type: "intent", terms: ["review", "weekly"] },
+        { type: "anyKind" },
+      ])
+    );
+
+    const where = chain._captured.where as { and: unknown[] };
+    // The eventPattern clause interpolates the column (not a string). A kind
+    // filter would bind the requested slug as a string value — none here.
+    const boundStrings = where.and.flatMap((c) => {
+      const values = (c as { values?: unknown[] } | null)?.values;
+      return Array.isArray(values)
+        ? values.filter((v) => typeof v === "string")
+        : [];
+    });
+    expect(boundStrings).toEqual([]);
+  });
 });

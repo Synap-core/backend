@@ -51,6 +51,7 @@ vi.mock("@synap/database", async (importOriginal) => {
     and: vi.fn((...conditions) => ({ and: conditions.filter(Boolean) })),
     or: vi.fn((...conditions) => ({ or: conditions.filter(Boolean) })),
     eq: vi.fn((column, value) => ({ eq: [column, value] })),
+    isNull: vi.fn((column) => ({ isNull: column })),
     desc: vi.fn((column) => ({ desc: column })),
     drizzleSql: vi.fn(
       (strings: TemplateStringsArray, ...values: unknown[]) => ({
@@ -149,8 +150,8 @@ describe("playbooks.matchForEntity", () => {
     expect(mockPredicate).toHaveBeenCalledTimes(1);
 
     // WHERE composes the visibility predicate + status='active' + an OR of
-    // scalar `subject_profile->>'profileSlug' = <slug>` comparisons. With no
-    // entityId the match set is just the requested kind slug: OR(= "post").
+    // scalar `subject_profile->>'profileSlug' = <slug>` comparisons AND
+    // `subjectProfile IS NULL` (null-subject playbooks stay in the pool).
     const where = chain._captured.where as { and: unknown[] };
     expect(where.and).toContainEqual({ __visibility: true });
     expect(where.and).toContainEqual(
@@ -160,6 +161,7 @@ describe("playbooks.matchForEntity", () => {
       expect.objectContaining({
         or: expect.arrayContaining([
           expect.objectContaining({ values: expect.arrayContaining(["post"]) }),
+          expect.objectContaining({ isNull: expect.anything() }),
         ]),
       })
     );
@@ -293,7 +295,7 @@ describe("playbooks.matchForEntity", () => {
     expect(mockScopedDb).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the requested slug when a row's subjectProfile is missing", async () => {
+  it("null-subject playbooks report subjectProfileSlug null (honest), not the requested slug", async () => {
     const chain = selectChain([
       {
         id: "pb-2",
@@ -312,6 +314,112 @@ describe("playbooks.matchForEntity", () => {
       workspaceId: WORKSPACE,
     });
 
-    expect(candidate.subjectProfileSlug).toBe("deal");
+    expect(candidate.subjectProfileSlug).toBeNull();
+    expect(candidate.signals).toContainEqual({ type: "anyKind" });
+  });
+
+  it("no profileSlug + intent ranks a null-subject Plan Next Content playbook first", async () => {
+    // Matcher order is updatedAt desc — Plan Next Content arrives SECOND, so a
+    // door that ignored intentText (or only returned kind-matched rows) would
+    // not put it first. The pool is every active visible playbook.
+    const chain = selectChain([
+      {
+        id: "pb-produce",
+        name: "Produce content from this idea",
+        goalTemplate: "Produce content for {{platform}} from {{subject}}",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: { profileSlug: "post" },
+      },
+      {
+        id: "pb-plan",
+        name: "Plan Next Content",
+        goalTemplate: "Decide what to publish next",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "what should I publish next",
+    });
+
+    // Zero-signal rows (Produce: no intent overlap, no kind without a slug) are
+    // dropped so an intent-only match does not dump the whole catalog.
+    expect(result.map((r) => r.id)).toEqual(["pb-plan"]);
+    expect(result[0]).toMatchObject({
+      name: "Plan Next Content",
+      subjectProfileSlug: null,
+    });
+    expect(result[0]!.signals).toEqual(
+      expect.arrayContaining([
+        { type: "intent", terms: expect.arrayContaining(["publish", "next"]) },
+        { type: "anyKind" },
+      ])
+    );
+
+    // No kind/facet set → no subject-profile filter. The pool is every active
+    // visible playbook (visibility + status), not only null-subject rows.
+    const where = chain._captured.where as { and: unknown[] };
+    expect(where.and).toHaveLength(2);
+    expect(where.and).toContainEqual({ __visibility: true });
+    expect(where.and).toContainEqual(
+      expect.objectContaining({ eq: expect.arrayContaining(["active"]) })
+    );
+  });
+
+  it("with profileSlug post, both subject=post AND subject=null stay in the pool", async () => {
+    const chain = selectChain([
+      {
+        id: "pb-produce",
+        name: "Produce content from this idea",
+        goalTemplate: "Produce content for {{platform}} from {{subject}}",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: { profileSlug: "post" },
+      },
+      {
+        id: "pb-plan",
+        name: "Plan Next Content",
+        goalTemplate: "Decide what to publish next",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const result = await caller.matchForEntity({
+      profileSlug: "post",
+      workspaceId: WORKSPACE,
+    });
+
+    expect(result.map((r) => r.id).sort()).toEqual(["pb-plan", "pb-produce"]);
+    expect(result.find((r) => r.id === "pb-produce")).toMatchObject({
+      subjectProfileSlug: "post",
+      signals: [{ type: "kind", profileSlug: "post" }],
+    });
+    expect(result.find((r) => r.id === "pb-plan")).toMatchObject({
+      name: "Plan Next Content",
+      subjectProfileSlug: null,
+      signals: [{ type: "anyKind" }],
+    });
+
+    // LOAD-BEARING: the WHERE must OR in `subjectProfile IS NULL`. Reverting
+    // that clause is the negative control — this assertion is what fails.
+    const where = chain._captured.where as { and: unknown[] };
+    expect(where.and).toContainEqual(
+      expect.objectContaining({
+        or: expect.arrayContaining([
+          expect.objectContaining({ values: expect.arrayContaining(["post"]) }),
+          expect.objectContaining({ isNull: expect.anything() }),
+        ]),
+      })
+    );
   });
 });

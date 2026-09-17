@@ -44,3 +44,7 @@ export {
 
 // CP catalog sync — kind vocabulary (imported by @synap/api's catalog-cache-query.ts)
 export { type CatalogKind } from "./workers/cp-catalog-sync.js";
+export {
+  derivePackageSearchTokens,
+  mergePackageSearchTags,
+} from "./workers/package-search-tokens.js";

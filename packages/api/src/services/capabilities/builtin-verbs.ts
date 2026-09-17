@@ -2074,7 +2074,17 @@ async function resolveInstalledFlag(
 const marketSearchParams = z.object({
   query: z.string().max(200).optional(),
   kind: z
-    .enum(["capability", "automation", "template", "cell", "skill", "view"])
+    .enum([
+      "capability",
+      "automation",
+      "template",
+      "cell",
+      "skill",
+      "view",
+      // Alias of cache kind `template` (CP category `workspace`). Mapped in
+      // queryCatalogCache; agents should still send `kind:template`.
+      "workspace",
+    ])
     .optional(),
   limit: z.coerce.number().int().min(1).max(50).optional(),
 });

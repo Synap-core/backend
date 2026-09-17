@@ -18,25 +18,31 @@ type LinkNeighbour = {
   linkType: string;
 };
 
-const { ownerPrivateVisibleWhereMock, createLinkMock, getLinksForMock } =
-  vi.hoisted(() => ({
-    ownerPrivateVisibleWhereMock: vi.fn(() => ({ __wsFloor: true })),
-    createLinkMock: vi.fn(
-      async (_input?: unknown): Promise<{ id: string } | undefined> => ({
-        id: "edge-1",
-      })
-    ),
-    getLinksForMock: vi.fn(
-      async (_userId?: string, _type?: string, _id?: string) =>
-        [] as LinkNeighbour[]
-    ),
-  }));
+const {
+  ownerPrivateVisibleWhereMock,
+  createLinkMock,
+  getLinksForMock,
+  getDbMock,
+} = vi.hoisted(() => ({
+  ownerPrivateVisibleWhereMock: vi.fn(() => ({ __wsFloor: true })),
+  createLinkMock: vi.fn(
+    async (_input?: unknown): Promise<{ id: string } | undefined> => ({
+      id: "edge-1",
+    })
+  ),
+  getLinksForMock: vi.fn(
+    async (_userId?: string, _type?: string, _id?: string) =>
+      [] as LinkNeighbour[]
+  ),
+  getDbMock: vi.fn(),
+}));
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
     ownerPrivateVisibleWhere: ownerPrivateVisibleWhereMock,
+    getDb: getDbMock,
   };
 });
 
@@ -51,20 +57,30 @@ const {
   listWorkspacesUsedByProject,
   listWorkspacesUsedByProjects,
   listProjectsUsingWorkspace,
+  listProjectsUsingWorkspaces,
 } = await import("./project-workspace.js");
 
-function makeDb(selectRows: unknown[]) {
+function makeDb(selectRows: unknown[], workspaceRows?: unknown[]) {
   const inserted: Array<{ table: unknown; values: unknown }> = [];
+  let selectCall = 0;
+  const whereResult = (rows: unknown[]) =>
+    Object.assign(Promise.resolve(rows), {
+      limit: async () => rows,
+    });
   const db = {
     select: () => ({
-      from: () => ({
-        where: () => {
-          const rows = selectRows;
-          return Object.assign(Promise.resolve(rows), {
-            limit: async () => rows,
-          });
-        },
-      }),
+      from: () => {
+        const n = selectCall++;
+        const rows =
+          n === 0
+            ? selectRows
+            : (workspaceRows ??
+              (selectRows.length > 0 ? [{ id: ARGS.workspaceId }] : []));
+        return {
+          where: () => whereResult(n === 0 ? selectRows : rows),
+          innerJoin: () => ({ where: () => whereResult(selectRows) }),
+        };
+      },
     }),
     insert: (table: unknown) => ({
       values: (values: unknown) => {
@@ -91,6 +107,7 @@ beforeEach(() => {
   ownerPrivateVisibleWhereMock.mockClear();
   createLinkMock.mockClear();
   getLinksForMock.mockClear();
+  getDbMock.mockReset();
   createLinkMock.mockResolvedValue({ id: "edge-1" });
 });
 
@@ -188,39 +205,22 @@ describe("linkProjectToWorkspace — not an ACL", () => {
 });
 
 describe("readers — same links graph, typed uses-edge", () => {
-  it("listWorkspacesUsedByProject reuses getLinksFor and keeps only uses→workspace", async () => {
-    getLinksForMock.mockResolvedValueOnce([
-      {
-        fromType: "project",
-        fromId: ARGS.projectId,
-        toType: "workspace",
-        toId: ARGS.workspaceId,
-        linkType: "uses",
-      },
-      {
-        fromType: "project",
-        fromId: ARGS.projectId,
-        toType: "entity",
-        toId: "entity-1",
-        linkType: "targets",
-      },
-      {
-        fromType: "session",
-        fromId: "sess-1",
-        toType: "tool",
-        toId: "tool-1",
-        linkType: "used",
-      },
-    ]);
+  it("listWorkspacesUsedByProject uses the same INDEX query as the batch door", async () => {
+    const { db } = makeDb([{ fromId: ARGS.projectId, toId: ARGS.workspaceId }]);
+    getDbMock.mockResolvedValueOnce(db);
 
     const ids = await listWorkspacesUsedByProject(ARGS.userId, ARGS.projectId);
 
-    expect(getLinksForMock).toHaveBeenCalledWith(
-      ARGS.userId,
-      "project",
-      ARGS.projectId
-    );
+    expect(getLinksForMock).not.toHaveBeenCalled();
     expect(ids).toEqual([ARGS.workspaceId]);
+  });
+
+  it("REFUSES a missing workspace after the project resolved", async () => {
+    const { db } = makeDb([{ id: ARGS.projectId }], []);
+    const result = await linkProjectToWorkspace(db as never, ARGS);
+    expect(result.linked).toBe(false);
+    expect((result as { reason?: string }).reason).toBe("workspace_not_found");
+    expect(createLinkMock).not.toHaveBeenCalled();
   });
 
   it("listWorkspacesUsedByProjects groups workspace ids by project", async () => {
@@ -240,15 +240,43 @@ describe("readers — same links graph, typed uses-edge", () => {
     expect(map.get("other-project")).toEqual([ARGS.workspaceId]);
   });
 
-  it("listProjectsUsingWorkspace is the reverse of the same edge", async () => {
+  it("listProjectsUsingWorkspace is the reverse of the same edge, floored", async () => {
     const { db } = makeDb([
       { fromId: ARGS.projectId },
       { fromId: ARGS.projectId },
       { fromId: "other-project" },
     ]);
 
-    const ids = await listProjectsUsingWorkspace(db as never, ARGS.workspaceId);
+    const ids = await listProjectsUsingWorkspace(
+      db as never,
+      ARGS.workspaceId,
+      ARGS.userId
+    );
     expect(ids).toEqual([ARGS.projectId, "other-project"]);
+    // Visibility floor must run — without it a private project would leak.
+    expect(ownerPrivateVisibleWhereMock).toHaveBeenCalled();
+  });
+
+  it("listProjectsUsingWorkspaces groups project ids by workspace", async () => {
+    const otherWs = "44444444-4444-4444-8444-444444444444";
+    const { db } = makeDb([
+      { workspaceId: ARGS.workspaceId, projectId: ARGS.projectId },
+      { workspaceId: ARGS.workspaceId, projectId: "other-project" },
+      { workspaceId: otherWs, projectId: ARGS.projectId },
+    ]);
+
+    const map = await listProjectsUsingWorkspaces(
+      db as never,
+      [ARGS.workspaceId, otherWs],
+      ARGS.userId
+    );
+
+    expect(map.get(ARGS.workspaceId)).toEqual([
+      ARGS.projectId,
+      "other-project",
+    ]);
+    expect(map.get(otherWs)).toEqual([ARGS.projectId]);
+    expect(ownerPrivateVisibleWhereMock).toHaveBeenCalled();
   });
 
   it("the source carries a typed reader the SSOT tripwire can see", () => {

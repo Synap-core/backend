@@ -1198,6 +1198,11 @@ export const tools = {
               description:
                 "Optional default property VALUES applied to new entities of this kind (distinct from `properties`, which defines the fields themselves).",
             },
+            parentProfileSlug: {
+              type: "string",
+              description:
+                "Optional slug of a parent kind to extend (e.g. 'note', 'person') — NOT a UUID. Resolved to the parent profile id server-side; use synap_list_profiles to discover slugs.",
+            },
             workspaceId: {
               type: "string",
               description: "Workspace to define the kind in.",
@@ -2011,19 +2016,19 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Given an entity's profile (e.g. 'post', 'deal', 'lead'), find active playbooks whose SUBJECT is that kind of entity — the Capture→Session matcher answering 'is there a playbook FOR this thing?'. Read-only. Returns candidates, best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Launch a returned candidate as an entity-bound session with synap_start_session (its id as templateId + the entity as subjectEntityId).",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said) and/or profileSlug (the kind of thing, e.g. 'post'). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_start_session (templateId + optional subjectEntityId) or synap_run_playbook. When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
         inputSchema: {
           type: "object",
           properties: {
             profileSlug: {
               type: "string",
               description:
-                "The entity profile slug to match playbooks against (e.g. 'post', 'deal', 'lead', 'competitor').",
+                "Optional entity profile slug to match against (e.g. 'post', 'deal', 'lead', 'competitor'). Omit to search all active visible playbooks by intentText alone.",
             },
             entityId: {
               type: "string",
               description:
-                "Optional UUID of the specific entity — round-trip it into synap_start_session as subjectEntityId once a playbook is chosen. Does not narrow the match (matching is by profile).",
+                "Optional UUID of the specific entity — round-trip it into synap_start_session as subjectEntityId once a playbook is chosen. Widens the match with that entity's live facet-role slugs.",
             },
             workspaceId: {
               type: "string",
@@ -2033,10 +2038,10 @@ export const tools = {
             intentText: {
               type: "string",
               description:
-                "Optional: what the user said they want (their capture note / request). RANKS the candidates — never filters them — and each result then carries `score` and a human-readable `reason` (e.g. 'You mentioned “review” · Made for deal items'). Show the reason when you suggest a playbook; never run one without the user's confirmation.",
+                "What the user said they want. Sufficient on its own — ranks the candidates (never filters) and each result carries `score` and a human-readable `reason`. Show the reason when you suggest a playbook; never run one without the user's confirmation.",
             },
           },
-          required: ["profileSlug"],
+          required: [],
         },
       },
       {

@@ -495,6 +495,17 @@ export async function promoteSessionToPlaybook(
   // promoting a run session whose goal is now "<playbook> for Acme Corp" must
   // not hand the next agent that label as its whole prompt.
   const goalTemplate = runPromptFor(session);
+  // Honest subject: copy the session's subject entity kind when it has one,
+  // leave null when it doesn't. `entities.type` is the profile slug.
+  let subjectProfile: { profileSlug: string } | null = null;
+  if (session.subjectEntityId) {
+    const subject = await db.query.entities.findFirst({
+      columns: { type: true },
+      where: eq(entities.id, session.subjectEntityId),
+    });
+    const slug = subject?.type?.trim();
+    if (slug) subjectProfile = { profileSlug: slug };
+  }
   let playbook: Playbook;
   let reused = false;
   try {
@@ -509,6 +520,7 @@ export async function promoteSessionToPlaybook(
         expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
         executor: "is-agent",
         status: "draft",
+        subjectProfile,
         // Lineage lives in the `session → promoted_to → playbook` edge below — the
         // single source of truth — not duplicated here.
       })

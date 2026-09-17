@@ -2144,7 +2144,7 @@ export const automationsRouter = router({
   matchForEntity: protectedProcedure
     .input(
       z.object({
-        profileSlug: z.string().min(1),
+        profileSlug: z.string().min(1).optional(),
         // Round-tripped by the caller into `trigger`/a run as the subject;
         // matching is by profile, so it does not narrow this query.
         entityId: z.string().uuid().optional(),
@@ -2176,43 +2176,56 @@ export const automationsRouter = router({
             // eventPattern ∈ the set matchPattern accepts for the fixed
             // `entity.create.completed` event.
             drizzleSql`${automations.triggerConfig}->>'eventPattern' = ANY(ARRAY['entity.create.completed','entity.create.*','entity.*'])`,
-            // filters.profileSlug absent (fires for any) OR equals the request.
-            drizzleSql`(${automations.triggerConfig}->'filters'->>'profileSlug' IS NULL OR ${automations.triggerConfig}->'filters'->>'profileSlug' = ${input.profileSlug})`
+            // When a kind is named: filters.profileSlug absent (fires for any)
+            // OR equals the request. When omitted, skip — the pool is every
+            // active visible entity-create automation, ranked by intentText.
+            input.profileSlug
+              ? drizzleSql`(${automations.triggerConfig}->'filters'->>'profileSlug' IS NULL OR ${automations.triggerConfig}->'filters'->>'profileSlug' = ${input.profileSlug})`
+              : undefined
           )
         )
         .orderBy(desc(automations.updatedAt));
 
       // Ranked with a human-readable `reason` — the SAME rule as
-      // `playbooks.matchForEntity`. The SQL above already narrowed to automations
-      // whose profileSlug filter is absent (any kind) or equal to the request.
+      // `playbooks.matchForEntity`. Report the automation's own filter slug
+      // honestly; absent filter → null (anyKind).
       const ranked = rankRouteCandidates({
-        entity: { entityId: input.entityId, profileSlug: input.profileSlug },
+        entity: {
+          entityId: input.entityId,
+          ...(input.profileSlug ? { profileSlug: input.profileSlug } : {}),
+        },
         intentText: input.intentText,
-        candidates: rows.map((a) => ({
-          kind: "automation" as const,
-          id: a.id,
-          name: a.name,
-          text: [a.description],
-          subjectProfileSlug:
-            (a.triggerConfig as { filters?: { profileSlug?: unknown } } | null)
-              ?.filters?.profileSlug === input.profileSlug
-              ? input.profileSlug
-              : null,
-          row: a,
-        })),
+        candidates: rows.map((a) => {
+          const filterSlug = (
+            a.triggerConfig as { filters?: { profileSlug?: unknown } } | null
+          )?.filters?.profileSlug;
+          return {
+            kind: "automation" as const,
+            id: a.id,
+            name: a.name,
+            text: [a.description],
+            subjectProfileSlug:
+              typeof filterSlug === "string" ? filterSlug : null,
+            row: a,
+          };
+        }),
       });
 
-      return ranked.map(({ candidate, score, reason, signals }) => ({
-        id: candidate.row.id,
-        name: candidate.row.name,
-        description: candidate.row.description ?? undefined,
-        triggerSummary: summarizeEntityCreateTrigger(
-          candidate.row.triggerConfig
-        ),
-        score,
-        reason,
-        signals,
-      }));
+      const MATCH_LIMIT = 20;
+      return ranked
+        .filter((r) => r.signals.length > 0)
+        .slice(0, MATCH_LIMIT)
+        .map(({ candidate, score, reason, signals }) => ({
+          id: candidate.row.id,
+          name: candidate.row.name,
+          description: candidate.row.description ?? undefined,
+          triggerSummary: summarizeEntityCreateTrigger(
+            candidate.row.triggerConfig
+          ),
+          score,
+          reason,
+          signals,
+        }));
     }),
 
   // ── Rules ecosystem: honest WHEN menu ────────────────────────────────────────

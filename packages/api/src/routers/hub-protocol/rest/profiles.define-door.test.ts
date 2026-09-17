@@ -211,3 +211,71 @@ describe("POST /profiles — define a kind or a role through the shared door", (
     ).toEqual(["company", "person"]);
   });
 });
+
+describe("MCP synap_define_kind parentProfileSlug", () => {
+  const PARENT_ID = "44444444-4444-4444-8444-444444444444";
+
+  it("resolves parentProfileSlug → parentProfileId before defineProfile", async () => {
+    const createProfile = vi.fn(async () => ({
+      status: "proposed",
+      proposalId: "prop-kind",
+    }));
+    const listProfiles = vi.fn(async () => ({
+      profiles: [{ id: PARENT_ID, slug: "note" }],
+    }));
+    const result = await capabilityHandlers.synap_define_kind!({
+      toolName: "synap_define_kind",
+      args: {
+        slug: "journal",
+        displayName: "Journal",
+        parentProfileSlug: "note",
+      },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: { profiles: { listProfiles, createProfile } } as never,
+      lensCaller: {} as never,
+      requestedWorkspaceId: WS,
+      workspaceAccessible: true,
+    });
+    const body = JSON.parse(
+      (result.content[0] as { text: string }).text
+    ) as Record<string, unknown>;
+    expect(body.status).toBe("proposed");
+    expect(listProfiles).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER,
+        workspaceId: WS,
+        profileSlugs: ["note"],
+      })
+    );
+    expect(createProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ parentProfileId: PARENT_ID, slug: "journal" })
+    );
+  });
+
+  it("refuses an unknown parent slug without calling defineProfile", async () => {
+    const createProfile = vi.fn();
+    const listProfiles = vi.fn(async () => ({ profiles: [] }));
+    const result = await capabilityHandlers.synap_define_kind!({
+      toolName: "synap_define_kind",
+      args: {
+        slug: "journal",
+        displayName: "Journal",
+        parentProfileSlug: "does-not-exist",
+      },
+      userId: USER,
+      apiKeyScopes: ["mcp.write"],
+      agentUserId: AGENT,
+      caller: { profiles: { listProfiles, createProfile } } as never,
+      lensCaller: {} as never,
+      requestedWorkspaceId: WS,
+      workspaceAccessible: true,
+    });
+    const body = JSON.parse(
+      (result.content[0] as { text: string }).text
+    ) as Record<string, unknown>;
+    expect(String(body.error)).toContain("does-not-exist");
+    expect(createProfile).not.toHaveBeenCalled();
+  });
+});

@@ -36,8 +36,11 @@ export interface CatalogCacheEntry {
 export interface QueryCatalogCacheOptions {
   /** Ranked tokenized substring match over name + tags + description. */
   query?: string;
-  /** Exact kind filter. */
-  kind?: CatalogKind;
+  /**
+   * Exact kind filter. `workspace` is an alias for the cache kind `template`
+   * (the CP's live PACKAGE_TYPES name); agents should send `kind:template`.
+   */
+  kind?: CatalogKind | "workspace";
   /** Exact source filter (the catalog provider base URL). Omit to search all configured sources. */
   source?: string;
   /** Cap the result count. Defaults to 20 when `query` is set; unset otherwise. */
@@ -57,7 +60,10 @@ export async function queryCatalogCache(
   const db = await getDb();
 
   const conditions = [];
-  if (opts?.kind) conditions.push(eq(cpCatalogCache.kind, opts.kind));
+  if (opts?.kind) {
+    const kind = opts.kind === "workspace" ? "template" : opts.kind;
+    conditions.push(eq(cpCatalogCache.kind, kind));
+  }
   if (opts?.source) conditions.push(eq(cpCatalogCache.source, opts.source));
 
   const rows = await db

@@ -31,6 +31,7 @@ import {
   validateSessionBlocker,
 } from "../../../services/focus-sessions/session-blocked-by.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
+import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
 import { workspaces } from "@synap/database/schema";
@@ -285,6 +286,19 @@ export function registerLinksRoutes(app: HubHono): void {
       blockedByWorkspaceId = valid.workspaceId;
     }
 
+    if (
+      parsed.data.linkType === "uses" &&
+      (parsed.data.fromType !== "project" || parsed.data.toType !== "workspace")
+    ) {
+      return c.json(
+        {
+          error:
+            "uses links must be project --uses--> workspace (the INDEX door)",
+        },
+        400
+      );
+    }
+
     try {
       // Falls back to the key's own bound agent identity when the body omits
       // `agentUserId` — mirrors `runs.ts`. Without it, a `hub_inbound` key
@@ -325,6 +339,8 @@ export function registerLinksRoutes(app: HubHono): void {
         return c.json({ status: "proposed", proposalId: perm.proposalId });
       }
 
+      const isUsesIndex = parsed.data.linkType === "uses";
+
       if (isBlockedBy) {
         // `addSessionBlocker` derives the edge's workspace itself from the
         // blocked session's own row — the same source `blockedByWorkspaceId`
@@ -347,6 +363,26 @@ export function registerLinksRoutes(app: HubHono): void {
           status: "created" as const,
           link: null,
           blockedBy: { inserted: result.inserted },
+        });
+      }
+
+      if (isUsesIndex) {
+        const uses = await linkProjectToWorkspace(db, {
+          projectId: parsed.data.fromId,
+          workspaceId: parsed.data.toId,
+          userId,
+        });
+        if (!uses.linked) {
+          const message =
+            uses.reason === "workspace_not_found"
+              ? "Workspace not found"
+              : "Project not found";
+          return c.json({ error: message }, 404);
+        }
+        return c.json({
+          status: "created",
+          link: null,
+          uses: { indexed: true },
         });
       }
 

@@ -38,7 +38,8 @@ export interface RouteCandidate {
 
 export interface RouteEntity {
   entityId?: string;
-  profileSlug: string;
+  /** Omit when ranking a kind-less pool (intent-only match). */
+  profileSlug?: string;
   /** Role-profile slugs the entity carries (facets). */
   facetSlugs?: readonly string[];
 }
@@ -131,7 +132,10 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     if (slug === null) {
       signals.push({ type: "anyKind" });
       score += WEIGHT.anyKind;
-    } else if (slug === input.entity.profileSlug) {
+    } else if (
+      input.entity.profileSlug !== undefined &&
+      slug === input.entity.profileSlug
+    ) {
       signals.push({ type: "kind", profileSlug: slug });
       score += WEIGHT.kind;
     } else if (facets.has(slug)) {

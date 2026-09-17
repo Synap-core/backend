@@ -202,7 +202,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_match_playbooks: {
     "pod-mcp": "synap_match_playbooks",
-    "cp-connector": null,
+    "cp-connector": "pod__match_playbooks",
     raycast: null,
   },
   synap_orient: {

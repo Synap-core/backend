@@ -592,6 +592,68 @@ export function registerProjectsRoutes(app: HubHono): void {
     });
   });
 
+  /**
+   * POST /projects/:id/to-suite-template
+   *
+   * Serialize a LIVE project into a suite `PackageDefinition`: walk the
+   * project's uses→workspace edges, reverse-serialize each workspace via
+   * `workspaceToPackageDefinition` (lossy — same drop-list as
+   * `/workspaces/:id/to-template`), then compose ONE suite package
+   * (`tags` include `suite`, `dependencies` `require` each slug, embedded
+   * playbooks). Read-only; gated on project visibility.
+   *
+   * Literal suffix (`/:id/to-suite-template`) so it never collides with a
+   * bare `/:id` catch-all.
+   */
+  app.post("/projects/:id/to-suite-template", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string;
+    const projectId = c.req.param("id");
+    if (!projectId) return c.json({ error: "projectId is required" }, 400);
+
+    try {
+      const { projectToSuitePackageDefinition } =
+        await import("../../../services/project-to-suite-package-definition.js");
+      const result = await projectToSuitePackageDefinition({
+        projectId,
+        userId,
+      });
+      return c.json(
+        {
+          projectId: result.projectId,
+          projectName: result.projectName,
+          workspaceIds: result.workspaceIds,
+          requiredSlugs: result.requiredSlugs,
+          definition: result.definition,
+        },
+        200
+      );
+    } catch (err) {
+      const message = (err as Error).message;
+      const notFound =
+        /not found or not visible/i.test(message) ||
+        /uses no workspaces/i.test(message);
+      logger.error(
+        { err, userId, projectId },
+        "POST /projects/:id/to-suite-template failed"
+      );
+      return c.json(
+        {
+          error: notFound
+            ? message
+            : "Failed to serialize project to suite template",
+          detail: message,
+        },
+        notFound ? 404 : 500
+      );
+    }
+  });
+
   // Create a project
   app.post("/projects", async (c) => {
     const userId = c.get("userId");

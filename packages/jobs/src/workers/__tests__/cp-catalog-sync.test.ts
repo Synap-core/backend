@@ -360,3 +360,86 @@ describe("handleCpCatalogSync — cell definitions are forwarded WHOLESALE", () 
     });
   });
 });
+
+describe("handleCpCatalogSync — derived search tokens fold into tags", () => {
+  it("folds playbook/dep tokens into tags when the CP row has a definition, without stuffing definition onto a list row", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities")) {
+        return jsonRes({
+          capabilities: [
+            {
+              key: "silent-pack",
+              name: "Enterprise OS",
+              description: "Company operating core.",
+              definition: {
+                playbooks: [
+                  {
+                    name: "Studio pipeline",
+                    goalTemplate: "Run the content creation pipeline.",
+                  },
+                ],
+              },
+            },
+          ],
+        });
+      }
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{
+      slug: string;
+      tags: string[] | null;
+      definition: Record<string, unknown> | null;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.slug).toBe("silent-pack");
+    expect(rows[0]!.tags).toEqual(
+      expect.arrayContaining(["content", "creation"])
+    );
+    // Capabilities already ship definition; folding must not drop it.
+    expect(rows[0]!.definition).toMatchObject({
+      playbooks: [{ name: "Studio pipeline" }],
+    });
+  });
+
+  it("copies list-view tags as-is and keeps definition null (does not start sending bodies)", async () => {
+    fetchMock.mockImplementation(async (urlArg: string) => {
+      const url = String(urlArg);
+      if (url.includes("/api/marketplace/capabilities"))
+        return jsonRes({ capabilities: [] });
+      if (url.includes("/api/marketplace/cells"))
+        return jsonRes({ cells: [], total: 0 });
+      if (url.includes("category=workspace")) {
+        return jsonRes({
+          packages: [
+            {
+              slug: "enterprise-os",
+              displayName: "Enterprise OS",
+              description: null,
+              tags: ["suite", "content", "creation"],
+            },
+          ],
+          total: 1,
+        });
+      }
+      return jsonRes({ packages: [], total: 0 });
+    });
+
+    await handleCpCatalogSync();
+
+    const rows = upsertedRows() as Array<{
+      slug: string;
+      tags: string[] | null;
+      definition: unknown;
+    }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.slug).toBe("enterprise-os");
+    expect(rows[0]!.tags).toEqual(["suite", "content", "creation"]);
+    expect(rows[0]!.definition).toBeNull();
+  });
+});

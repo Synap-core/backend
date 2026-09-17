@@ -91,6 +91,28 @@ export const capabilityHandlers: McpHandlerMap = {
       requestedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    // Agents name a parent by SLUG, never a UUID. Resolve it the same way IS
+    // `create_profile` does (listProfiles → find slug) before the define door
+    // sees an id.
+    let parentProfileId: string | undefined;
+    const parentSlug =
+      typeof args.parentProfileSlug === "string"
+        ? args.parentProfileSlug.trim()
+        : "";
+    if (parentSlug) {
+      const listed = (await caller.profiles.listProfiles({
+        userId,
+        workspaceId: requestedWorkspaceId as string | undefined,
+        profileSlugs: [parentSlug],
+      })) as { profiles?: Array<{ id: string; slug: string }> };
+      const parent = (listed.profiles ?? []).find((p) => p.slug === parentSlug);
+      if (!parent) {
+        return ok({
+          error: `Parent profile "${parentSlug}" not found. Use synap_list_profiles to see available profiles.`,
+        });
+      }
+      parentProfileId = parent.id;
+    }
     // The shared define door — `properties` on THIS tool are FIELD DEFS (on
     // synap_define_role they are default values). The door fails loudly on the
     // role-shaped object instead of silently dropping the caller's fields.
@@ -113,6 +135,7 @@ export const capabilityHandlers: McpHandlerMap = {
         ...(args.entityScope === "pod" || args.entityScope === "workspace"
           ? { entityScope: args.entityScope }
           : {}),
+        ...(parentProfileId ? { parentProfileId } : {}),
         ...(args.properties !== undefined ? { fields: args.properties } : {}),
         reasoning:
           readReasoning(args) ??

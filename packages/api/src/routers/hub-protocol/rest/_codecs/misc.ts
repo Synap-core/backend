@@ -559,6 +559,12 @@ export const ListWorkspacesResponseSchema = z
           .number()
           .optional()
           .describe("Live (non-deleted) entity count in this workspace."),
+        usedByProjectIds: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Additive INDEX: project ids that use this workspace (project --uses--> workspace). Floored to projects the caller can see. Not an ACL."
+          ),
         // ── Install health (A1) — see the projection in rest/workspaces.ts. ──
         provisioningStatus: z
           .string()

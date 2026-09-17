@@ -937,8 +937,10 @@ async function applyPackagePostWorkspaceInner(
               entities: 0,
               refused,
               message:
-                `Project ${body.projectId} is not visible or no longer exists — ` +
-                `no entity was filed into it.`,
+                !uses.linked && uses.reason === "workspace_not_found"
+                  ? `Workspace ${workspaceId} does not exist — the project was not indexed to it.`
+                  : `Project ${body.projectId} is not visible or no longer exists — ` +
+                    `no entity was filed into it.`,
             };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };

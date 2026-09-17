@@ -59,6 +59,7 @@ import {
 import { inviteProcedures } from "./workspaces/invites.js";
 import { definitionEngineProcedures } from "./workspaces/definition-engine.js";
 import { mcpServersProcedures } from "./workspaces/mcp-servers.js";
+import { listProjectsUsingWorkspace } from "../utils/project-workspace.js";
 
 export { isPodReadableWorkspace } from "./workspaces/helpers.js";
 
@@ -335,11 +336,20 @@ const coreProcedures = {
         });
       }
 
+      // Additive INDEX: projects that use this workspace. Floored to projects
+      // the caller can see. Not an ACL.
+      const usedByProjectIds = await listProjectsUsingWorkspace(
+        db,
+        input.id,
+        ctx.userId
+      );
+
       if (!membership && podReadable) {
         return {
           ...projectWorkspaceSettings(workspace),
           role: "viewer",
           accessKind: "pod_visible",
+          usedByProjectIds,
         };
       }
       if (!membership) {
@@ -426,6 +436,7 @@ const coreProcedures = {
         ...projectWorkspaceSettings(workspace),
         role: membership.role,
         accessKind: "member",
+        usedByProjectIds,
       };
     }),
 

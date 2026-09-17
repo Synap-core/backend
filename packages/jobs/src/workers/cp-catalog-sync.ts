@@ -53,6 +53,7 @@ import {
 } from "@synap/database";
 import { cpCatalogCache } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
+import { mergePackageSearchTags } from "./package-search-tokens.js";
 
 const logger = createLogger({ module: "cp-catalog-sync" });
 
@@ -433,7 +434,12 @@ async function syncOne(source: string, kind: CatalogKind): Promise<void> {
     version: e.version ?? null,
     tier: e.tier ?? null,
     vendor: e.vendor ?? null,
-    tags: e.tags ?? null,
+    // Fold derived tokens into tags when this hop has a definition (capabilities
+    // / cells). Packages list omits definition — derived-at-publish tags copy
+    // through as-is. Never write definition onto a list row that arrived null.
+    tags: e.definition
+      ? mergePackageSearchTags(e.tags, e.definition)
+      : (e.tags ?? null),
     contentHash: e.contentHash ?? null,
     definition: e.definition ?? null,
     syncedAt: now,

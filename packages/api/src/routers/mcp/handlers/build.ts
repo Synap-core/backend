@@ -272,8 +272,12 @@ export const buildHandlers: McpHandlerMap = {
       agentUserId
     );
     const matchCaller = playbooksRouter.createCaller(matchCtx);
+    const profileSlug =
+      typeof args.profileSlug === "string" && args.profileSlug.trim()
+        ? args.profileSlug.trim()
+        : undefined;
     const result = await matchCaller.matchForEntity({
-      profileSlug: args.profileSlug as string,
+      ...(profileSlug ? { profileSlug } : {}),
       entityId: args.entityId as string | undefined,
       workspaceId: matchWsId,
       // Ranks, never filters: each candidate comes back with `score` + `reason`.
