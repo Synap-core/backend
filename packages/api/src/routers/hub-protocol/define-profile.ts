@@ -18,7 +18,8 @@ import type { HubProtocolCaller } from "./rest/_shared.js";
 
 const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
 
-/** Base kinds a role attaches to when the caller names none. */
+/** Convenience default when the caller names none on CREATE — NOT a model
+ *  limit. Roles attach to ANY kind; pass applicableKinds: ["item"] etc. */
 const DEFAULT_ROLE_APPLICABLE_KINDS = ["company", "person"];
 
 export interface DefineProfileInput {

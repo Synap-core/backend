@@ -6,4 +6,6 @@
 4. **Using `array` of strings for tags.** Tags are a built-in concept; reuse the `tags` property on `note`/`project` instead of creating a parallel field.
 5. **Wrong `entityScope`.** Defaults to **`pod`**. Only set `entityScope: "workspace"` for process kinds (deals, pipelines). Do not pin people/knowledge to a workspace "to be safe."
 6. **Creating an overlay when a base property is wanted.** Overlays only appear in one workspace. If the user wants the field everywhere, don't set `overlay: true`.
-7. **Creating a custom profile when extension would work.** `client extends contact` is cleaner than a parallel `client` profile.
+7. **Creating a custom profile when extension would work.** Child kind (`parentProfileSlug`) or a **facet on any kind** is cleaner than a twin slug.
+8. **Treating facets as person/company-only.** A hat can sit on `item`, `task`, `deal`, …. `kind_mismatch` → widen `applicableKinds`, don't mint `seller` next to `vendor`.
+9. **Twin `deal` slug for a price timeline.** CRM `deal` is a sales pipeline. A commercial snapshot with its own life is the deal _precedent_ (own kind) or overlays on the same kind — never a second profile named deal.

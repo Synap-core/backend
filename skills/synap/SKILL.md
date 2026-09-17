@@ -48,9 +48,9 @@ You are connected to the user's Synap pod, the source of truth about their life,
 3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions.
 4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.
 5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.
-6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace.
+6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet on any kind, overlay, parent) — never a twin slug. New area of work: `load_skill` `system/synap/from-intent`.
 
-Load depth with `load_skill`: `system/synap/lenses` (workspaces, projects, sessions, where writes land), `escalation-ladder`, `writes`, or `catalog`.
+Load depth with `load_skill`: `system/synap/lenses`, `from-intent`, `escalation-ladder`, `writes`, or `catalog`.
 
 ---
 
@@ -84,7 +84,10 @@ When the tool list or current schema doesn't express the need — **search befor
 
 1. `list_profiles` / `list_views` / `list_capabilities({query})` in the active lenses
 2. `market.search({query, kind?})` over `capability` | `template` | `automation` | `cell`
-3. Load the relevant skill (`load_skill` / discover_tools) if the HOW is unclear
+3. Load the relevant skill (`load_skill` / discover_tools) if the HOW is unclear.
+   User stated a new area of work → `system/synap/from-intent` (conductor).
+   Schema extend vs invent → `system/synap-schema/extend-first`.
+   Missing **domain** workspace → `system/agent-os/skill`.
 
 Only if L2 returns empty for the real need do you climb to L3.
 
@@ -94,6 +97,7 @@ Extend the substrate so the need becomes expressible. Always governed — expect
 
 | Need               | Prefer               | Tool sketch                                                                                                            |
 | ------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Hat on a kind the role doesn't list yet | **Widen** `applicableKinds` | `define_role` **same slug** + extra kinds (merge). Hats attach to **any** kind, not only person/company |
 | Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                                                           |
 | Field missing      | Existing property    | `define_kind` with the existing kind's slug + the new field in `properties[]` (slug-idempotent)                        |
 | Kind missing       | Closest parent kind  | `define_kind` (extend, don't fork). Pod-wide by default — pass `entityScope:'workspace'` only for an app-specific kind |
@@ -130,6 +134,76 @@ Blocked path: **never** invent silently; **never** stop at a dead-end error — 
 
 ---
 
+## From intent — conductor for a new area of work
+
+Use this when the user states an **intent** to start or track something that may need structure (a project, domains, kinds, roles, deals-shaped things) — not when they only want to capture a fact into types that already exist (`synap` skill).
+
+This skill does **not** provision Company OS. That is `system/agent-os/skill` (install **domains** from templates). This skill decides **what the graph should be**, asks until that is clear, then loads the specialist skill for each write.
+
+Load: `system/synap/from-intent`.
+
+### 0. Orient first (firewall)
+
+Before proposing structure:
+
+1. `synap_orient` — pending review first; projects; workspaces.
+2. `synap_list_profiles` — kinds **and** roles (`profileKind`, `applicableKinds`, `parentProfileId`, `entityScope`).
+3. `synap_ask` — does this intent already live as a project or a cluster of entities?
+
+If a close project exists, **reuse it**. Do not mint a twin.
+
+### 1. Ask before you build (required)
+
+Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard.
+
+| Question | You are distinguishing |
+|---|---|
+| What is the **commitment** (the thing we are driving toward over weeks)? | **Project** (optional; gravity). Not a folder. |
+| Which **kinds of work** does it need (sell, build, write, buy, hire…)? | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
+| What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view. |
+| What already exists that we can **extend**? | `extend-first` — never a twin slug. |
+
+Hats are **not** limited to people and companies. A role is a hat on **whatever kind** `applicableKinds` lists (`item`, `task`, `deal`, …). “This item is an X” is a facet, not a new kind, until X has its own independent life.
+
+### 2. Propose the graph — confirm — then write
+
+Propose in this order, then wait:
+
+1. Project: reuse / create (human or capture-plan / ≥5 evidence) / skip.
+2. Domains: use existing → market template → (rare) create. Confirm each install.
+3. Schema: **extend-first** (`system/synap-schema/extend-first`). Confirm any `define_role` / `define_kind` / overlay.
+4. Instances + links + facets, under the project lens.
+5. Sessions for short work / blockers — **never** nested projects.
+
+`proposed` is success. Do not retry. Do not auto-install.
+
+### 3. Which skill to load next
+
+| Need | Skill |
+|---|---|
+| Schema: facet, overlay, child kind, new kind | `system/synap-schema/extend-first` then `extend-vs-create` |
+| Missing operational domain | `system/agent-os/skill` |
+| Views / cards once the model exists | `system/synap-ui/skill` |
+| Lenses, gravity, sessions | `system/synap/lenses` |
+| Four-test for a workspace | `system/synap/workspace-design` |
+| Index of everything | `catalog` |
+
+### Firewalls (never)
+
+- Invent a kind or role whose **slug or display name** matches something `list_profiles` already returned.
+- Invent a workspace that fails the four-test.
+- Nested projects. Phases = sessions.
+- A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
+- Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.
+- CRM `deal` (pre-sale pipeline) as a generic price timeline. A commercial snapshot with its own life uses the **deal precedent** (own kind), not a twin `deal` slug and not JSON on the thing.
+- Encoding the pattern only as Knowledge and expecting every MCP agent to find it. Skills + this conductor are the all-pods path.
+
+### After it works
+
+Offer L4: session → playbook, cell → renderer, lived setup → package. Never crystallize a guess.
+
+---
+
 ## Mental model
 
 Synap is a typed knowledge graph. **Reading is one verb (`synap ask`) — it routes for you.** Writing is where you must pick the right lane: the destination is decided by the **KIND** of knowledge, not by whichever workspace happens to be active.
@@ -154,6 +228,8 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 > - **`proposed`** → queued for the human's review, **like a git PR — not a failure, not a block.** Keep working: compose a whole graph of proposed changes in one session (reference the proposed entities, link them, add more) — they're staged together and go live when the human approves the batch. The only thing to remember: it's _under review_, so don't tell the user it's already applied. (Inferences about the user and writes to real workspaces are gated by design — expected, normal.)
 
 > **Substrate names (tables under the hood):** _semantic_ = `entities` (the `knowledge` profile, workspace-scoped = domain separation), _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys` (pod-wide runbooks). `ask` queries across them so you never pick on read.
+
+**Facets (roles)** are hats on **any kind** (`applicableKinds`), not only person/company. “This item is an X” is `attach_facet`, not a new kind, until X has its own life. Widen the role when `kind_mismatch`. See `from-intent` + `extend-first`.
 
 ### Data layers — the graph itself
 

@@ -790,6 +790,8 @@ export class ProfileRepository {
     if (input.defaultRenderers !== undefined)
       updateData.defaultRenderers = input.defaultRenderers;
     if (input.aiPosture !== undefined) updateData.aiPosture = input.aiPosture;
+    if (input.applicableKinds !== undefined)
+      updateData.applicableKinds = input.applicableKinds;
 
     // Increment version on update
     const current = await this.getById(id);

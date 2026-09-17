@@ -9,7 +9,9 @@ description: >
   schema", defining custom relations, setting up a profile for a specific domain
   (real estate, music production, research, fitness, cooking). Also triggers on:
   "do I already have a profile for X?", "what fields does <profile> have?",
-  extending an existing profile with workspace-specific overlay properties.
+  extending an existing profile with workspace-specific overlay properties,
+  widening a role so a hat fits another kind (any kind, not only person/company).
+  Prefer extend-first (system/synap-schema/extend-first) before define_kind.
   Do NOT use this skill for creating instances of existing types — the core
   `synap` skill handles that. This skill changes the SCHEMA, not the data.
 metadata:
@@ -117,7 +119,7 @@ Read the response:
 
 ### Commonly seeded profiles (verify before using)
 
-Standard pods typically include: `note`, `task`, `project`, `event`, `person`, `contact`, `company`, `bookmark`, `website`, `article`, `capture`, `file`, `anchor`, `decision`, `question`, `research`
+Standard pods typically include: `note`, `task`, `event`, `person`, `contact`, `company`, `item`, `bookmark`, `website`, `article`, `capture`, `file`, `anchor`, `decision`, `question`, `research`. A **project is not a profile** — it is a row in `projects`. Roles (vendor, client, …) appear as `profileKind: role`.
 
 CRM workspaces additionally have: `deal`, `client` — but **only** when a CRM workspace was created.  
 Custom workspace templates (devplane, content, etc.) add their own profiles entirely.
@@ -130,7 +132,7 @@ Before creating a new profile: **does one of these already fit?** A podcast epis
 
 There are three moves, not two. Before extending or creating, ask whether the thing is really a **role** the entity plays rather than a new kind of entity at all — that's a facet, and it's the move people skip.
 
-**Kind + Facets, the rule:** one entity = one kind (`profiles.profileKind = 'kind'`). Roles the entity plays — client, partner, investor, prospect — are role-profiles (`profileKind = 'role'`, `applicableKinds[]`) attached via `entity_facets`: additive, workspace-lensed, NOT entities. A facet cascades with its parent entity; only promote a role to a full kind if it accrues its own independent life.
+**Kind + Facets, the rule:** one entity = one kind (`profiles.profileKind = 'kind'`). Roles are hats on **any** kind — not only person/company. A role-profile (`profileKind = 'role'`, `applicableKinds[]`) attaches via `entity_facets`: additive, workspace-lensed, NOT a second entity. `applicableKinds` NULL = any kind; a list **restricts**. “This item is an X” is a facet on `item` when X is a hat, not a new kind. Only promote a role to a full kind if it accrues its own independent life. Widen a role (`define_role` on the existing slug) when the hat fits a kind that is not yet in `applicableKinds`. See `extend-first.md`.
 
 **The litmus test:**
 
@@ -157,6 +159,38 @@ Create new when:
 - It's a relationship-thing that accrues its own independent lifecycle (the `deal` precedent above)
 
 Prefer **inheritance** over new profiles when a system parent fits. `contact extends person` is the pattern — a new `client` profile can `parentProfileSlug: "contact"` and only add the fields that differ. But if `client` is really just a role a `company` or `person` plays (no independent properties of its own), it shouldn't be a profile at all — it's a facet, attached via `attach_facet`, never a second entity.
+
+---
+
+## Extend first — schema moves, in order
+
+Before `define_kind` or a new workspace, walk this list **top to bottom**. Stop at the first move that fits. Load from `system/synap-schema/extend-first`. The conductor for a fuzzy user intent is `system/synap/from-intent`.
+
+A **role (facet) is a hat on any entity kind**, not only person/company. `applicableKinds` is the allowlist (`NULL` = any kind). `kind_mismatch` means **widen the role**, not mint a sibling type.
+
+| # | If the need is… | Do this | Do not |
+|---|-----------------|---------|--------|
+| 1 | An instance of a kind you already have | `create_entity` / capture on that slug; search first | A second kind with a similar name |
+| 2 | A **hat** on an existing entity (“this item is an X”, “this company is a vendor”) | `attach_facet`. If the role exists but not on this kind → **widen `applicableKinds`** (same slug, extra kinds) then attach | A new kind or a second role slug (`seller` vs `vendor`) |
+| 3 | 1–3 extra fields in **one** domain | Workspace **overlay** property on the existing kind | A forked kind in that workspace |
+| 4 | A true **subtype** with its own fields and life | Child kind: `define_kind` with `parentProfileSlug` of the closest parent | A disconnected top-level kind |
+| 5 | A **relationship-with-a-life** (buyer × seller × price × stage, independent of either party) | Own kind (the **deal precedent**). New slug if CRM `deal` is a *sales pipeline* and this is not that. Overlay if it **is** the same kind in another workspace | Twin slug `deal`; JSON arrays of prices on the thing; Finding-per-scrape |
+| 6 | A **stage** inside a domain | Status field + view | A workspace per stage |
+| 7 | A **domain** (owns kinds + own team + automations + stable) | Four-test → `agent-os` / template | A workspace for a project, a hat, or a shopping list |
+| 8 | None of the above | `define_kind` (pod-wide default) | Silent invent |
+
+Same **kind** across workspaces: **one profile**, overlays for extra fields, optional `entityScope: pod` (pod-admin) so instances are not trapped. Never a second profile with the same name.
+
+### Widen a role
+
+`synap_define_role` with an **existing** slug is slug-idempotent: extra `applicableKinds` are **merged** (widen only). Shrinking the allowlist is not this door.
+
+### Firewalls
+
+- `list_profiles` before every define.
+- Prefer attach / widen / overlay / parent over create.
+- One structural proposal at a time.
+- `proposed` is success.
 
 ---
 
@@ -322,7 +356,9 @@ Defining a relation def is rarely worth it — `relates_to` + a property usually
 4. **Using `array` of strings for tags.** Tags are a built-in concept; reuse the `tags` property on `note`/`project` instead of creating a parallel field.
 5. **Wrong `entityScope`.** Defaults to **`pod`**. Only set `entityScope: "workspace"` for process kinds (deals, pipelines). Do not pin people/knowledge to a workspace "to be safe."
 6. **Creating an overlay when a base property is wanted.** Overlays only appear in one workspace. If the user wants the field everywhere, don't set `overlay: true`.
-7. **Creating a custom profile when extension would work.** `client extends contact` is cleaner than a parallel `client` profile.
+7. **Creating a custom profile when extension would work.** Child kind (`parentProfileSlug`) or a **facet on any kind** is cleaner than a twin slug.
+8. **Treating facets as person/company-only.** A hat can sit on `item`, `task`, `deal`, …. `kind_mismatch` → widen `applicableKinds`, don't mint `seller` next to `vendor`.
+9. **Twin `deal` slug for a price timeline.** CRM `deal` is a sales pipeline. A commercial snapshot with its own life is the deal *precedent* (own kind) or overlays on the same kind — never a second profile named deal.
 
 ---
 

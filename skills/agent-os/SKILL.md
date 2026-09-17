@@ -1,19 +1,15 @@
 ---
 name: agent-os
 description: >
-  Use this skill when the user needs a domain (workspace) or a tool
-  (capability) they do not yet have — the find→market→create loops. Triggers
-  include whole-company setup ("set up my company", "launch agent OS", "build
-  my company OS", "onboard my company") AND everyday intent: "I want to create
-  content", "I want to build a product", "I need a shopping/procurement
-  domain", "this work needs another workspace", "add Marketing to my project",
-  "I need a CRM and a content workspace", "set up marketing + sales + dev".
-  ALSO use it to add a SINGLE domain to an existing project, or when you've
-  noticed a project is missing an operational domain it clearly needs and
-  offered to set it up. A project is optional (reuse if present; never invent
-  one on a team pod). Ask, don't assume — infer what fits, confirm before
-  install. Same loop later applies to playbooks (mention; don't invent a new
-  package kind).
+  Use this skill to PROVISION operational domains (workspaces) from templates —
+  Company OS / "add a CRM" / "this project needs Marketing". Triggers: "set up
+  my company", "launch agent OS", "build my company OS", "onboard my company",
+  "add a Marketing workspace", "this project doesn't have a CRM". Find existing
+  workspace → marketplace template → confirm → packages/apply. NOT the skill
+  for "the user stated an intent, what graph should exist" — that conductor is
+  system/synap/from-intent (orient, questions, extend-first, then load THIS
+  skill only if a domain is actually missing). A project is optional (reuse if
+  present; never invent one on a team pod). Ask, don't assume.
 metadata:
   openclaw:
     requires:
@@ -314,7 +310,11 @@ lens; give them that one, linked and onboarded.
 
 ## When NOT to use this skill
 
-- The user wants to extend an existing workspace's schema (add a profile/field
-  to a workspace that already exists) → use `synap-schema`.
+- The user stated an **intent** to start something (a product, a build, a
+  tracking area) and you have not yet decided project vs hat vs kind vs domain
+  → `system/synap/from-intent` first. Load this skill only when a **domain
+  workspace** is actually missing.
+- Schema (facets, overlays, child kinds, widen a role) → `synap-schema` /
+  `extend-first`.
 - The user just wants to capture data → use the core `synap` skill.
 - Deep lens rules (where writes land, gravity detail) → `system/synap/lenses`.

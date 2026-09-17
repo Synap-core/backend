@@ -466,6 +466,26 @@
       "capability": null
     }
   },
+  "synap/from-intent": {
+    "teachesTools": [
+      "synap_orient",
+      "synap_list_profiles",
+      "synap_ask",
+      "synap_define_role",
+      "synap_define_kind",
+      "synap_attach_facet",
+      "synap_create_project",
+      "synap_start_session"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Conductor: user intent → orient → questions → extend-first → confirm → write. Not Company OS (that is agent-os).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
   "synap/scope": {
     "teachesTools": [],
     "skillGroup": "core",
@@ -661,6 +681,23 @@
     "skillGroup": "build",
     "alwaysOn": false,
     "summary": "When to extend an existing profile, create a new one, or attach a facet (Kind + Facets, the deal precedent).",
+    "delivery": {
+      "autoSeed": true,
+      "cliBundle": true,
+      "capability": null
+    }
+  },
+  "synap-schema/extend-first": {
+    "teachesTools": [
+      "list_profiles",
+      "synap_define_role",
+      "synap_define_kind",
+      "synap_attach_facet",
+      "create_property_def"
+    ],
+    "skillGroup": "build",
+    "alwaysOn": false,
+    "summary": "Schema moves in order: instance → facet (any kind) → widen role → overlay → child kind → deal-pattern kind → workspace. Never a twin slug.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -898,7 +935,7 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Find→market→create loops for domains (workspaces) then tools (capabilities); confirm before install; sessions for sub-work.",
+    "summary": "Company OS / domain provision: install workspace templates. Not the intent-structure conductor (that is synap/from-intent).",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

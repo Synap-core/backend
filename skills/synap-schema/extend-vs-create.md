@@ -2,7 +2,7 @@
 
 There are three moves, not two. Before extending or creating, ask whether the thing is really a **role** the entity plays rather than a new kind of entity at all — that's a facet, and it's the move people skip.
 
-**Kind + Facets, the rule:** one entity = one kind (`profiles.profileKind = 'kind'`). Roles the entity plays — client, partner, investor, prospect — are role-profiles (`profileKind = 'role'`, `applicableKinds[]`) attached via `entity_facets`: additive, workspace-lensed, NOT entities. A facet cascades with its parent entity; only promote a role to a full kind if it accrues its own independent life.
+**Kind + Facets, the rule:** one entity = one kind (`profiles.profileKind = 'kind'`). Roles are hats on **any** kind — not only person/company. A role-profile (`profileKind = 'role'`, `applicableKinds[]`) attaches via `entity_facets`: additive, workspace-lensed, NOT a second entity. `applicableKinds` NULL = any kind; a list **restricts**. “This item is an X” is a facet on `item` when X is a hat, not a new kind. Only promote a role to a full kind if it accrues its own independent life. Widen a role (`define_role` on the existing slug) when the hat fits a kind that is not yet in `applicableKinds`. See `extend-first.md`.
 
 **The litmus test:**
 

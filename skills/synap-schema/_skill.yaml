@@ -8,7 +8,9 @@ description: >
   schema", defining custom relations, setting up a profile for a specific domain
   (real estate, music production, research, fitness, cooking). Also triggers on:
   "do I already have a profile for X?", "what fields does <profile> have?",
-  extending an existing profile with workspace-specific overlay properties.
+  extending an existing profile with workspace-specific overlay properties,
+  widening a role so a hat fits another kind (any kind, not only person/company).
+  Prefer extend-first (system/synap-schema/extend-first) before define_kind.
   Do NOT use this skill for creating instances of existing types — the core
   `synap` skill handles that. This skill changes the SCHEMA, not the data.
 metadata:

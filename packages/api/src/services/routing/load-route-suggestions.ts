@@ -38,6 +38,7 @@ type PlaybookMatch = {
   name: string;
   goalTemplate: string | null;
   subjectProfileSlug: string | null;
+  signals?: ReadonlyArray<{ type: string; profileSlug?: string }>;
 };
 type AutomationMatch = {
   id: string;
@@ -130,9 +131,19 @@ export async function loadRouteSuggestions(input: {
               : e.profileSlug,
           })),
         ];
+        const facetSlugs = [
+          ...new Set(
+            pbs.flatMap((p) =>
+              (p.signals ?? [])
+                .filter((s) => s.type === "facet" && s.profileSlug)
+                .map((s) => s.profileSlug as string)
+            )
+          ),
+        ];
         return {
           ...(e.entityId ? { entityId: e.entityId } : {}),
           profileSlug: e.profileSlug,
+          ...(facetSlugs.length > 0 ? { facetSlugs } : {}),
           candidates,
         };
       })

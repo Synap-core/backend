@@ -39,6 +39,7 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { setProfileRenderer } from "../services/profiles/set-profile-renderer.js";
+import { mergeApplicableKinds } from "../utils/merge-applicable-kinds.js";
 import {
   RENDERER_SCOPES,
   type RendererSlot,
@@ -324,6 +325,61 @@ export const profilesRouter = router({
           input.scope === "shared"
         ) {
           await profileRepo.grantAccess(existing.id, ctx.workspaceId);
+        }
+        // Slug-idempotent WIDEN: define_role on an existing role merges
+        // applicableKinds (hats on any kind). Never shrinks. NULL stored
+        // allowlist already means any kind — nothing to add.
+        if (
+          existing.profileKind === "role" &&
+          input.applicableKinds &&
+          input.applicableKinds.length > 0
+        ) {
+          const { next, widened } = mergeApplicableKinds(
+            existing.applicableKinds,
+            input.applicableKinds
+          );
+          if (widened && next) {
+            const perm = await checkPermissionOrPropose({
+              userId: ctx.userId,
+              agentUserId: input.agentUserId,
+              workspaceId: ctx.workspaceId,
+              subjectType: "profile",
+              action: "create",
+              source: input.source,
+              reasoning: input.reasoning,
+              data: {
+                id: existing.id,
+                slug: existing.slug,
+                displayName: existing.displayName,
+                profileKind: "role",
+                applicableKinds: next,
+                widenApplicableKinds: true,
+              },
+            });
+            if ("denied" in perm && perm.denied) {
+              throw new TRPCError({
+                code: "FORBIDDEN",
+                message: perm.reason,
+              });
+            }
+            if ("proposalId" in perm) {
+              return {
+                profile: existing,
+                existing: true,
+                widened: true,
+                status: "proposed" as const,
+                message: proposedMessageFor(
+                  perm.proposalType,
+                  "Role applicableKinds widen proposed for review"
+                ),
+                proposalId: perm.proposalId,
+              };
+            }
+            const updated = await profileRepo.update(existing.id, {
+              applicableKinds: next,
+            });
+            return { profile: updated, existing: true, widened: true };
+          }
         }
         return { profile: existing, existing: true };
       }
@@ -667,6 +723,10 @@ export const profilesRouter = router({
         /** Whether entities of this type are pod-wide or workspace-scoped */
         entityScope: z.enum(["pod", "workspace"]).optional(),
         /**
+         * Role hats: extra kind slugs MERGED into applicableKinds (widen only).
+         */
+        applicableKinds: z.array(z.string()).optional(),
+        /**
          * System-default renderer for the LIST slot of this profile.
          * Pass `null` to clear the default (so the resolver returns the
          * hardcoded system fallback). See Profile Renderer North Star.
@@ -806,6 +866,21 @@ export const profilesRouter = router({
         else nextDefaultRenderers[contentKind] = ref;
       }
 
+      let applicableKindsUpdate: string[] | undefined;
+      if (input.applicableKinds !== undefined) {
+        if (existing.profileKind !== "role") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "applicableKinds can only be set on a role profile",
+          });
+        }
+        const { next, widened } = mergeApplicableKinds(
+          existing.applicableKinds,
+          input.applicableKinds
+        );
+        if (widened && next) applicableKindsUpdate = next;
+      }
+
       const updated = await profileRepo.update(input.id, {
         ...(defaultRenderersChanged
           ? { defaultRenderers: nextDefaultRenderers }
@@ -820,6 +895,9 @@ export const profilesRouter = router({
         defaultDetailRenderer: input.defaultDetailRenderer,
         defaultDashboardRenderer: input.defaultDashboardRenderer,
         aiPosture: input.aiPosture,
+        ...(applicableKindsUpdate
+          ? { applicableKinds: applicableKindsUpdate }
+          : {}),
       });
 
       // Invalidate entityScope cache when changed

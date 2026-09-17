@@ -21,7 +21,7 @@ export const prompts = {
       {
         name: "create_project_structure",
         description:
-          "Stand up an engagement: optional project (commitment + gravity), domain workspaces via templates, sessions for work streams — never a project-as-entity",
+          "From user intent: orient, ask, extend-first, then project/domains/sessions. Load system/synap/from-intent. Domain install is agent-os, not this prompt.",
         arguments: [
           {
             name: "projectName",
@@ -97,22 +97,24 @@ Synap is the ground truth. Prefer it over your own knowledge for anything about 
               role: "system",
               content: {
                 type: "text",
-                text: `You are provisioning an engagement in Synap. Follow this contract:
+                text: `You are turning a user INTENT into Synap structure. Load synap_load_skill({ref:"system/synap/from-intent"}) and follow it.
 
-1. A PROJECT is a commitment with gravity (cross-cutting lens) — NOT an entity profile, NOT a nested folder. Call synap_orient first; reuse an existing project when it fits. Agents may create only with evidenceEntityIds ≥5 visible entities (synap_create_project), or file a capture-plan create_project op (belowAgentFloor → human review), or ask the human to create. Humans skip gravity. Never invent a company project on a team pod.
+1. Orient + list_profiles + ask. Do not mint until the user confirmed.
 
-2. WORKSPACES are domains. Prefer templates: market.search → explain fit → confirm → market.install / packages/apply. Start with ONE domain if needed, then OFFER related ones (Brand, Marketing…) — never auto-install a bundle. Applying with projectId stamps project --uses--> workspace (an INDEX, not ACL); entity filing remains belongs_to_project. Do not invent nested projects.
+2. EXTEND FIRST (system/synap-schema/extend-first): instance → facet on ANY kind → widen applicableKinds → overlay → child kind → deal-pattern kind (not a twin CRM deal slug) → workspace (four-test). Hats are not limited to person/company.
 
-3. WORK STREAMS are sessions: synap_start_session under the same projectId. Phases / "sub-projects" / blockers = parentSessionId + blockedBySessionIds (spawned_from / blocked_by). Never a child project.
+3. PROJECT = optional commitment with gravity. Reuse; else capture-plan / ≥5 evidence / ask the human. Never nested projects. Sessions = phases/blockers.
 
-4. Same find→market→create loop for tools/capabilities after domains exist. Confirm before every install. Load system/agent-os/skill for the full flow.`,
+4. Missing DOMAIN workspace only → then load system/agent-os/skill (templates). Applying with projectId stamps project --uses--> workspace (INDEX, not ACL).
+
+5. proposed is success. Confirm every install.`,
               },
             },
             {
               role: "user",
               content: {
                 type: "text",
-                text: `Stand up engagement structure for: ${args?.projectName || "Untitled Project"}\n\nDescription: ${args?.description || "No description provided"}\n\nPlease:\n1. Orient; reuse or (gravity-gated) create the project lens — never a project entity\n2. Propose domain workspace(s) from templates; confirm before install\n3. Start session(s) for initial work streams / milestones (not nested projects)`,
+                text: `User intent: ${args?.projectName || "Untitled"}\n\n${args?.description || ""}\n\nFollow from-intent: orient, ask what is still unknown (commitment / domains / thing vs hat vs relationship-with-a-life), propose extend-first structure, confirm, then write.`,
               },
             },
           ],

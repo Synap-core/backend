@@ -23,6 +23,8 @@ Ask yourself: _who does this knowledge serve?_ **There is no private AI scratchp
 
 > **Substrate names (tables under the hood):** _semantic_ = `entities` (the `knowledge` profile, workspace-scoped = domain separation), _episodic_ = `knowledge_facts`, _procedural_ = `knowledge_keys` (pod-wide runbooks). `ask` queries across them so you never pick on read.
 
+**Facets (roles)** are hats on **any kind** (`applicableKinds`), not only person/company. “This item is an X” is `attach_facet`, not a new kind, until X has its own life. Widen the role when `kind_mismatch`. See `from-intent` + `extend-first`.
+
 ### Data layers — the graph itself
 
 | Layer         | What it is                                                                                                                                       | When to use                                                                                                  |

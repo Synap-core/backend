@@ -28,7 +28,10 @@ When the tool list or current schema doesn't express the need — **search befor
 
 1. `list_profiles` / `list_views` / `list_capabilities({query})` in the active lenses
 2. `market.search({query, kind?})` over `capability` | `template` | `automation` | `cell`
-3. Load the relevant skill (`load_skill` / discover_tools) if the HOW is unclear
+3. Load the relevant skill (`load_skill` / discover_tools) if the HOW is unclear.
+   User stated a new area of work → `system/synap/from-intent` (conductor).
+   Schema extend vs invent → `system/synap-schema/extend-first`.
+   Missing **domain** workspace → `system/agent-os/skill`.
 
 Only if L2 returns empty for the real need do you climb to L3.
 
@@ -36,14 +39,15 @@ Only if L2 returns empty for the real need do you climb to L3.
 
 Extend the substrate so the need becomes expressible. Always governed — expect `"proposed"`.
 
-| Need               | Prefer               | Tool sketch                                                                                                            |
-| ------------------ | -------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Role/hat missing   | Existing role attach | `define_role` only after `list_profiles` empty for that role                                                           |
-| Field missing      | Existing property    | `define_kind` with the existing kind's slug + the new field in `properties[]` (slug-idempotent)                        |
-| Kind missing       | Closest parent kind  | `define_kind` (extend, don't fork). Pod-wide by default — pass `entityScope:'workspace'` only for an app-specific kind |
-| View missing       | Existing view        | `list_views` first, then `create_view` (recovery or proactive)                                                         |
-| Domain missing     | **Template**         | `market.search(kind:template)` → install/propose **before** freehand `create_workspace`                                |
-| Capability missing | Marketplace          | `market.install` (always proposes for agents)                                                                          |
+| Need                                    | Prefer                      | Tool sketch                                                                                                            |
+| --------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Hat on a kind the role doesn't list yet | **Widen** `applicableKinds` | `define_role` **same slug** + extra kinds (merge). Hats attach to **any** kind, not only person/company                |
+| Role/hat missing                        | Existing role attach        | `define_role` only after `list_profiles` empty for that role                                                           |
+| Field missing                           | Existing property           | `define_kind` with the existing kind's slug + the new field in `properties[]` (slug-idempotent)                        |
+| Kind missing                            | Closest parent kind         | `define_kind` (extend, don't fork). Pod-wide by default — pass `entityScope:'workspace'` only for an app-specific kind |
+| View missing                            | Existing view               | `list_views` first, then `create_view` (recovery or proactive)                                                         |
+| Domain missing                          | **Template**                | `market.search(kind:template)` → install/propose **before** freehand `create_workspace`                                |
+| Capability missing                      | Marketplace                 | `market.install` (always proposes for agents)                                                                          |
 
 **Template-before-workspace (hard rule in teaching):** new operational domains start as marketplace templates when one fits. Freehand workspace creation is last resort after the four workspace-design conditions hold (`workspace-design.md`). Capture never invents a workspace — placement only routes into existing lenses.
 

@@ -20082,6 +20082,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				role: string;
 				accessKind: string;
+				usedByProjectIds: string[];
 				id: string;
 				createdAt: Date;
 				updatedAt: Date;
@@ -27803,8 +27804,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				profileSlug: string;
 				workspaceId: string;
+				profileSlug?: string | undefined;
 				entityId?: string | undefined;
 				intentText?: string | undefined;
 			};
@@ -30100,8 +30101,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		matchForEntity: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
-				profileSlug: string;
 				workspaceId: string;
+				profileSlug?: string | undefined;
 				entityId?: string | undefined;
 				intentText?: string | undefined;
 			};
@@ -30109,7 +30110,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 				name: string;
 				goalTemplate: string;
-				subjectProfileSlug: string;
+				subjectProfileSlug: string | null;
 				params: unknown;
 				executor: PlaybookExecutorRef;
 				score: number;

@@ -1,6 +1,7 @@
 operating-mode.md
 reflexes.md
 escalation-ladder.md
+from-intent.md
 mental-model.md
 quick-reference.md
 lenses.md

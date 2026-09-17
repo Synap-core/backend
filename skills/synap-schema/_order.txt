@@ -3,6 +3,7 @@ before-you-touch.md
 read-before-write.md
 discover-profiles.md
 extend-vs-create.md
+extend-first.md
 creating-profiles.md
 property-defs.md
 overlay-properties.md

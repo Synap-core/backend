@@ -1040,7 +1040,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a NEW role type (Kind + Facets) that can then be attached to entities via synap_attach_facet. A role — e.g. 'market-maker', 'sponsor', 'mentor' — is an attachable FACET, never its own entity. Escalation L3: call ONLY after synap_list_profiles shows no existing role slug that fits; prefer attaching an existing role over minting a near-duplicate. applicableKinds declares which base kinds (e.g. 'company', 'person') the role can attach to and is REQUIRED (non-empty). Governed: may return 'proposed' — NEVER treat that as an error.",
+          "Define or WIDEN a role (facet): a hat on ANY entity kind, not only person/company. Example: applicableKinds ['item'] means 'this item is an X'. Call ONLY after synap_list_profiles. If the slug already exists, extra applicableKinds are MERGED (widen only — never a second slug for the same hat). Prefer attach_facet; widen when kind_mismatch. NULL stored allowlist = any kind. Governed: may return 'proposed' — NEVER treat that as an error.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1057,7 +1057,7 @@ export const tools = {
               type: "array",
               items: { type: "string" },
               description:
-                "Base-kind slugs this role can attach to. REQUIRED, non-empty. Defaults to ['company','person'].",
+                "Kind slugs this hat can attach to (item, person, company, task, …). Merged on an existing role. Defaults to ['company','person'] only when omitted on CREATE — that default is a convenience, not a model limit.",
             },
             description: {
               type: "string",
@@ -1104,7 +1104,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Define a NEW entity KIND (a primary type: 'podcast', 'workout', 'invoice') and, optionally, its fields — the data model an app is built on. A kind is a thing that HAS identity; a hat that thing WEARS (client, sponsor, mentor) is a ROLE — use synap_define_role for those, never a kind. Escalation L3: call ONLY after synap_list_profiles shows no existing kind that fits; extending an existing kind with new fields is almost always better than minting a near-duplicate. Kinds are POD-WIDE by default (their entities are visible in every workspace) — pass entityScope:'workspace' only for a kind that is genuinely app-specific. Slug-idempotent: re-calling with an existing slug returns that profile and adds any new fields, so it is also the door for growing a kind's schema. Governed: may return 'proposed' — NEVER treat that as an error (when the kind itself is proposed, its fields are deferred until approval).",
+          "Define a NEW entity KIND only after list_profiles + extend-first (load_skill system/synap-schema/extend-first). A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. Slug-idempotent for fields. POD-WIDE default. Governed: 'proposed' is success.",
         inputSchema: {
           type: "object",
           properties: {
