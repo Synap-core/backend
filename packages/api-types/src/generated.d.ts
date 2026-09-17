@@ -23498,6 +23498,81 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing: boolean;
+				widened: boolean;
+				status: "proposed";
+				message: string;
+				proposalId: string;
+			} | {
+				profile: {
+					id: string;
+					userId: string | null;
+					workspaceId: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					slug: string;
+					scope: ProfileScope;
+					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
+					displayName: string;
+					isActive: boolean;
+					ownerId: string | null;
+					uiHints: unknown;
+					parentProfileId: string | null;
+					defaultValues: unknown;
+					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
+					entityScope: "pod" | "workspace";
+					defaultListRenderer: unknown;
+					defaultDetailRenderer: unknown;
+					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
+					profileKind: "kind" | "role";
+					applicableKinds: string[] | null;
+					roleCategory: string | null;
+					aiPosture: AiPosture | null;
+					lifecycle: "active" | "experimental" | "deprecated";
+					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
+				};
+				existing: boolean;
+				widened: boolean;
+				status?: undefined;
+				message?: undefined;
+				proposalId?: undefined;
+			} | {
+				profile: {
+					id: string;
+					userId: string | null;
+					workspaceId: string | null;
+					version: number;
+					createdAt: Date;
+					updatedAt: Date;
+					slug: string;
+					scope: ProfileScope;
+					origin: "agent" | "unknown" | "probe" | "core" | "template" | "authored";
+					displayName: string;
+					isActive: boolean;
+					ownerId: string | null;
+					uiHints: unknown;
+					parentProfileId: string | null;
+					defaultValues: unknown;
+					semanticSlug: string | null;
+					plural: string | null;
+					synonyms: string[] | null;
+					entityScope: "pod" | "workspace";
+					defaultListRenderer: unknown;
+					defaultDetailRenderer: unknown;
+					defaultDashboardRenderer: unknown;
+					defaultRenderers: Record<string, unknown>;
+					profileKind: "kind" | "role";
+					applicableKinds: string[] | null;
+					roleCategory: string | null;
+					aiPosture: AiPosture | null;
+					lifecycle: "active" | "experimental" | "deprecated";
+					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
+				};
+				existing: boolean;
+				widened?: undefined;
 				status?: undefined;
 				message?: undefined;
 				proposalId?: undefined;
@@ -23507,6 +23582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				existing?: undefined;
+				widened?: undefined;
 			} | {
 				profile: {
 					id: string;
@@ -23540,6 +23616,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					ownerKind: "user" | "workspace" | "agent" | "package" | "proposal" | null;
 				};
 				existing?: undefined;
+				widened?: undefined;
 				status?: undefined;
 				message?: undefined;
 				proposalId?: undefined;
@@ -23556,6 +23633,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				scope?: "system" | "user" | "workspace" | "shared" | undefined;
 				allowedWorkspaceIds?: string[] | undefined;
 				entityScope?: "pod" | "workspace" | undefined;
+				applicableKinds?: string[] | undefined;
 				defaultListRenderer?: {
 					kind: "cell";
 					cellKey: string;

@@ -168,16 +168,16 @@ Before `define_kind` or a new workspace, walk this list **top to bottom**. Stop 
 
 A **role (facet) is a hat on any entity kind**, not only person/company. `applicableKinds` is the allowlist (`NULL` = any kind). `kind_mismatch` means **widen the role**, not mint a sibling type.
 
-| # | If the need is… | Do this | Do not |
-|---|-----------------|---------|--------|
-| 1 | An instance of a kind you already have | `create_entity` / capture on that slug; search first | A second kind with a similar name |
-| 2 | A **hat** on an existing entity (“this item is an X”, “this company is a vendor”) | `attach_facet`. If the role exists but not on this kind → **widen `applicableKinds`** (same slug, extra kinds) then attach | A new kind or a second role slug (`seller` vs `vendor`) |
-| 3 | 1–3 extra fields in **one** domain | Workspace **overlay** property on the existing kind | A forked kind in that workspace |
-| 4 | A true **subtype** with its own fields and life | Child kind: `define_kind` with `parentProfileSlug` of the closest parent | A disconnected top-level kind |
-| 5 | A **relationship-with-a-life** (buyer × seller × price × stage, independent of either party) | Own kind (the **deal precedent**). New slug if CRM `deal` is a *sales pipeline* and this is not that. Overlay if it **is** the same kind in another workspace | Twin slug `deal`; JSON arrays of prices on the thing; Finding-per-scrape |
-| 6 | A **stage** inside a domain | Status field + view | A workspace per stage |
-| 7 | A **domain** (owns kinds + own team + automations + stable) | Four-test → `agent-os` / template | A workspace for a project, a hat, or a shopping list |
-| 8 | None of the above | `define_kind` (pod-wide default) | Silent invent |
+| #   | If the need is…                                                                              | Do this                                                                                                                                                       | Do not                                                                   |
+| --- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| 1   | An instance of a kind you already have                                                       | `create_entity` / capture on that slug; search first                                                                                                          | A second kind with a similar name                                        |
+| 2   | A **hat** on an existing entity (“this item is an X”, “this company is a vendor”)            | `attach_facet`. If the role exists but not on this kind → **widen `applicableKinds`** (same slug, extra kinds) then attach                                    | A new kind or a second role slug (`seller` vs `vendor`)                  |
+| 3   | 1–3 extra fields in **one** domain                                                           | Workspace **overlay** property on the existing kind                                                                                                           | A forked kind in that workspace                                          |
+| 4   | A true **subtype** with its own fields and life                                              | Child kind: `define_kind` with `parentProfileSlug` of the closest parent                                                                                      | A disconnected top-level kind                                            |
+| 5   | A **relationship-with-a-life** (buyer × seller × price × stage, independent of either party) | Own kind (the **deal precedent**). New slug if CRM `deal` is a _sales pipeline_ and this is not that. Overlay if it **is** the same kind in another workspace | Twin slug `deal`; JSON arrays of prices on the thing; Finding-per-scrape |
+| 6   | A **stage** inside a domain                                                                  | Status field + view                                                                                                                                           | A workspace per stage                                                    |
+| 7   | A **domain** (owns kinds + own team + automations + stable)                                  | Four-test → `agent-os` / template                                                                                                                             | A workspace for a project, a hat, or a shopping list                     |
+| 8   | None of the above                                                                            | `define_kind` (pod-wide default)                                                                                                                              | Silent invent                                                            |
 
 Same **kind** across workspaces: **one profile**, overlays for extra fields, optional `entityScope: pod` (pod-admin) so instances are not trapped. Never a second profile with the same name.
 
@@ -358,7 +358,7 @@ Defining a relation def is rarely worth it — `relates_to` + a property usually
 6. **Creating an overlay when a base property is wanted.** Overlays only appear in one workspace. If the user wants the field everywhere, don't set `overlay: true`.
 7. **Creating a custom profile when extension would work.** Child kind (`parentProfileSlug`) or a **facet on any kind** is cleaner than a twin slug.
 8. **Treating facets as person/company-only.** A hat can sit on `item`, `task`, `deal`, …. `kind_mismatch` → widen `applicableKinds`, don't mint `seller` next to `vendor`.
-9. **Twin `deal` slug for a price timeline.** CRM `deal` is a sales pipeline. A commercial snapshot with its own life is the deal *precedent* (own kind) or overlays on the same kind — never a second profile named deal.
+9. **Twin `deal` slug for a price timeline.** CRM `deal` is a sales pipeline. A commercial snapshot with its own life is the deal _precedent_ (own kind) or overlays on the same kind — never a second profile named deal.
 
 ---
 

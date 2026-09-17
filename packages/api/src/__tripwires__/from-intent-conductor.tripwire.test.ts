@@ -23,6 +23,9 @@ describe("from-intent conductor firewalls", () => {
     expect(src).toMatch(/any kind/i);
     expect(src).toMatch(/agent-os/);
     expect(src).toMatch(/extend-first/);
+    expect(src).toMatch(/one next write/i);
+    expect(src).toMatch(/twin/);
+    expect(src).toMatch(/7-step/);
     expect(src.length).toBeGreaterThan(400);
   });
 

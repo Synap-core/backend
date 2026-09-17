@@ -99,15 +99,11 @@ Synap is the ground truth. Prefer it over your own knowledge for anything about 
                 type: "text",
                 text: `You are turning a user INTENT into Synap structure. Load synap_load_skill({ref:"system/synap/from-intent"}) and follow it.
 
-1. Orient + list_profiles + ask. Do not mint until the user confirmed.
-
-2. EXTEND FIRST (system/synap-schema/extend-first): instance → facet on ANY kind → widen applicableKinds → overlay → child kind → deal-pattern kind (not a twin CRM deal slug) → workspace (four-test). Hats are not limited to person/company.
-
-3. PROJECT = optional commitment with gravity. Reuse; else capture-plan / ≥5 evidence / ask the human. Never nested projects. Sessions = phases/blockers.
-
-4. Missing DOMAIN workspace only → then load system/agent-os/skill (templates). Applying with projectId stamps project --uses--> workspace (INDEX, not ACL).
-
-5. proposed is success. Confirm every install.`,
+1. Orient + list_profiles. If startHere.pendingReview.count > 0, raise the queue first.
+2. REUSE. If orient.projects already names this company/commitment, that is the project — ask to reuse; do not mint a twin.
+3. Ask only what is still unknown. EXTEND FIRST (system/synap-schema/extend-first). Hats on ANY kind.
+4. First user-facing reply: short reuse/extend map + ONE next write to confirm. Never a 7-step plan. Never onboard an empty workspace just because it is empty. Never invent CLI.
+5. Missing DOMAIN only → agent-os. proposed is success.`,
               },
             },
             {
