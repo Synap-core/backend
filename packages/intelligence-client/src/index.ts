@@ -24,6 +24,7 @@ export type {
   StructuredFollowUp,
   DynamicFormField,
   DynamicFormSpec,
+  WorkspaceTiebreakResult,
 } from "./intelligence-hub-client.js";
 
 export {

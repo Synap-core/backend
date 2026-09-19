@@ -725,6 +725,12 @@ export const projectsRouter = router({
         subjectEntityId: z.string().uuid().nullable().optional(),
         settings: z.record(z.string(), z.unknown()).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /**
+         * WHY this change, in the caller's words — shown to the reviewer when
+         * the gate files a proposal. Not part of the patch: never stored on the
+         * project and never replayed by the `project/update` executor.
+         */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -747,6 +753,7 @@ export const projectsRouter = router({
         workspaceId: target.workspaceId ?? undefined,
         subjectType: "project",
         action: "update",
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         // The WHOLE patch, not just the id: an approver has to see what the
         // change actually is, and the `project/update` executor replays these
         // fields. A gate carrying only `{ id }` made an approved update a no-op.
@@ -773,7 +780,12 @@ export const projectsRouter = router({
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
       }
       if ("proposalId" in perm) {
-        return { status: "proposed", proposalId: perm.proposalId };
+        return {
+          status: "proposed",
+          proposalId: perm.proposalId,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        };
       }
 
       const eventRepo = new EventRepository(sql);

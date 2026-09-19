@@ -195,6 +195,21 @@ export interface ImportAnalysisPlan {
   overallConfidence: number;
 }
 
+/**
+ * Mirror of the IS `WorkspaceTiebreakResult` (routes/workspace-tiebreak.ts).
+ * `decider`/`model`/`probabilities` are absent on the IS's deterministic
+ * <2-candidate paths and on older IS builds.
+ */
+export interface WorkspaceTiebreakResult {
+  workspaceId: string | null;
+  confidence: number;
+  reason: string;
+  decider?: "jev" | "llm";
+  model?: string;
+  /** JEV only: probability per candidate workspace id, plus `none` (abstain). */
+  probabilities?: Record<string, number>;
+}
+
 // Re-export from types package
 export type {
   HubResponse,
@@ -1189,6 +1204,11 @@ export class IntelligenceHubClient {
    * — it may NOT invent a workspace. `null` workspaceId = abstain (→ the caller
    * keeps the ambient lens / asks). Graceful null on any transport failure, so a
    * tie-break outage degrades to "no move", never fails the capture.
+   *
+   * The IS decides WHO answers: the JEV decision model when configured (then
+   * `decider: "jev"` with a `probabilities` distribution), else its LLM
+   * cascade. `allowFallback: false` asks for JEV only — the IS answers 503
+   * (→ null here) rather than spending a second LLM call.
    */
   async workspaceTiebreak(input: {
     content: string;
@@ -1199,12 +1219,20 @@ export class IntelligenceHubClient {
       hint?: string;
     }>;
     facetSlugs?: string[];
+    routingMemory?: {
+      corrections: Array<{
+        textSnippet: string;
+        correctWorkspaceName: string;
+        wrongWorkspaceName?: string | null;
+      }>;
+      confirmations: Array<{
+        textSnippet: string;
+        correctWorkspaceName: string;
+      }>;
+    } | null;
+    allowFallback?: boolean;
     timeoutMs?: number;
-  }): Promise<{
-    workspaceId: string | null;
-    confidence: number;
-    reason: string;
-  } | null> {
+  }): Promise<WorkspaceTiebreakResult | null> {
     try {
       const controller = new AbortController();
       const timer = setTimeout(
@@ -1233,11 +1261,7 @@ export class IntelligenceHubClient {
           );
           return null;
         }
-        return (await response.json()) as {
-          workspaceId: string | null;
-          confidence: number;
-          reason: string;
-        };
+        return (await response.json()) as WorkspaceTiebreakResult;
       } finally {
         clearTimeout(timer);
       }
@@ -1505,94 +1529,6 @@ export class IntelligenceHubClient {
     } catch (err) {
       console.warn(
         `[IntelligenceHubClient] analyzeBulkMapping error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Classify content into a workspace using JEV Choice primitive.
-   *
-   * POST /api/routing/classify-workspace
-   *
-   * Uses TypeSafe JEV System One Choice to classify content into one of the
-   * available workspaces. This is a dedicated typed decision call that replaces
-   * the few-shot prompt in /api/structure.
-   *
-   * Returns null on any transport failure so the capture pipeline degrades
-   * gracefully (no workspace routing hint) instead of failing.
-   */
-  async classifyWorkspace(input: {
-    content: string;
-    candidates: Array<{
-      id: string;
-      name: string;
-      description?: string;
-      hint?: string;
-    }>;
-    routingMemory?: {
-      corrections: Array<{
-        textSnippet: string;
-        correctWorkspaceName: string;
-        wrongWorkspaceName?: string | null;
-      }>;
-      confirmations: Array<{
-        textSnippet: string;
-        correctWorkspaceName: string;
-      }>;
-    } | null;
-    facetSlugs?: string[];
-    timeoutMs?: number;
-  }): Promise<{
-    workspaceId: string | null;
-    confidence: number;
-    reason: string;
-    probabilities?: Record<string, number>;
-  } | null> {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        input.timeoutMs ?? 15_000
-      );
-      try {
-        const response = await fetch(
-          `${this.baseUrl}/api/routing/classify-workspace`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-API-Key": this.apiKey,
-            },
-            body: JSON.stringify(input),
-            signal: controller.signal,
-          }
-        );
-        if (!response.ok) {
-          if (isAuthStatus(response.status)) {
-            throw new IntelligenceAuthError(
-              response.status,
-              `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
-            );
-          }
-          console.warn(
-            `[IntelligenceHubClient] classifyWorkspace failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl})`
-          );
-          return null;
-        }
-        return (await response.json()) as {
-          workspaceId: string | null;
-          confidence: number;
-          reason: string;
-          probabilities?: Record<string, number>;
-        };
-      } finally {
-        clearTimeout(timer);
-      }
-    } catch (err) {
-      if (err instanceof IntelligenceAuthError) throw err;
-      console.warn(
-        `[IntelligenceHubClient] classifyWorkspace error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
       );
       return null;
     }

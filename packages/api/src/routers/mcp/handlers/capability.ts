@@ -11,6 +11,7 @@
 import { verifyWorkspaceAccess } from "../../hub-protocol/rest/_shared.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { toAutomationDigest, AUTOMATIONS_DIGEST_NOTE } from "./read-lean.js";
 import { validateCreateVerbInput } from "../validate-create-verb.js";
 import { wireCreatedVerb } from "../../../services/capabilities/create-declarative-verb.js";
 import {
@@ -609,7 +610,15 @@ export const capabilityHandlers: McpHandlerMap = {
         "draft" | "active" | "paused" | "error" | undefined,
       limit: typeof args.limit === "number" ? args.limit : undefined,
     });
-    return ok(result);
+    if (args.detail === "full") return ok(result);
+    const rows = (result as { automations?: Array<Record<string, unknown>> })
+      .automations;
+    if (!Array.isArray(rows)) return ok(result);
+    return ok({
+      ...result,
+      automations: rows.map(toAutomationDigest),
+      note: AUTOMATIONS_DIGEST_NOTE,
+    });
   },
   synap_trigger_automation: async (
     ctx: McpToolContext

@@ -23,6 +23,7 @@ import {
   projects,
   workspaces,
   ownerPrivateVisibleWhere,
+  drizzleSql,
 } from "@synap/database";
 
 /** INDEX projection a UI/agent can name, not just id. */
@@ -183,7 +184,9 @@ export async function listProjectsUsingWorkspace(
   const rows = await db
     .select({ fromId: links.fromId })
     .from(links)
-    .innerJoin(projects, eq(projects.id, links.fromId))
+    // `projects.id` is uuid, `links.from_id` is text (polymorphic): a bare
+    // column join is PG 42883 and fails EVERY call. Cast the uuid side.
+    .innerJoin(projects, eq(drizzleSql`${projects.id}::text`, links.fromId))
     .where(
       and(
         eq(links.fromType, "project"),
@@ -211,7 +214,9 @@ export async function listProjectsUsingWorkspaces(
   const rows = await db
     .select({ workspaceId: links.toId, projectId: links.fromId })
     .from(links)
-    .innerJoin(projects, eq(projects.id, links.fromId))
+    // `projects.id` is uuid, `links.from_id` is text (polymorphic): a bare
+    // column join is PG 42883 and fails EVERY call. Cast the uuid side.
+    .innerJoin(projects, eq(drizzleSql`${projects.id}::text`, links.fromId))
     .where(
       and(
         eq(links.fromType, "project"),

@@ -65,7 +65,10 @@ import {
   reportStructureStage,
   structureProgressSink,
 } from "../utils/structure-progress-bus.js";
-import type { StructuredFollowUp } from "@synap/intelligence-client";
+import type {
+  StructuredFollowUp,
+  WorkspaceTiebreakResult,
+} from "@synap/intelligence-client";
 import {
   eq,
   and,
@@ -116,7 +119,16 @@ import {
   fetchWorkspaceRoutingThreshold,
 } from "../services/routing-memory.js";
 import { loadTeamRosterForCapture } from "../services/team-roster-context.js";
-import { AI_KIND, BELOW_GATE_CONFIDENCE } from "../lib/ai-events.js";
+import {
+  AI_KIND,
+  BELOW_GATE_CONFIDENCE,
+  workspaceDecisionEventData,
+  type WorkspaceDecisionRecord,
+} from "../lib/ai-events.js";
+import {
+  applyDecisionModelPick,
+  toWorkspaceDecisionRecord,
+} from "../lib/workspace-decision.js";
 import { type CaptureRoutingResult } from "../lib/capture-routing.js";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
@@ -160,7 +172,6 @@ import {
 import {
   emitAiDecision,
   emitCaptureTrace,
-  buildStructuredDecisionData,
 } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
@@ -603,6 +614,22 @@ export function buildCaptureSummary(
   if (titles.length === 1) return `Captured${from}: ${titles[0]}`;
   if (titles.length === 2) return `Captured${from}: ${titles[0]}, ${titles[1]}`;
   return `Captured${from}: ${titles[0]}, ${titles[1]}, +${titles.length - 2} more`;
+}
+
+/**
+ * capture.structure's parallel workspace decision is best-effort: a failure
+ * logs and resolves null (the structurer's own pick stands). Module-level so
+ * the procedure's only exits stay `finishIntake` (structure-intake-wiring
+ * tripwire reads the procedure's `return`s).
+ */
+function workspaceDecisionFailed(userId: string) {
+  return (err: unknown): null => {
+    logger.warn(
+      { err, userId },
+      "capture.structure: workspace decision failed — keeping the structurer's pick"
+    );
+    return null;
+  };
 }
 
 const captureBaseRouter = router({
@@ -1580,46 +1607,29 @@ const captureBaseRouter = router({
         ? await readPodVisionModelPreference(database)
         : undefined;
 
-      // 3a. JEV Workspace Classification (Phase 4)
-      // Call the dedicated IS endpoint that uses TypeSafe JEV Choice primitive
-      // to classify the content into a workspace. This replaces the few-shot
-      // routing prompt in /api/structure with a typed decision call.
-      // Best effort: a memory/classification hiccup degrades to "no hint",
-      // never fails the capture.
-      let aiWorkspaceHint: {
-        workspaceId: string | null;
-        confidence: number;
-        reason: string;
-        probabilities?: Record<string, number>;
-      } | null = null;
-      if (availableWorkspaces.length > 0) {
-        try {
-          aiWorkspaceHint = await client.classifyWorkspace({
-            content: inputText,
-            candidates: availableWorkspaces,
-            routingMemory,
-            facetSlugs: undefined, // could be derived from extracted facets later
-            timeoutMs: 15_000,
-          });
-          if (aiWorkspaceHint?.workspaceId) {
-            logger.info(
-              {
-                userId,
-                aiWorkspaceId: aiWorkspaceHint.workspaceId,
-                confidence: aiWorkspaceHint.confidence,
-                reason: aiWorkspaceHint.reason,
-              },
-              "Capture routing: JEV workspace classification succeeded"
-            );
-          }
-        } catch (err) {
-          if (err instanceof IntelligenceAuthError) throw err;
-          logger.warn(
-            { err, userId },
-            "JEV workspace classification failed (capture proceeds without AI hint)"
-          );
-        }
-      }
+      // 3a. Workspace DECISION, in parallel with /structure (no added latency).
+      // The IS's decision door answers with its typed decision model only
+      // (`allowFallback: false`): a calibrated Choice over the domain
+      // workspaces, with a probability per option and an explicit abstain.
+      // When the IS has no decision model (or it fails) this resolves null and
+      // the structurer's own catalog pick (step 1a) stands — we never pay for a
+      // second LLM opinion on the same question. Best-effort: never fails the
+      // capture (an auth failure surfaces on the structure call itself).
+      const workspaceDecisionPromise: Promise<WorkspaceTiebreakResult | null> =
+        availableWorkspaces.length > 1 && inputText.trim()
+          ? client
+              .workspaceTiebreak({
+                content: inputText.slice(0, 4000),
+                candidates: availableWorkspaces,
+                routingMemory,
+                allowFallback: false,
+                timeoutMs: 10_000,
+              })
+              .catch(workspaceDecisionFailed(userId))
+          : Promise.resolve(null);
+      // The distribution behind the final workspace pick, returned to the
+      // caller so `capture.execute` can record it on the route decision.
+      let workspaceDecision: WorkspaceDecisionRecord | undefined;
 
       const structureInput = {
         text: input.text ?? "",
@@ -1637,15 +1647,6 @@ const captureBaseRouter = router({
             ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
             : input.previousEntities,
           routingMemory,
-          // JEV workspace classification hint (Phase 4) — strong signal from
-          // the dedicated Choice primitive, not few-shot prompting.
-          ...(aiWorkspaceHint?.workspaceId
-            ? {
-                aiWorkspaceId: aiWorkspaceHint.workspaceId,
-                aiWorkspaceConfidence: aiWorkspaceHint.confidence,
-                aiWorkspaceReason: aiWorkspaceHint.reason,
-              }
-            : {}),
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },
         // Which IS spend lane a photo's vision call reserves on (`visionBulk`
@@ -1773,6 +1774,20 @@ const captureBaseRouter = router({
         );
       }
 
+      // 1a'. The decision model's pick OUTRANKS the structurer's catalog-wide
+      // guess: it is a dedicated, calibrated Choice over the same candidate
+      // set, where the structurer's pick is a side-output of extraction. A JEV
+      // abstain ("none of these fits") is honoured as "stay put", exactly like
+      // a tie-break abstain below. Only the IS decision model's answers land
+      // here (`allowFallback: false`), so this never swaps one LLM guess for
+      // another. Step 1c's deterministic rungs still override this.
+      workspaceDecision = applyDecisionModelPick(
+        structureResult,
+        await workspaceDecisionPromise,
+        availableWorkspaces,
+        workspaceId
+      );
+
       // 1b. Silent-empty guard. The IS can return a well-formed 200 with ZERO
       // entities and no followUp — e.g. when the model is over budget, the
       // provider degraded, or the completion came back empty. Returning that as
@@ -1878,7 +1893,11 @@ const captureBaseRouter = router({
                 name: c.name,
               })),
               facetSlugs: routingSlugs,
+              routingMemory,
             });
+            workspaceDecision = tb
+              ? toWorkspaceDecisionRecord(tb, placement.candidates)
+              : undefined;
             if (tb?.workspaceId) {
               structureResult.targetWorkspaceId = tb.workspaceId;
               structureResult.targetWorkspaceName =
@@ -1898,6 +1917,8 @@ const captureBaseRouter = router({
             }
           } else if (placement.rung <= 4 && placement.workspaceId) {
             // Deterministic ontology/context/relational hit — resolver decides.
+            // No model decided this pick, so no distribution rides with it.
+            workspaceDecision = undefined;
             structureResult.targetWorkspaceId = placement.workspaceId;
             structureResult.targetWorkspaceName = nameFor(
               placement.workspaceId
@@ -1969,6 +1990,9 @@ const captureBaseRouter = router({
               structureResult.targetWorkspaceReason ?? null,
             targetWorkspaceConfidence:
               structureResult.targetWorkspaceConfidence ?? null,
+            ...(workspaceDecision
+              ? { targetWorkspaceDecision: workspaceDecision }
+              : {}),
             targetProjectId: structureResult.targetProjectId ?? null,
             targetProjectReason: structureResult.targetProjectReason ?? null,
             targetProjectConfidence:
@@ -2173,6 +2197,9 @@ const captureBaseRouter = router({
           targetWorkspaceReason: structureResult.targetWorkspaceReason ?? null,
           targetWorkspaceConfidence:
             structureResult.targetWorkspaceConfidence ?? null,
+          ...(workspaceDecision
+            ? { targetWorkspaceDecision: workspaceDecision }
+            : {}),
           targetProjectId: structureResult.targetProjectId ?? null,
           targetProjectReason: structureResult.targetProjectReason ?? null,
           targetProjectConfidence:
@@ -2418,6 +2445,27 @@ const captureBaseRouter = router({
         aiWorkspaceConfidence: z.number().nullish(),
         /** One-line justification for the AI's workspace pick (surfaced in ASK). */
         aiWorkspaceReason: z.string().nullish(),
+        /**
+         * The distribution behind `aiWorkspaceId`, forwarded verbatim from
+         * /capture/structure's `targetWorkspaceDecision`: which decider answered
+         * (`jev` decision model | `llm` fallback), the model, the probability
+         * per candidate workspace id (+ `none` = abstain) and the candidate set.
+         * Recorded on the route decision event for calibration; never used to
+         * place data. Absent ⇒ recorded as absent.
+         */
+        aiWorkspaceDecision: z
+          .object({
+            decider: z.enum(["jev", "llm"]),
+            model: z.string().max(200).optional(),
+            probabilities: z
+              .record(z.string(), z.number().min(0).max(1))
+              .optional(),
+            candidates: z
+              .array(z.object({ id: z.string(), name: z.string() }))
+              .max(50)
+              .optional(),
+          })
+          .nullish(),
         /**
          * The AI-suggested PROJECT (from /capture/structure's targetProjectId).
          * This is ADVISORY only — NEVER auto-linked. `belongs_to_project` WIDENS
@@ -3950,27 +3998,6 @@ const captureBaseRouter = router({
           // so every emitted decision has ≥1 stamped entity to be corrected
           // against — keeping the decision↔correction join 1:1.
           if (routingDecisionRecorded) {
-            // Build structured decision payload for calibration feedback loop.
-            // `availableWorkspaces`/`structureResult` live in the
-            // `capture.structure` mutation scope above — they are NOT in scope
-            // here in `capture.execute`. The question/candidates are derived
-            // from the AI's routing hint fields the caller forwarded.
-            const structuredData = buildStructuredDecisionData({
-              taskType: "classify",
-              question: `Which workspace should this capture be routed to? AI hint: ${input.aiWorkspaceReason ?? "no reason given"}`,
-              candidates: [],
-              response:
-                routing?.movedToWorkspace ??
-                routing?.pendingWorkspaceSwitch?.suggestedWorkspaceId ??
-                workspaceId,
-              probabilities: {},
-              confidence: input.aiWorkspaceConfidence ?? 0,
-              modelVersion: "unknown",
-              schemaVersion: "1.0",
-              correlationId,
-              workspaceId: workspaceId ?? null,
-              projectId: null,
-            });
             await emitAiDecision({
               action: "route",
               userId,
@@ -4002,8 +4029,8 @@ const captureBaseRouter = router({
                 mode: input.workspaceRouting ?? "auto",
                 applied: Boolean(routing?.movedToWorkspace),
                 currentWorkspaceId: ctx.workspaceId,
-                // Structured decision payload for JEV × Synap calibration
-                ...structuredData,
+                // Who decided + the full distribution (calibration sample).
+                ...workspaceDecisionEventData(input.aiWorkspaceDecision),
               },
             });
           }
@@ -4019,22 +4046,6 @@ const captureBaseRouter = router({
           const projectAutoLinked =
             Boolean(resolvedProjectId) && (projectPlacement.rung ?? 0) >= 2;
           if (projectAutoLinked || aiProjectAdvisoryId) {
-            // Build structured decision payload for calibration feedback loop.
-            const structuredData = buildStructuredDecisionData({
-              taskType: "classify",
-              question: `Which project should this capture be linked to? AI hint: ${input.aiProjectReason ?? "no reason given"}`,
-              candidates: [],
-              response: resolvedProjectId ?? aiProjectAdvisoryId,
-              probabilities: {},
-              confidence: projectAutoLinked
-                ? 1
-                : (input.aiProjectConfidence ?? 0),
-              modelVersion: "unknown",
-              schemaVersion: "1.0",
-              correlationId,
-              workspaceId: workspaceId ?? null,
-              projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
-            });
             await emitAiDecision({
               action: "project",
               userId,
@@ -4054,8 +4065,6 @@ const captureBaseRouter = router({
                 // Advisory (proposed) vs a landed deterministic auto-link.
                 applied: projectAutoLinked,
                 proposed: Boolean(aiProjectAdvisoryId),
-                // Structured decision payload for JEV × Synap calibration
-                ...structuredData,
               },
             });
           }

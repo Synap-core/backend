@@ -98,8 +98,14 @@ const UpdateProjectSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   description: z.string().optional(),
   status: z.enum(["active", "archived", "completed"]).optional(),
+  /** Lifecycle position. `null` clears it; omitted = untouched. */
+  phase: z.string().max(120).nullable().optional(),
+  /** Deadline. `null` clears it; omitted = untouched. */
+  targetDate: z.coerce.date().nullable().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  /** Why — shown to the reviewer; never stored on the project. */
+  reasoning: z.string().max(2000).optional(),
 });
 
 export function registerProjectsRoutes(app: HubHono): void {
@@ -124,7 +130,18 @@ export function registerProjectsRoutes(app: HubHono): void {
       .orderBy(desc(projects.createdAt))
       .limit(limit);
 
-    return c.json(rows);
+    // Additive INDEX (parity with tRPC `projects.list` and GET /projects/:id):
+    // the workspaces each project runs through. One batch query. Not an ACL.
+    const usedByProject = await listWorkspacesUsedByProjects(
+      db,
+      rows.map((r) => r.id)
+    );
+    return c.json(
+      rows.map((r) => ({
+        ...r,
+        usedWorkspaceIds: usedByProject.get(r.id) ?? [],
+      }))
+    );
   });
 
   // Project data digest — deterministic "understand existing data before
@@ -799,13 +816,34 @@ export function registerProjectsRoutes(app: HubHono): void {
   app.patch("/projects/:id", async (c) => {
     const userId = c.get("userId");
     const id = c.req.param("id");
-    const body = UpdateProjectSchema.parse(await c.req.json());
+    const parsed = UpdateProjectSchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!parsed.success) {
+      return c.json({ error: `Invalid body: ${parsed.error.message}` }, 400);
+    }
+    const { reasoning, ...body } = parsed.data;
+
+    // Load first, on the same visibility floor as GET /projects/:id: a
+    // project the caller cannot see must 404 BEFORE governance — otherwise an
+    // agent files a proposal against a foreign id that approval cannot apply.
+    // Its OWN workspace is the gate's subject (parity with tRPC `update`).
+    const target = await db.query.projects.findFirst({
+      where: and(
+        eq(projects.id, id),
+        ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
+      ),
+      columns: { id: true, workspaceId: true },
+    });
+    if (!target) return c.json({ error: "Project not found" }, 404);
 
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId: c.get("agentUserId") as string | undefined,
+      workspaceId: target.workspaceId ?? undefined,
       subjectType: "project",
       action: "update",
+      ...(reasoning ? { reasoning } : {}),
       // The WHOLE patch, matching the tRPC twin. This gate stored `{ id }`
       // alone, which was survivable only while `project/update` had no approve
       // executor and every such proposal failed loudly with NOT_IMPLEMENTED.
@@ -819,6 +857,10 @@ export function registerProjectsRoutes(app: HubHono): void {
           ? { description: body.description }
           : {}),
         ...(body.status !== undefined ? { status: body.status } : {}),
+        ...(body.phase !== undefined ? { phase: body.phase } : {}),
+        ...(body.targetDate !== undefined
+          ? { targetDate: body.targetDate }
+          : {}),
         ...(body.settings !== undefined ? { settings: body.settings } : {}),
         ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
       },

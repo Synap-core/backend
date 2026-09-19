@@ -2264,7 +2264,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List all workspaces visible to you (pod-wide). Returns workspace details including role, access kind, entity counts, template health, and usedByProjectIds (additive INDEX of projects using each workspace). NOT an ACL — visibility is floored to what you can see.",
+      "description": "List the workspaces (domain lenses) you can see, pod-wide — call this to find a workspace id instead of guessing from orient. Each row: id, name, description, workspaceType, your role, accessKind (member | pod_visible), archived, entityCount, and usedByProjectIds (projects that run through it — an INDEX, not an ACL). Link a project to one with synap_project_use_workspace.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2322,7 +2322,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List all projects visible to you (pod-wide). Returns paginated results with subject entity, phase category, and usedWorkspaceIds for each project. NOT an ACL — visibility is floored to what you can see.",
+      "description": "List the projects (cross-cutting initiatives) you can see, pod-wide, newest first — call this to find a project id before reading, updating or linking it. Each row: id, name, description, status, phase, phaseCategory, targetDate, homeWorkspaceId, usedWorkspaceIds (domains it runs through) and its subject. Paginated: { items, pagination: { hasMore, limit, offset } }. Full read: synap_get_project.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2375,7 +2375,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Rename or retitle a project (name, description, status). Reuse this instead of creating a twin. Governed: may return proposed.",
+      "description": "Update a project: rename, re-describe, change status, move its phase, or set/clear its target date. Reuse this instead of creating a twin. Find the id with synap_list_projects. Governed: `proposed` is success — surface reviewUrl.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2392,6 +2392,14 @@
           "status": {
             "type": "string",
             "enum": ["active", "archived", "completed"]
+          },
+          "phase": {
+            "type": ["string", "null"],
+            "description": "Lifecycle position (free text, ≤120 chars, e.g. 'wedge A' or a playbook stage key). null clears it; omit to leave it."
+          },
+          "targetDate": {
+            "type": ["string", "null"],
+            "description": "Deadline as an ISO-8601 date (e.g. '2026-12-15'). null clears it; omit to leave it."
           },
           "reasoning": {
             "type": "string",
@@ -2507,6 +2515,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "detail": {
+            "type": "string",
+            "enum": ["lean", "full"],
+            "description": "lean (default) = a digest to pick an id from (the heavy config/graph omitted, see `note`); full = complete rows — pair with a small limit."
+          },
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace UUID to narrow to. Omit for every view you own."
@@ -2870,6 +2883,11 @@
       "inputSchema": {
         "type": "object",
         "properties": {
+          "detail": {
+            "type": "string",
+            "enum": ["lean", "full"],
+            "description": "lean (default) = a digest to pick an id from (the heavy config/graph omitted, see `note`); full = complete rows — pair with a small limit."
+          },
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace UUID to narrow to (pod-wide automations are always included). Omit for all accessible."

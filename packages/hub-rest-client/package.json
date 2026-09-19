@@ -20,12 +20,13 @@
     "!src/**/*.test.ts"
   ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@synap-core/types": "workspace:*"
+  "devDependencies": {
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.3"
   },
   "keywords": [
     "synap",

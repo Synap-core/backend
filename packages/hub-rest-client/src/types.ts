@@ -11,11 +11,6 @@
  * Zero runtime dependencies — pure TypeScript interfaces.
  */
 
-import type {
-  AIWorkspaceRoutingHint,
-  AIProjectRoutingHint,
-} from "@synap-core/types";
-
 // ─── Core entities ───────────────────────────────────────────────────────────
 
 export interface HubEntity {
@@ -88,6 +83,13 @@ export interface HubWorkspace {
   id: string;
   name: string;
   role?: string;
+  description?: string | null;
+  workspaceType?: string;
+  accessKind?: "member" | "pod_visible";
+  /** Live non-deleted entities in this workspace. */
+  entityCount?: number;
+  /** Projects that run through this workspace (INDEX, not an ACL). */
+  usedByProjectIds?: string[];
 }
 
 /** GET /api/hub/workspaces — canonical Hub Protocol shape (not `data`). */
@@ -1351,6 +1353,54 @@ export type HubCreateProjectResult =
       error: string;
       dedupCandidates: Array<Record<string, unknown>>;
     };
+
+/** A project row as the Hub REST project doors return it. */
+export interface HubProject {
+  id: string;
+  name: string;
+  description: string | null;
+  status: "active" | "archived" | "completed";
+  phase: string | null;
+  targetDate: string | null;
+  /** Home workspace; null = pod-personal (owner-only). */
+  workspaceId: string | null;
+  /** Workspaces this project runs through (INDEX, not an ACL). */
+  usedWorkspaceIds?: string[];
+  /** GET /projects/:id only: the same ids, hydrated. */
+  usedWorkspaces?: Array<{ id: string; name: string; domain: string | null }>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * PATCH /api/hub/projects/:id body. Omitted = untouched; `null` on
+ * `phase`/`targetDate` CLEARS it. `reasoning` is shown to the reviewer and
+ * never stored on the project.
+ */
+export interface UpdateProjectInput {
+  name?: string;
+  description?: string;
+  status?: "active" | "archived" | "completed";
+  phase?: string | null;
+  /** ISO-8601 date. */
+  targetDate?: string | null;
+  reasoning?: string;
+}
+
+/** A governed write that filed a proposal instead of applying. */
+export interface HubProposedResult {
+  status: "proposed";
+  proposalId: string;
+  reviewPath?: string;
+  reviewUrl?: string;
+}
+
+/** PATCH /api/hub/projects/:id — the updated row (200) or a proposal (202). */
+export type HubUpdateProjectResult = HubProject | HubProposedResult;
+
+/** POST /api/hub/links (`project --uses--> workspace`) outcome. */
+export type HubLinkProjectWorkspaceResult =
+  { status: "created"; uses?: { indexed: boolean } } | HubProposedResult;
 
 /** Attach an existing role-profile to a primary-kind entity. */
 export interface AttachFacetInput {

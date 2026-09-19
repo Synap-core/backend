@@ -285,13 +285,15 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
         "The CLI ships NO playbook surface — a whole primitive is agent-only (MCP) + browser-only (tRPC). Known, not yet justified by a user need; revisit rather than assume.",
     })
   ),
-  // ── playbook — Hub REST carries only 2 routes ──────────────────────────────
-  ...(["list", "get", "create", "run", "archive"] as const).map((verb) => ({
+  // ── playbook — Hub REST ────────────────────────────────────────────────────
+  // list / create / run shipped on Hub REST (GET /playbooks, POST /playbooks,
+  // POST /playbooks/:id/run — the Raycast structure doors); those gaps closed.
+  ...(["get", "archive"] as const).map((verb) => ({
     object: "playbook",
     verb,
     door: "hub_rest" as Door,
     reason:
-      "Hub REST exposes only PATCH /playbooks/:id and POST /playbooks/promote-from-session — the IS needs to amend and to promote, not to browse or run; running goes through MCP `synap_run_playbook`.",
+      "Hub REST has no single-playbook read or archive: the narrow doors browse with GET /playbooks and run by id; retiring a shared process is a human act in the browser.",
   })),
   // ── playbook — MCP ─────────────────────────────────────────────────────────
   {

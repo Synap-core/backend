@@ -147,3 +147,83 @@ export const ENTITIES_LEAN_NOTE =
   "Lean rows: null columns and systemData omitted; string values longer than " +
   `${ENTITY_STRING_CAP} chars end in '…[truncated: N chars total]' (every property key is kept). ` +
   "synap_get_entity { entityId } returns one full row; detail:'full' here returns every row unprojected.";
+
+/** Picks `keys` that are present and non-null — a digest never invents a field. */
+function pick(
+  row: Record<string, unknown>,
+  keys: readonly string[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (row[k] !== null && row[k] !== undefined) out[k] = row[k];
+  }
+  return out;
+}
+
+/**
+ * One automation as the default `synap_list_automations` carries it: what an
+ * agent needs to recognise, trigger or diagnose it. Measured on the live pod
+ * (2026-09-19): 30 automations = 489,440 chars, almost all `flowDefinition`
+ * (the node graph) — past every client's tool-output cap. The graph comes back
+ * with `detail: "full"`.
+ */
+const AUTOMATION_DIGEST_KEYS = [
+  "id",
+  "name",
+  "workspaceId",
+  "triggerType",
+  "triggerConfig",
+  "status",
+  "errorMessage",
+  "lastRunAt",
+  "nextRunAt",
+  "runCount",
+  "successCount",
+  "failureCount",
+] as const;
+
+export function toAutomationDigest(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const out = pick(row, AUTOMATION_DIGEST_KEYS);
+  if (typeof row.description === "string" && row.description) {
+    out.description = capString(row.description, ENTITY_STRING_CAP);
+  }
+  return out;
+}
+
+export const AUTOMATIONS_DIGEST_NOTE =
+  "Digest: each automation omits flowDefinition (its step graph), metadata and bookkeeping " +
+  `columns; description is capped at ${ENTITY_STRING_CAP} chars. Pass detail:'full' (with a small ` +
+  "limit) for complete rows.";
+
+/**
+ * One saved view as the default `synap_list_views` carries it. Measured on the
+ * live pod (2026-09-19): 65 views = 81 KB, dominated by `config` (a bento's
+ * block layout). An agent lists views to pick a `viewId`; the layout comes
+ * back with `detail: "full"`.
+ */
+const VIEW_DIGEST_KEYS = [
+  "id",
+  "name",
+  "type",
+  "category",
+  "workspaceId",
+  "projectId",
+  "scopeProfileIds",
+  "updatedAt",
+] as const;
+
+export function toViewDigest(
+  row: Record<string, unknown>
+): Record<string, unknown> {
+  const out = pick(row, VIEW_DIGEST_KEYS);
+  if (typeof row.description === "string" && row.description) {
+    out.description = capString(row.description, ENTITY_STRING_CAP);
+  }
+  return out;
+}
+
+export const VIEWS_DIGEST_NOTE =
+  "Digest: each view omits config (layout/blocks), query, snapshot and bookkeeping columns. " +
+  "Pass detail:'full' for complete rows.";

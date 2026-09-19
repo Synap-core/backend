@@ -34,7 +34,8 @@ import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
 import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
-import { workspaces } from "@synap/database/schema";
+import { workspaces, projects } from "@synap/database/schema";
+import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 
 // Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
 // __tripwires__/links-endpoint-type-ssot.test.ts fails the build if this
@@ -298,6 +299,26 @@ export function registerLinksRoutes(app: HubHono): void {
         400
       );
     }
+    // The project must be one the caller can see BEFORE governance: otherwise
+    // a foreign or stale project id becomes a proposal that approval would
+    // write as a ghost INDEX edge (`linkProjectToWorkspace` refuses it on the
+    // direct path, but the proposal path never reaches it).
+    if (parsed.data.linkType === "uses") {
+      const visibleProject = await db.query.projects.findFirst({
+        where: and(
+          eq(projects.id, parsed.data.fromId),
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            userId
+          )
+        ),
+        columns: { id: true },
+      });
+      if (!visibleProject) {
+        return c.json({ error: "Project not found" }, 404);
+      }
+    }
 
     try {
       // Falls back to the key's own bound agent identity when the body omits
@@ -321,6 +342,9 @@ export function registerLinksRoutes(app: HubHono): void {
         workspaceId: isBlockedBy ? blockedByWorkspaceId : workspaceId,
         subjectType: "link",
         action: "create",
+        ...(typeof body.reasoning === "string" && body.reasoning.trim()
+          ? { reasoning: body.reasoning.trim() }
+          : {}),
         data: {
           // Human title so the proposal inbox shows a meaningful label
           // (e.g. "entity --about--> tool") instead of "Untitled".
@@ -336,7 +360,12 @@ export function registerLinksRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({ status: "proposed", proposalId: perm.proposalId });
+        return c.json({
+          status: "proposed",
+          proposalId: perm.proposalId,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
       }
 
       const isUsesIndex = parsed.data.linkType === "uses";

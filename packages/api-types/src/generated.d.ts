@@ -5849,6 +5849,24 @@ export interface ImportAnalysisPlan {
 	overallConfidence: number;
 }
 /**
+ * What the IS workspace-decision door (`/api/workspace-tiebreak`) reported for
+ * the pick a capture carried: which decider answered (`jev` = the TypeSafe
+ * decision model, `llm` = the cascade fallback), the model, the probability
+ * per candidate workspace id (+ `none` for JEV's abstain outcome), and the
+ * candidate set it was asked over. Recorded on the `route` decision event so
+ * a later correction joins (by correlationId) to the full distribution — the
+ * calibration sample "p=0.83 for X, user moved it to Y".
+ */
+export interface WorkspaceDecisionRecord {
+	decider: "jev" | "llm";
+	model?: string;
+	probabilities?: Record<string, number>;
+	candidates?: Array<{
+		id: string;
+		name: string;
+	}>;
+}
+/**
  * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
  *
  * A strong-identity dedup does not create a row — it enriches one that was
@@ -11391,6 +11409,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11415,10 +11438,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 			} & IntakeEcho) | ({
 				extraction?: undefined;
 				degradedReason?: string | undefined;
@@ -11439,6 +11458,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11463,10 +11487,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 			} & IntakeEcho) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
@@ -11493,6 +11513,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11517,10 +11542,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -11549,6 +11570,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11573,10 +11599,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -11735,6 +11757,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11759,10 +11786,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 			} & IntakeEcho) | ({
 				extraction?: undefined;
 				degradedReason?: string | undefined;
@@ -11783,6 +11806,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11807,10 +11835,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 			} & IntakeEcho) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
@@ -11837,6 +11861,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11861,10 +11890,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -11893,6 +11918,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
 				proposals: {
 					tempId: string;
 					profileSlug: string;
@@ -11917,10 +11947,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetWorkspaceName: string | null;
 				targetWorkspaceReason: string | null;
 				targetWorkspaceConfidence: number | null;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
 				sessionId: string | null;
 				intake: {
 					status: "recorded" | "partial" | "failed";
@@ -11990,6 +12016,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				aiWorkspaceId?: string | null | undefined;
 				aiWorkspaceConfidence?: number | null | undefined;
 				aiWorkspaceReason?: string | null | undefined;
+				aiWorkspaceDecision?: {
+					decider: "jev" | "llm";
+					model?: string | undefined;
+					probabilities?: Record<string, number> | undefined;
+					candidates?: {
+						id: string;
+						name: string;
+					}[] | undefined;
+				} | null | undefined;
 				aiProjectId?: string | null | undefined;
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
@@ -31141,13 +31176,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectEntityId?: string | null | undefined;
 				settings?: Record<string, unknown> | undefined;
 				metadata?: Record<string, unknown> | undefined;
+				reasoning?: string | undefined;
 			};
 			output: {
 				status: string;
 				proposalId: string;
+				reviewPath: string;
+				reviewUrl: string;
 			} | {
 				status: string;
 				proposalId?: undefined;
+				reviewPath?: undefined;
+				reviewUrl?: undefined;
 			};
 			meta: object;
 		}>;

@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
 import { resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
@@ -358,7 +359,11 @@ export const buildHandlers: McpHandlerMap = {
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,
     });
-    return ok(result);
+    if (args.detail === "full" || !Array.isArray(result)) return ok(result);
+    return ok({
+      views: (result as Array<Record<string, unknown>>).map(toViewDigest),
+      note: VIEWS_DIGEST_NOTE,
+    });
   },
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;

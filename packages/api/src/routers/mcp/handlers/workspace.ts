@@ -8,9 +8,24 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import { db, getDb, workspaces, projects, inArray } from "@synap/database";
+import {
+  db,
+  getDb,
+  workspaces,
+  projects,
+  inArray,
+  and,
+  eq,
+  isNull,
+  drizzleSql,
+  entities,
+  getWorkspaceMembership,
+} from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
-import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
+import {
+  linkProjectToWorkspace,
+  listProjectsUsingWorkspaces,
+} from "../../../utils/project-workspace.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
@@ -453,6 +468,13 @@ export const workspaceHandlers: McpHandlerMap = {
       });
     }
   },
+  /**
+   * Lean on purpose: an agent lists projects to PICK one, so each row is the
+   * handful of fields it needs to choose and act (id, name, status, phase,
+   * the workspaces it runs through, its subject) — not the raw row with its
+   * settings blob, nor the deprecated `projects` duplicate of `items`.
+   * `synap_get_project` is the full read.
+   */
   synap_list_projects: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -467,17 +489,47 @@ export const workspaceHandlers: McpHandlerMap = {
     const projectCaller = projectsRouter.createCaller(projectCtx);
     try {
       const result = await projectCaller.list({
-        status: args.status as "active" | "archived" | "completed" | undefined,
-        limit: typeof args.limit === "number" ? args.limit : undefined,
-        offset: typeof args.offset === "number" ? args.offset : undefined,
+        ...(args.status === "active" ||
+        args.status === "archived" ||
+        args.status === "completed"
+          ? { status: args.status }
+          : {}),
+        ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+        ...(typeof args.offset === "number" ? { offset: args.offset } : {}),
       });
-      return ok(result);
+      return ok({
+        items: result.items.map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          status: p.status,
+          phase: p.phase,
+          phaseCategory: p.phaseCategory,
+          targetDate: p.targetDate,
+          homeWorkspaceId: p.workspaceId,
+          usedWorkspaceIds: p.usedWorkspaceIds,
+          subject: p.subject
+            ? {
+                entityId: p.subject.entityId,
+                name: p.subject.entityName,
+                kind: p.subject.profileSlug,
+              }
+            : null,
+        })),
+        pagination: result.pagination,
+      });
     } catch (err) {
       return ok({
         error: err instanceof Error ? err.message : String(err),
       });
     }
   },
+  /**
+   * Lean on purpose, like `synap_list_projects`: identity, the caller's role,
+   * how much lives there, and which projects run through it. The tRPC list's
+   * settings projection (layouts, bento ids, renderer maps) is withheld — it
+   * is UI state, and it is what made a workspace list too large to reason over.
+   */
   synap_list_workspaces: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
@@ -493,14 +545,44 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     const workspacesCaller = workspacesRouter.createCaller(wsCtx);
     try {
-      const result = await workspacesCaller.list({
-        includeArchived:
-          typeof args.includeArchived === "boolean"
-            ? args.includeArchived
-            : undefined,
-        appId: typeof args.appId === "string" ? args.appId : undefined,
+      const rows = await workspacesCaller.list({
+        includeArchived: args.includeArchived === true,
+        ...(typeof args.appId === "string" ? { appId: args.appId } : {}),
       });
-      return ok(result);
+      const ids = rows.map((w) => w.id);
+      const [usedBy, counts] = await Promise.all([
+        listProjectsUsingWorkspaces(db, ids, userId),
+        ids.length
+          ? db
+              .select({
+                workspaceId: entities.workspaceId,
+                count: drizzleSql<number>`cast(count(*) as integer)`,
+              })
+              .from(entities)
+              .where(
+                and(
+                  inArray(entities.workspaceId, ids),
+                  isNull(entities.deletedAt)
+                )
+              )
+              .groupBy(entities.workspaceId)
+          : Promise.resolve([]),
+      ]);
+      const countById = new Map(counts.map((r) => [r.workspaceId, r.count]));
+      return ok({
+        count: rows.length,
+        workspaces: rows.map((w) => ({
+          id: w.id,
+          name: w.name,
+          description: w.description,
+          workspaceType: w.workspaceType,
+          role: w.role,
+          accessKind: w.accessKind,
+          archived: w.archivedAt != null,
+          entityCount: countById.get(w.id) ?? 0,
+          usedByProjectIds: usedBy.get(w.id) ?? [],
+        })),
+      });
     } catch (err) {
       return ok({
         error: err instanceof Error ? err.message : String(err),
@@ -543,6 +625,14 @@ export const workspaceHandlers: McpHandlerMap = {
       args.status === "completed"
         ? { status: args.status }
         : {}),
+      // Two-state: omitted = untouched, explicit null = clear.
+      ...(typeof args.phase === "string" || args.phase === null
+        ? { phase: args.phase as string | null }
+        : {}),
+      ...(typeof args.targetDate === "string" || args.targetDate === null
+        ? { targetDate: args.targetDate as unknown as Date | null }
+        : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -556,6 +646,37 @@ export const workspaceHandlers: McpHandlerMap = {
     if (!projectId || !workspaceId) {
       return ok({ error: "projectId and workspaceId are required" });
     }
+    // Same pre-governance floor as REST POST /links (linkType "uses"): the
+    // project must be visible and the caller a member of the workspace —
+    // otherwise an unreachable edge becomes a proposal approval would write.
+    const [visibleProject] = await db
+      .select({ id: projects.id })
+      .from(projects)
+      .where(
+        and(
+          eq(projects.id, projectId),
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            userId
+          )
+        )
+      )
+      .limit(1);
+    if (!visibleProject) return ok({ error: "Project not found" });
+    const [liveWorkspace, membership] = await Promise.all([
+      db.query.workspaces.findFirst({
+        where: and(
+          eq(workspaces.id, workspaceId),
+          isNull(workspaces.archivedAt)
+        ),
+        columns: { id: true },
+      }),
+      getWorkspaceMembership(db, workspaceId, userId),
+    ]);
+    if (!liveWorkspace || !membership) {
+      return ok({ error: `Access denied to workspace ${workspaceId}` });
+    }
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,
@@ -566,6 +687,7 @@ export const workspaceHandlers: McpHandlerMap = {
         readReasoning(args) ??
         "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace",
       data: {
+        title: "project --uses--> workspace",
         fromType: "project",
         fromId: projectId,
         toType: "workspace",
@@ -580,6 +702,7 @@ export const workspaceHandlers: McpHandlerMap = {
       return ok({
         status: "proposed",
         proposalId: perm.proposalId,
+        reviewUrl: perm.reviewUrl,
       });
     }
     const database = await getDb();

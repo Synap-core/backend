@@ -199,6 +199,10 @@ import type {
   CreateRelationInput,
   CreateProjectInput,
   HubCreateProjectResult,
+  HubProject,
+  UpdateProjectInput,
+  HubUpdateProjectResult,
+  HubLinkProjectWorkspaceResult,
   AttachFacetInput,
   HubAttachFacetResult,
   CreateViewInput,
@@ -729,6 +733,68 @@ export class HubRestClient {
     }
     if (!res.ok) throw await this.toHubError(res);
     return this.parseBody<HubCreateProjectResult>(res);
+  }
+
+  /** Projects the caller can see, newest first (each with usedWorkspaceIds). */
+  async listProjects(options?: {
+    status?: "active" | "archived" | "completed";
+    limit?: number;
+  }): Promise<HubProject[]> {
+    const params = new URLSearchParams();
+    if (options?.status) params.set("status", options.status);
+    if (options?.limit) params.set("limit", String(options.limit));
+    const qs = params.toString();
+    return this.request<HubProject[]>(
+      "GET",
+      `/api/hub/projects${qs ? `?${qs}` : ""}`
+    );
+  }
+
+  /** One project, with the workspaces it runs through hydrated. */
+  async getProject(projectId: string): Promise<HubProject> {
+    return this.request<HubProject>(
+      "GET",
+      `/api/hub/projects/${encodeURIComponent(projectId)}`
+    );
+  }
+
+  /**
+   * Update a project. Governed: an agent key gets `{ status: "proposed" }`
+   * with the review link instead of the updated row.
+   */
+  async updateProject(
+    projectId: string,
+    input: UpdateProjectInput
+  ): Promise<HubUpdateProjectResult> {
+    return this.request<HubUpdateProjectResult>(
+      "PATCH",
+      `/api/hub/projects/${encodeURIComponent(projectId)}`,
+      input
+    );
+  }
+
+  /**
+   * Stamp `project --uses--> workspace` (the INDEX of domains an engagement
+   * runs through — not an ACL). Idempotent. Governed: may propose.
+   */
+  async linkProjectToWorkspace(input: {
+    projectId: string;
+    workspaceId: string;
+    reasoning?: string;
+  }): Promise<HubLinkProjectWorkspaceResult> {
+    return this.request<HubLinkProjectWorkspaceResult>(
+      "POST",
+      "/api/hub/links",
+      {
+        workspaceId: input.workspaceId,
+        fromType: "project",
+        fromId: input.projectId,
+        toType: "workspace",
+        toId: input.workspaceId,
+        linkType: "uses",
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      }
+    );
   }
 
   // ─── Unified Search ───────────────────────────────────────────────────────

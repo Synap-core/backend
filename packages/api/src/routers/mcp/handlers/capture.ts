@@ -8,6 +8,7 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import type { WorkspaceDecisionRecord } from "../../../lib/ai-events.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
 import {
@@ -1120,6 +1121,13 @@ const captureHandler: McpToolHandler = async (
     ).targetWorkspaceConfidence,
     aiWorkspaceReason: (structured as { targetWorkspaceReason?: string | null })
       .targetWorkspaceReason,
+    // The distribution behind the pick (decider/model/probabilities), recorded
+    // on the route decision event for calibration — never used to place data.
+    aiWorkspaceDecision: (
+      structured as {
+        targetWorkspaceDecision?: WorkspaceDecisionRecord | null;
+      }
+    ).targetWorkspaceDecision,
     // Explicit caller-provided projectId is a deliberate pin (rung 1) and
     // still auto-links. The AI's structure-RESOLVED target, however, must NOT
     // silently become an auto-link: `belongs_to_project` WIDENS cross-workspace

@@ -24,73 +24,11 @@ import {
   AI_CORRECTION,
   AI_PROCESSING,
   CAPTURE_TRACE_KIND,
-  DATA_TASK_TYPE,
-  DATA_QUESTION,
-  DATA_CANDIDATES,
-  DATA_RESPONSE,
-  DATA_PROBABILITIES,
-  DATA_CONFIDENCE,
-  DATA_MODEL_VERSION,
-  DATA_SCHEMA_VERSION,
 } from "../lib/ai-events.js";
 import { createLogger } from "@synap-core/core";
 import { db, isConnectionSyncProposal } from "@synap/database";
 
 const logger = createLogger({ module: "ai-feedback-events" });
-
-/**
- * Structured decision payload for the JEV × Synap integration.
- * Every AI decision is logged with its full structured payload so corrections
- * can feed back as calibration data.
- */
-export interface StructuredDecisionPayload {
-  /** Task type: "classify" | "score" | "judge" | "extract" | "generate" | "act" */
-  taskType: string;
-  /** The natural language question or instruction given to the model. */
-  question: string;
-  /** Candidate options for Choice tasks: [{id, name, description}]. */
-  candidates?: Array<{ id: string; name: string; description?: string }>;
-  /** The typed answer: option id, score value, or probability. */
-  response: unknown;
-  /** Full probability distribution for Choice/Score tasks. */
-  probabilities?: Record<string, number>;
-  /** Confidence score 0-1. */
-  confidence: number;
-  /** Model ID that answered. */
-  modelVersion: string;
-  /** Question schema version. */
-  schemaVersion: string;
-  /** The correlationId linking this decision to any future correction. */
-  correlationId: string;
-  /** Optional: workspace the decision applies to. */
-  workspaceId?: string | null;
-  /** Optional: project the decision applies to. */
-  projectId?: string | null;
-}
-
-/**
- * Build the structured decision data object for `emitAiDecision`.
- * Call sites should pass the raw fields and this function adds the SSOT keys.
- */
-export function buildStructuredDecisionData(
-  payload: StructuredDecisionPayload
-): Record<string, unknown> {
-  return {
-    [DATA_TASK_TYPE]: payload.taskType,
-    [DATA_QUESTION]: payload.question,
-    [DATA_CANDIDATES]: payload.candidates ?? [],
-    [DATA_RESPONSE]: payload.response,
-    [DATA_PROBABILITIES]: payload.probabilities ?? {},
-    [DATA_CONFIDENCE]: payload.confidence,
-    [DATA_MODEL_VERSION]: payload.modelVersion,
-    [DATA_SCHEMA_VERSION]: payload.schemaVersion,
-    correlationId: payload.correlationId,
-    ...(payload.workspaceId !== undefined && {
-      workspaceId: payload.workspaceId,
-    }),
-    ...(payload.projectId !== undefined && { projectId: payload.projectId }),
-  };
-}
 
 /**
  * Whether a correction targets a connection-sync import (`data.connectionSync`).

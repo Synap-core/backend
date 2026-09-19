@@ -54,37 +54,50 @@ export const AI_KIND = {
 } as const;
 export type AiKind = (typeof AI_KIND)[keyof typeof AI_KIND];
 
-// ── Structured Decision Payload (JEV × Synap integration) ───────────────────
-// Every AI decision is logged with its full structured payload so corrections
-// can feed back as calibration data. Keys are declared here to prevent typos.
-/** Task type the decision addresses. */
-export const DECISION_TASK_TYPE = {
-  CLASSIFY: "classify",
-  SCORE: "score",
-  JUDGE: "judge",
-  EXTRACT: "extract",
-  GENERATE: "generate",
-  ACT: "act",
-} as const;
-export type DecisionTaskType =
-  (typeof DECISION_TASK_TYPE)[keyof typeof DECISION_TASK_TYPE];
+// ── Decision distribution — WHO decided a workspace route, and how sure ─────
+/**
+ * What the IS workspace-decision door (`/api/workspace-tiebreak`) reported for
+ * the pick a capture carried: which decider answered (`jev` = the TypeSafe
+ * decision model, `llm` = the cascade fallback), the model, the probability
+ * per candidate workspace id (+ `none` for JEV's abstain outcome), and the
+ * candidate set it was asked over. Recorded on the `route` decision event so
+ * a later correction joins (by correlationId) to the full distribution — the
+ * calibration sample "p=0.83 for X, user moved it to Y".
+ */
+export interface WorkspaceDecisionRecord {
+  decider: "jev" | "llm";
+  model?: string;
+  probabilities?: Record<string, number>;
+  candidates?: Array<{ id: string; name: string }>;
+}
 
-/** JSONB key for the task type. */
-export const DATA_TASK_TYPE = "taskType";
-/** JSONB key for the natural language question/instruction. */
-export const DATA_QUESTION = "question";
-/** JSONB key for the candidate options array [{id, name, description}]. */
-export const DATA_CANDIDATES = "candidates";
-/** JSONB key for the typed response (option id, score, or probability). */
-export const DATA_RESPONSE = "response";
-/** JSONB key for the full probability distribution. */
+/** `data` keys for a {@link WorkspaceDecisionRecord} on a route decision. */
+export const DATA_DECIDER = "decider";
+export const DATA_DECISION_MODEL = "decisionModel";
 export const DATA_PROBABILITIES = "probabilities";
-/** JSONB key for the confidence score 0-1. */
-export const DATA_CONFIDENCE = "confidence";
-/** JSONB key for the model version/ID that answered. */
-export const DATA_MODEL_VERSION = "modelVersion";
-/** JSONB key for the question schema version. */
-export const DATA_SCHEMA_VERSION = "schemaVersion";
+export const DATA_CANDIDATES = "candidates";
+
+/**
+ * The route event's decision-distribution fields. Uses ONLY keys the route
+ * event does not already carry, so spreading it can never overwrite the
+ * event's own `confidence` / `reason` / `chosenWorkspaceId`. No record ⇒ no
+ * fields — an absent distribution is recorded as absent, never as `{}`.
+ */
+export function workspaceDecisionEventData(
+  decision: WorkspaceDecisionRecord | null | undefined
+): Record<string, unknown> {
+  if (!decision) return {};
+  return {
+    [DATA_DECIDER]: decision.decider,
+    ...(decision.model ? { [DATA_DECISION_MODEL]: decision.model } : {}),
+    ...(decision.probabilities
+      ? { [DATA_PROBABILITIES]: decision.probabilities }
+      : {}),
+    ...(decision.candidates?.length
+      ? { [DATA_CANDIDATES]: decision.candidates }
+      : {}),
+  };
+}
 
 // ── The JOIN KEY (and friends) — one definition of the fragile JSONB paths ───
 /** The DECISION's id carried inside a correction's `data` — THE join key. */

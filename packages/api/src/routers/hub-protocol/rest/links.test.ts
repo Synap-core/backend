@@ -28,6 +28,9 @@ const membershipByWsId = new Map<string, { role: string } | null>();
 // The BLOCKED session's own workspace, keyed by session id — what the
 // blocked_by branch stamps on the edge (see the describe block below).
 const focusSessionWorkspaceById = new Map<string, string>();
+// Projects the caller can see (the `uses` branch loads one on the visibility
+// floor before governance).
+const visibleProjectIds = new Set<string>();
 
 vi.mock("@synap/database", () => {
   return {
@@ -42,6 +45,13 @@ vi.mock("@synap/database", () => {
             const cond = where as { ids?: string[] };
             const id = cond.ids?.[0];
             return id ? workspaceRowsById.get(id) : undefined;
+          }),
+        },
+        projects: {
+          findFirst: vi.fn(async ({ where }: { where: unknown }) => {
+            const cond = where as { ids?: string[] };
+            const id = cond.ids?.[0];
+            return id && visibleProjectIds.has(id) ? { id } : undefined;
           }),
         },
         focusSessions: {
@@ -64,6 +74,7 @@ vi.mock("@synap/database", () => {
       ids: conds.flatMap((c) => c.ids ?? []),
     })),
     isNull: vi.fn(() => ({ ids: [] })),
+    ownerPrivateVisibleWhere: vi.fn(() => ({ ids: [] })),
     getWorkspaceMembership: vi.fn(
       async (_db: unknown, workspaceId: string) =>
         membershipByWsId.get(workspaceId) ?? null
@@ -74,6 +85,7 @@ vi.mock("@synap/database", () => {
 
 vi.mock("@synap/database/schema", () => ({
   workspaces: { id: "id", archivedAt: "archived_at" },
+  projects: { id: "id", workspaceId: "workspace_id", userId: "user_id" },
 }));
 
 vi.mock("../../../services/links/links-service.js", () => ({
@@ -150,6 +162,7 @@ vi.mock("./_shared.js", () => ({
 
 // Imports must come AFTER vi.mock (ESM hoisting handles this).
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { registerLinksRoutes } from "./links.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -554,5 +567,64 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     expect(res.status).toBe(404);
     const calls = await writeCalls();
     expect(calls.addSessionBlocker).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /links — project --uses--> workspace", () => {
+  const PROJECT = "33333333-3333-4333-8333-333333333333";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    workspaceRowsById.clear();
+    membershipByWsId.clear();
+    visibleProjectIds.clear();
+    workspaceRowsById.set(CONSUMER_WS, { id: CONSUMER_WS });
+    membershipByWsId.set(CONSUMER_WS, { role: "editor" });
+    resolveActingContextMock.mockResolvedValue({
+      ok: true,
+      userId: USER_ID,
+      workspaceId: CONSUMER_WS,
+      role: "editor",
+    });
+  });
+
+  const usesBody = {
+    workspaceId: CONSUMER_WS,
+    fromType: "project",
+    fromId: PROJECT,
+    toType: "workspace",
+    toId: CONSUMER_WS,
+    linkType: "uses",
+  };
+
+  it("404s a project the caller cannot see, before governance", async () => {
+    const res = await postLinks(buildTestApp(), usesBody);
+    expect(res.status).toBe(404);
+    expect(checkPermissionOrPropose).not.toHaveBeenCalled();
+  });
+
+  it("forwards reasoning to the gate and returns the review link when it proposes", async () => {
+    visibleProjectIds.add(PROJECT);
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: false,
+      proposalId: "prop-uses",
+      reviewPath: "/open/prop-uses",
+      reviewUrl: "https://pod.example/open/prop-uses",
+    } as never);
+    const res = await postLinks(buildTestApp(), {
+      ...usesBody,
+      reasoning: "Architech runs through Operations",
+    });
+    expect(await res.json()).toEqual({
+      status: "proposed",
+      proposalId: "prop-uses",
+      reviewPath: "/open/prop-uses",
+      reviewUrl: "https://pod.example/open/prop-uses",
+    });
+    expect(
+      vi.mocked(checkPermissionOrPropose).mock.calls[0]?.[0]
+    ).toMatchObject({
+      reasoning: "Architech runs through Operations",
+    });
   });
 });

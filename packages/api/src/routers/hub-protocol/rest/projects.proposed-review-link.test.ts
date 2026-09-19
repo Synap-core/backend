@@ -7,7 +7,9 @@
  * build the link itself.
  *
  * DB-free door test: the REAL handlers run; the permission gate is mocked to
- * propose, so nothing past the 202 branch executes.
+ * propose, so nothing past the 202 branch executes. PATCH loads the project on
+ * the visibility floor BEFORE the gate (so a foreign id 404s instead of filing
+ * an unappliable proposal) — that one read is stubbed.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -23,6 +25,7 @@ vi.mock("../../../utils/permission-check.js", () => ({
 }));
 
 import { OpenAPIHono } from "@hono/zod-openapi";
+import { db } from "@synap/database";
 import { registerProjectsRoutes } from "./projects.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
@@ -45,6 +48,10 @@ const json = (method: string, body?: Record<string, unknown>) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(db.query.projects, "findFirst").mockResolvedValue({
+    id: PROJECT_ID,
+    workspaceId: null,
+  } as never);
   checkPermissionOrProposeMock.mockResolvedValue({
     proposalId: "prop-1",
     summary: "Create project",
@@ -86,5 +93,36 @@ describe("/projects — a proposed write carries its review link", () => {
       status: "proposed",
       proposalId: "prop-2",
     });
+  });
+
+  it("PATCH on a project the caller cannot see is 404 and never reaches the gate", async () => {
+    vi.spyOn(db.query.projects, "findFirst").mockResolvedValueOnce(
+      undefined as never
+    );
+    const res = await buildApp().request(
+      `/projects/${PROJECT_ID}`,
+      json("PATCH", { name: "Atlas 3" })
+    );
+    expect(res.status).toBe(404);
+    expect(checkPermissionOrProposeMock).not.toHaveBeenCalled();
+  });
+
+  it("PATCH forwards reasoning, phase and targetDate to the gate", async () => {
+    await buildApp().request(
+      `/projects/${PROJECT_ID}`,
+      json("PATCH", {
+        phase: "wedge A",
+        targetDate: "2026-12-15",
+        reasoning: "why",
+      })
+    );
+    const arg = checkPermissionOrProposeMock.mock.calls[0]?.[0] as {
+      reasoning?: string;
+      data: Record<string, unknown>;
+    };
+    expect(arg.reasoning).toBe("why");
+    expect(arg.data.phase).toBe("wedge A");
+    expect(arg.data.targetDate).toBeInstanceOf(Date);
+    expect(arg.data).not.toHaveProperty("reasoning");
   });
 });
