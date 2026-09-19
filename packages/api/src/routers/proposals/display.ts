@@ -172,8 +172,9 @@ type DisplayEnrichedProposal = ProposalRow & {
   approverName?: string;
   targetName?: string;
   /**
-   * The GOAL of the focus session that produced this proposal, when there is one
-   * and the viewer may see it. A resolved display label exactly like
+   * The NAME of the focus session that produced this proposal (its title, else
+   * its goal's first line — `resolveSessionTitle`), when there is one and the
+   * viewer may see it. Keyed `sessionGoal` for wire compatibility. A resolved display label exactly like
    * `authorName` — the review spine groups by `sessionId` and had nothing but
    * the raw uuid to head the group with.
    */
@@ -420,7 +421,11 @@ export async function enrichProposalsForDisplay(
     // label, and the spine falls back to the id.
     sessionIds.length > 0
       ? db
-          .select({ id: focusSessions.id, goal: focusSessions.goal })
+          .select({
+            id: focusSessions.id,
+            title: focusSessions.title,
+            goal: focusSessions.goal,
+          })
           .from(focusSessions)
           .where(
             and(
@@ -432,7 +437,9 @@ export async function enrichProposalsForDisplay(
               )
             )
           )
-      : Promise.resolve([] as Array<{ id: string; goal: string }>),
+      : Promise.resolve(
+          [] as Array<{ id: string; title: string | null; goal: string }>
+        ),
     // Document titles for `targetType: "document"` proposals — see the
     // `documentIds` note above. Owner-floored, batched, skipped entirely when
     // the page carries no document proposal.
@@ -505,7 +512,9 @@ export async function enrichProposalsForDisplay(
   }
   const traceByCorrelationId = new Map<string, EventRecord[]>(traceEntries);
   const facetById = new Map(facetRows.map((row) => [row.id, row]));
-  const sessionGoalById = new Map(sessionRows.map((row) => [row.id, row.goal]));
+  const sessionGoalById = new Map(
+    sessionRows.map((row) => [row.id, resolveSessionTitle(row)])
+  );
   const documentTitleById = new Map(
     documentRows.map((row) => [row.id, row.title])
   );

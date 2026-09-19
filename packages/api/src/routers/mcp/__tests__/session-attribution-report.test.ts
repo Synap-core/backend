@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   openRows: [] as Array<{ id: string }>,
   openThrows: false,
   payloadText: JSON.stringify({ status: "applied" }),
+  /** The call named a session ⇒ its one select is the ownership check. */
+  explicit: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -30,8 +32,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: vi.fn(async () => ({})),
     db: {
       select: vi.fn((columns: Record<string, unknown>) => {
-        // `listOpenFocusSessions` projects `goal`; the ownership check does not.
-        const isOpenList = "goal" in columns;
+        // The resolver reads EITHER the ownership of a named session OR the
+        // open unclaimed list — never both in one call.
+        void columns;
+        const isOpenList = !h.explicit;
         const chain: Record<string, unknown> = {};
         chain.from = () => chain;
         chain.where = () => chain;
@@ -71,6 +75,7 @@ const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
 const { resolveSessionHandle } = await import("../handlers/shared.js");
 
 async function run(args: Record<string, unknown>) {
+  h.explicit = typeof args.sessionId === "string";
   const result = await executeMCPToolViaHubProtocol(
     "synap_capture",
     { text: "x", ...args },
@@ -90,26 +95,29 @@ beforeEach(() => {
 });
 
 describe("structured session attribution on every attributed write", () => {
-  it("(c) no sessionId with several sessions open → derived + ambiguous, and the Note text stays", async () => {
+  it("(c) no sessionId with several unclaimed sessions open → NO guess, ambiguous, and the Note says so", async () => {
     h.openRows = [{ id: "S-NEWEST" }, { id: "S-OLDER" }];
 
     const { blocks, payload } = await run({});
 
     expect(payload.attribution).toEqual({
-      session: "derived",
+      session: "none",
       ambiguous: true,
       openCount: 2,
     });
     expect(payload.status).toBe("applied");
     expect(blocks).toHaveLength(2);
-    expect(blocks[1].text).toMatch(/^Note: 2 of your focus sessions are open/);
+    expect(blocks[1].text).toMatch(
+      /^Note: 2 of your focus sessions are open and none is yours/
+    );
   });
 
-  it("one open session → derived, not ambiguous, counted", async () => {
+  it("one unclaimed open session → derived via unclaimed, not ambiguous, counted", async () => {
     h.openRows = [{ id: "S-ONLY" }];
     const { blocks, payload } = await run({});
     expect(payload.attribution).toEqual({
       session: "derived",
+      via: "unclaimed",
       ambiguous: false,
       openCount: 1,
     });

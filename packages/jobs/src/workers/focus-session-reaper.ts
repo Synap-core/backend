@@ -21,8 +21,16 @@
  * on age alone — only genuine silence trips this.
  */
 
-import { db, and, drizzleSql, focusSessions } from "@synap/database";
+import {
+  db,
+  and,
+  drizzleSql,
+  focusSessions,
+  AGENT_PROPOSAL_PACKAGE_MARKER,
+  RECEIPT_IDLE_WINDOW_HOURS,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { closeSessionViaDoor } from "../utils/session-close.js";
 
 const logger = createLogger({ module: "focus-session-reaper" });
 
@@ -43,9 +51,71 @@ export const SESSION_IS_STALE = and(
   drizzleSql`${focusSessions.updatedAt} < now() - (${REAPER_STALE_HOURS}::int * interval '1 hour')`
 );
 
+/**
+ * A write RECEIPT (the session the gate auto-opened to group an agent's writes)
+ * that is DONE: idle for the receipt window — no row touch and no proposal
+ * filed under it — with nothing left pending. Nothing ever closed receipts, so
+ * every one sat open until the stale sweep below mislabelled it abandoned work.
+ *
+ * Receipts only (`metadata.kind` marker): a session an agent adopted by
+ * starting it explicitly lost the marker and is real work, reaped as `stale`
+ * like any other. A receipt still holding a pending proposal stays open — its
+ * review is not done — and falls to the stale sweep only after 24h.
+ */
+export const RECEIPT_IS_DONE = and(
+  drizzleSql`${focusSessions.status} IN ('active', 'paused')`,
+  drizzleSql`${focusSessions.metadata} ->> 'kind' = ${AGENT_PROPOSAL_PACKAGE_MARKER}`,
+  drizzleSql`${focusSessions.updatedAt} < now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')`,
+  drizzleSql`NOT EXISTS (select 1 from proposals p where p.session_id = ${focusSessions.id} and (p.status = 'pending' or p.created_at > now() - (${RECEIPT_IDLE_WINDOW_HOURS}::int * interval '1 hour')))`
+);
+
+/** Most receipts closed per tick — each close runs the full door. */
+const RECEIPT_CLOSE_BATCH = 200;
+
+/**
+ * Close finished receipts through the ONE close door (`completeFocusSession`
+ * via the IoC slot) — status `closed`, never a raw stamp. One failing close is
+ * logged and skipped; the rest still close.
+ */
+export async function closeIdleReceipts(): Promise<number> {
+  const done = await db
+    .select({ id: focusSessions.id, userId: focusSessions.userId })
+    .from(focusSessions)
+    .where(RECEIPT_IS_DONE)
+    .limit(RECEIPT_CLOSE_BATCH);
+  let closed = 0;
+  for (const row of done) {
+    try {
+      const result = await closeSessionViaDoor({
+        sessionId: row.id,
+        userId: row.userId,
+        terminalStatus: "closed",
+        summary:
+          "Closed automatically: no activity and nothing left to review.",
+      });
+      if (result) closed++;
+    } catch (err) {
+      logger.error(
+        { err, sessionId: row.id },
+        "receipt close failed — will retry next tick"
+      );
+    }
+  }
+  return closed;
+}
+
 /** Called by the cron scheduler every hour. */
 export async function handleFocusSessionReaper(): Promise<void> {
   try {
+    // Receipts first, so a finished one is CLOSED rather than swept to stale.
+    const receiptsClosed = await closeIdleReceipts();
+    if (receiptsClosed > 0) {
+      logger.info(
+        { receiptsClosed },
+        "Focus session reaper closed idle receipts"
+      );
+    }
+
     // Cutoff computed in SQL (int * interval), no Date param bound — mirrors
     // automation-run-reaper: postgres.js 3.4.8 crashes on Date bind params on
     // the pod image.

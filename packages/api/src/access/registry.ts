@@ -41,6 +41,7 @@ import {
   userResourceState,
   agentConfigs,
   focusSessions,
+  sessionEvaluations,
   rendererBindings,
   projects,
   views,
@@ -549,6 +550,19 @@ registerVisibility({
     kind: "workspaceOwned",
     workspaceColumn: focusSessions.workspaceId,
     userColumn: focusSessions.userId,
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A session's evaluations carry the session's own `user_id` / `workspace_id`
+// (copied by the one write door, `recordSessionEvaluation`), so they are exactly
+// as visible as the session they grade — the same rule, not a looser one.
+registerVisibility({
+  table: sessionEvaluations,
+  query: () => db.query.sessionEvaluations,
+  rule: {
+    kind: "workspaceOwned",
+    workspaceColumn: sessionEvaluations.workspaceId,
+    userColumn: sessionEvaluations.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
 });

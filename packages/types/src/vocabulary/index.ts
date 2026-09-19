@@ -503,6 +503,30 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   // fallback until now; that fallback exists to stop a raw token leaking, not
   // as an endorsement, so the state is spelled out here.
   scheduled: "Scheduled",
+  // session EVALUATION verdicts (`session_evaluations.verdict`, @synap-core/types
+  // focus-sessions verdict). `unmeasured` is NOT a failure — nobody could check
+  // it — so it must never read as one; "Not checked" says exactly that.
+  pass: "Passed",
+  fail: "Failed",
+  unmeasured: "Not checked",
+  // session VERDICT STATES — the whole session's grade over its criteria
+  // (`computeSessionVerdict`, `SessionVerdictLike.state`), NOT a single
+  // criterion's verdict above. They reached users through `humanizeToken`
+  // ("Passing" / "Failing" / "Incomplete") until now.
+  //
+  // The words are chosen for work that is STILL IN FLIGHT, which is when this
+  // label is read most: a session is graded while it runs, so "Failing" accused
+  // work-in-progress of having failed when the truth is "not met yet". Each one
+  // names the state of the CONTRACT, not a judgement of the person:
+  //   passing    — every required criterion is met. "Met" matches the summary
+  //                beside it ("All 4 met"), so the two cannot drift apart.
+  //   failing    — a required criterion has a `fail` verdict. Still recoverable.
+  //   incomplete — nothing failed; something has not been checked. "Partly
+  //                checked" says exactly that, and never reads as a failure
+  //                (the same rule `unmeasured: "Not checked"` follows).
+  passing: "Met",
+  failing: "Not yet met",
+  incomplete: "Partly checked",
   // session POPULATION lenses (derived, never stored — see
   // `services/focus-sessions/session-kind.ts`): one `focus_sessions` table
   // holds a person's units of work, machine executions, and the containers an

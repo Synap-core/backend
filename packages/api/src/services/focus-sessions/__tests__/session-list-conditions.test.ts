@@ -95,7 +95,11 @@ describe("search", () => {
         q: "  50%_off  ",
       })
     );
-    expect(q.sql).toMatch(/"focus_sessions"\."goal" ilike \$\d+/);
+    // The NAME the list shows (title) OR the goal — a session titled
+    // "Relay theme" whose goal never says "relay" is still found.
+    expect(q.sql).toMatch(
+      /\("focus_sessions"\."title" ilike \$\d+ or "focus_sessions"\."goal" ilike \$\d+\)/
+    );
     // Trimmed, then `%` and `_` escaped so they match literally.
     expect(q.params).toContain("%50\\%\\_off%");
   });

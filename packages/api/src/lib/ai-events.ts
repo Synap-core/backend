@@ -25,6 +25,15 @@ export const AI_DECISION = "ai_decision";
 /** `events.subject_type` for a user reversal of an AI decision. */
 export const AI_CORRECTION = "ai_correction";
 /**
+ * `events.subject_type` for a user ENDORSING an AI decision after the fact —
+ * e.g. moving a captured entity INTO the workspace its route decision
+ * suggested (the suggestion stayed a proposal; the person later took it).
+ * Same join key as a correction (`data.correlationId` = the DECISION's id).
+ * Deliberately NOT an `ai_correction`: every correction reader counts those as
+ * the AI being wrong.
+ */
+export const AI_CONFIRMATION = "ai_confirmation";
+/**
  * `events.subject_type` for a self-diagnosis TRACE — a point where the capture
  * pipeline silently dropped/degraded/coerced something (a facet, an entity, a
  * relation, content). Keyed by the capture's `correlationId` (the captureId) so
@@ -63,19 +72,18 @@ export type AiKind = (typeof AI_KIND)[keyof typeof AI_KIND];
  * candidate set it was asked over. Recorded on the `route` decision event so
  * a later correction joins (by correlationId) to the full distribution — the
  * calibration sample "p=0.83 for X, user moved it to Y".
+ *
+ * ONE definition, shared with every capture door: `@synap-core/types`
+ * (`capture-routing-types.ts`). Re-exported here, never redeclared.
  */
-export interface WorkspaceDecisionRecord {
-  decider: "jev" | "llm";
-  model?: string;
-  probabilities?: Record<string, number>;
-  candidates?: Array<{ id: string; name: string }>;
-}
+import type { WorkspaceDecisionRecord } from "@synap-core/types";
+export type { WorkspaceDecisionRecord };
 
 /** `data` keys for a {@link WorkspaceDecisionRecord} on a route decision. */
-export const DATA_DECIDER = "decider";
-export const DATA_DECISION_MODEL = "decisionModel";
-export const DATA_PROBABILITIES = "probabilities";
-export const DATA_CANDIDATES = "candidates";
+const DATA_DECIDER = "decider";
+const DATA_DECISION_MODEL = "decisionModel";
+const DATA_PROBABILITIES = "probabilities";
+const DATA_CANDIDATES = "candidates";
 
 /**
  * The route event's decision-distribution fields. Uses ONLY keys the route
@@ -106,6 +114,12 @@ export const decisionCorrelationKeyExpr = drizzleSql<
 >`${events.data}->>'correlationId'`;
 /** The `data.kind` discriminator, extracted from any ai_* event. */
 export const eventKindExpr = drizzleSql<string | null>`${events.data}->>'kind'`;
+/**
+ * WHO decided a route decision — `data.decider` (`jev` | `llm`, see
+ * {@link workspaceDecisionEventData}). A route event recorded before deciders
+ * existed has no key and was an LLM pick, so it reads as `llm`.
+ */
+export const routeDeciderExpr = drizzleSql<string>`coalesce(${events.data}->>${DATA_DECIDER}::text, 'llm')`;
 /** The freeform human rejection reason, extracted from an `ai_correction`'s `data`. */
 export const reasonExpr = drizzleSql<string | null>`${events.data}->>'reason'`;
 /** The structured rejection taxonomy code, extracted from an `ai_correction`'s `data`. */

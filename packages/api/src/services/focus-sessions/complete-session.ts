@@ -40,6 +40,7 @@ import {
   eq,
   and,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -62,6 +63,8 @@ import {
   cancelRecordMetadataSql,
   type SessionCancelRecord,
 } from "./cancel-session.js";
+import type { SessionVerdict } from "@synap-core/types/focus-sessions";
+import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 
 export interface CompleteFocusSessionParams {
   sessionId: string;
@@ -114,7 +117,34 @@ export type CompleteFocusSessionResult = {
   warnings: string[];
   /** `cancelled` only: what was stopped, what will finish, what already applied. */
   cancel?: SessionCancelRecord;
+  /**
+   * The session's grade against its criteria at close. Never blocks the close:
+   * unmet required criteria close FLAGGED (a warning + this), not refused.
+   */
+  verdict?: SessionVerdict;
 };
+
+/**
+ * The `verification_report` write for a close. MERGES (shallow) into whatever
+ * is stored instead of replacing it: the CLI writes `codeQuality` into the
+ * report mid-session, and a close that carried only a summary used to erase
+ * it. An explicit `null` report still CLEARS. Returns `undefined` when the
+ * close has nothing to say about the report.
+ */
+export function closeReportPatch(args: {
+  summary?: string;
+  verificationReport?: Record<string, unknown> | null;
+  unfinishedOutputs: number;
+}): Record<string, unknown> | null | undefined {
+  const { summary, verificationReport, unfinishedOutputs } = args;
+  if (verificationReport === null) return null;
+  const patch = {
+    ...(summary !== undefined ? { summary } : {}),
+    ...(verificationReport ?? {}),
+    ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
+  };
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
 
 function packItem(row: typeof proposals.$inferSelect): ProposalPackItem {
   const data = (row.data ?? {}) as Record<string, unknown>;
@@ -282,6 +312,12 @@ export async function completeFocusSession(
         }
       : undefined;
 
+  const reportPatch = closeReportPatch({
+    summary,
+    verificationReport,
+    unfinishedOutputs,
+  });
+
   const [updated] = await db.transaction(async (tx) => {
     // Only the cancel path touches the array, so only it needs the lock — a
     // `closed`/`failed` exit leaves `expectedOutputs` alone and cannot lose a
@@ -309,26 +345,15 @@ export async function completeFocusSession(
         closedAt: new Date(),
         ...(retirement ? { expectedOutputs: retirement.outputs } : {}),
         ...(cancel ? { metadata: cancelRecordMetadataSql(cancel) } : {}),
-        ...(verificationReport != null
-          ? {
-              verificationReport: {
-                ...(summary !== undefined ? { summary } : {}),
-                ...(verificationReport as Record<string, unknown>),
-                ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
-              },
-            }
-          : summary !== undefined
+        ...(reportPatch === null
+          ? { verificationReport: null }
+          : reportPatch
             ? {
-                verificationReport: {
-                  summary,
-                  ...(unfinishedOutputs > 0 ? { unfinishedOutputs } : {}),
-                },
+                // Shallow merge in SQL, inside this UPDATE, so a report written
+                // since the load above is merged into, never overwritten.
+                verificationReport: drizzleSql`(CASE WHEN jsonb_typeof(${focusSessions.verificationReport}) = 'object' THEN ${focusSessions.verificationReport} ELSE '{}'::jsonb END) || ${JSON.stringify(reportPatch)}::jsonb`,
               }
-            : verificationReport === null
-              ? { verificationReport: null }
-              : unfinishedOutputs > 0
-                ? { verificationReport: { unfinishedOutputs } }
-                : {}),
+            : {}),
       })
       .where(eq(focusSessions.id, sessionId))
       .returning();
@@ -429,6 +454,15 @@ export async function completeFocusSession(
     );
   }
 
+  // The grade at close — computed, never enforced (founder decision: close
+  // never blocks on criteria). Unmet required criteria are said out loud.
+  const { verdict } = await loadSessionEvaluationSummary(updated);
+  if (verdict.requiredUnmet > 0) {
+    warnings.push(
+      `${verdict.requiredUnmet} required criteri${verdict.requiredUnmet === 1 ? "on" : "a"} not met — session closed anyway, flagged.`
+    );
+  }
+
   // ── THE CLOSE EVENT ────────────────────────────────────────────────────────
   // Closing a session is a fact about the work, and until now it left no trace
   // anyone could react to or read back: no automation could fire on it, the
@@ -451,6 +485,8 @@ export async function completeFocusSession(
     goal: updated.goal,
     status: updated.status,
     ...(summary !== undefined ? { summary } : {}),
+    // Additive: reactors that do not know it ignore it.
+    verdict,
   };
 
   await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {
@@ -486,5 +522,6 @@ export async function completeFocusSession(
     },
     warnings,
     ...(cancel ? { cancel } : {}),
+    verdict,
   };
 }

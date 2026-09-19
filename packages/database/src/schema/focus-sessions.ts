@@ -226,6 +226,13 @@ export const focusSessions = pgTable(
     /** Verification report: Test results and verification outcomes (single closing report). */
     verificationReport: jsonb("verification_report"),
     /**
+     * SessionCriterion[] (@synap/playbooks) — the binary contract this session
+     * is graded against. Copied from the playbook at instantiate or declared by
+     * an agent on an ad-hoc session; graded by rows in `session_evaluations`
+     * (never on this row). Added by 0267.
+     */
+    criteria: jsonb("criteria").notNull().default([]),
+    /**
      * Free-form session metadata bag (additive — 0160). Shallow-merged by the
      * Hub PATCH door and the automation `session_update` output subtype. Used
      * e.g. for `grantStatus` (a sub-object an automation maintains while driving

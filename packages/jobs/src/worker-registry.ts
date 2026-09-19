@@ -120,6 +120,24 @@ export const workerRegistry: WorkerMetadata[] = [
     category: "ai",
   },
   {
+    id: "playbook-lessons-scanner",
+    name: "Playbook Lessons Scanner",
+    description:
+      "Weekly (Mon 04:10 UTC). For every playbook with at least 3 graded closed runs in the last 90 days, reads the SAME scorecard the playbooks.scorecard door renders and finds the required criteria that failed — or that a person overrode the judge on — in 2+ of those runs. Asks the IS (/api/revise-lessons) for the FULL reconciled replacement list of a stage's lessons (contradictions replaced, duplicates merged, capped at MAX_STAGE_LESSONS) and files ONE PENDING playbook/update proposal per playbook that REPLACES stages[].lessons wholesale — never appends, never writes a playbook. Skips a playbook that already has an open playbook/update proposal, and skips it entirely when the IS cannot answer rather than proposing un-reconciled content. Payload carries the rationale and sourceSessionIds lineage.",
+    triggers: ["cron:10 4 * * 1"],
+    outputs: ["proposal.created"],
+    category: "ai",
+  },
+  {
+    id: "session-titler",
+    name: "Session Titler",
+    description:
+      "Every 10min, names focus sessions nobody named. Backfills a derived name (no LLM) on untitled runs and captures; asks the IS (/api/session-title, cheapest tier) for ONE 3–6 word name for a work session or write receipt that has a real signal (message, proposal, output), and ONE outcome-aware rename when it closes with a summary. Never selects a human- or agent-chosen title (metadata.titleSource), and writes through a conditional UPDATE that re-checks the title + source it read, so a concurrent rename always wins. Playbook/automation runs keep their derived name. IS down ⇒ nothing stamped, retried next tick.",
+    triggers: ["cron:*/10 * * * *"],
+    outputs: [],
+    category: "ai",
+  },
+  {
     id: "chat-turn-reaper",
     name: "Chat Turn Reaper",
     description:

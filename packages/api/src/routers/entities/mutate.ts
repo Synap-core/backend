@@ -30,7 +30,10 @@ import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
-import { emitAiCorrection } from "../../utils/ai-feedback-events.js";
+import {
+  emitAiCorrection,
+  emitRouteMoveFeedback,
+} from "../../utils/ai-feedback-events.js";
 import { AI_KIND } from "../../lib/ai-events.js";
 import { getBoss } from "@synap/events";
 import { randomUUID } from "crypto";
@@ -688,21 +691,17 @@ export const mutateProcs = {
 
           moved.push(entityId);
 
-          // Feedback signal (PRIMARY) — a human rerouted an entity the AI
-          // placed via a captured decision. Best-effort: never fail the move.
+          // Feedback signal (PRIMARY) — a human moved an entity the AI
+          // placed via a captured decision. Into the workspace the decision
+          // SUGGESTED = a confirmation; anywhere else = a route correction.
+          // Best-effort: never fail the move.
           if (existing.correlationId) {
-            await emitAiCorrection({
-              action: "reroute",
+            await emitRouteMoveFeedback({
               userId: ctx.userId,
-              subjectId: entityId,
-              workspaceId: input.workspaceId,
-              data: {
-                kind: AI_KIND.ROUTE,
-                entityId,
-                fromWorkspaceId,
-                toWorkspaceId: input.workspaceId,
-                correlationId: existing.correlationId,
-              },
+              entityId,
+              fromWorkspaceId,
+              toWorkspaceId: input.workspaceId,
+              correlationId: existing.correlationId,
             });
           }
         } catch (err) {

@@ -31,6 +31,8 @@ export interface RequestWriteContext {
   readonly actingAgentUserId?: string;
   /** A1 — the session id the MCP door derived (guessed, not named). */
   readonly derivedSessionId?: string;
+  /** C1 — which CLIENT is calling (the key it authenticated with). */
+  readonly clientKey?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestWriteContext>();
@@ -171,4 +173,43 @@ export function isDerivedSession(
 ): boolean {
   if (sessionSource !== undefined) return sessionSource === "derived";
   return !!sessionId && sessionId === getDerivedSessionId();
+}
+
+// ═══ Concern: CALLING CLIENT (C1) ═════════════════════════════════════════════
+//
+// Session-first attribution groups a client's writes into ITS session — never
+// into the newest session another client (or the person) opened. The MCP door
+// is stateless (no Mcp-Session-Id) and the Hub has no connection either, so the
+// one stable per-client fact at every key-auth door is the KEY: one claude.ai
+// connector, one `synap init` agent key, one CLI profile each authenticate with
+// their own. Entered at those doors; read by the session resolver and the
+// receipt packager several layers below.
+//
+// NOT entered for the IS's `is_internal` key: one key serves every channel, so
+// it would pour all of the IS's conversations into one session. IS writes group
+// by their channel (`actingChannelId`) instead.
+
+/**
+ * The client key for a validated API key: `key:<id>`, or undefined for the
+ * IS's shared `is_internal` key (see above). MCP and Hub REST share the value,
+ * so an agent key used from both doors is one client.
+ */
+export function clientKeyForApiKey(key: {
+  id: string;
+  keyType?: string | null;
+}): string | undefined {
+  return key.keyType === "is_internal" ? undefined : `key:${key.id}`;
+}
+
+/** Run `fn` with the calling client recorded; `undefined` enters no scope. */
+export function runWithClientKey<T>(
+  clientKey: string | undefined,
+  fn: () => T
+): T {
+  return clientKey ? runWithPatch({ clientKey }, fn) : fn();
+}
+
+/** The calling client's key for this request, if a key-auth door set one. */
+export function getRequestClientKey(): string | undefined {
+  return storage.getStore()?.clientKey;
 }

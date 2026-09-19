@@ -29,7 +29,50 @@ import { createLogger } from "@synap-core/core";
 import { MessageAuthorType, MessageRole } from "@synap/database/schema";
 import { triggerAutoRespond } from "../../../utils/trigger-auto-respond.js";
 import { resolveActiveAgentBySlug } from "../../agent-identity-service.js";
-import type { Executor, RunContext, RunResult } from "@synap/playbooks";
+import {
+  readStageLessons,
+  type Executor,
+  type PlaybookStage,
+  type RunContext,
+  type RunResult,
+} from "@synap/playbooks";
+
+/**
+ * The kickoff's active-stage section: name, goal, expected outputs, suggested
+ * tasks, advisory grants, and the stage's LESSONS — what earlier runs of this
+ * stage taught (`PlaybookStage.lessons`, revised by the lessons scanner). One
+ * channel: lessons ride with the goal they qualify, never a second prompt.
+ */
+export function buildStageSection(stage: PlaybookStage): string {
+  const lines = [`## Current stage: ${stage.name}`];
+  if (stage.goal) lines.push(stage.goal);
+  if (stage.expectedOutputs?.length) {
+    lines.push(
+      `Expected outputs: ${stage.expectedOutputs
+        .map((o) => o.label)
+        .join(", ")}`
+    );
+  }
+  if (stage.suggestedTasks?.length) {
+    lines.push(`Suggested tasks: ${stage.suggestedTasks.join(", ")}`);
+  }
+  const lessons = readStageLessons(stage);
+  if (lessons.length) {
+    lines.push(
+      `Lessons from earlier runs of this stage:\n${lessons
+        .map((l) => `- ${l}`)
+        .join("\n")}`
+    );
+  }
+  if (stage.grants?.length) {
+    lines.push(
+      `Capabilities available at this stage: ${stage.grants
+        .map((g) => g.id)
+        .join(", ")}`
+    );
+  }
+  return lines.join("\n");
+}
 
 const logger = createLogger({ module: "is-agent-executor" });
 
@@ -84,29 +127,7 @@ export class IsAgentExecutor implements Executor {
     const stage = ctx.currentStage
       ? ctx.stages?.find((s) => s.key === ctx.currentStage)
       : undefined;
-    let stageSection = "";
-    if (stage) {
-      const lines = [`## Current stage: ${stage.name}`];
-      if (stage.goal) lines.push(stage.goal);
-      if (stage.expectedOutputs?.length) {
-        lines.push(
-          `Expected outputs: ${stage.expectedOutputs
-            .map((o) => o.label)
-            .join(", ")}`
-        );
-      }
-      if (stage.suggestedTasks?.length) {
-        lines.push(`Suggested tasks: ${stage.suggestedTasks.join(", ")}`);
-      }
-      if (stage.grants?.length) {
-        lines.push(
-          `Capabilities available at this stage: ${stage.grants
-            .map((g) => g.id)
-            .join(", ")}`
-        );
-      }
-      stageSection = `\n\n${lines.join("\n")}`;
-    }
+    const stageSection = stage ? `\n\n${buildStageSection(stage)}` : "";
 
     // Layer-2 CONTEXT SKILL — the AI-generated "how to run THIS playbook"
     // instruction, linked to the playbook via a non-grant `documents` edge (kept

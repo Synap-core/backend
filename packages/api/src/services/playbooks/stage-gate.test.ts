@@ -82,7 +82,22 @@ vi.mock("../../utils/event-backed-proposal.js", () => ({
   },
 }));
 
-import { applyStageGateOnAdvance, findStage } from "./stage-gate.js";
+/** What the mocked `evaluateSession` returns, and every call it received. */
+let evaluation: Record<string, unknown> = {};
+const evaluateCalls: Array<Record<string, unknown>> = [];
+vi.mock("../focus-sessions/evaluations/evaluate.js", () => ({
+  evaluateSession: async (input: Record<string, unknown>) => {
+    evaluateCalls.push(input);
+    return evaluation;
+  },
+}));
+
+import {
+  applyStageGateOnAdvance,
+  checkGateFailing,
+  findStage,
+  CHECK_GATE_UNEVALUATED,
+} from "./stage-gate.js";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
 const PLAYBOOK_ID = "22222222-3333-4444-8555-666666666666";
@@ -112,6 +127,8 @@ function advance(toStage: string) {
 }
 
 beforeEach(() => {
+  evaluateCalls.length = 0;
+  evaluation = { status: "evaluated", criteria: [], evaluations: [] };
   updates.length = 0;
   proposalCalls.length = 0;
   updateReturns = [{ id: SESSION_ID }];
@@ -145,6 +162,8 @@ describe("applyStageGateOnAdvance", () => {
     const result = await advance("review");
 
     expect(result).not.toBeNull();
+    expect(result!.kind).toBe("human");
+    if (result!.kind !== "human") return;
     expect(result!.paused).toBe(true);
     expect(result!.proposalId).toBe("prop-1");
     expect(result!.proposalType).toBe("playbook.stage_gate");
@@ -205,5 +224,121 @@ describe("applyStageGateOnAdvance", () => {
     expect(
       (proposalCalls[0].data as Record<string, unknown>).playbookRunId
     ).toBeUndefined();
+  });
+});
+
+describe("check gate", () => {
+  const CHECKED = {
+    key: "ship",
+    name: "Ship",
+    category: "started",
+    gate: { kind: "check" },
+  };
+  const buildCriteria = [
+    {
+      key: "tests",
+      statement: "Tests pass",
+      check: { kind: "evidence", evidenceKey: "t" },
+      stageKey: "build",
+    },
+    {
+      key: "nice",
+      statement: "Nice to have",
+      required: false,
+      check: { kind: "judge" },
+      stageKey: "build",
+    },
+    {
+      key: "later",
+      statement: "Later stage",
+      check: { kind: "judge" },
+      stageKey: "ship",
+    },
+  ];
+
+  beforeEach(() => {
+    runRow = { id: RUN_ID, definitionSnapshot: { stages: [UNGATED, CHECKED] } };
+  });
+
+  it("evaluates the stage being LEFT, and passes without pausing or filing", async () => {
+    evaluation = {
+      status: "evaluated",
+      criteria: buildCriteria,
+      evaluations: [{ criterionKey: "tests", verdict: "pass" }],
+    };
+    const result = await advance("ship");
+    expect(evaluateCalls).toHaveLength(1);
+    // The stage LEFT ("build"), never the stage entered ("ship").
+    expect(evaluateCalls[0].stageKey).toBe("build");
+    expect(result).toMatchObject({
+      kind: "check",
+      passed: true,
+      failing: [],
+      paused: false,
+    });
+    expect(updates).toHaveLength(0);
+    expect(proposalCalls).toHaveLength(0);
+  });
+
+  it("a failing required criterion pauses the session — and files NO proposal", async () => {
+    evaluation = {
+      status: "evaluated",
+      criteria: buildCriteria,
+      evaluations: [{ criterionKey: "tests", verdict: "fail" }],
+    };
+    const result = await advance("ship");
+    expect(result).toMatchObject({
+      kind: "check",
+      passed: false,
+      failing: ["tests"],
+      paused: true,
+    });
+    expect(updates).toHaveLength(1);
+    expect(updates[0].status).toBe("paused");
+    expect(proposalCalls).toHaveLength(0);
+  });
+
+  it("an evaluation that did not RUN holds the gate — it never reads as clean", async () => {
+    // `evaluateSession` answers `not_found` when the session cannot be loaded
+    // for this caller. Folding that into "nothing failing" would advance the
+    // run ungated on the one path the gate exists to hold.
+    evaluation = { status: "not_found" };
+    const result = await advance("ship");
+    expect(result).toMatchObject({
+      kind: "check",
+      passed: false,
+      failing: [CHECK_GATE_UNEVALUATED],
+      paused: true,
+    });
+    expect(updates[0].status).toBe("paused");
+    expect(proposalCalls).toHaveLength(0);
+  });
+});
+
+describe("checkGateFailing", () => {
+  const criteria = [
+    { key: "a", stageKey: "build" },
+    { key: "b", stageKey: "build", required: false },
+    { key: "c", stageKey: "ship" },
+  ];
+  it("counts only the left stage's REQUIRED criteria that are not passing", () => {
+    expect(checkGateFailing({ criteria, evaluations: [] }, "build")).toEqual([
+      "a",
+    ]);
+    expect(
+      checkGateFailing(
+        {
+          criteria,
+          evaluations: [{ criterionKey: "a", verdict: "unmeasured" }],
+        },
+        "build"
+      )
+    ).toEqual(["a"]);
+    expect(
+      checkGateFailing(
+        { criteria, evaluations: [{ criterionKey: "a", verdict: "pass" }] },
+        "build"
+      )
+    ).toEqual([]);
   });
 });

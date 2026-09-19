@@ -1838,6 +1838,7 @@ export class HubRestClient {
         aiWorkspaceId: input.aiWorkspaceId,
         aiWorkspaceConfidence: input.aiWorkspaceConfidence,
         aiWorkspaceReason: input.aiWorkspaceReason,
+        workspaceChoice: input.workspaceChoice,
       }
     );
   }

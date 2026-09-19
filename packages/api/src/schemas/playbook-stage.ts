@@ -22,9 +22,12 @@ import { z } from "zod";
 import {
   PLAYBOOK_STAGE_CATEGORIES,
   STAGE_GATE_PROPOSAL_TYPES,
+  MAX_STAGE_LESSONS,
+  STAGE_LESSON_MAX_CHARS,
   type PlaybookStageCategory,
   type StageGateProposalType,
 } from "@synap/playbooks";
+import { sessionCriteriaSchema } from "./session-criteria.js";
 
 /**
  * The six, as a zod enum. Derived from the contract package's list rather than
@@ -80,7 +83,7 @@ export const playbookStageSchema = z.looseObject({
   position: z.number().int().optional(),
   indefinite: z.boolean().optional(),
   /**
-   * Human gate on ENTRY (optional; absent ⇒ the stage advances freely).
+   * Entry gate (optional; absent ⇒ the stage advances freely).
    *
    * STRICT, unlike its siblings: the surrounding stage object is loose because
    * dropping an unknown stage field on a round-trip would lose data, but a gate
@@ -90,7 +93,9 @@ export const playbookStageSchema = z.looseObject({
    */
   gate: z
     .strictObject({
-      kind: z.literal("human"),
+      // "check" evaluates the criteria of the stage being LEFT before the run
+      // may continue (services/playbooks/stage-gate.ts).
+      kind: z.enum(["human", "check"]),
       // Closed set, derived from the contract package — see the comment on
       // `PlaybookStageGate.proposalType` for why a free string here would file
       // gates that approve without ever resuming the run.
@@ -103,6 +108,13 @@ export const playbookStageSchema = z.looseObject({
         )
         .optional(),
     })
+    .optional(),
+  /** Binary acceptance criteria belonging to this stage (stageKey stamped at instantiate). */
+  criteria: sessionCriteriaSchema.optional(),
+  /** What earlier runs of this stage taught — see `PlaybookStage.lessons`. */
+  lessons: z
+    .array(z.string().trim().min(1).max(STAGE_LESSON_MAX_CHARS))
+    .max(MAX_STAGE_LESSONS)
     .optional(),
 });
 

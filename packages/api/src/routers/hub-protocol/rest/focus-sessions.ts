@@ -22,12 +22,17 @@
 
 import { z } from "@hono/zod-openapi";
 import {
+  sessionCriteriaSchema,
+  sessionEvidenceSchema,
+} from "../../../schemas/session-criteria.js";
+import {
   db,
   eq,
   and,
   desc,
   focusSessions,
   playbookRuns,
+  drizzleSql,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -37,9 +42,12 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { emitHubRealtimeEvent } from "../../../utils/domain-event-bridge.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
 import { createFocusSession } from "../../../services/focus-sessions/create-session.js";
+import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
+import type { SessionCriterion } from "@synap/playbooks";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
+  titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
 import { completeFocusSession } from "../../../services/focus-sessions/complete-session.js";
 import { sessionListConditions } from "../../../services/focus-sessions/session-list-conditions.js";
@@ -142,8 +150,15 @@ const CreateBodySchema = z
     title: z.string().max(SESSION_TITLE_MAX).optional(),
     goal: z.string().min(1).max(2000),
     correlationId: z.string().optional(),
-    templateId: z.string().optional(),
+    /**
+     * A playbook to start from. Omitted on an AGENT start ⇒ a matching playbook
+     * is applied above a confidence threshold and reported on `template`;
+     * `null` opts out of matching.
+     */
+    templateId: z.string().nullable().optional(),
     expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
+    /** Binary acceptance criteria (validated by the service's shared schema). */
+    criteria: z.array(z.unknown()).optional(),
     channelId: z.string().uuid().optional(),
     agentIds: z.array(z.string()).optional(),
     /**
@@ -232,6 +247,8 @@ const UpdateBodySchema = z.object({
   subjectEntityId: z.string().uuid().nullable().optional(),
   // Free-form metadata bag — SHALLOW-MERGED into the existing row metadata.
   metadata: z.record(z.string(), z.unknown()).optional(),
+  // WHOLESALE replace of the session's binary acceptance criteria (max 12).
+  criteria: sessionCriteriaSchema.optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -705,7 +722,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         database: db,
         userId: acting.userId,
       });
-      return c.json({ ...row, rerun: continuation.rerun, continuation });
+      return c.json({
+        ...row,
+        rerun: continuation.rerun,
+        continuation,
+        // Same lift as tRPC `focusSessions.get`: normalized criteria, verdict,
+        // current evaluation per criterion. Absent when the read failed.
+        ...(continuation.evaluation.status === "ok"
+          ? {
+              criteria: continuation.evaluation.criteria,
+              verdict: continuation.evaluation.verdict,
+              evaluations: continuation.evaluation.evaluations,
+            }
+          : {}),
+      });
     } catch (err) {
       logger.error({ err, id }, "focus-sessions.get failed");
       return c.json(
@@ -805,7 +835,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         correlationId: body.correlationId,
         channelId: body.channelId ?? null,
         agentIds: body.agentIds,
-        templateId: body.templateId ?? null,
+        templateId: body.templateId,
+        // Session-first defaults are for AI starts only — keyed on the KEY's
+        // own agent, not the capture-path remap above: a person's start (or a
+        // capture they made) is never re-shaped by a guessed template.
+        matchTemplate: !!ctxAgentUserId,
+        clientKey: ctxAgentUserId ? requestClientKey(ctxAgentUserId) : null,
+        criteria: body.criteria as SessionCriterion[] | undefined,
         expectedOutputs: body.expectedOutputs,
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
@@ -847,6 +883,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Edge outcomes, only when asked for — a failed edge is reported here.
         ...(result.parentLink ? { parentLink: result.parentLink } : {}),
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
+        // What template applied (or none) and the auto-opened session adopted.
+        ...(result.template ? { template: result.template } : {}),
+        ...(result.adopted ? { adopted: true } : {}),
       });
     } catch (err) {
       logger.error({ err }, "focus-sessions.create failed");
@@ -989,6 +1028,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.subjectEntityId !== undefined
             ? { subjectEntityId: patch.subjectEntityId }
             : {}),
+          ...(patch.criteria !== undefined ? { criteria: patch.criteria } : {}),
         },
       });
 
@@ -1087,11 +1127,24 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // `undefined` leaves the anchor; `null` is the CLEAR.
       if (patch.subjectEntityId !== undefined)
         set.subjectEntityId = patch.subjectEntityId;
+      if (patch.criteria !== undefined) set.criteria = patch.criteria;
       // Shallow-merge the metadata bag into the existing row metadata (additive).
       if (patch.metadata !== undefined) {
         const existingMeta =
           (existing.metadata as Record<string, unknown> | null) ?? {};
         set.metadata = { ...existingMeta, ...patch.metadata };
+      }
+      // Title provenance: an agent's rename is never overwritten by the
+      // background titler; a CLEAR hands the name back to it ("derived").
+      // Folded into the metadata write above when there is one (the server's
+      // stamp wins over a body key), otherwise MERGED in SQL — never assigned
+      // over the row's metadata.
+      if (patch.title !== undefined) {
+        const stamp = titleSourcePatch(set.title ? "agent" : "derived");
+        set.metadata =
+          set.metadata !== undefined
+            ? { ...(set.metadata as Record<string, unknown>), ...stamp }
+            : drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(stamp)}::jsonb`;
       }
 
       let [updated] = await db
@@ -1212,6 +1265,114 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * synap_complete_session). Returns the proposal pack (pendingProposals,
    * counts, warnings). Does not reimplement close — leave complete-run alone.
    */
+  /**
+   * GET /focus-sessions/:id/evaluations — criteria, verdict, the CURRENT
+   * evaluation per criterion, and the full append-only `history`.
+   */
+  app.get("/focus-sessions/:id/evaluations", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    const acting = await resolveActingContext(c, {});
+    if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+    try {
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, id),
+          eq(focusSessions.userId, acting.userId)
+        ),
+      });
+      if (!row) return c.json({ error: `Focus session ${id} not found` }, 404);
+      const { listSessionEvaluations, summarizeEvaluations } =
+        await import("../../../services/focus-sessions/evaluations/record.js");
+      const history = await listSessionEvaluations({
+        sessionId: id,
+        userId: acting.userId,
+      });
+      return c.json({
+        ...summarizeEvaluations(row.criteria, history),
+        history,
+      });
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.evaluations failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/evaluations — run the pending criteria
+   * (evidence → capability → judge). Body `{ evidence? }` grades
+   * evidence-checked criteria in the same call.
+   *
+   * POST /focus-sessions/:id/evidence — the agent's deterministic report,
+   * `{ evidence: { [evidenceKey]: { passed, detail? } } }`. Grades ONLY the
+   * evidence-checked criteria (never spends a judge call or runs a capability).
+   *
+   * Both return `{ results, criteria, verdict, evaluations, resumed }`.
+   */
+  for (const [path, onlyEvidence] of [
+    ["/focus-sessions/:id/evaluations", false],
+    ["/focus-sessions/:id/evidence", true],
+  ] as const) {
+    app.post(path, async (c) => {
+      if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+        return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+      }
+      const id = c.req.param("id");
+      if (!isUuid(id)) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const raw = (await c.req.json().catch(() => ({}))) as unknown;
+      const parsed = z
+        .object({
+          evidence: onlyEvidence
+            ? sessionEvidenceSchema
+            : sessionEvidenceSchema.optional(),
+        })
+        .safeParse(raw ?? {});
+      if (!parsed.success) {
+        return c.json(
+          {
+            error: parsed.error.issues
+              .map((i) => `${i.path.join(".") || "body"}: ${i.message}`)
+              .join(", "),
+          },
+          400
+        );
+      }
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      try {
+        const { evaluateSession } =
+          await import("../../../services/focus-sessions/evaluations/evaluate.js");
+        const result = await evaluateSession({
+          sessionId: id,
+          userId: acting.userId,
+          agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+          evidence: parsed.data.evidence,
+          ...(onlyEvidence ? { kinds: ["evidence"] as const } : {}),
+        });
+        if (result.status === "not_found") {
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        }
+        return c.json(result);
+      } catch (err) {
+        logger.error({ err, id }, "focus-sessions.evaluate failed");
+        return c.json(
+          { error: err instanceof Error ? err.message : "Unknown error" },
+          500
+        );
+      }
+    });
+  }
+
   app.post("/focus-sessions/:id/complete", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);

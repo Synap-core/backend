@@ -30,7 +30,25 @@ const PLAYBOOK = {
   name: "CRM hygiene",
   goalTemplate:
     "You are the CRM hygiene maintenance agent, running unattended. Review @{arg:scope} and fix stale fields.",
-  stages: [],
+  stages: [
+    {
+      key: "fix",
+      criteria: [
+        {
+          key: "no-stale",
+          statement: "No contact is stale",
+          check: { kind: "judge" },
+        },
+      ],
+    },
+  ],
+  criteria: [
+    {
+      key: "typecheck",
+      statement: "Typecheck passes",
+      check: { kind: "evidence", evidenceKey: "typecheck" },
+    },
+  ],
   params: [],
   expectedOutputs: [],
   executor: "is-agent",
@@ -109,6 +127,20 @@ vi.mock("../links/links-service.js", () => ({
   resolveGrantedCapabilities: async () => [],
 }));
 
+// Promote's tail (conversion receipt + event log) writes through its own
+// connections; stubbed so the PROMOTE insert is observable here.
+vi.mock("@synap/events", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  emitSideEffects: async () => undefined,
+}));
+vi.mock("../focus-sessions/session-conversion.js", () => ({
+  recordConversion: async () => ({}),
+}));
+vi.mock("../../lib/event-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  logEvent: async () => undefined,
+}));
+
 const executorRun = vi.fn(async (_ctx: { goal: string }) => ({
   status: "running" as const,
 }));
@@ -116,10 +148,14 @@ vi.mock("./executors/registry.js", () => ({
   resolveExecutor: () => ({ ref: "is-agent", run: executorRun }),
 }));
 
-const { buildRunSessionTitle, runPromptFor, RUN_PROMPT_METADATA_KEY } =
-  await import("./playbook-lifecycle.js");
+const {
+  buildRunSessionTitle,
+  runPromptFor,
+  RUN_PROMPT_METADATA_KEY,
+  promoteSessionToPlaybook,
+} = await import("./playbook-lifecycle.js");
 const { runPlaybook } = await import("./run-playbook.js");
-const { focusSessions } = await import("@synap/database");
+const { focusSessions, playbooks } = await import("@synap/database");
 
 beforeEach(() => {
   inserted.length = 0;
@@ -200,6 +236,11 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
     // The ROW reads as a title.
     expect(session.goal).toBe("CRM hygiene for Acme Corp");
     expect(String(session.goal)).not.toContain("unattended");
+    // The display NAME is written beside the goal, derived and improvable.
+    expect(session.title).toBe("CRM hygiene · Acme Corp");
+    expect((session.metadata as Record<string, unknown>).titleSource).toBe(
+      "derived"
+    );
 
     // The INSTRUCTION is stored, whole, where the executor reads it.
     expect(
@@ -252,5 +293,44 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
     expect(executorRun.mock.calls[0][0].goal).toBe(
       "Resolved against the automation StepContext"
     );
+  });
+});
+
+describe("criteria travel with the template", () => {
+  it("instantiate copies playbook-level AND every stage's criteria, stageKey stamped", async () => {
+    await runPlaybook({
+      playbookId: PLAYBOOK.id,
+      workspaceId: "ws-1",
+      userId: "user-1",
+      params: {},
+    });
+    const session = inserted.filter((i) => i.table === focusSessions)[0].values;
+    const criteria = session.criteria as Array<Record<string, unknown>>;
+    expect(criteria.map((c) => c.key)).toEqual(["typecheck", "no-stale"]);
+    expect(criteria[1].stageKey).toBe("fix");
+    expect(criteria[0]).not.toHaveProperty("stageKey");
+  });
+
+  it("promote carries the session's criteria as STRUCTURE, stageKey dropped", async () => {
+    await runPlaybook({
+      playbookId: PLAYBOOK.id,
+      workspaceId: "ws-1",
+      userId: "user-1",
+      params: {},
+    });
+    await promoteSessionToPlaybook({ sessionId: "row-1", userId: "user-1" });
+    const promoted = inserted.find((i) => i.table === playbooks)!.values;
+    expect(promoted.criteria).toEqual([
+      {
+        key: "typecheck",
+        statement: "Typecheck passes",
+        check: { kind: "evidence", evidenceKey: "typecheck" },
+      },
+      {
+        key: "no-stale",
+        statement: "No contact is stale",
+        check: { kind: "judge" },
+      },
+    ]);
   });
 });

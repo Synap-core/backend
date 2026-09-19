@@ -12,6 +12,10 @@
 import { z } from "@hono/zod-openapi";
 
 import { RAW_SOURCE_MAX_CHARS } from "../../../../services/capture-agent/capture-narrative.js";
+import {
+  workspaceChoiceSchema,
+  workspaceDecisionRecordSchema,
+} from "../../../../lib/workspace-decision.js";
 
 /**
  * Optional original-input descriptor carried with a proposal-first graph
@@ -294,6 +298,34 @@ export const CaptureStructureResponseSchema = z
     targetProjectId: z.string().nullish(),
     targetProjectReason: z.string().nullish(),
     targetProjectConfidence: z.number().nullish(),
+    /**
+     * WHERE the capture will land — the SOURCE OF TRUTH (`CapturePlacement`,
+     * `@synap-core/types`); derive the destination with
+     * `deriveWorkspacePlacementView`. `targetWorkspace*` above mixes the AI's
+     * pick with a deterministic placement and is kept for older clients.
+     * `suggestion.alternatives[].weight` sizes a bar; never render it as a number.
+     */
+    placement: z
+      .object({
+        workspaceId: z.string().nullable(),
+        workspaceName: z.string().nullable(),
+        deterministic: z.boolean(),
+        suggestion: z
+          .object({
+            workspaceId: z.string(),
+            workspaceName: z.string(),
+            reason: z.string().nullable(),
+            alternatives: z.array(
+              z.object({
+                workspaceId: z.string(),
+                workspaceName: z.string(),
+                weight: z.number(),
+              })
+            ),
+          })
+          .optional(),
+      })
+      .optional(),
     /** True when the plan came from the degraded fallback path, not a real structuring. */
     degraded: z.boolean().optional(),
     /**
@@ -429,6 +461,27 @@ export const CaptureExecuteRequestSchema = z
     aiWorkspaceId: z.string().uuid().nullish(),
     aiWorkspaceConfidence: z.number().nullish(),
     aiWorkspaceReason: z.string().nullish(),
+    /**
+     * The distribution behind `aiWorkspaceId` (structure's
+     * `targetWorkspaceDecision`): decider, model, per-workspace probabilities,
+     * candidates. Recorded on the route decision event, never used to place
+     * data. Same schema as the tRPC `capture.execute` input (one definition).
+     * Before this, zod STRIPPED it here, so a REST capture recorded less than
+     * the same capture through MCP.
+     */
+    aiWorkspaceDecision: workspaceDecisionRecordSchema.nullish(),
+    /**
+     * What the person did with the destination before saving (derive it with
+     * `deriveWorkspacePlacementView`, `@synap-core/types`): `accepted` /
+     * `changed` / `removed` / `ignored`. Recorded on the route decision;
+     * `changed` with a pinned `targetWorkspaceId` records one capture-time
+     * route correction. Same schema as the tRPC input (one definition).
+     */
+    workspaceChoice: workspaceChoiceSchema.optional(),
+    /** The AI-suggested project (advisory only — never auto-linked). */
+    aiProjectId: z.string().uuid().nullish(),
+    aiProjectConfidence: z.number().nullish(),
+    aiProjectReason: z.string().nullish(),
     /**
      * The run session to file this execute into — the `sessionId`
      * `/capture/structure` returned (a degraded salvage included), so the rerun

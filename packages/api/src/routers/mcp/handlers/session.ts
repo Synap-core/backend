@@ -16,7 +16,8 @@ import {
 } from "../../../services/focus-sessions/parent-lineage.js";
 import { attachTriage } from "../../../services/focus-sessions/triage.js";
 import type { TerminalSessionStatus } from "../../../services/focus-sessions/session-statuses.js";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
+import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import type { UpdateFocusSessionParams } from "../../../services/focus-sessions/update-session.js";
 import { SESSION_TITLE_MAX } from "@synap-core/types/focus-sessions";
 import {
@@ -180,7 +181,19 @@ export const sessionHandlers: McpHandlerMap = {
       correlationId: args.correlationId as string | undefined,
       channelId: args.channelId as string | undefined,
       agentIds: args.agentIds as string[] | undefined,
-      templateId: args.templateId as string | undefined,
+      // `null` is the explicit opt-out of template matching; absent = match.
+      templateId:
+        args.templateId === null
+          ? null
+          : typeof args.templateId === "string"
+            ? args.templateId
+            : undefined,
+      matchTemplate: true,
+      // Binds the session to THIS client and adopts the session the gate
+      // auto-opened for it, if any (never a duplicate).
+      clientKey: requestClientKey(agentUserId) ?? null,
+      // Validated by the service with the shared criteria schema.
+      criteria: args.criteria as SessionCriterion[] | undefined,
       // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
       // re-typed inline shape: an inline copy silently narrows what this door
       // believes a slot is, which is how the per-door shapes drifted in the
@@ -244,6 +257,8 @@ export const sessionHandlers: McpHandlerMap = {
       pendingProposals: result.pendingProposals,
       counts: result.counts,
       warnings: result.warnings,
+      // The criteria verdict at close (absent when the session had none read).
+      ...(result.verdict ? { verdict: result.verdict } : {}),
       // `cancelled` only: what the cancel stopped, what was already running and
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
@@ -374,28 +389,27 @@ export const sessionHandlers: McpHandlerMap = {
     return ok(result);
   },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    // `resolveAmbientSession` now always answers when ANY session is open (it
-    // picks the newest and reports `ambiguous`), so the old "multiple open →
-    // refuse and list them" branch here is unreachable: it could only fire when
-    // the resolver returned undefined, which now means zero open sessions.
-    // Deleted rather than left behind a flag — two live definitions of what
-    // ambiguity means is exactly the two-store divergence this codebase keeps
-    // getting bitten by. The disclosure lives on the answer instead.
+    // No id named ⇒ the SAME resolver a write is attributed through: this
+    // client's own session, else the single unclaimed open work session.
+    // Several unclaimed and none bound ⇒ no guess, said in words.
     const explicitId =
       typeof args.sessionId === "string" && args.sessionId.trim() !== ""
         ? args.sessionId
         : undefined;
     const ambient = explicitId
       ? undefined
-      : await resolveAmbientSession(userId);
+      : await resolveAmbientSession(userId, agentUserId);
     const wantedId = explicitId ?? ambient?.sessionId;
     if (!wantedId) {
+      const openCount = ambient?.unclaimedOpenCount ?? 0;
       return ok({
         session: null,
         message:
-          "You have no open focus session. Start one with synap_start_session.",
+          openCount > 1
+            ? `${openCount} sessions are open and none is bound to you — pass sessionId to read one, or start your own with synap_start_session.`
+            : "You have no open focus session. Start one with synap_start_session.",
       });
     }
     // A malformed handle (e.g. a display-truncated id) must not reach
@@ -415,10 +429,6 @@ export const sessionHandlers: McpHandlerMap = {
     if (!session) {
       return ok({ error: `Focus session ${wantedId} not found` });
     }
-    // Disclose an inferred answer. Asking "which session am I in?" and getting a
-    // confident one back while three are open is precisely the mis-attribution
-    // the old refusal guarded against — the fix is to answer AND say it was
-    // inferred, not to withhold the answer.
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE
     // projection, shared with the tRPC `focusSessions.get`.
@@ -429,11 +439,10 @@ export const sessionHandlers: McpHandlerMap = {
     return ok({
       session: await withParentSessionId(session),
       continuation: await projectContinuationPacket(session, { userId }),
-      ...(ambient?.ambiguous
+      ...(ambient?.sessionId
         ? {
             inferred: true,
-            openCount: ambient.openCount,
-            message: `${ambient.openCount} sessions are open — this is the most recently started. Pass sessionId to ask about another.`,
+            via: ambient.source,
           }
         : {}),
     });
@@ -559,6 +568,11 @@ export const sessionHandlers: McpHandlerMap = {
           ? { title: args.title }
           : {}),
       goal: args.goal as string | undefined,
+      // Validated by the service with the shared criteria schema (a bad list
+      // comes back as `denied` with the reason, never stored half-right).
+      ...(args.criteria !== undefined
+        ? { criteria: args.criteria as SessionCriterion[] }
+        : {}),
       status: args.status as "active" | "paused" | undefined,
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,

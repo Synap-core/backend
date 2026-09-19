@@ -92,3 +92,31 @@ export {
 } from "./ai-usage-collector.js";
 
 export type { AiUsageSample, AiUsageTotals } from "./ai-usage-collector.js";
+
+export { judgeSessionCriteria } from "./session-judge-client.js";
+export type {
+  JudgeCriteriaRequest,
+  JudgeCriteriaResult,
+} from "./session-judge-client.js";
+
+export {
+  postSessionIntelligence,
+  requestSessionTitle,
+} from "./session-intelligence-client.js";
+export type {
+  SessionTitleRequest,
+  SessionTitleResult,
+} from "./session-intelligence-client.js";
+
+export { requestPlaybookChoice } from "./playbook-choice-client.js";
+export type {
+  PlaybookChoiceRequest,
+  PlaybookChoiceResult,
+} from "./playbook-choice-client.js";
+
+export { requestRevisedLessons } from "./session-lessons-client.js";
+export type {
+  ReviseLessonsRequest,
+  ReviseLessonsResult,
+  StageLessonFinding,
+} from "./session-lessons-client.js";

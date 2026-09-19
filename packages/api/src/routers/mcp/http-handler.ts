@@ -46,6 +46,8 @@ import {
   inArray,
   runWithProbeWrites,
   runWithActingAgent,
+  runWithClientKey,
+  clientKeyForApiKey,
   isProbeApiKey,
 } from "@synap/database";
 import {
@@ -517,10 +519,14 @@ mcpHttpApp.post("/", async (c) => {
   );
   await server.connect(transport);
 
-  // Request write facts: D8 probe key, D6 agent principal.
+  // Request write facts: D8 probe key, D6 agent principal, C1 calling client
+  // (the key — the one stable per-client fact on a stateless transport; it is
+  // what keeps two agents' writes out of each other's sessions).
   return runWithProbeWrites(isProbeApiKey(keyRecord), () =>
     runWithActingAgent(agentUserId, () =>
-      transport.handleRequest(c.req.raw, { parsedBody })
+      runWithClientKey(clientKeyForApiKey(keyRecord), () =>
+        transport.handleRequest(c.req.raw, { parsedBody })
+      )
     )
   );
 });

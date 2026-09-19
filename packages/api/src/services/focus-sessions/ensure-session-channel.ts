@@ -18,6 +18,7 @@ import {
   eq,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({
   module: "focus-sessions/ensure-session-channel",
@@ -31,14 +32,25 @@ export async function ensureSessionChannel(args: {
 }): Promise<string | null> {
   const session = await db.query.focusSessions.findFirst({
     where: eq(focusSessions.id, args.sessionId),
-    columns: { id: true, channelId: true, goal: true, workspaceId: true },
+    columns: {
+      id: true,
+      channelId: true,
+      title: true,
+      goal: true,
+      workspaceId: true,
+    },
   });
   if (!session) return null;
   if (session.channelId) return session.channelId;
 
   const workspaceId = args.workspaceId ?? session.workspaceId ?? null;
+  // The room is named like the session everywhere else: its title, else the
+  // goal's first line — never a clipped paragraph.
   const title =
-    (args.goal ?? session.goal)?.slice(0, 120).trim() || "Work session";
+    resolveSessionTitle(
+      { title: session.title, goal: args.goal ?? session.goal },
+      { maxLength: 120 }
+    ) || "Work session";
 
   try {
     const [channel] = await db

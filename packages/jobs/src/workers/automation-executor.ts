@@ -70,6 +70,7 @@ import {
   resolveRunChannel,
 } from "../utils/post-run-summary.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { subjectEntityIdFromPayload } from "../utils/run-subject.js";
 import { RUN_NOT_DELAY_SUSPENDED } from "./automation-run-reaper.js";
 import { tripNeverWorkedBreaker } from "./automation-breaker.js";
@@ -456,6 +457,10 @@ async function executeAutomationFlow(params: {
       userId: ownerId,
       workspaceId,
       goal: automation.name || `Automation run ${runId}`,
+      title: buildDerivedSessionTitle({
+        kind: "run",
+        name: automation.name || "Automation run",
+      }),
       source: "automation",
       automationId,
       automationRunId: runId,

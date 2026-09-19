@@ -41,6 +41,7 @@ import {
   chatTurnEvents,
   ChatTurnStatus,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ProposalStatus } from "@synap/database/schema";
 import {
   userVisibleWhere,
@@ -1043,6 +1044,7 @@ async function listSessionRuns(
   const rows = await db
     .select({
       id: focusSessions.id,
+      title: focusSessions.title,
       goal: focusSessions.goal,
       status: focusSessions.status,
       startedAt: focusSessions.startedAt,
@@ -1113,7 +1115,7 @@ async function listSessionRuns(
     id: r.id,
     flowType: "session" as const,
     flowId: null,
-    flowName: r.goal ?? "Session",
+    flowName: resolveSessionTitle(r) || "Session",
     status: sessionStatus(r.status),
     startedAt: r.startedAt,
     completedAt: r.closedAt ?? null,

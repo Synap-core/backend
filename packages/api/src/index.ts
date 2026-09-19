@@ -360,6 +360,9 @@ export { registerPodWideProposalReactor } from "./notifications/pod-wide-proposa
 // `focus_session.closed`, this reactor derives whether the LAST open blocker
 // just went away and notifies once. See session-unblock-reactor.ts.
 export { registerSessionUnblockReactor } from "./notifications/session-unblock-reactor.js";
+// And the closing report: on the same close event the session document gains
+// its structured Outcome / Definition of done / Produced / Decisions sections.
+export { registerClosingReportReactor } from "./services/session-document/closing-report-reactor.js";
 export { scanBrokenAutomations } from "./services/automations/scan-broken-automations.js";
 export {
   runEventEnd,

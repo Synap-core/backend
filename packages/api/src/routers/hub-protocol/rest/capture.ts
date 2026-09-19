@@ -3,6 +3,11 @@
  */
 
 import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
+import {
+  deriveWorkspacePlacementView,
+  type CapturePlacement,
+} from "@synap-core/types";
+import { pendingSwitchFromPlacement } from "../../../lib/workspace-decision.js";
 import { z } from "zod";
 
 import {
@@ -642,14 +647,25 @@ export function registerCaptureRoutes(app: HubHono): void {
       const structurePlan = result as CaptureStructureLike;
       if (!structureAgentUserId && shouldPersistCapturePlan(structurePlan)) {
         const { entities, relations } = captureStructureToGraph(structurePlan);
-        // Placement is the structure procedure's already-resolved target (it ran
-        // the one workspace-resolution door); never re-stamp the ambient lens.
-        const targetWorkspaceId =
-          typeof (result as { targetWorkspaceId?: unknown })
-            .targetWorkspaceId === "string"
-            ? ((result as { targetWorkspaceId?: string }).targetWorkspaceId ??
-              null)
-            : null;
+        // Placement is the structure procedure's `placement` block, through
+        // THE destination rule as a HEADLESS door: a deterministic placement
+        // is honoured; an AI suggestion is NEVER applied here — the plan files
+        // where it would have landed without the AI, and the suggestion is
+        // returned (`pendingWorkspaceSwitch`) for the caller to confirm.
+        // (`targetWorkspaceId` mixes the AI's pick with a deterministic
+        // placement, so filing into it silently applied the AI's guess.)
+        const structurePlacement = (result as { placement?: CapturePlacement })
+          .placement;
+        const targetWorkspaceId = deriveWorkspacePlacementView(
+          structurePlacement,
+          { kind: "default" },
+          { interactive: false }
+        ).destination.workspaceId;
+        const structurePendingSwitch = pendingSwitchFromPlacement(
+          structurePlacement,
+          (result as { targetWorkspaceConfidence?: number | null })
+            .targetWorkspaceConfidence
+        );
         // Retain what the human actually typed/linked on the proposal.
         //
         // Structuring is lossy: `captureStructureToGraph` keeps the extracted
@@ -745,6 +761,10 @@ export function registerCaptureRoutes(app: HubHono): void {
         });
         return c.json({
           routeSuggestions,
+          // The AI's destination suggestion — NOT applied (headless door).
+          ...(structurePendingSwitch
+            ? { pendingWorkspaceSwitch: structurePendingSwitch }
+            : {}),
           proposalId: graph.proposalId,
           reviewUrl: graph.reviewUrl,
           status: structureStatus,
@@ -967,6 +987,11 @@ export function registerCaptureRoutes(app: HubHono): void {
         aiWorkspaceId: body.aiWorkspaceId,
         aiWorkspaceConfidence: body.aiWorkspaceConfidence,
         aiWorkspaceReason: body.aiWorkspaceReason,
+        aiWorkspaceDecision: body.aiWorkspaceDecision,
+        workspaceChoice: body.workspaceChoice,
+        aiProjectId: body.aiProjectId,
+        aiProjectConfidence: body.aiProjectConfidence,
+        aiProjectReason: body.aiProjectReason,
         sessionId,
       });
       return c.json(result);

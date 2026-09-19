@@ -90,7 +90,7 @@ export interface AdvanceSessionStageInput {
 export interface AdvanceSessionStageResult {
   /** False when `toStage` equals the stage the session was already on. */
   changed: boolean;
-  /** True when the stage entered declares a human gate. */
+  /** True when the stage entered declares a gate (human or check). */
   gated: boolean;
   /**
    * True only when the session row was actually flipped to `paused` by the gate.
@@ -101,6 +101,11 @@ export interface AdvanceSessionStageResult {
   paused: boolean;
   proposalId?: string;
   proposalType?: string;
+  /**
+   * A `check` gate's outcome: whether the left stage's required criteria pass,
+   * and which do not. Present only when the stage entered is check-gated.
+   */
+  check?: { passed: boolean; failing: string[] };
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -176,6 +181,15 @@ export async function advanceSessionStage(
   });
 
   if (!gate) return { changed: true, gated: false, paused: false };
+
+  if (gate.kind === "check") {
+    return {
+      changed: true,
+      gated: true,
+      paused: gate.paused,
+      check: { passed: gate.passed, failing: gate.failing },
+    };
+  }
 
   return {
     changed: true,

@@ -487,15 +487,33 @@ export interface PlaybookStage {
    * a rewind would silently discard whatever the advance already recorded.
    */
   gate?: PlaybookStageGate;
+  /**
+   * Binary acceptance criteria that belong to THIS stage. Copied onto the
+   * session at instantiate with `stageKey` stamped (`collectPlaybookCriteria`);
+   * a `check` gate on the NEXT stage evaluates them before letting the run in.
+   */
+  criteria?: SessionCriterion[];
+  /**
+   * What earlier runs of this stage taught — at most `MAX_STAGE_LESSONS` short
+   * lines, each ≤ `STAGE_LESSON_MAX_CHARS`. Shown to the agent beside the
+   * stage goal. REVISED as a whole (the lessons scanner files a
+   * `playbook/update` proposal carrying the full reconciled list), never
+   * appended to. Read via `readStageLessons`.
+   */
+  lessons?: string[];
 }
 
 /**
- * A stage's entry gate. `kind` is a one-value union on purpose — the shape must
- * be able to grow a second gate kind (a check, a timer) without a migration, and
- * a bare boolean could not. Only `"human"` exists today.
+ * A stage's entry gate. `kind` is a union so the shape can grow without a
+ * migration, where a bare boolean could not.
+ *
+ *   "human" — advancing in pauses the session and files a proposal.
+ *   "check" — advancing in evaluates the criteria of the stage being LEFT; all
+ *             required passing ⇒ the run continues, otherwise it pauses with the
+ *             failing criteria visible, and re-running the evaluation resumes it.
  */
 export interface PlaybookStageGate {
-  kind: "human";
+  kind: "human" | "check";
   /**
    * Proposal type filed when the gate opens. Defaults to
    * `DEFAULT_STAGE_GATE_PROPOSAL_TYPE`.
@@ -539,6 +557,8 @@ export function resolveStageGate(
   const raw = (stage as { gate?: unknown } | null | undefined)?.gate;
   if (!raw || typeof raw !== "object") return undefined;
   const gate = raw as { kind?: unknown; proposalType?: unknown };
+  // A check gate files no proposal, so it carries no proposalType.
+  if (gate.kind === "check") return { kind: "check" };
   if (gate.kind !== "human") return undefined;
   const known =
     typeof gate.proposalType === "string" &&
@@ -558,6 +578,173 @@ export function resolveStageGate(
 /** The proposal type a given stage's gate files (default applied). */
 export function stageGateProposalType(gate: PlaybookStageGate): string {
   return gate.proposalType ?? DEFAULT_STAGE_GATE_PROPOSAL_TYPE;
+}
+
+// ─── Session criteria — the contract a session is graded against ────────────
+
+/**
+ * How a criterion is checked, in the order of trust: deterministic evidence
+ * first, a capability run second, an AI judge third (never the agent that did
+ * the work), a human last — and a human verdict overrides every other.
+ */
+export const CRITERION_CHECK_KINDS = [
+  "evidence",
+  "capability",
+  "judge",
+  "human",
+] as const;
+export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+
+/** A session carries at most this many criteria; the doors refuse more. */
+export const MAX_SESSION_CRITERIA = 12;
+
+/**
+ * One BINARY, observable acceptance criterion ("Typecheck passes with 0
+ * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
+ * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
+ */
+export interface SessionCriterion {
+  /** Stable slug, unique within the session. */
+  key: string;
+  statement: string;
+  /** Absent = true. */
+  required?: boolean;
+  check: {
+    kind: CriterionCheckKind;
+    /** kind=capability: the capability verb run via executeCapability. */
+    capability?: string;
+    /** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
+    evidenceKey?: string;
+    /** kind=judge: what the judge should look at. */
+    hint?: string;
+  };
+  /** Set when copied from a stage. */
+  stageKey?: string;
+}
+
+function optionalString(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() ? v : undefined;
+}
+
+/**
+ * Read a criteria list out of an untyped jsonb bag. TOLERANT, like
+ * `resolveStageGate`: a malformed entry (no key, no statement, an unknown check
+ * kind, a duplicate key) is DROPPED, never thrown on — a stored bag written by
+ * a newer pod or by hand must not break every reader. Capped at
+ * `MAX_SESSION_CRITERIA` (the doors refuse more; the reader truncates).
+ */
+export function readCriteria(raw: unknown): SessionCriterion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: SessionCriterion[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (out.length >= MAX_SESSION_CRITERIA) break;
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Record<string, unknown>;
+    const key = optionalString(e.key);
+    const statement = optionalString(e.statement);
+    const check = e.check as Record<string, unknown> | null | undefined;
+    const kind = check && typeof check === "object" ? check.kind : undefined;
+    if (!key || !statement || seen.has(key)) continue;
+    if (!(CRITERION_CHECK_KINDS as readonly unknown[]).includes(kind)) continue;
+    const capability = optionalString(check!.capability);
+    const evidenceKey = optionalString(check!.evidenceKey);
+    const hint = optionalString(check!.hint);
+    const stageKey = optionalString(e.stageKey);
+    seen.add(key);
+    out.push({
+      key,
+      statement,
+      ...(typeof e.required === "boolean" ? { required: e.required } : {}),
+      check: {
+        kind: kind as CriterionCheckKind,
+        ...(capability ? { capability } : {}),
+        ...(evidenceKey ? { evidenceKey } : {}),
+        ...(hint ? { hint } : {}),
+      },
+      ...(stageKey ? { stageKey } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * The criteria a session instantiated from `playbook` starts with: the
+ * playbook-level list, then every stage's with `stageKey` stamped. A key that
+ * repeats is kept once (first wins) — keys are unique within a session.
+ */
+export function collectPlaybookCriteria(playbook: {
+  criteria?: unknown;
+  stages?: unknown;
+}): SessionCriterion[] {
+  const stamped: unknown[] = [
+    ...(Array.isArray(playbook.criteria) ? playbook.criteria : []),
+  ];
+  if (Array.isArray(playbook.stages)) {
+    for (const stage of playbook.stages) {
+      const stageKey = optionalString((stage as { key?: unknown } | null)?.key);
+      const list = (stage as { criteria?: unknown } | null)?.criteria;
+      if (!stageKey || !Array.isArray(list)) continue;
+      for (const c of list) {
+        if (c && typeof c === "object") stamped.push({ ...c, stageKey });
+      }
+    }
+  }
+  return readCriteria(stamped);
+}
+
+/** A stage carries at most this many lessons; the reader truncates. */
+export const MAX_STAGE_LESSONS = 5;
+/** Longest single lesson, in characters. */
+export const STAGE_LESSON_MAX_CHARS = 200;
+
+/**
+ * Read a stage's lessons out of an untyped jsonb bag. TOLERANT, like
+ * `readCriteria`: a non-string, a blank line or a duplicate (case-insensitive)
+ * is dropped; an over-long line is cut at `STAGE_LESSON_MAX_CHARS`; the list is
+ * capped at `MAX_STAGE_LESSONS`. Takes the stage (or anything shaped like one)
+ * so a legacy stage with no `lessons` reads as `[]`.
+ */
+export function readStageLessons(stage: unknown): string[] {
+  const raw = (stage as { lessons?: unknown } | null | undefined)?.lessons;
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of raw) {
+    if (out.length >= MAX_STAGE_LESSONS) break;
+    if (typeof entry !== "string") continue;
+    const line = entry
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, STAGE_LESSON_MAX_CHARS)
+      .trim();
+    const key = line.toLowerCase();
+    if (!line || seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * A session's criteria when a template joins the caller's own: the caller's
+ * first, then the template's under keys not already taken (keys are unique
+ * within a session; the caller's wording wins). The ONE merge rule — the direct
+ * create and the approved-proposal create both use it.
+ */
+export function mergeCriteria(
+  own: readonly SessionCriterion[],
+  fromTemplate: readonly SessionCriterion[]
+): SessionCriterion[] {
+  const keys = new Set(own.map((c) => c.key));
+  return [...own, ...fromTemplate.filter((c) => !keys.has(c.key))];
+}
+
+/** A criterion's `required` flag with its default applied. */
+export function isCriterionRequired(
+  c: Pick<SessionCriterion, "required">
+): boolean {
+  return c.required !== false;
 }
 
 /**

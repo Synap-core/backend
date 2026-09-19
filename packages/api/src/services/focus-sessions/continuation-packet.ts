@@ -53,7 +53,12 @@ import {
   buildObjectActionTitle,
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  type SessionVerdict,
+} from "@synap-core/types/focus-sessions";
+import type { SessionCriterion } from "@synap/playbooks";
+import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import { readCapturePart } from "@synap-core/types/capture";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
@@ -213,7 +218,10 @@ export interface ContinuationPacket {
    * never leaking its name; only a FAILED read is `unavailable`.
    */
   project:
-    | { status: "ok"; project: { id: string; name: string; goal: string | null } | null }
+    | {
+        status: "ok";
+        project: { id: string; name: string; goal: string | null } | null;
+      }
     | { status: "unavailable"; reason: string };
   userMustDecide: {
     owedSlots: PacketSection<PacketSlotItem>;
@@ -272,6 +280,30 @@ export interface ContinuationPacket {
     unfinishedOutputs?: number;
   } | null;
   nextMove: ContinuationNextMove;
+  /**
+   * The session's contract and its grade: the declared binary criteria, the
+   * server-computed verdict, and the CURRENT evaluation per criterion (human
+   * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
+   * failed read is `unavailable`, never folded into "none".
+   */
+  evaluation:
+    | {
+        status: "ok";
+        criteria: SessionCriterion[];
+        verdict: SessionVerdict;
+        evaluations: PacketEvaluationItem[];
+      }
+    | { status: "unavailable"; reason: string };
+}
+
+export interface PacketEvaluationItem {
+  criterionKey: string;
+  verdict: "pass" | "fail" | "unmeasured";
+  evaluatorKind: "evidence" | "capability" | "judge" | "human";
+  evaluatorId: string | null;
+  attempt: number;
+  rationale: string | null;
+  createdAt: string;
 }
 
 type SessionRow = typeof focusSessions.$inferSelect;
@@ -1081,6 +1113,7 @@ export async function projectContinuationPacket(
     openQuestions,
     alreadyDone,
     lastDecision,
+    evaluation,
   ] = await Promise.all([
     readProject(database, ctx.userId, row.projectId ?? null).catch(
       unavailable(
@@ -1176,6 +1209,28 @@ export async function projectContinuationPacket(
           "This session's last decision could not be read."
         )
       ),
+    loadSessionEvaluationSummary(row)
+      .then((summary): ContinuationPacket["evaluation"] => ({
+        status: "ok",
+        criteria: summary.criteria,
+        verdict: summary.verdict,
+        evaluations: summary.evaluations.map((e) => ({
+          criterionKey: e.criterionKey,
+          verdict: e.verdict,
+          evaluatorKind: e.evaluatorKind,
+          evaluatorId: e.evaluatorId,
+          attempt: e.attempt,
+          rationale: e.rationale,
+          createdAt: e.createdAt.toISOString(),
+        })),
+      }))
+      .catch(
+        unavailable(
+          row.id,
+          "evaluation",
+          "This session's criteria evaluations could not be read."
+        )
+      ),
   ]);
 
   const manifest = readSessionRunManifest(row.metadata);
@@ -1235,5 +1290,6 @@ export async function projectContinuationPacket(
       outputs,
       children,
     }),
+    evaluation,
   };
 }

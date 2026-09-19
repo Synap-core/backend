@@ -204,3 +204,56 @@ describe("openRunSession detour lineage", () => {
     warn.mockRestore();
   });
 });
+
+describe("openRunSession title", () => {
+  it("writes the caller's derived name beside an unchanged goal, marked `derived`", async () => {
+    await openRunSession({
+      userId: "u1",
+      goal: "Enrich Acme Corp",
+      title: "Enrich Acme Corp",
+      source: "enrichment",
+    });
+    const inserted = insertValuesMock.mock.calls[0][0];
+    expect(inserted.title).toBe("Enrich Acme Corp");
+    expect(inserted.goal).toBe("Enrich Acme Corp");
+    expect(inserted.metadata).toEqual({
+      source: "enrichment",
+      titleSource: "derived",
+    });
+  });
+
+  it("honours an explicit source", async () => {
+    await openRunSession({
+      userId: "u1",
+      goal: "g",
+      title: "Named by the agent",
+      titleSource: "agent",
+      source: "agent-write",
+    });
+    const inserted = insertValuesMock.mock.calls[0][0];
+    expect(inserted.metadata).toMatchObject({ titleSource: "agent" });
+  });
+
+  it("no title ⇒ no title and no provenance (the titler may name it later)", async () => {
+    await openRunSession({ userId: "u1", goal: "Sweep", source: "automation" });
+    const inserted = insertValuesMock.mock.calls[0][0];
+    expect(inserted).not.toHaveProperty("title");
+    expect(inserted.metadata).not.toHaveProperty("titleSource");
+  });
+
+  it("a REUSED channel session keeps its own name — nothing is inserted", async () => {
+    findFirstMock.mockResolvedValue({
+      id: "existing-run-session",
+      metadata: { source: "automation" },
+    });
+    const result = await openRunSession({
+      userId: "u1",
+      goal: "g",
+      title: "Would overwrite",
+      channelId: "chan-1",
+      source: "automation",
+    });
+    expect(result.reused).toBe(true);
+    expect(insertValuesMock).not.toHaveBeenCalled();
+  });
+});

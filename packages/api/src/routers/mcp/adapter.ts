@@ -25,7 +25,6 @@ import {
   pickAdvisoryWorkspaceId,
   resolveSessionHandle,
   type McpHandlerMap,
-  type ResolvedSession,
   type SessionAttributionReport,
 } from "./handlers/shared.js";
 import { readHandlers } from "./handlers/read.js";
@@ -34,6 +33,7 @@ import { captureHandlers } from "./handlers/capture.js";
 import { capabilityHandlers } from "./handlers/capability.js";
 import { workspaceHandlers } from "./handlers/workspace.js";
 import { sessionHandlers } from "./handlers/session.js";
+import { sessionEvaluationHandlers } from "./handlers/session-evaluation.js";
 import { buildHandlers } from "./handlers/build.js";
 import { ruleHandlers } from "./handlers/rule.js";
 
@@ -55,6 +55,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...capabilityHandlers,
   ...workspaceHandlers,
   ...sessionHandlers,
+  ...sessionEvaluationHandlers,
   ...buildHandlers,
   ...ruleHandlers,
 };
@@ -77,7 +78,12 @@ export async function executeMCPToolViaHubProtocol(
   keyType?: string | null,
   keyWorkspaceId?: string | null
 ): Promise<CallToolResult> {
-  const resolution = await resolveSessionHandle(toolName, args, userId);
+  const resolution = await resolveSessionHandle(
+    toolName,
+    args,
+    userId,
+    agentUserId
+  );
   const session = resolution?.session;
   const sessionId = session?.sessionId;
 
@@ -200,17 +206,13 @@ export async function executeMCPToolViaHubProtocol(
       ? await runWithDerivedSession(session.sessionId, invokeHandler)
       : await invokeHandler();
 
-  // A GUESS MUST ANNOUNCE ITSELF. When several sessions were open we attributed
-  // this write to the most recently started one — usually right, occasionally
-  // not. Disclosing it here (once, in the adapter) is what makes the guess
-  // legitimate: the model learns the write was grouped by inference and can
-  // re-issue with an explicit `sessionId` if it was wrong. Silent inference is
-  // the thing we refuse, not inference.
-  //
-  // Deliberately NOT threaded through every handler's own payload shape — one
-  // place, no per-handler drift.
-  const disclosed = session?.ambiguous
-    ? withSessionDisclosure(result, session)
+  // NO GUESS, SAID ONCE. Several unclaimed sessions were open and none is
+  // bound to this client, so the write was NOT filed under any of them — the
+  // gate groups it under this client's own auto-opened session instead.
+  // Disclosed here (once, in the adapter) so the model can pass `sessionId` or
+  // call start_session when the write belongs to existing work.
+  const disclosed = resolution?.attribution.ambiguous
+    ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
     : result;
   // The same fact as data. The Note above stays (clients may read it); this is
   // what a client can branch on — including an explicit `sessionId` that was
@@ -259,12 +261,13 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 /** Appends the ambiguity note to a tool result without disturbing its payload. */
 function withSessionDisclosure(
   result: CallToolResult,
-  session: ResolvedSession
+  openCount: number
 ): CallToolResult {
   const note =
-    `Note: ${session.openCount} of your focus sessions are open. This write was ` +
-    `attributed to the most recently started one (${session.sessionId}). If it ` +
-    `belongs to another, pass that session's id as \`sessionId\`.`;
+    `Note: ${openCount} of your focus sessions are open and none is yours, so ` +
+    `this write was not filed under any of them — it is grouped in a session ` +
+    `opened for you. If it belongs to one of them, pass that session's id as ` +
+    `\`sessionId\`; to name your own unit of work, call synap_start_session.`;
   return {
     ...result,
     content: [

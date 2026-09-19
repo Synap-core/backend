@@ -58,6 +58,12 @@ export const playbooks = pgTable(
     /** PlaybookStage[] — first-class ordered stages (empty = progress-only). */
     stages: jsonb("stages").notNull().default([]),
     /**
+     * SessionCriterion[] — binary acceptance criteria copied onto every session
+     * instantiated from this playbook (with each stage's own, see
+     * `collectPlaybookCriteria`). Added by 0267.
+     */
+    criteria: jsonb("criteria").notNull().default([]),
+    /**
      * Monotonic definition version (D3c). Bumped on a governed update that
      * changes a definition-affecting field (goalTemplate/stages/params/
      * inputStrategy/channelSpec/expectedOutputs). A run snapshots this into

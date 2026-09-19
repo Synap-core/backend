@@ -56,6 +56,7 @@ import {
   resolveWorkspacePlacement,
   ProposalStatus,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   relations,
   relationDefs,
@@ -1411,7 +1412,7 @@ export const relationsRouter = router({
         connections.push({
           entityId: fs.id,
           entity: null,
-          label: fs.goal,
+          label: resolveSessionTitle(fs) || fs.goal,
           direction: "incoming",
           source: "focus_session",
           focusSessionId: fs.id,

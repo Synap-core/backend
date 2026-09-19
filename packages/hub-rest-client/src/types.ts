@@ -422,6 +422,29 @@ export interface CaptureStructureResponse {
   targetWorkspaceId?: string | null;
   targetWorkspaceConfidence?: number | null;
   targetWorkspaceReason?: string | null;
+  /**
+   * WHERE this capture will land — the SOURCE OF TRUTH (`CapturePlacement`,
+   * `@synap-core/types`): the deterministic/ambient destination plus the AI's
+   * suggestion when there is one. `targetWorkspace*` mixes the two and is kept
+   * for older clients. Derive the destination with
+   * `deriveWorkspacePlacementView`, never by reading these fields.
+   */
+  placement?: {
+    workspaceId: string | null;
+    workspaceName: string | null;
+    deterministic: boolean;
+    suggestion?: {
+      workspaceId: string;
+      workspaceName: string;
+      reason: string | null;
+      /** Ranked "Why?" rows; `weight` sizes a bar, never rendered as a number. */
+      alternatives: Array<{
+        workspaceId: string;
+        workspaceName: string;
+        weight: number;
+      }>;
+    };
+  };
   targetProjectId?: string | null;
   /**
    * Soft meta-structure suggestions (display-only chips). Never materialize.
@@ -507,6 +530,13 @@ export interface CaptureExecuteInput {
   aiWorkspaceId?: string | null;
   aiWorkspaceConfidence?: number | null;
   aiWorkspaceReason?: string | null;
+  /**
+   * What the person did with the destination before saving — derive it with
+   * `deriveWorkspacePlacementView` (`@synap-core/types`), never locally.
+   * A headless caller (CLI, agent) passes `ignored` / nothing: it never shows
+   * the suggestion, so the suggestion stays a proposal.
+   */
+  workspaceChoice?: "accepted" | "changed" | "removed" | "ignored";
 }
 
 /** One planned entity in the proposal-first graph capture door. */
@@ -597,11 +627,15 @@ export interface CaptureExecuteResponse {
     targetTempId: string;
     relationType: string;
   }>;
-  /** Set when AUTO routing moved the capture to the AI-resolved workspace. */
-  movedToWorkspace?: string;
-  /** Set in ASK mode — a suggested switch for the surface to confirm. */
+  /**
+   * The AI's pending "move to X?" — NOTHING was moved (an AI pick proposes, it
+   * never places data), on every outcome (applied and proposed). Confirm it by
+   * re-filing with an explicit workspace. There is no `movedToWorkspace`.
+   */
   pendingWorkspaceSwitch?: {
     suggestedWorkspaceId: string;
+    /** `null` when the pod could not name it (never a raw id in its place). */
+    suggestedWorkspaceName: string | null;
     reason: string | null;
     confidence: number | null;
   };

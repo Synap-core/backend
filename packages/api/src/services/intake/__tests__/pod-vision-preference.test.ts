@@ -7,7 +7,10 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { readPodVisionModelPreference } from "../pod-vision-preference.js";
+import {
+  readPodThirdPartyDecisionModelConsent,
+  readPodVisionModelPreference,
+} from "../pod-vision-preference.js";
 
 function dbReturning(rows: unknown[] | Error) {
   const chain = {
@@ -57,5 +60,53 @@ describe("readPodVisionModelPreference", () => {
     await expect(
       readPodVisionModelPreference(dbReturning(new Error("db down")))
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("readPodThirdPartyDecisionModelConsent", () => {
+  it("allowed ONLY when the stored flag is exactly true", async () => {
+    await expect(
+      readPodThirdPartyDecisionModelConsent(
+        dbReturning([
+          {
+            settings: {
+              intelligenceDefaults: { thirdPartyDecisionModel: true },
+            },
+          },
+        ])
+      )
+    ).resolves.toEqual({ allowed: true });
+  });
+
+  it("default OFF: absent, false, non-boolean, or no row → not opted in", async () => {
+    for (const rows of [
+      [],
+      [{ settings: {} }],
+      [{ settings: { intelligenceDefaults: { visionModelId: "x" } } }],
+      [
+        {
+          settings: {
+            intelligenceDefaults: { thirdPartyDecisionModel: false },
+          },
+        },
+      ],
+      [
+        {
+          settings: {
+            intelligenceDefaults: { thirdPartyDecisionModel: "true" },
+          },
+        },
+      ],
+    ]) {
+      await expect(
+        readPodThirdPartyDecisionModelConsent(dbReturning(rows))
+      ).resolves.toEqual({ allowed: false, reason: "not_opted_in" });
+    }
+  });
+
+  it("a failed read fails CLOSED and says so (read_failed ≠ not opted in)", async () => {
+    await expect(
+      readPodThirdPartyDecisionModelConsent(dbReturning(new Error("db down")))
+    ).resolves.toEqual({ allowed: false, reason: "read_failed" });
   });
 });

@@ -19,6 +19,7 @@
 
 import { createHash } from "crypto";
 import { createLogger } from "@synap-core/core";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import type { db as DbType } from "@synap/database";
 import {
   ensureIntakeSession,
@@ -219,13 +220,17 @@ function captureCorrelationKey(input: RecordStructureIntakeInput): string {
     .slice(0, 40)}`;
 }
 
-function captureGoal(input: RecordStructureIntakeInput): string {
-  const label =
+function captureLabel(input: RecordStructureIntakeInput): string | null {
+  return (
     input.source.text?.trim().split("\n")[0] ||
     input.source.url ||
     input.source.file?.filename ||
-    "capture";
-  return `Capture · ${label.slice(0, 80)}`;
+    null
+  );
+}
+
+function captureGoal(input: RecordStructureIntakeInput): string {
+  return `Capture · ${(captureLabel(input) ?? "capture").slice(0, 80)}`;
 }
 
 /** What {@link stageCaptureSources} stages — the staging half of a capture door. */
@@ -404,6 +409,16 @@ export async function recordStructureIntake(
       bodyHandle: input.bodyHandle ?? null,
       door: "capture",
       goal: input.goal ?? captureGoal(input),
+      // The room's name is what was captured, not the "Capture · " goal. A
+      // caller-supplied goal is named from itself (ensureIntakeSession).
+      ...(input.goal
+        ? {}
+        : {
+            title: buildDerivedSessionTitle({
+              kind: "capture",
+              label: captureLabel(input),
+            }),
+          }),
       correlationKey:
         input.correlationKey === undefined
           ? captureCorrelationKey(input)

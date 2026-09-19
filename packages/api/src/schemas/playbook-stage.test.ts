@@ -152,3 +152,28 @@ describe("schema ↔ PlaybookStage interface", () => {
     expect(stage.category).toBe("started");
   });
 });
+
+describe("lessons — bounded, validated at the write door", () => {
+  it("accepts up to 5 non-blank lines of ≤ 200 chars", () => {
+    const stage = playbookStageSchema.parse({
+      ...validStage,
+      lessons: ["Run tsc before claiming done", "Name the changed file"],
+    });
+    expect(stage.lessons).toEqual([
+      "Run tsc before claiming done",
+      "Name the changed file",
+    ]);
+  });
+
+  it("refuses a sixth lesson, an over-long one, and a blank one", () => {
+    for (const lessons of [
+      ["a", "b", "c", "d", "e", "f"],
+      ["x".repeat(201)],
+      ["   "],
+    ]) {
+      expect(
+        playbookStageSchema.safeParse({ ...validStage, lessons }).success
+      ).toBe(false);
+    }
+  });
+});

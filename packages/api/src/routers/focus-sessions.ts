@@ -15,6 +15,7 @@ import {
   capabilities,
   db,
   desc,
+  drizzleSql,
   eq,
   focusSessions,
   vaultGrants,
@@ -32,8 +33,14 @@ import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 
 import { createFocusSession } from "../services/focus-sessions/create-session.js";
 import {
+  sessionCriteriaSchema,
+  sessionEvidenceSchema,
+} from "../schemas/session-criteria.js";
+import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
+  titleSourcePatch,
+  type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import {
   isTerminalSessionStatus,
@@ -353,7 +360,12 @@ async function projectSessionRows(
     withKind,
     requireUserId(userId)
   );
-  return withParticipants;
+  // The grade against the session's criteria — `verdict` present only on rows
+  // that declare criteria. One batched read for the page (see
+  // `attachSessionVerdicts`), same unconditional contract as participants.
+  const { attachSessionVerdicts } =
+    await import("../services/focus-sessions/evaluations/record.js");
+  return attachSessionVerdicts(withParticipants);
 }
 
 // ── Router ─────────────────────────────────────────────────────────────────
@@ -366,9 +378,19 @@ async function projectSessionRows(
 type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
-} & SessionParticipants &
-  Partial<SessionEdges> &
+} & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies>;
+
+/**
+ * Merge `metadata.titleSource` into the row — never assign over metadata. A
+ * human rename is stamped "human" so the background titler never overwrites
+ * it; a CLEAR stamps "derived", handing the name back to it.
+ */
+export function titleSourceMetadataSql(source: "human" | "derived") {
+  return drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+    titleSourcePatch(source)
+  )}::jsonb`;
+}
 
 export const focusSessionsRouter = router({
   links: sessionLinksRouter,
@@ -1008,7 +1030,130 @@ export const focusSessionsRouter = router({
         kind: projectSessionKind(row),
         rerun: continuation.rerun,
         continuation,
+        // The contract + grade, lifted from the packet so a detail page reads
+        // them off the session: normalized criteria, the verdict, and the
+        // CURRENT evaluation per criterion. Absent when the read failed —
+        // `continuation.evaluation` then says so.
+        ...(continuation.evaluation.status === "ok"
+          ? {
+              criteria: continuation.evaluation.criteria,
+              verdict: continuation.evaluation.verdict,
+              evaluations: continuation.evaluation.evaluations,
+            }
+          : {}),
       });
+    }),
+
+  /**
+   * A session's criteria, its verdict, the CURRENT evaluation per criterion
+   * (human wins) and the full append-only `history` of attempts.
+   */
+  evaluations: protectedProcedure
+    .input(z.object({ sessionId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const row = await db.query.focusSessions.findFirst({
+        where: and(
+          eq(focusSessions.id, input.sessionId),
+          eq(focusSessions.userId, userId)
+        ),
+      });
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      const { listSessionEvaluations, summarizeEvaluations } =
+        await import("../services/focus-sessions/evaluations/record.js");
+      const history = await listSessionEvaluations({
+        sessionId: row.id,
+        userId,
+      });
+      return { ...summarizeEvaluations(row.criteria, history), history };
+    }),
+
+  /**
+   * Run the session's pending criteria (evidence → capability → judge). The
+   * evaluation never blocks anything by itself; a check-gated pause resumes
+   * when the left stage's required criteria now pass (`resumed`).
+   */
+  evaluate: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        evidence: sessionEvidenceSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { evaluateSession } =
+        await import("../services/focus-sessions/evaluations/evaluate.js");
+      const result = await evaluateSession({
+        sessionId: input.sessionId,
+        userId: requireUserId(ctx.userId),
+        evidence: input.evidence,
+      });
+      if (result.status === "not_found") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
+    }),
+
+  /**
+   * The OWNER's verdict on one criterion — final, and it overrides every
+   * evidence / capability / judge row. Discharges the criterion's escalation
+   * slot when one was filed, and resumes a check-gated pause it clears.
+   */
+  grade: protectedProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        criterionKey: z.string().min(1).max(80),
+        verdict: z.enum(["pass", "fail"]),
+        rationale: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      const { recordSessionEvaluation, loadSessionEvaluationSummary } =
+        await import("../services/focus-sessions/evaluations/record.js");
+      const { resumeCheckGateIfMet } =
+        await import("../services/focus-sessions/evaluations/evaluate.js");
+      const out = await recordSessionEvaluation({
+        sessionId: input.sessionId,
+        userId,
+        criterionKey: input.criterionKey,
+        verdict: input.verdict,
+        evaluatorKind: "human",
+        rationale: input.rationale ?? null,
+      });
+      if (out.status === "not_found" || out.status === "unknown_criterion") {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            out.status === "not_found"
+              ? `Focus session ${input.sessionId} not found`
+              : `No criterion "${input.criterionKey}" on this session`,
+        });
+      }
+      if (out.status !== "recorded") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "reason" in out ? out.reason : out.status,
+        });
+      }
+      const resumed = await resumeCheckGateIfMet({
+        sessionId: input.sessionId,
+        userId,
+      });
+      const row = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, input.sessionId),
+      });
+      const summary = row ? await loadSessionEvaluationSummary(row) : undefined;
+      return { evaluation: out.evaluation, resumed, ...summary };
     }),
 
   /**
@@ -1197,6 +1342,8 @@ export const focusSessionsRouter = router({
          * is about. Omitted leaves the anchor alone; `null` is the un-set.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /** WHOLESALE replace of the session's binary acceptance criteria. */
+        criteria: sessionCriteriaSchema.optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1244,8 +1391,10 @@ export const focusSessionsRouter = router({
       if (patch.correlationId !== undefined)
         set.correlationId = patch.correlationId;
       if (patch.goal !== undefined) set.goal = patch.goal;
-      if (patch.title !== undefined)
+      if (patch.title !== undefined) {
         set.title = normalizeSessionTitle(patch.title);
+        set.metadata = titleSourceMetadataSql(set.title ? "human" : "derived");
+      }
       if (patch.agentIds !== undefined) set.agentIds = patch.agentIds;
       // Merge, never assign: the surfaces that patch this list read it, edit
       // one slot, and send the whole array back — so a wholesale assignment
@@ -1264,6 +1413,7 @@ export const focusSessionsRouter = router({
       // than `?? existing` so "no subject" is expressible at all.
       if (patch.subjectEntityId !== undefined)
         set.subjectEntityId = patch.subjectEntityId;
+      if (patch.criteria !== undefined) set.criteria = patch.criteria;
 
       // Any terminal status via update funnels through completeFocusSession —
       // the ONE close door (pack + run close + ephemeral expiry + close event).
@@ -1292,8 +1442,12 @@ export const focusSessionsRouter = router({
           };
           if (patch.progress !== undefined) extra.progress = patch.progress;
           if (patch.goal !== undefined) extra.goal = patch.goal;
-          if (patch.title !== undefined)
+          if (patch.title !== undefined) {
             extra.title = normalizeSessionTitle(patch.title);
+            extra.metadata = titleSourceMetadataSql(
+              extra.title ? "human" : "derived"
+            );
+          }
           if (patch.subjectEntityId !== undefined)
             extra.subjectEntityId = patch.subjectEntityId;
           if (patch.expectedOutputs !== undefined)

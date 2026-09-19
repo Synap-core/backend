@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   const tx = {
+    // The twin lock (`pg_advisory_xact_lock`) — nothing to serialize here.
+    execute: vi.fn(async () => undefined),
     insert: vi.fn(() => ({
       values: vi.fn((v: Record<string, unknown>) => {
         h.inserted.push(v);

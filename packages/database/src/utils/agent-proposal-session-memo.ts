@@ -11,9 +11,10 @@
  * per call.
  *
  * So the resolution is memoized on the identity that DECIDES it — the same
- * tuple the resolver's own reuse ladder keys on (operator + agent + workspace +
- * project + normalized goal). Every row of one burst shares that tuple, so the
- * resolver runs ONCE and the remaining rows read the memo.
+ * tuple the resolver's own reuse ladder keys on (operator + agent + calling
+ * client + stable correlation). Every row of one burst shares that tuple, so the
+ * resolver runs ONCE and the remaining rows read the memo. The goal is NOT part
+ * of the key: a client's writes group into one session whatever each one does.
  *
  * DELIBERATE PROPERTIES
  *  - TTL-bounded (60s). A session closed out-of-band goes stale for at most one
@@ -29,6 +30,7 @@
  */
 
 import {
+  resolveClientKey,
   resolveOrCreateAgentProposalSession,
   type ResolveOrCreateAgentProposalSessionInput,
 } from "./resolve-or-create-agent-proposal-session.js";
@@ -49,10 +51,8 @@ function memoKey(input: ResolveOrCreateAgentProposalSessionInput): string {
   return [
     input.userId,
     input.agentUserId,
-    input.workspaceId ?? "",
-    input.projectId ?? "",
+    resolveClientKey(input),
     input.stableCorrelation && input.correlationId ? input.correlationId : "",
-    input.goal.replace(/\s+/g, " ").trim().slice(0, 240),
   ].join("|");
 }
 
@@ -69,7 +69,7 @@ function evictExpired(now: number): void {
 
 /**
  * Resolve the agent's proposal-packaging session, at most once per
- * (operator, agent, workspace, project, goal) per {@link MEMO_TTL_MS}.
+ * (operator, agent, client, correlation) per {@link MEMO_TTL_MS}.
  *
  * Same contract as `resolveOrCreateAgentProposalSession`: best-effort, never
  * throws, `null` when no session could be resolved or minted.

@@ -1902,10 +1902,16 @@ export const intelligenceRouter = router({
       .orderBy(podSettings.createdAt)
       .limit(1);
     const blob = (row?.settings ?? {}) as { intelligenceDefaults?: unknown };
-    const defaults =
-      (blob.intelligenceDefaults as ReturnType<
-        typeof getDefaultPodIntelligenceDefaults
-      > | null) ?? getDefaultPodIntelligenceDefaults();
+    const stored = blob.intelligenceDefaults as ReturnType<
+      typeof getDefaultPodIntelligenceDefaults
+    > | null;
+    const defaults = {
+      ...getDefaultPodIntelligenceDefaults(),
+      ...(stored ?? {}),
+      // Consent is opt-in: only a stored `true` is on (mirrors the capture
+      // reader, `readPodThirdPartyDecisionModelConsent`).
+      thirdPartyDecisionModel: stored?.thirdPartyDecisionModel === true,
+    };
     return { defaults };
   }),
 
@@ -1914,14 +1920,24 @@ export const intelligenceRouter = router({
    *
    * Upserts the pod-wide intelligence defaults. Pass null for any tier to
    * inherit from the active IS. Pod admins only.
+   *
+   * A PATCH over `intelligenceDefaults`: an omitted key keeps its stored value,
+   * so saving the model tiers never clears the decision-model consent and
+   * toggling the consent never clears the tiers.
+   *
+   * `thirdPartyDecisionModel` — the pod's opt-in to the third-party decision
+   * model (TypeSafe JEV) for capture workspace routing. Default OFF. When on,
+   * capture sends the capture text (≤4000 chars), the candidate workspaces'
+   * names/descriptions and recent routing-correction snippets to TypeSafe.
    */
   setPodDefaults: podAdminProcedure
     .input(
       z.object({
-        chatModelId: z.string().nullable(),
-        reasoningModelId: z.string().nullable(),
-        embeddingModelId: z.string().nullable(),
-        visionModelId: z.string().nullable(),
+        chatModelId: z.string().nullable().optional(),
+        reasoningModelId: z.string().nullable().optional(),
+        embeddingModelId: z.string().nullable().optional(),
+        visionModelId: z.string().nullable().optional(),
+        thirdPartyDecisionModel: z.boolean().optional(),
       })
     )
     .mutation(async ({ input }) => {
@@ -1935,15 +1951,27 @@ export const intelligenceRouter = router({
         await db
           .update(podSettings)
           .set({
-            settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify(
-              { intelligenceDefaults: input }
-            )}::jsonb`,
+            // Merge INTO `intelligenceDefaults` (JSON.stringify drops the
+            // omitted keys), never replace the whole object.
+            settings: drizzleSql`jsonb_set(
+              coalesce(${podSettings.settings}, '{}'::jsonb),
+              '{intelligenceDefaults}',
+              (CASE WHEN jsonb_typeof(${podSettings.settings}->'intelligenceDefaults') = 'object'
+                THEN ${podSettings.settings}->'intelligenceDefaults'
+                ELSE '{}'::jsonb END) || ${JSON.stringify(input)}::jsonb,
+              true
+            )`,
             updatedAt: new Date(),
           })
           .where(eq(podSettings.id, existing.id));
       } else {
         await db.insert(podSettings).values({
-          settings: { intelligenceDefaults: input },
+          settings: {
+            intelligenceDefaults: {
+              ...getDefaultPodIntelligenceDefaults(),
+              ...input,
+            },
+          },
         });
       }
       return { defaults: input };

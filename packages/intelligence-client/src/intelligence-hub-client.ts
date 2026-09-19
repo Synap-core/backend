@@ -1209,6 +1209,9 @@ export class IntelligenceHubClient {
    * `decider: "jev"` with a `probabilities` distribution), else its LLM
    * cascade. `allowFallback: false` asks for JEV only — the IS answers 503
    * (→ null here) rather than spending a second LLM call.
+   * `allowDecisionModel: false` (the pod has not opted in to the third-party
+   * decision model — `intelligenceDefaults.thirdPartyDecisionModel`) makes the
+   * IS never call JEV; its LLM cascade answers. An older IS ignores the flag.
    */
   async workspaceTiebreak(input: {
     content: string;
@@ -1231,6 +1234,7 @@ export class IntelligenceHubClient {
       }>;
     } | null;
     allowFallback?: boolean;
+    allowDecisionModel?: boolean;
     timeoutMs?: number;
   }): Promise<WorkspaceTiebreakResult | null> {
     try {

@@ -2427,12 +2427,6 @@ export type WidgetTrustLevel = "trusted" | "installed" | "generated";
  *   - "panel"           → side or floating panel surface
  */
 export type WidgetRole = "widget" | "view-renderer" | "entity-renderer" | "panel";
-export interface PodIntelligenceDefaults {
-	chatModelId: string | null;
-	reasoningModelId: string | null;
-	embeddingModelId: string | null;
-	visionModelId: string | null;
-}
 export interface PodProactiveDefaults {
 	enabled: boolean;
 	nudgeDensity: "low" | "medium" | "high";
@@ -2593,7 +2587,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "playbook" | "automation" | "agent" | "human";
+			data: "human" | "agent" | "automation" | "playbook";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2608,7 +2602,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "playbook" | "automation" | "agent" | "human";
+			$type: "human" | "agent" | "automation" | "playbook";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2714,7 +2708,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
+			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -2929,6 +2923,23 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {}>;
+		criteria: import("drizzle-orm/pg-core").PgColumn<{
+			name: "criteria";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
 		metadata: import("drizzle-orm/pg-core").PgColumn<{
 			name: "metadata";
 			tableName: "focus_sessions";
@@ -3001,6 +3012,241 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	dialect: "pg";
 }>;
 export type FocusSession = typeof focusSessions.$inferSelect;
+declare const sessionEvaluations: import("drizzle-orm/pg-core").PgTableWithColumns<{
+	name: "session_evaluations";
+	schema: undefined;
+	columns: {
+		id: import("drizzle-orm/pg-core").PgColumn<{
+			name: "id";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: true;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		sessionId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "session_id";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgUUID";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		userId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "user_id";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		workspaceId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "workspace_id";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		criterionKey: import("drizzle-orm/pg-core").PgColumn<{
+			name: "criterion_key";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		attempt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "attempt";
+			tableName: "session_evaluations";
+			dataType: "number";
+			columnType: "PgInteger";
+			data: number;
+			driverParam: string | number;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		verdict: import("drizzle-orm/pg-core").PgColumn<{
+			name: "verdict";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: "pass" | "fail" | "unmeasured";
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"pass",
+				"fail",
+				"unmeasured"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		evaluatorKind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "evaluator_kind";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: "human" | "evidence" | "capability" | "judge";
+			driverParam: string;
+			notNull: true;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				"evidence",
+				"capability",
+				"judge",
+				"human"
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		evaluatorId: import("drizzle-orm/pg-core").PgColumn<{
+			name: "evaluator_id";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		evidence: import("drizzle-orm/pg-core").PgColumn<{
+			name: "evidence";
+			tableName: "session_evaluations";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		rationale: import("drizzle-orm/pg-core").PgColumn<{
+			name: "rationale";
+			tableName: "session_evaluations";
+			dataType: "string";
+			columnType: "PgText";
+			data: string;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		createdAt: import("drizzle-orm/pg-core").PgColumn<{
+			name: "created_at";
+			tableName: "session_evaluations";
+			dataType: "date";
+			columnType: "PgTimestamp";
+			data: Date;
+			driverParam: string;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+	};
+	dialect: "pg";
+}>;
 /**
  * Tools Schema — registered integrations the AI can use
  *
@@ -3606,6 +3852,23 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		stages: import("drizzle-orm/pg-core").PgColumn<{
 			name: "stages";
+			tableName: "playbooks";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		criteria: import("drizzle-orm/pg-core").PgColumn<{
+			name: "criteria";
 			tableName: "playbooks";
 			dataType: "json";
 			columnType: "PgJsonb";
@@ -5786,6 +6049,92 @@ export interface ImportModelingSuggestion {
 		reason?: string;
 	}>;
 }
+declare const EVALUATION_VERDICTS: readonly [
+	"pass",
+	"fail",
+	"unmeasured"
+];
+export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+export interface SessionVerdict {
+	total: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** Required criteria whose current verdict is not `pass`. */
+	requiredUnmet: number;
+	/**
+	 * none       — the session declares no criteria.
+	 * passing    — every required criterion passes.
+	 * failing    — at least one required criterion's current verdict is `fail`.
+	 * incomplete — no required criterion failed, but some are not yet measured.
+	 */
+	state: "none" | "passing" | "failing" | "incomplete";
+}
+/**
+ * Capture routing — the ONE mapping from a `capture.structure` result to the
+ * routing hints `capture.execute` takes.
+ *
+ * Every capture door (MCP, hub REST, the shared app capture pipeline, intake
+ * UI, relay, CLI) forwards the structure step's placement advice to execute.
+ * Each door used to hand-copy a different subset of fields, so the same
+ * capture recorded different data depending on where it came from (only MCP
+ * forwarded the decision distribution). Doors call `captureExecuteRoutingHints`
+ * instead, so what reaches execute — and what the route decision event stores
+ * — is identical everywhere.
+ *
+ * These are ADVISORY hints: execute's placement ladder decides (an AI pick
+ * proposes a move, it never moves data). A user's deliberate choice is NOT a
+ * hint — doors pass it as execute's `targetWorkspaceId` / `projectId`.
+ *
+ * Pure, dependency-free: safe in browser, Electron, React Native, Node, CLI.
+ */
+/**
+ * The distribution behind an AI workspace pick, as the IS decision door
+ * reported it: which decider answered (`jev` = the TypeSafe decision model,
+ * `llm` = the cascade fallback), the model, the probability per candidate
+ * workspace id (+ `none` for the decision model's abstain outcome) and the
+ * candidate set it was asked over.
+ */
+export interface WorkspaceDecisionRecord {
+	decider: "jev" | "llm";
+	model?: string;
+	probabilities?: Record<string, number>;
+	candidates?: Array<{
+		id: string;
+		name: string;
+	}>;
+}
+/**
+ * Where a capture will land, as `capture.structure` resolved it — the honest
+ * replacement for reading the AI's pick out of `targetWorkspaceId`.
+ */
+export interface CapturePlacement {
+	/**
+	 * Where the capture lands if no suggestion is applied: a deterministic
+	 * placement (explicit pin, ontology, focus session, relational), or the
+	 * ambient workspace. `null` = pod-wide.
+	 */
+	workspaceId: string | null;
+	workspaceName: string | null;
+	/** A deterministic rung placed it — never an AI guess. */
+	deterministic: boolean;
+	/** The AI's suggestion — present only when it differs from `workspaceId`. */
+	suggestion?: {
+		workspaceId: string;
+		workspaceName: string;
+		reason: string | null;
+		/**
+		 * Ranked options for the "Why?" disclosure, suggestion first, at most 3.
+		 * `weight` (0..1) sizes a bar; it is never rendered as a number.
+		 * Empty when the decider reported no distribution.
+		 */
+		alternatives: Array<{
+			workspaceId: string;
+			workspaceName: string;
+			weight: number;
+		}>;
+	};
+}
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
  * string question. Mirrors `@synap-core/hub-rest-client` and the frontend
@@ -5849,22 +6198,60 @@ export interface ImportAnalysisPlan {
 	overallConfidence: number;
 }
 /**
- * What the IS workspace-decision door (`/api/workspace-tiebreak`) reported for
- * the pick a capture carried: which decider answered (`jev` = the TypeSafe
- * decision model, `llm` = the cascade fallback), the model, the probability
- * per candidate workspace id (+ `none` for JEV's abstain outcome), and the
- * candidate set it was asked over. Recorded on the `route` decision event so
- * a later correction joins (by correlationId) to the full distribution — the
- * calibration sample "p=0.83 for X, user moved it to Y".
+ * The ONE shape of the AI's pending "move to X?" suggestion on every
+ * `capture.execute` outcome (applied AND proposed). Nothing was moved: the
+ * capture landed where it would have without the AI; the caller confirms by
+ * re-filing with an explicit workspace.
  */
-export interface WorkspaceDecisionRecord {
-	decider: "jev" | "llm";
-	model?: string;
-	probabilities?: Record<string, number>;
-	candidates?: Array<{
-		id: string;
-		name: string;
-	}>;
+export interface PendingWorkspaceSwitch {
+	suggestedWorkspaceId: string;
+	/** `null` when the pod could not name it (never a raw id in its place). */
+	suggestedWorkspaceName: string | null;
+	reason: string | null;
+	confidence: number | null;
+}
+/**
+ * The "always file <kind> here?" OFFER a capture-time reroute earns.
+ *
+ * WHY IT IS AN OFFER AND NOT A RULE. Synap already has a first-class Rule
+ * object — a `skills` row with `category: "rule"` whose sentence is compiled
+ * into an automation (`routers/skills.ts:463 createRule` →
+ * `services/rules/create.ts`, grammar in `services/rules/sentence-schema.ts`).
+ * It cannot express this placement, and the ladder could not read it if it
+ * could, on THREE counts measured in the code:
+ *
+ *  1. No THEN action files an entity into a named workspace. The sentence
+ *     vocabulary is `notify | update_entity | create_entity | run_command |
+ *     post_message | call_webhook` (`sentence-schema.ts:47`), and
+ *     `entity_update`'s executor takes `{ entityId, properties, title,
+ *     description }` and writes the AUTOMATION's own `workspaceId`
+ *     (`packages/jobs/src/workers/steps/output.ts:512`) — there is no target
+ *     workspace parameter to set.
+ *  2. A rule fires AFTER the fact, off an event. Even with such an action it
+ *     would MOVE an already-landed capture, which emits a route correction and
+ *     tells routing memory the AI was wrong — the opposite of what a standing
+ *     placement preference means.
+ *  3. The placement ladder reads no rule store at all. `resolveWorkspacePlacement`
+ *     (`@synap/database/services/workspace-resolution-service.ts`) has six
+ *     rungs and the only rule-shaped input is the declared guild→workspace
+ *     mapping at its rung 1 (`:665`).
+ *
+ * So this is deliberately NOT installable (`installable: false`): the pod says
+ * what it would offer and why it cannot honour it yet, rather than inventing a
+ * second routing store or bolting placement onto `governance_rules` (which is
+ * AUTHORIZATION — auto-approve vs propose — and never routing). The offer is
+ * also stamped on the route correction event so it is COUNTED, not dropped.
+ */
+export interface WorkspaceRuleOffer {
+	/** The ONE kind the capture produced — an offer must name a single X. */
+	profileSlug: string;
+	/** Where the person actually filed it. */
+	workspaceId: string;
+	workspaceName: string | null;
+	/** FALSE today — see the docblock. Never fabricate a `true` here. */
+	installable: boolean;
+	/** Why it cannot be installed yet, in the pod's own words. */
+	reason: string;
 }
 /**
  * What a merge wrote onto a PRE-EXISTING entity, with the values it replaced.
@@ -7709,6 +8096,36 @@ export interface ExpectedOutput {
  * vocabularies exactly like ours — makes the category a MANDATORY field.
  */
 export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
+declare const CRITERION_CHECK_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+/**
+ * One BINARY, observable acceptance criterion ("Typecheck passes with 0
+ * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
+ * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
+ */
+export interface SessionCriterion {
+	/** Stable slug, unique within the session. */
+	key: string;
+	statement: string;
+	/** Absent = true. */
+	required?: boolean;
+	check: {
+		kind: CriterionCheckKind;
+		/** kind=capability: the capability verb run via executeCapability. */
+		capability?: string;
+		/** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
+		evidenceKey?: string;
+		/** kind=judge: what the judge should look at. */
+		hint?: string;
+	};
+	/** Set when copied from a stage. */
+	stageKey?: string;
+}
 /**
  * The normalized shape the Phase-1 adapters produce from builtin IS tools,
  * code/instruction skills, intelligence_commands, and source providers — so a
@@ -10106,6 +10523,45 @@ export interface ContinuationPacket {
 		unfinishedOutputs?: number;
 	} | null;
 	nextMove: ContinuationNextMove;
+	/**
+	 * The session's contract and its grade: the declared binary criteria, the
+	 * server-computed verdict, and the CURRENT evaluation per criterion (human
+	 * wins). `criteria: []` with `verdict.state: "none"` means none declared; a
+	 * failed read is `unavailable`, never folded into "none".
+	 */
+	evaluation: {
+		status: "ok";
+		criteria: SessionCriterion[];
+		verdict: SessionVerdict;
+		evaluations: PacketEvaluationItem[];
+	} | {
+		status: "unavailable";
+		reason: string;
+	};
+}
+export interface PacketEvaluationItem {
+	criterionKey: string;
+	verdict: "pass" | "fail" | "unmeasured";
+	evaluatorKind: "evidence" | "capability" | "judge" | "human";
+	evaluatorId: string | null;
+	attempt: number;
+	rationale: string | null;
+	createdAt: string;
+}
+export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
+export interface SessionEvaluationSummary {
+	criteria: SessionCriterion[];
+	/** The CURRENT row per criterion (human wins), for criteria still declared. */
+	evaluations: SessionEvaluationRow[];
+	verdict: SessionVerdict;
+}
+export interface CriterionRunOutcome {
+	key: string;
+	/** `recorded` wrote a row; `skipped` wrote nothing and says why. */
+	status: "recorded" | "skipped";
+	verdict?: EvaluationVerdict;
+	reason?: string;
+	escalated?: boolean;
 }
 /** A near-goal open session in the same scope — a suggestion, never a block. */
 export interface SessionTwinCandidate {
@@ -10149,6 +10605,31 @@ export interface OwedSlot {
 }
 /** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
 export type SectionOwner = "ai" | "human";
+export interface CriterionScore {
+	key: string;
+	statement: string;
+	required: boolean;
+	/** Closed sessions that declared this criterion. */
+	sessions: number;
+	passed: number;
+	failed: number;
+	unmeasured: number;
+	/** passed / (passed + failed); null when nothing was measured. */
+	passRate: number | null;
+	overrides: number;
+}
+export interface PlaybookScorecard {
+	runs: {
+		total: number;
+		closed: number;
+		/** Closed sessions with at least one evaluation row. */
+		evaluated: number;
+		reopened: number;
+	};
+	escalations: number;
+	overrides: number;
+	criteria: CriterionScore[];
+}
 /**
  * Enrollment shapes exposed to the frontend (contract with the parallel
  * enrollment-UI agent — field names are load-bearing, do not rename).
@@ -11409,6 +11890,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11458,6 +11940,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11513,6 +11996,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11570,6 +12054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11757,6 +12242,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11806,6 +12292,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11861,6 +12348,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -11918,6 +12406,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					confidence?: number;
 					payload?: Record<string, unknown>;
 				}[] | undefined;
+				placement: CapturePlacement;
 				targetProjectId: string | null;
 				targetProjectReason: string | null;
 				targetProjectConfidence: number | null;
@@ -12025,6 +12514,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 					}[] | undefined;
 				} | null | undefined;
+				workspaceChoice?: "removed" | "changed" | "accepted" | "ignored" | undefined;
 				aiProjectId?: string | null | undefined;
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
@@ -12043,6 +12533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					mimeType: string;
 				} | null;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				proposalIds: string[];
 				sourceIntake: {
 					errors?: string[] | undefined;
@@ -12062,6 +12553,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				captureId: `${string}-${string}-${string}-${string}-${string}`;
 				correlationId: `${string}-${string}-${string}-${string}-${string}`;
 			} | {
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				proposalId: string;
 				proposalType: string;
 				summary: string;
@@ -12093,12 +12585,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "linked";
 					reason?: undefined;
 				};
-				pendingWorkspaceSwitch?: {
-					suggestedWorkspaceId: string;
-					reason: string | null;
-					confidence: number | null;
-				} | undefined;
-				movedToWorkspace?: string | undefined;
+				workspaceRuleOffer?: WorkspaceRuleOffer | undefined;
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				facetsFailed?: {
 					entityId: string;
@@ -12161,12 +12649,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reason: string;
 					projectId?: undefined;
 				};
-				pendingWorkspaceSwitch?: {
-					suggestedWorkspaceId: string;
-					reason: string | null;
-					confidence: number | null;
-				} | undefined;
-				movedToWorkspace?: string | undefined;
+				workspaceRuleOffer?: WorkspaceRuleOffer | undefined;
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				facetsFailed?: {
 					entityId: string;
@@ -12229,12 +12713,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					status: "proposed";
 					reason: string;
 				};
-				pendingWorkspaceSwitch?: {
-					suggestedWorkspaceId: string;
-					reason: string | null;
-					confidence: number | null;
-				} | undefined;
-				movedToWorkspace?: string | undefined;
+				workspaceRuleOffer?: WorkspaceRuleOffer | undefined;
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				facetsFailed?: {
 					entityId: string;
@@ -12291,12 +12771,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[];
 				routeSuggestions: RouteSuggestionsEcho;
 			} | {
-				pendingWorkspaceSwitch?: {
-					suggestedWorkspaceId: string;
-					reason: string | null;
-					confidence: number | null;
-				} | undefined;
-				movedToWorkspace?: string | undefined;
+				workspaceRuleOffer?: WorkspaceRuleOffer | undefined;
+				pendingWorkspaceSwitch?: PendingWorkspaceSwitch | undefined;
 				relationsFailed?: MaterializeRelationFailure[] | undefined;
 				facetsFailed?: {
 					entityId: string;
@@ -18507,23 +18983,31 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		getPodDefaults: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
-				defaults: PodIntelligenceDefaults;
+				defaults: {
+					thirdPartyDecisionModel: boolean;
+					chatModelId: string | null;
+					reasoningModelId: string | null;
+					embeddingModelId: string | null;
+					visionModelId: string | null;
+				};
 			};
 			meta: object;
 		}>;
 		setPodDefaults: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				chatModelId: string | null;
-				reasoningModelId: string | null;
-				embeddingModelId: string | null;
-				visionModelId: string | null;
+				chatModelId?: string | null | undefined;
+				reasoningModelId?: string | null | undefined;
+				embeddingModelId?: string | null | undefined;
+				visionModelId?: string | null | undefined;
+				thirdPartyDecisionModel?: boolean | undefined;
 			};
 			output: {
 				defaults: {
-					chatModelId: string | null;
-					reasoningModelId: string | null;
-					embeddingModelId: string | null;
-					visionModelId: string | null;
+					chatModelId?: string | null | undefined;
+					reasoningModelId?: string | null | undefined;
+					embeddingModelId?: string | null | undefined;
+					visionModelId?: string | null | undefined;
+					thirdPartyDecisionModel?: boolean | undefined;
 				};
 			};
 			meta: object;
@@ -21306,7 +21790,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "graph" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | undefined;
+				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "graph" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -24807,10 +25291,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "pod" | "workspace";
 					expiresAt: Date | null;
 					revokedAt: Date | null;
+					verdict: "auto" | "propose";
 					principalKind: "agent" | "any";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
 				};
 			};
 			meta: object;
@@ -24831,10 +25315,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					scopeKind: "pod" | "workspace";
 					expiresAt: Date | null;
 					revokedAt: Date | null;
+					verdict: "auto" | "propose";
 					principalKind: "agent" | "any";
 					targetPattern: string;
 					targetProfile: string | null;
-					verdict: "auto" | "propose";
 				};
 			};
 			meta: object;
@@ -29158,6 +29642,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -29173,7 +29658,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} & {
 				triage: TriageProjection;
 				kind: SessionKind;
-			} & SessionParticipants & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
+			} & SessionParticipants & {
+				verdict?: SessionVerdict;
+			} & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
 			meta: object;
 		}>;
 		browse: import("@trpc/server").TRPCQueryProcedure<{
@@ -29206,6 +29693,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;
@@ -29222,7 +29710,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					triage: TriageProjection;
 				} & {
 					kind: SessionKind;
-				} & SessionParticipants)[];
+				} & SessionParticipants & {
+					verdict?: SessionVerdict;
+				})[];
 				pagination: {
 					hasMore: boolean;
 					total?: number;
@@ -29272,6 +29762,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;
@@ -29312,6 +29803,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;
@@ -29387,6 +29879,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;
@@ -29463,6 +29956,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				id: string;
 			};
 			output: {
+				criteria: unknown;
+				verdict?: SessionVerdict | undefined;
+				evaluations?: PacketEvaluationItem[] | undefined;
 				triage: TriageProjection;
 				kind: "run" | "receipt" | "work";
 				rerun: RerunAvailability;
@@ -29496,6 +29992,88 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		evaluations: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				sessionId: string;
+			};
+			output: {
+				history: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					createdAt: Date;
+					sessionId: string;
+					attempt: number;
+					evidence: unknown;
+					criterionKey: string;
+					verdict: "pass" | "fail" | "unmeasured";
+					evaluatorKind: "human" | "capability" | "evidence" | "judge";
+					evaluatorId: string | null;
+					rationale: string | null;
+				}[];
+				criteria: SessionCriterion[];
+				evaluations: SessionEvaluationRow[];
+				verdict: SessionVerdict;
+			};
+			meta: object;
+		}>;
+		evaluate: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				evidence?: Record<string, {
+					passed: boolean;
+					detail?: string | undefined;
+				}> | undefined;
+			};
+			output: {
+				status: "evaluated";
+				results: CriterionRunOutcome[];
+				resumed: boolean;
+			} & SessionEvaluationSummary;
+			meta: object;
+		}>;
+		grade: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				criterionKey: string;
+				verdict: "pass" | "fail";
+				rationale?: string | undefined;
+			};
+			output: {
+				criteria?: SessionCriterion[] | undefined;
+				evaluations?: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					createdAt: Date;
+					sessionId: string;
+					attempt: number;
+					evidence: unknown;
+					criterionKey: string;
+					verdict: "pass" | "fail" | "unmeasured";
+					evaluatorKind: "human" | "capability" | "evidence" | "judge";
+					evaluatorId: string | null;
+					rationale: string | null;
+				}[] | undefined;
+				verdict?: SessionVerdict | undefined;
+				evaluation: {
+					id: string;
+					userId: string;
+					workspaceId: string | null;
+					createdAt: Date;
+					sessionId: string;
+					attempt: number;
+					evidence: unknown;
+					criterionKey: string;
+					verdict: "pass" | "fail" | "unmeasured";
+					evaluatorKind: "human" | "capability" | "evidence" | "judge";
+					evaluatorId: string | null;
+					rationale: string | null;
+				};
+				resumed: boolean;
+			};
+			meta: object;
+		}>;
 		getByCorrelationId: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				correlationId: string;
@@ -29514,6 +30092,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -29583,6 +30162,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -29609,6 +30189,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -29672,6 +30253,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				currentStage?: string | undefined;
 				subjectEntityId?: string | null | undefined;
+				criteria?: {
+					key: string;
+					statement: string;
+					check: {
+						kind: "human" | "capability" | "evidence" | "judge";
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+					};
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
+				}[] | undefined;
 			};
 			output: {
 				id: string;
@@ -29687,6 +30280,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -29719,6 +30313,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -30136,6 +30731,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelSpec: unknown;
 				expectedOutputs: unknown;
 				stages: unknown;
+				criteria: unknown;
 				version: number;
 				schedule: unknown;
 				executor: PlaybookExecutorRef;
@@ -30168,6 +30764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 					expectedOutputs: unknown;
 					stages: unknown;
+					criteria: unknown;
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
@@ -30203,6 +30800,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 					expectedOutputs: unknown;
 					stages: unknown;
+					criteria: unknown;
 					version: number;
 					schedule: unknown;
 					executor: PlaybookExecutorRef;
@@ -30261,10 +30859,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				channelSpec: unknown;
 				expectedOutputs: unknown;
 				stages: unknown;
+				criteria: unknown;
 				schedule: unknown;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
 			};
+			meta: object;
+		}>;
+		scorecard: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				playbookId: string;
+			};
+			output: PlaybookScorecard;
 			meta: object;
 		}>;
 		create: import("@trpc/server").TRPCMutationProcedure<{
@@ -30301,9 +30907,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					position?: number | undefined;
 					indefinite?: boolean | undefined;
 					gate?: {
-						kind: "human";
+						kind: "human" | "check";
 						proposalType?: "playbook.stage_gate" | undefined;
 					} | undefined;
+					criteria?: {
+						key: string;
+						statement: string;
+						check: {
+							kind: "human" | "capability" | "evidence" | "judge";
+							capability?: string | undefined;
+							evidenceKey?: string | undefined;
+							hint?: string | undefined;
+						};
+						required?: boolean | undefined;
+						stageKey?: string | undefined;
+					}[] | undefined;
+					lessons?: string[] | undefined;
+				}[] | undefined;
+				criteria?: {
+					key: string;
+					statement: string;
+					check: {
+						kind: "human" | "capability" | "evidence" | "judge";
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+					};
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
 				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
@@ -30336,6 +30967,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 					expectedOutputs: unknown;
 					stages: unknown;
+					criteria: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -30386,9 +31018,34 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					position?: number | undefined;
 					indefinite?: boolean | undefined;
 					gate?: {
-						kind: "human";
+						kind: "human" | "check";
 						proposalType?: "playbook.stage_gate" | undefined;
 					} | undefined;
+					criteria?: {
+						key: string;
+						statement: string;
+						check: {
+							kind: "human" | "capability" | "evidence" | "judge";
+							capability?: string | undefined;
+							evidenceKey?: string | undefined;
+							hint?: string | undefined;
+						};
+						required?: boolean | undefined;
+						stageKey?: string | undefined;
+					}[] | undefined;
+					lessons?: string[] | undefined;
+				}[] | undefined;
+				criteria?: {
+					key: string;
+					statement: string;
+					check: {
+						kind: "human" | "capability" | "evidence" | "judge";
+						capability?: string | undefined;
+						evidenceKey?: string | undefined;
+						hint?: string | undefined;
+					};
+					required?: boolean | undefined;
+					stageKey?: string | undefined;
 				}[] | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
@@ -30421,6 +31078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 					expectedOutputs: unknown;
 					stages: unknown;
+					criteria: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -30482,6 +31140,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;
@@ -30535,6 +31194,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					channelSpec: unknown;
 					expectedOutputs: unknown;
 					stages: unknown;
+					criteria: unknown;
 					schedule: unknown;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
@@ -30604,6 +31264,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
 					goal: string;

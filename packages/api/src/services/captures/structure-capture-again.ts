@@ -35,6 +35,7 @@ import {
   eventRepository,
 } from "@synap/database";
 import type { Context } from "../../types/context.js";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { ensureIntakeSession } from "../intake/ensure-intake-session.js";
@@ -234,6 +235,7 @@ export async function structureCaptureAgain(args: {
       agentUserId: args.agentUserId ?? null,
       door: source.kind === "import_item" ? "import" : "capture",
       goal: `Capture · ${(doc.title ?? "untitled").slice(0, 80)}`,
+      title: buildDerivedSessionTitle({ kind: "capture", label: doc.title }),
       // One run per capture: a second press re-finds it instead of minting.
       correlationKey: `capture-run:${doc.id}`,
     });

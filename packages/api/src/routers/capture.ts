@@ -26,7 +26,10 @@ import {
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
 import { stageExecuteSources } from "../services/intake/stage-execute-sources.js";
-import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
+import {
+  readPodThirdPartyDecisionModelConsent,
+  readPodVisionModelPreference,
+} from "../services/intake/pod-vision-preference.js";
 import {
   captureClarificationAnswered,
   claimCaptureQuestion,
@@ -127,9 +130,16 @@ import {
 } from "../lib/ai-events.js";
 import {
   applyDecisionModelPick,
-  toWorkspaceDecisionRecord,
+  applyTiebreakOutcome,
+  buildCapturePlacement,
+  routeDecisionOutcome,
+  workspaceChoiceSchema,
+  workspaceDecisionRecordSchema,
+  workspaceRuleOfferFor,
+  type PendingWorkspaceSwitch,
+  type WorkspaceRuleOffer,
 } from "../lib/workspace-decision.js";
-import { type CaptureRoutingResult } from "../lib/capture-routing.js";
+import type { CapturePlacement } from "@synap-core/types";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
@@ -170,6 +180,7 @@ import {
   type StagedSourceBlob,
 } from "../utils/store-entity-source-blob.js";
 import {
+  emitAiCorrection,
   emitAiDecision,
   emitCaptureTrace,
 } from "../utils/ai-feedback-events.js";
@@ -630,6 +641,53 @@ function workspaceDecisionFailed(userId: string) {
     );
     return null;
   };
+}
+
+/**
+ * capture.structure's `placement` — the honest destination block (see
+ * `buildCapturePlacement`). Reads the per-target tuned offer gate only when a
+ * suggestion is actually on the table; a tuning-query hiccup falls back to the
+ * flat gate, exactly as execute's rung 5 does. Module-level for the same
+ * structure-intake-wiring reason as `workspaceDecisionFailed`.
+ */
+async function structureCapturePlacement(opts: {
+  userId: string;
+  ambientWorkspaceId: string | null;
+  deterministicWorkspaceId: string | null;
+  pick: {
+    targetWorkspaceId?: string | null;
+    targetWorkspaceReason?: string | null;
+    targetWorkspaceConfidence?: number | null;
+  };
+  decision: WorkspaceDecisionRecord | undefined;
+  memberWorkspaces: ReadonlyArray<{ id: string; name: string }>;
+  routableIds: ReadonlyArray<string>;
+}): Promise<CapturePlacement> {
+  const pickId = opts.pick.targetWorkspaceId ?? null;
+  const offerGate =
+    !opts.deterministicWorkspaceId &&
+    pickId &&
+    pickId !== opts.ambientWorkspaceId
+      ? await fetchWorkspaceRoutingThreshold(opts.userId, pickId, {
+          decider: opts.decision?.decider ?? "llm",
+        }).catch(() => undefined)
+      : undefined;
+  return buildCapturePlacement({
+    ambientWorkspaceId: opts.ambientWorkspaceId,
+    deterministic: opts.deterministicWorkspaceId
+      ? { workspaceId: opts.deterministicWorkspaceId }
+      : null,
+    aiPick: {
+      workspaceId: pickId,
+      reason: opts.pick.targetWorkspaceReason,
+      confidence: opts.pick.targetWorkspaceConfidence,
+    },
+    decision: opts.decision,
+    nameOf: (id) =>
+      opts.memberWorkspaces.find((w) => w.id === id)?.name ?? null,
+    routableIds: opts.routableIds,
+    offerGate,
+  });
 }
 
 const captureBaseRouter = router({
@@ -1607,6 +1665,13 @@ const captureBaseRouter = router({
         ? await readPodVisionModelPreference(database)
         : undefined;
 
+      // The pod's CONSENT to the third-party decision model (TypeSafe JEV) —
+      // opt-in, default OFF, and a failed read fails CLOSED (logged at error).
+      // Off ⇒ no capture content is sent to it: step 3a is not fired at all
+      // and step 1c's tie-break says `allowDecisionModel: false`.
+      const decisionModelConsent =
+        await readPodThirdPartyDecisionModelConsent(database);
+
       // 3a. Workspace DECISION, in parallel with /structure (no added latency).
       // The IS's decision door answers with its typed decision model only
       // (`allowFallback: false`): a calibrated Choice over the domain
@@ -1615,8 +1680,11 @@ const captureBaseRouter = router({
       // the structurer's own catalog pick (step 1a) stands — we never pay for a
       // second LLM opinion on the same question. Best-effort: never fails the
       // capture (an auth failure surfaces on the structure call itself).
+      // Only with the pod's consent (above).
       const workspaceDecisionPromise: Promise<WorkspaceTiebreakResult | null> =
-        availableWorkspaces.length > 1 && inputText.trim()
+        decisionModelConsent.allowed &&
+        availableWorkspaces.length > 1 &&
+        inputText.trim()
           ? client
               .workspaceTiebreak({
                 content: inputText.slice(0, 4000),
@@ -1774,13 +1842,8 @@ const captureBaseRouter = router({
         );
       }
 
-      // 1a'. The decision model's pick OUTRANKS the structurer's catalog-wide
-      // guess: it is a dedicated, calibrated Choice over the same candidate
-      // set, where the structurer's pick is a side-output of extraction. A JEV
-      // abstain ("none of these fits") is honoured as "stay put", exactly like
-      // a tie-break abstain below. Only the IS decision model's answers land
-      // here (`allowFallback: false`), so this never swaps one LLM guess for
-      // another. Step 1c's deterministic rungs still override this.
+      // 1a'. A decision-model pick outranks the structurer's (see
+      // lib/workspace-decision.ts). Step 1c's deterministic rungs still win.
       workspaceDecision = applyDecisionModelPick(
         structureResult,
         await workspaceDecisionPromise,
@@ -1872,6 +1935,10 @@ const captureBaseRouter = router({
             .filter((s): s is string => typeof s === "string" && s.length > 0)
         )
       );
+      // Set only when a deterministic rung (2–4) placed the capture above —
+      // the one fact that separates "placed" from "the AI's pick" in the
+      // `targetWorkspace*` fields (which carry both, for older clients).
+      let deterministicWorkspaceId: string | null = null;
       if (routingSlugs.length > 0) {
         reportStructureStage("placing");
         try {
@@ -1894,31 +1961,22 @@ const captureBaseRouter = router({
               })),
               facetSlugs: routingSlugs,
               routingMemory,
+              // No pod consent ⇒ the IS never calls the third-party decision
+              // model; its LLM cascade breaks the tie.
+              allowDecisionModel: decisionModelConsent.allowed,
             });
-            workspaceDecision = tb
-              ? toWorkspaceDecisionRecord(tb, placement.candidates)
-              : undefined;
-            if (tb?.workspaceId) {
-              structureResult.targetWorkspaceId = tb.workspaceId;
-              structureResult.targetWorkspaceName =
-                placement.candidates.find((c) => c.id === tb.workspaceId)
-                  ?.name ?? nameFor(tb.workspaceId);
-              structureResult.targetWorkspaceReason =
-                tb.reason ?? placement.reason;
-              structureResult.targetWorkspaceConfidence = tb.confidence ?? null;
-            } else {
-              // Abstain (or tie-break unavailable) → don't move. Staying in the
-              // ambient workspace is the honest choice over an arbitrary guess.
-              structureResult.targetWorkspaceId = workspaceId;
-              structureResult.targetWorkspaceName = nameFor(workspaceId);
-              structureResult.targetWorkspaceConfidence = null;
-              structureResult.targetWorkspaceReason =
-                "workspace tie-break abstained — staying in the current workspace";
-            }
+            workspaceDecision = applyTiebreakOutcome(
+              structureResult,
+              tb,
+              placement.candidates,
+              workspaceId,
+              nameFor,
+              workspaceDecision
+            );
           } else if (placement.rung <= 4 && placement.workspaceId) {
             // Deterministic ontology/context/relational hit — resolver decides.
-            // No model decided this pick, so no distribution rides with it.
             workspaceDecision = undefined;
+            deterministicWorkspaceId = placement.workspaceId;
             structureResult.targetWorkspaceId = placement.workspaceId;
             structureResult.targetWorkspaceName = nameFor(
               placement.workspaceId
@@ -1934,6 +1992,18 @@ const captureBaseRouter = router({
           );
         }
       }
+
+      // THE destination block (source of truth for every surface; the
+      // `targetWorkspace*` fields stay for older clients only).
+      const capturePlacement = await structureCapturePlacement({
+        userId,
+        ambientWorkspaceId: workspaceId ?? null,
+        deterministicWorkspaceId,
+        pick: structureResult,
+        decision: workspaceDecision,
+        memberWorkspaces: userWorkspaceRows,
+        routableIds: availableWorkspaces.map((w) => w.id),
+      });
 
       podTimings.placementMs = Date.now() - placementStart;
 
@@ -1993,6 +2063,7 @@ const captureBaseRouter = router({
             ...(workspaceDecision
               ? { targetWorkspaceDecision: workspaceDecision }
               : {}),
+            placement: capturePlacement,
             targetProjectId: structureResult.targetProjectId ?? null,
             targetProjectReason: structureResult.targetProjectReason ?? null,
             targetProjectConfidence:
@@ -2200,6 +2271,13 @@ const captureBaseRouter = router({
           ...(workspaceDecision
             ? { targetWorkspaceDecision: workspaceDecision }
             : {}),
+          /**
+           * WHERE this capture will land — the SOURCE OF TRUTH for every
+           * surface (`deriveWorkspacePlacementView`, `@synap-core/types`).
+           * `targetWorkspace*` above mixes the AI's pick with a deterministic
+           * placement and is kept only for older clients.
+           */
+          placement: capturePlacement,
           targetProjectId: structureResult.targetProjectId ?? null,
           targetProjectReason: structureResult.targetProjectReason ?? null,
           targetProjectConfidence:
@@ -2453,19 +2531,18 @@ const captureBaseRouter = router({
          * Recorded on the route decision event for calibration; never used to
          * place data. Absent ⇒ recorded as absent.
          */
-        aiWorkspaceDecision: z
-          .object({
-            decider: z.enum(["jev", "llm"]),
-            model: z.string().max(200).optional(),
-            probabilities: z
-              .record(z.string(), z.number().min(0).max(1))
-              .optional(),
-            candidates: z
-              .array(z.object({ id: z.string(), name: z.string() }))
-              .max(50)
-              .optional(),
-          })
-          .nullish(),
+        aiWorkspaceDecision: workspaceDecisionRecordSchema.nullish(),
+        /**
+         * What the person did with the destination before saving — derived by
+         * `deriveWorkspacePlacementView` (`@synap-core/types`), never locally:
+         * `accepted` (saved with the AI's suggestion), `changed` (picked
+         * another workspace), `removed` (dropped it — stays where it would have
+         * landed), `ignored` (a headless door never showed it). Recorded on
+         * the route decision; with a pinned `targetWorkspaceId` it is what
+         * makes the pin count as a response to the suggestion (`changed` ⇒ one
+         * capture-time route correction). Absent ⇒ no suggestion was in play.
+         */
+        workspaceChoice: workspaceChoiceSchema.optional(),
         /**
          * The AI-suggested PROJECT (from /capture/structure's targetProjectId).
          * This is ADVISORY only — NEVER auto-linked. `belongs_to_project` WIDENS
@@ -2561,7 +2638,13 @@ const captureBaseRouter = router({
       // exactly as the old inline gate did, so every door (MCP, REST, CLI,
       // Raycast, import) routes identically. No hints → today's ambient behavior.
       let workspaceId: string | null | undefined;
-      let routing: CaptureRoutingResult | undefined;
+      // The AI's "move to X?" suggestion (rung 5 proposes, never moves), in
+      // the ONE shape every execute outcome echoes — applied AND proposed.
+      let pendingWorkspaceSwitch: PendingWorkspaceSwitch | undefined;
+      // "Always file <kind> here?" — earned by a capture-time reroute. NOT
+      // installable today; see `workspaceRuleOfferFor` for the three measured
+      // reasons why, and why it is surfaced anyway instead of dropped.
+      let workspaceRuleOffer: WorkspaceRuleOffer | undefined;
       let placementRung: ResolutionRung | undefined;
       let placementReason: string | undefined;
       if (input.targetWorkspaceId) {
@@ -2574,9 +2657,12 @@ const captureBaseRouter = router({
         // Best-effort: a tuning-query hiccup falls back to the flat gate.
         let minConfidence: number | undefined;
         if (mode === "auto" && input.aiWorkspaceId !== ctx.workspaceId) {
+          // Tuned over decisions of the SAME decider as this pick (a JEV
+          // probability and an LLM self-report are different populations).
           minConfidence = await fetchWorkspaceRoutingThreshold(
             userId,
-            input.aiWorkspaceId
+            input.aiWorkspaceId,
+            { decider: input.aiWorkspaceDecision?.decider ?? "llm" }
           ).catch(() => undefined);
         }
         const placement = await resolveWorkspacePlacement(database, {
@@ -2597,31 +2683,20 @@ const captureBaseRouter = router({
         workspaceId = placement.workspaceId;
         placementRung = placement.rung;
         placementReason = placement.reason;
-        // Map the door decision back to the surface's routing shape the
-        // response + telemetry already consume.
-        //
-        // There is no longer a `movedToWorkspace` branch here: rung 5 PROPOSES,
-        // it never ACTS (see `resolveWorkspacePlacement`), so a rung-5
-        // resolution ALWAYS carries `ask: true` and leaves `workspaceId` on the
-        // ambient workspace. `placement.rung === 5 && !placement.ask` is
-        // therefore unreachable — the old branch that mapped it to
-        // `movedToWorkspace` was dead once the door stopped moving data on a
-        // guess. Rungs 1–4 still place data outright, and land in the `else`
-        // below exactly as before (they never set `movedToWorkspace` either —
-        // that field only ever described the rung-5 AI move).
+        // Rung 5 PROPOSES, it never ACTS (see `resolveWorkspacePlacement`):
+        // a rung-5 resolution carries `ask: true` and leaves `workspaceId` on
+        // the ambient workspace, whatever the routing mode — so there is no
+        // "moved" outcome to report, only a suggestion. Rungs 1–4 place data
+        // outright and carry no suggestion.
         if (placement.ask) {
-          routing = {
-            workspaceId: placement.workspaceId ?? ctx.workspaceId,
-            pendingWorkspaceSwitch: {
-              // The door guarantees `candidates[0]` IS the suggestion.
-              suggestedWorkspaceId:
-                placement.candidates[0]?.id ?? input.aiWorkspaceId,
-              reason: input.aiWorkspaceReason ?? null,
-              confidence: input.aiWorkspaceConfidence ?? null,
-            },
+          // The door guarantees `candidates[0]` IS the suggestion.
+          const suggested = placement.candidates[0];
+          pendingWorkspaceSwitch = {
+            suggestedWorkspaceId: suggested?.id ?? input.aiWorkspaceId,
+            suggestedWorkspaceName: suggested?.name || null,
+            reason: input.aiWorkspaceReason ?? null,
+            confidence: input.aiWorkspaceConfidence ?? null,
           };
-        } else {
-          routing = { workspaceId: placement.workspaceId ?? ctx.workspaceId };
         }
       } else {
         workspaceId = ctx.workspaceId;
@@ -2979,6 +3054,8 @@ const captureBaseRouter = router({
           ...sessionEcho,
           ...sourceIntakeEcho,
           proposalIds,
+          // The AI's pending suggestion rides every outcome (one shape).
+          ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
           // Edges NOT filed (unknown relation slug) — named, never coerced.
           ...(proposeRelationsFailed.length
             ? { relationsFailed: proposeRelationsFailed }
@@ -3300,6 +3377,8 @@ const captureBaseRouter = router({
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           threadId: input.threadId,
+          // The AI's pending suggestion rides every outcome (one shape).
+          ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
         };
       }
 
@@ -3950,8 +4029,21 @@ const captureBaseRouter = router({
           // condition so decisions↔stamps stay 1:1 (no phantom decision on an
           // all-deduped capture; no orphan correlationId on a non-AI capture
           // whose later mutations would emit corrections matching no decision).
-          const routingDecisionRecorded =
-            Boolean(input.aiWorkspaceId) && materializedEntityIds.length > 0;
+          //
+          // WHAT is recorded (and whether a pin counts as a response to the
+          // AI's suggestion) is ONE pure rule: `routeDecisionOutcome`.
+          const routeOutcome =
+            materializedEntityIds.length > 0
+              ? routeDecisionOutcome({
+                  pinnedWorkspaceId: input.targetWorkspaceId,
+                  aiWorkspaceId: input.aiWorkspaceId,
+                  choice: input.workspaceChoice,
+                  pendingSuggestionId:
+                    pendingWorkspaceSwitch?.suggestedWorkspaceId,
+                  landedWorkspaceId: workspaceId,
+                })
+              : null;
+          const routingDecisionRecorded = routeOutcome !== null;
 
           // Provenance stamp — join the created entities back to the decision
           // that produced them (shared correlationId, only when a decision was
@@ -3997,7 +4089,7 @@ const captureBaseRouter = router({
           // unions downstream. Gated on `routingDecisionRecorded` (see above)
           // so every emitted decision has ≥1 stamped entity to be corrected
           // against — keeping the decision↔correction join 1:1.
-          if (routingDecisionRecorded) {
+          if (routeOutcome) {
             await emitAiDecision({
               action: "route",
               userId,
@@ -4005,21 +4097,13 @@ const captureBaseRouter = router({
               correlationId,
               data: {
                 kind: AI_KIND.ROUTE,
-                // What the AI CHOSE — not necessarily where the data landed.
-                // `applied` below carries that distinction. Since rung 5 now
-                // proposes instead of acting, `movedToWorkspace` is never set,
-                // so without the `pendingWorkspaceSwitch` fallback every
-                // decision would be recorded against the AMBIENT workspace.
+                // What the AI CHOSE — not necessarily where the data landed
+                // (`applied` carries that). An unpinned capture records the
+                // rung-5 suggestion, not the ambient workspace it stayed in:
                 // `fetchWorkspaceRoutingThreshold` keys its volume + correction
-                // rate on `chosenWorkspaceId`, so that would starve the
-                // auto-tuned gate for the suggested workspace (volume drops
-                // under MIN_TUNING_VOLUME → falls back to the flat gate
-                // forever). Recording the suggestion keeps the tuner fed with
-                // exactly the volume it saw before this change.
-                chosenWorkspaceId:
-                  routing?.movedToWorkspace ??
-                  routing?.pendingWorkspaceSwitch?.suggestedWorkspaceId ??
-                  workspaceId,
+                // rate on `chosenWorkspaceId`, so recording the ambient would
+                // starve the tuned gate for the suggested workspace.
+                chosenWorkspaceId: routeOutcome.chosenWorkspaceId,
                 confidence: input.aiWorkspaceConfidence ?? null,
                 reason: input.aiWorkspaceReason ?? null,
                 // I6: which ladder rung decided + its code-generated reason
@@ -4027,12 +4111,66 @@ const captureBaseRouter = router({
                 rung: placementRung ?? null,
                 routeReason: placementReason ?? null,
                 mode: input.workspaceRouting ?? "auto",
-                applied: Boolean(routing?.movedToWorkspace),
+                // The person saved WITH the AI's suggestion (`accepted`) — a
+                // confirmation routing-memory learns from.
+                applied: routeOutcome.applied,
+                // What the person did with the suggestion (null = no choice
+                // reported: an older client, or no suggestion was shown).
+                choice: routeOutcome.choice,
                 currentWorkspaceId: ctx.workspaceId,
                 // Who decided + the full distribution (calibration sample).
                 ...workspaceDecisionEventData(input.aiWorkspaceDecision),
               },
             });
+            // `changed`: the person filed it elsewhere BEFORE saving — the AI
+            // was wrong, exactly as if they had moved it afterwards. ONE route
+            // correction through the same emitter a later move uses (so the
+            // tuner + routing memory count it identically), marked as a
+            // capture-time preempt. Subject = the first fresh entity (routing
+            // memory reads a correction's text off `data.entityId`).
+            if (routeOutcome.correction) {
+              const entityId = materializedEntityIds[0];
+              // The standing-preference OFFER this reroute earns. Built here
+              // so the SAME value is stamped on the correction (counted) and
+              // returned to the caller (surfaced) — one derivation, never two.
+              // The name read is best-effort: an unreadable name is `null`,
+              // never a raw id in a name's place.
+              const offerWorkspaceName = await database
+                .select({ name: workspaces.name })
+                .from(workspaces)
+                .where(eq(workspaces.id, routeOutcome.correction.toWorkspaceId))
+                .limit(1)
+                .then((rows) => rows[0]?.name ?? null)
+                .catch(() => null);
+              workspaceRuleOffer = workspaceRuleOfferFor({
+                correction: routeOutcome.correction,
+                profileSlugs: created
+                  .filter((c) => !c.linked)
+                  .map((c) => c.profileSlug),
+                nameOf: () => offerWorkspaceName,
+              });
+              await emitAiCorrection({
+                action: "reroute",
+                userId,
+                subjectId: entityId,
+                workspaceId: routeOutcome.correction.toWorkspaceId,
+                data: {
+                  kind: AI_KIND.ROUTE,
+                  entityId,
+                  fromWorkspaceId: routeOutcome.correction.fromWorkspaceId,
+                  toWorkspaceId: routeOutcome.correction.toWorkspaceId,
+                  correlationId,
+                  preempt: "capture_time",
+                  // COUNTED: the offer rides the correction, so "how often
+                  // would we have offered a placement rule for <kind>→<ws>" is
+                  // answerable from the event store today, before any rule
+                  // object can hold one.
+                  ...(workspaceRuleOffer
+                    ? { ruleOffer: workspaceRuleOffer }
+                    : {}),
+                },
+              });
+            }
           }
 
           // Project-placement decision (the cross-cutting dimension). Emitted
@@ -4341,14 +4479,15 @@ const captureBaseRouter = router({
         // honest gap behind `relations.length < requested relation count`.
         // Empty on the happy path.
         ...(relationsFailed.length ? { relationsFailed } : {}),
-        // Routing outcome (present only when routing engaged) — the surface can
-        // show "moved to X" / offer to confirm a suggested switch.
-        ...(routing?.movedToWorkspace
-          ? { movedToWorkspace: routing.movedToWorkspace }
-          : {}),
-        ...(routing?.pendingWorkspaceSwitch
-          ? { pendingWorkspaceSwitch: routing.pendingWorkspaceSwitch }
-          : {}),
+        // The AI's pending "move to X?" (nothing was moved) — the same shape
+        // on every outcome. There is no `movedToWorkspace`: an AI pick never
+        // moves data (rung 5 proposes).
+        ...(pendingWorkspaceSwitch ? { pendingWorkspaceSwitch } : {}),
+        // "Always file <kind> here?" — present ONLY when the person rerouted
+        // this capture away from the AI's pick and it produced exactly one
+        // kind. `installable: false` today, with the pod's own reason: a
+        // surface may show the offer, but must not claim it can be saved.
+        ...(workspaceRuleOffer ? { workspaceRuleOffer } : {}),
         // Project disposition — what happened on the project axis, so a surface
         // (or the MCP adapter) can state it: a DETERMINISTIC auto-link landed
         // (rung 1-4), an AI suggestion was proposed (advisory, awaiting confirm),

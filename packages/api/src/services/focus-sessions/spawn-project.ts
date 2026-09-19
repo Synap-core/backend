@@ -8,7 +8,7 @@
  *
  * THE FIELD MAPPING, stated explicitly because half of it is lossy:
  *
- *   session.goal              → project.name (truncated to the column's 255)
+ *   session display name      → project.name (resolveSessionTitle, ≤ 255)
  *                               and project.description (the FULL goal, so a
  *                               truncated name never destroys the sentence)
  *   session.workspaceId       → project.workspaceId
@@ -46,6 +46,7 @@ import {
   ProjectRepository,
   buildProjectProvenance,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type { FocusSession } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -71,7 +72,7 @@ export interface SpawnProjectInput {
   sessionId: string;
   /** The acting principal — owner floor AND the project's owner. */
   userId: string;
-  /** Optional name; defaults to the session goal. */
+  /** Optional name; defaults to the session's display name. */
   name?: string;
   description?: string;
   /** Provenance label for which door originated the spawn. */
@@ -116,7 +117,10 @@ export async function spawnProjectFromSession(
     };
   }
 
-  const name = (input.name ?? session.goal).slice(0, PROJECT_NAME_MAX);
+  const name = (
+    input.name ??
+    (resolveSessionTitle(session, { maxLength: PROJECT_NAME_MAX }) || "Project")
+  ).slice(0, PROJECT_NAME_MAX);
   const expectedOutputs = (session.expectedOutputs ?? []) as Array<
     Record<string, unknown>
   >;

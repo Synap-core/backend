@@ -268,6 +268,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   stages: unknown;
   params: unknown;
   expectedOutputs: unknown;
+  criteria: unknown;
 } {
   return {
     version: playbook.version,
@@ -275,6 +276,7 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     stages: playbook.stages,
     params: playbook.params,
     expectedOutputs: playbook.expectedOutputs,
+    criteria: playbook.criteria,
   };
 }
 

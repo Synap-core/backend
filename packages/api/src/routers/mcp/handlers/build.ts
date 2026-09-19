@@ -15,6 +15,7 @@ import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
 import { resolveProposalId } from "../../hub-protocol/rest/_shared.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
 import { CONTENT_KINDS } from "@synap/database/schema";
+import { getDb } from "@synap/database";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import {
   ok,
@@ -35,6 +36,10 @@ import {
   type PlaybookDoorIdentity,
   type PlaybookDoorOutcome,
 } from "../../hub-protocol/playbook-doors.js";
+import {
+  compactScorecard,
+  computePlaybookScorecards,
+} from "@synap/jobs/utils/playbook-scorecard.js";
 
 function playbookDoorIdentity(ctx: McpToolContext): PlaybookDoorIdentity {
   return {
@@ -234,7 +239,21 @@ export const buildHandlers: McpHandlerMap = {
       limit: typeof args.limit === "number" ? args.limit : undefined,
       cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     });
-    return ok(result);
+    // How each of these has actually gone for this person — two queries for
+    // the whole page (never one per row). A playbook with no closed run gets
+    // no entry; zeroes would be noise. The SAME derivation the tRPC
+    // `playbooks.scorecard` and the lessons scanner read.
+    const scorecards = await computePlaybookScorecards(await getDb(), {
+      playbookIds: result.playbooks.map((p) => p.id),
+      userId: ctx.userId,
+    });
+    return ok({
+      ...result,
+      playbooks: result.playbooks.map((p) => {
+        const compact = compactScorecard(scorecards[p.id]!);
+        return compact ? { ...p, scorecard: compact } : p;
+      }),
+    });
   },
   synap_match_playbooks: async (
     ctx: McpToolContext

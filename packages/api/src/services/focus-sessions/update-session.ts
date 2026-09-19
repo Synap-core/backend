@@ -16,13 +16,15 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { db, focusSessions, eq, and } from "@synap/database";
+import { db, focusSessions, eq, and, drizzleSql } from "@synap/database";
 import {
   BLOCKED_REASONS,
   OUTPUT_RETIRED_REASONS,
   OUTPUT_REF_KINDS,
   type ExpectedOutput,
+  type SessionCriterion,
 } from "@synap/playbooks";
+import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
@@ -46,6 +48,7 @@ import {
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
+  titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
 
 export interface UpdateFocusSessionParams {
@@ -96,6 +99,13 @@ export interface UpdateFocusSessionParams {
    * the same `isOutputRefVisible` predicate an output's ref goes through.
    */
   subjectEntityId?: string | null;
+  /**
+   * WHOLESALE replace of the session's binary acceptance criteria (an ad-hoc
+   * session declaring its contract, or retuning it). Validated against
+   * `sessionCriteriaSchema` — max 12, unique keys. Evaluations already
+   * recorded stay; a key no longer declared simply stops counting.
+   */
+  criteria?: SessionCriterion[];
 }
 
 export type UpdateFocusSessionResult =
@@ -829,6 +839,19 @@ export async function updateFocusSession(
     }
   }
 
+  // Criteria are a CONTROL: refused whole when malformed, never half-applied.
+  if (params.criteria !== undefined) {
+    const parsed = sessionCriteriaSchema.safeParse(params.criteria);
+    if (!parsed.success) {
+      return {
+        status: "denied",
+        reason: `Invalid criteria: ${parsed.error.issues
+          .map((i) => `${i.path.join(".") || "criteria"}: ${i.message}`)
+          .join("; ")}`,
+      };
+    }
+  }
+
   // A title is ONE line of at most SESSION_TITLE_MAX — refused, never clipped.
   if (
     params.title !== undefined &&
@@ -901,6 +924,7 @@ export async function updateFocusSession(
       ...(params.subjectEntityId !== undefined
         ? { subjectEntityId: params.subjectEntityId }
         : {}),
+      ...(params.criteria !== undefined ? { criteria: params.criteria } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -929,14 +953,21 @@ export async function updateFocusSession(
     updatedAt: new Date(),
   };
   if (params.goal !== undefined) set.goal = params.goal;
-  if (params.title !== undefined)
+  if (params.title !== undefined) {
     set.title = normalizeSessionTitle(params.title);
+    // An agent's rename is never overwritten by the background titler; a
+    // CLEAR hands the name back to it. Merged, never assigned over metadata.
+    set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+      titleSourcePatch(set.title ? "agent" : "derived")
+    )}::jsonb`;
+  }
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;
   if (params.currentStage !== undefined) set.currentStage = params.currentStage;
   // `undefined` leaves the anchor; `null` is the CLEAR.
   if (params.subjectEntityId !== undefined)
     set.subjectEntityId = params.subjectEntityId;
+  if (params.criteria !== undefined) set.criteria = params.criteria;
 
   // Roster append goes through the ONE append door, which owns its own row lock
   // and its own idempotency. Deliberately NOT folded into `set` below: assigning

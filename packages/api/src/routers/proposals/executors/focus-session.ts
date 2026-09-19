@@ -1,5 +1,10 @@
 import { TRPCError } from "@trpc/server";
-import type { ExpectedOutput } from "@synap/playbooks";
+import {
+  collectPlaybookCriteria,
+  mergeCriteria,
+  type ExpectedOutput,
+  type SessionCriterion,
+} from "@synap/playbooks";
 import {
   db,
   proposals,
@@ -7,6 +12,11 @@ import {
   focusSessions,
   normalizeGoal,
   recordSessionSpawn,
+  drizzleSql,
+  and,
+  or,
+  isNull,
+  playbooks,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -31,8 +41,14 @@ import { findOpenSessionTwin } from "../../../services/focus-sessions/find-open-
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
+  type SessionTitleSource,
 } from "@synap-core/types/focus-sessions";
+import {
+  instantiateSessionRow,
+  resolveRunnablePlaybook,
+} from "../../../services/playbooks/playbook-lifecycle.js";
 import { z } from "zod";
+import { sessionCriteriaSchema } from "../../../schemas/session-criteria.js";
 
 /**
  * A title from a stored payload: one line, blank ⇒ null, over the column bound
@@ -166,64 +182,114 @@ export function registerFocusSessionExecutors(): void {
         };
       }
 
-      const insertedSessions = await db
-        .insert(focusSessions)
-        .values({
-          // id = proposal.targetId so any link built at propose time resolves.
-          id: proposal.targetId,
-          // The proposal's chain id, so a later create on the same chain finds
-          // this row through the correlation idempotency instead of minting a
-          // twin (the create-session door has always stamped its own).
-          correlationId: correlationHolder ? null : correlationId,
-          workspaceId: proposal.workspaceId,
-          projectId: proposal.projectId,
-          subjectEntityId:
-            (innerData.subjectEntityId as string | undefined) ?? null,
-          // userId = the operator/approver so update/list/complete (scoped by
-          // operator userId) can resolve this session.
-          userId,
-          title: storedTitle(innerData.title),
-          goal,
-          templateId: (innerData.templateId as string | undefined) ?? null,
-          // Typed origin (migration 0240). Unlike create-session.ts this door
-          // does not resolve templateId against the playbooks table, so it
-          // cannot know whether the session is a playbook run — but it CAN know
-          // it is never an automation run (automation sessions come from
-          // openRunSession and never propose). "agent" is what the sniff also
-          // returns for these rows (no playbookId, no automation metadata).
-          origin: "agent",
-          // THE FLOOR, on the door an AI caller actually takes.
-          //
-          // `create-session.ts` sanitizes its DIRECT insert, but an AI caller
-          // is precisely the one routed through a proposal — so for a while
-          // this branch inserted the caller's array verbatim, and every receipt
-          // the floor exists to refuse (`attestedBy` naming a human who never
-          // looked, `retiredAt` making the slot invisible to `owedSlotWhere`
-          // from birth, `status: "done"`) landed here one approval later. The
-          // `owedSince` invariant was lost too: an `owner: 'human'` slot
-          // inserted with no clock for the owed board to age it by.
-          //
-          // Sanitizing HERE and not only at the propose site is deliberate:
-          // this is the write, and a payload can sit in the proposals table for
-          // weeks between the two. `now` is approval time, which is the moment
-          // the slot actually becomes owed.
-          expectedOutputs: sanitizeDeclaredOutputs(
-            (innerData.expectedOutputs as ExpectedOutput[] | undefined) ?? []
-          ),
-          channelId: (innerData.channelId as string | undefined) ?? null,
-          agentIds: (innerData.agentIds as string[] | undefined) ?? [],
-          status: "active",
+      // CRITERIA, parsed like the update path (a bad list is dropped and
+      // reported on `refusals`), then merged with a template's own exactly as
+      // the direct create does (`mergeCriteria`: the proposer's first, a
+      // template criterion only under a new key).
+      const criteriaRefusals: string[] = [];
+      const ownCriteria = parseProposedCriteria(
+        innerData.criteria,
+        proposal.targetId,
+        criteriaRefusals
+      );
+
+      const insertProposedSession = async () => {
+        const title = storedTitle(innerData.title);
+        const criteria = mergeCriteria(
+          ownCriteria,
+          await visibleTemplateCriteria(
+            innerData.templateId,
+            proposal.workspaceId
+          )
+        );
+        const metadata: Record<string, unknown> = {
           // A playbook-instantiate proposal (routers/playbooks.ts) carries the
           // rendered goalTemplate as `prompt` alongside the title in `goal` —
           // the same split instantiateSession writes directly. Stamp it so the
           // approved path does not silently drop the agent's instruction.
-          // Absent on every other focus_session/create proposal ⇒ {} default.
           ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
-            ? { metadata: { prompt: innerData.prompt } }
+            ? { prompt: innerData.prompt }
             : {}),
-        })
-        .onConflictDoNothing()
-        .returning();
+          // A title on a create proposal was chosen by the proposing agent —
+          // automation never renames it.
+          ...(title
+            ? { titleSource: "agent" satisfies SessionTitleSource }
+            : {}),
+        };
+        return db
+          .insert(focusSessions)
+          .values({
+            // id = proposal.targetId so any link built at propose time resolves.
+            id: proposal.targetId,
+            // The proposal's chain id, so a later create on the same chain finds
+            // this row through the correlation idempotency instead of minting a
+            // twin (the create-session door has always stamped its own).
+            correlationId: correlationHolder ? null : correlationId,
+            workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId,
+            subjectEntityId:
+              (innerData.subjectEntityId as string | undefined) ?? null,
+            // userId = the operator/approver so update/list/complete (scoped by
+            // operator userId) can resolve this session.
+            userId,
+            title,
+            goal,
+            templateId: (innerData.templateId as string | undefined) ?? null,
+            // Typed origin (migration 0240). Unlike create-session.ts this door
+            // does not resolve templateId against the playbooks table, so it
+            // cannot know whether the session is a playbook run — but it CAN know
+            // it is never an automation run (automation sessions come from
+            // openRunSession and never propose). "agent" is what the sniff also
+            // returns for these rows (no playbookId, no automation metadata).
+            origin: "agent",
+            // THE FLOOR, on the door an AI caller actually takes.
+            //
+            // `create-session.ts` sanitizes its DIRECT insert, but an AI caller
+            // is precisely the one routed through a proposal — so for a while
+            // this branch inserted the caller's array verbatim, and every receipt
+            // the floor exists to refuse (`attestedBy` naming a human who never
+            // looked, `retiredAt` making the slot invisible to `owedSlotWhere`
+            // from birth, `status: "done"`) landed here one approval later. The
+            // `owedSince` invariant was lost too: an `owner: 'human'` slot
+            // inserted with no clock for the owed board to age it by.
+            //
+            // Sanitizing HERE and not only at the propose site is deliberate:
+            // this is the write, and a payload can sit in the proposals table for
+            // weeks between the two. `now` is approval time, which is the moment
+            // the slot actually becomes owed.
+            expectedOutputs: sanitizeDeclaredOutputs(
+              (innerData.expectedOutputs as ExpectedOutput[] | undefined) ?? []
+            ),
+            channelId: (innerData.channelId as string | undefined) ?? null,
+            agentIds: (innerData.agentIds as string[] | undefined) ?? [],
+            status: "active",
+            ...(criteria.length > 0 ? { criteria } : {}),
+            // Absent keys on most proposals ⇒ the column's {} default.
+            ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
+          })
+          .onConflictDoNothing()
+          .returning();
+      };
+
+      // A PLAYBOOK INSTANTIATE (routers/playbooks.ts `instantiate`, proposed
+      // path) materializes through the direct path's own body — playbookId,
+      // first stage, the playbook's outputs, the subject, the derived title and
+      // the `instantiated_from` edge — at the prospective id. The plain insert
+      // below knew none of that, so an approved instantiate landed as an
+      // untemplated ad-hoc session.
+      const insertedSessions =
+        typeof innerData.playbookId === "string"
+          ? await instantiateApprovedPlaybook({
+              playbookId: innerData.playbookId,
+              sessionId: proposal.targetId,
+              correlationId: correlationHolder ? null : correlationId,
+              workspaceId: proposal.workspaceId,
+              projectId: proposal.projectId,
+              userId,
+              innerData,
+              ownCriteria,
+            })
+          : await insertProposedSession();
 
       // ── THE EFFECT RECEIPT (reference conversion — template for the rest) ──
       // `insertedSessions` is what POSTGRES returned for THIS statement, not a
@@ -258,7 +324,7 @@ export function registerFocusSessionExecutors(): void {
       // even though the session was successfully created.
       // Best-effort is not SILENT: a missed edge lands on `refusals`, the
       // result's documented partial-application channel.
-      const lineageRefusals: string[] = [];
+      const lineageRefusals: string[] = [...criteriaRefusals];
       if (
         created &&
         typeof innerData.parentSessionId === "string" &&
@@ -523,6 +589,14 @@ export function registerFocusSessionExecutors(): void {
         // `null` (or blank) is the CLEAR — same explicit arm as the subject.
         if (innerData.title === null || typeof innerData.title === "string") {
           set.title = storedTitle(innerData.title);
+          // Provenance rides the rename: an agent's title is never replaced by
+          // the background titler; a CLEAR hands the name back to it.
+          const titleSource: SessionTitleSource = set.title
+            ? "agent"
+            : "derived";
+          set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+            { titleSource }
+          )}::jsonb`;
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
@@ -554,6 +628,22 @@ export function registerFocusSessionExecutors(): void {
           sessionId,
           innerData
         );
+
+        // CRITERIA. Carried by the proposing doors and, until now, applied by
+        // none — an approved criteria change returned success and changed
+        // nothing. Parsed with the SAME strict schema the doors use, because
+        // the payload may predate a schema change: a bad list is dropped and
+        // REPORTED on `refusals`, never thrown over the rest of the patch.
+        if (innerData.criteria !== undefined) {
+          const criteriaRefusals: string[] = [];
+          const criteria = parseProposedCriteria(
+            innerData.criteria,
+            sessionId,
+            criteriaRefusals
+          );
+          if (criteriaRefusals.length === 0) set.criteria = criteria;
+          outputRefusals.push(...criteriaRefusals);
+        }
 
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`
         // and the Hub PATCH) so the PROPOSED path is not a silent no-op —
@@ -617,6 +707,119 @@ export function registerFocusSessionExecutors(): void {
       };
     },
   });
+}
+
+/**
+ * A proposal's `criteria`, parsed with the doors' strict schema. Absent ⇒ [].
+ * Invalid ⇒ [] plus a refusal line (and a log): the payload may predate a
+ * schema change, and one bad list must never fail the rest of the approval.
+ */
+function parseProposedCriteria(
+  raw: unknown,
+  sessionId: string,
+  refusals: string[]
+): SessionCriterion[] {
+  if (raw === undefined) return [];
+  const parsed = sessionCriteriaSchema.safeParse(raw);
+  if (parsed.success) return parsed.data as SessionCriterion[];
+  logger.warn(
+    { sessionId, issues: parsed.error.issues },
+    "focus_session: approved criteria failed validation — not applied"
+  );
+  refusals.push(
+    `The criteria were not changed: ${parsed.error.issues[0]?.message ?? "invalid criteria"}.`
+  );
+  return [];
+}
+
+/**
+ * The criteria of the template a proposed start names (`templateId` = a
+ * playbook id), when that playbook is visible in the proposal's workspace
+ * (pod-wide or the same workspace). A free-text / missing / foreign template
+ * contributes nothing — the same "not a playbook ⇒ legacy" reading the direct
+ * create door applies.
+ */
+async function visibleTemplateCriteria(
+  templateId: unknown,
+  workspaceId: string | null
+): Promise<SessionCriterion[]> {
+  if (!z.string().uuid().safeParse(templateId).success) return [];
+  const [playbook] = await db
+    .select({ criteria: playbooks.criteria, stages: playbooks.stages })
+    .from(playbooks)
+    .where(
+      and(
+        eq(playbooks.id, templateId as string),
+        workspaceId
+          ? or(
+              isNull(playbooks.workspaceId),
+              eq(playbooks.workspaceId, workspaceId)
+            )
+          : isNull(playbooks.workspaceId)
+      )
+    )
+    .limit(1);
+  return playbook ? collectPlaybookCriteria(playbook) : [];
+}
+
+/**
+ * Materialize an approved playbook-instantiate proposal through the direct
+ * path's own body (`instantiateSessionRow`), so the approved row and a direct
+ * `instantiate` cannot differ. The playbook is re-resolved against the
+ * proposal's workspace first: the id in `data` sat in the queue and must still
+ * name a playbook this workspace may run (the same guard every scheduled door
+ * uses). Returns the inserted rows — empty when the prospective id already
+ * exists (a re-approve), which is the receipt's zero.
+ */
+async function instantiateApprovedPlaybook(args: {
+  playbookId: string;
+  sessionId: string;
+  correlationId: string | null;
+  workspaceId: string | null;
+  projectId: string | null;
+  userId: string;
+  innerData: Record<string, unknown>;
+  /** The proposer's own criteria (already parsed); the playbook's join after. */
+  ownCriteria: SessionCriterion[];
+}) {
+  const { innerData } = args;
+  if (!args.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Playbook instantiate proposal has no workspace",
+    });
+  }
+  const playbook = await resolveRunnablePlaybook({
+    playbookId: args.playbookId,
+    workspaceId: args.workspaceId,
+  });
+  const row = await instantiateSessionRow({
+    id: args.sessionId,
+    criteria: mergeCriteria(
+      args.ownCriteria,
+      collectPlaybookCriteria(playbook)
+    ),
+    correlationId: args.correlationId,
+    playbookId: playbook.id,
+    workspaceId: args.workspaceId,
+    projectId: args.projectId,
+    userId: args.userId,
+    subjectId:
+      typeof innerData.subjectEntityId === "string"
+        ? innerData.subjectEntityId
+        : null,
+    channelId:
+      typeof innerData.channelId === "string" ? innerData.channelId : null,
+    agentIds: Array.isArray(innerData.agentIds)
+      ? innerData.agentIds.filter((id): id is string => typeof id === "string")
+      : [],
+    // The prompt was rendered against the caller's params at propose time;
+    // the params themselves are not carried, so the render is reused as-is.
+    ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
+      ? { goalOverride: innerData.prompt }
+      : {}),
+  });
+  return row ? [row] : [];
 }
 
 /**

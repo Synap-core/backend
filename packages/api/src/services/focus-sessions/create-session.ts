@@ -11,6 +11,9 @@ import {
   playbookRuns,
   eq,
   and,
+  drizzleSql,
+  findClientSession,
+  normalizeGoal,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
   isProbeWriteContext,
@@ -24,7 +27,13 @@ import { randomUUID } from "node:crypto";
 import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
-import type { ExpectedOutput } from "@synap/playbooks";
+import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
+import { collectPlaybookCriteria, mergeCriteria } from "@synap/playbooks";
+import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
+import {
+  matchSessionTemplate,
+  type SessionTemplateReport,
+} from "./match-session-template.js";
 import { sanitizeDeclaredOutputs } from "./update-session.js";
 import {
   guidanceForBlockedSlots,
@@ -49,6 +58,7 @@ import {
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
+  titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
@@ -134,6 +144,27 @@ export interface CreateFocusSessionParams {
    * goal and scope exists. Without it that session is returned as `deduped`.
    */
   forceCreate?: boolean;
+  /**
+   * Binary acceptance criteria — the definition of done (`focus_sessions.
+   * criteria`, Lane B's contract). Validated with the shared write schema; at
+   * most `MAX_SESSION_CRITERIA`. A template's own criteria are added after.
+   */
+  criteria?: SessionCriterion[];
+  /**
+   * The CALLING CLIENT (`key:<apiKeyId>`, see `clientKeyForApiKey`). Stamped
+   * on the new row as `metadata.clientKey`, which binds the session to that
+   * client for write attribution — and, when the gate already AUTO-OPENED a
+   * session for this client, that session is ADOPTED instead of a second one
+   * being created (session-first: an explicit start always wins, never
+   * duplicates). Absent for a human start.
+   */
+  clientKey?: string | null;
+  /**
+   * Match a playbook when the caller named none (`templateId` undefined — an
+   * explicit `null` opts out). Set by the AI start doors only. The outcome is
+   * ALWAYS reported on `template`.
+   */
+  matchTemplate?: boolean;
 }
 
 /** What happened to the create-time `spawned_from` edge. */
@@ -162,6 +193,14 @@ export type CreateFocusSessionResult =
       blockerLinks?: CreateTimeBlockerReport[];
       /** Near-goal OPEN sessions in the same scope — suggested, never blocking. */
       candidates?: SessionTwinCandidate[];
+      /** Present iff template matching ran — what applied, what else fit, how to opt out. */
+      template?: SessionTemplateReport;
+      /**
+       * True when the session the gate had auto-opened for this client was
+       * adopted (goal/title/template/criteria updated) rather than a new row
+       * created. `session.id` is then that session's id.
+       */
+      adopted?: true;
     }
   | {
       /**
@@ -204,12 +243,14 @@ export async function createFocusSession(
     correlationId,
     channelId = null,
     agentIds = [],
-    templateId = null,
+    templateId: requestedTemplateId = null,
     expectedOutputs = [],
     parentSessionId = null,
     suspendedIntent = null,
     blockedBySessionIds = [],
+    clientKey = null,
   } = params;
+  let templateId = requestedTemplateId;
 
   // Refused, never truncated: a clipped name is a claim the caller did not make.
   const title = normalizeSessionTitle(rawTitle);
@@ -220,6 +261,24 @@ export async function createFocusSession(
       ),
       { code: "BAD_REQUEST" }
     );
+  }
+
+  // Criteria are a CONTROL: validated with the shared write schema (strict,
+  // capped), refused in words rather than stored half-right.
+  let criteria: SessionCriterion[] = [];
+  if (params.criteria !== undefined) {
+    const parsed = sessionCriteriaSchema.safeParse(params.criteria);
+    if (!parsed.success) {
+      throw Object.assign(
+        new Error(
+          `Invalid criteria: ${parsed.error.issues
+            .map((i) => `${i.path.join(".") || "criteria"}: ${i.message}`)
+            .join("; ")}`
+        ),
+        { code: "BAD_REQUEST" }
+      );
+    }
+    criteria = parsed.data as SessionCriterion[];
   }
 
   // Idempotency: correlationId returns the existing session for this user,
@@ -280,6 +339,42 @@ export async function createFocusSession(
     };
   }
 
+  // TEMPLATE — only when the AI door asked and the caller named none
+  // (`templateId: null` is the opt-out). Auto-applied above the confidence
+  // threshold; ALWAYS reported, applied or not (silent binding is the flagged
+  // wrong path). After the twin check, so a repeated start of the same work
+  // still dedups instead of becoming a second run.
+  let template: SessionTemplateReport | undefined;
+  if (params.matchTemplate && params.templateId === undefined) {
+    try {
+      template = await matchSessionTemplate({
+        userId,
+        agentUserId,
+        workspaceId,
+        title,
+        goal,
+      });
+      if (template.applied) templateId = template.applied.id;
+    } catch (err) {
+      // The match is a default, never a gate: a failed match starts the
+      // session ad-hoc and SAYS nothing could be matched.
+      logger.warn({ err }, "template match failed — starting ad-hoc");
+      template = {
+        applied: null,
+        suggestions: [],
+        optOut: "pass templateId: null",
+      };
+    }
+  }
+
+  // ADOPTION — the gate already auto-opened a session for this client (its
+  // first write arrived before it started one). Starting now must not leave two
+  // rows for one piece of work: that session becomes this one.
+  const adoptId = clientKey
+    ? ((await findClientSession(userId, clientKey, { onlyAutoOpened: true }))
+        ?.id ?? null)
+    : null;
+
   // VISIBILITY FLOOR for any `ref` a declared slot carries — the SAME
   // `isOutputRefVisible` the attach-output and update doors apply, and BEFORE
   // the membrane so a ref the caller cannot see is refused to the caller who
@@ -307,6 +402,21 @@ export async function createFocusSession(
   // the receipt minted its own random id that no row ever had (live receipt
   // 91191f04, 2026-09-14). The dedup hash strips `id`, so retries still dedup.
   const sessionId = randomUUID();
+
+  // If `templateId` is a real Playbook id, this session IS a playbook run: wire
+  // the canonical `playbookId` + a `playbook_runs` ledger row so it surfaces in
+  // the runs feed. Writing ONLY the deprecated `templateId` (legacy behavior, kept
+  // below for compat) produced disconnected "ghost" sessions that ran forever with
+  // no ledger row. A non-UUID / free-text templateId resolves to no playbook →
+  // unchanged legacy behavior. (Guard the UUID first — comparing a uuid column to
+  // free text throws in Postgres.)
+  const playbook =
+    templateId && UUID_RE.test(templateId)
+      ? ((await db.query.playbooks.findFirst({
+          where: eq(playbooks.id, templateId),
+        })) ?? null)
+      : null;
+
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
@@ -325,6 +435,13 @@ export async function createFocusSession(
       // Also the proposal's display name (`extractProposalName` reads `title`).
       ...(title ? { title } : {}),
       templateId,
+      // A real playbook: the approve executor materializes through the SAME
+      // body a direct instantiate uses (`instantiateSessionRow` via its
+      // `playbookId` branch) — playbook, first stage, run shape — instead of
+      // landing an untemplated row that only remembers `templateId`. That
+      // branch needs the workspace the playbook runs in, so a project-only
+      // (workspace-less) start keeps the legacy row on the proposed path.
+      ...(playbook && workspaceId ? { playbookId: playbook.id } : {}),
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
       // Sanitized BEFORE it is proposed, so the payload a human reviews is the
@@ -344,6 +461,7 @@ export async function createFocusSession(
       ...(suspendedIntent ? { suspendedIntent } : {}),
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
+      ...(criteria.length > 0 ? { criteria } : {}),
     },
   });
 
@@ -366,78 +484,150 @@ export async function createFocusSession(
     };
   }
 
-  // If `templateId` is a real Playbook id, this session IS a playbook run: wire
-  // the canonical `playbookId` + a `playbook_runs` ledger row so it surfaces in
-  // the runs feed. Writing ONLY the deprecated `templateId` (legacy behavior, kept
-  // below for compat) produced disconnected "ghost" sessions that ran forever with
-  // no ledger row. A non-UUID / free-text templateId resolves to no playbook →
-  // unchanged legacy behavior. (Guard the UUID first — comparing a uuid column to
-  // free text throws in Postgres.)
-  const playbook =
-    templateId && UUID_RE.test(templateId)
-      ? ((await db.query.playbooks.findFirst({
-          where: eq(playbooks.id, templateId),
-        })) ?? null)
-      : null;
+  // A template's criteria join the caller's (keys unique, caller's first).
+  const sessionCriteria = playbook
+    ? mergeCriteria(criteria, collectPlaybookCriteria(playbook))
+    : criteria;
 
   // Session + its playbook_runs ledger row land in ONE transaction: the
   // correlationId idempotency check returns the existing session on retry, so
   // a partial state (session without its run row) could never be repaired.
-  const created = await db.transaction(async (tx) => {
-    const [session] = await tx
-      .insert(focusSessions)
-      .values({
-        id: sessionId,
+  //
+  // RACE: the twin check above runs outside any lock, so two concurrent starts
+  // of the same work both passed it. The per-(user, scope, goal) advisory lock
+  // serializes check+insert: the second waits, re-reads, and returns the
+  // first's row as `deduped`. Case-insensitive, like the matcher. Skipped where
+  // the matcher never dedups (a template run, or `forceCreate`).
+  const lockTwins = !templateId && !params.forceCreate;
+  const outcome = await db.transaction(async (tx) => {
+    if (lockTwins) {
+      const scopeKey = parentSessionId
+        ? `parent:${parentSessionId}`
+        : projectId
+          ? `project:${projectId}`
+          : `workspace:${workspaceId ?? ""}`;
+      await tx.execute(
+        drizzleSql`select pg_advisory_xact_lock(hashtext(${`session-twin|${userId}|${scopeKey}|${normalizeGoal(goal).toLowerCase()}`}))`
+      );
+      const raced = await findOpenSessionTwin({
+        userId,
+        goal,
         workspaceId,
         projectId,
-        subjectEntityId,
-        userId,
-        title,
-        goal,
-        correlationId: correlationId ?? null,
-        // D8: conditional, so a normal session keeps the metadata column default.
-        ...(isProbeWriteContext() ? { metadata: stampProbeMarker({}) } : {}),
+        parentSessionId,
         templateId,
-        playbookId: playbook?.id ?? null,
-        // Typed origin (migration 0240) — stamped from what this door already
-        // resolved, never re-sniffed from metadata. A session created here is a
-        // playbook run exactly when `templateId` resolved to a real playbook;
-        // automation-origin sessions never come through here, they come through
-        // `openRunSession`. Readers prefer this column and fall back to the
-        // legacy metadata sniff only for rows a non-stamping writer produced.
-        //
-        // Otherwise the discriminator is `agentUserId` — the SAME fact the
-        // governance membrane above already used to decide whether this write
-        // needs a proposal. An agent identity means an agent opened the session
-        // ("agent"); its absence means a person did ("human"). Until "human"
-        // existed every human-started session was stamped "agent", so the
-        // triage lens (which exists to surface sessions somebody else opened
-        // for you) could not tell an agent's session from your own.
-        origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
-        // `focus_sessions.current_stage` is documented as "seeded from the
-        // playbook's first stage on instantiation" — but this door only ever
-        // wired playbookId, so a session started from a staged playbook opened
-        // with a NULL stage and every stage-aware surface read it as stageless.
-        // Seed it here so the column matches its contract from birth; stageless
-        // playbooks (stages: []) correctly stay NULL.
-        currentStage: firstStageKey(playbook?.stages),
-        // `owedSince` is present IFF `owner === 'human'`, and that invariant has
-        // to hold from BIRTH: a session created with an already-blocked slot
-        // would otherwise carry the human's ownership with no clock, and the
-        // owed feed has nothing to order or age it by.
-        //
-        // The SAME door the merge uses, never a second answer here — and it is
-        // the whole write-authority floor, not just the clock. This was
-        // `reconcileOwedSince` alone, which meant a caller could declare a slot
-        // already carrying `attestedBy` (a forged human confirmation) or
-        // `retiredAt` (born invisible to the owed board). The update door had
-        // refused both for as long as the floor existed; this one had not.
-        expectedOutputs: sanitizeDeclaredOutputs(expectedOutputs),
-        channelId,
-        agentIds,
-        status: "active",
-      })
-      .returning();
+        database: tx as unknown as typeof db,
+      });
+      if (raced.exact) return { deduped: raced.exact, session: undefined };
+    }
+
+    const fields = {
+      workspaceId,
+      projectId,
+      subjectEntityId,
+      title,
+      goal,
+      templateId,
+      playbookId: playbook?.id ?? null,
+      // `focus_sessions.current_stage` is documented as "seeded from the
+      // playbook's first stage on instantiation" — but this door only ever
+      // wired playbookId, so a session started from a staged playbook opened
+      // with a NULL stage and every stage-aware surface read it as stageless.
+      // Seed it here so the column matches its contract from birth; stageless
+      // playbooks (stages: []) correctly stay NULL.
+      currentStage: firstStageKey(playbook?.stages),
+      // `owedSince` is present IFF `owner === 'human'`, and that invariant has
+      // to hold from BIRTH: a session created with an already-blocked slot
+      // would otherwise carry the human's ownership with no clock, and the
+      // owed feed has nothing to order or age it by.
+      //
+      // The SAME door the merge uses, never a second answer here — and it is
+      // the whole write-authority floor, not just the clock. This was
+      // `reconcileOwedSince` alone, which meant a caller could declare a slot
+      // already carrying `attestedBy` (a forged human confirmation) or
+      // `retiredAt` (born invisible to the owed board). The update door had
+      // refused both for as long as the floor existed; this one had not.
+      expectedOutputs: sanitizeDeclaredOutputs(expectedOutputs),
+      criteria: sessionCriteria,
+    };
+
+    let session: typeof focusSessions.$inferSelect | undefined;
+    if (adoptId) {
+      // ADOPT the client's auto-opened session. It stops being a write receipt
+      // (the `kind` marker goes) and becomes this unit of work, bound to the
+      // client; an explicit title is the agent's own (`titleSource: agent`),
+      // which automation never overwrites.
+      const [adopted] = await tx
+        .update(focusSessions)
+        .set({
+          ...fields,
+          // What the start did not say keeps what the auto-opened row had
+          // (its derived name, the workspace its first write landed in).
+          // Drizzle drops `undefined` keys from a SET.
+          title: title ?? undefined,
+          workspaceId: workspaceId ?? undefined,
+          projectId: projectId ?? undefined,
+          subjectEntityId: subjectEntityId ?? undefined,
+          ...(playbook ? { origin: "playbook" as const } : {}),
+          ...(channelId ? { channelId } : {}),
+          ...(agentIds.length > 0 ? { agentIds } : {}),
+          ...(correlationId ? { correlationId } : {}),
+          metadata: drizzleSql`(coalesce(${focusSessions.metadata}, '{}'::jsonb) - 'kind' - 'autoOpened') || ${JSON.stringify(
+            {
+              clientKey,
+              adoptedAt: new Date().toISOString(),
+              ...(title ? titleSourcePatch("agent") : {}),
+            }
+          )}::jsonb`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(eq(focusSessions.id, adoptId), eq(focusSessions.userId, userId))
+        )
+        .returning();
+      session = adopted;
+    }
+    // Not adopting — or the auto-opened row went away since the lookup.
+    const adopted = !!session;
+    if (!session) {
+      const [inserted] = await tx
+        .insert(focusSessions)
+        .values({
+          id: sessionId,
+          ...fields,
+          userId,
+          correlationId: correlationId ?? null,
+          // Binds the session to the calling client (write attribution); an
+          // explicit title is its author's (agent or person), which automation
+          // never renames. D8: conditional, so an untitled human session keeps
+          // the column default.
+          ...(clientKey || title || isProbeWriteContext()
+            ? {
+                metadata: stampProbeMarker({
+                  ...(clientKey ? { clientKey } : {}),
+                  ...(title
+                    ? titleSourcePatch(agentUserId ? "agent" : "human")
+                    : {}),
+                }),
+              }
+            : {}),
+          // Typed origin (migration 0240) — stamped from what this door already
+          // resolved, never re-sniffed from metadata. A session created here is
+          // a playbook run exactly when `templateId` resolved to a real
+          // playbook; automation-origin sessions never come through here, they
+          // come through `openRunSession`. Otherwise the discriminator is
+          // `agentUserId` — the SAME fact the governance membrane above already
+          // used to decide whether this write needs a proposal. An agent
+          // identity means an agent opened the session ("agent"); its absence
+          // means a person did ("human").
+          origin: playbook ? "playbook" : agentUserId ? "agent" : "human",
+          channelId,
+          agentIds,
+          status: "active",
+        })
+        .returning();
+      session = inserted;
+    }
 
     // The playbook_runs ledger row (status "running") so the runs feed sees the
     // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
@@ -460,8 +650,12 @@ export async function createFocusSession(
         },
       });
     }
-    return session;
+    return { session: session!, adopted, deduped: undefined };
   });
+  if (outcome.deduped) {
+    return { status: "deduped", session: outcome.deduped, candidates: [] };
+  }
+  const created = outcome.session!;
 
   // Gate 2: always mint a work channel when the caller did not supply one
   // (parity with runPlaybook). Re-load so the returned row includes channelId.
@@ -565,5 +759,7 @@ export async function createFocusSession(
     ...(twinMatch.candidates.length > 0
       ? { candidates: twinMatch.candidates }
       : {}),
+    ...(template ? { template } : {}),
+    ...(outcome.adopted ? { adopted: true as const } : {}),
   };
 }

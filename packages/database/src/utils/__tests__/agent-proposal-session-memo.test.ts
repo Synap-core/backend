@@ -17,6 +17,14 @@ const { mockResolve } = vi.hoisted(() => ({
 
 vi.mock("../resolve-or-create-agent-proposal-session.js", () => ({
   resolveOrCreateAgentProposalSession: mockResolve,
+  // The real rule minus the request context: explicit › channel › agent.
+  resolveClientKey: (i: {
+    clientKey?: string | null;
+    channelId?: string | null;
+    agentUserId: string;
+  }) =>
+    i.clientKey ||
+    (i.channelId ? `channel:${i.channelId}` : `agent:${i.agentUserId}`),
 }));
 
 const { resolveAgentProposalSessionOnce, __resetAgentProposalSessionMemo } =
@@ -81,22 +89,19 @@ describe("resolveAgentProposalSessionOnce", () => {
     expect(mockResolve).toHaveBeenCalledTimes(1);
   });
 
-  it("keys on the tuple the resolver's own reuse ladder keys on", async () => {
+  it("keys on the tuple the resolver's own reuse ladder keys on — the CLIENT", async () => {
     await resolveAgentProposalSessionOnce(BASE);
     await resolveAgentProposalSessionOnce({ ...BASE, agentUserId: "agent-2" });
-    await resolveAgentProposalSessionOnce({ ...BASE, workspaceId: "ws-2" });
-    await resolveAgentProposalSessionOnce({ ...BASE, goal: "another goal" });
+    await resolveAgentProposalSessionOnce({ ...BASE, clientKey: "key:B" });
     await resolveAgentProposalSessionOnce({ ...BASE, userId: "user-2" });
 
-    expect(mockResolve).toHaveBeenCalledTimes(5);
+    expect(mockResolve).toHaveBeenCalledTimes(4);
   });
 
-  it("normalizes the goal the same way the resolver does, so whitespace is not a second key", async () => {
+  it("a different GOAL or workspace from the same client is the same group", async () => {
     await resolveAgentProposalSessionOnce(BASE);
-    await resolveAgentProposalSessionOnce({
-      ...BASE,
-      goal: "  Agent create   ·  entity  ",
-    });
+    await resolveAgentProposalSessionOnce({ ...BASE, goal: "another goal" });
+    await resolveAgentProposalSessionOnce({ ...BASE, workspaceId: "ws-2" });
 
     expect(mockResolve).toHaveBeenCalledTimes(1);
   });

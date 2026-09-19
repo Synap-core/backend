@@ -98,6 +98,8 @@ export function registerPlaybookExecutors(): void {
         // category-less stages and will be rejected on approval — by design;
         // the proposal must be revised to declare categories.
         stages: innerData.stages as PlaybookStageInput[] | undefined,
+        // Re-validated by `playbooks.create` (`sessionCriteriaSchema`).
+        criteria: innerData.criteria,
         subjectProfile: innerData.subjectProfile as
           Record<string, unknown> | undefined,
         schedule: innerData.schedule,
@@ -222,6 +224,7 @@ export function registerPlaybookExecutors(): void {
         "channelSpec",
         "expectedOutputs",
         "stages",
+        "criteria",
         "subjectProfile",
         "schedule",
         "executor",

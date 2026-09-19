@@ -7,7 +7,8 @@
  *
  * Currently stores:
  *   - intelligenceDefaults: tier-based model defaults (chat / reasoning /
- *     embedding / vision). null fields fall through to the default IS.
+ *     embedding / vision). null fields fall through to the default IS. Also
+ *     the opt-in `thirdPartyDecisionModel` consent (default off).
  *   - proactiveDefaults: pod-wide defaults for proactive AI (workspaces can
  *     override via workspace.settings.proactiveAi).
  *
@@ -22,6 +23,13 @@ export interface PodIntelligenceDefaults {
   reasoningModelId: string | null;
   embeddingModelId: string | null;
   visionModelId: string | null;
+  /**
+   * The pod's CONSENT to the third-party decision model (TypeSafe JEV) for
+   * capture workspace routing. Default OFF: absent/false ⇒ capture never asks
+   * the IS for a JEV decision and tells the tie-break `allowDecisionModel:
+   * false`. Read (fail-closed) by `readPodThirdPartyDecisionModelConsent`.
+   */
+  thirdPartyDecisionModel?: boolean;
 }
 
 export interface PodProactiveDefaults {

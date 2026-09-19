@@ -114,7 +114,8 @@ vi.mock(
           return { linked: false, reason: "not_found" } as const;
         }
         const key = `${i.sessionId}->${i.blockerSessionId}`;
-        if (existingEdges.has(key)) return { linked: true, inserted: 0 } as const;
+        if (existingEdges.has(key))
+          return { linked: true, inserted: 0 } as const;
         existingEdges.add(key);
         edgeWrites.push(key);
         return { linked: true, inserted: 1 } as const;
@@ -615,8 +616,17 @@ describe("(6) focus_session/create — the reference effect receipt", () => {
   );
 
   it("builds `rows` from the INSERT's own .returning(), not from a boolean", () => {
-    expect(src).toContain("const insertedSessions = await db");
-    expect(src).toContain(".returning();");
+    // Two branches feed `insertedSessions`, and each is a statement's own
+    // `.returning()`: the ad-hoc insert here, and — for a playbook instantiate —
+    // `instantiateSessionRow`'s conflict-safe insert (its zero-row outcome is
+    // asserted behaviourally in focus-session-playbook-instantiate.pglite.test.ts).
+    expect(src).toMatch(
+      /const insertProposedSession = async \(\) => \{[\s\S]*?return db\s*\.insert\(focusSessions\)[\s\S]*?\.returning\(\);/
+    );
+    expect(src).toMatch(
+      /const insertedSessions =[\s\S]*?\? await instantiateApprovedPlaybook\([\s\S]*?: await insertProposedSession\(\);/
+    );
+    expect(src).toMatch(/return row \? \[row\] : \[\];/);
     expect(src).toMatch(/rows:\s*insertedSessions\.length/);
     expect(src).toMatch(/ids:\s*insertedSessions\.map\(/);
   });

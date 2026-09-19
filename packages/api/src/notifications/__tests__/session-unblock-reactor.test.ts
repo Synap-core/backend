@@ -121,6 +121,41 @@ describe("session-unblock-notify reactor", () => {
     expect(createMock).not.toHaveBeenCalled();
   });
 
+  it("names both sessions by their NAME (title, else the goal's first line), never the goal paragraph", async () => {
+    // Limitation: this fake db returns rows whatever the select asked for, so
+    // it proves the naming rule, not that `title` is in the select (tsc does).
+    getSessionEdgesForMock.mockResolvedValueOnce({
+      blockedBy: [],
+      unblocks: [DEPENDENT],
+    });
+    queue.push([
+      {
+        id: CLOSED,
+        title: null,
+        goal: "Ship the theme toggle\nYou are the agent, running unattended…",
+        userId: "u",
+      },
+    ]);
+    queue.push([
+      {
+        id: DEPENDENT,
+        title: "Relay theme follows system",
+        goal: "A long paragraph the agent was handed as its instruction.",
+        userId: "u",
+        workspaceId: "ws",
+      },
+    ]);
+    openBlockerIdsMock.mockResolvedValueOnce([]);
+    queue.push([]);
+    await sessionUnblockNotifyReactor.handler(payload(), {} as never);
+    expect(createMock.mock.calls[0]![0]).toMatchObject({
+      data: {
+        sessionTitle: "Relay theme follows system",
+        blockerTitle: "Ship the theme toggle",
+      },
+    });
+  });
+
   it("notifies once when the LAST open blocker closes", async () => {
     getSessionEdgesForMock.mockResolvedValueOnce({
       blockedBy: [],

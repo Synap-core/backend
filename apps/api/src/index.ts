@@ -53,6 +53,7 @@ import {
   sanitizeErrorEgress,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
+  registerClosingReportReactor,
   registerDevAgentSpawner,
 } from "@synap/api";
 import { dispatchDevAgentRun } from "./dev-agent-dispatch.js";
@@ -1938,6 +1939,9 @@ try {
       // `focus_session.closed`, this reactor derives whether the last open
       // blocker just went away and files ONE `session.unblocked` notification.
       registerSessionUnblockReactor();
+      // Same close event: the session document gains its structured closing
+      // report (outcome, definition of done, outputs, decisions).
+      registerClosingReportReactor();
       // IoC: fill the BYOA local-spawn slot. The `external-agent` executor's
       // no-webhook branch starts the workspace's coding CLI on this host; the
       // spawn (node-pty + the DevPlane `localTerminalEnabled` gate) lives here,

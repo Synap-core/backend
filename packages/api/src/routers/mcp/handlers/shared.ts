@@ -366,7 +366,7 @@ export async function buildGraphEnvelope(
  * to the hub caller as a grouping hint.
  *
  * A prefix rule covers the bulk (`synap_get_*` / `synap_list_*`); the rest are
- * named. Ownership is still enforced downstream (`checkFocusSessionOwnership`), so this
+ * named. Ownership is still enforced downstream (`resolveWorkSession`), so this
  * list is a performance boundary, never an authorization one.
  */
 export const READ_ONLY_TOOL_PREFIXES = ["synap_get_", "synap_list_"] as const;
@@ -395,58 +395,19 @@ export function isReadOnlyTool(toolName: string): boolean {
 // existing importer is unchanged — one declaration, two names for it.
 import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
 import { sessionKindWhere } from "../../../services/focus-sessions/session-kind.js";
+import {
+  resolveWorkSession,
+  requestClientKey,
+  type WorkSessionResolution,
+} from "../../../services/focus-sessions/resolve-work-session.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
 } from "../../../services/focus-sessions/session-statuses.js";
 
 /**
- * Does this `focus_sessions` row belong to the effective user?
- *
- * `?sessionId=` arrives on the MCP URL and is caller-supplied — nothing upstream
- * validates it. Left unchecked it would point proposal grouping and `produced`
- * links at somebody else's session. This is a SCOPE HINT, not authorization, so
- * a mismatch is ignored (and logged), never thrown.
- */
-async function checkFocusSessionOwnership(
-  userId: string,
-  sessionId: string
-): Promise<"owned" | "not-owned" | "ownership-check-failed"> {
-  try {
-    const [row] = await db
-      .select({ id: focusSessions.id })
-      .from(focusSessions)
-      .where(
-        and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
-      )
-      .limit(1);
-    return row ? "owned" : "not-owned";
-  } catch (err) {
-    // A lookup failure must not silently widen the handle's reach — it is
-    // treated as not owned. It is still REPORTED as its own outcome: "we could
-    // not check" and "it is not yours" are different facts.
-    logger.warn(
-      { err, sessionId },
-      "mcp: focus-session ownership check failed"
-    );
-    return "ownership-check-failed";
-  }
-}
-
-/**
- * The user's most recent still-open focus session — the ambient "what I'm
- * working on" handle when no explicit/URL one was supplied. Without this the
- * whole session-handle feature is inert: MCP URLs are registered once per
- * client, so nothing ever populates `?sessionId=`.
- *
- * NOT memoized. `synap_start_session` is itself session-linked, so this runs
- * BEFORE the session it opens exists — a memo would cache that pre-session
- * answer and the writes belonging to the just-opened session are exactly the
- * ones that would fail to group. The query is a single indexed lookup.
- */
-/**
- * Ambient open sessions for a user (newest first). Used for single-session
- * attach and multi-session ambiguity guardrails.
+ * A user's open WORK sessions (newest first) — the orient briefing's count.
+ * Write attribution does NOT read this: it goes through `resolveWorkSession`.
  */
 export async function listOpenFocusSessions(
   userId: string,
@@ -514,81 +475,22 @@ export type SessionAttribution = "explicit" | "derived";
 export interface ResolvedSession {
   sessionId: string;
   attribution: SessionAttribution;
-  /**
-   * More than one session was open and the newest was chosen. Only ever set on
-   * `derived` — an explicit id is never a guess.
-   */
-  ambiguous?: boolean;
-  /** Open-session count at resolution time; present only when `ambiguous`. */
-  openCount?: number;
 }
 
 /**
- * The user's most recently STARTED open session.
- *
- * This used to REFUSE whenever more than one session was open, on the reasoning
- * that mis-grouping a write is worse than not grouping it. Measurement said
- * otherwise: the refusal is unrecoverable (the write lands with no session and
- * nothing can ever reattach it), while a wrong guess is visible and repairable.
- * In practice the refusal was the 100% case — two abandoned verification
- * sessions latched ambient attach off pod-wide — and the mis-grouping it
- * protected against stayed hypothetical.
- *
- * So it now picks the newest and SAYS SO (`ambiguous`), which the caller
- * surfaces. A hint that is usually right and discloses itself beats a hint that
- * is absent every time; the explicit `sessionId` arg on the write doors is the
- * override when the guess is wrong.
+ * The session `synap_get_session` answers about when none is named — the SAME
+ * resolver a write is attributed through (`resolveWorkSession`): this client's
+ * own session, else the one unclaimed open work session. Undefined when there
+ * is no such session or several (never a guess among them).
  */
 export async function resolveAmbientSession(
-  userId: string
-): Promise<
-  { sessionId: string; ambiguous: boolean; openCount: number } | undefined
-> {
-  const measured = await measureAmbientSession(userId);
-  return measured.ok ? measured.ambient : undefined;
-}
-
-/**
- * `resolveAmbientSession`, but a FAILED session read stays distinguishable from
- * "no session open" — the attribution report needs the difference (a count it
- * could not take is `null`, never `0`).
- */
-async function measureAmbientSession(userId: string): Promise<
-  | {
-      ok: true;
-      ambient:
-        | { sessionId: string; ambiguous: boolean; openCount: number }
-        | undefined;
-    }
-  | { ok: false }
-> {
-  // Fetch >2 so `openCount` is informative rather than clamped at the old
-  // "is there more than one" boundary.
-  let open: Awaited<ReturnType<typeof listOpenFocusSessions>>;
-  try {
-    open = await listOpenFocusSessions(userId, 10, { onError: "throw" });
-  } catch {
-    // Already logged by the reader.
-    return { ok: false };
-  }
-  const newest = open[0]?.id;
-  if (!newest) return { ok: true, ambient: undefined };
-  const ambiguous = open.length > 1;
-  if (ambiguous) {
-    logger.info(
-      {
-        userId,
-        openCount: open.length,
-        chosenSessionId: newest,
-        sessionIds: open.map((s) => s.id),
-      },
-      "mcp: multiple open focus sessions — attributing to the most recently started; pass sessionId to override"
-    );
-  }
-  return {
-    ok: true,
-    ambient: { sessionId: newest, ambiguous, openCount: open.length },
-  };
+  userId: string,
+  agentUserId?: string
+): Promise<WorkSessionResolution> {
+  return resolveWorkSession({
+    userId,
+    clientKey: requestClientKey(agentUserId),
+  });
 }
 
 /**
@@ -599,13 +501,23 @@ async function measureAmbientSession(userId: string): Promise<
  * parse prose to learn its write was grouped by a guess.
  */
 export interface SessionAttributionReport {
-  /** `none` = no session: none open, the read failed, or the explicit id was dropped. */
+  /** `none` = no session: none bound, none unambiguous, or the explicit id was dropped. */
   session: "explicit" | "derived" | "none";
-  /** Several work sessions were open and the newest was chosen. */
+  /**
+   * `derived` only: `client` = the session bound to THIS client (one it
+   * started, or the one auto-opened for it); `unclaimed` = the single open work
+   * session no client has claimed.
+   */
+  via?: "client" | "unclaimed";
+  /**
+   * Several unclaimed work sessions were open, so NONE was guessed — the write
+   * is grouped under this client's own (auto-opened) session instead.
+   */
   ambiguous: boolean;
   /**
-   * Open work sessions counted while resolving. `null` = NOT counted — an
-   * explicit handle never lists them, and a failed read is not zero.
+   * Unclaimed open work sessions counted while resolving. `null` = NOT counted
+   * — an explicit handle or a client-bound session answered first, or the read
+   * failed (a failed read is not zero).
    */
   openCount: number | null;
   /**
@@ -625,83 +537,60 @@ export interface SessionResolution {
 }
 
 /**
- * Resolve the focus-session handle for THIS tool call.
+ * Resolve the focus-session handle for THIS tool call, through the ONE
+ * resolver every AI door shares (`services/focus-sessions/resolve-work-session.ts`):
+ * explicit `args.sessionId` › this client's own session › the single unclaimed
+ * open work session › none. It used to fall back to the newest open session
+ * POD-WIDE, which filed one agent's writes under another agent's (or the
+ * person's) session; a client never inherits another client's session now.
+ * With no session, the governance gate auto-opens one for this client at the
+ * first real write — see the resolver's header.
  *
- * Precedence: explicit `args.sessionId` > derived (most recent open session).
- * The explicit id is ownership-checked before it becomes `ctx.sessionId`; a
- * handle that isn't the caller's is dropped rather than rejected — it is a
- * grouping hint, and failing the whole tool call over it would be a worse
- * outcome than losing the grouping. The drop is REPORTED in `attribution`.
- *
+ * A dropped explicit id is REPORTED in `attribution`, never an error.
  * `undefined` only for a read-only tool: reads are never attributed.
  */
 export async function resolveSessionHandle(
   toolName: string,
   args: Record<string, unknown>,
-  userId: string
+  userId: string,
+  agentUserId?: string
 ): Promise<SessionResolution | undefined> {
   if (isReadOnlyTool(toolName)) return undefined;
   // Normalize: sessionId flows to a `uuid` DB column, so a non-string arg is
-  // dropped here rather than `as`-cast blindly. (Malformed UUID *strings* are
-  // still rejected downstream by the mutation inputs' zod `.uuid()` schemas.)
+  // dropped here rather than `as`-cast blindly.
   const explicit =
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
-  if (explicit) {
-    const ownership = await checkFocusSessionOwnership(userId, explicit);
-    if (ownership === "owned") {
-      return {
-        session: { sessionId: explicit, attribution: "explicit" },
-        attribution: { session: "explicit", ambiguous: false, openCount: null },
-      };
-    }
-    logger.warn(
-      {
-        userId,
-        sessionId: explicit,
-        toolName,
-        source: "arg",
-        ownership,
-      },
-      "mcp: focus-session handle does not belong to the caller — ignoring"
-    );
+  const r = await resolveWorkSession({
+    userId,
+    explicitSessionId: explicit,
+    clientKey: requestClientKey(agentUserId),
+  });
+  if (r.source === "explicit" && r.sessionId) {
     return {
-      session: undefined,
+      session: { sessionId: r.sessionId, attribution: "explicit" },
+      attribution: { session: "explicit", ambiguous: false, openCount: null },
+    };
+  }
+  if ((r.source === "client" || r.source === "unclaimed") && r.sessionId) {
+    return {
+      session: { sessionId: r.sessionId, attribution: "derived" },
       attribution: {
-        session: "none",
+        session: "derived",
+        via: r.source,
         ambiguous: false,
-        openCount: null,
-        ignoredSession: { sessionId: explicit, reason: ownership },
+        openCount: r.unclaimedOpenCount,
       },
-    };
-  }
-  const measured = await measureAmbientSession(userId);
-  if (!measured.ok) {
-    return {
-      session: undefined,
-      attribution: { session: "none", ambiguous: false, openCount: null },
-    };
-  }
-  const ambient = measured.ambient;
-  if (!ambient) {
-    return {
-      session: undefined,
-      attribution: { session: "none", ambiguous: false, openCount: 0 },
     };
   }
   return {
-    session: {
-      sessionId: ambient.sessionId,
-      attribution: "derived",
-      ...(ambient.ambiguous
-        ? { ambiguous: true, openCount: ambient.openCount }
-        : {}),
-    },
+    session: undefined,
     attribution: {
-      session: "derived",
-      ambiguous: ambient.ambiguous,
-      openCount: ambient.openCount,
+      session: "none",
+      ambiguous: (r.unclaimedOpenCount ?? 0) > 1,
+      openCount: r.unclaimedOpenCount,
+      ...(r.ignoredSession ? { ignoredSession: r.ignoredSession } : {}),
     },
   };
 }

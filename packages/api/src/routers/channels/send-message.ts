@@ -71,6 +71,7 @@ import {
   type AnchoredCommentPlan,
 } from "../../utils/anchored-comment-turn.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
+import { withTurnSessionTitle } from "../../services/focus-sessions/turn-context-session-title.js";
 import { resolveIntelligenceServiceByAgentId } from "../../utils/intelligence-routing.js";
 import {
   makeRoutedTeammateContext,
@@ -164,8 +165,11 @@ export const sendMessageProcedure = protectedProcedure
     const workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;
     const projectId = input.projectId;
     const requestedAgentId: string | undefined = input.agentId;
+    // The session's NAME is added here, server-side (the caller cannot send
+    // one): the agent is told what the work is called, not handed a goal
+    // paragraph as its name.
     const turnContext = input.turnContext
-      ? redactTurnContext(input.turnContext)
+      ? await withTurnSessionTitle(redactTurnContext(input.turnContext), userId)
       : undefined;
 
     if (projectId) {

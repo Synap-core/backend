@@ -22,11 +22,21 @@ import { auditLog } from "./audit-log.js";
 import {
   AI_DECISION,
   AI_CORRECTION,
+  AI_CONFIRMATION,
+  AI_KIND,
   AI_PROCESSING,
   CAPTURE_TRACE_KIND,
+  eventKindExpr,
 } from "../lib/ai-events.js";
 import { createLogger } from "@synap-core/core";
-import { db, isConnectionSyncProposal } from "@synap/database";
+import {
+  and,
+  db,
+  drizzleSql,
+  eq,
+  events,
+  isConnectionSyncProposal,
+} from "@synap/database";
 
 const logger = createLogger({ module: "ai-feedback-events" });
 
@@ -138,6 +148,98 @@ export async function emitAiCorrection(opts: {
       "ai_correction emit failed (operation preserved)"
     );
   }
+}
+
+/**
+ * The workspace a route decision CHOSE (its `chosenWorkspaceId` — the AI's
+ * pick or pending suggestion), joined by the decision's correlationId. `null`
+ * = no route decision under that id.
+ */
+async function routeDecisionChosenWorkspace(
+  userId: string,
+  correlationId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({
+      chosen: drizzleSql<string | null>`${events.data}->>'chosenWorkspaceId'`,
+    })
+    .from(events)
+    .where(
+      and(
+        eq(events.userId, userId),
+        eq(events.subjectType, AI_DECISION),
+        eq(events.correlationId, correlationId),
+        drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`
+      )
+    )
+    .limit(1);
+  return row?.chosen ?? null;
+}
+
+/**
+ * The feedback a human MOVE of an AI-placed entity carries — the one decision
+ * for every move door. Moving it INTO the workspace its route decision chose
+ * (the suggestion that stayed a proposal) ENDORSES the AI: an
+ * `ai_confirmation`, never a correction. Any other move reroutes away from the
+ * AI's choice: a `route` correction, exactly as before. An unreadable decision
+ * falls back to the correction (the pre-existing behaviour), logged.
+ * Best-effort, never throws.
+ */
+export async function emitRouteMoveFeedback(opts: {
+  userId: string;
+  entityId: string;
+  fromWorkspaceId: string | null;
+  toWorkspaceId: string;
+  /** The DECISION's id, stamped on the entity at capture. */
+  correlationId: string;
+}): Promise<"confirmation" | "correction"> {
+  const data = {
+    kind: AI_KIND.ROUTE,
+    entityId: opts.entityId,
+    fromWorkspaceId: opts.fromWorkspaceId,
+    toWorkspaceId: opts.toWorkspaceId,
+    correlationId: opts.correlationId,
+  };
+  let chosen: string | null = null;
+  try {
+    chosen = await routeDecisionChosenWorkspace(
+      opts.userId,
+      opts.correlationId
+    );
+  } catch (err) {
+    logger.warn(
+      { err, entityId: opts.entityId },
+      "route move feedback: decision lookup failed — recording a correction"
+    );
+  }
+  if (chosen && chosen === opts.toWorkspaceId) {
+    try {
+      await auditLog({
+        subjectType: AI_CONFIRMATION,
+        action: "accept_suggestion",
+        phase: "completed",
+        subjectId: opts.entityId,
+        userId: opts.userId,
+        workspaceId: opts.toWorkspaceId,
+        source: "api",
+        data,
+      });
+    } catch (err) {
+      logger.warn(
+        { err, entityId: opts.entityId },
+        "ai_confirmation emit failed (operation preserved)"
+      );
+    }
+    return "confirmation";
+  }
+  await emitAiCorrection({
+    action: "reroute",
+    userId: opts.userId,
+    subjectId: opts.entityId,
+    workspaceId: opts.toWorkspaceId,
+    data,
+  });
+  return "correction";
 }
 
 /**

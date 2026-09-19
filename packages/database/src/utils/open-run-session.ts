@@ -10,6 +10,18 @@ export interface OpenRunSessionInput {
   userId: string;
   /** Human-readable purpose of the run — becomes the session's goal (required). */
   goal: string;
+  /**
+   * The session's display NAME (`focus_sessions.title`), built by the caller
+   * with `buildDerivedSessionTitle` (`@synap-core/types/focus-sessions`, which
+   * this package does not depend on). Written only on CREATE — a reused
+   * channel session keeps its own name. `goal` is unaffected.
+   */
+  title?: string | null;
+  /**
+   * Who named it (`metadata.titleSource`). Defaults to `"derived"` whenever a
+   * title is given: every run caller builds its name from what it opened.
+   */
+  titleSource?: "human" | "agent" | "generated" | "derived";
   workspaceId?: string | null;
   /** Bind the session to a channel so its feed mirrors to Discord/etc. When set,
    *  an existing active session on the channel is REUSED (see below). */
@@ -44,6 +56,13 @@ export interface OpenRunSessionInput {
    * identity — without it every human capture's room read as agent-opened.
    */
   origin?: "automation" | "agent" | "human";
+  /**
+   * Run the reads and the insert on this handle — a caller that must insert
+   * INSIDE its own transaction (the receipt packager, which holds a per-client
+   * advisory lock) passes the tx, so the lock and the insert share one
+   * connection. Default: the module pool.
+   */
+  database?: typeof db;
 }
 
 export interface OpenRunSessionResult {
@@ -74,13 +93,14 @@ export interface OpenRunSessionResult {
 export async function openRunSession(
   input: OpenRunSessionInput
 ): Promise<OpenRunSessionResult> {
+  const database = input.database ?? db;
   // Reuse ONLY a run-origin session (one WE opened — it carries metadata.source).
   // Never hijack a human's interactive session that happens to be active on the
   // channel: that would file automation proposals into a person's session card.
   // A human session on the channel → returns null → we fall back to channel-less.
   const findReusableRunSession = async (): Promise<string | null> => {
     if (!input.channelId) return null;
-    const existing = await db.query.focusSessions.findFirst({
+    const existing = await database.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.channelId, input.channelId),
         eq(focusSessions.status, "active")
@@ -116,7 +136,7 @@ export async function openRunSession(
     // always name the run using it NOW — otherwise reaping the original (dead)
     // run would close a room a healthy successor run is mid-flight in.
     if (input.automationRunId) {
-      await db
+      await database
         .update(focusSessions)
         .set({
           metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
@@ -144,7 +164,7 @@ export async function openRunSession(
   //
   // Deliberately AFTER the reuse early-return above: a reused channel session
   // already has its own placement and must never be re-filed by a later run.
-  const placement = await resolveSessionProjectPlacement(db, {
+  const placement = await resolveSessionProjectPlacement(database, {
     userId: input.userId,
     explicitProjectId: input.projectId ?? null,
     parentSessionId: input.parentSessionId ?? null,
@@ -161,13 +181,15 @@ export async function openRunSession(
       ? { automationRunId: input.automationRunId }
       : {}),
     ...(input.extraMetadata ?? {}),
+    ...(input.title ? { titleSource: input.titleSource ?? "derived" } : {}),
   });
 
   const insert = (channelId: string | null) =>
-    db
+    database
       .insert(focusSessions)
       .values({
         userId: input.userId,
+        ...(input.title ? { title: input.title } : {}),
         goal: input.goal,
         status: "active",
         workspaceId: input.workspaceId ?? null,

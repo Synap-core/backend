@@ -4499,6 +4499,10 @@ CREATE INDEX IF NOT EXISTS "governance_ceilings_source_proposal_idx"
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "origin" text;  -- 0240 (playbook | automation | agent — an automation run wearing a session's shape is no longer a JSONB sniff)
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_origin" ON "focus_sessions" ("origin");
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 0262 (short optional name, separate from goal)
+-- 0267: binary acceptance criteria (SessionCriterion[]) — the contract a
+-- session is graded against; the grade itself lives in session_evaluations.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.
@@ -4589,3 +4593,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS "calendar_feed_tokens_user_id_uidx"
 
 CREATE UNIQUE INDEX IF NOT EXISTS "calendar_feed_tokens_token_lookup_hash_uidx"
   ON "calendar_feed_tokens" ("token_lookup_hash");
+
+-- ---------------------------------------------------------------------------
+-- Session evaluations (0267)
+-- One row per criterion per attempt; latest row per criterion = current
+-- verdict, a human row wins over any non-human row regardless of time.
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS "session_evaluations" (
+  "id"             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "session_id"     uuid NOT NULL REFERENCES "focus_sessions"("id") ON DELETE CASCADE,
+  "user_id"        text NOT NULL,
+  "workspace_id"   text,
+  "criterion_key"  text NOT NULL,
+  "attempt"        integer NOT NULL DEFAULT 1,
+  "verdict"        text NOT NULL CHECK ("verdict" IN ('pass', 'fail', 'unmeasured')),
+  "evaluator_kind" text NOT NULL CHECK ("evaluator_kind" IN ('evidence', 'capability', 'judge', 'human')),
+  "evaluator_id"   text,
+  "evidence"       jsonb NOT NULL DEFAULT '{}'::jsonb,
+  "rationale"      text,
+  "created_at"     timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "idx_session_evaluations_session_id"
+  ON "session_evaluations" ("session_id");
+CREATE INDEX IF NOT EXISTS "idx_session_evaluations_session_criterion"
+  ON "session_evaluations" ("session_id", "criterion_key", "created_at");

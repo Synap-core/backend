@@ -29,6 +29,7 @@
  */
 
 import { createLogger } from "@synap-core/core";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   db,
   focusSessions,
@@ -61,6 +62,13 @@ export interface EnsureIntakeSessionInput {
   door: IntakeDoor;
   /** Goal of a minted session ("Capture · …", "Import 12 markdown items"). */
   goal: string;
+  /**
+   * Display NAME of a minted session — the caller's own label for what was
+   * captured (`buildDerivedSessionTitle({ kind: "capture", … })`). Absent ⇒
+   * derived here from `goal` by the same builder (ids and raw links stripped,
+   * bounded), so every door's room is named even before it passes one.
+   */
+  title?: string | null;
   /** Stable per-capture key: a retry reuses the room instead of minting a second. */
   correlationKey?: string | null;
   /**
@@ -280,6 +288,9 @@ export async function ensureIntakeSession(
     const opened = await openRunSession({
       userId: input.userId,
       goal: normalizeGoal(input.goal),
+      title:
+        input.title ??
+        buildDerivedSessionTitle({ kind: "capture", label: input.goal }),
       workspaceId: input.workspaceId ?? null,
       projectId: input.projectId ?? null,
       agentUserId: input.agentUserId ?? null,

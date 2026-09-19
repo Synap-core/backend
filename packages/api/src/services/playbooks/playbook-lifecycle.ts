@@ -58,10 +58,18 @@ import {
   playbooks,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
-import type {
-  ExpectedOutput,
-  LinkInput,
-  PlaybookStage,
+import {
+  buildDerivedSessionTitle,
+  resolveSessionTitle,
+  type SessionTitleSource,
+} from "@synap-core/types/focus-sessions";
+import {
+  collectPlaybookCriteria,
+  readCriteria,
+  type ExpectedOutput,
+  type LinkInput,
+  type PlaybookStage,
+  type SessionCriterion,
 } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { parseCommandTemplate } from "../../utils/command-template.js";
@@ -152,6 +160,23 @@ export function buildRunSessionTitle(
 }
 
 /**
+ * The run session's display NAME (`focus_sessions.title`) — the shared derived
+ * builder, wrapped so the propose path in `routers/playbooks.ts` and the direct
+ * path here build it from the same two inputs. `buildRunSessionTitle` above
+ * stays the `goal` (the dedup/proposal key); this is the short name beside it.
+ */
+export function buildRunSessionName(
+  playbookName: string,
+  subjectTitle?: string | null
+): string {
+  return buildDerivedSessionTitle({
+    kind: "run",
+    name: playbookName,
+    subject: subjectTitle,
+  });
+}
+
+/**
  * The instruction to hand an agent for this session: the rendered prompt when
  * one was stored, else the goal. The fallback is what keeps every session
  * created BEFORE this change dispatching exactly as it did — their paragraph
@@ -231,6 +256,21 @@ export interface InstantiateInput {
    * of value the next reader will assume is a bug.
    */
   origin?: "playbook" | "automation" | "agent" | "human";
+  /**
+   * A FIXED row id, for the approved-proposal path: the `focus_session/create`
+   * executor materializes at `proposal.targetId` so any link built at propose
+   * time resolves. With an id the insert is conflict-safe (a re-approve writes
+   * nothing) — see {@link instantiateSessionRow}.
+   */
+  id?: string;
+  /** The proposal chain id, stamped so a later create on the chain finds this row. */
+  correlationId?: string | null;
+  /**
+   * The FINAL criteria list, when the caller already merged its own with the
+   * playbook's (the approved-proposal path, via `mergeCriteria`). Absent ⇒ the
+   * playbook's own (`collectPlaybookCriteria`).
+   */
+  criteria?: SessionCriterion[];
 }
 
 /**
@@ -300,6 +340,24 @@ export async function resolveRunnablePlaybook(input: {
 export async function instantiateSession(
   input: InstantiateInput
 ): Promise<FocusSession> {
+  const session = await instantiateSessionRow(input);
+  if (!session) {
+    // Only reachable with a caller-fixed `id` that already exists.
+    throw new Error(`Focus session ${input.id} already exists`);
+  }
+  return session;
+}
+
+/**
+ * {@link instantiateSession}'s body, returning `null` instead of throwing when
+ * a caller-fixed `id` is already taken (the insert then writes nothing — no
+ * row, no edges). The approved-proposal executor calls this so a re-approve is
+ * a receipt of ZERO rows rather than a crash; every other caller goes through
+ * `instantiateSession`, whose ids are always fresh.
+ */
+export async function instantiateSessionRow(
+  input: InstantiateInput
+): Promise<FocusSession | null> {
   const db = await getDb();
   const playbook = await db.query.playbooks.findFirst({
     where: eq(playbooks.id, input.playbookId),
@@ -332,36 +390,49 @@ export async function instantiateSession(
     subjectTitle = subject?.title ?? null;
   }
   const goal = buildRunSessionTitle(playbook.name, subjectTitle);
+  // The display NAME. `goal` above stays exactly as it was — it is the
+  // dedup/proposal key other doors compare on — and the short name is written
+  // beside it, marked `derived` so the background titler may improve it.
+  const title = buildRunSessionName(playbook.name, subjectTitle);
   const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
   // Seed the active stage from the playbook's first stage (null when stageless,
   // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
   const stages = (playbook.stages as PlaybookStage[]) ?? [];
   const currentStage = stages[0]?.key ?? null;
 
-  const [session] = await db
-    .insert(focusSessions)
-    .values({
-      workspaceId: input.workspaceId,
-      userId: input.userId,
-      goal,
-      playbookId: playbook.id,
-      // Typed origin (migration 0240) — instantiating from a playbook IS the
-      // definition of a playbook-origin session; the caller knows it without
-      // inspecting metadata.
-      origin: input.origin ?? "playbook",
-      projectId: input.projectId ?? null,
-      subjectEntityId: input.subjectId ?? null,
-      expectedOutputs,
-      currentStage,
-      channelId: input.channelId ?? null,
-      agentIds: input.agentIds ?? [],
-      status: input.status ?? "active",
-      metadata: {
-        ...(input.metadata ?? {}),
-        [RUN_PROMPT_METADATA_KEY]: prompt,
-      },
-    })
-    .returning();
+  const insert = db.insert(focusSessions).values({
+    ...(input.id ? { id: input.id } : {}),
+    ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    title,
+    goal,
+    playbookId: playbook.id,
+    // Typed origin (migration 0240) — instantiating from a playbook IS the
+    // definition of a playbook-origin session; the caller knows it without
+    // inspecting metadata.
+    origin: input.origin ?? "playbook",
+    projectId: input.projectId ?? null,
+    subjectEntityId: input.subjectId ?? null,
+    expectedOutputs,
+    // Playbook-level + every stage's criteria, stageKey stamped — the one
+    // copy rule. Written in this body, so the approved-proposal path grades
+    // against the same list as a direct instantiate.
+    criteria: input.criteria ?? collectPlaybookCriteria(playbook),
+    currentStage,
+    channelId: input.channelId ?? null,
+    agentIds: input.agentIds ?? [],
+    status: input.status ?? "active",
+    metadata: {
+      ...(input.metadata ?? {}),
+      [RUN_PROMPT_METADATA_KEY]: prompt,
+      titleSource: "derived" satisfies SessionTitleSource,
+    },
+  });
+  const [session] = input.id
+    ? await insert.onConflictDoNothing().returning()
+    : await insert.returning();
+  if (!session) return null;
 
   // Provenance edges.
   const edges: LinkInput[] = [
@@ -396,7 +467,7 @@ export interface PromoteInput {
   sessionId: string;
   /** The promoting principal (used to scope the capability-link read). */
   userId: string;
-  /** Optional name for the new playbook (defaults to the session goal). */
+  /** Optional name for the new playbook (defaults to the session's display name). */
   name?: string;
   description?: string;
   /** Agent attribution, when an agent's approved proposal is materializing. */
@@ -490,7 +561,11 @@ export async function promoteSessionToPlaybook(
     ];
   }
 
-  const name = input.name ?? session.goal.slice(0, 200);
+  // The session's NAME (its title, else the goal's first line) — not the
+  // goal clipped mid-paragraph.
+  const name =
+    input.name ??
+    (resolveSessionTitle(session, { maxLength: 200 }) || "Playbook");
   // The new playbook's TEMPLATE is the session's instruction, not its title —
   // promoting a run session whose goal is now "<playbook> for Acme Corp" must
   // not hand the next agent that label as its whole prompt.
@@ -518,6 +593,13 @@ export async function promoteSessionToPlaybook(
         description: input.description ?? null,
         goalTemplate,
         expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
+        // The session's criteria become the playbook's own — STRUCTURE only
+        // (key/statement/required/check). Evaluations are this run's verdicts,
+        // not the template's; `stageKey` is dropped because promote copies no
+        // stages, so a stage-bound criterion would point at nothing.
+        criteria: readCriteria(session.criteria).map(
+          ({ stageKey: _stageKey, ...structure }) => structure
+        ),
         executor: "is-agent",
         status: "draft",
         subjectProfile,

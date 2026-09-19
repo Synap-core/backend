@@ -22,7 +22,7 @@
  * a fetched page is the defect this table has shipped twice.
  */
 
-import { eq, ilike, focusSessions } from "@synap/database";
+import { eq, ilike, or, focusSessions } from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { requireUserId } from "../../utils/user-scoped.js";
@@ -110,7 +110,14 @@ export function sessionListConditions({
   // match past the limit.
   const term = q?.trim();
   if (term) {
-    conditions.push(ilike(focusSessions.goal, `%${escapeLikePattern(term)}%`));
+    // Title OR goal: a session is found by the name the list shows it under.
+    const pattern = `%${escapeLikePattern(term)}%`;
+    conditions.push(
+      or(
+        ilike(focusSessions.title, pattern),
+        ilike(focusSessions.goal, pattern)
+      )!
+    );
   }
 
   return conditions;

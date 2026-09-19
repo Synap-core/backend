@@ -102,6 +102,8 @@ export interface SectionDraft {
     author: string;
     writtenAt: string;
     sessionState: string;
+    /** Optional section status (markdown-engine `synap-section` allowlist). */
+    status?: string;
   };
 }
 
@@ -162,7 +164,7 @@ async function applySectionWrite(args: {
   baseVersion: number;
   baseContent: string;
   newContent: string;
-  author: { kind: "ai" | "user"; id: string };
+  author: { kind: "ai" | "system" | "user"; id: string };
   message: string;
 }): Promise<AppliedSectionWrite> {
   const { doc, baseVersion, baseContent, newContent, author, message } = args;
@@ -178,10 +180,7 @@ async function applySectionWrite(args: {
         updatedAt: new Date(),
       })
       .where(
-        and(
-          eq(documents.id, doc.id),
-          eq(documents.currentVersion, baseVersion)
-        )
+        and(eq(documents.id, doc.id), eq(documents.currentVersion, baseVersion))
       )
       .returning({ id: documents.id });
     if (claimed.length === 0) {
@@ -256,6 +255,18 @@ export interface UpsertSessionSectionInput {
   userId: string;
   /** Present ⇒ an agent is writing, and the ownership rule applies. */
   agentUserId?: string | null;
+  /**
+   * The pod itself is writing a machine-owned section (e.g.
+   * `system:closing-report`) on the owner's behalf — a deterministic
+   * projection of stored facts, no model in the loop. The section is stamped
+   * `owner="ai"` with this author, and the ownership rule applies exactly as
+   * for an agent: a person's section is never rewritten. Governance runs on
+   * the owner's principal, as for any write the owner's own pod makes.
+   * Ignored when `agentUserId` is set.
+   */
+  systemAuthor?: string;
+  /** Optional `status` stamp for the section (e.g. a verdict state). */
+  status?: string;
   sessionId: string;
   /**
    * The session the caller is VERIFIABLY working in (the ownership-checked
@@ -311,7 +322,9 @@ export async function upsertSessionDocumentSection(
 
   const session = await loadOwnedSession(input.sessionId, input.userId);
   const agentUserId = input.agentUserId ?? null;
-  const writerIsAgent = Boolean(agentUserId);
+  const systemAuthor = agentUserId ? null : (input.systemAuthor ?? null);
+  // A system writer is machine-owned: same ownership rule as an agent.
+  const writerIsAgent = Boolean(agentUserId) || Boolean(systemAuthor);
 
   let documentId = await findSessionDocumentId(session.id);
   if (!documentId) {
@@ -349,16 +362,17 @@ export async function upsertSessionDocumentSection(
     body: input.body,
     attributes: {
       owner: writerIsAgent ? "ai" : "human",
-      author: agentUserId ?? input.userId,
+      author: agentUserId ?? systemAuthor ?? input.userId,
       writtenAt: new Date().toISOString(),
       sessionState: sessionStateStamp(session),
+      ...(input.status ? { status: input.status } : {}),
     },
   };
   const baseContent = await readContent(doc);
   const rendered = renderSectionWrite(baseContent, draft, writerIsAgent);
 
   const ownSession =
-    writerIsAgent && input.ambientSessionId === session.id;
+    Boolean(agentUserId) && input.ambientSessionId === session.id;
   const perm = await checkPermissionOrPropose({
     userId: input.userId,
     ...(agentUserId ? { agentUserId, source: "intelligence" as const } : {}),
@@ -399,9 +413,11 @@ export async function upsertSessionDocumentSection(
     baseVersion,
     baseContent,
     newContent: rendered.markdown,
-    author: writerIsAgent
-      ? { kind: "ai", id: agentUserId! }
-      : { kind: "user", id: input.userId },
+    author: agentUserId
+      ? { kind: "ai", id: agentUserId }
+      : systemAuthor
+        ? { kind: "system", id: systemAuthor }
+        : { kind: "user", id: input.userId },
     message: `Section "${draft.title.trim()}" written`,
   });
   return {
@@ -422,11 +438,14 @@ export async function upsertSessionDocumentSection(
  * movement since is a CONFLICT (the approval dispatch records it as a failed
  * approval, with this message as the reason).
  */
-export async function applyApprovedSectionProposal(proposal: {
-  targetId: string;
-  agentUserId: string | null;
-  data: unknown;
-}, approverUserId: string): Promise<AppliedSectionWrite & { documentId: string }> {
+export async function applyApprovedSectionProposal(
+  proposal: {
+    targetId: string;
+    agentUserId: string | null;
+    data: unknown;
+  },
+  approverUserId: string
+): Promise<AppliedSectionWrite & { documentId: string }> {
   const raw = (proposal.data ?? {}) as Record<string, unknown>;
   const inner = (
     raw.data && typeof raw.data === "object" ? raw.data : raw

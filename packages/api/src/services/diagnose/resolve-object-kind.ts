@@ -44,6 +44,7 @@ import {
   events,
   workspaces,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import {
   userVisibleWhere,
@@ -187,6 +188,7 @@ export async function resolveObjectKind(
       run: async () => {
         const [r] = await db
           .select({
+            title: focusSessions.title,
             goal: focusSessions.goal,
             workspaceId: focusSessions.workspaceId,
           })
@@ -210,7 +212,7 @@ export async function resolveObjectKind(
           .limit(1);
         if (!r) return null;
         return {
-          displayName: r.goal ?? null,
+          displayName: resolveSessionTitle(r) || null,
           workspaceId: r.workspaceId ?? null,
         };
       },

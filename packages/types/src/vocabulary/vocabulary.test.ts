@@ -431,6 +431,27 @@ describe("resolveStatusLabel", () => {
     expect(resolveStatusLabel("stale")).toBe("Stale");
   });
 
+  it("names session evaluation verdicts — unmeasured never reads as a failure", () => {
+    // humanizeToken would say "Pass" (an imperative) and "Unmeasured".
+    expect(resolveStatusLabel("pass")).toBe("Passed");
+    expect(resolveStatusLabel("fail")).toBe("Failed");
+    expect(resolveStatusLabel("unmeasured")).toBe("Not checked");
+  });
+
+  it("names session VERDICT STATES honestly for work still in flight", () => {
+    // Without rows these humanized to "Passing" / "Failing" / "Incomplete":
+    // "Failing" accuses unfinished work of having failed.
+    expect(resolveStatusLabel("passing")).toBe("Met");
+    expect(resolveStatusLabel("failing")).toBe("Not yet met");
+    expect(resolveStatusLabel("incomplete")).toBe("Partly checked");
+    // The state of the CONTRACT is a different fact from one criterion's
+    // verdict, so the two never share a word.
+    expect(resolveStatusLabel("failing")).not.toBe(resolveStatusLabel("fail"));
+    expect(resolveStatusLabel("incomplete")).not.toBe(
+      resolveStatusLabel("unmeasured")
+    );
+  });
+
   it("names every connection-sync phase (no humanized fallback)", () => {
     expect(resolveStatusLabel("fetching")).toBe("Fetching");
     expect(resolveStatusLabel("mapping")).toBe("Matching");

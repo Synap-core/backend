@@ -7,8 +7,9 @@
  * insert followed 80–215ms later by an unattributed direct create of the same
  * goal — two doors, no shared question, two rows.
  *
- * A TWIN is an OPEN session of the SAME user, SAME normalized goal and SAME
- * scope:
+ * A TWIN is an OPEN session of the SAME user, SAME normalized goal (compared
+ * case-insensitively — "Ship the report" and "ship the report" are one piece of
+ * work; anything else stays exact, never fuzzy-merged) and SAME scope:
  *   - `parentSessionId` given ⇒ scope is that parent's children (the
  *     `spawned_from` edge — lineage is a link, never a column);
  *   - else `projectId` given ⇒ that project;
@@ -78,7 +79,7 @@ export async function findOpenSessionTwin(
   input: FindOpenSessionTwinInput
 ): Promise<SessionTwinMatch> {
   const database = input.database ?? db;
-  const target = normalizeGoal(input.goal);
+  const target = normalizeGoal(input.goal).toLowerCase();
   if (!target || input.templateId) return NONE;
 
   let scope;
@@ -130,7 +131,7 @@ export async function findOpenSessionTwin(
   let exact: SessionTwinMatch["exact"] = null;
   const candidates: SessionTwinCandidate[] = [];
   for (const row of open) {
-    if (normalizeGoal(row.goal) === target) {
+    if (normalizeGoal(row.goal).toLowerCase() === target) {
       if (!exact) exact = row;
       continue;
     }

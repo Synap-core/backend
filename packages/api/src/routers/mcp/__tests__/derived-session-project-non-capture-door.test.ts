@@ -35,6 +35,8 @@ const P_SESSION = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const h = vi.hoisted(() => ({
   owned: false,
   openRows: [] as Array<{ id: string }>,
+  /** The call named a session ⇒ its one select is the ownership check. */
+  explicit: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -44,7 +46,10 @@ vi.mock("@synap/database", async (importOriginal) => {
     getDb: vi.fn(async () => ({})),
     db: {
       select: vi.fn((columns: Record<string, unknown>) => {
-        const isOpenList = "goal" in columns;
+        // The resolver reads EITHER the ownership of a named session OR the
+        // open unclaimed list — never both in one call.
+        void columns;
+        const isOpenList = !h.explicit;
         const chain: Record<string, unknown> = {};
         chain.from = () => chain;
         chain.where = () => chain;
@@ -106,6 +111,7 @@ vi.mock("../handlers/entity.js", async () => {
 const { executeMCPToolViaHubProtocol } = await import("../adapter.js");
 
 async function createEntity(args: Record<string, unknown>) {
+  h.explicit = typeof args.sessionId === "string";
   const result = await executeMCPToolViaHubProtocol(
     "synap_create_entity",
     { profileSlug: "note", title: "x", ...args },
@@ -127,8 +133,8 @@ beforeEach(() => {
 });
 
 describe("A1 — a non-capture MCP hub door never takes a project from a guessed session", () => {
-  it("DERIVED newest session: the write is grouped under it but gets NO project", async () => {
-    h.openRows = [{ id: S_NEWEST }, { id: S_OLDER }];
+  it("DERIVED session (the one unclaimed open one): the write is grouped under it but gets NO project", async () => {
+    h.openRows = [{ id: S_NEWEST }];
 
     const out = await createEntity({});
 

@@ -45,6 +45,7 @@ import {
   focusSessions,
   notifications,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { registerReactor, type Reactor } from "@synap/events";
 import {
   FOCUS_SESSION_SUBJECT_TYPE,
@@ -99,16 +100,20 @@ export const sessionUnblockNotifyReactor: Reactor = {
     // It is also the owner floor for the output-dependent read below, which is
     // why it now runs on EVERY close rather than only on one with declared
     // dependents — the derived half cannot be looked up without a userId.
-    const [closed] = await db
+    const [closedRow] = await db
       .select({
         id: focusSessions.id,
-        title: focusSessions.goal,
+        title: focusSessions.title,
+        goal: focusSessions.goal,
         userId: focusSessions.userId,
       })
       .from(focusSessions)
       .where(eq(focusSessions.id, closedId))
       .limit(1);
-    if (!closed) return;
+    if (!closedRow) return;
+    // The session's NAME (title, else the goal's first line) — never the goal
+    // paragraph, which is what a notification used to quote.
+    const closed = { ...closedRow, title: resolveSessionTitle(closedRow) };
 
     // Sessions waiting on an OUTPUT of this one. Read AFTER the close, which
     // is why this uses `outputDependentsOf` and not the open-only reader: to
@@ -125,15 +130,18 @@ export const sessionUnblockNotifyReactor: Reactor = {
     ];
     if (dependentIds.length === 0) return;
 
-    const dependents = await db
-      .select({
-        id: focusSessions.id,
-        title: focusSessions.goal,
-        userId: focusSessions.userId,
-        workspaceId: focusSessions.workspaceId,
-      })
-      .from(focusSessions)
-      .where(inArray(focusSessions.id, dependentIds));
+    const dependents = (
+      await db
+        .select({
+          id: focusSessions.id,
+          title: focusSessions.title,
+          goal: focusSessions.goal,
+          userId: focusSessions.userId,
+          workspaceId: focusSessions.workspaceId,
+        })
+        .from(focusSessions)
+        .where(inArray(focusSessions.id, dependentIds))
+    ).map((d) => ({ ...d, title: resolveSessionTitle(d) }));
 
     for (const dependent of dependents) {
       try {

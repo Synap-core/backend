@@ -45,6 +45,10 @@ import {
   BLOCKED_SLOT_RECURRENCE_CRON,
 } from "./workers/blocked-slot-recurrence-scanner.js";
 import {
+  PLAYBOOK_LESSONS_QUEUE,
+  PLAYBOOK_LESSONS_CRON,
+} from "./workers/playbook-lessons-scanner.js";
+import {
   STRUCTURE_GUIDELINE_SCAN_QUEUE,
   STRUCTURE_GUIDELINE_SCAN_CRON,
 } from "./workers/structure-guideline-scanner.js";
@@ -64,6 +68,10 @@ import {
   PLAYBOOK_RUN_REAPER_QUEUE,
   PLAYBOOK_RUN_REAPER_CRON,
 } from "./workers/playbook-run-reaper.js";
+import {
+  SESSION_TITLER_QUEUE,
+  SESSION_TITLER_CRON,
+} from "./workers/session-titler.js";
 import {
   CHAT_TURN_REAPER_QUEUE,
   CHAT_TURN_REAPER_CRON,
@@ -190,6 +198,12 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info("Registered cron: focus-session-reaper (every hour)");
 
+  // Session titler (every 10min — derived names for untitled runs/captures, one
+  // generated name per unnamed work session/receipt, one outcome-aware rename
+  // at close; never touches a human- or agent-chosen title)
+  await scheduleSafe(boss, SESSION_TITLER_QUEUE, SESSION_TITLER_CRON, {});
+  logger.info("Registered cron: session-titler (every 10min)");
+
   // Playbook run reaper (every ~30min — force-fails playbook_runs stuck
   // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS whose session went quiet;
   // orphaned by worker death or an external agent that never captured back)
@@ -284,6 +298,15 @@ export async function registerCronSchedules(): Promise<void> {
   );
   logger.info(
     "Registered cron: structure-guideline.scan (daily at 3:55 AM UTC)"
+  );
+
+  // Playbook lessons scanner (weekly, Mondays 04:10 UTC — after the two daily
+  // guideline scanners). Files ONE PENDING playbook/update proposal per
+  // playbook, REPLACING stages[].lessons with the IS-reconciled list; never
+  // writes a playbook.
+  await scheduleSafe(boss, PLAYBOOK_LESSONS_QUEUE, PLAYBOOK_LESSONS_CRON, {});
+  logger.info(
+    "Registered cron: playbook-lessons.scan (weekly, Mondays at 4:10 AM UTC)"
   );
 
   // Librarian project archiver (daily at 3:45 AM UTC — after near-dup at 3:15).

@@ -116,3 +116,30 @@ describe("is-agent executor — agent selector", () => {
     expect(insertChannelMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("is-agent executor — stage lessons reach the kickoff", () => {
+  beforeEach(() => {
+    insertChannelMessage.mockClear();
+  });
+
+  it("the active stage's lessons are in the posted kickoff, beside its goal", async () => {
+    await new IsAgentExecutor().run({
+      ...baseCtx,
+      currentStage: "build",
+      stages: [
+        { key: "plan", name: "Plan", lessons: ["NOT this stage's lesson"] },
+        {
+          key: "build",
+          name: "Build",
+          goal: "Ship the change",
+          lessons: ["Run tsc before claiming done", 42],
+        },
+      ],
+    } as any);
+    const kickoff = JSON.stringify(insertChannelMessage.mock.calls[0]);
+    expect(kickoff).toContain("Ship the change");
+    expect(kickoff).toContain("Lessons from earlier runs of this stage");
+    expect(kickoff).toContain("- Run tsc before claiming done");
+    expect(kickoff).not.toContain("NOT this stage's lesson");
+  });
+});

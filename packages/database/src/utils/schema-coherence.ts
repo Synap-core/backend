@@ -574,6 +574,25 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0262_focus_sessions_title.sql",
   },
 
+  // Session criteria + evaluations (0267) — the contract a session is graded
+  // against, and the grade. Every session read selects `criteria`; a missing
+  // column 500s every session door.
+  {
+    table: "focus_sessions",
+    column: "criteria",
+    addedBy: "0267_session_criteria_and_evaluations.sql",
+  },
+  {
+    table: "playbooks",
+    column: "criteria",
+    addedBy: "0267_session_criteria_and_evaluations.sql",
+  },
+  {
+    table: "session_evaluations",
+    column: "evaluator_kind",
+    addedBy: "0267_session_criteria_and_evaluations.sql",
+  },
+
   // The Process Plane — typed tier discriminators (0240)
   {
     table: "focus_sessions",

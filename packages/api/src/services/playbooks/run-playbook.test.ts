@@ -155,13 +155,14 @@ describe("buildRunSessionMetadata (session metadata stamps)", () => {
 });
 
 describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
-  it("snapshots version/goalTemplate/stages/params/expectedOutputs", () => {
+  it("snapshots version/goalTemplate/stages/params/expectedOutputs/criteria", () => {
     const playbook = {
       version: 3,
       goalTemplate: "Do {{x}}",
       stages: [{ key: "s1" }],
       params: [{ name: "x" }],
       expectedOutputs: [{ label: "out" }],
+      criteria: [{ key: "c1" }],
     } as unknown as Playbook;
     expect(buildDefinitionSnapshot(playbook)).toEqual({
       version: 3,
@@ -169,6 +170,7 @@ describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
       stages: [{ key: "s1" }],
       params: [{ name: "x" }],
       expectedOutputs: [{ label: "out" }],
+      criteria: [{ key: "c1" }],
     });
   });
 });

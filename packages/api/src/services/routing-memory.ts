@@ -11,9 +11,12 @@
  *     right)` triple. Reconstructed from the `ai_correction` (kind=route)
  *     event's `entityId` (→ the mis-routed entity's text) + `fromWorkspaceId`
  *     / `toWorkspaceId`.
- *   - `confirmations` (POSITIVE examples): an auto-applied decision the user
- *     did NOT correct — a route the AI got right. Text comes from the entity
- *     stamped with the decision's `correlationId`.
+ *   - `confirmations` (POSITIVE examples): a route the AI got right and the
+ *     user did NOT later correct — an applied decision that matured, one the
+ *     person ACCEPTED at capture (`choice: "accepted"`: they saw the
+ *     suggestion and saved with it), or one they endorsed afterwards by moving
+ *     the entity into the suggested workspace (`ai_confirmation`). Text comes
+ *     from the entity stamped with the decision's `correlationId`.
  *
  * Threaded into `captureRouter.structure` as a hint, so EVERY interactive
  * capture door (MCP, REST, CLI, Raycast, tRPC) learns from it for free — a
@@ -39,6 +42,7 @@ import {
 import {
   AI_DECISION,
   AI_CORRECTION,
+  AI_CONFIRMATION,
   AI_KIND,
   AUTO_ROUTE_MIN_CONFIDENCE,
   ROUTE_TUNING_CEIL,
@@ -46,8 +50,9 @@ import {
   clampWindowDays,
   decisionCorrelationKeyExpr,
   eventKindExpr,
+  routeDeciderExpr,
 } from "../lib/ai-events.js";
-import { lte } from "@synap/database";
+import { lte, or } from "@synap/database";
 
 export interface RoutingMemoryExample {
   /** A short snippet of the captured text (title/preview), for the prompt. */
@@ -138,16 +143,37 @@ export async function fetchRoutingMemory(
     correctedIdRows.map((r) => r.cid).filter((x): x is string => !!x)
   );
 
-  // 3. Auto-applied decisions that MATURED without correction — positives
-  //    candidates. The maturity gate is load-bearing: a fresh auto-route the
-  //    user simply hasn't looked at yet is NOT a confirmation. Without it, an
-  //    uncorrected MIS-route becomes a "confirmed" positive example and teaches
-  //    the model the wrong thing (caught by dogfooding: a fashion signal
-  //    mis-filed to CRM, uncorrected, started pulling later signals to CRM).
-  //    Only a decision old enough to have been corrected but wasn't is trusted.
+  // 3. Decisions the AI got right — positive candidates. Three ways in:
+  //    (a) APPLIED and MATURED without correction. The maturity gate is
+  //        load-bearing for a route nobody looked at: an uncorrected MIS-route
+  //        would otherwise become a "confirmed" example and teach the model
+  //        the wrong thing (dogfood: a fashion signal mis-filed to CRM,
+  //        uncorrected, started pulling later signals to CRM).
+  //    (b) APPLIED because the person ACCEPTED the suggestion at capture
+  //        (`choice = accepted`). They saw it and saved with it — the thing the
+  //        maturity gate waits for has already happened, so no wait.
+  //    (c) ENDORSED later: the person moved the entity INTO the suggested
+  //        workspace (`ai_confirmation`, joined by the decision's id).
+  //    A later correction still disqualifies all three (`correctedIds`).
   const maturedBefore = new Date(
     Date.now() - MATURITY_DAYS * 24 * 60 * 60 * 1000
   );
+  const endorsedIdRows = await db
+    .select({ cid: decisionCorrelationKeyExpr })
+    .from(events)
+    .where(
+      and(
+        eq(events.userId, userId),
+        eq(events.subjectType, AI_CONFIRMATION),
+        drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
+        gte(events.timestamp, since)
+      )
+    );
+  const endorsedIds = [
+    ...new Set(
+      endorsedIdRows.map((r) => r.cid).filter((x): x is string => !!x)
+    ),
+  ];
   const decisionRows = await db
     .select({
       correlationId: events.correlationId,
@@ -161,9 +187,19 @@ export async function fetchRoutingMemory(
         eq(events.userId, userId),
         eq(events.subjectType, AI_DECISION),
         drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
-        drizzleSql`${events.data}->>'applied' = 'true'`,
         gte(events.timestamp, since),
-        lte(events.timestamp, maturedBefore)
+        or(
+          and(
+            drizzleSql`${events.data}->>'applied' = 'true'`,
+            or(
+              lte(events.timestamp, maturedBefore),
+              drizzleSql`${events.data}->>'choice' = 'accepted'`
+            )
+          ),
+          endorsedIds.length
+            ? inArray(events.correlationId, endorsedIds)
+            : drizzleSql`false`
+        )
       )
     )
     .orderBy(desc(events.timestamp))
@@ -290,8 +326,20 @@ const MIN_TUNING_VOLUME = 5;
 export async function fetchWorkspaceRoutingThreshold(
   userId: string,
   workspaceId: string,
-  opts?: { windowDays?: number }
+  opts?: {
+    windowDays?: number;
+    /**
+     * The decider of the pick being gated. The volume + correction rate are
+     * computed over route decisions of the SAME decider only: the decision
+     * model's calibrated probabilities and an LLM's self-reported confidence
+     * are different populations, so an LLM's miss history must never raise the
+     * gate a decision-model pick has to clear (or vice versa). Default `llm`;
+     * legacy events without `data.decider` count as `llm`.
+     */
+    decider?: "jev" | "llm";
+  }
 ): Promise<number | undefined> {
+  const decider = opts?.decider ?? "llm";
   const windowDays = clampWindowDays(opts?.windowDays);
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
 
@@ -304,6 +352,7 @@ export async function fetchWorkspaceRoutingThreshold(
         eq(events.subjectType, AI_DECISION),
         drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
         drizzleSql`${events.data}->>'chosenWorkspaceId' = ${workspaceId}`,
+        drizzleSql`${routeDeciderExpr} = ${decider}`,
         gte(events.timestamp, since)
       )
     );

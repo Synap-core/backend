@@ -30,7 +30,9 @@ import {
   resolveAgentProposalSessionOnce,
   deriveProposalProjectId,
   type InsertPendingProposalResult,
+  type ResolveOrCreateAgentProposalSessionInput,
 } from "@synap/database";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
@@ -1598,32 +1600,34 @@ async function evaluatePermission(
         sessionId ??
         (dryRun || subjectType.startsWith("focus_session")
           ? null
-          : await resolveAgentProposalSessionOnce({
-              userId,
-              agentUserId,
-              workspaceId,
-              projectId,
-              goal: deriveAgentProposalSessionGoal({
-                data,
-                proposalType: action,
-                targetType: subjectType,
-                notificationDescription: opts.reasoning ?? null,
-                // The SAME sentence the proposal itself stores as its summary
-                // (`createProposal` builds it from the same three inputs), so
-                // the receipt session and the proposal detail cannot name one
-                // write two different things. Ranked below every author-supplied
-                // arm inside the deriver, so it only ever displaces the
-                // `Agent <type> · <target>` machine-token fallback.
-                summary: buildProposalSummary(
-                  singularSubjectType(subjectType),
-                  action,
-                  data
-                ),
-              }),
-              // Per-proposal correlation UUIDs would force one session per row —
-              // only reuse by agent+goal (openRunSession mint on miss).
-              stableCorrelation: false,
-            }));
+          : await resolveAgentProposalSessionOnce(
+              receiptSessionInput({
+                userId,
+                agentUserId,
+                workspaceId,
+                projectId,
+                // Grouped by the calling client; an IS turn (no key-auth client)
+                // groups by the channel it acts in.
+                channelId: actingChannelId,
+                goal: deriveAgentProposalSessionGoal({
+                  data,
+                  proposalType: action,
+                  targetType: subjectType,
+                  notificationDescription: opts.reasoning ?? null,
+                  // The SAME sentence the proposal itself stores as its summary
+                  // (`createProposal` builds it from the same three inputs), so
+                  // the receipt session and the proposal detail cannot name one
+                  // write two different things. Ranked below every author-supplied
+                  // arm inside the deriver, so it only ever displaces the
+                  // `Agent <type> · <target>` machine-token fallback.
+                  summary: buildProposalSummary(
+                    singularSubjectType(subjectType),
+                    action,
+                    data
+                  ),
+                }),
+              })
+            ));
 
       // Re-stamp the frozen envelope ONLY when the hoist actually resolved a
       // session the caller did not supply. Same object otherwise, so every
@@ -2583,6 +2587,28 @@ export async function createPendingProposal(
 }
 
 /**
+ * The ONE input both receipt doors hand the session packager: grouped by the
+ * calling client (never the per-write goal — N writes used to make N
+ * receipts), and named by the shared derived builder so no id reaches a title.
+ * Per-proposal correlation UUIDs would force one session per row, so
+ * correlation is never treated as stable here.
+ */
+function receiptSessionInput(input: {
+  userId: string;
+  agentUserId: string;
+  workspaceId?: string | null;
+  projectId?: string | null;
+  channelId?: string | null;
+  goal: string;
+}): ResolveOrCreateAgentProposalSessionInput {
+  return {
+    ...input,
+    title: buildDerivedSessionTitle({ kind: "receipt", doing: input.goal }),
+    stableCorrelation: false,
+  };
+}
+
+/**
  * Same as createPendingProposal but also reports whether the SSOT deduped the
  * write (an identical PENDING agent proposal already existed). Threaded up by
  * createProposal so it can skip the "created" notification for a dedup hit and
@@ -2606,28 +2632,27 @@ async function createPendingProposalRow(
     !input.targetType.startsWith("focus_session")
   ) {
     try {
-      sessionId = await resolveOrCreateAgentProposalSession({
-        userId: input.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: input.workspaceId,
-        projectId: input.projectId,
-        goal: deriveAgentProposalSessionGoal({
-          data: input.data,
-          proposalType: input.proposalType,
-          targetType: input.targetType,
-          notificationDescription: input.notificationDescription,
-          // Same sentence, same reason as the hoist above — this is the second
-          // of the two doors that mint an agent receipt session.
-          summary: buildProposalSummary(
-            singularSubjectType(input.targetType),
-            input.proposalType,
-            input.data
-          ),
-        }),
-        // Per-proposal correlation UUIDs would force one session per row —
-        // only reuse by agent+goal (openRunSession mint on miss).
-        stableCorrelation: false,
-      });
+      sessionId = await resolveOrCreateAgentProposalSession(
+        receiptSessionInput({
+          userId: input.userId,
+          agentUserId: input.agentUserId,
+          workspaceId: input.workspaceId,
+          projectId: input.projectId,
+          goal: deriveAgentProposalSessionGoal({
+            data: input.data,
+            proposalType: input.proposalType,
+            targetType: input.targetType,
+            notificationDescription: input.notificationDescription,
+            // Same sentence, same reason as the hoist above — this is the second
+            // of the two doors that mint an agent receipt session.
+            summary: buildProposalSummary(
+              singularSubjectType(input.targetType),
+              input.proposalType,
+              input.data
+            ),
+          }),
+        })
+      );
     } catch {
       sessionId = null;
     }

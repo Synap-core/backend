@@ -58,6 +58,7 @@ import {
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -78,11 +79,13 @@ import { auditLog } from "../utils/audit-log.js";
 import {
   instantiateSession,
   buildRunSessionTitle,
+  buildRunSessionName,
   RUN_PROMPT_METADATA_KEY,
   promoteSessionToPlaybook,
   resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
+import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
   materializePlaybookCronAutomation,
   findNonArchivedAutomationByName,
@@ -226,6 +229,12 @@ export const createInputSchema = z.object({
    * `focus_sessions.currentStage` stores).
    */
   stages: playbookStagesSchema.optional(),
+  /**
+   * Binary acceptance criteria every session instantiated from this playbook
+   * is graded against (with each stage's own — `collectPlaybookCriteria`).
+   * Validated like `stages`: a criterion is a control, not a loose bag.
+   */
+  criteria: sessionCriteriaSchema.optional(),
   subjectProfile: jsonRecord.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
@@ -279,6 +288,8 @@ export const updateInputSchema = z.object({
   expectedOutputs: z.array(jsonRecord).optional(),
   /** See `createInputSchema.stages` — validated, `category` required. */
   stages: playbookStagesSchema.optional(),
+  /** See `createInputSchema.criteria`. */
+  criteria: sessionCriteriaSchema.optional(),
   subjectProfile: jsonRecord.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
@@ -1369,6 +1380,32 @@ export const playbooksRouter = router({
     }),
 
   /**
+   * How this playbook's runs went, for the CALLER's sessions (sessions are
+   * owner-private): runs closed / evaluated / reopened, pass rate per
+   * criterion, how often a person overrode the judge, escalations. Derived on
+   * read — no table. The one derivation, shared with the weekly lessons
+   * scanner: `@synap/jobs/utils/playbook-scorecard`.
+   */
+  scorecard: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const row = await scopedDb(AccessContext.from(ctx)).findFirst<Playbook>(
+        playbooks,
+        { where: eq(playbooks.id, input.playbookId) }
+      );
+      if (!row) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return computePlaybookScorecard(await getDb(), {
+        playbookId: row.id,
+        userId: ctx.userId,
+      });
+    }),
+
+  /**
    * Create a new playbook. Governance-gated: AI callers (agentUserId set) route
    * through checkPermissionOrPropose; on "proposed" the row is NOT written.
    */
@@ -1401,6 +1438,7 @@ export const playbooksRouter = router({
           channelSpec: input.channelSpec,
           expectedOutputs: input.expectedOutputs,
           stages: input.stages,
+          criteria: input.criteria,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
           metadata: input.metadata,
@@ -1496,6 +1534,7 @@ export const playbooksRouter = router({
             channelSpec: input.channelSpec ?? {},
             expectedOutputs: input.expectedOutputs ?? [],
             stages: input.stages ?? [],
+            criteria: input.criteria ?? [],
             subjectProfile: input.subjectProfile ?? null,
             schedule: input.schedule ?? null,
             metadata: input.metadata ?? {},
@@ -1663,6 +1702,7 @@ export const playbooksRouter = router({
             ? { expectedOutputs: input.expectedOutputs }
             : {}),
           ...(input.stages !== undefined ? { stages: input.stages } : {}),
+          ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
             : {}),
@@ -1703,6 +1743,7 @@ export const playbooksRouter = router({
       if (input.expectedOutputs !== undefined)
         set.expectedOutputs = input.expectedOutputs;
       if (input.stages !== undefined) set.stages = input.stages;
+      if (input.criteria !== undefined) set.criteria = input.criteria;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
       if (input.schedule !== undefined) set.schedule = input.schedule;
@@ -1721,6 +1762,7 @@ export const playbooksRouter = router({
         "inputStrategy",
         "channelSpec",
         "expectedOutputs",
+        "criteria",
       ] as const;
       const definitionChanged = DEFINITION_FIELDS.some(
         (f) =>
@@ -1931,10 +1973,18 @@ export const playbooksRouter = router({
         // and the rendered goalTemplate rides `prompt`, which the executor
         // stamps onto metadata. Resolving only the template here would have
         // re-introduced the paragraph-as-title on the approved path alone.
+        // The executor materializes through the same `instantiateSession`
+        // body when `playbookId` is present, so the approved row carries the
+        // playbook, its first stage, the subject and this derived `title`
+        // exactly as the direct path below writes them.
         data: {
           playbookId: input.playbookId,
           name: playbook.name,
           goal: buildRunSessionTitle(playbook.name, subjectTitle),
+          title: buildRunSessionName(playbook.name, subjectTitle),
+          ...(subjectId ? { subjectEntityId: subjectId } : {}),
+          ...(input.channelId ? { channelId: input.channelId } : {}),
+          ...(input.agentIds?.length ? { agentIds: input.agentIds } : {}),
           [RUN_PROMPT_METADATA_KEY]: resolveGoal(
             playbook.goalTemplate,
             (input.params ?? {}) as Record<string, unknown>,

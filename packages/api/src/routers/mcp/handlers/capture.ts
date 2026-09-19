@@ -8,7 +8,12 @@
  * captured locals → `ctx` fields) changed.
  */
 
-import type { WorkspaceDecisionRecord } from "../../../lib/ai-events.js";
+import {
+  captureExecuteRoutingHints,
+  deriveWorkspacePlacementView,
+  type CapturePlacement,
+  type CaptureStructureRouting,
+} from "@synap-core/types";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
 import {
@@ -1040,6 +1045,29 @@ const captureHandler: McpToolHandler = async (
   // Intake RUN channel — separate from the personal chat. Seed the user
   // capture, stamp the proposal onto this thread, then narrate the receipt
   // (pending OR auto-approved). Do not wait for approval.
+  // THE destination rule, as a HEADLESS door (`interactive: false`): a
+  // DETERMINISTIC placement is sent as an explicit placement (never demoted to
+  // a rung-5 guess); an AI suggestion is NEVER applied — it stays a proposal
+  // the agent confirms by re-calling with an explicit `workspaceId`. A caller
+  // that DID pass one is a `chosen` selection, so a pin that differs from the
+  // suggestion records the AI as corrected.
+  const structurePlacement = (structured as { placement?: CapturePlacement })
+    .placement;
+  const placementView = deriveWorkspacePlacementView(
+    structurePlacement,
+    confinedWorkspaceId
+      ? {
+          kind: "chosen",
+          workspaceId: confinedWorkspaceId,
+          workspaceName:
+            structurePlacement?.suggestion?.workspaceId === confinedWorkspaceId
+              ? structurePlacement.suggestion.workspaceName
+              : "",
+        }
+      : { kind: "default" },
+    { interactive: false }
+  );
+
   const intakeFlowId = newProcessFlowId();
   const { channel, messageIds: intakeMessageIds } = await openProcessChannel({
     userId,
@@ -1113,21 +1141,12 @@ const captureHandler: McpToolHandler = async (
     // `resolveWorkspacePlacement`'s rungs 2-5 exactly as before. Mirrors the
     // hub REST door (routers/hub-protocol/rest/capture.ts), which already
     // keeps `targetWorkspaceId` separate from the ambient `workspaceId`.
-    ...(confinedWorkspaceId ? { targetWorkspaceId: confinedWorkspaceId } : {}),
-    aiWorkspaceId: (structured as { targetWorkspaceId?: string | null })
-      .targetWorkspaceId,
-    aiWorkspaceConfidence: (
-      structured as { targetWorkspaceConfidence?: number | null }
-    ).targetWorkspaceConfidence,
-    aiWorkspaceReason: (structured as { targetWorkspaceReason?: string | null })
-      .targetWorkspaceReason,
-    // The distribution behind the pick (decider/model/probabilities), recorded
-    // on the route decision event for calibration — never used to place data.
-    aiWorkspaceDecision: (
-      structured as {
-        targetWorkspaceDecision?: WorkspaceDecisionRecord | null;
-      }
-    ).targetWorkspaceDecision,
+    ...placementView.execute,
+    // The structure step's placement advice — every advisory ai* field,
+    // including the decision distribution recorded on the route event — via
+    // the ONE mapper every capture door uses (`@synap-core/types`), never a
+    // hand-copied subset (tripwire: capture-execute-routing-hints-one-door).
+    ...captureExecuteRoutingHints(structured as CaptureStructureRouting),
     // Explicit caller-provided projectId is a deliberate pin (rung 1) and
     // still auto-links. The AI's structure-RESOLVED target, however, must NOT
     // silently become an auto-link: `belongs_to_project` WIDENS cross-workspace
@@ -1135,20 +1154,14 @@ const captureHandler: McpToolHandler = async (
     // other surface — execute records it as a suggestion (chip), never links
     // it, unless a DETERMINISTIC rung (explicit / session / relational)
     // independently resolves the same project.
+    // (The AI project fields ride in the mapper spread above.)
     ...(args.projectId ? { projectId: args.projectId as string } : {}),
-    aiProjectId: (structured as { targetProjectId?: string | null })
-      .targetProjectId,
-    aiProjectConfidence: (
-      structured as { targetProjectConfidence?: number | null }
-    ).targetProjectConfidence,
-    aiProjectReason: (structured as { targetProjectReason?: string | null })
-      .targetProjectReason,
   });
-  // execute() returns movedToWorkspace / pendingWorkspaceSwitch when routing
-  // engaged — surface them at the top level for the caller.
+  // execute() returns the AI's pendingWorkspaceSwitch when a suggestion is
+  // outstanding — surfaced at the top level for the caller. It never moves
+  // data, so there is no `movedToWorkspace`.
   const ex = executed as {
     status?: string;
-    movedToWorkspace?: string;
     pendingWorkspaceSwitch?: unknown;
     proposalId?: string;
     /** The anchored-proposal lane files one proposal per op. */
@@ -1235,7 +1248,8 @@ const captureHandler: McpToolHandler = async (
         : {
             // Unreadable: NOT a stored fact — flagged below, never passed off
             // as one.
-            workspaceId: ex.movedToWorkspace ?? captureWsId ?? null,
+            workspaceId:
+              placementView.execute.targetWorkspaceId ?? captureWsId ?? null,
             projectId: null,
             sessionId: ex.sessionId ?? null,
           };
@@ -1256,6 +1270,10 @@ const captureHandler: McpToolHandler = async (
       ...(ex.summary ? { summary: ex.summary } : {}),
       ...(ex.reasoning ? { reasoning: ex.reasoning } : {}),
       ...(ex.message ? { message: ex.message } : {}),
+      // The suggestion rides the proposed outcome too (one shape).
+      ...(ex.pendingWorkspaceSwitch
+        ? { pendingWorkspaceSwitch: ex.pendingWorkspaceSwitch }
+        : {}),
       ...(degradedNotice
         ? {
             degraded: true,
@@ -1267,10 +1285,11 @@ const captureHandler: McpToolHandler = async (
       executed,
     });
   }
-  // The scope echo must be what the write ACTUALLY landed in: routing may
-  // have moved it (movedToWorkspace), and a project only counts when it was
+  // The scope echo must be what the write ACTUALLY landed in: an explicit
+  // placement (deterministic rung / caller pin), and a project only counts when it was
   // LINKED — a `proposed` project is an unconfirmed suggestion, not placement.
-  const landedWsId = ex.movedToWorkspace ?? captureWsId ?? null;
+  const landedWsId =
+    placementView.execute.targetWorkspaceId ?? captureWsId ?? null;
   // The LINKED outcome is the only project this lane stored: execute stamps
   // `belongs_to_project` from its own ladder and nothing else. There is no
   // fallback — `scopeProjectId` (rungs 1–2) reported a pin that failed to link,
@@ -1327,7 +1346,8 @@ const captureHandler: McpToolHandler = async (
       : {}),
     structured,
     executed,
-    ...(ex.movedToWorkspace ? { movedToWorkspace: ex.movedToWorkspace } : {}),
+    // The AI's pending "move to X?" — NOTHING was moved (this door never
+    // applies a suggestion). Confirm it by re-calling with `workspaceId`.
     ...(ex.pendingWorkspaceSwitch
       ? { pendingWorkspaceSwitch: ex.pendingWorkspaceSwitch }
       : {}),

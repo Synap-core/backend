@@ -35,6 +35,7 @@ import {
   eq,
   and,
   desc,
+  drizzleSql,
 } from "@synap/database";
 import {
   resolveStageGate,
@@ -174,6 +175,8 @@ export interface OpenStageGateResult {
  * Pause the session and file the gate proposal. Call this AFTER the stage write
  * has landed — the stage stands and the pause describes it.
  *
+ * HUMAN gates only — a `check` gate files no proposal (see `applyCheckGate`).
+ *
  * The pause update is guarded on `status = "active"`: a session a human already
  * paused, or one that closed between the advance and here, must not be dragged
  * back into a state it left. `paused` in the result names what the UPDATE
@@ -242,11 +245,123 @@ export async function openStageGate(
   };
 }
 
+/** Where a check-gated pause is recorded on `focus_sessions.metadata`. */
+export const CHECK_GATE_METADATA_KEY = "checkGate";
+
+/**
+ * Stands in `failing` when the evaluation itself could not run. Not a
+ * criterion key: it names the ABSENCE of a verdict, so a surface can say
+ * "the check did not run" rather than blaming a criterion.
+ */
+export const CHECK_GATE_UNEVALUATED = "__unevaluated";
+
+export interface CheckGateResult {
+  kind: "check";
+  stageKey: string;
+  /** True when every required criterion of the stage being left passes. */
+  passed: boolean;
+  /** Keys of the left stage's required criteria that do not pass (yet). */
+  failing: string[];
+  /** True only when the session row was actually flipped to `paused`. */
+  paused: boolean;
+}
+
+/**
+ * A `check` gate: evaluate the criteria of the stage being LEFT; all required
+ * passing ⇒ the run continues; otherwise PAUSE (same guard as the human gate)
+ * and record `metadata.checkGate = { stageKey, fromStage, failing }` so the
+ * failing criteria are visible. No proposal: the resume is re-running the
+ * evaluation (or a human grade) — `resumeCheckGateIfMet` flips it back.
+ *
+ * A stage entered with no stage behind it has nothing to check and passes.
+ */
+export async function applyCheckGate(params: {
+  sessionId: string;
+  userId: string;
+  agentUserId?: string | null;
+  stageKey: string;
+  fromStage: string | null;
+}): Promise<CheckGateResult> {
+  const { sessionId, stageKey, fromStage } = params;
+  if (!fromStage) {
+    return {
+      kind: "check",
+      stageKey,
+      passed: true,
+      failing: [],
+      paused: false,
+    };
+  }
+  const { evaluateSession } =
+    await import("../focus-sessions/evaluations/evaluate.js");
+  const result = await evaluateSession({
+    sessionId,
+    userId: params.userId,
+    agentUserId: params.agentUserId ?? null,
+    stageKey: fromStage,
+  });
+  // An evaluation that did not RUN is not a clean gate. `evaluateSession`
+  // answers `not_found` when the session cannot be loaded for this caller (a
+  // race with a close, the wrong userId) — reading that as "nothing failing"
+  // would advance the run ungated on the one path the gate exists to hold.
+  // Unmeasured is not passed; the pause below says so, and re-running the
+  // evaluation is the same resume as for a real failure.
+  const failing =
+    result.status === "evaluated"
+      ? checkGateFailing(result, fromStage)
+      : [CHECK_GATE_UNEVALUATED];
+  if (failing.length === 0) {
+    return { kind: "check", stageKey, passed: true, failing, paused: false };
+  }
+  const paused = await db
+    .update(focusSessions)
+    .set({
+      status: "paused",
+      updatedAt: new Date(),
+      metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+        { [CHECK_GATE_METADATA_KEY]: { stageKey, fromStage, failing } }
+      )}::jsonb`,
+    })
+    .where(
+      and(eq(focusSessions.id, sessionId), eq(focusSessions.status, "active"))
+    )
+    .returning({ id: focusSessions.id });
+  return {
+    kind: "check",
+    stageKey,
+    passed: false,
+    failing,
+    paused: paused.length > 0,
+  };
+}
+
+/** Pure: the required criteria of `fromStage` whose current verdict is not pass. */
+export function checkGateFailing(
+  summary: {
+    criteria: Array<{ key: string; required?: boolean; stageKey?: string }>;
+    evaluations: Array<{ criterionKey: string; verdict: string }>;
+  },
+  fromStage: string
+): string[] {
+  const current = new Map(
+    summary.evaluations.map((e) => [e.criterionKey, e.verdict])
+  );
+  return summary.criteria
+    .filter(
+      (c) =>
+        c.stageKey === fromStage &&
+        c.required !== false &&
+        current.get(c.key) !== "pass"
+    )
+    .map((c) => c.key);
+}
+
 /**
  * THE ONE CALL a stage-advance door makes. Resolve the gate for the stage just
- * entered and, if there is one, pause + file. Returns null when the stage is
- * ungated — the overwhelmingly common case, and one extra query only when the
- * stage actually changed.
+ * entered and, if there is one, apply it: a human gate pauses + files a
+ * proposal, a check gate evaluates and pauses only on a miss. Returns null when
+ * the stage is ungated — the overwhelmingly common case, and one extra query
+ * only when the stage actually changed.
  */
 export async function applyStageGateOnAdvance(params: {
   sessionId: string;
@@ -258,7 +373,9 @@ export async function applyStageGateOnAdvance(params: {
   playbookId?: string | null;
   toStage: string;
   fromStage?: string | null;
-}): Promise<OpenStageGateResult | null> {
+}): Promise<
+  ({ kind: "human" } & OpenStageGateResult) | CheckGateResult | null
+> {
   const found = await resolveStageGateForSession({
     sessionId: params.sessionId,
     playbookId: params.playbookId,
@@ -266,7 +383,17 @@ export async function applyStageGateOnAdvance(params: {
   });
   if (!found) return null;
 
-  return openStageGate({
+  if (found.gate.kind === "check") {
+    return applyCheckGate({
+      sessionId: params.sessionId,
+      userId: params.userId,
+      agentUserId: params.agentUserId ?? null,
+      stageKey: params.toStage,
+      fromStage: params.fromStage ?? null,
+    });
+  }
+
+  const opened = await openStageGate({
     sessionId: params.sessionId,
     userId: params.userId,
     agentUserId: params.agentUserId ?? null,
@@ -279,4 +406,5 @@ export async function applyStageGateOnAdvance(params: {
     gate: found.gate,
     fromStage: params.fromStage ?? null,
   });
+  return { kind: "human", ...opened };
 }

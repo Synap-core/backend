@@ -27,6 +27,7 @@ import {
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   channels,
   channelMembers,
@@ -475,7 +476,9 @@ export const crudProcedures = {
         workspaceId,
         channelType: ChannelType.AGENT_COLLAB,
         status: ChannelStatus.ACTIVE,
-        title: input.title ?? `Session: ${session.goal.slice(0, 64)}`,
+        title:
+          input.title ??
+          `Session: ${resolveSessionTitle(session, { maxLength: 64 })}`,
         metadata: { sessionId: session.id, a2aiStatus: "active" },
       });
 

@@ -37,6 +37,7 @@ import {
   drizzleSql,
   type MergeMaterializedStamp,
 } from "@synap/database";
+import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { ProposalStatus } from "@synap/database/schema";
 import type {
   StoredProposalData,
@@ -973,14 +974,14 @@ export const proposalsRouter = router({
 
       if (proposal.sessionId) {
         const [s] = await db
-          .select({ goal: focusSessions.goal })
+          .select({ title: focusSessions.title, goal: focusSessions.goal })
           .from(focusSessions)
           .where(eq(focusSessions.id, proposal.sessionId))
           .limit(1);
         targets.push({
           kind: "session",
           id: proposal.sessionId,
-          label: s?.goal || "Session",
+          label: (s && resolveSessionTitle(s)) || "Session",
         });
       }
 

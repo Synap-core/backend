@@ -28,10 +28,50 @@ import { ABSTRACT_VERBS } from "@synap/database/schema";
 // same commit, and `output-ref-kinds-parity` audits the mirrors this file
 // cannot import (the Hub REST client's duplicated literal).
 import { OUTPUT_REF_KINDS } from "@synap/playbooks";
+
 import { automationDataContractSchema } from "../../automations.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import { PROJECT_SCOPE_EVENT_PREFIXES } from "../../../services/rules/scope.js";
 import { buildCapabilityExecuteAgentJsonSchema } from "../../../contracts/capability-execute-schema.js";
+
+/**
+ * The ONE advertised shape of a session criterion (start + update doors).
+ * Validated server-side with `sessionCriteriaSchema`; this only teaches it.
+ */
+const SESSION_CRITERIA_PROPERTY = {
+  type: "array",
+  maxItems: 12,
+  description:
+    "Optional binary acceptance criteria — your definition of done, each one observable (e.g. 'Typecheck passes with 0 errors'). Closing never blocks on them; unmet ones are flagged.",
+  items: {
+    type: "object",
+    properties: {
+      key: {
+        type: "string",
+        description: "Lowercase slug, unique in the session.",
+      },
+      statement: { type: "string" },
+      required: {
+        type: "boolean",
+        description: "Default true.",
+      },
+      check: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["evidence", "capability", "judge", "human"],
+          },
+          capability: { type: "string" },
+          evidenceKey: { type: "string" },
+          hint: { type: "string" },
+        },
+        required: ["kind"],
+      },
+    },
+    required: ["key", "statement", "check"],
+  },
+};
 
 /**
  * JSON Schema for `synap_create_automation`'s `dataContract` input, DERIVED from
@@ -1277,7 +1317,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). With no templateId, a matching playbook is applied only above a confidence threshold, and the result's `template` block always says what was applied (`applied`), what else fit (`suggestions`) and how to opt out (templateId: null). Declare `criteria` for your definition of done.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1329,10 +1369,11 @@ export const tools = {
                 "Optional array of agent IDs participating in this session.",
             },
             templateId: {
-              type: "string",
+              type: ["string", "null"],
               description:
-                "Optional session template UUID to bootstrap this session from.",
+                "Optional playbook UUID to start this session from. Omit to let a matching playbook apply automatically (reported on `template`); pass null to start ad-hoc with no matching.",
             },
+            criteria: SESSION_CRITERIA_PROPERTY,
             parentSessionId: {
               type: "string",
               format: "uuid",
@@ -1464,6 +1505,11 @@ export const tools = {
             progress: {
               type: "number",
               description: "0-100 integer progress (optional).",
+            },
+            criteria: {
+              ...SESSION_CRITERIA_PROPERTY,
+              description:
+                "Replace the session's acceptance criteria wholesale (optional) — the full list, not a delta.",
             },
             currentStage: {
               type: "string",
@@ -1618,6 +1664,41 @@ export const tools = {
               type: "string",
               description:
                 "APPEND one agent user id to the session roster (optional). Idempotent — re-attaching an agent already on the session writes nothing. Use this to staff a session already in flight; the roster is otherwise only settable when the session is created.",
+            },
+          },
+          required: ["sessionId"],
+        },
+      },
+      {
+        name: "synap_evaluate_session",
+        annotations: {
+          title: "Evaluate focus session",
+          readOnlyHint: false,
+          destructiveHint: false,
+          idempotentHint: false,
+          openWorldHint: false,
+        },
+        description:
+          "Grade a focus session against its acceptance criteria. Post deterministic evidence for evidence-checked criteria as `evidence: { <evidenceKey>: { passed, detail? } }`; capability and judge checks run automatically (the judge is never the model that did the work). Returns each criterion's result, the current evaluations and the session verdict. At most 2 automatic attempts per criterion — after that a failing required criterion is handed to the human. Never blocks closing the session.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            sessionId: {
+              type: "string",
+              description: "The focus session UUID.",
+            },
+            evidence: {
+              type: "object",
+              description:
+                'Evidence keyed by each criterion\'s evidenceKey (e.g. { typecheck: { passed: true, detail: "0 errors" } }).',
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  passed: { type: "boolean" },
+                  detail: { type: "string", maxLength: 2000 },
+                },
+                required: ["passed"],
+              },
             },
           },
           required: ["sessionId"],
@@ -2448,7 +2529,7 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in; leave it out to let the resolver place it (see `workspaceRouting`).",
+                "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`).",
             },
             projectId: {
               type: "string",
@@ -2465,7 +2546,7 @@ export const tools = {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "How much latitude the backend resolver has over the AI's workspace GUESS (rung 5) specifically — it does NOT gate the deterministic rungs above it (ontology role-routing, focus-session context, relational gravity), which still run and can place the capture regardless of this setting. 'auto' (default) = let a confident AI guess win a tie among deterministic candidates the resolver couldn't separate on its own (returned as movedToWorkspace). 'ask' = never move on the AI's guess alone; return pendingWorkspaceSwitch so you can confirm with the user first. 'locked' = suppress the AI guess entirely — only the deterministic rungs place the capture; it does NOT freeze the capture onto the caller's/session workspace by itself. To pin an EXACT workspace and skip resolution altogether (deterministic rungs included), pass an explicit `workspaceId` (rung-1 placement) instead of relying on this setting.",
+                "How much latitude the backend resolver has over the AI's workspace GUESS (rung 5) specifically — it does NOT gate the deterministic rungs above it (ontology role-routing, focus-session context, relational gravity), which still run and place the capture regardless of this setting. An AI guess NEVER moves a capture through this door, in any mode: 'auto' and 'ask' now do the SAME thing — the capture stays where it would have landed and the guess comes back as `pendingWorkspaceSwitch` ({ suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence }) for you to confirm with the user; there is no `movedToWorkspace` on the response any more. To ACT on a suggestion, re-call synap_capture with `workspaceId` set to `pendingWorkspaceSwitch.suggestedWorkspaceId` (that pin is recorded as the user accepting it). 'locked' = suppress the AI guess entirely, so no suggestion is returned; it does NOT freeze the capture onto the caller's/session workspace by itself. To pin an EXACT workspace and skip resolution altogether (deterministic rungs included), pass an explicit `workspaceId` (rung-1 placement) instead of relying on this setting.",
             },
             sessionId: {
               type: "string",

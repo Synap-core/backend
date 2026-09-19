@@ -51,6 +51,7 @@ import {
   handleFocusSessionReaper,
   FOCUS_SESSION_REAPER_QUEUE,
 } from "./focus-session-reaper.js";
+import { handleSessionTitler, SESSION_TITLER_QUEUE } from "./session-titler.js";
 import {
   handlePlaybookRunReaper,
   PLAYBOOK_RUN_REAPER_QUEUE,
@@ -206,6 +207,10 @@ import {
   handleStructureGuidelineScan,
 } from "./structure-guideline-scanner.js";
 import {
+  PLAYBOOK_LESSONS_QUEUE,
+  handlePlaybookLessonsScan,
+} from "./playbook-lessons-scanner.js";
+import {
   handleLibrarianArchiver,
   LIBRARIAN_ARCHIVER_QUEUE,
 } from "./librarian-archiver.js";
@@ -263,6 +268,10 @@ const ALL_QUEUES = [
   // governance.structure_guideline proposals only (same created-queue class as
   // the two scanners above — pinned by queues-are-created.tripwire.test.ts).
   STRUCTURE_GUIDELINE_SCAN_QUEUE,
+  // The WEEKLY playbook lessons scanner. Files PENDING playbook/update
+  // proposals that replace stages[].lessons (same created-queue class as the
+  // scanners above — pinned by queues-are-created.tripwire.test.ts).
+  PLAYBOOK_LESSONS_QUEUE,
   // The daily tighten recommender scan and the prompt-version quality scan —
   // both run api-side logic through IoC slots (same created-queue class).
   GOVERNANCE_TIGHTEN_SCAN_QUEUE,
@@ -272,6 +281,7 @@ const ALL_QUEUES = [
   "automation-cron-scheduler",
   AUTOMATION_RUN_REAPER_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
+  SESSION_TITLER_QUEUE,
   PLAYBOOK_RUN_REAPER_QUEUE,
   CHAT_TURN_REAPER_QUEUE,
   "relation-backfill",
@@ -638,6 +648,12 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: focus-session-reaper");
 
+  // Session titler (cron: every 10min — names sessions nobody named)
+  await boss.work(SESSION_TITLER_QUEUE, async () => {
+    await handleSessionTitler();
+  });
+  logger.info("Registered worker: session-titler");
+
   // Playbook run reaper (cron: every ~30min — force-fails playbook_runs stuck
   // 'running' past PLAYBOOK_RUN_REAPER_STALE_HOURS with a quiet session; the
   // gap automation-run-reaper never covered)
@@ -932,6 +948,13 @@ export async function registerAllWorkers(): Promise<void> {
     handleBlockedSlotRecurrenceScan()
   );
   logger.info("Registered worker: blocked-slot.recurrence-scan");
+
+  // Playbook lessons scanner (cron: weekly Mon 04:10 UTC — files playbook/update
+  // proposals carrying IS-reconciled stage lessons; never writes a playbook)
+  await boss.work(PLAYBOOK_LESSONS_QUEUE, async () => {
+    await handlePlaybookLessonsScan();
+  });
+  logger.info("Registered worker: playbook-lessons.scan");
 
   // Structure-guideline scanner (cron: daily 03:55 UTC — files
   // governance.structure_guideline proposals only; never writes a guideline)

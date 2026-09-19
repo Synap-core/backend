@@ -11,7 +11,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * appointment the NEWEST open work session, and the next write lands in it
  * instead of the person's real current work.
  *
- * Driven through the real `resolveAmbientSession` → `listOpenFocusSessions`.
+ * Driven through the real `resolveAmbientSession` → `resolveWorkSession` →
+ * `listUnclaimedOpenWorkSessions` (no client key: the unclaimed rung).
  * The DB is mocked, but the mock APPLIES the composed status predicates
  * (`eq` / `ne` / `inArray` on `focus_sessions.status`) and the `desc` order to
  * fixture rows, so the assertion is on which session is chosen.
@@ -27,7 +28,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: mockDb,
-    and: vi.fn((...c: unknown[]) => ({ and: c.filter((x) => x !== undefined) })),
+    and: vi.fn((...c: unknown[]) => ({
+      and: c.filter((x) => x !== undefined),
+    })),
     or: vi.fn((...c: unknown[]) => ({ or: c.filter((x) => x !== undefined) })),
     eq: vi.fn((col: unknown, v: unknown) => ({ eq: [col, v] })),
     ne: vi.fn((col: unknown, v: unknown) => ({ ne: [col, v] })),
@@ -110,8 +113,8 @@ describe("ambient session attribution — a scheduled appointment never captures
 
     const resolved = await resolveAmbientSession("u1");
 
-    expect(resolved?.sessionId).toBe("live-work");
-    expect(resolved?.openCount).toBe(1);
+    expect(resolved.sessionId).toBe("live-work");
+    expect(resolved.unclaimedOpenCount).toBe(1);
   });
 
   it("with only an appointment open, nothing is ambient", async () => {
@@ -126,6 +129,6 @@ describe("ambient session attribution — a scheduled appointment never captures
       ])
     );
 
-    expect(await resolveAmbientSession("u1")).toBeUndefined();
+    expect((await resolveAmbientSession("u1")).sessionId).toBeUndefined();
   });
 });

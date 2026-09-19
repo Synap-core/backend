@@ -105,6 +105,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__diagnose",
     raycast: "diagnose",
   },
+  synap_evaluate_session: {
+    "pod-mcp": "synap_evaluate_session",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_export_project_pack: {
     "pod-mcp": "synap_export_project_pack",
     "cp-connector": null,

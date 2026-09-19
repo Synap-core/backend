@@ -12,6 +12,7 @@
 
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
 import { router, publicProcedure, protectedProcedure } from "../trpc.js";
 import {
   db,
@@ -1313,6 +1314,10 @@ export const capabilitiesRouter = router({
       const { sessionId } = await openRunSession({
         userId,
         goal: `Enrich ${entity.title ?? "record"}`,
+        title: buildDerivedSessionTitle({
+          kind: "enrich",
+          label: entity.title,
+        }),
         workspaceId: runWorkspaceId,
         subjectEntityId: input.entityId,
         source: "enrichment",
@@ -1531,6 +1536,7 @@ export const capabilitiesRouter = router({
       const { sessionId } = await openRunSession({
         userId,
         goal: `Import ${goalTitle}`,
+        title: buildDerivedSessionTitle({ kind: "import", label: goalTitle }),
         workspaceId: runWorkspaceId,
         subjectEntityId: entityId,
         source: "import",
