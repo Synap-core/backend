@@ -762,27 +762,31 @@ export class IntelligenceHubClient {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 6_000); // 6s max
       try {
-        const response = await fetch(`${this.baseUrl}/api/extract`, {
+        const response = await fetch(`${this.baseUrl}/api/structure`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": this.apiKey,
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            text: input.title || input.url,
+            url: input.url,
+            html: input.html,
+          }),
           signal: controller.signal,
         });
         if (!response.ok) return null;
         const data = (await response.json()) as {
-          success: boolean;
-          data: {
+          entities: Array<{
             profileSlug: string;
             title: string;
             description?: string;
             properties?: Record<string, unknown>;
             confidence: number;
-          };
+          }>;
         };
-        return data.success ? data.data : null;
+        const first = data.entities?.[0];
+        return first ?? null;
       } finally {
         clearTimeout(timer);
       }
@@ -809,23 +813,37 @@ export class IntelligenceHubClient {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 6_000);
       try {
-        const response = await fetch(`${this.baseUrl}/api/classify`, {
+        const response = await fetch(`${this.baseUrl}/api/structure`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "X-API-Key": this.apiKey,
           },
-          body: JSON.stringify(input),
+          body: JSON.stringify({
+            text: input.text,
+            url: input.url,
+          }),
           signal: controller.signal,
         });
         if (!response.ok) return null;
-        return (await response.json()) as {
-          profileSlug: string;
-          title: string;
-          properties: Record<string, unknown>;
-          confidence: number;
-          tokensUsed: number;
+        const data = (await response.json()) as {
+          entities: Array<{
+            profileSlug: string;
+            title: string;
+            properties?: Record<string, unknown>;
+            confidence: number;
+          }>;
         };
+        const first = data.entities?.[0];
+        return first
+          ? {
+              profileSlug: first.profileSlug,
+              title: first.title,
+              properties: first.properties ?? {},
+              confidence: first.confidence,
+              tokensUsed: 0,
+            }
+          : null;
       } finally {
         clearTimeout(timer);
       }
@@ -1487,6 +1505,94 @@ export class IntelligenceHubClient {
     } catch (err) {
       console.warn(
         `[IntelligenceHubClient] analyzeBulkMapping error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Classify content into a workspace using JEV Choice primitive.
+   *
+   * POST /api/routing/classify-workspace
+   *
+   * Uses TypeSafe JEV System One Choice to classify content into one of the
+   * available workspaces. This is a dedicated typed decision call that replaces
+   * the few-shot prompt in /api/structure.
+   *
+   * Returns null on any transport failure so the capture pipeline degrades
+   * gracefully (no workspace routing hint) instead of failing.
+   */
+  async classifyWorkspace(input: {
+    content: string;
+    candidates: Array<{
+      id: string;
+      name: string;
+      description?: string;
+      hint?: string;
+    }>;
+    routingMemory?: {
+      corrections: Array<{
+        textSnippet: string;
+        correctWorkspaceName: string;
+        wrongWorkspaceName?: string | null;
+      }>;
+      confirmations: Array<{
+        textSnippet: string;
+        correctWorkspaceName: string;
+      }>;
+    } | null;
+    facetSlugs?: string[];
+    timeoutMs?: number;
+  }): Promise<{
+    workspaceId: string | null;
+    confidence: number;
+    reason: string;
+    probabilities?: Record<string, number>;
+  } | null> {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(
+        () => controller.abort(),
+        input.timeoutMs ?? 15_000
+      );
+      try {
+        const response = await fetch(
+          `${this.baseUrl}/api/routing/classify-workspace`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-API-Key": this.apiKey,
+            },
+            body: JSON.stringify(input),
+            signal: controller.signal,
+          }
+        );
+        if (!response.ok) {
+          if (isAuthStatus(response.status)) {
+            throw new IntelligenceAuthError(
+              response.status,
+              `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
+            );
+          }
+          console.warn(
+            `[IntelligenceHubClient] classifyWorkspace failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl})`
+          );
+          return null;
+        }
+        return (await response.json()) as {
+          workspaceId: string | null;
+          confidence: number;
+          reason: string;
+          probabilities?: Record<string, number>;
+        };
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      if (err instanceof IntelligenceAuthError) throw err;
+      console.warn(
+        `[IntelligenceHubClient] classifyWorkspace error: ${err instanceof Error ? err.message : String(err)} (baseUrl=${this.baseUrl})`
       );
       return null;
     }

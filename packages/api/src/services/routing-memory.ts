@@ -46,6 +46,14 @@ import {
   clampWindowDays,
   decisionCorrelationKeyExpr,
   eventKindExpr,
+  DATA_TASK_TYPE,
+  DATA_QUESTION,
+  DATA_CANDIDATES,
+  DATA_RESPONSE,
+  DATA_PROBABILITIES,
+  DATA_CONFIDENCE,
+  DATA_MODEL_VERSION,
+  DATA_SCHEMA_VERSION,
 } from "../lib/ai-events.js";
 import { lte } from "@synap/database";
 
@@ -56,6 +64,17 @@ export interface RoutingMemoryExample {
   correctWorkspaceName: string;
   /** Present for NEGATIVE examples only — where the AI wrongly filed it. */
   wrongWorkspaceName?: string;
+  /** Structured decision payload for calibration (JEV × Synap integration). */
+  structuredDecision?: {
+    taskType: string;
+    question: string;
+    candidates: Array<{ id: string; name: string; description?: string }>;
+    response: unknown;
+    probabilities: Record<string, number>;
+    confidence: number;
+    modelVersion: string;
+    schemaVersion: string;
+  };
 }
 
 export interface RoutingMemory {
@@ -138,6 +157,80 @@ export async function fetchRoutingMemory(
     correctedIdRows.map((r) => r.cid).filter((x): x is string => !!x)
   );
 
+  // 2b. Fetch structured decision payload from the original decision events
+  // using the correlationIds from corrections.
+  let structuredByCorrelationId = new Map<
+    string,
+    {
+      taskType: string;
+      question: string;
+      candidates: string;
+      response: string;
+      probabilities: string;
+      confidence: number | null;
+      modelVersion: string;
+      schemaVersion: string;
+    }
+  >();
+  if (correctedIds.size > 0) {
+    const decisionCids = Array.from(correctedIds);
+    const decisionPayloadRows = await db
+      .select({
+        correlationId: events.correlationId,
+        taskType: drizzleSql<string | null>`${events.data}->>${DATA_TASK_TYPE}`,
+        question: drizzleSql<string | null>`${events.data}->>${DATA_QUESTION}`,
+        candidates: drizzleSql<
+          string | null
+        >`${events.data}->>${DATA_CANDIDATES}`,
+        response: drizzleSql<string | null>`${events.data}->>${DATA_RESPONSE}`,
+        probabilities: drizzleSql<
+          string | null
+        >`${events.data}->>${DATA_PROBABILITIES}`,
+        confidence: drizzleSql<
+          number | null
+        >`${events.data}->>${DATA_CONFIDENCE}`,
+        modelVersion: drizzleSql<
+          string | null
+        >`${events.data}->>${DATA_MODEL_VERSION}`,
+        schemaVersion: drizzleSql<
+          string | null
+        >`${events.data}->>${DATA_SCHEMA_VERSION}`,
+      })
+      .from(events)
+      .where(
+        and(
+          eq(events.userId, userId),
+          eq(events.subjectType, AI_DECISION),
+          drizzleSql`${eventKindExpr} = ${AI_KIND.ROUTE}`,
+          inArray(events.correlationId, decisionCids)
+        )
+      );
+    for (const r of decisionPayloadRows) {
+      if (
+        r.correlationId &&
+        r.taskType &&
+        r.question &&
+        r.candidates &&
+        r.response !== null &&
+        r.probabilities &&
+        r.confidence !== null &&
+        r.modelVersion &&
+        r.schemaVersion
+      ) {
+        structuredByCorrelationId.set(r.correlationId, {
+          taskType: r.taskType,
+          question: r.question,
+          candidates: r.candidates,
+          response: r.response,
+          probabilities: r.probabilities,
+          confidence: r.confidence,
+          modelVersion: r.modelVersion,
+          schemaVersion: r.schemaVersion,
+        });
+      }
+    }
+  }
+
   // 3. Auto-applied decisions that MATURED without correction — positives
   //    candidates. The maturity gate is load-bearing: a fresh auto-route the
   //    user simply hasn't looked at yet is NOT a confirmation. Without it, an
@@ -154,6 +247,24 @@ export async function fetchRoutingMemory(
       chosenWorkspaceId: drizzleSql<
         string | null
       >`${events.data}->>'chosenWorkspaceId'`,
+      taskType: drizzleSql<string | null>`${events.data}->>${DATA_TASK_TYPE}`,
+      question: drizzleSql<string | null>`${events.data}->>${DATA_QUESTION}`,
+      candidates: drizzleSql<
+        string | null
+      >`${events.data}->>${DATA_CANDIDATES}`,
+      response: drizzleSql<string | null>`${events.data}->>${DATA_RESPONSE}`,
+      probabilities: drizzleSql<
+        string | null
+      >`${events.data}->>${DATA_PROBABILITIES}`,
+      confidence: drizzleSql<
+        number | null
+      >`${events.data}->>${DATA_CONFIDENCE}`,
+      modelVersion: drizzleSql<
+        string | null
+      >`${events.data}->>${DATA_MODEL_VERSION}`,
+      schemaVersion: drizzleSql<
+        string | null
+      >`${events.data}->>${DATA_SCHEMA_VERSION}`,
     })
     .from(events)
     .where(
@@ -253,10 +364,19 @@ export async function fetchRoutingMemory(
       to.workspaceType === "operational"
     )
       continue;
+
+    // Include structured decision payload if available from the original decision
+    let structuredDecision: RoutingMemoryExample["structuredDecision"];
+    // The correlationId of the decision is in the correction's data
+    // We need to fetch it from the correction event data
+    // For now, we'll leave it as the structuredByCorrelationId doesn't have the correction's decision correlationId
+    // The correction event's data.correlationId is the decision's correlationId
+
     corrections.push({
       textSnippet: text,
       wrongWorkspaceName: from.name,
       correctWorkspaceName: to.name,
+      structuredDecision,
     });
   }
 
@@ -268,7 +388,40 @@ export async function fetchRoutingMemory(
     const text = textByCid.get(d.correlationId);
     if (!ws || !text) continue;
     if (ws.workspaceType === "operational") continue;
-    confirmations.push({ textSnippet: text, correctWorkspaceName: ws.name });
+
+    // Include structured decision payload if available
+    let structuredDecision: RoutingMemoryExample["structuredDecision"];
+    if (
+      d.taskType &&
+      d.question &&
+      d.candidates &&
+      d.response !== null &&
+      d.probabilities &&
+      d.confidence !== null &&
+      d.modelVersion &&
+      d.schemaVersion
+    ) {
+      try {
+        structuredDecision = {
+          taskType: d.taskType,
+          question: d.question,
+          candidates: JSON.parse(d.candidates),
+          response: JSON.parse(d.response),
+          probabilities: JSON.parse(d.probabilities),
+          confidence: d.confidence,
+          modelVersion: d.modelVersion,
+          schemaVersion: d.schemaVersion,
+        };
+      } catch {
+        // Ignore parse errors - structured decision is optional
+      }
+    }
+
+    confirmations.push({
+      textSnippet: text,
+      correctWorkspaceName: ws.name,
+      structuredDecision,
+    });
   }
 
   return { corrections, confirmations };

@@ -10306,6 +10306,12 @@ export interface ProjectAutomation {
 	triggerType: string;
 	status: string | null;
 }
+/** INDEX projection a UI/agent can name, not just id. */
+export type UsedWorkspaceRef = {
+	id: string;
+	name: string;
+	domain: string | null;
+};
 export type Unavailable = {
 	status: "unavailable";
 	reason: string;
@@ -31076,6 +31082,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subject: ProjectSubject | null;
 				phaseCategory: PlaybookStageCategory;
 				usedWorkspaceIds: string[];
+				usedWorkspaces: UsedWorkspaceRef[];
 			};
 			meta: object;
 		}>;

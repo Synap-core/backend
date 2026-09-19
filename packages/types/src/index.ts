@@ -109,3 +109,6 @@ export * from "./invitations/index.js";
 
 // Focus session lifecycle vocabulary (leaf module — browser/CLI safe)
 export * from "./focus-sessions/index.js";
+
+// AI Capture Routing Types — Single Source of Truth (Phase 2 Week 2 consolidation)
+export * from "./capture-routing-types.js";

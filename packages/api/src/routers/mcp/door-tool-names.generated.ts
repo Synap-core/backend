@@ -185,6 +185,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__list_profiles",
     raycast: "list-profiles",
   },
+  synap_list_projects: {
+    "pod-mcp": "synap_list_projects",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_list_proposals: {
     "pod-mcp": "synap_list_proposals",
     "cp-connector": "pod__list_proposals",
@@ -204,6 +209,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_list_widgets",
     "cp-connector": null,
     raycast: "list-widgets",
+  },
+  synap_list_workspaces: {
+    "pod-mcp": "synap_list_workspaces",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_load_skill: {
     "pod-mcp": "synap_load_skill",

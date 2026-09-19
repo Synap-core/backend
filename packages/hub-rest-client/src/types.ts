@@ -11,6 +11,11 @@
  * Zero runtime dependencies — pure TypeScript interfaces.
  */
 
+import type {
+  AIWorkspaceRoutingHint,
+  AIProjectRoutingHint,
+} from "@synap-core/types";
+
 // ─── Core entities ───────────────────────────────────────────────────────────
 
 export interface HubEntity {

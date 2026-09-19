@@ -25,6 +25,11 @@
       "types": "./dist/utils/governance-rule-provenance.d.ts",
       "import": "./dist/utils/governance-rule-provenance.js",
       "default": "./dist/utils/governance-rule-provenance.js"
+    },
+    "./capture-routing": {
+      "types": "./dist/services/capture-routing.d.ts",
+      "import": "./dist/services/capture-routing.js",
+      "default": "./dist/services/capture-routing.js"
     }
   },
   "files": [

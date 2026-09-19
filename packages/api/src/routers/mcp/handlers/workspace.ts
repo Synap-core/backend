@@ -18,6 +18,7 @@ import {
   setAgentFocusWorkspace,
   setAgentFocusProject,
 } from "../../../services/agent-identity-service.js";
+import { workspacesRouter } from "../../workspaces.js";
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
@@ -445,6 +446,60 @@ export const workspaceHandlers: McpHandlerMap = {
     const projectCaller = projectsRouter.createCaller(projectCtx);
     try {
       const result = await projectCaller.get({ id: projectId });
+      return ok(result);
+    } catch (err) {
+      return ok({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+  synap_list_projects: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const projectCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      null,
+      undefined,
+      undefined,
+      undefined
+    );
+    const projectCaller = projectsRouter.createCaller(projectCtx);
+    try {
+      const result = await projectCaller.list({
+        status: args.status as "active" | "archived" | "completed" | undefined,
+        limit: typeof args.limit === "number" ? args.limit : undefined,
+        offset: typeof args.offset === "number" ? args.offset : undefined,
+      });
+      return ok(result);
+    } catch (err) {
+      return ok({
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+  synap_list_workspaces: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const wsCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      null,
+      undefined,
+      undefined,
+      undefined
+    );
+    const workspacesCaller = workspacesRouter.createCaller(wsCtx);
+    try {
+      const result = await workspacesCaller.list({
+        includeArchived:
+          typeof args.includeArchived === "boolean"
+            ? args.includeArchived
+            : undefined,
+        appId: typeof args.appId === "string" ? args.appId : undefined,
+      });
       return ok(result);
     } catch (err) {
       return ok({

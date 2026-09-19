@@ -9,7 +9,10 @@ import {
 import { ProposalStatus } from "@synap/database/schema";
 import { randomUUID } from "crypto";
 import { createLogger } from "@synap-core/core";
-import { emitAiDecision } from "../../../utils/ai-feedback-events.js";
+import {
+  emitAiDecision,
+  buildStructuredDecisionData,
+} from "../../../utils/ai-feedback-events.js";
 import {
   runResolvedSkill,
   assertApprovalTargetResolves,
@@ -424,6 +427,20 @@ export function registerCapabilityExecutors(): void {
           kind: "capability_run",
           skillId,
           verbId: (data.verbId as string | null) ?? null,
+          // Structured decision payload for JEV × Synap calibration
+          ...buildStructuredDecisionData({
+            taskType: "act",
+            question: `Run capability "${skillId}" ${data.verbId ? `verb "${data.verbId}"` : ""} with parameters ${JSON.stringify(data.parameters ?? {})}`,
+            candidates: [],
+            response: runResult,
+            probabilities: {},
+            confidence: 1,
+            modelVersion: "executor",
+            schemaVersion: "1.0",
+            correlationId,
+            workspaceId: proposal.workspaceId,
+            projectId: proposal.projectId ?? null,
+          }),
         },
       });
 

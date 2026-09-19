@@ -2258,6 +2258,30 @@
       }
     },
     {
+      "name": "synap_list_workspaces",
+      "annotations": {
+        "title": "List workspaces",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List all workspaces visible to you (pod-wide). Returns workspace details including role, access kind, entity counts, template health, and usedByProjectIds (additive INDEX of projects using each workspace). NOT an ACL — visibility is floored to what you can see.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "includeArchived": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include soft-archived workspaces (default false)"
+          },
+          "appId": {
+            "type": "string",
+            "description": "Optional filter by settings.appId"
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "synap_create_project",
       "annotations": {
         "title": "Create project",
@@ -2289,6 +2313,39 @@
           }
         },
         "required": ["name"]
+      }
+    },
+    {
+      "name": "synap_list_projects",
+      "annotations": {
+        "title": "List projects",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List all projects visible to you (pod-wide). Returns paginated results with subject entity, phase category, and usedWorkspaceIds for each project. NOT an ACL — visibility is floored to what you can see.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["active", "archived", "completed"],
+            "description": "Optional filter by project status"
+          },
+          "limit": {
+            "type": "number",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 50,
+            "description": "Page size (1-1000, default 50)"
+          },
+          "offset": {
+            "type": "number",
+            "minimum": 0,
+            "default": 0,
+            "description": "Offset for pagination (default 0)"
+          }
+        },
+        "required": []
       }
     },
     {

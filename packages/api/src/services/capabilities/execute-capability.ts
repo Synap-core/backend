@@ -81,7 +81,10 @@ import { createLogger } from "@synap-core/core";
 
 import { resolveWriteIdempotencyKey } from "../../utils/write-door-idempotency.js";
 
-import { emitAiDecision } from "../../utils/ai-feedback-events.js";
+import {
+  emitAiDecision,
+  buildStructuredDecisionData,
+} from "../../utils/ai-feedback-events.js";
 import { gateCapabilityExecution } from "./gate-capability-execution.js";
 import { executeSkillViaIS } from "../skills/execute-skill-via-is.js";
 import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
@@ -1095,6 +1098,20 @@ async function recordDirectCapabilityRun(opts: {
             runSummary: slimMirrorRunSummary(opts.runResult),
           }
         : { runResult: boundEventRunResult(opts.runResult) }),
+      // Structured decision payload for JEV × Synap calibration
+      ...buildStructuredDecisionData({
+        taskType: "act",
+        question: `Run capability "${opts.skillId}" ${opts.verbId ? `verb "${opts.verbId}"` : ""}`,
+        candidates: [],
+        response: opts.runResult,
+        probabilities: {},
+        confidence: 1,
+        modelVersion: "executor",
+        schemaVersion: "1.0",
+        correlationId: opts.correlationId,
+        workspaceId: opts.workspaceId,
+        projectId: null,
+      }),
     },
   });
 

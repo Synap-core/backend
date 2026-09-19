@@ -54,6 +54,38 @@ export const AI_KIND = {
 } as const;
 export type AiKind = (typeof AI_KIND)[keyof typeof AI_KIND];
 
+// ── Structured Decision Payload (JEV × Synap integration) ───────────────────
+// Every AI decision is logged with its full structured payload so corrections
+// can feed back as calibration data. Keys are declared here to prevent typos.
+/** Task type the decision addresses. */
+export const DECISION_TASK_TYPE = {
+  CLASSIFY: "classify",
+  SCORE: "score",
+  JUDGE: "judge",
+  EXTRACT: "extract",
+  GENERATE: "generate",
+  ACT: "act",
+} as const;
+export type DecisionTaskType =
+  (typeof DECISION_TASK_TYPE)[keyof typeof DECISION_TASK_TYPE];
+
+/** JSONB key for the task type. */
+export const DATA_TASK_TYPE = "taskType";
+/** JSONB key for the natural language question/instruction. */
+export const DATA_QUESTION = "question";
+/** JSONB key for the candidate options array [{id, name, description}]. */
+export const DATA_CANDIDATES = "candidates";
+/** JSONB key for the typed response (option id, score, or probability). */
+export const DATA_RESPONSE = "response";
+/** JSONB key for the full probability distribution. */
+export const DATA_PROBABILITIES = "probabilities";
+/** JSONB key for the confidence score 0-1. */
+export const DATA_CONFIDENCE = "confidence";
+/** JSONB key for the model version/ID that answered. */
+export const DATA_MODEL_VERSION = "modelVersion";
+/** JSONB key for the question schema version. */
+export const DATA_SCHEMA_VERSION = "schemaVersion";
+
 // ── The JOIN KEY (and friends) — one definition of the fragile JSONB paths ───
 /** The DECISION's id carried inside a correction's `data` — THE join key. */
 export const decisionCorrelationKeyExpr = drizzleSql<

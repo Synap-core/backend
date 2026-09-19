@@ -160,6 +160,7 @@ import {
 import {
   emitAiDecision,
   emitCaptureTrace,
+  buildStructuredDecisionData,
 } from "../utils/ai-feedback-events.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 import {
@@ -1578,6 +1579,48 @@ const captureBaseRouter = router({
       const visionModelId = input.file
         ? await readPodVisionModelPreference(database)
         : undefined;
+
+      // 3a. JEV Workspace Classification (Phase 4)
+      // Call the dedicated IS endpoint that uses TypeSafe JEV Choice primitive
+      // to classify the content into a workspace. This replaces the few-shot
+      // routing prompt in /api/structure with a typed decision call.
+      // Best effort: a memory/classification hiccup degrades to "no hint",
+      // never fails the capture.
+      let aiWorkspaceHint: {
+        workspaceId: string | null;
+        confidence: number;
+        reason: string;
+        probabilities?: Record<string, number>;
+      } | null = null;
+      if (availableWorkspaces.length > 0) {
+        try {
+          aiWorkspaceHint = await client.classifyWorkspace({
+            content: inputText,
+            candidates: availableWorkspaces,
+            routingMemory,
+            facetSlugs: undefined, // could be derived from extracted facets later
+            timeoutMs: 15_000,
+          });
+          if (aiWorkspaceHint?.workspaceId) {
+            logger.info(
+              {
+                userId,
+                aiWorkspaceId: aiWorkspaceHint.workspaceId,
+                confidence: aiWorkspaceHint.confidence,
+                reason: aiWorkspaceHint.reason,
+              },
+              "Capture routing: JEV workspace classification succeeded"
+            );
+          }
+        } catch (err) {
+          if (err instanceof IntelligenceAuthError) throw err;
+          logger.warn(
+            { err, userId },
+            "JEV workspace classification failed (capture proceeds without AI hint)"
+          );
+        }
+      }
+
       const structureInput = {
         text: input.text ?? "",
         file: input.file,
@@ -1594,6 +1637,15 @@ const captureBaseRouter = router({
             ? [anchorPreviousEntity, ...(input.previousEntities ?? [])]
             : input.previousEntities,
           routingMemory,
+          // JEV workspace classification hint (Phase 4) — strong signal from
+          // the dedicated Choice primitive, not few-shot prompting.
+          ...(aiWorkspaceHint?.workspaceId
+            ? {
+                aiWorkspaceId: aiWorkspaceHint.workspaceId,
+                aiWorkspaceConfidence: aiWorkspaceHint.confidence,
+                aiWorkspaceReason: aiWorkspaceHint.reason,
+              }
+            : {}),
           ...(availableRelationTypes ? { availableRelationTypes } : {}),
         },
         // Which IS spend lane a photo's vision call reserves on (`visionBulk`
@@ -3898,6 +3950,27 @@ const captureBaseRouter = router({
           // so every emitted decision has ≥1 stamped entity to be corrected
           // against — keeping the decision↔correction join 1:1.
           if (routingDecisionRecorded) {
+            // Build structured decision payload for calibration feedback loop.
+            // `availableWorkspaces`/`structureResult` live in the
+            // `capture.structure` mutation scope above — they are NOT in scope
+            // here in `capture.execute`. The question/candidates are derived
+            // from the AI's routing hint fields the caller forwarded.
+            const structuredData = buildStructuredDecisionData({
+              taskType: "classify",
+              question: `Which workspace should this capture be routed to? AI hint: ${input.aiWorkspaceReason ?? "no reason given"}`,
+              candidates: [],
+              response:
+                routing?.movedToWorkspace ??
+                routing?.pendingWorkspaceSwitch?.suggestedWorkspaceId ??
+                workspaceId,
+              probabilities: {},
+              confidence: input.aiWorkspaceConfidence ?? 0,
+              modelVersion: "unknown",
+              schemaVersion: "1.0",
+              correlationId,
+              workspaceId: workspaceId ?? null,
+              projectId: null,
+            });
             await emitAiDecision({
               action: "route",
               userId,
@@ -3929,6 +4002,8 @@ const captureBaseRouter = router({
                 mode: input.workspaceRouting ?? "auto",
                 applied: Boolean(routing?.movedToWorkspace),
                 currentWorkspaceId: ctx.workspaceId,
+                // Structured decision payload for JEV × Synap calibration
+                ...structuredData,
               },
             });
           }
@@ -3944,6 +4019,22 @@ const captureBaseRouter = router({
           const projectAutoLinked =
             Boolean(resolvedProjectId) && (projectPlacement.rung ?? 0) >= 2;
           if (projectAutoLinked || aiProjectAdvisoryId) {
+            // Build structured decision payload for calibration feedback loop.
+            const structuredData = buildStructuredDecisionData({
+              taskType: "classify",
+              question: `Which project should this capture be linked to? AI hint: ${input.aiProjectReason ?? "no reason given"}`,
+              candidates: [],
+              response: resolvedProjectId ?? aiProjectAdvisoryId,
+              probabilities: {},
+              confidence: projectAutoLinked
+                ? 1
+                : (input.aiProjectConfidence ?? 0),
+              modelVersion: "unknown",
+              schemaVersion: "1.0",
+              correlationId,
+              workspaceId: workspaceId ?? null,
+              projectId: resolvedProjectId ?? aiProjectAdvisoryId ?? null,
+            });
             await emitAiDecision({
               action: "project",
               userId,
@@ -3963,6 +4054,8 @@ const captureBaseRouter = router({
                 // Advisory (proposed) vs a landed deterministic auto-link.
                 applied: projectAutoLinked,
                 proposed: Boolean(aiProjectAdvisoryId),
+                // Structured decision payload for JEV × Synap calibration
+                ...structuredData,
               },
             });
           }

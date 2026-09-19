@@ -148,6 +148,10 @@
     "./external-connect": {
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"
+    },
+    "./capture-routing": {
+      "types": "./dist/capture-routing-types.d.ts",
+      "import": "./dist/capture-routing-types.js"
     }
   },
   "scripts": {
