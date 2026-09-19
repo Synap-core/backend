@@ -1694,7 +1694,7 @@ continuing the conversation.
 
 A **focus session** is a named, multi-step work room where you and AI agents collaborate on a specific goal. Use one whenever the work has a clear end state, will take more than one exchange, or involves multiple agents.
 
-**Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a *receipt*, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
+**Sessions are the default — you never have to ask.** Every write you make is grouped into a session automatically: yours if you started one, otherwise one opened for you (a _receipt_, closed on its own once idle and reviewed). Nothing is ever refused for lacking a session.
 
 **When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of yours were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one.
 
