@@ -29,7 +29,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { z } from "zod";
 import type { RunScope } from "../services/runs/index.js";
 
 /**
@@ -68,18 +67,30 @@ describe("tripwire: every RunScope lens is reachable from every door", () => {
   it("tRPC `runs.list` accepts every scope key", async () => {
     const { runsRouter } = await import("../routers/runs.js");
     // Read the REAL Zod shape, not the source text.
+    // Walked structurally rather than through Zod's generics: we only need the
+    // KEY NAMES of the `scope` sub-object, and pinning the exact ZodObject
+    // generic here buys nothing while breaking on every Zod minor.
     const input = (
       runsRouter._def.procedures.list as unknown as {
-        _def: { inputs: unknown[] };
+        _def: { inputs: Array<{ shape: Record<string, unknown> }> };
       }
-    )._def.inputs[0] as z.ZodObject<{
-      scope: z.ZodOptional<z.ZodObject<never>>;
-    }>;
-    const scopeShape = (
-      (input.shape.scope as z.ZodOptional<z.ZodObject<never>>)._def
-        .innerType as z.ZodObject<Record<string, unknown>>
-    ).shape;
+    )._def.inputs[0];
+    const scopeField = input.shape.scope as {
+      _def?: { innerType?: { shape?: Record<string, unknown> } };
+      shape?: Record<string, unknown>;
+    };
+    // `.optional()` wraps the object, so the shape hangs off `_def.innerType`;
+    // fall back to a bare object in case the door ever drops `.optional()`.
+    const scopeShape =
+      scopeField._def?.innerType?.shape ?? scopeField.shape ?? {};
     const accepted = Object.keys(scopeShape).sort();
+
+    // Non-vacuity: if the structural walk missed, `accepted` is empty and every
+    // key would read as "missing" — a loud false positive, but let's name it.
+    expect(
+      accepted.length,
+      "could not read the tRPC scope shape — the walk is broken, not the door"
+    ).toBeGreaterThan(0);
 
     expect(
       RUN_SCOPE_KEYS.filter((k) => !accepted.includes(k)),

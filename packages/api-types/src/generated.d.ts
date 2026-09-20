@@ -12641,6 +12641,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		dismissResultRow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				tempId: string;
+				dismissed: boolean;
+			};
+			output: DismissCaptureResultRowResult;
+			meta: object;
+		}>;
 		structure: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				text?: string | undefined;
@@ -12979,15 +12988,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					errors?: string[];
 				};
 			};
-			meta: object;
-		}>;
-		dismissResultRow: import("@trpc/server").TRPCMutationProcedure<{
-			input: {
-				sessionId: string;
-				tempId: string;
-				dismissed: boolean;
-			};
-			output: DismissCaptureResultRowResult;
 			meta: object;
 		}>;
 		analyzeBulkMapping: import("@trpc/server").TRPCMutationProcedure<{

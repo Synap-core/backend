@@ -835,6 +835,22 @@ export function capabilityVerbHasExternalEffect(
   // window would replay the first's stored result instead of reading again.
   // For `exa_search` (kind:"code", so the fail-closed `return true` below) that
   // was a silently STALE answer to a fresh web search.
+  //
+  // KNOWN TRADE-OFF, accepted deliberately — do not "re-fix" this by putting
+  // billed reads back behind the receipt. That receipt was ALSO, incidentally,
+  // a ~10-minute SPEND dedupe: `exa_search` / `exa_find_similar` return
+  // `costDollars` and Exa bills per call. Combined with the same wave making
+  // declared reads auto-run without a human click, an unattended loop that
+  // retries now pays for each attempt where it previously replayed a cached
+  // result for free. We took that on purpose: a correct-but-billed answer beats
+  // a free-but-stale one, and silently serving a 10-minute-old web search is
+  // the worse failure for a discovery verb.
+  //
+  // This axis is "does it MUTATE the outside world", not "is it free". Cost is
+  // a THIRD property and neither this function nor `metadata.readOnly` models
+  // it. If per-call spend needs bounding, it belongs in a budget/ceiling rung
+  // (governance already has `governance_ceilings`), never in a correctness
+  // guard whose staleness window is an accident of the dedup bucket.
   if (verbDeclaresReadOnly(skill)) {
     return false;
   }

@@ -53,14 +53,24 @@ describe("capture.structure records its run on every exit", () => {
     .map((line) => toReturn(line.trim()))
     .filter((r): r is string => r !== null);
 
+  // Locals assigned from `await finishIntake(` — DERIVED, never listed. An
+  // exit that spreads one of these still recorded its run; one that spreads
+  // anything else did not. (Was a hand-counted allowance for `asked` alone,
+  // which made the second such exit — the terminal one, which now persists the
+  // capture_result part before returning — read as a bypass.)
+  const recordedLocals = new Set(
+    [...slice.matchAll(/const (\w+) = await finishIntake\(/g)].map((m) => m[1]!)
+  );
+
   it("the scan still sees the procedure's exits (non-vacuity)", () => {
     // Five outcomes today: pod auth degrade, pod invalid-response degrade,
     // empty result, follow-up, plan. Fewer means the slice or the regex broke.
-    // The follow-up exit records through `const asked = await finishIntake(`
-    // and returns `{ ...asked, …ids }` (the persisted question's ids).
+    // Two of them record through a local (`asked`, `structured`) and return an
+    // object that spreads it.
+    expect(recordedLocals.size).toBeGreaterThanOrEqual(2);
     expect(
       returns.filter((r) => r.startsWith("return finishIntake(")).length +
-        (slice.match(/const asked = await finishIntake\(/g)?.length ?? 0)
+        recordedLocals.size
     ).toBeGreaterThanOrEqual(5);
     // Self-check: the pattern still sees a bare AND a single-line-guarded return.
     const sample = [
@@ -93,13 +103,20 @@ describe("capture.structure records its run on every exit", () => {
   });
 
   it("no exit bypasses finishIntake", () => {
-    // 1 only when the follow-up branch both records through finishIntake AND
-    // returns an object that spreads that result; 0 otherwise.
-    const askedSpreadExits =
-      /const asked = await finishIntake\(/.test(slice) &&
-      /return \{\s*\n\s*\.\.\.asked,/.test(slice)
-        ? 1
-        : 0;
+    // Object exits that SPREAD a recorded local — multi-line (`return {\n
+    // ...asked,`) and single-line (`return { ...structured, x };`) alike. The
+    // spread name must be one `await finishIntake(` produced; anything else is
+    // a bypass wearing the same shape.
+    const spreadExits = [
+      ...slice.matchAll(/return \{\s*(?:\n\s*)?\.\.\.(\w+)[,\s}]/g),
+    ].map((m) => m[1]!);
+    expect(
+      spreadExits.filter((n) => !recordedLocals.has(n) && n !== "result")
+    ).toEqual([]);
+    const recordedSpreadExits = spreadExits.filter((n) =>
+      recordedLocals.has(n)
+    ).length;
+
     const bypassing = returns.filter(
       (r) =>
         !r.startsWith("return finishIntake(") &&
@@ -108,14 +125,16 @@ describe("capture.structure records its run on every exit", () => {
         // already analyzed into a run of their own (the "already imported"
         // ledger) — staging them again would mint a second room for them.
         r !== "return alreadyImportedAnswer;" &&
-        // The follow-up exit: an object that SPREADS the finishIntake result.
-        !(r === "return {" && askedSpreadExits === 1)
+        // An object exit that spreads a finishIntake local (see above).
+        !(r === "return {" && recordedSpreadExits > 0) &&
+        !/^return \{ \.\.\.(\w+)[,\s}]/.test(r)
     );
     expect(bypassing).toEqual([]);
-    // Exactly one `return {` may lean on that allowance, and it must spread `asked`.
-    expect(returns.filter((r) => r === "return {").length).toBe(
-      askedSpreadExits
+    // Every bare `return {` exit must be accounted for by a recorded spread.
+    expect(returns.filter((r) => r === "return {").length).toBeLessThanOrEqual(
+      recordedSpreadExits
     );
+    expect(recordedSpreadExits).toBe(recordedLocals.size);
   });
 
   it("ONE bulk derivation decides the IS vision lane: the caller's flag OR a run already holding a file", () => {

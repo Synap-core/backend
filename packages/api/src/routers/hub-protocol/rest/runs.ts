@@ -138,6 +138,21 @@ export function registerRunsRoutes(app: HubHono): void {
       scope[key] = value;
     }
 
+    // INCOHERENT SCOPE is a CALLER error — a 400, never the 500 a bare service
+    // throw would produce. `listRuns` refuses `sessionId` + `projectId`
+    // because `events` has no project column, so the pair would return the
+    // proposal-backed runs and silently drop every direct one. Caught here so
+    // the caller is told what to change instead of reading "internal error".
+    if (scope.sessionId && scope.projectId) {
+      return c.json(
+        {
+          error:
+            "sessionId and projectId cannot be combined — a session already pins its project, and the pair would silently drop every direct capability run. Pass one or the other.",
+        },
+        400
+      );
+    }
+
     const runs = await listRuns({
       userId,
       flowType: parsedFt?.success ? parsedFt.data : undefined,

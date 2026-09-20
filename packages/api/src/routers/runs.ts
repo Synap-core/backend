@@ -11,6 +11,7 @@
  * — the same access predicate `proposals.list` / `activity.summary` use.
  */
 
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
@@ -80,6 +81,19 @@ export const runsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
+      // INCOHERENT SCOPE is a CALLER error, so it must read as one. `listRuns`
+      // throws on `sessionId` + `projectId` (a session lens under a project
+      // scope would silently drop every direct run), but a bare service throw
+      // surfaces as INTERNAL_SERVER_ERROR — telling the caller "we broke" when
+      // the truth is "you asked for something incoherent". Same correction as
+      // the repair-error 400 on the capability-execute door.
+      if (input.scope?.sessionId && input.scope?.projectId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "scope.sessionId and scope.projectId cannot be combined — a session already pins its project, and the pair would silently drop every direct capability run. Pass one or the other.",
+        });
+      }
       const runs = await listRuns({ userId, ...input });
       return { runs };
     }),
