@@ -108,11 +108,24 @@ describe("tripwire: DEFAULT_AUTO_APPROVE floor is never materialized as governan
     //     agent resolver skips connection rules (resolve-agent-governance-
     //     decision.ts); only `resolveConnectionSyncDecision` reads them, through
     //     `decideAgentPolicy`, so the floors still apply to every sync write.
+    //   - services/proposals/gov-config.ts → `applyGovConfigChange`, the ONE
+    //     store-write behind the unified settings door. Reached from exactly two
+    //     places, both human-authored: `routers/gov-config.ts` (the user's own
+    //     tRPC door) and `routers/proposals/apply-approval.ts` (the executor for
+    //     a `settings.update` proposal the user APPROVED). It stamps `createdBy`
+    //     + `sourceProposalId` on every row, so a rule it writes is attributable
+    //     to a person, never to a boot seeder. It also carries a STRICTER guard
+    //     than the diff helper would give it: `nonWidenableFloorFor` REFUSES an
+    //     `auto` rule on a non-widenable floor outright, rather than silently
+    //     dropping it from a list. Classified 2026-09-20; it appeared when the
+    //     B4a-B4g executors were consolidated into this one door, and the walk
+    //     below correctly flagged it as unclassified rather than assuming.
     const ALLOWLIST = new Set(
       [
         "packages/api/src/routers/governance-rules.ts",
         "packages/api/src/routers/proposals/apply-approval.ts",
         "packages/database/src/utils/connection-governance.ts",
+        "packages/api/src/services/proposals/gov-config.ts",
       ].map((p) => p.split("/").join(sep))
     );
 

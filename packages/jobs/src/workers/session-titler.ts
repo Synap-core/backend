@@ -22,8 +22,9 @@
  *
  * IS unreachable ⇒ logged, the pass stops, nothing is stamped: the session
  * keeps its derived name and is picked up again next tick. An IS that ANSWERED
- * with nothing usable is stamped as attempted, so one unnameable session does
- * not burn a call every tick forever.
+ * with nothing usable counts ONE attempt against the early bound and records
+ * WHY on the row, so one unnameable session neither burns a call every tick
+ * forever nor is written off for good on a single bad answer.
  */
 
 import {
@@ -61,6 +62,27 @@ export const TITLER_BATCH = 25;
 export const TITLER_BACKFILL_BATCH = 100;
 /** A session younger than this has not said what it is yet. */
 const EARLY_MIN_AGE_MINUTES = 2;
+/**
+ * How many times a phase may ASK and get an unusable answer before it stops
+ * asking. An answer the pod rejects (empty, an id, a link) used to stamp the
+ * row exactly like a success, so the session stayed unnamed for ever and no
+ * tick ever looked at it again — live on 2026-09-20, where the titler had run
+ * and produced ZERO names pod-wide with nothing saying why. Bounded, because
+ * the opposite failure is paying a model on every tick for a row that will
+ * never yield a name.
+ */
+const MAX_TITLE_ATTEMPTS = 3;
+/**
+ * How long a row rests between two of those attempts. THREE is a bound on
+ * spend, not a retry strategy: without a cool-off the three attempts are three
+ * consecutive ticks, thirty minutes, all asking the same model about the same
+ * context — a session that has not said what it is yet in the first half hour
+ * is exactly the one worth asking again LATER, once its room has more in it.
+ * Six hours spreads the three attempts across most of a working day and still
+ * ends, for certain, after the third.
+ */
+const TITLE_RETRY_COOLOFF_MINUTES = 6 * 60;
+
 /** Only recently closed sessions are retitled — history is left as it is. */
 const CLOSE_LOOKBACK_DAYS = 7;
 const CONTEXT_MAX = 2000;
@@ -113,7 +135,15 @@ export const EARLY_TITLE_CANDIDATE = and(
   NAMED_BY_AUTOMATION,
   // Early is once: a generated name is not regenerated before close.
   drizzleSql`COALESCE(${focusSessions.metadata}->>'titleSource', '') <> 'generated'`,
-  drizzleSql`${focusSessions.metadata}->>'titleEarlyAttemptedAt' IS NULL`,
+  drizzleSql`COALESCE((${focusSessions.metadata}->>'titleEarlyAttempts')::int, 0) < ${MAX_TITLE_ATTEMPTS}`,
+  // Rest between attempts. `titleEarlyAttemptedAt` is re-stamped by EVERY early
+  // attempt, so it is already "when we last asked" — a second timestamp field
+  // would be a second name for one fact.
+  drizzleSql`(
+    ${focusSessions.metadata}->>'titleEarlyAttemptedAt' IS NULL
+    OR (${focusSessions.metadata}->>'titleEarlyAttemptedAt')::timestamptz
+       < now() - (${TITLE_RETRY_COOLOFF_MINUTES}::int * interval '1 minute')
+  )`,
   drizzleSql`${TEMPLATE_RUN} IS NOT TRUE`,
   WORK_OR_RECEIPT,
   drizzleSql`${focusSessions.createdAt} < now() - (${EARLY_MIN_AGE_MINUTES}::int * interval '1 minute')`,
@@ -234,14 +264,35 @@ function closeContext(row: CandidateRow): string {
 }
 
 /**
- * One generation phase. Returns the number of names written. Stops at the
- * first IS failure (the service is down for the rest of the batch too) and
- * stamps nothing for the sessions it could not ask about.
+ * What one pass DID — not only what it achieved.
+ *
+ * `named` alone is what the summary logged before, and on 2026-09-20 it made
+ * the live failure unreadable: the titler ran every ten minutes, wrote nothing,
+ * and logged nothing at all (the summary was gated on a non-zero count), so
+ * "the IS is never asked" and "the IS is asked and every answer is rejected"
+ * looked identical from outside. `asked` and `unusable` are the two numbers
+ * that tell them apart.
+ */
+interface PhaseOutcome {
+  /** Names actually written. */
+  named: number;
+  /** Sessions the IS was asked about. */
+  asked: number;
+  /** Answers the pod refused (`sanitizeGeneratedTitle` returned null). */
+  unusable: number;
+  /** Rows that just spent their LAST attempt — they will never be asked again. */
+  exhausted: number;
+}
+
+/**
+ * One generation phase. Stops at the first IS failure (the service is down for
+ * the rest of the batch too) and stamps nothing for the sessions it could not
+ * ask about.
  */
 async function generatePhase(
   phase: "early" | "close",
   requestTitle: TitleRequester
-): Promise<number> {
+): Promise<PhaseOutcome> {
   const rows: CandidateRow[] = await db
     .select({
       id: focusSessions.id,
@@ -261,7 +312,8 @@ async function generatePhase(
     )
     .limit(TITLER_BATCH);
 
-  let named = 0;
+  const out: PhaseOutcome = { named: 0, asked: 0, unusable: 0, exhausted: 0 };
+  const isEarly = phase === "early";
   for (const row of rows) {
     const context =
       phase === "early" ? await earlyContext(row) : closeContext(row);
@@ -279,11 +331,43 @@ async function generatePhase(
       );
       break;
     }
+    out.asked++;
     // The pod's own rules, whatever the IS already did.
     const title = sanitizeGeneratedTitle(answer.title);
     const now = new Date().toISOString();
-    const stamp =
-      phase === "early" ? "titleEarlyAttemptedAt" : "titleRetitledAtClose";
+    const stamp = isEarly ? "titleEarlyAttemptedAt" : "titleRetitledAtClose";
+    // The counter is EARLY-ONLY. Close is a genuine one-shot, gated by
+    // `titleRetitledAtClose`, and a shared counter would let a close attempt
+    // silently spend an early budget (or the reverse) — one number standing
+    // for two different bounds.
+    const attempts = isEarly ? readEarlyAttempts(row) + 1 : 1;
+    // WHY it produced nothing. `empty` = the IS answered with no text at all
+    // (a down model, a truncated stream); `unusable` = it answered and the pod
+    // REFUSED what it said (an id, a link, a reasoning block). They have
+    // different fixes, so they must not both read as "no name".
+    const reason: "empty" | "unusable" =
+      typeof answer.title === "string" && answer.title.trim() !== ""
+        ? "unusable"
+        : "empty";
+    if (!title) {
+      out.unusable++;
+      if (isEarly && attempts >= MAX_TITLE_ATTEMPTS) out.exhausted++;
+      logger.warn(
+        {
+          sessionId: row.id,
+          phase,
+          attempts,
+          reason,
+          rawTitle: answer.title ?? null,
+          decider: answer.decider,
+        },
+        !isEarly
+          ? "session-titler: unusable answer at close — keeping the name it has"
+          : attempts >= MAX_TITLE_ATTEMPTS
+            ? "session-titler: unusable answer — giving up, keeping the derived name"
+            : "session-titler: unusable answer — will retry after the cool-off"
+      );
+    }
     const wrote = await writeTitleIfUnchanged({
       sessionId: row.id,
       readTitle: row.title,
@@ -291,21 +375,36 @@ async function generatePhase(
       title,
       metadata: {
         [stamp]: now,
+        ...(isEarly ? { titleEarlyAttempts: attempts } : {}),
         ...(title
           ? {
               titleSource: "generated" satisfies SessionTitleSource,
               titleGeneratedAt: now,
               ...(answer.model ? { titleModel: answer.model } : {}),
             }
-          : {}),
+          : // Recorded on the ROW, not only in the log: at 3am the question is
+            // "why is THIS session still unnamed", and a log line that has
+            // rotated away cannot answer it.
+            { titleEarlyLastReason: reason }),
       },
     });
-    if (wrote && title) named++;
+    if (wrote && title) out.named++;
   }
-  return named;
+  return out;
 }
 
 /** Phase 1: derived names for runs and captures written before creators set one. */
+/**
+ * EARLY attempts already spent on this row, tolerant of a legacy/absent value.
+ * Absent reads as 0, which is what un-sticks the rows stamped by the version
+ * that gave up after one unusable answer.
+ */
+function readEarlyAttempts(row: { metadata?: unknown }): number {
+  const raw = (row.metadata as { titleEarlyAttempts?: unknown } | null)
+    ?.titleEarlyAttempts;
+  return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
 async function backfillDerivedTitles(): Promise<number> {
   const rows = await db
     .select({
@@ -368,8 +467,22 @@ export async function handleSessionTitler(
   }
   const early = await generatePhase("early", requestTitle);
   const close = await generatePhase("close", requestTitle);
-  if (backfilled || early || close) {
-    logger.info({ backfilled, early, close }, "session-titler named sessions");
+  // Logged whenever the pass DID something — asking and being refused counts.
+  // Gating this on names written is what made a pod-wide zero silent.
+  if (backfilled || early.asked || close.asked) {
+    logger.info(
+      {
+        backfilled,
+        early: early.named,
+        close: close.named,
+        earlyAsked: early.asked,
+        earlyUnusable: early.unusable,
+        earlyExhausted: early.exhausted,
+        closeAsked: close.asked,
+        closeUnusable: close.unusable,
+      },
+      "session-titler pass"
+    );
   }
-  return { backfilled, early, close };
+  return { backfilled, early: early.named, close: close.named };
 }

@@ -116,6 +116,22 @@ async function session(opts: {
   return id;
 }
 
+/**
+ * Push the row's last early attempt back past the cool-off, so the next tick
+ * is allowed to ask again. Written as a real metadata write rather than fake
+ * timers because the cool-off is a SQL predicate over a stored timestamp —
+ * mocking the clock would leave the thing under test untouched.
+ */
+async function ageLastAttempt(id: string) {
+  await q(
+    `update focus_sessions
+       set metadata = metadata || jsonb_build_object(
+         'titleEarlyAttemptedAt', (now() - interval '2 days')::text)
+     where id = $1`,
+    [id]
+  );
+}
+
 async function row(id: string) {
   const { rows } = await q<{
     title: string | null;
@@ -257,19 +273,72 @@ describe("failure and empty answers", () => {
     expect((await row(id)).title).toBe("Works now");
   });
 
-  it("an unusable answer keeps the name but is not asked again", async () => {
+  it("an unusable answer is retried, then given up on — never asked for ever", async () => {
+    // Live 2026-09-20: the titler had run and produced ZERO names pod-wide.
+    // A rejected answer (an id, a link, nothing) stamped the row exactly like
+    // a success, so the session stayed unnamed and no tick looked again. One
+    // bad answer must not be permanent; neither must an endless model bill.
     const id = await session({
       title: "Derived",
       metadata: { titleSource: "derived" },
     });
-    const first = answering("3f2a9c1e-0b4d-4e5f-9a8b-7c6d5e4f3a2b");
-    await handleSessionTitler({ requestTitle: first });
+    const junk = answering("3f2a9c1e-0b4d-4e5f-9a8b-7c6d5e4f3a2b");
+    await handleSessionTitler({ requestTitle: junk });
+    let r = await row(id);
+    expect(r.title).toBe("Derived");
+    expect(r.metadata.titleSource).toBe("derived");
+    expect(r.metadata.titleEarlyAttempts).toBe(1);
+    // The IS answered with a real string the POD refused — not an empty answer.
+    expect(r.metadata.titleEarlyLastReason).toBe("unusable");
+
+    // NOT on the very next tick: three attempts must not be three consecutive
+    // ticks asking the same model about the same context.
+    const tooSoon = answering("A real name now");
+    await handleSessionTitler({ requestTitle: tooSoon });
+    expect(tooSoon).not.toHaveBeenCalled();
+
+    // ASKED AGAIN once the cool-off has passed — what the old code refused.
+    await ageLastAttempt(id);
+    const second = answering("A real name now");
+    await handleSessionTitler({ requestTitle: second });
+    expect(second).toHaveBeenCalled();
+    r = await row(id);
+    expect(r.title).toBe("A real name now");
+    expect(r.metadata.titleSource).toBe("generated");
+  });
+
+  it("tells an EMPTY answer from a REFUSED one on the row", () => {
+    // Two different failures with two different fixes: nothing came back at
+    // all (a down model, a truncated stream) vs the pod rejecting what came
+    // back (an id, a link). Folding them into one "no name" is what left the
+    // live zero unexplainable.
+    return (async () => {
+      const id = await session({
+        title: "Derived",
+        metadata: { titleSource: "derived" },
+      });
+      await handleSessionTitler({ requestTitle: answering("") });
+      expect((await row(id)).metadata.titleEarlyLastReason).toBe("empty");
+    })();
+  });
+
+  it("stops asking after the attempt cap, keeping the derived name", async () => {
+    const id = await session({
+      title: "Derived",
+      metadata: { titleSource: "derived" },
+    });
+    for (let i = 0; i < 3; i++) {
+      await handleSessionTitler({ requestTitle: answering("") });
+      await ageLastAttempt(id);
+    }
+    expect((await row(id)).metadata.titleEarlyAttempts).toBe(3);
+    // Past the cool-off AND past the bound: the bound is what stops it.
+    const afterCap = answering("Too late");
+    await handleSessionTitler({ requestTitle: afterCap });
+    expect(afterCap).not.toHaveBeenCalled();
     const r = await row(id);
     expect(r.title).toBe("Derived");
     expect(r.metadata.titleSource).toBe("derived");
-    const second = answering("Anything");
-    await handleSessionTitler({ requestTitle: second });
-    expect(second).not.toHaveBeenCalled();
   });
 });
 
@@ -330,7 +399,9 @@ describe("backfill — derived names, no LLM", () => {
     expect(out).toEqual({ backfilled: 2, early: 0, close: 0 });
     expect((await row(run)).metadata.titleSource).toBe("derived");
     const cap = await row(capture);
-    expect(cap.title).toBe("Capture · Link from example.com");
+    // The goal already CARRIES the machine verb, so the derived name is the
+    // content — not a byte-identical copy of the goal (12 live rows, 09-20).
+    expect(cap.title).toBe("Link from example.com");
     expect(cap.metadata.titleSource).toBe("derived");
     expect((await row(work)).title).toBeNull();
     expect((await row(titled)).title).toBe("Kept");

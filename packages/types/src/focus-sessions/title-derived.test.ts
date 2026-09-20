@@ -31,6 +31,46 @@ describe("buildDerivedSessionTitle", () => {
     ).toBe("Link from linktr.ee");
   });
 
+  it("drops the machine verb a creator already wrote into the label", () => {
+    // Live 2026-09-20: 12 of 50 rows had a derived title BYTE-IDENTICAL to the
+    // goal it was built from, because intake stores `goal` as `Capture · <x>`
+    // and the backfill hands that whole string over as the label. The name has
+    // to be the CONTENT.
+    const goal = "Capture · Un des buts de synap: pouvoir dire ce qu'on veut";
+    const title = buildDerivedSessionTitle({ kind: "capture", label: goal });
+    expect(title).not.toBe(goal);
+    expect(title.startsWith("Capture")).toBe(false);
+    expect(title).toBe("Un des buts de synap: pouvoir dire ce qu'on veut");
+    // The prepending verbs have the same hazard one step earlier.
+    expect(
+      buildDerivedSessionTitle({ kind: "enrich", label: "Enrich Acme Corp" })
+    ).toBe("Enrich Acme Corp");
+    expect(
+      buildDerivedSessionTitle({ kind: "import", label: "Import Q3 ledger" })
+    ).toBe("Import Q3 ledger");
+  });
+
+  it("keeps a label that only RESEMBLES the machine verb", () => {
+    // The strip is anchored and case-sensitive on purpose: these are a
+    // person's own words, not a creator's prefix, and eating them would be a
+    // worse bug than the one being fixed.
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "Capture the flag" })
+    ).toBe("Capture the flag");
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "capture · notes" })
+    ).toBe("capture · notes");
+    expect(
+      buildDerivedSessionTitle({ kind: "import", label: "Important dates" })
+    ).toBe("Import Important dates");
+  });
+
+  it("falls back to the verb when the label was only the prefix", () => {
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "Capture · " })
+    ).toBe("Capture");
+  });
+
   it("never leaks ids into a receipt name", () => {
     const out = buildDerivedSessionTitle({
       kind: "receipt",

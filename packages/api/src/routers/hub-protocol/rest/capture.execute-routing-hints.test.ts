@@ -166,3 +166,44 @@ describe("POST /capture/execute — routing hints parity with MCP", () => {
     expect(executeMock).not.toHaveBeenCalled();
   });
 });
+
+describe("POST /capture/execute — a domain REFUSAL is not a 500", () => {
+  it("the same-name CONFLICT answers 409 and KEEPS its guidance", async () => {
+    // Live on 2026-09-20 this returned 500 "An unexpected server error
+    // occurred" with the body redacted by the 5xx egress middleware, so the
+    // caller lost the one sentence that says what to do. Capturing anything
+    // whose title matches an existing entity of that kind hits this.
+    // Faithful shape: tRPC throws an Error SUBCLASS carrying `.code` — the
+    // handler reads `.message` off an Error, and `errCode` duck-types `.code`
+    // (never `instanceof`, which is dead in the bundled build).
+    executeMock.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "A company with this name already exists: Acme (abc). Reuse an existing id (enrich / attach facet), or pass forceCreate: true if this is genuinely a different subject."
+        ),
+        { code: "CONFLICT" }
+      )
+    );
+    const res = await buildApp().request("/capture/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entities: [{ tempId: "t1", profileSlug: "company", title: "Acme" }],
+      }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toContain("forceCreate");
+  });
+
+  it("an unknown failure still answers 500", async () => {
+    executeMock.mockRejectedValue(new Error("boom"));
+    const res = await buildApp().request("/capture/execute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        entities: [{ tempId: "t1", profileSlug: "note", title: "x" }],
+      }),
+    });
+    expect(res.status).toBe(500);
+  });
+});

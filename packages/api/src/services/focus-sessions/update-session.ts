@@ -45,6 +45,7 @@ import {
   type BlockGuidance,
   type BlockedSlotRef,
 } from "./block-guidelines.js";
+import type { FollowOutcome } from "./follow-playbook.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -106,6 +107,26 @@ export interface UpdateFocusSessionParams {
    * recorded stay; a key no longer declared simply stops counting.
    */
   criteria?: SessionCriterion[];
+  /**
+   * FOLLOW a playbook with this live session — or RELEASE it with `null`.
+   *
+   * A followed session BECOMES A RUN of that playbook (`playbookId` is written,
+   * so `projectSessionKind` reclassifies it from `work` to `run`), joins the
+   * playbook's runs, and leaves the owner's default work lens. That consequence
+   * is intended and must be DISCLOSED by the surface before the act.
+   *
+   * Applied by `followPlaybook` (`follow-playbook.ts`) — the ONE implementation
+   * behind every door — AFTER the field write below, so the playbook's criteria
+   * and deliverables merge onto whatever this same call just wrote.
+   */
+  followPlaybookId?: string | null;
+  /**
+   * Which stage this work is ALREADY in. Absent ⇒ `currentStage` is left
+   * exactly as it is (NEVER seeded to stage 1 — an unmapped stage is Jira's
+   * hidden-issue failure). A key the playbook does not declare is REFUSED with
+   * the valid keys listed.
+   */
+  followStageKey?: string | null;
 }
 
 export type UpdateFocusSessionResult =
@@ -142,6 +163,19 @@ export type UpdateFocusSessionResult =
        * applies.
        */
       blockGuidelines?: BlockGuidance;
+      /**
+       * What a `followPlaybookId` in the patch DID — present only when the
+       * patch carried one. It MUST cross this boundary for the same reason
+       * `completeOutput` does: an attach that was REFUSED (an unknown stage
+       * key, a playbook already followed) changes nothing on the row, so a
+       * caller handed only the session object reads the refusal as a success.
+       */
+      follow?: FollowOutcome;
+      /**
+       * Why the follow half of this patch did not land, when the rest did.
+       * Absent when there was no `followPlaybookId` or when it landed.
+       */
+      followRefusal?: string;
     };
 
 type OutputItem = ExpectedOutput;
@@ -229,6 +263,10 @@ export const expectedOutputWireSchema = z.object({
   // `.nullable()` because silence means KEEP (see `SERVER_OWNED_OUTPUT_FIELDS`)
   // and so "clear this pointer" needs an explicit way to say itself.
   ref: outputRefWireSchema.nullable().optional(),
+  // The criterion a criterion slot stands for — stamped by the escalation in
+  // `evaluations/record.ts`, never authored by a client. On the wire for the
+  // same round-trip reason as `owedSince`: a naive echo must not lose it.
+  criterionKey: z.string().optional(),
 }) satisfies z.ZodType<ExpectedOutput, ExpectedOutput>;
 
 /**
@@ -316,6 +354,10 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   "attestedAt",
   "retiredAt",
   "retiredReason",
+  // Stamped by the escalation that files a criterion slot. SERVER-STAMPED, not
+  // merely erasure-protected: an agent that could author it would point the
+  // scorecard at a criterion it did not fail.
+  "criterionKey",
 ] as const satisfies ReadonlyArray<keyof ExpectedOutput>;
 
 /**
@@ -925,6 +967,16 @@ export async function updateFocusSession(
         ? { subjectEntityId: params.subjectEntityId }
         : {}),
       ...(params.criteria !== undefined ? { criteria: params.criteria } : {}),
+      // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
+      // `focus_session/update` executor re-applies it on approval, so the
+      // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
+      // survive the payload, hence the `!== undefined` test.
+      ...(params.followPlaybookId !== undefined
+        ? { followPlaybookId: params.followPlaybookId }
+        : {}),
+      ...(params.followStageKey !== undefined
+        ? { followStageKey: params.followStageKey }
+        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1055,6 +1107,43 @@ export async function updateFocusSession(
     if (advance.paused) gatedStatus = "paused";
   }
 
+  // ── FOLLOW / RELEASE A PLAYBOOK ─────────────────────────────────────────────
+  // AFTER the field write on purpose: the playbook's criteria and deliverables
+  // MERGE onto what this same call may just have written (caller's first), and
+  // `followPlaybook` takes its own row lock to read that post-write state.
+  //
+  // A refusal does NOT throw: the rest of the patch legitimately landed, and
+  // failing the whole call would leave the caller unable to tell which half
+  // applied. It rides back on `followRefusal`, like `completeOutput` does.
+  let followOutcome: FollowOutcome | undefined;
+  let followRefusal: string | undefined;
+  let followedSession: typeof updated | undefined;
+  if (params.followPlaybookId !== undefined) {
+    const { followPlaybook } = await import("./follow-playbook.js");
+    const followed = await followPlaybook({
+      sessionId,
+      userId,
+      agentUserId,
+      followPlaybookId: params.followPlaybookId,
+      followStageKey: params.followStageKey,
+    });
+    switch (followed.status) {
+      case "ok":
+        followOutcome = followed.follow;
+        followedSession = followed.session as typeof updated;
+        break;
+      case "refused":
+        followRefusal = followed.reason;
+        break;
+      case "proposed":
+        followRefusal = followed.reason;
+        break;
+      case "not_found":
+        followRefusal = `Focus session ${sessionId} not found`;
+        break;
+    }
+  }
+
   // After the write: a guideline annotates the block, it never gates it.
   const blockGuidelines = await guidanceForBlockedSlots({
     userId,
@@ -1062,10 +1151,19 @@ export async function updateFocusSession(
     slots: blockedByThisPatch,
   });
 
+  // The row the FOLLOW wrote wins when there was one — it is strictly later
+  // than `updated` and carries the `playbookId`, the merged criteria and the
+  // merged deliverables. Returning the pre-follow row would tell the caller its
+  // attach did nothing.
+  const finalSession = followedSession ?? updated;
   return {
     status: "updated",
-    session: gatedStatus ? { ...updated, status: gatedStatus } : updated,
+    session: gatedStatus
+      ? { ...finalSession, status: gatedStatus }
+      : finalSession,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),
+    ...(followOutcome ? { follow: followOutcome } : {}),
+    ...(followRefusal ? { followRefusal } : {}),
   };
 }

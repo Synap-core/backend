@@ -110,6 +110,18 @@ const ACKNOWLEDGED: Record<string, string> = {
   "api:routers/mcp/tools/index.ts":
     "JSON-schema property declaration for the MCP tool input",
 
+  // DECLARATION, NOT ADVANCE — `followPlaybookId` binds a LIVE session to a
+  // playbook, and `followStageKey` names the stage the work is ALREADY in. The
+  // column is written ONLY from that caller-supplied key (grep
+  // `stageKey !== null ? { currentStage: stageKey }` — there is no derivation,
+  // no `stages[0]`, and an unknown key is refused with the valid keys). Nobody
+  // advanced INTO the stage, so routing it through the door would file a human
+  // gate for a transition that never happened — the Camunda rule the whole
+  // feature is built on: a running instance keeps its context, and a definition
+  // attached later never re-evaluates what already happened.
+  "api:services/focus-sessions/follow-playbook.ts":
+    "declaration: currentStage = the caller-NAMED followStageKey, never derived",
+
   // THE DOOR'S OWN single-column UPDATE lives in the door; listed for completeness
   // by THE_DOOR above, not here.
 };

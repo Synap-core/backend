@@ -11,7 +11,7 @@ The loop has three moves that compound. Each takes a one-off act and, if it's wo
 
 ### 1. Open a session for real work
 
-When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
+When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The start door hands back the pod's matching playbooks (`playbooks.candidates`) — read them before working ad-hoc, and start again with `templateId` when one fits. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
 
 ### 2. Create a cell to REPORT — don't dump data into chat
 

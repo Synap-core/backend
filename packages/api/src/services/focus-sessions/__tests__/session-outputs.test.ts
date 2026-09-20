@@ -436,6 +436,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     why: "The Stripe restricted key for the live account",
     ref: { kind: "document", id: "44444444-4444-4444-4444-444444444444" },
     owedSince: "2026-09-08T09:00:00.000Z",
+    criterionKey: "no-stale",
     status: "done",
     claimedDone: true,
     satisfiedByProposalId: PROPOSAL,

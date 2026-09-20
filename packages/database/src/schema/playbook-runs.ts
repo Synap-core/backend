@@ -23,8 +23,17 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/** Lifecycle of a run. */
-export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed";
+/**
+ * Lifecycle of a run.
+ *
+ * `cancelled` is the RELEASE state: a live session that followed this playbook
+ * stopped following it (`follow-playbook.ts`). It is neither `completed` (the
+ * run did not finish) nor `failed` (nothing failed) — and the distinction is
+ * load-bearing, because the scorecard feeds governance widening and a `failed`
+ * row would grade a playbook for a person's change of mind.
+ */
+export type PlaybookRunStatus =
+  "running" | "completed" | "failed" | "proposed" | "cancelled";
 
 export const playbookRuns = pgTable(
   "playbook_runs",
@@ -42,7 +51,7 @@ export const playbookRuns = pgTable(
       .$type<PlaybookRunExecutorRef>()
       .notNull(),
     status: text("status", {
-      enum: ["running", "completed", "failed", "proposed"],
+      enum: ["running", "completed", "failed", "proposed", "cancelled"],
     })
       .$type<PlaybookRunStatus>()
       .notNull()

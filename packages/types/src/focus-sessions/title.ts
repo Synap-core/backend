@@ -183,6 +183,28 @@ function readableLabel(label: string | null | undefined): string {
   ).replace(/^[\s·:,-]+|[\s·:,-]+$/g, "");
 }
 
+/**
+ * The MACHINE VERB a creator already wrote into the text this builder is about
+ * to name from, by kind. Stripped so the name is the CONTENT, never a second
+ * copy of the verb.
+ *
+ * Live on 2026-09-20: 12 of 50 sessions carried a derived title byte-identical
+ * to their own goal, because intake stores `goal` as `Capture · <content>` and
+ * the backfill passed that whole string as the capture's label — so the "name"
+ * added nothing a reader did not already have. The `Enrich `/`Import ` forms
+ * are the same hazard one step earlier: this builder PREPENDS those verbs, so a
+ * label that already carries one would read "Enrich Enrich the dossier".
+ *
+ * Matched case-sensitively and anchored, because these are the exact strings
+ * the creators write — a loose match would eat a person's own words ("Import
+ * duties", "Capture the flag").
+ */
+const DERIVED_LABEL_PREFIX = {
+  capture: /^Capture\s*·\s*/,
+  enrich: /^Enrich\s+/,
+  import: /^Import\s+/,
+} as const;
+
 export type DerivedSessionTitleInput =
   /** A playbook or automation execution, optionally about one subject. */
   | { kind: "run"; name: string; subject?: string | null }
@@ -209,12 +231,18 @@ export function buildDerivedSessionTitle(
       const subject = readableLabel(input.subject);
       return clip(subject ? `${base} · ${subject}` : base, GENERATED_TITLE_MAX);
     }
-    case "capture":
-      return clip(readableLabel(input.label) || "Capture", GENERATED_TITLE_MAX);
+    case "capture": {
+      const label = readableLabel(input.label)
+        .replace(DERIVED_LABEL_PREFIX.capture, "")
+        .trim();
+      return clip(label || "Capture", GENERATED_TITLE_MAX);
+    }
     case "enrich":
     case "import": {
       const verb = input.kind === "enrich" ? "Enrich" : "Import";
-      const label = readableLabel(input.label);
+      const label = readableLabel(input.label)
+        .replace(DERIVED_LABEL_PREFIX[input.kind], "")
+        .trim();
       return clip(label ? `${verb} ${label}` : verb, GENERATED_TITLE_MAX);
     }
     case "receipt": {

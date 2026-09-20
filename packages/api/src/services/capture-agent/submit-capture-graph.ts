@@ -52,17 +52,20 @@ import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { createLogger } from "@synap-core/core";
 import {
   type HubWriteSource,
-  isPlanBatch,
   type CompositeProposalOperation,
+  type CompositeCreateAutomationOp,
   type CompositeCreateDocumentOp,
   type CompositeCreateLinkOp,
   type CompositeCreateProjectOp,
+  type CompositeCreateRuleOp,
   type CompositeCreateSessionOp,
+  type CompositeCreateSkillOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { preflightPlanOperations } from "./capture-plan-preflight.js";
 import {
+  hasComposedSteps,
   planStepSummaries,
   type CapturePlanProblem,
   type PlanStepSummary,
@@ -186,6 +189,22 @@ export interface CapturePlanInput {
   /** `evidence` is server-stamped; a caller-supplied one is ignored. */
   projects?: Array<Omit<CompositeCreateProjectOp, "op" | "evidence">>;
   links?: Array<Omit<CompositeCreateLinkOp, "op">>;
+  /**
+   * ── Rule Loop config steps (NS1) ─────────────────────────────────────
+   * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
+   * row) and the `rule` that remembers the pair. They ride the SAME proposal
+   * and the SAME `ref` namespace as everything above, which is the point: a
+   * `create_automation` whose flow names a skill this batch creates resolves,
+   * because the materializer runs pass 0a (skills) to completion before pass
+   * 0b (automations) and the automation door's catalog check is a live read.
+   *
+   * `enabled` is accepted on an automation only so a producer can STATE its
+   * intent — it is forced false at materialization (approve-first), and the
+   * override is reported, never swallowed.
+   */
+  skills?: Array<Omit<CompositeCreateSkillOp, "op">>;
+  automations?: Array<Omit<CompositeCreateAutomationOp, "op">>;
+  rules?: Array<Omit<CompositeCreateRuleOp, "op">>;
 }
 
 /** One plan step on a submit receipt — self-describing for the reviewer/agent. */
@@ -207,7 +226,10 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
     (plan?.sessions?.length ?? 0) +
       (plan?.documents?.length ?? 0) +
       (plan?.projects?.length ?? 0) +
-      (plan?.links?.length ?? 0) >
+      (plan?.links?.length ?? 0) +
+      (plan?.skills?.length ?? 0) +
+      (plan?.automations?.length ?? 0) +
+      (plan?.rules?.length ?? 0) >
     0
   );
 }
@@ -527,6 +549,17 @@ export async function buildCaptureGraphOperations(
       ...d,
     })),
     ...(plan?.links ?? []).map((l) => ({ op: "create_link" as const, ...l })),
+    // ── Rule Loop config steps (NS1) ─────────────────────────────────────
+    // Emitted in fact → behaviour → rule order so the array reads the way the
+    // materializer applies it. Apply order is fixed by its passes, not by
+    // position here (see `CompositeProposalData.operations`), so this is
+    // legibility, not a dependency.
+    ...(plan?.skills ?? []).map((s) => ({ op: "create_skill" as const, ...s })),
+    ...(plan?.automations ?? []).map((a) => ({
+      op: "create_automation" as const,
+      ...a,
+    })),
+    ...(plan?.rules ?? []).map((r) => ({ op: "create_rule" as const, ...r })),
   ];
 
   // Scope-aware homes (shared with import): stamp process kinds into the graph
@@ -641,7 +674,7 @@ export async function preflightCaptureGraphOperations(
   // CONNECTED PLAN: ref integrity, cycles, limits, ownership of every named
   // session/entity/project, and the project evidence verdict — the SAME check
   // on submit, on the dry run, and on every revision of a pending plan.
-  if (isPlanBatch(operations)) {
+  if (hasComposedSteps(operations)) {
     const plan = await preflightPlanOperations(database, operations, userId);
     return {
       invalidEntities,
@@ -789,7 +822,7 @@ export async function dryRunCaptureGraph(
     entityCount: collapsed.entities.length,
     relationCount: collapsed.relations.length,
     planProblems,
-    ...(isPlanBatch(operations)
+    ...(hasComposedSteps(operations)
       ? { planSteps: planStepReceipts(operations) }
       : {}),
   };
@@ -984,7 +1017,7 @@ export async function submitCaptureGraph(
         reviewUrl: priorReviewUrl,
         summary,
         applied: priorApplied,
-        ...(isPlanBatch(priorOps)
+        ...(hasComposedSteps(priorOps)
           ? { plan: { steps: planStepReceipts(priorOps) } }
           : {}),
         sessionId: priorScope.sessionId,
@@ -1096,7 +1129,7 @@ export async function submitCaptureGraph(
     throw new CaptureGraphValidationError(invalidEntities, planProblems);
   }
   const homes = computeImportHomes(operations);
-  const isPlan = isPlanBatch(operations);
+  const isPlan = hasComposedSteps(operations);
   // A project step below the agent evidence floor is shown to a human with
   // its marker — it can never be auto-applied past that human.
   const planNeedsReview = operations.some(

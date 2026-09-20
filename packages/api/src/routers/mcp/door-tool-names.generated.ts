@@ -22,8 +22,8 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_complete_session: {
     "pod-mcp": "synap_complete_session",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__complete_session",
+    raycast: "complete-session",
   },
   synap_create_automation: {
     "pod-mcp": "synap_create_automation",
@@ -117,7 +117,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_get_channel: {
     "pod-mcp": "synap_get_channel",
-    "cp-connector": null,
+    "cp-connector": "pod__get_channel",
     raycast: null,
   },
   synap_get_document: {
@@ -152,8 +152,8 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_get_session: {
     "pod-mcp": "synap_get_session",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__get_session",
+    raycast: "get-session",
   },
   synap_get_thread_context: {
     "pod-mcp": "synap_get_thread_context",
@@ -202,8 +202,8 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_list_sessions: {
     "pod-mcp": "synap_list_sessions",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__list_sessions",
+    raycast: "list-sessions",
   },
   synap_list_views: {
     "pod-mcp": "synap_list_views",
@@ -307,7 +307,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_start_session: {
     "pod-mcp": "synap_start_session",
-    "cp-connector": null,
+    "cp-connector": "pod__start_session",
     raycast: "start-session",
   },
   synap_store_file: {
@@ -337,7 +337,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_update_session: {
     "pod-mcp": "synap_update_session",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__update_session",
+    raycast: "update-session",
   },
 };

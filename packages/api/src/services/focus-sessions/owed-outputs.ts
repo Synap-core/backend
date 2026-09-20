@@ -194,6 +194,13 @@ export interface OwedSlot {
   owedSince: string;
   /** The agent's claim that it produced this after all, if it made one. */
   claimedDone?: boolean;
+  /**
+   * For a criterion slot, the `SessionCriterion.key` it stands for — so a tray
+   * can open the scorecard ON that criterion instead of matching its prose
+   * label. Absent on every ordinary slot and on criterion slots filed before
+   * the field existed; absence means "no criterion to highlight".
+   */
+  criterionKey?: string;
 }
 
 export interface ListOwedSlotsParams {
@@ -249,6 +256,9 @@ export function projectOwedSlots(row: OwedRow): OwedSlot[] {
       owedSince,
       ...(slot.claimedDone !== undefined
         ? { claimedDone: slot.claimedDone }
+        : {}),
+      ...(slot.criterionKey !== undefined
+        ? { criterionKey: slot.criterionKey }
         : {}),
     });
   }

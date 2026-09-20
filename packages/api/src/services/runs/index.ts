@@ -214,7 +214,8 @@ type AutomationRunStatus =
   | "cancelled"
   | "skipped"
   | "blocked_by_policy";
-type PlaybookRunStatusValue = "running" | "completed" | "failed" | "proposed";
+type PlaybookRunStatusValue =
+  "running" | "completed" | "failed" | "proposed" | "cancelled";
 type FocusSessionStatus =
   | "active"
   | "paused"
@@ -245,11 +246,13 @@ function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
     case "completed":
     case "failed":
     case "proposed":
-      return [status];
+    // A run RELEASED by its session (`follow-playbook.ts` detach). Filterable
+    // like any other: it is a real row with a real end, not an absence.
     case "cancelled":
+      return [status];
     case "skipped":
     case "blocked_by_policy":
-      return []; // playbook_runs has no "cancelled"/"skipped"/"blocked_by_policy"
+      return []; // playbook_runs has no "skipped"/"blocked_by_policy"
   }
 }
 

@@ -29,6 +29,87 @@ describe("from-intent conductor firewalls", () => {
     expect(src.length).toBeGreaterThan(400);
   });
 
+  // 2026-09-20: the conductor became SESSION-FIRST and PLAN-FIRST once the
+  // narrow doors gained a session lifecycle and `synap_capture` gained the
+  // connected-plan lane. Before that, "ONE next write" + 40-odd flat tools was
+  // an instruction to file N separate proposals — which is exactly what one
+  // agent did, hitting the pending-proposal cap at 17 while building one pack.
+  //
+  // LIMITATION, stated rather than implied: this scans PROSE. It proves the
+  // contract is still written down, not that an agent obeys it. It cannot see
+  // an agent that reads the file and files fourteen proposals anyway.
+  it("from-intent names the session as the unit of work, before structure", () => {
+    const src = readFileSync(join(ROOT, "synap/from-intent.md"), "utf8");
+    expect(src).toMatch(/synap_start_session/);
+    // The session must be named in the ORIENT firewall (§0), not merely
+    // mentioned later as one option among many — that was the old shape.
+    const orient = src.slice(src.indexOf("### 0."), src.indexOf("### 1."));
+    expect(orient.length).toBeGreaterThan(200);
+    expect(orient).toMatch(/synap_start_session/);
+  });
+
+  it("from-intent teaches the connected PLAN as ONE proposal", () => {
+    const src = readFileSync(join(ROOT, "synap/from-intent.md"), "utf8");
+    expect(src).toMatch(/connected PLAN/i);
+    expect(src).toMatch(/all-or-none/i);
+    // The plan args an agent actually has to pass. A doc that says "use a plan"
+    // without naming them sends the agent back to the flat tools.
+    for (const arg of [
+      "projects",
+      "sessions",
+      "documents",
+      "links",
+      "skills",
+      "automations",
+      "rules",
+    ]) {
+      expect(src, `plan arg ${arg} must be named`).toMatch(
+        new RegExp(`\\b${arg}\\[\\]`)
+      );
+    }
+    // The firewall that makes it bite.
+    expect(src).toMatch(/Splitting one coherent structure into N proposals/i);
+  });
+
+  // 2026-09-20 — CAPABILITY LADDER. `proposeCapabilityEnable`, `tool.request`
+  // and the package `require` dependency were all BUILT and governed, and
+  // taught in ZERO skill files — measured. The only capability door an agent
+  // knew was `market.install` (11 files), i.e. the heaviest and most
+  // permission-shaped of them. That is this repo's recurring shape: built,
+  // decided, unreachable.
+  //
+  // LIMITATION: prose scan. It proves the ladder is still written down and
+  // still names REACHABLE doors; it cannot prove an agent climbs it.
+  it("from-intent teaches the capability ladder, and only reachable doors", () => {
+    const src = readFileSync(join(ROOT, "synap/from-intent.md"), "utf8");
+
+    // The boundary, stated with its reason.
+    expect(src).toMatch(/plan never installs a capability/i);
+
+    // Every rung must name a door that EXISTS on an agent surface.
+    for (const door of [
+      "synap_list_capabilities",
+      "synap_run_capability",
+      "market.search",
+      "market.install",
+      "tool.request",
+    ]) {
+      expect(src, `capability ladder must name ${door}`).toContain(door);
+    }
+
+    // The trap this replaces: `proposeCapabilityEnable` is NOT agent-callable —
+    // it fires automatically from `execute-capability.ts` when a draft skill is
+    // refused. Teaching it as a tool would send an agent hunting for a door
+    // that does not exist on any surface.
+    expect(
+      src,
+      "proposeCapabilityEnable is internal — the skill must teach 'just run it', not a call"
+    ).not.toContain("proposeCapabilityEnable");
+
+    // Ordering advice that keeps the author-time rejection from biting.
+    expect(src).toMatch(/author the automation LAST/i);
+  });
+
   it("agent-os When NOT points at from-intent", () => {
     const src = readFileSync(join(ROOT, "agent-os/SKILL.md"), "utf8");
     expect(src).toMatch(/from-intent/);

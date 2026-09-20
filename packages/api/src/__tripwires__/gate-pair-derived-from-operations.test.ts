@@ -222,6 +222,81 @@ describe("TRIPWIRE: gate pair is derived from data.operations", () => {
     files.map((f) => [f, stripCommentsAndStrings(readFileSync(f, "utf8"))])
   );
 
+  // 2026-09-20 — GATE COVERAGE. The scan above proves the pair is DERIVED. It
+  // cannot prove every op ARM was classified: `COMPOSITE_OP_GATE_PAIRS` is
+  // deliberately PARTIAL (plan arms resolve policy per-member inside
+  // `submit-capture-graph.ts`, never through this gate), so "absent from the
+  // table" is a legitimate state — which is exactly why an arm omitted BY
+  // DECISION and one omitted BY ACCIDENT are indistinguishable without this.
+  //
+  // It lives here, not in `@synap/governance-policy`, because that package is
+  // dependency-free by contract and may not import the op union. This package
+  // already sees both.
+  //
+  // LIMITATION, measured: this asserts somebody CLASSIFIED each arm. It does
+  // NOT assert the elsewhere-path governs them correctly. In particular
+  // `gatePairFloorRank` still does not consult rungs 2.08 / 2.09 (the schema
+  // and structure floors), so adding a SCHEMA arm to the gated table without
+  // teaching that rank function would let the batch gate as `entity/create`
+  // and bypass a floor built to stop exactly that.
+  it("every composite op arm is classified: gated here, or gated elsewhere", async () => {
+    const { COMPOSITE_OP_GATE_PAIRS } =
+      await import("@synap/governance-policy");
+    const { PLAN_OPERATION_KINDS } =
+      await import("@synap-core/types/proposals");
+
+    const gated = new Set<string>(Object.keys(COMPOSITE_OP_GATE_PAIRS));
+    const elsewhere = new Set<string>(
+      PLAN_OPERATION_KINDS as readonly string[]
+    );
+
+    // DERIVED, never hand-listed: read the arms off the union in the types
+    // source. A new arm joins this scan by EXISTING.
+    const typesSrc = readFileSync(
+      join(__dirname, "../../../types/src/proposals/index.ts"),
+      "utf8"
+    );
+    const union = typesSrc.slice(
+      typesSrc.indexOf("export type CompositeProposalOperation ="),
+      typesSrc.indexOf("/** The op kinds that make a composite a PLAN")
+    );
+    // ANY name in the union, not just `Composite*Op`. An earlier version of
+    // this scan matched `/Composite\w+Op/` and was VACUOUS: an arm named
+    // anything else was invisible, so the negative control passed green. That
+    // is the "derive the set" rule failing in disguise - a regex that encodes a
+    // naming convention IS a hand-maintained list.
+    const interfaceNames = [...union.matchAll(/\|\s*(\w+)/g)].map((m) => m[1]);
+    // Non-vacuity: the union must have been found and parsed.
+    expect(
+      interfaceNames.length,
+      "could not parse CompositeProposalOperation arms — the scan is blind"
+    ).toBeGreaterThanOrEqual(9);
+
+    const opKinds = interfaceNames.map((name) => {
+      const at = typesSrc.indexOf(`interface ${name} {`);
+      expect(
+        at,
+        `union arm ${name} has no \`interface ${name} {\` - the scan cannot ` +
+          `read its op literal and would silently skip it`
+      ).toBeGreaterThan(-1);
+      const m = /op:\s*"([a-z_]+)"/.exec(typesSrc.slice(at));
+      expect(m, `no op literal found on ${name}`).not.toBeNull();
+      return m![1];
+    });
+    expect(new Set(opKinds).size).toBe(opKinds.length);
+
+    const unclassified = opKinds.filter(
+      (op) => !gated.has(op) && !elsewhere.has(op)
+    );
+    expect(
+      unclassified,
+      `composite op arm(s) neither in COMPOSITE_OP_GATE_PAIRS nor in ` +
+        `PLAN_OPERATION_KINDS. Decide which gate governs each: add it to the ` +
+        `gated table (and teach gatePairFloorRank rungs 2.08/2.09 if it is a ` +
+        `schema/structure arm), or to the plan set so it resolves per-member.`
+    ).toEqual([]);
+  });
+
   it("finds the gate call sites it is supposed to police", () => {
     const withGate = files.filter((f) =>
       sources.get(f)!.includes("checkPermissionOrPropose(")

@@ -12,7 +12,6 @@
  *    here it answers "allowed" so the create path runs to the insert.
  *  - channel mint / realtime emit / block guidance — side effects with their
  *    own suites.
- *  - the IS playbook chooser — injected, so the threshold is what is tested.
  *
  * NOT covered: true cross-connection lock contention. PGlite is ONE
  * connection and serializes transactions, so the concurrency rows prove the
@@ -30,21 +29,6 @@ const h = vi.hoisted(() => {
       query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
     },
     db: null as unknown,
-    /** The IS chooser the start door's matcher uses (set per test). */
-    chooser: (async () => ({
-      playbookId: null,
-      confidence: 0,
-      decider: "llm" as const,
-    })) as (input: {
-      content: string;
-      candidates: Array<{ id: string; name: string; description?: string }>;
-      // Optional since the per-pod consent flag was withdrawn 2026-09-20.
-      allowDecisionModel?: boolean;
-    }) => Promise<{
-      playbookId: string | null;
-      confidence: number;
-      decider: "jev" | "llm";
-    }>,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -120,7 +104,7 @@ vi.mock("../match-session-template.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.matchSessionTemplate>
     ) => {
       matchSpy(...args);
-      return actual.matchSessionTemplate(args[0], args[1] ?? h.chooser);
+      return actual.matchSessionTemplate(args[0]);
     },
   };
 });
@@ -133,10 +117,7 @@ import {
 } from "@synap/database";
 import { resolveWorkSession } from "../resolve-work-session.js";
 import { createFocusSession } from "../create-session.js";
-import {
-  matchSessionTemplate,
-  type PlaybookChooser,
-} from "../match-session-template.js";
+import { matchSessionTemplate } from "../match-session-template.js";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -470,7 +451,7 @@ describe("twin dedup under the lock", () => {
   });
 });
 
-describe("template threshold", () => {
+describe("playbook candidates are SUGGESTED, never applied", () => {
   async function playbook(name: string, goalTemplate: string): Promise<string> {
     const id = randomUUID();
     await q(
@@ -480,58 +461,50 @@ describe("template threshold", () => {
     );
     return id;
   }
-  const chooserReturning =
-    (confidence: number, pick: () => string): PlaybookChooser =>
-    async () => ({ playbookId: pick(), confidence, decider: "llm" });
 
-  it("≥2 candidates, IS confident → applied and reported", async () => {
+  it("a LONE strong match is a candidate, not an application", async () => {
+    // Under the retired policy this was the auto-apply case: one candidate
+    // over the lexical floor (two matched words at 3 points each). It now
+    // rides back as a candidate like any other.
     const weekly = await playbook("Weekly review", "Review the week");
-    await playbook("Quarterly review", "Review the quarter");
-    const report = await matchSessionTemplate(
-      { userId: USER, goal: "Weekly review of the pipeline" },
-      chooserReturning(0.9, () => weekly)
-    );
-    expect(report.applied).toMatchObject({
-      id: weekly,
-      decider: "llm",
-      confidence: 0.9,
+    const report = await matchSessionTemplate({
+      userId: USER,
+      goal: "Weekly review of the pipeline",
     });
+    expect(report.candidates.map((c) => c.id)).toEqual([weekly]);
+    expect(report.candidates[0].score).toBeGreaterThanOrEqual(6);
     expect(report.optOut).toBe("pass templateId: null");
   });
 
-  it("≥2 candidates, IS unsure → nothing applied, suggestions only", async () => {
+  it("SEVERAL matches all ride back, ranked, each with its reason", async () => {
     const weekly = await playbook("Weekly review", "Review the week");
-    await playbook("Quarterly review", "Review the quarter");
-    const report = await matchSessionTemplate(
-      { userId: USER, goal: "Weekly review of the pipeline" },
-      chooserReturning(0.5, () => weekly)
-    );
-    expect(report.applied).toBeNull();
-    expect(report.notApplied).toBe("not_confident");
-    expect(report.suggestions.map((s) => s.id)).toContain(weekly);
+    const quarterly = await playbook("Quarterly review", "Review the quarter");
+    const report = await matchSessionTemplate({
+      userId: USER,
+      goal: "Weekly review of the pipeline",
+    });
+    const ids = report.candidates.map((c) => c.id);
+    expect(ids).toContain(weekly);
+    expect(ids).toContain(quarterly);
+    // Ranked best-first, and every candidate SAYS why it matched — the reason
+    // is what the caller shows before choosing.
+    expect(ids[0]).toBe(weekly);
+    for (const c of report.candidates)
+      expect(c.reason.length).toBeGreaterThan(0);
   });
 
-  it("an UNREACHABLE assistant is reported as unavailable, not as unsure", async () => {
-    // Two different facts: "it considered them and was not convinced" vs
-    // "it never answered". A caller that cannot tell them apart reads an
-    // outage as a decision.
-    const weekly = await playbook("Weekly review", "Review the week");
-    await playbook("Quarterly review", "Review the quarter");
-    const report = await matchSessionTemplate(
-      { userId: USER, goal: "Weekly review of the pipeline" },
-      async () => {
-        throw new Error("IS down");
-      }
-    );
-    expect(report.applied).toBeNull();
-    expect(report.notApplied).toBe("unavailable");
-    expect(report.suggestions.map((s) => s.id)).toContain(weekly);
+  it("no word in common → an EMPTY candidate list, not a guess", async () => {
+    await playbook("Weekly review", "Review the week");
+    const report = await matchSessionTemplate({
+      userId: USER,
+      goal: "Migrate the billing database",
+    });
+    expect(report.candidates).toEqual([]);
   });
 
-  it("the start door applies a confident match and says so", async () => {
+  it("the start door applies NOTHING and hands back the candidates", async () => {
     const weekly = await playbook("Weekly review", "Review the week");
     await playbook("Quarterly review", "Review the quarter");
-    h.chooser = chooserReturning(0.9, () => weekly);
     const result = await createFocusSession({
       userId: USER,
       agentUserId: AGENT,
@@ -539,8 +512,26 @@ describe("template threshold", () => {
       matchTemplate: true,
     });
     if (result.status !== "created") throw new Error(result.status);
-    expect(result.template?.applied?.id).toBe(weekly);
+    // The whole point: a strong match binds nothing.
+    expect(result.session.playbookId).toBeNull();
+    expect(result.session.templateId).toBeNull();
+    expect(result.playbooks?.candidates.map((c) => c.id)).toContain(weekly);
+  });
+
+  it("an explicit templateId still BINDS — the one naming path", async () => {
+    const weekly = await playbook("Weekly review", "Review the week");
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Weekly review of the pipeline",
+      templateId: weekly,
+      matchTemplate: true,
+    });
+    if (result.status !== "created") throw new Error(result.status);
     expect(result.session.playbookId).toBe(weekly);
+    // Naming one skips matching entirely — no candidate list to choose from.
+    expect(matchSpy).not.toHaveBeenCalled();
+    expect(result.playbooks).toBeUndefined();
   });
 
   it("explicit templateId: null → no matching at all", async () => {
@@ -554,7 +545,7 @@ describe("template threshold", () => {
     });
     if (result.status !== "created") throw new Error(result.status);
     expect(matchSpy).not.toHaveBeenCalled();
-    expect(result.template).toBeUndefined();
+    expect(result.playbooks).toBeUndefined();
     expect(result.session.playbookId).toBeNull();
   });
 });

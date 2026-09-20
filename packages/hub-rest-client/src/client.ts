@@ -174,6 +174,16 @@ import type {
   HubDiagnoseResult,
   CreateFocusSessionInput,
   CreateFocusSessionResult,
+  ListFocusSessionsOptions,
+  HubFocusSessionListItem,
+  GetFocusSessionOptions,
+  HubFocusSessionWithContinuation,
+  UpdateFocusSessionInput,
+  UpdateFocusSessionResult,
+  CompleteFocusSessionInput,
+  CompleteFocusSessionResult,
+  RerunFocusSessionInput,
+  RerunFocusSessionResult,
   HubDocument,
   HubRelation,
   HubGraphResult,
@@ -1854,7 +1864,16 @@ export class HubRestClient {
   async submitCaptureGraph(
     input: SubmitCaptureGraphInput
   ): Promise<SubmitCaptureGraphResult> {
-    const { workspaceId, relations, bindings, ...body } = input;
+    const {
+      workspaceId,
+      relations,
+      bindings,
+      sessions,
+      documents,
+      projects,
+      links,
+      ...body
+    } = input;
     return this.request<SubmitCaptureGraphResult>(
       "POST",
       "/api/hub/capture/graph",
@@ -1864,6 +1883,12 @@ export class HubRestClient {
         ...(workspaceId ? { workspaceId } : {}),
         relations: relations ?? [],
         bindings: bindings ?? [],
+        // CONNECTED PLAN steps — only included when provided, so existing
+        // entity-only callers see no change to the wire body.
+        ...(sessions ? { sessions } : {}),
+        ...(documents ? { documents } : {}),
+        ...(projects ? { projects } : {}),
+        ...(links ? { links } : {}),
       }
     );
   }
@@ -1963,6 +1988,109 @@ export class HubRestClient {
         userId,
         ...(workspaceId ? { workspaceId } : {}),
       }
+    );
+  }
+
+  /**
+   * List focus sessions in a workspace. Wraps GET /api/hub/focus-sessions.
+   * `workspaceId` is required by the door — defaults to the client's own.
+   * Agent-facing defaults (`status`/`lens`/`kind` all `"all"`) intentionally
+   * differ from the human tRPC lens — see the route's own note.
+   */
+  async listFocusSessions(
+    options?: ListFocusSessionsOptions
+  ): Promise<HubFocusSessionListItem[]> {
+    const workspaceId = options?.workspaceId ?? this.workspaceId;
+    const params = new URLSearchParams();
+    if (workspaceId) params.set("workspaceId", workspaceId);
+    if (options?.status) params.set("status", options.status);
+    if (options?.limit !== undefined)
+      params.set("limit", String(options.limit));
+    if (options?.lens) params.set("lens", options.lens);
+    if (options?.kind) params.set("kind", options.kind);
+    if (options?.playbookId) params.set("playbookId", options.playbookId);
+    if (options?.automationId) params.set("automationId", options.automationId);
+    if (options?.subjectEntityId)
+      params.set("subjectEntityId", options.subjectEntityId);
+    return this.request<HubFocusSessionListItem[]>(
+      "GET",
+      `/api/hub/focus-sessions?${params}`
+    );
+  }
+
+  /**
+   * Read one focus session by id — the row plus its continuation packet
+   * (rerun rule + criteria/verdict/evaluations when evaluable). Wraps
+   * GET /api/hub/focus-sessions/:id. Throws `HubApiError` (404) when the
+   * session does not exist or is not this caller's — never a plausible-looking
+   * empty result, and never `null` (see `requestOrNull`'s own contract): a
+   * missing session and a failed read must not collapse into one shape here.
+   */
+  async getFocusSession(
+    id: string,
+    options?: GetFocusSessionOptions
+  ): Promise<HubFocusSessionWithContinuation> {
+    const params = new URLSearchParams();
+    if (options?.workspaceId) params.set("workspaceId", options.workspaceId);
+    const qs = params.toString() ? `?${params}` : "";
+    return this.request<HubFocusSessionWithContinuation>(
+      "GET",
+      `/api/hub/focus-sessions/${id}${qs}`
+    );
+  }
+
+  /**
+   * Update a focus session — progress, status, criteria, expected outputs, and
+   * more. Wraps PATCH /api/hub/focus-sessions/:id. A `status: "proposed"`
+   * result is normal under governance, not an error; the applied-row shape
+   * merges `blockGuidelines`/`follow` only when this call triggered them.
+   */
+  async updateFocusSession(
+    id: string,
+    input: UpdateFocusSessionInput
+  ): Promise<UpdateFocusSessionResult> {
+    return this.request<UpdateFocusSessionResult>(
+      "PATCH",
+      `/api/hub/focus-sessions/${id}`,
+      input
+    );
+  }
+
+  /**
+   * Close a focus session (any terminal exit — `closed`/`cancelled`/`failed`,
+   * default `closed`). Wraps POST /api/hub/focus-sessions/:id/complete. Same
+   * service as MCP `synap_complete_session`; returns the close pack
+   * (pendingProposals, counts, warnings). A `status: "proposed"` result is
+   * normal under governance — never an error.
+   */
+  async completeFocusSession(
+    id: string,
+    input?: CompleteFocusSessionInput
+  ): Promise<CompleteFocusSessionResult> {
+    return this.request<CompleteFocusSessionResult>(
+      "POST",
+      `/api/hub/focus-sessions/${id}/complete`,
+      input ?? {}
+    );
+  }
+
+  /**
+   * Spawn a NEW session `spawned_from` this one, re-analysing its stored
+   * sources with the current guidelines. Wraps
+   * POST /api/hub/focus-sessions/:id/rerun. `mode: "replace"` is refused
+   * (403 → thrown) for an agent credential — reverting approved work is a
+   * human decision; `dryRun: true` reports counts + the cap verdict without
+   * writing anything. CP already curates `synap_rerun_session`, so this
+   * mirrors that door's precedent.
+   */
+  async rerunFocusSession(
+    id: string,
+    input: RerunFocusSessionInput
+  ): Promise<RerunFocusSessionResult> {
+    return this.request<RerunFocusSessionResult>(
+      "POST",
+      `/api/hub/focus-sessions/${id}/rerun`,
+      input
     );
   }
 

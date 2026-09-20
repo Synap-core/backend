@@ -1,9 +1,10 @@
 /**
  * Backend → IS session-intelligence calls (synap-intelligence-service
- * routes/session-intelligence/*: `/api/session-title`, `/api/playbook-choice`,
- * `/api/judge-criteria`).
+ * routes/session-intelligence/*: `/api/session-title`, `/api/judge-criteria`).
+ * (`/api/playbook-choice` was retired 2026-09-20 with the start door's
+ * auto-apply — the pod ranks playbooks itself and hands over the candidates.)
  *
- * ONE transport for the three narrow session questions, in the shape of the
+ * ONE transport for the narrow session questions, in the shape of the
  * headless transports: per-call `{ serviceUrl, apiKey }` (the caller resolves
  * the service via `getDefaultActiveService`), a `generation` budget, and
  * ATTRIBUTED failures via `describeISFailure` / `describeISHttpError`. It

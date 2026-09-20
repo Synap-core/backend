@@ -57,6 +57,7 @@ const STORED: Required<
   Pick<ExpectedOutput, (typeof SERVER_STAMPED_OUTPUT_FIELDS)[number]>
 > = {
   status: "pending",
+  criterionKey: "no-stale",
   claimedDone: false,
   satisfiedByProposalId: "11111111-1111-1111-1111-111111111111",
   delegatedTo: "researcher",
@@ -73,6 +74,7 @@ const STORED: Required<
 /** The forgery an agent would attempt for each — every one a real attack. */
 const FORGED: typeof STORED = {
   status: "done",
+  criterionKey: "forged-key",
   claimedDone: true,
   satisfiedByProposalId: "99999999-9999-9999-9999-999999999999",
   delegatedTo: "someone-else",

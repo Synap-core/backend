@@ -68,6 +68,7 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../../../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../../../services/focus-sessions/assert-output-ref-visible.js";
+import type { FollowOutcome } from "../../../services/focus-sessions/follow-playbook.js";
 import { delegateExpectedOutput } from "../../../services/focus-sessions/delegate-output.js";
 import {
   guidanceForBlockedSlots,
@@ -250,6 +251,14 @@ const UpdateBodySchema = z.object({
   metadata: z.record(z.string(), z.unknown()).optional(),
   // WHOLESALE replace of the session's binary acceptance criteria (max 12).
   criteria: sessionCriteriaSchema.optional(),
+  // FOLLOW a playbook with this live session; `null` RELEASES it. The session
+  // BECOMES A RUN of that playbook — it joins the playbook's runs and leaves
+  // the work lens. ONE implementation (`follow-playbook.ts`), shared with the
+  // tRPC and MCP doors and the approval executor.
+  followPlaybookId: z.string().uuid().nullable().optional(),
+  // Which stage the work is ALREADY in. Omitted ⇒ the stage is left alone
+  // (never seeded to stage 1); an unknown key is REFUSED with the valid keys.
+  followStageKey: z.string().min(1).nullable().optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -884,8 +893,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Edge outcomes, only when asked for — a failed edge is reported here.
         ...(result.parentLink ? { parentLink: result.parentLink } : {}),
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
-        // What template applied (or none) and the auto-opened session adopted.
-        ...(result.template ? { template: result.template } : {}),
+        // The pod's playbooks ranked against this session's words (suggestions
+        // only — nothing applied), and the auto-opened session adopted.
+        ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: true } : {}),
       });
     } catch (err) {
@@ -1030,6 +1040,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             ? { subjectEntityId: patch.subjectEntityId }
             : {}),
           ...(patch.criteria !== undefined ? { criteria: patch.criteria } : {}),
+          // Carried so the PROPOSED path is not a silent no-op — the
+          // `focus_session/update` executor re-applies the follow on approval.
+          // `null` is the RELEASE, hence the `!== undefined` test.
+          ...(patch.followPlaybookId !== undefined
+            ? { followPlaybookId: patch.followPlaybookId }
+            : {}),
+          ...(patch.followStageKey !== undefined
+            ? { followStageKey: patch.followStageKey }
+            : {}),
         },
       });
 
@@ -1205,6 +1224,44 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         if (advance.paused) updated = { ...updated, status: "paused" };
       }
 
+      // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
+      // ONE implementation, shared with the tRPC and MCP doors. AFTER the field
+      // write so the playbook's criteria and deliverables merge onto what this
+      // call just wrote. A refusal is a 400 naming the reason — this door is
+      // reached by an AGENT key, and a 200 with an unchanged row is exactly the
+      // "guard holds, report misleads" shape the output floor already pays for.
+      let follow: FollowOutcome | undefined;
+      if (updated && patch.followPlaybookId !== undefined) {
+        const { followPlaybook } =
+          await import("../../../services/focus-sessions/follow-playbook.js");
+        const result = await followPlaybook({
+          sessionId: id,
+          userId,
+          agentUserId,
+          followPlaybookId: patch.followPlaybookId,
+          followStageKey: patch.followStageKey,
+        });
+        if (result.status === "refused") {
+          return c.json({ error: result.reason }, 400);
+        }
+        if (result.status === "not_found") {
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        }
+        if (result.status === "proposed") {
+          return jsonGoverned(c, {
+            status: "proposed",
+            message: result.reason,
+            proposalId: result.proposalId,
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+            session: updated,
+          });
+        }
+        updated = result.session as typeof updated;
+        follow = result.follow;
+      }
+
       emitHubRealtimeEvent({
         eventType: "focus_session.update.completed",
         subjectId: updated.id,
@@ -1233,9 +1290,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             })
           : undefined;
 
-      return c.json(
-        blockGuidelines ? { ...updated, blockGuidelines } : updated
-      );
+      return c.json({
+        ...updated,
+        ...(blockGuidelines ? { blockGuidelines } : {}),
+        // What the follow DID — which playbook, which stage, how much
+        // structure merged. Without it the caller must infer an attach from a
+        // `playbookId` that appeared, and can never see a release's note.
+        ...(follow ? { follow } : {}),
+      });
     } catch (err) {
       // A WRITE-AUTHORITY refusal is a CALLER error, not a server fault. The
       // slot floor throws `TRPCError(BAD_REQUEST)` naming the slot and the

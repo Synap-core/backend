@@ -108,6 +108,15 @@ export const hubViewsRouter = router({
         profileId: z.string().uuid().optional(),
         config: z.record(z.string(), z.any()).optional(),
         metadata: z.record(z.string(), z.any()).optional(),
+        /**
+         * Canvas seed content for a whiteboard/mindmap, validated downstream by
+         * `ViewContentSchema`. Forwarded to `views.create`, which writes it to
+         * the new document's MinIO object — the ONE server-side path that can
+         * put shapes on a board. Without this forward an agent key could create
+         * an empty board and nothing else, because every non-tRPC door dropped
+         * the field silently.
+         */
+        initialContent: z.any().optional(),
         agentUserId: z.string().uuid().optional(),
         reasoning: z.string().optional(),
         /**
@@ -135,6 +144,7 @@ export const hubViewsRouter = router({
         scopeProfileIds: input.profileId ? [input.profileId] : undefined,
         config: input.config,
         metadata: input.metadata,
+        initialContent: input.initialContent,
         source: "intelligence",
         agentUserId: input.agentUserId,
         reasoning: input.reasoning,

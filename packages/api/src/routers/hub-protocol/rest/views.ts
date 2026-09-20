@@ -157,6 +157,8 @@ export function registerViewsRoutes(app: HubHono): void {
       profileId?: string;
       config?: Record<string, unknown>;
       metadata?: Record<string, unknown>;
+      /** Canvas seed for a whiteboard/mindmap — `{ version, category, store }`. */
+      initialContent?: unknown;
       agentUserId?: string;
       reasoning?: string;
       sourceMessageId?: string;
@@ -198,6 +200,9 @@ export function registerViewsRoutes(app: HubHono): void {
         profileId: body.profileId,
         config: body.config,
         metadata: body.metadata,
+        // Canvas seed (whiteboard/mindmap). Dropped here until 2026-09-20,
+        // which is why no agent key could ever put a shape on a board.
+        initialContent: body.initialContent,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),

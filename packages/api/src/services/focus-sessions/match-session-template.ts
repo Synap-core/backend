@@ -1,59 +1,40 @@
 /**
- * matchSessionTemplate — which playbook (if any) should shape a session an AI
- * is starting without naming one.
+ * matchSessionTemplate — which of the pod's playbooks fit the session an AI is
+ * about to start. SUGGEST-ONLY: it applies NOTHING.
  *
- * Founder decision: a matched template is AUTO-APPLIED only above a confidence
- * threshold, and the start response always SAYS what was applied and how to
- * opt out. Silent template binding was the flagged wrong path, so this returns
- * a report even when nothing applied (`suggestions`), and the caller echoes it.
+ * Founder decision 2026-09-20 — discovery is a property of the DOOR, not a
+ * plea in prose: "make sure AIs always fetch session playbooks before creating
+ * a session". So the start door ALWAYS hands back the pod's existing processes,
+ * ranked, with the reason each one matched, and the caller decides. Naming a
+ * playbook with `templateId` is now the ONLY way one binds at start.
+ *
+ * WHAT WAS RETIRED, AND WHY. Until this date the door auto-applied a playbook
+ * above a confidence threshold (a lexical floor for a lone candidate, an IS
+ * `/api/playbook-choice` tiebreak above 0.75 for several). Measured on the live
+ * pod: auto-apply had bound 0 of 6 work sessions. And no comparable product
+ * binds a process on a confidence score — Devin, Linear and Jira all make the
+ * choice named. So the thresholds, the IS chooser and the `applied` /
+ * `notApplied` report are gone; a threshold that fires for nobody is a rule
+ * that only ever surprises.
  *
  * Ranking is the EXISTING lexical ranker (`rankRouteCandidates`, the one
  * `playbooks.matchForEntity` and capture suggestions use) — this module only
  * builds the candidate list (active playbooks through the access layer; the
  * searchable text is name + description + goal template + stage names) and
- * keeps the candidates that the session's own words matched. The ranker's
- * rule is unchanged, so capture suggestions are unaffected.
- *
- *   0 matched  → nothing applied.
- *   1 matched  → applied when its lexical score ≥ {@link LEXICAL_AUTO_APPLY_SCORE}.
- *   ≥2 matched → the IS picks one or abstains (`/api/playbook-choice`); applied
- *                when its probability ≥ {@link AUTO_APPLY_PROBABILITY}. An IS
- *                that cannot answer applies nothing — suggestions only.
- *
- * The decision model (JEV) answers when the IS has one configured; the
- * per-request `allowDecisionModel` flag is the opt-out. (The per-pod TypeSafe
- * consent flag was withdrawn 2026-09-20 — provider choice is an operator
- * decision, uniform across providers.)
+ * keeps the candidates that the session's own words matched. The ranker's rule
+ * is unchanged, so capture suggestions are unaffected.
  */
 import { db, playbooks, eq, and, desc } from "@synap/database";
-import { requestPlaybookChoice } from "@synap/intelligence-client";
-import { createLogger } from "@synap-core/core";
 import { scopedDb } from "../../access/scoped-db.js";
 import { AccessContext } from "../../access/context.js";
-import { rankRouteCandidates, tokenize } from "../routing/suggest-routes.js";
-import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
+import { rankRouteCandidates } from "../routing/suggest-routes.js";
 
-const logger = createLogger({
-  module: "focus-sessions/match-session-template",
-});
-
-/** IS/JEV probability at or above which the pick is applied. */
-export const AUTO_APPLY_PROBABILITY = 0.75;
-
-/**
- * Lexical floor for the single-candidate case: two distinct words of the
- * session's title/goal found in the playbook (3 points each in the ranker).
- * One shared word ("review") is a coincidence, not a match.
- */
-export const LEXICAL_AUTO_APPLY_SCORE = 6;
-
-/** Candidates sent to the IS, best lexical first. */
-const IS_CANDIDATES_MAX = 8;
-const SUGGESTIONS_MAX = 5;
+/** How many ranked candidates ride back on a start. */
+const CANDIDATES_MAX = 5;
 
 export const TEMPLATE_OPT_OUT = "pass templateId: null" as const;
 
-export interface TemplateSuggestion {
+export interface PlaybookCandidate {
   id: string;
   name: string;
   /** Lexical score from the shared ranker. */
@@ -62,36 +43,20 @@ export interface TemplateSuggestion {
   reason: string;
 }
 
-/** The `template` block every start response carries when matching ran. */
-export interface SessionTemplateReport {
-  applied: {
-    id: string;
-    name: string;
-    /** Probability (IS/JEV) or share of the session's words matched (lexical). */
-    confidence: number;
-    decider: "jev" | "llm" | "lexical";
-  } | null;
-  suggestions: TemplateSuggestion[];
-  /**
-   * WHY nothing was applied, when `applied` is null. "Not confident" and
-   * "the assistant could not answer" are different facts, and a caller that
-   * cannot tell them apart reads an outage as a considered decision.
-   * Absent when a template WAS applied.
-   */
-  notApplied?: TemplateNotAppliedReason;
+/**
+ * The `playbooks` block every start response carries when matching ran — the
+ * pod handing over its existing processes. An EMPTY `candidates` is a fact
+ * ("nothing of yours matched these words"), not a failure.
+ *
+ * There is deliberately no `applied` and no `notApplied`: nothing is applied,
+ * so both fields could only ever say the same thing, and a field that cannot
+ * vary is noise a reader must learn to ignore.
+ */
+export interface SessionPlaybookCandidates {
+  candidates: PlaybookCandidate[];
+  /** How to skip matching entirely on the next start. */
   optOut: typeof TEMPLATE_OPT_OUT;
 }
-
-/** Why `applied` is null. */
-export type TemplateNotAppliedReason =
-  /** Nothing matched the session's words at all. */
-  | "no_match"
-  /** One candidate, but too weak a word match to apply on its own. */
-  | "weak_match"
-  /** Several candidates; the assistant picked none, or not confidently. */
-  | "not_confident"
-  /** Several candidates; the assistant could not be reached. */
-  | "unavailable";
 
 export interface MatchSessionTemplateInput {
   userId: string;
@@ -101,28 +66,6 @@ export interface MatchSessionTemplateInput {
   goal: string;
 }
 
-/** Test seam: the IS call (real one resolves the default service). */
-export type PlaybookChooser = (input: {
-  content: string;
-  candidates: Array<{ id: string; name: string; description?: string }>;
-  /**
-   * Per-request opt-out from the IS decision model. Omitted here ⇒ the IS
-   * decides (it falls back to its LLM cascade when JEV is unconfigured). It
-   * used to carry a per-pod TypeSafe consent flag, withdrawn 2026-09-20:
-   * provider choice is an operator decision, uniform across providers.
-   */
-  allowDecisionModel?: boolean;
-}) => Promise<{
-  playbookId: string | null;
-  confidence: number;
-  decider: "jev" | "llm";
-}>;
-
-const defaultChooser: PlaybookChooser = async (input) => {
-  const { endpoint, apiKey } = await getDefaultActiveService();
-  return requestPlaybookChoice(endpoint, apiKey, input);
-};
-
 function stageNames(stages: unknown): string[] {
   if (!Array.isArray(stages)) return [];
   return stages
@@ -131,15 +74,8 @@ function stageNames(stages: unknown): string[] {
 }
 
 export async function matchSessionTemplate(
-  input: MatchSessionTemplateInput,
-  chooser: PlaybookChooser = defaultChooser
-): Promise<SessionTemplateReport> {
-  const none: SessionTemplateReport = {
-    applied: null,
-    suggestions: [],
-    notApplied: "no_match",
-    optOut: TEMPLATE_OPT_OUT,
-  };
+  input: MatchSessionTemplateInput
+): Promise<SessionPlaybookCandidates> {
   const intentText = [input.title, input.goal].filter(Boolean).join(" ");
 
   const visibility = scopedDb(
@@ -169,81 +105,14 @@ export async function matchSessionTemplate(
       description: p.description ?? undefined,
     })),
   }).filter((r) => r.signals.some((s) => s.type === "intent"));
-  if (matched.length === 0) return none;
 
-  const toSuggestion = (r: (typeof matched)[number]): TemplateSuggestion => ({
-    id: r.candidate.id,
-    name: r.candidate.name,
-    score: r.score,
-    reason: r.reason,
-  });
-  const suggestFrom = (appliedId: string | null) =>
-    matched
-      .filter((r) => r.candidate.id !== appliedId)
-      .slice(0, SUGGESTIONS_MAX)
-      .map(toSuggestion);
-
-  if (matched.length === 1) {
-    const only = matched[0];
-    const intentTerms = only.signals.find((s) => s.type === "intent");
-    const goalWords = tokenize(intentText).size;
-    if (only.score >= LEXICAL_AUTO_APPLY_SCORE) {
-      return {
-        applied: {
-          id: only.candidate.id,
-          name: only.candidate.name,
-          confidence:
-            intentTerms?.type === "intent" && goalWords > 0
-              ? Math.min(1, intentTerms.terms.length / goalWords)
-              : 0,
-          decider: "lexical",
-        },
-        suggestions: [],
-        optOut: TEMPLATE_OPT_OUT,
-      };
-    }
-    return {
-      ...none,
-      notApplied: "weak_match",
-      suggestions: suggestFrom(null),
-    };
-  }
-
-  const pool = matched.slice(0, IS_CANDIDATES_MAX);
-  let why: TemplateNotAppliedReason = "not_confident";
-  try {
-    const choice = await chooser({
-      content: intentText.slice(0, 4000),
-      candidates: pool.map((r) => ({
-        id: r.candidate.id,
-        name: r.candidate.name,
-        ...(r.candidate.description
-          ? { description: r.candidate.description }
-          : {}),
-      })),
-    });
-    const picked = choice.playbookId
-      ? pool.find((r) => r.candidate.id === choice.playbookId)
-      : undefined;
-    if (picked && choice.confidence >= AUTO_APPLY_PROBABILITY) {
-      return {
-        applied: {
-          id: picked.candidate.id,
-          name: picked.candidate.name,
-          confidence: choice.confidence,
-          decider: choice.decider,
-        },
-        suggestions: suggestFrom(picked.candidate.id),
-        optOut: TEMPLATE_OPT_OUT,
-      };
-    }
-  } catch (err) {
-    // The IS could not answer: nothing is applied on a guess. The lexical
-    // candidates still ride back as suggestions, and `notApplied` says the
-    // assistant was unreachable rather than unconvinced — an outage must not
-    // read as a considered decision.
-    why = "unavailable";
-    logger.warn({ err }, "playbook choice unavailable — suggestions only");
-  }
-  return { ...none, notApplied: why, suggestions: suggestFrom(null) };
+  return {
+    candidates: matched.slice(0, CANDIDATES_MAX).map((r) => ({
+      id: r.candidate.id,
+      name: r.candidate.name,
+      score: r.score,
+      reason: r.reason,
+    })),
+    optOut: TEMPLATE_OPT_OUT,
+  };
 }

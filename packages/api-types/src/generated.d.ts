@@ -4352,8 +4352,16 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  */
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/** Lifecycle of a run. */
-export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed";
+/**
+ * Lifecycle of a run.
+ *
+ * `cancelled` is the RELEASE state: a live session that followed this playbook
+ * stopped following it (`follow-playbook.ts`). It is neither `completed` (the
+ * run did not finish) nor `failed` (nothing failed) — and the distinction is
+ * load-bearing, because the scorecard feeds governance widening and a `failed`
+ * row would grade a playbook for a person's change of mind.
+ */
+export type PlaybookRunStatus = "running" | "completed" | "failed" | "proposed" | "cancelled";
 export interface EffectiveProperty extends PropertyDef {
 	required: boolean;
 	defaultValue: unknown;
@@ -8083,6 +8091,25 @@ export interface ExpectedOutput {
 	 * truthiness alone.
 	 */
 	ref?: OutputRef | null;
+	/**
+	 * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
+	 * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
+	 * written once at the escalation that files the slot
+	 * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
+	 *
+	 * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
+	 * clipped at 120 chars) and a surface asked to open the scorecard on the right
+	 * criterion could otherwise only match that string back — which forks the
+	 * backend's label format into every UI and breaks the moment a statement is
+	 * reworded or the clip lands differently. The key is the machine identity the
+	 * evaluation rows are already keyed by, so the pointer is exact.
+	 *
+	 * ABSENT on every slot filed before this field existed, and on every
+	 * non-criterion slot. A reader MUST treat absence as "no criterion to
+	 * highlight" — never as an error, and never as a reason to fall back to
+	 * matching the label.
+	 */
+	criterionKey?: string;
 }
 /**
  * The CLOSED rollup category a stage declares membership in. Copied verbatim
@@ -10510,6 +10537,14 @@ export interface PacketSlotItem {
 	owedSince?: string;
 	/** Agent type the slot was delegated to, when it was. */
 	delegatedTo?: string;
+	/**
+	 * For a criterion slot (`kind` = `CRITERION_SLOT_KIND`), the
+	 * `SessionCriterion.key` it stands for — so a continuation surface can point
+	 * at the criterion rather than match the slot's prose label. Absent on every
+	 * ordinary slot and on criterion slots filed before the field existed;
+	 * absence means "no criterion to highlight", never an error.
+	 */
+	criterionKey?: string;
 }
 export interface PacketProposalItem {
 	id: string;
@@ -10742,7 +10777,7 @@ export interface SessionTwinCandidate {
 	score: number;
 }
 declare const TEMPLATE_OPT_OUT: "pass templateId: null";
-export interface TemplateSuggestion {
+export interface PlaybookCandidate {
 	id: string;
 	name: string;
 	/** Lexical score from the shared ranker. */
@@ -10750,35 +10785,20 @@ export interface TemplateSuggestion {
 	/** Why it matched, in words ("You mentioned “report”"). */
 	reason: string;
 }
-/** The `template` block every start response carries when matching ran. */
-export interface SessionTemplateReport {
-	applied: {
-		id: string;
-		name: string;
-		/** Probability (IS/JEV) or share of the session's words matched (lexical). */
-		confidence: number;
-		decider: "jev" | "llm" | "lexical";
-	} | null;
-	suggestions: TemplateSuggestion[];
-	/**
-	 * WHY nothing was applied, when `applied` is null. "Not confident" and
-	 * "the assistant could not answer" are different facts, and a caller that
-	 * cannot tell them apart reads an outage as a considered decision.
-	 * Absent when a template WAS applied.
-	 */
-	notApplied?: TemplateNotAppliedReason;
+/**
+ * The `playbooks` block every start response carries when matching ran — the
+ * pod handing over its existing processes. An EMPTY `candidates` is a fact
+ * ("nothing of yours matched these words"), not a failure.
+ *
+ * There is deliberately no `applied` and no `notApplied`: nothing is applied,
+ * so both fields could only ever say the same thing, and a field that cannot
+ * vary is noise a reader must learn to ignore.
+ */
+export interface SessionPlaybookCandidates {
+	candidates: PlaybookCandidate[];
+	/** How to skip matching entirely on the next start. */
 	optOut: typeof TEMPLATE_OPT_OUT;
 }
-/** Why `applied` is null. */
-export type TemplateNotAppliedReason = 
-/** Nothing matched the session's words at all. */
-"no_match"
-/** One candidate, but too weak a word match to apply on its own. */
- | "weak_match"
-/** Several candidates; the assistant picked none, or not confidently. */
- | "not_confident"
-/** Several candidates; the assistant could not be reached. */
- | "unavailable";
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	status: "linked";
@@ -10809,6 +10829,13 @@ export interface OwedSlot {
 	owedSince: string;
 	/** The agent's claim that it produced this after all, if it made one. */
 	claimedDone?: boolean;
+	/**
+	 * For a criterion slot, the `SessionCriterion.key` it stands for — so a tray
+	 * can open the scorecard ON that criterion instead of matching its prose
+	 * label. Absent on every ordinary slot and on criterion slots filed before
+	 * the field existed; absence means "no criterion to highlight".
+	 */
+	criterionKey?: string;
 }
 /** Who may rewrite a section. Absent or unknown reads as `human` — see `sectionOwner`. */
 export type SectionOwner = "ai" | "human";
@@ -10832,6 +10859,16 @@ export interface PlaybookScorecard {
 		/** Closed sessions with at least one evaluation row. */
 		evaluated: number;
 		reopened: number;
+		/**
+		 * The split of `total` by HOW the session came to be a run of this
+		 * playbook. `instantiated + attached === total`, always — both numbers are
+		 * surfaced so a reader can see what the criteria scores are made of.
+		 * A criterion's pass rate above counts BOTH populations; the lessons
+		 * scanner re-projects over instantiated rows alone before proposing an
+		 * edit to the playbook (see {@link ScorecardSessionRow.attached}).
+		 */
+		instantiated: number;
+		attached: number;
 	};
 	escalations: number;
 	overrides: number;
@@ -11730,6 +11767,20 @@ export interface Signal {
 	 * was true of ICONS and wrong about VERBS.
 	 */
 	slotKind?: string;
+	/**
+	 * For a criterion slot, the `SessionCriterion.key` it stands for — the exact
+	 * companion to `slotKind`, and it travels for the same reason: `slotKind`
+	 * tells a tray this row takes the GRADE verb, and this tells it WHICH
+	 * criterion to open the scorecard on.
+	 *
+	 * It is a key, never the prose label: the label is `Check: <statement>`
+	 * clipped at 120 chars, and matching it back in a UI would fork the
+	 * backend's label format into every surface. Absent on ordinary slots and on
+	 * criterion slots filed before the field existed — absence means "open the
+	 * scorecard without highlighting", never an error, and never a licence to
+	 * fall back to label matching.
+	 */
+	criterionKey?: string;
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door).
@@ -30375,6 +30426,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | {
 						url: string;
 					} | null | undefined;
+					criterionKey?: string | undefined;
 				}[] | undefined;
 				channelId?: string | undefined;
 				agentIds?: string[] | undefined;
@@ -30411,7 +30463,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				verificationReport: unknown;
 			} | {
 				adopted?: true | undefined;
-				template?: SessionTemplateReport | undefined;
+				playbooks?: SessionPlaybookCandidates | undefined;
 				blockerLinks?: CreateTimeBlockerReport[] | undefined;
 				parentLink?: CreateTimeParentLink | undefined;
 				id: string;
@@ -30488,6 +30540,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | {
 						url: string;
 					} | null | undefined;
+					criterionKey?: string | undefined;
 				}[] | undefined;
 				currentStage?: string | undefined;
 				subjectEntityId?: string | null | undefined;
@@ -30503,6 +30556,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 				}[] | undefined;
+				followPlaybookId?: string | null | undefined;
+				followStageKey?: string | null | undefined;
 			};
 			output: {
 				id: string;

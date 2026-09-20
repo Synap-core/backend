@@ -90,16 +90,28 @@ const captureHandler: McpToolHandler = async (
   const captureRelations = Array.isArray(args.relations)
     ? (args.relations as Array<Record<string, unknown>>)
     : [];
-  // CONNECTED PLAN steps (sessions / documents / projects / links). Each is
+  // CONNECTED PLAN steps (sessions / documents / projects / links) and the
+  // Rule Loop config steps (skills / automations / rules). Each is
   // shape-checked door-locally (an object), then validated in full — refs,
   // cycles, limits, ownership, evidence — by the shared preflight.
-  const planArg = (key: "sessions" | "documents" | "projects" | "links") =>
-    Array.isArray(args[key]) ? (args[key] as unknown[]) : [];
+  const planArg = (
+    key:
+      | "sessions"
+      | "documents"
+      | "projects"
+      | "links"
+      | "skills"
+      | "automations"
+      | "rules"
+  ) => (Array.isArray(args[key]) ? (args[key] as unknown[]) : []);
   const capturePlanRaw = {
     sessions: planArg("sessions"),
     documents: planArg("documents"),
     projects: planArg("projects"),
     links: planArg("links"),
+    skills: planArg("skills"),
+    automations: planArg("automations"),
+    rules: planArg("rules"),
   };
   const capturePlanShapeProblems: string[] = [];
   for (const [key, items] of Object.entries(capturePlanRaw)) {

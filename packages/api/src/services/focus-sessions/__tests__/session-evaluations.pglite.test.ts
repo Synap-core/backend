@@ -124,6 +124,11 @@ import { completeFocusSession } from "../complete-session.js";
 import { FOCUS_SESSION_CLOSE_ACTION } from "../close-event.js";
 import { updateFocusSession } from "../update-session.js";
 import { focusSessionsRouter } from "../../../routers/focus-sessions.js";
+import {
+  signalFromOwedSlot,
+  type OwedSlotSignalInput,
+} from "../../signals/needs-you-union.js";
+import { projectContinuationPacket } from "../continuation-packet.js";
 
 const USER = "user-1";
 const AGENT = "agent-1";
@@ -338,6 +343,91 @@ describe("session evaluations", () => {
     // `why` is capped at 500 by every slot door; a long statement is clipped,
     // never smuggled past the ceiling.
     expect(String(slots[0]!.why).length).toBeLessThanOrEqual(500);
+  });
+
+  it("the escalation slot carries its criterion KEY, out through the doors a UI calls", async () => {
+    // WHY A KEY AND NOT THE LABEL: the slot's label is prose
+    // (`Check: <statement>`, clipped at 120), so a surface that wanted to open
+    // the scorecard on the right criterion could only match that string back —
+    // forking this file's label format into every UI and breaking the moment a
+    // statement is reworded. Driven through a REAL escalation and read off the
+    // tRPC door, never a hand-built slot: the point is that the value ARRIVES.
+    const id = await seed();
+    for (let i = 0; i < MAX_NON_HUMAN_ATTEMPTS; i++) {
+      await recordSessionEvaluation({
+        sessionId: id,
+        userId: USER,
+        agentUserId: AGENT,
+        criterionKey: "typecheck",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+      });
+    }
+
+    const caller = focusSessionsRouter.createCaller({
+      authenticated: true,
+      userId: USER,
+    } as never);
+    const owed = await caller.owed({ limit: 50 });
+    const slot = owed.find((o) => o.sessionId === id);
+    expect(slot).toBeDefined();
+    expect(slot!.kind).toBe("criterion");
+    expect(slot!.criterionKey).toBe("typecheck");
+
+    // …and onward onto the needs-you signal, beside `slotKind` — the two
+    // travel together: one says this row takes the GRADE verb, the other says
+    // which criterion it grades.
+    const signal = signalFromOwedSlot(slot as unknown as OwedSlotSignalInput);
+    expect(signal.slotKind).toBe("criterion");
+    expect(signal.criterionKey).toBe("typecheck");
+
+    // …and through the continuation packet's owed slots, the third door.
+    const packet = await projectContinuationPacket(
+      {
+        id,
+        goal: "Ship the thing",
+        status: "active",
+        workspaceId: null,
+        projectId: null,
+        expectedOutputs: (await sessionRow(id)).expected_outputs,
+      } as never,
+      { userId: USER }
+    );
+    const packetSlot = packet.userMustDecide.owedSlots;
+    expect(packetSlot.status).toBe("ok");
+    if (packetSlot.status !== "ok") return;
+    expect(packetSlot.items[0]!.criterionKey).toBe("typecheck");
+  });
+
+  it("an ORDINARY owed slot carries no criterion key — absence is not an error", async () => {
+    // Back-compat is the same shape as "never applied": a slot filed before
+    // this field existed, and every non-criterion slot, carries nothing. A
+    // consumer must read that as "no criterion to highlight".
+    const id = await seed();
+    await q(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        id,
+        JSON.stringify([
+          {
+            kind: "doc",
+            label: "The dossier",
+            owner: "human",
+            status: "pending",
+            owedSince: new Date().toISOString(),
+          },
+        ]),
+      ]
+    );
+    const caller = focusSessionsRouter.createCaller({
+      authenticated: true,
+      userId: USER,
+    } as never);
+    const owed = await caller.owed({ limit: 50 });
+    const slot = owed.find((o) => o.sessionId === id)!;
+    expect(slot).toBeDefined();
+    expect("criterionKey" in slot).toBe(false);
+    expect("criterionKey" in signalFromOwedSlot(slot as never)).toBe(false);
   });
 
   it("a very long criterion statement is CLIPPED so the sentence still fits `why`", async () => {

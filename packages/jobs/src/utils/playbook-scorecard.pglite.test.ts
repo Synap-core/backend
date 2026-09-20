@@ -89,11 +89,13 @@ async function session(opts: {
   playbookId?: string;
   slots?: unknown[];
   closes?: number;
+  /** Stamps `metadata.followedVia` — the ATTACHED marker the SQL reads. */
+  attached?: boolean;
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into focus_sessions (id, user_id, goal, status, playbook_id, criteria, expected_outputs, closed_at)
-     values ($1, $2, 'g', $3, $4, $5::jsonb, $6::jsonb, now())`,
+    `insert into focus_sessions (id, user_id, goal, status, playbook_id, criteria, expected_outputs, metadata, closed_at)
+     values ($1, $2, 'g', $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, now())`,
     [
       id,
       opts.userId ?? "user-1",
@@ -101,6 +103,9 @@ async function session(opts: {
       opts.playbookId ?? PLAYBOOK,
       JSON.stringify(CRITERIA),
       JSON.stringify(opts.slots ?? []),
+      JSON.stringify(
+        opts.attached ? { followedVia: "attach", followedAt: "2026-09-20" } : {}
+      ),
     ]
   );
   for (let i = 0; i < (opts.closes ?? 1); i++) {
@@ -182,6 +187,10 @@ describe("playbook scorecard on real SQL", () => {
       closed: 5,
       evaluated: 4,
       reopened: 2,
+      // Every fixture above was INSTANTIATED; the attached split is exercised
+      // by its own case below, on a playbook of its own.
+      instantiated: 6,
+      attached: 0,
     });
     expect(card.escalations).toBe(1);
   });
@@ -228,6 +237,32 @@ describe("playbook scorecard on real SQL", () => {
       unmeasured: 4,
       passRate: 1,
     });
+  });
+
+  it("an ATTACHED run is counted, reported APART, and read from the real column", async () => {
+    // The DISCRIMINATING pair: one session instantiated, one attached, same
+    // playbook, same criteria. A rule that only counted `playbook_id` (or one
+    // that dropped attached runs entirely) gives 2/0 or 1/0 here — both wrong,
+    // and in opposite directions. The marker is `metadata.followedVia`, so
+    // this also drives the `#>>` projection through real SQL rather than
+    // hand-building the row the projection reads.
+    const mixed = randomUUID();
+    await session({ playbookId: mixed });
+    await session({ playbookId: mixed, attached: true });
+    const card = await computePlaybookScorecard(db, {
+      playbookId: mixed,
+      userId: "user-1",
+    });
+    expect(card.runs).toMatchObject({
+      total: 2,
+      instantiated: 1,
+      attached: 1,
+    });
+    const { sessions } = await loadPlaybookScorecardRows(db, {
+      playbookIds: [mixed],
+      userId: "user-1",
+    });
+    expect(sessions.map((s) => s.attached).sort()).toEqual([false, true]);
   });
 
   it("nothing measured ⇒ passRate null, never 0", async () => {

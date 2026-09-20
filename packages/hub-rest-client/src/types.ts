@@ -588,6 +588,75 @@ export interface CaptureGraphRawSource {
   idempotencyKey?: string;
 }
 
+/**
+ * ── CONNECTED PLAN steps ─────────────────────────────────────────────────
+ *
+ * Refs share the entity ref namespace; validated in full (refs, cycles,
+ * limits, ownership, evidence) by the core. These mirror the server's
+ * `Composite*Op` shapes (`@synap-core/types` proposals) minus the `op`
+ * discriminator, which the server stamps on before materializing.
+ */
+export interface CaptureGraphSessionStep {
+  /** Stable handle for this session within the plan (e.g. "s1"). */
+  ref: string;
+  /** Short one-line name (≤ SESSION_TITLE_MAX). */
+  title?: string | null;
+  /** The outcome. Required. */
+  goal: string;
+  /** Parent = the `spawned_from` edge (a detour or planned sub-session). */
+  parentRef?: string;
+  parentSessionId?: string;
+  /** `blocked_by` edges declared at birth. */
+  blockedByRefs?: string[];
+  blockedBySessionIds?: string[];
+  /** The entity this session is about (a session ref or a real id). */
+  subjectRef?: string;
+  subjectEntityId?: string;
+  /** The project it belongs to (a project ref or a real id). */
+  projectRef?: string;
+  projectId?: string;
+  /** Declared deliverables — sanitized by the session door at apply time. */
+  expectedOutputs?: Array<Record<string, unknown>>;
+}
+
+export interface CaptureGraphDocumentStep {
+  ref: string;
+  title: string;
+  /** Markdown body. */
+  content: string;
+  /** Attach as that entity's body (`entities.documentId`). */
+  entityRef?: string;
+  entityId?: string;
+  /** Record as that session's output (the session artifact ledger). */
+  sessionRef?: string;
+  sessionId?: string;
+  /** The declared output slot of that session this document claims. */
+  expectedLabel?: string;
+}
+
+export interface CaptureGraphProjectStep {
+  ref: string;
+  name: string;
+  description?: string;
+  /** The real-world thing the project is about (`project --targets--> entity`). */
+  subjectRef?: string;
+  subjectEntityId?: string;
+  /** Plan entity refs that count as the project's evidence. */
+  evidenceRefs?: string[];
+  /** Existing entities that count as evidence (must be visible). */
+  evidenceEntityIds?: string[];
+}
+
+/** The edges a plan may declare — both are session↔session `links` types. */
+export interface CaptureGraphLinkStep {
+  /** `from --blocked_by--> to` (from waits on to) · `from --spawned_from--> to` (to is from's parent). */
+  type: "blocked_by" | "spawned_from";
+  fromRef?: string;
+  fromSessionId?: string;
+  toRef?: string;
+  toSessionId?: string;
+}
+
 /** Input for POST /capture/graph. The server always creates one composite proposal. */
 export interface SubmitCaptureGraphInput {
   workspaceId?: string | null;
@@ -598,9 +667,15 @@ export interface SubmitCaptureGraphInput {
   sourceMessageId?: string;
   sessionId?: string;
   rawSource?: CaptureGraphRawSource;
-  entities: CaptureGraphEntity[];
+  entities?: CaptureGraphEntity[];
   relations?: CaptureGraphRelation[];
   bindings?: CaptureGraphBinding[];
+  // CONNECTED PLAN steps — refs share the entity ref namespace; validated
+  // in full by the core. A call may carry entities, plan steps, or both.
+  sessions?: CaptureGraphSessionStep[];
+  documents?: CaptureGraphDocumentStep[];
+  projects?: CaptureGraphProjectStep[];
+  links?: CaptureGraphLinkStep[];
   summary?: string;
 }
 
@@ -830,6 +905,15 @@ export interface FocusSessionExpectedOutput {
       }
     | { url: string }
     | null;
+  /**
+   * For an ESCALATED-CRITERION slot, the `SessionCriterion.key` it stands for.
+   * Read-only here: the pod stamps it where the escalation files the slot, and
+   * `expectedOutputWireSchema` refuses a caller authoring one. Absent on every
+   * ordinary slot and on criterion slots filed before the field existed —
+   * absence means "no criterion to point at", never an error, and never a
+   * reason to match the slot's prose label back to a criterion.
+   */
+  criterionKey?: string;
 }
 
 /**
@@ -889,6 +973,311 @@ export type CreateFocusSessionResult =
       session: null;
     }
   | HubFocusSession;
+
+/**
+ * `focus_sessions.status`, duplicated from `@synap-core/types/focus-sessions`
+ * for the same dependency-free reason as the rest of this file. `"all"` is the
+ * LIST door's own filter value, never a stored state; `"stale"` is stamped
+ * only by the reaper, never client-writable (see `UpdatableFocusSessionStatus`).
+ */
+export type FocusSessionStatus =
+  | "active"
+  | "paused"
+  | "forming"
+  | "scheduled"
+  | "closed"
+  | "failed"
+  | "cancelled"
+  | "stale";
+
+/** Every `FocusSessionStatus` a CLIENT may WRITE — every one except `stale`. */
+export type UpdatableFocusSessionStatus = Exclude<FocusSessionStatus, "stale">;
+
+/**
+ * A session's population lens, duplicated from `SESSION_KINDS`
+ * (`@synap/api/services/focus-sessions/session-kind.ts`) — projected, never
+ * stored.
+ */
+export type FocusSessionKind = "work" | "run" | "receipt";
+
+/** Options for GET /api/hub/focus-sessions. */
+export interface ListFocusSessionsOptions {
+  /** Required by the door; defaults to the client's own `workspaceId`. */
+  workspaceId?: string;
+  /** `"all"` (default here) covers every stored status, `stale` included. */
+  status?: FocusSessionStatus | "all";
+  limit?: number;
+  /**
+   * Triage lens — same vocabulary as tRPC `focusSessions.list`. Default here
+   * is `"all"`: an agent listing sessions is usually looking for the one it
+   * just opened, which a human `"default"` lens would hide.
+   */
+  lens?: "default" | "triage" | "all";
+  /** Population lens. Default here is `"all"` (differs from the human tRPC lens). */
+  kind?: FocusSessionKind | "all";
+  /** Narrow to the sessions of ONE flow definition. */
+  playbookId?: string;
+  automationId?: string;
+  /** Narrow to sessions ABOUT this subject-spine entity. */
+  subjectEntityId?: string;
+}
+
+/**
+ * One row from GET /api/hub/focus-sessions — `HubFocusSession` plus the two
+ * lens projections every LIST row carries (`attachTriage` + `attachSessionKind`
+ * — never projected on the single-row GET, which is why they live here and
+ * not on `HubFocusSession` itself).
+ */
+export interface HubFocusSessionListItem extends HubFocusSession {
+  kind: FocusSessionKind;
+  triage: {
+    pending: boolean;
+    acceptedAt: string | null;
+    acceptedBy: string | null;
+  };
+}
+
+/** Options for GET /api/hub/focus-sessions/:id. */
+export interface GetFocusSessionOptions {
+  /**
+   * Optional. Provided: membership check + workspace floor (legacy callers).
+   * Omitted: owner/user floor only — resolves project-scoped (workspaceId
+   * null) sessions too.
+   */
+  workspaceId?: string;
+}
+
+/**
+ * GET /api/hub/focus-sessions/:id — the row plus its continuation packet.
+ * `rerun` and `continuation` are opaque here (`projectContinuationPacket`'s
+ * shape is not re-declared in this dependency-free package — read it, don't
+ * guess its fields); `criteria`/`verdict`/`evaluations` are present only when
+ * the continuation's own evaluation projection succeeded.
+ */
+export interface HubFocusSessionWithContinuation extends HubFocusSession {
+  rerun: unknown;
+  continuation: unknown;
+  criteria?: unknown;
+  verdict?: unknown;
+  evaluations?: unknown;
+}
+
+/**
+ * One binary acceptance criterion. Duplicated from `sessionCriterionSchema`
+ * (`@synap/api/schemas/session-criteria.ts`) / `CRITERION_CHECK_KINDS`
+ * (`@synap/playbooks`) for the same dependency-free reason as the rest of this
+ * file — the pod's own schema is the enforcing copy.
+ */
+export interface HubSessionCriterion {
+  key: string;
+  statement: string;
+  required?: boolean;
+  check: {
+    kind: "evidence" | "capability" | "judge" | "human";
+    capability?: string;
+    evidenceKey?: string;
+    hint?: string;
+  };
+  stageKey?: string;
+}
+
+/**
+ * Input for PATCH /api/hub/focus-sessions/:id. Every field is a WHOLESALE
+ * replace except `expectedOutputs` (merged server-side by label — see
+ * `FocusSessionExpectedOutput`), `metadata`/`verificationReport` (shallow-
+ * merged into the existing bag) and `addAgentId` (an APPEND alongside the
+ * `agentIds` replace). `null` on `title`/`subjectEntityId`/`followPlaybookId`/
+ * `followStageKey` CLEARS the field; `undefined` (the default) leaves it alone.
+ */
+export interface UpdateFocusSessionInput {
+  status?: UpdatableFocusSessionStatus;
+  progress?: number;
+  channelId?: string;
+  correlationId?: string;
+  title?: string | null;
+  goal?: string;
+  agentIds?: string[];
+  addAgentId?: string;
+  expectedOutputs?: FocusSessionExpectedOutput[];
+  verificationReport?: Record<string, unknown>;
+  currentStage?: string;
+  subjectEntityId?: string | null;
+  metadata?: Record<string, unknown>;
+  criteria?: HubSessionCriterion[];
+  followPlaybookId?: string | null;
+  followStageKey?: string | null;
+  agentUserId?: string;
+  reasoning?: string;
+}
+
+/**
+ * Governance-gated update: either a pending proposal receipt or the applied
+ * row, same shape as `CreateFocusSessionResult` — `proposed` is normal, never
+ * an error. `blockGuidelines` rides only when `expectedOutputs` newly declared
+ * a blocked slot; `follow` only when `followPlaybookId`/`followStageKey` acted.
+ */
+export type UpdateFocusSessionResult =
+  | {
+      status: "proposed";
+      proposalId: string;
+      reviewUrl?: string;
+      reviewPath?: string;
+      summary?: string;
+      message?: string;
+      reasoning?: string;
+      session: null;
+    }
+  | (HubFocusSession & {
+      blockGuidelines?: unknown;
+      follow?: unknown;
+    });
+
+/** Input for POST /api/hub/focus-sessions/:id/complete. */
+export interface CompleteFocusSessionInput {
+  summary?: string;
+  verificationReport?: Record<string, unknown>;
+  /** Which terminal state to land in. Defaults to `"closed"` server-side. */
+  terminalStatus?: "closed" | "cancelled" | "failed";
+}
+
+/** One proposal in the close pack (`pendingProposals`). */
+export interface FocusSessionProposalPackItem {
+  id: string;
+  status: string;
+  proposalType: string | null;
+  summary: string | null;
+  workspaceId: string | null;
+  createdAt: string | null;
+}
+
+/**
+ * Governance-gated complete: either a pending proposal receipt (governance
+ * still forced one — the lifecycle escape should normally prevent this) or the
+ * close pack. `proposed` is normal, never an error.
+ */
+export type CompleteFocusSessionResult =
+  | {
+      status: "proposed";
+      proposalId: string;
+      reviewUrl?: string;
+      reviewPath?: string;
+      summary?: string;
+      message?: string;
+      reasoning?: string;
+      session: null;
+    }
+  | {
+      /** The status the ROW now holds — never a literal echo of the request. */
+      status: string;
+      session: HubFocusSession;
+      /** Pending proposals attributed to this session (review pack). */
+      pendingProposals: FocusSessionProposalPackItem[];
+      counts: {
+        pending: number;
+        unfinishedOutputs: number;
+        expiredEphemerals: number;
+        retiredSlots: number;
+      };
+      warnings: string[];
+    };
+
+/** Input for POST /api/hub/focus-sessions/:id/rerun. */
+export interface RerunFocusSessionInput {
+  /**
+   * `"add"` layers new material onto the parent's existing outputs.
+   * `"replace"` reverts the parent's applied proposals first — an AGENT
+   * credential asking for `replace` is refused (403): reverting approved work
+   * is a human decision.
+   */
+  mode: "replace" | "add";
+  /** Narrow the rerun to specific stored sources; omitted reruns all of them. */
+  scope?: { sourceDocumentIds: string[] };
+  /** Counts + cap verdict only — nothing written. */
+  dryRun?: boolean;
+  reason?: string;
+}
+
+/** One source re-analysed by the rerun. */
+export type RerunItemOutcome =
+  | "proposed"
+  | "applied"
+  | "deduplicated"
+  | "not_structured"
+  | "needs_input"
+  | "failed";
+
+export interface RerunItemResult {
+  sourceDocumentIds: string[];
+  door: "capture" | "import";
+  outcome: RerunItemOutcome;
+  proposalId?: string;
+  reviewUrl?: string;
+  reason?: string;
+}
+
+/** What the rerun would do / did to the parent's sources. */
+export interface RerunPlan {
+  sources: {
+    selected: number;
+    capture: number;
+    import: number;
+    degraded: number;
+    missing: string[];
+    notInRun: string[];
+  };
+  replaceWouldRevert: number;
+  parentPending: number;
+  estimatedStructureCalls: number;
+  cap: { max: number; withinCap: boolean };
+}
+
+/**
+ * POST /api/hub/focus-sessions/:id/rerun result. Only the `ok: true` shapes
+ * are reachable from the client method — every `ok: false` refusal
+ * (`not_found` 404, `replace_is_a_human_decision` 403, everything else 409)
+ * answers a non-2xx status and surfaces as a thrown `HubApiError` instead,
+ * same convention as every other door in this file.
+ */
+export type RerunFocusSessionResult =
+  | {
+      ok: true;
+      status: "dry_run";
+      parentSessionId: string;
+      mode: "replace" | "add";
+      plan: RerunPlan;
+      availability: {
+        available: boolean;
+        reason?: "no_manifest" | "in_flight" | "availability_unknown";
+      };
+    }
+  | {
+      ok: true;
+      /** An identical request inside the dedupe window already started this child. */
+      status: "reused";
+      reused: true;
+      sessionId: string;
+      parentSessionId: string;
+      mode: "replace" | "add";
+      idempotencyNamespace: string;
+      plan: RerunPlan;
+    }
+  | {
+      ok: true;
+      /** `rerun`: every item structured · `partial`: some did not · `failed`: none did. */
+      status: "rerun" | "partial" | "failed";
+      reused: false;
+      sessionId: string;
+      parentSessionId: string;
+      mode: "replace" | "add";
+      idempotencyNamespace: string;
+      plan: RerunPlan;
+      /** False when the child's lineage (parent, mode, namespace) could not be recorded. */
+      lineageRecorded: boolean;
+      /** `replace` only — opaque here; read `rerun-session.ts` before branching on it. */
+      revert?: unknown;
+      items: RerunItemResult[];
+      counts: Record<RerunItemOutcome, number>;
+    };
 
 // ─── Relations & Graph ───────────────────────────────────────────────────────
 

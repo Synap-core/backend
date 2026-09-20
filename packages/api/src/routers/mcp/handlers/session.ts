@@ -597,6 +597,19 @@ export const sessionHandlers: McpHandlerMap = {
       // believes a slot is, which is how the per-door shapes drifted in the
       // first place — and a cast narrows nothing while checking nothing.
       expectedOutputs: slots.expectedOutputs,
+      // NARROWED like `subjectEntityId`, and for the same reason: this field
+      // has THREE meanings on the wire — `undefined` leaves the playbook alone,
+      // `null` RELEASES it, a string FOLLOWS it — and a blanket cast collapses
+      // two of them. The stage key, the visibility floor and the refusals all
+      // live in `followPlaybook`, the one door every caller reaches.
+      ...(args.followPlaybookId === null
+        ? { followPlaybookId: null }
+        : typeof args.followPlaybookId === "string"
+          ? { followPlaybookId: args.followPlaybookId }
+          : {}),
+      ...(typeof args.followStageKey === "string"
+        ? { followStageKey: args.followStageKey }
+        : {}),
     });
     switch (result.status) {
       case "not_found":
@@ -633,6 +646,14 @@ export const sessionHandlers: McpHandlerMap = {
           // this patch declared must reach the agent that declared it.
           ...(result.blockGuidelines
             ? { blockGuidelines: result.blockGuidelines }
+            : {}),
+          // Same reason as `completeOutput`: a follow that was REFUSED (an
+          // unknown stage key, a playbook already followed, a grant widening
+          // sent for review) changes nothing on the row, and a caller reading
+          // only the session would take the refusal for a success.
+          ...(result.follow ? { follow: result.follow } : {}),
+          ...(result.followRefusal
+            ? { followRefusal: result.followRefusal }
             : {}),
         });
     }

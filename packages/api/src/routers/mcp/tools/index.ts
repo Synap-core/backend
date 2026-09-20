@@ -1317,7 +1317,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). With no templateId, a matching playbook is applied only above a confidence threshold, and the result's `template` block always says what was applied (`applied`), what else fit (`suggestions`) and how to opt out (templateId: null). Declare `criteria` for your definition of done.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. Declare `criteria` for your definition of done.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1371,7 +1371,7 @@ export const tools = {
             templateId: {
               type: ["string", "null"],
               description:
-                "Optional playbook UUID to start this session from. Omit to let a matching playbook apply automatically (reported on `template`); pass null to start ad-hoc with no matching.",
+                "Optional playbook UUID — the ONE way a playbook binds to this session. Omit and the result's `playbooks` block ranks the pod's playbooks against your words so you can name one (nothing is applied for you); pass null to skip matching entirely.",
             },
             criteria: SESSION_CRITERIA_PROPERTY,
             parentSessionId: {
@@ -1478,7 +1478,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently). Cannot close — use synap_complete_session for that.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1664,6 +1664,16 @@ export const tools = {
               type: "string",
               description:
                 "APPEND one agent user id to the session roster (optional). Idempotent — re-attaching an agent already on the session writes nothing. Use this to staff a session already in flight; the roster is otherwise only settable when the session is created.",
+            },
+            followPlaybookId: {
+              type: ["string", "null"],
+              description:
+                "FOLLOW a playbook with this live session (optional) — the session BECOMES A RUN of it: it appears in that playbook's runs and leaves the plain work list. Its acceptance criteria and deliverables MERGE in (nothing you already have is overwritten or deleted); its title, goal and origin are left alone. Pass null to RELEASE the playbook — the merged criteria and deliverables STAY, and a release is refused while a stage gate is waiting. Find a playbook with synap_list_playbooks / synap_match_playbooks. The reply carries `follow` with what happened.",
+            },
+            followStageKey: {
+              type: ["string", "null"],
+              description:
+                "Only with followPlaybookId: which stage this work is ALREADY in, by the stage `key` (optional). OMIT IT unless you know — the session then sits in no stage, which is honest; it is never guessed and never set to the first stage. A key the playbook does not declare is refused, with the valid keys listed.",
             },
           },
           required: ["sessionId"],
@@ -2097,7 +2107,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said) and/or profileSlug (the kind of thing, e.g. 'post'). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
+          "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said — that exact spelling) and/or profileSlug (the kind of thing, e.g. 'post') and/or entityId. At least ONE is required: a call with no signal is REFUSED (without one, every active playbook ties at the same score; to just see what exists, call synap_list_playbooks). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2501,6 +2511,84 @@ export const tools = {
                 required: ["type"],
               },
             },
+            skills: {
+              type: "array",
+              description:
+                "RULE LOOP: instruction skills to create — the FACT half, what an agent should KNOW while reasoning. `ref` is how a `rules[]` step points at it (`factRef`). This is an instruction, NOT a capability/verb: it does not install a tool.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  name: { type: "string" },
+                  body: {
+                    type: "string",
+                    description: "The instruction itself, markdown. REQUIRED.",
+                  },
+                  scope: {
+                    type: "string",
+                    enum: ["pod", "user", "workspace"],
+                  },
+                  agentTypes: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Omit or null to apply to every agent type.",
+                  },
+                },
+                required: ["ref", "name", "body", "scope"],
+              },
+            },
+            automations: {
+              type: "array",
+              description:
+                "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). ALWAYS materialized DISABLED (draft): approving the proposal creates it, it never arrives already running — switch it on yourself afterwards. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  name: { type: "string" },
+                  description: { type: "string" },
+                  triggerType: {
+                    type: "string",
+                    enum: ["event", "cron", "webhook", "manual"],
+                  },
+                  flowDefinition: {
+                    type: "object",
+                    description:
+                      "`{ nodes: [], edges: [] }` — validated in full (node contracts, unknown verbs, dangling edges, cycles) by the automation door. Put the trigger config on `flowDefinition.triggerConfig`; an event automation without one cannot match.",
+                  },
+                },
+                required: ["ref", "name", "triggerType", "flowDefinition"],
+              },
+            },
+            rules: {
+              type: "array",
+              description:
+                "RULE LOOP: the memory that joins a FACT to a BEHAVIOUR. Needs `factRef` and/or `behaviourRefs` — each names a `skills[]` / `automations[]` step in this call, or a real UUID that already exists. A rule joined to nothing is refused.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  intent: {
+                    type: "string",
+                    description: "The rule in the user's own words. REQUIRED.",
+                  },
+                  scope: {
+                    type: "object",
+                    properties: {
+                      kind: {
+                        type: "string",
+                        enum: ["pod", "workspace", "user"],
+                      },
+                      workspaceId: { type: "string" },
+                    },
+                    required: ["kind"],
+                  },
+                  factRef: { type: "string" },
+                  behaviourRefs: { type: "array", items: { type: "string" } },
+                },
+                required: ["ref", "intent", "scope"],
+              },
+            },
             summary: {
               type: "string",
               description:
@@ -2848,7 +2936,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view-table needs a saved viewId, not a profileSlug). Type: table, kanban, list, gallery, calendar, bento, masonry, flow. profileId scopes to one entity type. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+          "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view-table needs a saved viewId, not a profileSlug). Type: table, kanban, list, gallery, calendar, bento, masonry, flow, whiteboard. profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2864,6 +2952,7 @@ export const tools = {
                 "bento",
                 "masonry",
                 "flow",
+                "whiteboard",
               ],
             },
             workspaceId: { type: "string" },
@@ -2875,6 +2964,11 @@ export const tools = {
               type: "object",
               description:
                 "View configuration (groupBy, sortBy, filters, etc.)",
+            },
+            initialContent: {
+              type: "object",
+              description:
+                'Whiteboard only — seeds the canvas: {version:1, category:"canvas", store:{<tldrawRecordId>: <tldrawRecord>}}. Shapes can ONLY be set here; there is no content-update door, so a board is seeded once at create. Read back with synap_list_views + the view detail.',
             },
             expectedLabel: {
               type: "string",

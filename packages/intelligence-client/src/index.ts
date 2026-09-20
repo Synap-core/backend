@@ -108,12 +108,6 @@ export type {
   SessionTitleResult,
 } from "./session-intelligence-client.js";
 
-export { requestPlaybookChoice } from "./playbook-choice-client.js";
-export type {
-  PlaybookChoiceRequest,
-  PlaybookChoiceResult,
-} from "./playbook-choice-client.js";
-
 export { requestRevisedLessons } from "./session-lessons-client.js";
 export type {
   ReviseLessonsRequest,

@@ -785,6 +785,55 @@ export function isPlanBatch(operations: CompositeProposalOperation[]): boolean {
   return operations.some(isPlanOperation);
 }
 
+/**
+ * ── ATOMICITY COVERAGE FLOOR ────────────────────────────────────────────────
+ *
+ * Every op kind is CLASSIFIED: it either makes a batch all-or-none (a PLAN op)
+ * or it is deliberately per-op resilient. Adding an arm to
+ * `CompositeProposalOperation` without deciding which it is **fails the build**.
+ *
+ * Why a type-level floor and not a test: the defect this prevents is "someone
+ * adds an op kind and nobody decides its failure semantics", and a test can
+ * only notice that after the fact. Here the omission cannot compile. Two
+ * properties are load-bearing, per `.claude/rules/guards-and-tests.md`:
+ *   1. the set is DERIVED from the op union, never a third hand-written list;
+ *   2. every member is CLASSIFIED — "resilient, and here is why" is a decision
+ *      recorded in the type system, not an accident nobody can date.
+ *
+ * The three Rule Loop ops are resilient BY DECISION, not by omission:
+ * `materialize-composite-rule-loop.test.ts` pins "a failed op does not discard
+ * the ops that already succeeded", and its header names per-op resilience as
+ * part of the materializer's contract. A pack that needs them atomic gets that
+ * by carrying a plan op (a session or project), which every real pack does.
+ *
+ * `create_entity` / `create_relation` are resilient for the same reason capture
+ * has always been: one unreadable row in a 1600-row import must not discard the
+ * other 1599.
+ */
+const RESILIENT_OPERATION_KINDS = [
+  "create_entity",
+  "create_relation",
+  "create_skill",
+  "create_automation",
+  "create_rule",
+] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
+
+type _EveryOpKindClassified =
+  Exclude<
+    CompositeProposalOperation["op"],
+    (typeof PLAN_OPERATION_KINDS)[number]
+  > extends (typeof RESILIENT_OPERATION_KINDS)[number]
+    ? true
+    : never;
+
+/**
+ * A new op kind that is neither a plan op nor declared resilient makes this
+ * `never`, and the assignment below stops the build. Positive-controlled: add
+ * an arm to the union without listing it and `tsc` fails here.
+ */
+const _everyOpKindClassified: _EveryOpKindClassified = true;
+void _everyOpKindClassified;
+
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
    * Ordered list of operations. No op kind has to come first: the entity ops

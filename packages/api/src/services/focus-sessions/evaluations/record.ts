@@ -320,6 +320,11 @@ async function fileCriterionSlot(
       reconcileOwedSince({
         kind: CRITERION_SLOT_KIND,
         label,
+        // WHICH criterion this slot stands for, as a machine key. The label is
+        // prose and is clipped, so a surface must never match it back to find
+        // the criterion — that would fork this file's label format into every
+        // UI. Slots filed before this field existed carry none.
+        criterionKey: criterion.key,
         status: "pending",
         owner: "human",
         blockedReason: "decision",

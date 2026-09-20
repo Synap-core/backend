@@ -154,6 +154,8 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 **Pending review first.** If `startHere.pendingReview.count > 0`, offer to walk the queue before any new structure. Unreviewed work looks missing and gets duplicated.
 
+4. `synap_start_session` — **name the unit of work before you build it.** Title + goal, nothing else; the session is the room the rest of this happens in, not a form to fill. Every write you make afterwards is attributed to it automatically, so the user can open ONE object and see the whole arc instead of loose proposals with no shared story. Reuse an open session that already covers this intent (`synap_list_sessions`) rather than starting a second one. If the intent is a single fact with no structure behind it, skip the session and use the `synap` skill instead — this whole conductor is the wrong door for that.
+
 ### 1. Ask before you build (required)
 
 Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply.
@@ -173,15 +175,45 @@ After orient, your first user-facing message is:
 
 1. **Reuse or not** — name the existing project(s) that already match. If none, say you would create one (human / capture-plan / ≥5 evidence). Stop if they must choose.
 2. **What already covers the intent** — existing workspaces (do not onboard an **empty** domain unless this session's goal needs data there _now_). Existing kinds/roles (extend-first).
-3. **Exactly one next write** you want confirmed. Examples of ONE: reuse+pin project lens; install one overlay template; start one session; widen one role. Not: project + template + onboard Finance + declare all edges + playbook.
+3. **Exactly one next write** you want confirmed. Examples of ONE: reuse+pin project lens; install one overlay template; widen one role; **or one connected PLAN** (below). Not: project + template + onboard Finance + declare all edges + playbook filed as five separate proposals.
 
 Then **wait**. After that write lands (`proposed` is success), the _next_ turn may offer the next one move.
+
+#### ONE write may be a whole connected PLAN
+
+`synap_capture` accepts `projects[]` / `sessions[]` / `documents[]` / `links[]` / `entities[]` / `relations[]` — and `skills[]` / `automations[]` / `rules[]` — in a **single call** that files **ONE proposal**. Steps reference each other by `ref`; ids exist only after approval. A plan carrying a session or project applies **all-or-none**, compensated if any step fails.
+
+This is the difference between a reviewer seeing one graph and deciding once, and seeing fourteen cards with no visible relationship. **Prefer the plan whenever the structure is connected.** It is not a 7-step sequence — it is one decision about one shape.
+
+It also resolves ordering that separate proposals cannot: an `automations[]` step whose flow names a skill created by a `skills[]` step in the SAME call resolves, because the skill is materialized before the automation is validated. Filed separately, the second proposal fails — the first has not been approved yet.
+
+Refs, not ids. To change a pending plan, **revise it** (full updated operations, re-validated). Never file a second proposal pointing at items still pending in the first.
+
+**Budget is per proposal, not per object.** An agent has a cap on how many proposals may sit pending at once. Fourteen objects as fourteen proposals can exhaust it and get the next write refused; the same fourteen as one plan costs one slot. If a write is ever refused for the cap, that refusal carries a link to raise it — follow the link, do not retry the write.
 
 Do **not** declare every provides/consumes/trigger edge in the opening. Edges are a later turn, and only for the pair this work actually reads.
 
 Do **not** invent CLI (`synap create project --evidenceEntityIds`, `synap marketplace install`, `synap declare workspace source`). Use the MCP/Hub tools this door actually exposes.
 
 Empty workspace ≠ broken. An empty Finance is fine until this intent needs a revenue number.
+
+### 2b. When the work needs a CAPABILITY (a verb an automation calls)
+
+A plan creates instruction skills, automations and rules. **A plan never installs a capability.** Installing one fetches a template from the Control Plane mid-apply, writes secrets and vault grants, and has no undo path — none of which belongs inside an all-or-none batch. Capability access is its own decision, on purpose.
+
+Walk this ladder instead. Every rung is a door that exists; do not invent one.
+
+| Situation | Do this |
+| --- | --- |
+| Not sure the verb exists | `synap_list_capabilities` (a `query` reaches the folded builtin verbs too) |
+| Verb exists but is **not enabled** | **Just run it** — `synap_run_capability`. The refusal files ONE enable request covering your whole pack and hands it back as `enableProposal`, and tells you the action did NOT run. There is no enable tool to call. |
+| Verb is not installed | `market.search` to find it, then `market.install` — both builtin verbs through `synap_run_capability`. For an agent this ALWAYS files a `capability.install` proposal; that is success, not refusal. |
+| The tool does not exist at Synap at all | `tool.request` (builtin verb) — records a `tool_request` so the gap is visible instead of silently blocking you |
+| Authoring a reusable PACK | Declare the need as a package dependency (`relation: "require"`) rather than installing inside the pack |
+
+**Author the automation LAST.** An automation whose `capability` node names a verb that is not in the catalog is rejected at author time (`capability_unknown_verbId`) — the write never lands, so there is nothing half-built to clean up. Get the verb enabled or installed first, then file the plan that uses it.
+
+A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
 ### 3. Which skill to load next
 
@@ -199,6 +231,8 @@ Empty workspace ≠ broken. An empty Finance is fine until this intent needs a r
 - Twin **project**: orient already has this company/commitment under another name.
 - Twin kind/role whose **slug or display name** matches `list_profiles`.
 - A 7-step "right sequence" in the first confirm. One structural move per turn.
+- **Splitting one coherent structure into N proposals.** If the objects reference each other, they are ONE plan through `synap_capture`, not one `create_*` call each. N cards the reviewer must mentally re-join is the failure this conductor exists to prevent.
+- Building structure with no session open. The unit of work is named first (§0.4) or the work arrives as orphan proposals.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
 - Nested projects. Phases = sessions.
@@ -1272,7 +1306,7 @@ The loop has three moves that compound. Each takes a one-off act and, if it's wo
 
 ### 1. Open a session for real work
 
-When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
+When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The start door hands back the pod's matching playbooks (`playbooks.candidates`) — read them before working ad-hoc, and start again with `templateId` when one fits. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
 
 ### 2. Create a cell to REPORT — don't dump data into chat
 
@@ -1698,7 +1732,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of yours were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one.
 
-**Templates apply themselves, and say so.** Without `templateId`, a matching playbook is applied only when the match is confident; the response's `template` block reports `applied` (id, name, confidence, decider) or `null`, the other `suggestions`, and the opt-out (`templateId: null`). Name a playbook yourself with `templateId` when you know it (`synap_list_playbooks` / `synap_match_playbooks`).
+**Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
 **Declare your definition of done** with `criteria` — binary, observable statements ("Typecheck passes with 0 errors"). Closing never blocks on them; unmet ones are flagged.
 

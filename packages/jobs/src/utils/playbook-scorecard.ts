@@ -55,6 +55,20 @@ export interface ScorecardSessionRow {
   expectedOutputs: unknown;
   /** How many close events this session has emitted. */
   closeEvents: number;
+  /**
+   * TRUE when this session was ATTACHED to the playbook while already live
+   * (`metadata.followedVia = "attach"`), as against INSTANTIATED from it.
+   *
+   * WHY IT IS ON THE ROW. A session attached at the end did not run under the
+   * playbook: most of its work happened before the definition was bound, so
+   * grading the playbook on it is grading a process for work it did not shape.
+   * And this scorecard is not cosmetic — the weekly lessons scanner turns it
+   * into governed `playbook/update` proposals, which feed the trusted-agent
+   * widening lane. So the two populations are COUNTED BOTH, REPORTED APART
+   * (`runs.instantiated` / `runs.attached`) and never silently blended; the
+   * scanner then uses instantiated runs alone as failure evidence.
+   */
+  attached: boolean;
 }
 
 export interface ScorecardEvaluationRow extends EvaluationRowLike {
@@ -83,6 +97,16 @@ export interface PlaybookScorecard {
     /** Closed sessions with at least one evaluation row. */
     evaluated: number;
     reopened: number;
+    /**
+     * The split of `total` by HOW the session came to be a run of this
+     * playbook. `instantiated + attached === total`, always — both numbers are
+     * surfaced so a reader can see what the criteria scores are made of.
+     * A criterion's pass rate above counts BOTH populations; the lessons
+     * scanner re-projects over instantiated rows alone before proposing an
+     * edit to the playbook (see {@link ScorecardSessionRow.attached}).
+     */
+    instantiated: number;
+    attached: number;
   };
   escalations: number;
   overrides: number;
@@ -201,6 +225,8 @@ export function projectPlaybookScorecard(
         (s) =>
           s.closeEvents >= 2 || (s.closeEvents >= 1 && !TERMINAL.has(s.status))
       ).length,
+      instantiated: sessions.filter((s) => !s.attached).length,
+      attached: sessions.filter((s) => s.attached).length,
     },
     escalations,
     overrides: overrides.length,
@@ -245,6 +271,13 @@ export async function loadPlaybookScorecardRows(
         WHERE ev.type = ${FOCUS_SESSION_CLOSED_EVENT_TYPE}
           AND ev.subject_id = "focus_sessions"."id"::text
       )`,
+      // The follow receipt the attach door stamps (`follow-playbook.ts`).
+      // PRESENCE of the marker, not its shape: `#>>` yields a text value for a
+      // JSON value of any type, and a row stamped by any future follow door
+      // must read as attached rather than silently as instantiated.
+      followedVia: drizzleSql<
+        string | null
+      >`${focusSessions.metadata} #>> '{followedVia}'`,
     })
     .from(focusSessions)
     .where(where);
@@ -252,6 +285,7 @@ export async function loadPlaybookScorecardRows(
     ...r,
     status: String(r.status),
     closeEvents: Number(r.closeEvents ?? 0),
+    attached: r.followedVia != null,
   }));
   if (sessions.length === 0) return { sessions, evaluations: [] };
   const evaluations = await database

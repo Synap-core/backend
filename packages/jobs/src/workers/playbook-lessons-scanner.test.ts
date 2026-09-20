@@ -83,8 +83,19 @@ const PLAYBOOK: LessonsScanPlaybook = {
   userId: USER_ID,
 };
 
-/** One closed session declaring `keys` worth of the playbook's criteria. */
-function session(id: string, keys: string[]): ScorecardSessionRow {
+/**
+ * One closed session declaring `keys` worth of the playbook's criteria.
+ *
+ * `attached` — the session was bound to the playbook while ALREADY LIVE
+ * (`follow-playbook.ts`), as against instantiated from it. It is evidence
+ * about the SESSION, not about the playbook, and the scanner must not revise
+ * a playbook's stages on the strength of it.
+ */
+function session(
+  id: string,
+  keys: string[],
+  opts: { attached?: boolean } = {}
+): ScorecardSessionRow {
   const all = STAGES.flatMap((s) =>
     ((s.criteria as ReturnType<typeof criterion>[]) ?? []).map((c) => ({
       ...c,
@@ -98,6 +109,7 @@ function session(id: string, keys: string[]): ScorecardSessionRow {
     criteria: all.filter((c) => keys.includes(c.key)),
     expectedOutputs: [],
     closeEvents: 1,
+    attached: opts.attached ?? false,
   };
 }
 
@@ -180,6 +192,29 @@ describe("threshold — the 2-of-3 rule", () => {
         },
       ],
     });
+  });
+
+  it("an ATTACHED run is NOT failure evidence against the playbook", async () => {
+    // THE DISCRIMINATING FIXTURE. One instantiated failure (below the 2-of-3
+    // floor) plus two ATTACHED failures of the same criterion. A scanner that
+    // filtered on `playbookId` alone sees three failures and files; the rule
+    // under test sees one and does not. Flipping `attached` to false on the
+    // two rows below is the negative control — it then fires.
+    const instantiated = ["s1", "s2", "s3"].map((id) => session(id, ["tsc"]));
+    const attached = ["a1", "a2"].map((id) =>
+      session(id, ["tsc"], { attached: true })
+    );
+    const sessions = [...instantiated, ...attached];
+    const evaluations = [
+      ...instantiated.map((s, i) =>
+        evaluation(s.id, "tsc", i < 1 ? "fail" : "pass")
+      ),
+      ...attached.map((s) => evaluation(s.id, "tsc", "fail")),
+    ];
+    const { deps, filed, reviseLessons } = makeDeps({ sessions, evaluations });
+    expect(await runPlaybookLessonsScan(deps)).toEqual([]);
+    expect(filed).toEqual([]);
+    expect(reviseLessons).not.toHaveBeenCalled();
   });
 
   it("does NOT fire on a single failure", async () => {
@@ -416,7 +451,14 @@ describe("pure helpers", () => {
       planStageRevisions(
         STAGES,
         {
-          runs: { total: 2, closed: 2, evaluated: 2, reopened: 0 },
+          runs: {
+            total: 2,
+            closed: 2,
+            evaluated: 2,
+            reopened: 0,
+            instantiated: 2,
+            attached: 0,
+          },
           escalations: 0,
           overrides: 0,
           criteria: [
@@ -498,6 +540,7 @@ describe("IS call budget", () => {
         ],
         expectedOutputs: [],
         closeEvents: 1,
+        attached: false,
       })) as ScorecardSessionRow[];
       rows.set(id, {
         sessions,

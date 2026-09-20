@@ -17,6 +17,7 @@
 
 import {
   isLikelyUUID,
+  isPlanOperation,
   PLAN_LINK_TYPES,
   type CompositeProposalOperation,
   type PlanLinkType,
@@ -30,6 +31,52 @@ import {
 export const PLAN_SESSION_GOAL_MAX = 2000;
 /** The project door's name bound (`projects.create` `name.max(255)`). */
 export const PLAN_PROJECT_NAME_MAX = 255;
+
+// ── Rule Loop enumerations, DERIVED from the op union ──────────────────────
+// Hand-written literal arrays are how a validator falls behind the type it
+// validates. Each array below is bound to its op field in BOTH directions at
+// compile time: `satisfies` refuses a member the union does not have, and the
+// `Exclude<…> extends never` floor refuses a union member the array is
+// missing. Add a scope or a trigger type to the op and the BUILD stops here.
+type SkillScope = Extract<
+  CompositeProposalOperation,
+  { op: "create_skill" }
+>["scope"];
+type AutomationTriggerType = Extract<
+  CompositeProposalOperation,
+  { op: "create_automation" }
+>["triggerType"];
+type RuleScopeKind = Extract<
+  CompositeProposalOperation,
+  { op: "create_rule" }
+>["scope"]["kind"];
+
+export const SKILL_SCOPES = [
+  "pod",
+  "user",
+  "workspace",
+] as const satisfies readonly SkillScope[];
+export const AUTOMATION_TRIGGER_TYPES = [
+  "event",
+  "cron",
+  "webhook",
+  "manual",
+] as const satisfies readonly AutomationTriggerType[];
+export const RULE_SCOPE_KINDS = [
+  "pod",
+  "workspace",
+  "user",
+] as const satisfies readonly RuleScopeKind[];
+
+type _AllRuleLoopEnumsCovered = [
+  Exclude<SkillScope, (typeof SKILL_SCOPES)[number]>,
+  Exclude<AutomationTriggerType, (typeof AUTOMATION_TRIGGER_TYPES)[number]>,
+  Exclude<RuleScopeKind, (typeof RULE_SCOPE_KINDS)[number]>,
+] extends [never, never, never]
+  ? true
+  : never;
+const _allRuleLoopEnumsCovered: _AllRuleLoopEnumsCovered = true;
+void _allRuleLoopEnumsCovered;
 
 export type PlanRefKind =
   | "entity"
@@ -86,6 +133,38 @@ export function planRefKinds(
     if (typeof ref === "string" && ref && !kinds.has(ref)) kinds.set(ref, kind);
   });
   return kinds;
+}
+
+/**
+ * True when the batch carries any step this module VALIDATES and REPORTS —
+ * the plan ops, plus the Rule Loop config ops.
+ *
+ * Deliberately NOT `isPlanBatch`, and the difference is load-bearing in both
+ * directions:
+ *
+ *   - `isPlanBatch` (`@synap-core/types/proposals`) answers "does this batch
+ *     apply ALL-OR-NONE?" — a materializer question about compensation. The
+ *     three config ops are not plan ops and keep the per-op resilience the
+ *     rest of the composite has; that is unchanged here.
+ *   - this answers "does this batch have non-entity steps to check and to
+ *     name on the receipt?" — a preflight/receipt question.
+ *
+ * Collapsing the two is how `validatePlanOperations`' config arms would become
+ * DEAD CODE: the preflight is gated on the predicate, so a batch of only
+ * skills/automations/rules would skip ref validation entirely and a bad
+ * `factRef` would surface as a silently skipped op mid-materialize. Same for
+ * the receipt: the filed steps would go unnamed.
+ */
+export function hasComposedSteps(
+  operations: CompositeProposalOperation[]
+): boolean {
+  return operations.some(
+    (op) =>
+      isPlanOperation(op) ||
+      op.op === "create_skill" ||
+      op.op === "create_automation" ||
+      op.op === "create_rule"
+  );
 }
 
 /** Every session↔session edge the plan declares, in declaration order. */
@@ -230,6 +309,36 @@ export function validatePlanOperations(
   };
   const expectId = (opIndex: number, field: string, id: string) => {
     if (!isLikelyUUID(id)) push(opIndex, `${field} "${id}" is not a UUID`);
+  };
+  /**
+   * A Rule Loop ref: an op ref in THIS batch naming `expected`, OR a real
+   * UUID naming a row that already exists. Both are what
+   * `resolveCompositeRef` accepts, so this mirrors it exactly — anything else
+   * makes it THROW mid-materialize, where the op is logged and skipped after
+   * its siblings have already landed.
+   */
+  const expectRefOrId = (
+    opIndex: number,
+    field: string,
+    ref: string,
+    expected: PlanRefKind
+  ) => {
+    const kind = kinds.get(ref);
+    if (kind) {
+      if (kind !== expected) {
+        push(
+          opIndex,
+          `${field} "${ref}" names a ${kind}, but must name a ${expected}`
+        );
+      }
+      return;
+    }
+    if (!isLikelyUUID(ref)) {
+      push(
+        opIndex,
+        `${field} "${ref}" names no ${expected} in this batch and is not a ${expected} id`
+      );
+    }
   };
   const notBoth = (
     opIndex: number,
@@ -411,6 +520,99 @@ export function validatePlanOperations(
         }
         return;
       }
+      // ── Rule Loop config steps (NS1) ─────────────────────────────────
+      // Checked HERE, before anything is queued, because the materializer's
+      // per-op resilience is the wrong place for a ref error: a `factRef`
+      // that resolves to nothing makes `resolveCompositeRef` THROW inside
+      // pass 3, which is caught, logged and SKIPPED — leaving the skill and
+      // the automation created and the rule that was meant to join them
+      // silently absent, reported as success.
+      case "create_skill":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a skill step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a skill step needs a `name`");
+        if (typeof op.body !== "string" || !op.body.trim())
+          push(i, "a skill step needs a `body` (the instruction, markdown)");
+        if (!(SKILL_SCOPES as readonly string[]).includes(op.scope)) {
+          push(
+            i,
+            `skill scope "${String(op.scope)}" is not valid — use one of ${SKILL_SCOPES.join(", ")}`
+          );
+        }
+        if (
+          op.agentTypes !== undefined &&
+          op.agentTypes !== null &&
+          !Array.isArray(op.agentTypes)
+        ) {
+          push(i, "agentTypes must be an array (or null for every agent type)");
+        }
+        return;
+      case "create_automation": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "an automation step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "an automation step needs a `name`");
+        if (
+          !(AUTOMATION_TRIGGER_TYPES as readonly string[]).includes(
+            op.triggerType
+          )
+        ) {
+          push(
+            i,
+            `automation triggerType "${String(op.triggerType)}" is not valid — use one of ${AUTOMATION_TRIGGER_TYPES.join(", ")}`
+          );
+        }
+        // SHAPE ONLY. The flow's SEMANTICS (node contracts, unknown verbs,
+        // dangling edges, cycles) belong to the one flow validator, which runs
+        // against the live catalog inside the automation door — and must run
+        // THERE, not here, so a node naming a skill this same batch creates
+        // resolves against the row pass 0a just wrote.
+        const flow = op.flowDefinition as
+          { nodes?: unknown; edges?: unknown } | null | undefined;
+        if (!flow || typeof flow !== "object" || Array.isArray(flow)) {
+          push(
+            i,
+            "an automation step needs a `flowDefinition` object with `nodes` and `edges`"
+          );
+        } else {
+          if (!Array.isArray(flow.nodes))
+            push(i, "flowDefinition.nodes must be an array");
+          if (!Array.isArray(flow.edges))
+            push(i, "flowDefinition.edges must be an array");
+        }
+        return;
+      }
+      case "create_rule":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a rule step needs a `ref`");
+        if (typeof op.intent !== "string" || !op.intent.trim())
+          push(
+            i,
+            "a rule step needs an `intent` (the rule in the user's words)"
+          );
+        if (
+          !op.scope ||
+          typeof op.scope !== "object" ||
+          !(RULE_SCOPE_KINDS as readonly string[]).includes(op.scope.kind)
+        ) {
+          push(
+            i,
+            `rule scope.kind "${String(op.scope?.kind)}" is not valid — use one of ${RULE_SCOPE_KINDS.join(", ")}`
+          );
+        }
+        if (op.scope?.workspaceId)
+          expectId(i, "scope.workspaceId", op.scope.workspaceId);
+        if (op.factRef) expectRefOrId(i, "factRef", op.factRef, "skill");
+        for (const behaviourRef of op.behaviourRefs ?? [])
+          expectRefOrId(i, "behaviourRefs", behaviourRef, "automation");
+        if (!op.factRef && (op.behaviourRefs?.length ?? 0) === 0) {
+          push(
+            i,
+            "a rule needs a `factRef` (what the agent should KNOW) and/or `behaviourRefs` (what RUNS) — a rule joined to nothing remembers nothing"
+          );
+        }
+        return;
       default:
         return;
     }

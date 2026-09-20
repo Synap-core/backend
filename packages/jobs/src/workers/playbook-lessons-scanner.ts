@@ -353,7 +353,16 @@ export async function runPlaybookLessonsScan(
         playbook.userId,
         closedAfter
       );
-      const mine = sessions.filter((s) => s.playbookId === playbook.id);
+      // INSTANTIATED runs only. A session ATTACHED to this playbook while
+      // already live (`metadata.followedVia`) did not run under it — most of
+      // its work happened before the definition was bound — so it is not
+      // evidence that the playbook's stages need revising. It still COUNTS on
+      // the scorecard (`runs.attached`, reported beside `runs.instantiated`);
+      // it is excluded HERE, where a number becomes a governed `playbook/update`
+      // proposal that feeds the trusted-agent widening lane.
+      const mine = sessions.filter(
+        (s) => s.playbookId === playbook.id && !s.attached
+      );
       const card = projectPlaybookScorecard(mine, evaluations);
 
       // Lineage + the overriding person's own words, from the SAME rows the

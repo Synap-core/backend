@@ -53,6 +53,7 @@ import {
   SESSION_ARTIFACT_KINDS,
 } from "../services/focus-sessions/record-session-artifact.js";
 import { isOutputRefVisible } from "../services/focus-sessions/assert-output-ref-visible.js";
+import type { FollowOutcome } from "../services/focus-sessions/follow-playbook.js";
 import { delegateExpectedOutput } from "../services/focus-sessions/delegate-output.js";
 import {
   blockExpectedOutput,
@@ -1279,18 +1280,18 @@ export const focusSessionsRouter = router({
         };
       }
       // Edge outcomes ride the returned row, only when they were asked for.
-      // `template` + `adopted` are the SAME blocks the MCP and Hub start doors
-      // already return: what matched, what else fit, why nothing applied, and
-      // whether an auto-opened session was adopted instead of a row created.
-      // This door used to drop both, so a browser-started session could never
-      // say which template ran. The shape comes from `CreateFocusSessionResult`
-      // and is never restated here.
+      // `playbooks` + `adopted` are the SAME blocks the MCP and Hub start doors
+      // already return: the pod's processes ranked against this session's words
+      // (suggestions — nothing is applied), and whether an auto-opened session
+      // was adopted instead of a row created. This door used to drop both, so a
+      // browser-started session could never offer the pod's playbooks. The
+      // shape comes from `CreateFocusSessionResult` and is never restated here.
       return {
         ...(result.candidates ? { dedupCandidates: result.candidates } : {}),
         ...(result.session as FocusSession),
         ...(result.parentLink ? { parentLink: result.parentLink } : {}),
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
-        ...(result.template ? { template: result.template } : {}),
+        ...(result.playbooks ? { playbooks: result.playbooks } : {}),
         ...(result.adopted ? { adopted: result.adopted } : {}),
       };
     }),
@@ -1355,6 +1356,19 @@ export const focusSessionsRouter = router({
         subjectEntityId: z.string().uuid().nullable().optional(),
         /** WHOLESALE replace of the session's binary acceptance criteria. */
         criteria: sessionCriteriaSchema.optional(),
+        /**
+         * FOLLOW a playbook with this live session; `null` RELEASES it.
+         * The session BECOMES A RUN of that playbook — it joins the playbook's
+         * runs and leaves the work lens. Applied by the ONE implementation
+         * (`follow-playbook.ts`), never inline here.
+         */
+        followPlaybookId: z.string().uuid().nullable().optional(),
+        /**
+         * Which stage this work is ALREADY in. Omitted ⇒ the stage is left
+         * alone (never seeded to stage 1); an unknown key is REFUSED with the
+         * valid keys.
+         */
+        followStageKey: z.string().min(1).nullable().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1522,11 +1536,52 @@ export const focusSessionsRouter = router({
         stageGated = advance.paused;
       }
 
+      // ── FOLLOW / RELEASE A PLAYBOOK ───────────────────────────────────────
+      // ONE implementation, shared with the Hub PATCH, the MCP door and the
+      // approval executor. AFTER the field write, so the playbook's criteria
+      // and deliverables merge onto whatever this call just wrote.
+      //
+      // A refusal THROWS here, unlike at the MCP door: this is the browser
+      // door, the follow is the whole point of the click, and a caller that
+      // asked to follow a playbook and got a 200 with an unchanged row has no
+      // way to tell a refusal from a bug.
+      let followed = updated;
+      let follow: FollowOutcome | undefined;
+      if (input.followPlaybookId !== undefined) {
+        const { followPlaybook, followRefusalError } =
+          await import("../services/focus-sessions/follow-playbook.js");
+        const result = await followPlaybook({
+          sessionId: input.id,
+          userId: ctx.userId,
+          followPlaybookId: input.followPlaybookId,
+          followStageKey: input.followStageKey,
+        });
+        if (result.status === "refused")
+          throw followRefusalError(result.reason);
+        if (result.status === "proposed") {
+          throw new TRPCError({ code: "FORBIDDEN", message: result.reason });
+        }
+        if (result.status === "not_found") {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Focus session ${input.id} not found`,
+          });
+        }
+        followed = result.session as typeof updated;
+        follow = result.follow;
+      }
+
       // Return the status the ROW now holds. A caller handed `active` while the
       // gate has just paused the session would step past the approval it opened.
-      return (
-        stageGated ? { ...updated, status: "paused" } : updated
+      const row = (
+        stageGated ? { ...followed, status: "paused" } : followed
       ) as FocusSession;
+      // `follow` rides the row so the surface can confirm WHAT happened —
+      // which playbook, which stage, how much structure merged — rather than
+      // inferring it from a `playbookId` that appeared.
+      return (follow ? { ...row, follow } : row) as FocusSession & {
+        follow?: FollowOutcome;
+      };
     }),
 
   /**

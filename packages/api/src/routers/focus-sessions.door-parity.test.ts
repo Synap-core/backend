@@ -2,17 +2,17 @@
  * `focusSessions` tRPC — DOOR PARITY with the MCP and Hub start/close doors.
  *
  * The screens can only show what the door returns. Three blocks the service
- * already produced never crossed this boundary, so the browser could not say
- * which template ran, whether the session it got back was adopted rather than
- * created, or how the close graded against the session's criteria:
+ * already produced never crossed this boundary, so the browser could not offer
+ * the pod's playbooks, say whether the session it got back was adopted rather
+ * than created, or show how the close graded against the session's criteria:
  *
- *   - `create` dropped `template` (SessionTemplateReport) and `adopted`.
+ *   - `create` dropped `playbooks` (SessionPlaybookCandidates) and `adopted`.
  *   - `close` returned the bare row — no `warnings`, no `verdict`.
  *
  * These drive the REAL procedures and read what the caller receives, so the
  * claim is "the value arrives", not "the key is declared". The deduped arm is
  * asserted too, for the opposite property: a reused session must NOT claim a
- * template report, because no matching ran.
+ * candidate list, because no matching ran.
  *
  * DB-FREE: the two services are mocked at their module boundary (this file
  * tests the DOOR's projection, not the services, which own their own tests);
@@ -87,64 +87,68 @@ const sessionRow = (over: Record<string, unknown> = {}) => ({
 });
 
 /** The exact block the MCP/Hub start doors already return. */
-const TEMPLATE = {
-  applied: {
-    id: "pb-1",
-    name: "Weekly review",
-    confidence: 0.82,
-    decider: "jev" as const,
-  },
-  suggestions: [
-    { id: "pb-2", name: "Retro", score: 0.4, reason: "You mentioned “review”" },
+const PLAYBOOKS = {
+  candidates: [
+    {
+      id: "pb-1",
+      name: "Weekly review",
+      score: 6,
+      reason: "You mentioned “review”",
+    },
+    { id: "pb-2", name: "Retro", score: 3, reason: "You mentioned “review”" },
   ],
-  optOut: "templateId: null",
+  optOut: "pass templateId: null",
 };
 
-describe("focusSessions.create — the template report reaches the caller", () => {
-  it("carries `template` and `adopted` off a created session", async () => {
+describe("focusSessions.create — the playbook candidates reach the caller", () => {
+  it("carries `playbooks` and `adopted` off a created session", async () => {
     createSpy.mockResolvedValue({
       status: "created",
       session: sessionRow(),
-      template: TEMPLATE,
+      playbooks: PLAYBOOKS,
       adopted: true,
     });
 
     const out = await caller().create({ workspaceId: WS, goal: "Review" });
 
-    // The VALUE arrives, not merely a declared key: the applied playbook's
-    // name and decider are what the room's "template applied" row renders.
+    // The VALUE arrives, not merely a declared key: the candidate's name and
+    // its REASON are what the picker renders — a candidate with no reason is
+    // an unexplained suggestion, which is the thing this replaced.
     expect(out).toMatchObject({
       id: SESSION,
       adopted: true,
-      template: {
-        applied: { id: "pb-1", name: "Weekly review", decider: "jev" },
-        suggestions: [{ id: "pb-2", name: "Retro" }],
+      playbooks: {
+        candidates: [
+          {
+            id: "pb-1",
+            name: "Weekly review",
+            reason: "You mentioned “review”",
+          },
+          { id: "pb-2", name: "Retro" },
+        ],
       },
     });
   });
 
-  it("carries the HONEST no-match reason, so 'unavailable' never reads as a decision", async () => {
+  it("an EMPTY candidate list still arrives — empty and unmeasured are not the same fact", async () => {
+    // "Matching ran and your playbooks do not fit these words" is a fact the
+    // caller can act on. It must not be spelled the same way as "matching did
+    // not run / failed", which OMITS the block entirely (arm below).
     createSpy.mockResolvedValue({
       status: "created",
       session: sessionRow(),
-      template: {
-        applied: null,
-        suggestions: [],
-        notApplied: "unavailable",
-        optOut: "templateId: null",
-      },
+      playbooks: { candidates: [], optOut: "pass templateId: null" },
     });
 
     const out = await caller().create({ workspaceId: WS, goal: "Review" });
-    expect(out).toMatchObject({
-      template: { applied: null, notApplied: "unavailable" },
-    });
+    expect(out).toMatchObject({ playbooks: { candidates: [] } });
+    expect(out).toHaveProperty("playbooks");
     // Nothing was adopted, so the flag stays OFF — an absent `adopted` and a
     // `false` one must not be spelled the same way as `true`.
     expect(out).not.toHaveProperty("adopted");
   });
 
-  it("a DEDUPED session claims no template — nothing was created, so nothing matched", async () => {
+  it("a DEDUPED session claims no candidates — nothing was created, so nothing matched", async () => {
     createSpy.mockResolvedValue({
       status: "deduped",
       session: sessionRow(),
@@ -153,7 +157,7 @@ describe("focusSessions.create — the template report reaches the caller", () =
 
     const out = await caller().create({ workspaceId: WS, goal: "Review" });
     expect(out).toMatchObject({ id: SESSION, deduped: true });
-    expect(out).not.toHaveProperty("template");
+    expect(out).not.toHaveProperty("playbooks");
     expect(out).not.toHaveProperty("adopted");
   });
 });

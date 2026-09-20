@@ -97,6 +97,14 @@ export interface PacketSlotItem {
   owedSince?: string;
   /** Agent type the slot was delegated to, when it was. */
   delegatedTo?: string;
+  /**
+   * For a criterion slot (`kind` = `CRITERION_SLOT_KIND`), the
+   * `SessionCriterion.key` it stands for — so a continuation surface can point
+   * at the criterion rather than match the slot's prose label. Absent on every
+   * ordinary slot and on criterion slots filed before the field existed;
+   * absence means "no criterion to highlight", never an error.
+   */
+  criterionKey?: string;
 }
 
 export interface PacketProposalItem {
@@ -354,6 +362,9 @@ function owedItem(slot: OwedSlot): PacketSlotItem {
       : {}),
     ...(slot.why !== undefined ? { why: slot.why } : {}),
     owedSince: slot.owedSince,
+    ...(slot.criterionKey !== undefined
+      ? { criterionKey: slot.criterionKey }
+      : {}),
   };
 }
 

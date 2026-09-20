@@ -9,6 +9,7 @@
  */
 
 import { z } from "zod";
+import { toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { toViewDigest, VIEWS_DIGEST_NOTE } from "./read-lean.js";
@@ -260,6 +261,30 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // REFUSE A SIGNAL-LESS MATCH. Ranking needs something to rank AGAINST:
+    // with no intentText, no profileSlug and no entityId, every active
+    // playbook comes back at the ranker's floor score — a long, plausible,
+    // meaningless list. Measured on the live pod: a caller that passed
+    // `intent` instead of `intentText` got 15 candidates, all tied.
+    //
+    // This is the house error door (`toolError` → `isError: true` TEXT the
+    // model can act on and retry, never a JSON-RPC crash), and the message
+    // names the argument AND the other door, because "you gave me nothing" is
+    // only useful to a caller who is told what to give.
+    //
+    // Boundary, stated: this catches a call with NO signal. A mistyped
+    // argument alongside a real one (e.g. `intent` + `profileSlug`) still
+    // ranks on what it understood — nothing in the MCP layer rejects an
+    // unknown key today. See the report accompanying this change.
+    const hasSignal = (["intentText", "profileSlug", "entityId"] as const).some(
+      (k) => typeof args[k] === "string" && (args[k] as string).trim()
+    );
+    if (!hasSignal) {
+      return toolError(
+        `Tool '${toolName}' needs something to match against. Pass intentText (what the user said — note the spelling, not 'intent'), and/or profileSlug (the kind of thing, e.g. 'post'), and/or entityId. ` +
+          `Without one of those every active playbook ties at the same score, which is not a match. To simply see the playbooks that exist, call synap_list_playbooks instead.`
+      );
+    }
     // READ: matchForEntity is a workspaceProcedure (needs a ctx workspace for
     // the facet lens) — "pod-wide" isn't available to it the way it is for
     // synap_ask. HONEST FALLBACK, same shape as synap_get_relations: when the
@@ -350,6 +375,11 @@ export const buildHandlers: McpHandlerMap = {
       type: args.type as string,
       profileId: args.profileId as string | undefined,
       config: args.config as Record<string, unknown> | undefined,
+      // Canvas seed for type: "whiteboard" — the only door that can put shapes
+      // on a board at create time. Undefined for every structured view.
+      ...(args.initialContent !== undefined
+        ? { initialContent: args.initialContent }
+        : {}),
       ...(agentUserId ? { agentUserId } : {}),
       ...(typeof args.expectedLabel === "string"
         ? { expectedLabel: args.expectedLabel }

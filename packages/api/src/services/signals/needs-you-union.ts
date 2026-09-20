@@ -121,6 +121,20 @@ export interface Signal {
    */
   slotKind?: string;
   /**
+   * For a criterion slot, the `SessionCriterion.key` it stands for — the exact
+   * companion to `slotKind`, and it travels for the same reason: `slotKind`
+   * tells a tray this row takes the GRADE verb, and this tells it WHICH
+   * criterion to open the scorecard on.
+   *
+   * It is a key, never the prose label: the label is `Check: <statement>`
+   * clipped at 120 chars, and matching it back in a UI would fork the
+   * backend's label format into every surface. Absent on ordinary slots and on
+   * criterion slots filed before the field existed — absence means "open the
+   * scorecard without highlighting", never an error, and never a licence to
+   * fall back to label matching.
+   */
+  criterionKey?: string;
+  /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door).
    * Absent on every other kind — a notification, an event or an owed slot has
@@ -292,6 +306,12 @@ export interface OwedSlotSignalInput {
    * carries one.
    */
   kind?: string;
+  /**
+   * The criterion key of a criterion slot, straight from `listOwedSlots`.
+   * Optional for the same reason as `kind`, plus back-compat: an older slot
+   * carries none.
+   */
+  criterionKey?: string;
 }
 
 /**
@@ -317,6 +337,11 @@ export interface OwedSlotSignalInput {
  *                                      cannot tell them apart offers attest on
  *                                      a grade — marking it done while the
  *                                      criterion stays failing.
+ *   criterionKey                    → `criterionKey` — WHICH criterion that
+ *                                      grade verb applies to, so a tray can
+ *                                      open the scorecard ON it. A key, never
+ *                                      the prose label, so no surface
+ *                                      re-derives this file's label format.
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -342,6 +367,7 @@ const PROJECTED_OWED_SLOT_FIELDS = [
   "why",
   "claimedDone",
   "kind",
+  "criterionKey",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const WITHHELD_OWED_SLOT_FIELDS = [
@@ -420,6 +446,7 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     ...(row.claimedDone !== undefined ? { claimedDone: row.claimedDone } : {}),
     ...(row.sessionGoal ? { sessionGoal: row.sessionGoal } : {}),
     ...(row.kind ? { slotKind: row.kind } : {}),
+    ...(row.criterionKey ? { criterionKey: row.criterionKey } : {}),
   };
 }
 

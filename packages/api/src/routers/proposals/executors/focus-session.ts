@@ -661,11 +661,49 @@ export function registerFocusSessionExecutors(): void {
           });
         }
 
-        const [updated] = await db
+        let [updated] = await db
           .update(focusSessions)
           .set(set)
           .where(eq(focusSessions.id, sessionId))
           .returning();
+
+        // FOLLOW / RELEASE A PLAYBOOK. Carried into the gate payload by all
+        // three proposing doors, so it is applied HERE in the same hunk — a
+        // field added to the payload and not to this list is exactly how the
+        // deliverables half went unapplied for months, returning success for a
+        // change that never happened. Applied through the SAME `followPlaybook`
+        // the direct write uses, so the merge, the stage refusal and the run
+        // ledger cannot fork between the ungated and the approved path.
+        //
+        // `null` is the RELEASE and must survive, hence the explicit null arm.
+        if (
+          innerData.followPlaybookId === null ||
+          typeof innerData.followPlaybookId === "string"
+        ) {
+          const { followPlaybook } =
+            await import("../../../services/focus-sessions/follow-playbook.js");
+          const followed = await followPlaybook({
+            sessionId,
+            // The session's OWN owner — the approver may be another human,
+            // exactly as the roster append above is floored.
+            userId: session.userId,
+            followPlaybookId: innerData.followPlaybookId,
+            followStageKey:
+              typeof innerData.followStageKey === "string"
+                ? innerData.followStageKey
+                : undefined,
+          });
+          if (followed.status === "ok") {
+            updated = followed.session as typeof updated;
+          } else if (followed.status !== "not_found") {
+            // REPORTED, never thrown, for the same reason the output refusals
+            // are: the rest of the approved patch landed, and throwing would
+            // leave the proposal pending after a partial write.
+            outputRefusals.push(
+              "reason" in followed ? followed.reason : "follow refused"
+            );
+          }
+        }
 
         if (updated) {
           emitHubRealtimeEvent({

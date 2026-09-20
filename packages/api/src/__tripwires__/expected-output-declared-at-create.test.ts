@@ -57,6 +57,7 @@ const FORGED: Record<string, unknown> = {
   attestedAt: "2020-01-01T00:00:00.000Z",
   retiredAt: "2020-01-01T00:00:00.000Z",
   retiredReason: "session_cancelled",
+  criterionKey: "forged-key",
 };
 
 describe("a declared slot carries no receipt it did not earn", () => {

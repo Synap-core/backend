@@ -84,8 +84,13 @@ const stripComments = (src: string): string =>
     .replace(/(^|[^:])\/\/[^\n]*/g, (_m, p) => p);
 
 /** A raw terminal stamp: `.update(focusSessions)` … `status: "<terminal>"`. */
+// The gap may not cross ANOTHER `.update(` — without that, a session update
+// followed within 400 chars by an unrelated `.update(playbookRuns).set({
+// status: "cancelled" })` matched, and the detector blamed the wrong table.
+// (Found live 2026-09-20 on `follow-playbook.ts`, whose detach clears
+// `playbookId` on the session and then cancels the run row beneath it.)
 const TERMINAL_STAMP =
-  /\.update\(\s*focusSessions\s*\)[\s\S]{0,400}?status:\s*"(closed|cancelled|failed)"/g;
+  /\.update\(\s*focusSessions\s*\)(?:(?!\.update\()[\s\S]){0,400}?status:\s*"(closed|cancelled|failed)"/g;
 
 function findViolations(roots: string[]): string[] {
   const hits: string[] = [];
@@ -127,6 +132,26 @@ describe("tripwire: a session's terminal status has ONE door", () => {
       "the detector no longer matches a raw terminal stamp — the regex broke, " +
         "and a broken detector reports every file as clean."
     ).toBe(true);
+    TERMINAL_STAMP.lastIndex = 0;
+
+    // And it must NOT reach ACROSS a second `.update(` into another table —
+    // the false positive this binding exists to stop.
+    const OTHER_TABLE = `
+      await db
+        .update(focusSessions)
+        .set({ playbookId: null })
+        .where(eq(focusSessions.id, sessionId));
+      await db
+        .update(playbookRuns)
+        .set({ status: "cancelled", completedAt: new Date() })
+        .where(eq(playbookRuns.id, run.id));
+    `;
+    TERMINAL_STAMP.lastIndex = 0;
+    expect(
+      TERMINAL_STAMP.test(stripComments(OTHER_TABLE)),
+      "the detector reached past a second `.update(` and blamed a session door " +
+        "for a playbook_runs status — it must bind to ONE statement."
+    ).toBe(false);
     TERMINAL_STAMP.lastIndex = 0;
 
     // And it must NOT fire on a call that goes through the door.

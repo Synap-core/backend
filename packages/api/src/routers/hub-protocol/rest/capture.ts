@@ -70,6 +70,7 @@ import {
   logger,
   resolveActorId,
   type HubHono,
+  errCode,
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -998,9 +999,22 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json(result);
     } catch (err) {
       logger.error({ err, userId }, "POST /capture/execute failed");
+      // A domain REFUSAL must not egress as a 500. The same-name create gate
+      // (`entities.create` → CONFLICT, "… already exists … reuse an existing
+      // id, or pass forceCreate") is the common one: capture anything whose
+      // title matches an existing entity of that kind and this route used to
+      // answer 500 "An unexpected server error occurred", with the 5xx egress
+      // middleware REDACTING the body — so the caller lost the one sentence
+      // that says what to do. Verified live on 2026-09-20 (errorId
+      // fb9b602a-…): the pod logged the CONFLICT message, the CLI showed a
+      // redacted 500. `httpStatusForTrpcError` covers 400/403/404; CONFLICT is
+      // read separately (see its doc: never `instanceof TRPCError`, the
+      // bundled build has its own class identity).
+      const status =
+        errCode(err) === "CONFLICT" ? 409 : httpStatusForTrpcError(err);
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        status
       );
     }
   });
@@ -1484,6 +1498,13 @@ export function registerCaptureRoutes(app: HubHono): void {
       documents?: unknown[];
       projects?: unknown[];
       links?: unknown[];
+      // RULE LOOP config steps — same ref namespace, same proposal. Carried
+      // here too so this door and `synap_capture` accept the SAME call: a
+      // capability one door can express and the other cannot is the fork this
+      // codebase keeps re-discovering.
+      skills?: unknown[];
+      automations?: unknown[];
+      rules?: unknown[];
       summary?: string;
     } | null;
 
@@ -1493,8 +1514,19 @@ export function registerCaptureRoutes(app: HubHono): void {
           documents: Array.isArray(body.documents) ? body.documents : [],
           projects: Array.isArray(body.projects) ? body.projects : [],
           links: Array.isArray(body.links) ? body.links : [],
+          skills: Array.isArray(body.skills) ? body.skills : [],
+          automations: Array.isArray(body.automations) ? body.automations : [],
+          rules: Array.isArray(body.rules) ? body.rules : [],
         }
-      : { sessions: [], documents: [], projects: [], links: [] };
+      : {
+          sessions: [],
+          documents: [],
+          projects: [],
+          links: [],
+          skills: [],
+          automations: [],
+          rules: [],
+        };
     const planStepCount = Object.values(planArrays).reduce(
       (n, items) => n + items.length,
       0
@@ -1507,7 +1539,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json(
         {
           error:
-            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[])",
+            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[] / skills[] / automations[] / rules[])",
         },
         400
       );

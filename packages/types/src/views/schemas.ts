@@ -257,7 +257,27 @@ const StructuredViewContentSchema = z
 const CanvasViewContentSchema = z.object({
   version: z.literal(1),
   category: z.literal("canvas"),
-  elements: z.array(z.unknown()),
+  /**
+   * Legacy/unused shape list. NOTHING reads this key — the whiteboard's Yjs
+   * `bindState` hydrates from `store` (see below). Kept optional so existing
+   * payloads that send it keep validating, but a seed does not need it.
+   */
+  elements: z.array(z.unknown()).optional(),
+  /**
+   * The canonical canvas payload: a map of tldraw record id → tldraw record,
+   * exactly as `{ store }` is written to (and read back from) the document's
+   * MinIO object.
+   *
+   * This is what `packages/realtime/src/yjs-server.ts` `bindState` reads when a
+   * board room opens (`const store = parsed.store ?? parsed`), and what
+   * `writeState` serialises back every ~10s. Declaring it here makes seeding a
+   * board at create time an INTENTIONAL, typed path — before this it worked
+   * only by accident, because `views.create` stringifies the raw `z.any()`
+   * input rather than the parsed result, so an undeclared `store` key survived
+   * validation-by-stripping. That accident was one refactor away from silently
+   * dropping every seeded shape.
+   */
+  store: z.record(z.string(), z.unknown()).optional(),
   embeddedEntities: z.array(z.string().uuid()).optional(),
 });
 

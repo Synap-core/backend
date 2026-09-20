@@ -6,7 +6,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **When you begin a unit of work, start it yourself** — `synap_start_session` (MCP) / `start_session` (IS) / `synap session start` (CLI) with a short `title` (the name) and a `goal` (the outcome). If writes of yours were already auto-grouped, that session is adopted (`adopted: true`, same id) — never a second one.
 
-**Templates apply themselves, and say so.** Without `templateId`, a matching playbook is applied only when the match is confident; the response's `template` block reports `applied` (id, name, confidence, decider) or `null`, the other `suggestions`, and the opt-out (`templateId: null`). Name a playbook yourself with `templateId` when you know it (`synap_list_playbooks` / `synap_match_playbooks`).
+**Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
 **Declare your definition of done** with `criteria` — binary, observable statements ("Typecheck passes with 0 errors"). Closing never blocks on them; unmet ones are flagged.
 

@@ -32,7 +32,7 @@ import { collectPlaybookCriteria, mergeCriteria } from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import {
   matchSessionTemplate,
-  type SessionTemplateReport,
+  type SessionPlaybookCandidates,
 } from "./match-session-template.js";
 import { sanitizeDeclaredOutputs } from "./update-session.js";
 import {
@@ -161,9 +161,10 @@ export interface CreateFocusSessionParams {
    */
   clientKey?: string | null;
   /**
-   * Match a playbook when the caller named none (`templateId` undefined — an
-   * explicit `null` opts out). Set by the AI start doors only. The outcome is
-   * ALWAYS reported on `template`.
+   * Rank the pod's playbooks against this session's words when the caller
+   * named none (`templateId` undefined — an explicit `null` skips matching).
+   * Set by the AI start doors only. NOTHING is applied: the ranked candidates
+   * ride back on `playbooks` for the caller to choose from.
    */
   matchTemplate?: boolean;
 }
@@ -194,11 +195,16 @@ export type CreateFocusSessionResult =
       blockerLinks?: CreateTimeBlockerReport[];
       /** Near-goal OPEN sessions in the same scope — suggested, never blocking. */
       candidates?: SessionTwinCandidate[];
-      /** Present iff template matching ran — what applied, what else fit, how to opt out. */
-      template?: SessionTemplateReport;
+      /**
+       * Present iff playbook matching ran — the pod's existing processes,
+       * ranked against this session's words, with the reason each matched.
+       * Suggestions only; nothing here was applied. Bind one by starting
+       * again with `templateId`, or carry on ad-hoc.
+       */
+      playbooks?: SessionPlaybookCandidates;
       /**
        * True when the session the gate had auto-opened for this client was
-       * adopted (goal/title/template/criteria updated) rather than a new row
+       * adopted (goal/title/criteria updated) rather than a new row
        * created. `session.id` is then that session's id.
        */
       adopted?: true;
@@ -340,31 +346,29 @@ export async function createFocusSession(
     };
   }
 
-  // TEMPLATE — only when the AI door asked and the caller named none
-  // (`templateId: null` is the opt-out). Auto-applied above the confidence
-  // threshold; ALWAYS reported, applied or not (silent binding is the flagged
-  // wrong path). After the twin check, so a repeated start of the same work
-  // still dedups instead of becoming a second run.
-  let template: SessionTemplateReport | undefined;
+  // PLAYBOOKS — only when the AI door asked and the caller named none
+  // (`templateId: null` skips matching). SUGGEST-ONLY since 2026-09-20: the
+  // door hands back the pod's existing processes, ranked, and applies NOTHING.
+  // Naming `templateId` is the only way a playbook binds at start. After the
+  // twin check, so a repeated start of the same work still dedups.
+  let playbookCandidates: SessionPlaybookCandidates | undefined;
   if (params.matchTemplate && params.templateId === undefined) {
     try {
-      template = await matchSessionTemplate({
+      playbookCandidates = await matchSessionTemplate({
         userId,
         agentUserId,
         workspaceId,
         title,
         goal,
       });
-      if (template.applied) templateId = template.applied.id;
     } catch (err) {
-      // The match is a default, never a gate: a failed match starts the
-      // session ad-hoc and SAYS nothing could be matched.
-      logger.warn({ err }, "template match failed — starting ad-hoc");
-      template = {
-        applied: null,
-        suggestions: [],
-        optOut: "pass templateId: null",
-      };
+      // Suggestions are a courtesy, never a gate. A failed lookup must not
+      // read as "you have no playbooks", so the block is OMITTED rather than
+      // returned empty — an empty list and a failed read are different facts.
+      logger.warn(
+        { err },
+        "playbook match failed — starting with no candidates"
+      );
     }
   }
 
@@ -784,7 +788,7 @@ export async function createFocusSession(
     ...(twinMatch.candidates.length > 0
       ? { candidates: twinMatch.candidates }
       : {}),
-    ...(template ? { template } : {}),
+    ...(playbookCandidates ? { playbooks: playbookCandidates } : {}),
     ...(outcome.adopted ? { adopted: true as const } : {}),
   };
 }

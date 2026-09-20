@@ -415,6 +415,25 @@ export interface ExpectedOutput {
    * truthiness alone.
    */
   ref?: OutputRef | null;
+  /**
+   * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
+   * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
+   * written once at the escalation that files the slot
+   * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
+   *
+   * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
+   * clipped at 120 chars) and a surface asked to open the scorecard on the right
+   * criterion could otherwise only match that string back — which forks the
+   * backend's label format into every UI and breaks the moment a statement is
+   * reworded or the clip lands differently. The key is the machine identity the
+   * evaluation rows are already keyed by, so the pointer is exact.
+   *
+   * ABSENT on every slot filed before this field existed, and on every
+   * non-criterion slot. A reader MUST treat absence as "no criterion to
+   * highlight" — never as an error, and never as a reason to fall back to
+   * matching the label.
+   */
+  criterionKey?: string;
 }
 
 /**
