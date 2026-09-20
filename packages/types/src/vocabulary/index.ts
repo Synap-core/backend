@@ -702,3 +702,103 @@ export function resolveBlockedReasonLabel(
   if (!reason) return "";
   return BLOCKED_REASON_LABELS[reason.toLowerCase()] ?? humanizeToken(reason);
 }
+
+/**
+ * NOTIFICATION-CATEGORY labels — the five buckets `notification_preferences`
+ * and `NOTIFICATION_REGISTRY` sort every notification type into.
+ *
+ * ── Why this is here and not humanized at the call site ────────────────────
+ * `humanizeToken("ai")` returns "Ai". That alone is the reason a curated row
+ * is needed: the acronym is the one member the generic sentence-caser cannot
+ * get right, and a call site that "fixes" it with its own `toUpperCase` is how
+ * the six incompatible `humanizeKey` copies happened. The other four are
+ * curated alongside it so the set reads as one taxonomy and a picker's group
+ * headers can never half-agree.
+ *
+ * ── Why its own table ──────────────────────────────────────────────────────
+ * These are not lifecycle states (`STATUS_LABELS`) and not object kinds
+ * (`OBJECT_NOUNS`) — `data` and `system` would collide with both readings.
+ * They are a closed classification of delivery, a different domain.
+ *
+ * The value set is defined ONCE, as `NotificationCategory` in
+ * `@synap/database` (and mirrored by the `notification_category` PG enum).
+ * This package is dependency-free by design and so mirrors the keys.
+ */
+export const NOTIFICATION_CATEGORY_LABELS: Readonly<Record<string, string>> = {
+  /** Proposals and AI requests awaiting a human. */
+  governance: "Governance",
+  /** Connector syncs and entity events. */
+  data: "Data",
+  /** Agent completions and skill triggers. NOT "Ai". */
+  ai: "AI",
+  /** Updates, errors, storage. */
+  system: "System",
+  /** External messages — Gmail, Slack, and the rest. */
+  inbox: "Inbox",
+};
+
+/**
+ * The human label for a notification category. Unknown values humanize rather
+ * than leak, so a sixth category added to the PG enum can never reach a
+ * settings screen as a raw token.
+ */
+export function resolveNotificationCategoryLabel(
+  category: string | null | undefined
+): string {
+  if (!category) return "";
+  return (
+    NOTIFICATION_CATEGORY_LABELS[category.toLowerCase()] ??
+    humanizeToken(category)
+  );
+}
+
+/**
+ * NOTIFICATION ROUTING-RULE labels — the values
+ * `notification_preferences.routingRules` maps a notification type (or
+ * category) onto, as a human choice in a settings picker.
+ *
+ * ── Why curated, not humanized ─────────────────────────────────────────────
+ * `humanizeToken` gets two of the four wrong on its own: `in_app` → "In app"
+ * and `os` → "Os". The same argument as the `ai` → "AI" row above, and the
+ * same reason it belongs in this table rather than in a `charAt(0)` at the
+ * call site.
+ *
+ * ── Why these words ────────────────────────────────────────────────────────
+ * The labels name the DELIVERY the user gets, not the machine token's shape:
+ * `os` is the channel that rings a phone, so "Push only" is what it means to
+ * the person choosing it. `mute` is "Off" rather than "Muted" because the row
+ * is never persisted at all — nothing arrives, not even in the bell.
+ *
+ * `telegram` is deliberately ABSENT. It is a legal `routingRules` value in the
+ * type union but has no transport (`NotificationService.resolveChannels` logs
+ * "not implemented" and falls back to defaults), so the catalogue never offers
+ * it and no picker should render it. Leaving it out of this table is not an
+ * omission: if one ever reaches a surface it humanizes to "Telegram", which is
+ * honest, rather than being given a curated label that implies it works.
+ */
+export const NOTIFICATION_ROUTING_RULE_LABELS: Readonly<
+  Record<string, string>
+> = {
+  /** Both delivering channels: the bell and a device push. */
+  all: "In-app + Push",
+  /** The `os` channel alone — what rings a phone. */
+  os: "Push only",
+  /** The bell alone; no device push. */
+  in_app: "In-app only",
+  /** Not persisted, not emitted, not pushed. */
+  mute: "Off",
+};
+
+/**
+ * The human label for a routing-rule value. Unknown values humanize rather
+ * than leak, so `telegram` — or a sixth token added to the column's
+ * vocabulary — can never reach a settings screen as a raw token.
+ */
+export function resolveNotificationRoutingRuleLabel(
+  rule: string | null | undefined
+): string {
+  if (!rule) return "";
+  return (
+    NOTIFICATION_ROUTING_RULE_LABELS[rule.toLowerCase()] ?? humanizeToken(rule)
+  );
+}

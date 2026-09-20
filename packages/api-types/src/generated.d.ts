@@ -9914,6 +9914,175 @@ export interface EnrichmentResult {
 	data: Record<string, unknown>;
 }
 /**
+ * Notification Type Registry
+ *
+ * Maps notification type keys to their definition.
+ * Adding a new notification type = add one entry here. Zero code.
+ *
+ * Templates support simple {{variable}} interpolation.
+ * Variables come from the `data` object passed to NotificationService.create().
+ * Interpolation covers `titleTemplate` and `bodyTemplate` ONLY — `actions` are
+ * persisted and emitted verbatim.
+ *
+ * NOT unified here (deliberately, and still open): `notifications.workspaceUrl`
+ * and `navigation/deep-links.ts` are two further address vocabularies for the
+ * same destinations. Only the inline ACTION vocabulary is folded into the ONE
+ * route table by `navigate-object` below.
+ */
+export type DeliveryChannel = "in_app" | "os" | "telegram" | "email_digest";
+export interface NotificationActionDef {
+	id: string;
+	label: string;
+	variant: "primary" | "secondary" | "destructive";
+	handler: NotificationNavigateHandler | NotificationNavigateObjectHandler | {
+		type: "mutation";
+		procedure: string;
+		inputKey?: string;
+	};
+}
+/**
+ * A destination that is NOT an object — a settings tab, the vault, a listing.
+ * These have no id and no route-table row, so they name an app directly.
+ *
+ * Anything whose destination IS an object must use `navigate-object` below;
+ * an app+params pair for an object is a second, hand-rolled routing vocabulary
+ * that drifts from the ONE route table the moment either side changes.
+ */
+export interface NotificationNavigateHandler {
+	type: "navigate";
+	app: string;
+	params?: Record<string, unknown>;
+}
+/**
+ * A destination that IS an object. The client resolves `{kind, id}` through the
+ * ONE route table — `objectNavTarget()` in
+ * `browser/electron/renderer/src/navigation/object-nav.ts` (its `fallbackNavTarget`
+ * switch lists every routable kind) — so this registry never restates where a
+ * kind lives.
+ *
+ * `kind` is typed as a plain string on purpose: the route table is a browser
+ * module and the kind vocabulary (`OBJECT_KINDS` in
+ * `@synap-core/types/vocabulary`) is an open `Record<string, …>`, not a union.
+ *
+ * `id` is OMITTED for the common case, and then means "this notification's own
+ * `sourceId`" — which is the object id for every action migrated so far
+ * (chat.mention → channelId, automation.broken → automationId, proposal.created
+ * → proposalId). Nothing interpolates `{{tokens}}` inside a handler: `create()`
+ * stores `def.actions` VERBATIM and the persisted row does not carry `data`, so
+ * a templated id would reach the client as the literal `{{…}}` text. That was
+ * already true of the `chat.mention` action this replaces.
+ */
+export interface NotificationNavigateObjectHandler {
+	type: "navigate-object";
+	/** Object-nav kind — see `fallbackNavTarget` in object-nav.ts. */
+	kind: string;
+	/** Literal object id. Omit ⇒ the notification's own `sourceId`. */
+	id?: string;
+	/**
+	 * Optional object-nav VIEW reading (`OBJECT_NAV_VIEWS` in
+	 * `@synap-core/types/navigation` — `'room'` opens a session's Intake Room).
+	 * Literal, never templated; the client re-validates it with
+	 * `isObjectNavView` and drops an unknown one.
+	 */
+	view?: string;
+}
+export interface NotificationDef {
+	type: string;
+	category: "governance" | "data" | "ai" | "system" | "inbox";
+	label: string;
+	icon: string;
+	priority: "low" | "normal" | "high" | "urgent";
+	/** Mustache-style template: {{variable}} */
+	titleTemplate: string;
+	bodyTemplate: string;
+	/** Default delivery channels (user prefs can override) */
+	defaultChannels: DeliveryChannel[];
+	/**
+	 * The channels this type may EVER go out on, whatever a routing rule says.
+	 * Omit ⇒ no ceiling. Exists for a type whose audience is fixed by what it IS:
+	 * a phone→desktop handoff pushed back to the phone that sent it is noise.
+	 */
+	channelCeiling?: DeliveryChannel[];
+	/** Inline action buttons */
+	actions?: NotificationActionDef[];
+	/** Auto-dismiss after ms. 0 = persistent. */
+	ttl?: number;
+	/** Group notifications sharing the same resolved groupBy field */
+	groupBy?: string;
+	/**
+	 * SUPPRESSION window, in ms. Declared ⇒ `NotificationService.create()` looks
+	 * for an existing row with the SAME `(userId, type, groupKey)` created within
+	 * this window and, finding one, writes NOTHING and interrupts nobody.
+	 *
+	 * This is not `groupBy`. `groupBy` is DISPLAY collapsing — N rows exist and
+	 * the bell stacks them, which is fine for a bell and wrong for a phone: N
+	 * rows means N pushes. A type that can be emitted repeatedly for the same
+	 * subject (a second criterion escalating in the same session, a redelivered
+	 * close event) needs the row itself not to be written a second time.
+	 *
+	 * Opt-IN on purpose. Applying a window to every type would silently swallow
+	 * `proposal.created`, which groups by AGENT and legitimately fires once per
+	 * proposal — the second proposal from the same agent is real news, not a
+	 * duplicate. Only a type whose groupKey IS its identity may declare one.
+	 *
+	 * WHAT IT DOES NOT COVER, measured: it is keyed on the resolved `groupKey`,
+	 * so two notifications that differ in any way the groupKey does not encode
+	 * (a DIFFERENT criterion in the same session) are the same key and the second
+	 * is suppressed — that is the intent here, not a gap. Conversely it cannot
+	 * coalesce two events whose groupKeys differ, however similar they read. A
+	 * type with no resolvable groupKey is never deduped (and says so in the log).
+	 */
+	dedupeWindowMs?: number;
+}
+/**
+ * The five values `routingRules` has always declared, as read by
+ * `NotificationService` (`"mute"` short-circuits before the row is written;
+ * the other four reach `resolveChannels`). This module adds no sixth token.
+ */
+export type NotificationRoutingRule = "mute" | "in_app" | "os" | "all" | "telegram";
+export interface NotificationCatalogueEntry {
+	/** Registry key — and the exact key to write under `routingRules`. */
+	type: string;
+	category: NotificationDef["category"];
+	/** Human label, from the registry entry's own `label`. */
+	label: string;
+	/** lucide icon name, from the registry entry. */
+	icon: string;
+	priority: NotificationDef["priority"];
+	/** The type's declared defaults, narrowed to channels with a transport. */
+	defaultChannels: DeliveryChannel[];
+	/** Present only when the type declares one; narrowed to deliverable channels. */
+	channelCeiling?: DeliveryChannel[];
+	/** Rule values a picker may offer for THIS type — derived from the ceiling. */
+	allowedRules: NotificationRoutingRule[];
+	/**
+	 * The offered rule equivalent to `defaultChannels`, so a picker can name the
+	 * unset state ("Default — In-app + Push") instead of showing a blank. `null`
+	 * when no offered rule reproduces the defaults exactly (e.g. a type whose
+	 * defaults are empty after the transport filter).
+	 */
+	defaultRule: NotificationRoutingRule | null;
+}
+export interface NotificationCatalogueCategory {
+	category: NotificationDef["category"];
+	label: string;
+}
+export interface NotificationCatalogue {
+	/** Producer-backed types only, registry order. */
+	types: NotificationCatalogueEntry[];
+	/** Categories present in `types`, for grouping. Never an empty group. */
+	categories: NotificationCatalogueCategory[];
+	/** Channels with a real transport — the only ones any entry can name. */
+	deliverableChannels: DeliveryChannel[];
+	/**
+	 * How many registry rows were withheld for having no producer. Exposed so a
+	 * surface can be honest ("12 more types are declared but never fire") rather
+	 * than implying the registry is this small.
+	 */
+	withheldProducerlessCount: number;
+}
+export type PreferenceScope = "pod" | "workspace";
+/**
  * Broker trust diagnostics — WHY a Control-Plane-brokered pod can or cannot
  * broker connections, as non-secret facts.
  *
@@ -10572,6 +10741,44 @@ export interface SessionTwinCandidate {
 	/** Token-set overlap with the requested goal ∈ [NEAR_MATCH_THRESHOLD, 1). */
 	score: number;
 }
+declare const TEMPLATE_OPT_OUT: "pass templateId: null";
+export interface TemplateSuggestion {
+	id: string;
+	name: string;
+	/** Lexical score from the shared ranker. */
+	score: number;
+	/** Why it matched, in words ("You mentioned “report”"). */
+	reason: string;
+}
+/** The `template` block every start response carries when matching ran. */
+export interface SessionTemplateReport {
+	applied: {
+		id: string;
+		name: string;
+		/** Probability (IS/JEV) or share of the session's words matched (lexical). */
+		confidence: number;
+		decider: "jev" | "llm" | "lexical";
+	} | null;
+	suggestions: TemplateSuggestion[];
+	/**
+	 * WHY nothing was applied, when `applied` is null. "Not confident" and
+	 * "the assistant could not answer" are different facts, and a caller that
+	 * cannot tell them apart reads an outage as a considered decision.
+	 * Absent when a template WAS applied.
+	 */
+	notApplied?: TemplateNotAppliedReason;
+	optOut: typeof TEMPLATE_OPT_OUT;
+}
+/** Why `applied` is null. */
+export type TemplateNotAppliedReason = 
+/** Nothing matched the session's words at all. */
+"no_match"
+/** One candidate, but too weak a word match to apply on its own. */
+ | "weak_match"
+/** Several candidates; the assistant picked none, or not confidently. */
+ | "not_confident"
+/** Several candidates; the assistant could not be reached. */
+ | "unavailable";
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	status: "linked";
@@ -11509,6 +11716,20 @@ export interface Signal {
 	 * act on it now.
 	 */
 	sessionGoal?: string | null;
+	/**
+	 * The owed slot's OWN `kind` (`ExpectedOutput.kind`) — NOT this signal's
+	 * `kind`, which is the union's discriminator and is already `"owed-slot"`.
+	 * Named `slotKind` for exactly that reason.
+	 *
+	 * It is here because one slot kind takes a DIFFERENT VERB: an escalated
+	 * criterion (`CRITERION_SLOT_KIND`) is a grade the human owes, so a tray
+	 * offering "I did this" / attest on it marks the slot done while the
+	 * criterion stays failing and the verdict never moves. Without this field a
+	 * tray cannot tell the two apart — and the previous classification withheld
+	 * `kind` on the reasoning that renderers draw icons from `category`, which
+	 * was true of ICONS and wrong about VERBS.
+	 */
+	slotKind?: string;
 	/**
 	 * Decision CLASS of a `proposal-cluster` signal, carried straight off the
 	 * cluster (which derives it through `proposalClassFields`, the one door).
@@ -18984,7 +19205,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: void;
 			output: {
 				defaults: {
-					thirdPartyDecisionModel: boolean;
 					chatModelId: string | null;
 					reasoningModelId: string | null;
 					embeddingModelId: string | null;
@@ -18999,7 +19219,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				reasoningModelId?: string | null | undefined;
 				embeddingModelId?: string | null | undefined;
 				visionModelId?: string | null | undefined;
-				thirdPartyDecisionModel?: boolean | undefined;
 			};
 			output: {
 				defaults: {
@@ -19007,7 +19226,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					reasoningModelId?: string | null | undefined;
 					embeddingModelId?: string | null | undefined;
 					visionModelId?: string | null | undefined;
-					thirdPartyDecisionModel?: boolean | undefined;
 				};
 			};
 			meta: object;
@@ -19934,7 +20152,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "both" | "target" | undefined;
+				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -19964,7 +20182,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				entityId: string;
 				type?: string | undefined;
-				direction?: "source" | "both" | "target" | undefined;
+				direction?: "source" | "target" | "both" | undefined;
 				limit?: number | undefined;
 			};
 			output: {
@@ -27267,9 +27485,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		types: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: NotificationCatalogue;
+			meta: object;
+		}>;
 		getPrefs: import("@trpc/server").TRPCQueryProcedure<{
 			input: void;
 			output: {
+				effectiveScope: PreferenceScope | null;
+				shadowedByWorkspaceOverride: boolean;
 				id: string;
 				userId: string;
 				workspaceId: string | null;
@@ -27286,6 +27511,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		}>;
 		updatePrefs: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
+				scope?: "pod" | "workspace" | undefined;
 				enabled?: boolean | undefined;
 				quietHoursEnabled?: boolean | undefined;
 				quietHoursStart?: string | undefined;
@@ -27295,6 +27521,16 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			output: {
 				success: boolean;
+				scope: "pod" | "workspace";
+				shadowingWorkspaceIds: string[];
+			};
+			meta: object;
+		}>;
+		clearWorkspaceOverride: import("@trpc/server").TRPCMutationProcedure<{
+			input: void;
+			output: {
+				success: boolean;
+				cleared: boolean;
 			};
 			meta: object;
 		}>;
@@ -30174,6 +30410,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				closedAt: Date | null;
 				verificationReport: unknown;
 			} | {
+				adopted?: true | undefined;
+				template?: SessionTemplateReport | undefined;
 				blockerLinks?: CreateTimeBlockerReport[] | undefined;
 				parentLink?: CreateTimeParentLink | undefined;
 				id: string;
@@ -30300,6 +30538,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				summary?: string | undefined;
 			};
 			output: {
+				verdict?: SessionVerdict | undefined;
+				warnings: string[];
 				id: string;
 				userId: string;
 				workspaceId: string | null;

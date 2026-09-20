@@ -1267,6 +1267,9 @@ export const focusSessionsRouter = router({
       if (result.status === "deduped") {
         // The EXISTING session — flagged, never silent. The row's own `status`
         // is the session's lifecycle, so reuse rides as `deduped: true`.
+        // NO `template` here, on purpose: nothing was created, so no matching
+        // ran; carrying a report would claim an application that never
+        // happened. `CreateFocusSessionResult`'s deduped arm has none either.
         return {
           ...(result.session as FocusSession),
           deduped: true as const,
@@ -1276,11 +1279,19 @@ export const focusSessionsRouter = router({
         };
       }
       // Edge outcomes ride the returned row, only when they were asked for.
+      // `template` + `adopted` are the SAME blocks the MCP and Hub start doors
+      // already return: what matched, what else fit, why nothing applied, and
+      // whether an auto-opened session was adopted instead of a row created.
+      // This door used to drop both, so a browser-started session could never
+      // say which template ran. The shape comes from `CreateFocusSessionResult`
+      // and is never restated here.
       return {
         ...(result.candidates ? { dedupCandidates: result.candidates } : {}),
         ...(result.session as FocusSession),
         ...(result.parentLink ? { parentLink: result.parentLink } : {}),
         ...(result.blockerLinks ? { blockerLinks: result.blockerLinks } : {}),
+        ...(result.template ? { template: result.template } : {}),
+        ...(result.adopted ? { adopted: result.adopted } : {}),
       };
     }),
 
@@ -1546,7 +1557,15 @@ export const focusSessionsRouter = router({
             message: `Focus session ${input.id} not found`,
           });
         }
-        return result.session as FocusSession;
+        // `verdict` rides alongside the row exactly as the MCP and Hub close
+        // doors return it — absent when the session declared no criteria, so
+        // it is never "unknown" — together with the close `warnings` (the
+        // unmet-criteria sentence among them) this door used to drop.
+        return {
+          ...(result.session as FocusSession),
+          warnings: result.warnings,
+          ...(result.verdict ? { verdict: result.verdict } : {}),
+        };
       } catch (err) {
         const e = err as { code?: string; message?: string };
         if (e.code === "FORBIDDEN") {

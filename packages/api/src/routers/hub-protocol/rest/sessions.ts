@@ -24,6 +24,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 export function registerSessionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -400,7 +401,7 @@ export function registerSessionsRoutes(app: HubHono): void {
       const result = await caller.compactedStates.create(
         body as Parameters<typeof caller.compactedStates.create>[0]
       );
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "compactedStates.create failed");
       return c.json(

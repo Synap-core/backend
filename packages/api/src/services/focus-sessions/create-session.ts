@@ -59,6 +59,7 @@ import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
   titleSourcePatch,
+  canAutoRetitle,
 } from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
@@ -553,6 +554,17 @@ export async function createFocusSession(
 
     let session: typeof focusSessions.$inferSelect | undefined;
     if (adoptId) {
+      // A name a person or agent chose survives adoption; a DERIVED one does
+      // not (it describes the writes that opened the row, not this goal).
+      const [adoptee] = await tx
+        .select({
+          title: focusSessions.title,
+          metadata: focusSessions.metadata,
+        })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, adoptId))
+        .limit(1);
+      const adoptKeepsTitle = adoptee ? !canAutoRetitle(adoptee) : false;
       // ADOPT the client's auto-opened session. It stops being a write receipt
       // (the `kind` marker goes) and becomes this unit of work, bound to the
       // client; an explicit title is the agent's own (`titleSource: agent`),
@@ -562,9 +574,18 @@ export async function createFocusSession(
         .set({
           ...fields,
           // What the start did not say keeps what the auto-opened row had
-          // (its derived name, the workspace its first write landed in).
-          // Drizzle drops `undefined` keys from a SET.
-          title: title ?? undefined,
+          // (the workspace its first write landed in). Drizzle drops
+          // `undefined` keys from a SET.
+          //
+          // The NAME is the exception: the row's derived name describes the
+          // WRITES that opened it, and this start gives the row a different
+          // goal — keeping it would leave the session called after something
+          // else (live: a research session inherited "[dogfood] the Research
+          // pack is enabled…" from the write that opened the receipt). With no
+          // explicit title, the derived name is dropped, so lists fall back to
+          // the new goal's first line until the titler names it. A title a
+          // person or agent chose is never touched.
+          title: title ?? (adoptKeepsTitle ? undefined : null),
           workspaceId: workspaceId ?? undefined,
           projectId: projectId ?? undefined,
           subjectEntityId: subjectEntityId ?? undefined,
@@ -576,7 +597,11 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
-              ...(title ? titleSourcePatch("agent") : {}),
+              ...(title
+                ? titleSourcePatch("agent")
+                : adoptKeepsTitle
+                  ? {}
+                  : titleSourcePatch("derived")),
             }
           )}::jsonb`,
           updatedAt: new Date(),

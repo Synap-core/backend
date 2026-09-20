@@ -72,6 +72,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { resolveVerifiedSessionId } from "../_middleware/session.js";
 import { stageCaptureSources } from "../../../services/intake/record-structure-intake.js";
@@ -1340,7 +1341,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       // and return the proposal receipt instead.
       const createdStatus = (created as { status?: string }).status;
       if (createdStatus === "proposed" || typeof created.id !== "string") {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           message:
             (created as { message?: string }).message ??

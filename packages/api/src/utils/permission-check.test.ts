@@ -29,6 +29,7 @@ const {
   mockEmitAiDecision,
   mockPodAdminWorkspaceFindFirst,
   mockPodAdminMemberFindFirst,
+  mockRequestRaiseProposalCap,
 } = vi.hoisted(() => ({
   mockVerifyPermission: vi.fn().mockResolvedValue({ allowed: true }),
   mockDbSelect: vi.fn(),
@@ -44,6 +45,11 @@ const {
   mockFocusSessionFindFirst: vi.fn().mockResolvedValue(undefined),
   // The daily-cap REFUSAL's human-facing record (see the cap tests below).
   mockEmitAiDecision: vi.fn().mockResolvedValue(undefined),
+  // The cap refusal's REMEDY filer. Mocked for the same reason as
+  // emitAiDecision: its real module pulls `@synap/database`, replaced wholesale
+  // here. Default null = "nothing owed", so every pre-existing cap test keeps
+  // exercising the plain refusal; the cap-raise tests override it.
+  mockRequestRaiseProposalCap: vi.fn().mockResolvedValue(null),
   // `isPodAdmin` (utils/workspace-role.ts) — read by the gate's 4d check only.
   // Default: no pod-admin workspace → not an admin; only 4d's tests set them.
   mockPodAdminWorkspaceFindFirst: vi.fn().mockResolvedValue(undefined),
@@ -139,6 +145,12 @@ vi.mock("@synap/database", async () => {
 // `@synap/database`, which this file replaces wholesale.
 vi.mock("./ai-feedback-events.js", () => ({
   emitAiDecision: mockEmitAiDecision,
+}));
+
+// The cap refusal's remedy filer — dynamically imported in the source (the real
+// module imports permission-check.ts, so a static import there would cycle).
+vi.mock("../services/proposals/recommend-raise-proposal-cap.js", () => ({
+  requestRaiseProposalCap: mockRequestRaiseProposalCap,
 }));
 
 vi.mock("@synap/jobs", () => ({
@@ -1329,6 +1341,219 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
 
     expect("granted" in result && result.granted === false).toBe(true);
     expect((result as { proposalId: string }).proposalId).toBeDefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // THE REFUSAL IS THE DOOR — a capped write files (and returns) the remedy.
+  //
+  // The defect these pin: the refusal named a remedy in prose ("raise its cap
+  // via a governance ceiling") that pointed at NOTHING CALLABLE, so an agent
+  // that went looking reported the cap as an unconfigurable runtime constant.
+  // -------------------------------------------------------------------------
+  describe("files a cap-raise request and returns its link", () => {
+    beforeEach(() => {
+      mockRequestRaiseProposalCap.mockReset();
+      mockRequestRaiseProposalCap.mockResolvedValue(null);
+      process.env.PUBLIC_URL = "https://pod.test";
+    });
+
+    it("refused at the cap → ONE cap-raise request is filed, with the gate's OWN pending/cap numbers", async () => {
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockResolvedValue({
+        proposalId: "prop-cap-raise-1",
+        deduped: false,
+        cap: 10,
+        proposedLimit: 15,
+      });
+
+      const result = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-capped-1",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      expect("denied" in result && result.denied === true).toBe(true);
+      expect(mockRequestRaiseProposalCap).toHaveBeenCalledTimes(1);
+      // The filer must be handed the numbers the refusal QUOTES, never left to
+      // re-query: a re-read could return a different count and the request and
+      // the message would then disagree about why the agent is blocked.
+      expect(mockRequestRaiseProposalCap).toHaveBeenCalledWith(
+        "agent-capped-1",
+        { pendingCount: 10, cap: 10 }
+      );
+    });
+
+    it("the refusal REASON says nothing was written, links the request, and names the alternative", async () => {
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockResolvedValue({
+        proposalId: "prop-cap-raise-2",
+        deduped: false,
+        cap: 10,
+        proposedLimit: 15,
+      });
+
+      const result = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-capped-2",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      const reason = (result as { reason: string }).reason;
+      // Plain words, all three facts. Asserted as VALUES that reached the
+      // string — not "a link field is declared somewhere".
+      expect(reason).toContain("Nothing was written");
+      expect(reason).toContain("waiting for your review");
+      expect(reason).toContain("https://pod.test/open/prop-cap-raise-2");
+      expect(reason).toContain("raise this agent's limit to 15");
+      expect(reason).toContain(
+        "review or clear this agent's pending proposals"
+      );
+      // Every door surfaces `reason`, which is why the link rides IN it; the
+      // structured fields are the extra for doors that can render a link.
+      expect(
+        (result as { capRaiseProposalId?: string }).capRaiseProposalId
+      ).toBe("prop-cap-raise-2");
+      expect((result as { capRaiseReviewUrl?: string }).capRaiseReviewUrl).toBe(
+        "https://pod.test/open/prop-cap-raise-2"
+      );
+    });
+
+    it("a SECOND refusal points at the SAME request — no duplicate row", async () => {
+      // The filer dedupes (one open request per agent) and reports it with
+      // `deduped: true`. The refusal must still hand back the link, so a
+      // flooding agent is told where the remedy is on every single attempt.
+      mockRequestRaiseProposalCap.mockResolvedValue({
+        proposalId: "prop-cap-raise-3",
+        deduped: true,
+        cap: 10,
+        proposedLimit: 15,
+      });
+
+      setupAgentBudget(10);
+      const first = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-flooding",
+        subjectType: "entity",
+        action: "create",
+      });
+      setupAgentBudget(10);
+      const second = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-flooding",
+        subjectType: "entity",
+        action: "update",
+      });
+
+      expect(
+        (first as { capRaiseProposalId?: string }).capRaiseProposalId
+      ).toBe("prop-cap-raise-3");
+      expect(
+        (second as { capRaiseProposalId?: string }).capRaiseProposalId
+      ).toBe("prop-cap-raise-3");
+      expect((second as { reason: string }).reason).toContain(
+        "https://pod.test/open/prop-cap-raise-3"
+      );
+    });
+
+    it("nothing owed (a ceiling already covers the raise) → plain refusal, no dangling link", async () => {
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockResolvedValue(null);
+
+      const result = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-covered",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      const reason = (result as { reason: string }).reason;
+      expect(reason).toContain("Agent proposal limit reached (10 pending)");
+      expect(reason).toContain("Nothing was written");
+      expect(reason).not.toContain("/open/");
+      expect(
+        (result as { capRaiseProposalId?: string }).capRaiseProposalId
+      ).toBeUndefined();
+    });
+
+    it("a filer failure degrades to the plain refusal — it can never turn a refusal into a throw", async () => {
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockRejectedValue(new Error("db down"));
+
+      const result = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-filer-down",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      expect("denied" in result && result.denied === true).toBe(true);
+      expect((result as { reason: string }).reason).toContain(
+        "Agent proposal limit reached (10 pending)"
+      );
+    });
+
+    it("the refusal LEDGER row carries the request id and a fixHint that names it", async () => {
+      setupAgentBudget(10);
+      mockEmitAiDecision.mockClear();
+      mockRequestRaiseProposalCap.mockResolvedValue({
+        proposalId: "prop-cap-raise-4",
+        deduped: false,
+        cap: 10,
+        proposedLimit: 15,
+      });
+
+      await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-ledger",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      const emitted = mockEmitAiDecision.mock.calls[0][0] as {
+        data: Record<string, unknown>;
+      };
+      // The existing blocked_by_policy ledger row is INTACT, plus the remedy.
+      expect(emitted.data).toMatchObject({
+        outcome: "refused",
+        refusalReason: "capped",
+        capRaiseProposalId: "prop-cap-raise-4",
+      });
+      expect(emitted.data.fixHint).toContain("Approve the pending request");
+    });
+
+    it("the cap-raise is NEVER filed for a write the cap does not block", async () => {
+      // Under the cap the write proposes normally — filing a raise request for
+      // an agent that is not blocked would put noise in the human's queue.
+      setupAgentBudget(9);
+
+      await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-under-cap",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      expect(mockRequestRaiseProposalCap).not.toHaveBeenCalled();
+    });
+
+    it("a governance.* meta-proposal is exempt from the cap, so the raise can always be reviewed", async () => {
+      // THE DESIGN'S LOAD-BEARING EXEMPTION. If a governance meta-proposal
+      // counted against the cap, a fully blocked agent could never get a
+      // governance change in front of its owner at all.
+      setupAgentBudget(10);
+
+      const result = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-meta",
+        subjectType: "governance",
+        action: "governance.widen_lane",
+      });
+
+      expect("granted" in result && result.granted === false).toBe(true);
+      expect(mockRequestRaiseProposalCap).not.toHaveBeenCalled();
+    });
   });
 });
 

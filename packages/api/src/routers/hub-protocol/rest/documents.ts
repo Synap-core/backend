@@ -23,6 +23,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 const UpdateDocumentBodySchema = z.object({
@@ -152,7 +153,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       // Item 3 Part 3: a bound service key targeting another workspace throws
       // FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`.
@@ -200,7 +201,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
           );
         }
       }
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, documentId }, "getDocument failed");
       return c.json(
@@ -364,7 +365,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         originalContent: current.document.content,
         proposedContent: content,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, documentId }, "updateDocument failed");
       return c.json(
@@ -425,7 +426,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         proposedContent: body.proposedContent,
         originalContent: body.originalContent,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "createDocumentProposal failed");
       return c.json(
@@ -469,9 +470,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
       }
       const sessionId = c.req.param("sessionId");
       const sectionId = c.req.param("sectionId");
-      const body = UpsertSessionSectionBodySchema.safeParse(
-        await c.req.json()
-      );
+      const body = UpsertSessionSectionBodySchema.safeParse(await c.req.json());
       if (!body.success) {
         return c.json({ error: body.error.message }, 400);
       }
@@ -481,8 +480,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         });
         if (!acting.ok) return c.json({ error: acting.error }, acting.status);
         const agentUserId =
-          body.data.agentUserId ??
-          (c.get("agentUserId") as string | undefined);
+          body.data.agentUserId ?? (c.get("agentUserId") as string | undefined);
         const actorResolution = await resolveActorId(
           agentUserId,
           acting.userId
@@ -504,7 +502,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
           reasoning: body.data.reasoning,
           sourceMessageId: body.data.sourceMessageId,
         });
-        return c.json(result);
+        return jsonGoverned(c, result);
       } catch (err) {
         logger.error(
           { err, sessionId, sectionId },

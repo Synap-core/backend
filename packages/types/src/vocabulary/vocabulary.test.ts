@@ -22,6 +22,10 @@ import {
   LINEAGE_EDGE_LABELS,
   resolveCaptureDoorLabel,
   CAPTURE_DOOR_LABELS,
+  resolveNotificationCategoryLabel,
+  NOTIFICATION_CATEGORY_LABELS,
+  resolveNotificationRoutingRuleLabel,
+  NOTIFICATION_ROUTING_RULE_LABELS,
 } from "./index.js";
 
 describe("capture vocabulary", () => {
@@ -897,5 +901,80 @@ describe("resolveBlockedReasonLabel", () => {
     expect(resolveBlockedReasonLabel(null)).toBe("");
     expect(resolveBlockedReasonLabel(undefined)).toBe("");
     expect(resolveBlockedReasonLabel("")).toBe("");
+  });
+});
+
+describe("resolveNotificationCategoryLabel", () => {
+  it("renders the acronym category correctly — the reason this table exists", () => {
+    // `humanizeToken("ai")` returns "Ai"; a curated row is the only thing that
+    // makes this right, and this assertion is what would catch its removal.
+    expect(humanizeToken("ai")).toBe("Ai");
+    expect(resolveNotificationCategoryLabel("ai")).toBe("AI");
+  });
+
+  it("labels every category the DB enum declares", () => {
+    // Mirrors `NotificationCategory` in @synap/database (this package is
+    // dependency-free, so the keys are mirrored rather than imported).
+    for (const category of ["governance", "data", "ai", "system", "inbox"]) {
+      const label = resolveNotificationCategoryLabel(category);
+      expect(label, `no curated label for ${category}`).toBe(
+        NOTIFICATION_CATEGORY_LABELS[category]
+      );
+      expect(label).not.toBe("");
+    }
+    expect(Object.keys(NOTIFICATION_CATEGORY_LABELS)).toHaveLength(5);
+  });
+
+  it("humanizes an unknown category rather than leaking the token", () => {
+    expect(resolveNotificationCategoryLabel("release_train")).toBe(
+      "Release train"
+    );
+  });
+
+  it("returns an empty string for null/undefined", () => {
+    expect(resolveNotificationCategoryLabel(null)).toBe("");
+    expect(resolveNotificationCategoryLabel(undefined)).toBe("");
+  });
+});
+
+describe("resolveNotificationRoutingRuleLabel", () => {
+  it("fixes the two tokens humanizeToken gets wrong — the reason this table exists", () => {
+    // Both of these are what a settings picker would show without a curated
+    // row. They are the discriminating cases: `all` and `mute` would survive a
+    // naive humanize, these two would not.
+    expect(humanizeToken("in_app")).toBe("In app");
+    expect(humanizeToken("os")).toBe("Os");
+    expect(resolveNotificationRoutingRuleLabel("in_app")).toBe("In-app only");
+    expect(resolveNotificationRoutingRuleLabel("os")).toBe("Push only");
+  });
+
+  it("labels every rule the catalogue can offer", () => {
+    // Mirrors the offerable set in `notifications/catalogue.ts`. `telegram` is
+    // deliberately NOT here — see the table's docblock.
+    for (const rule of ["all", "os", "in_app", "mute"]) {
+      const label = resolveNotificationRoutingRuleLabel(rule);
+      expect(label, `no curated label for ${rule}`).toBe(
+        NOTIFICATION_ROUTING_RULE_LABELS[rule]
+      );
+      expect(label).not.toBe("");
+      expect(label).not.toBe(rule);
+    }
+    expect(Object.keys(NOTIFICATION_ROUTING_RULE_LABELS)).toHaveLength(4);
+  });
+
+  it("humanizes a transport-less or unknown rule rather than leaking it", () => {
+    // `telegram` is a legal column value with no transport. If it ever reaches
+    // a surface it must read as a word, not as a raw token — and it must NOT
+    // have a curated label implying it works.
+    expect(NOTIFICATION_ROUTING_RULE_LABELS.telegram).toBeUndefined();
+    expect(resolveNotificationRoutingRuleLabel("telegram")).toBe("Telegram");
+    expect(resolveNotificationRoutingRuleLabel("email_digest")).toBe(
+      "Email digest"
+    );
+  });
+
+  it("returns an empty string for null/undefined", () => {
+    expect(resolveNotificationRoutingRuleLabel(null)).toBe("");
+    expect(resolveNotificationRoutingRuleLabel(undefined)).toBe("");
   });
 });

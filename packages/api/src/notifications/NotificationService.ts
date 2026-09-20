@@ -23,9 +23,11 @@ import {
   db,
   notifications,
   notificationPreferences,
+  users,
   workspaceMembers,
   and,
   eq,
+  gte,
   isNull,
   eventRepository,
 } from "@synap/database";
@@ -83,6 +85,18 @@ export interface CreateNotificationInput {
   // Override registry defaults (optional)
   groupKey?: string;
   expiresAt?: Date;
+
+  /**
+   * Where a TAP on this notification should land, as `{kind, id}` — the same
+   * two-field vocabulary the clients' ONE route table already speaks
+   * (`objectRouteFor` in relay, `objectNavTarget` in browser).
+   *
+   * Omit for the common case: `pushTarget()` derives it from the type's own
+   * `navigate-object` action, so the push tap and the in-app action button
+   * resolve through one declaration and cannot drift apart. Pass it only when
+   * the destination is NOT what the registry action says.
+   */
+  target?: { kind: string; id: string; view?: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +197,123 @@ function resolveChannels(
 }
 
 // ---------------------------------------------------------------------------
+// Quiet hours — the RECIPIENT's clock
+// ---------------------------------------------------------------------------
+
+/**
+ * `HH:MM` for `at`, as read in `timeZone`.
+ *
+ * `Intl` is the one correct way to do this: it handles DST transitions and
+ * half-hour offsets, which any `getTimezoneOffset()` arithmetic gets wrong
+ * twice a year. An INVALID or unknown IANA name throws inside `Intl`, and a
+ * throw here would abort the whole notification — so it falls back to UTC and
+ * says so. Quiet hours computed in the wrong zone is a bad interruption; a
+ * notification lost to a bad timezone string is a lost notification, and those
+ * are not the same cost.
+ */
+export function localHourMinute(at: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(at);
+  } catch {
+    logger.warn(
+      { timeZone },
+      "Unknown IANA timezone — quiet hours read in UTC"
+    );
+    return new Intl.DateTimeFormat("en-GB", {
+      timeZone: "UTC",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(at);
+  }
+}
+
+/**
+ * The recipient's IANA timezone, for the quiet-hours window.
+ *
+ * A FAILED read degrades to "UTC" and LOGS, rather than propagating. This is a
+ * deliberate exception to "empty ≠ failed, never swallow", and the reason is
+ * the cost asymmetry: `create()` wraps everything in a non-fatal catch, so an
+ * exception here does not surface an error anywhere — it silently drops the
+ * WHOLE notification. That is strictly worse than computing one window in the
+ * wrong zone, and it is not hypothetical: it happened the moment this read was
+ * added, in a harness without the `users` table, and it cost every notification
+ * rather than one quiet-hours decision. The log line is what keeps it honest;
+ * nothing downstream reads this value as data.
+ */
+async function recipientTimezone(userId: string): Promise<string> {
+  try {
+    const [row] = await db
+      .select({ timezone: users.timezone })
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    return row?.timezone || "UTC";
+  } catch (err) {
+    logger.warn(
+      { err, userId },
+      "Could not read recipient timezone — quiet hours read in UTC"
+    );
+    return "UTC";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Push tap target — WHERE a tap on the phone lands.
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the `{kind, id, view?}` a push should carry so the device can route
+ * the tap.
+ *
+ * THE DEFECT THIS CLOSES: the push payload carried `sourceType`/`sourceId` and
+ * a `deepLink` minted for `sourceType === 'proposal'` ONLY. Relay's push router
+ * (`routeForPushNotificationData`) reads, in order, an explicit link, then the
+ * proposal special case, then `{kind, id}` — and NOTHING in the pod ever sent
+ * the third. Its `session` and `room` routes were built with zero producers, so
+ * a session push arrived, rendered correctly, and tapped to NOTHING. Silently:
+ * no error, no log, no fallback screen. That is the worst shape a bug can take,
+ * because it looks exactly like a feature that works.
+ *
+ * DERIVED, not re-declared. The registry already says where each type's object
+ * lives — its `navigate-object` action, whose `kind`/`view` the in-app button
+ * uses and whose omitted `id` means "this notification's `sourceId`". Reading
+ * that same handler here means the tap target and the button target are ONE
+ * declaration. A second hand-written kind-per-type table would be a fork the
+ * moment either side changed, which is the exact mistake `navigate-object`
+ * exists to prevent.
+ *
+ * Returns `undefined` when the type has no `navigate-object` action, or has one
+ * with no literal id and no `sourceId` to stand in — a `{kind}` with no id is
+ * not routable, and a dead link is worse than none (the same judgement the
+ * proposal-only `deepLink` narrowing already made).
+ */
+export function pushTarget(
+  def: NotificationDef,
+  input: Pick<CreateNotificationInput, "sourceId" | "target">
+): { kind: string; id: string; view?: string } | undefined {
+  if (input.target) return input.target;
+
+  for (const action of def.actions ?? []) {
+    const handler = action.handler;
+    if (handler.type !== "navigate-object") continue;
+    const id = handler.id ?? input.sourceId;
+    if (!id) continue;
+    return {
+      kind: handler.kind,
+      id,
+      ...(handler.view ? { view: handler.view } : {}),
+    };
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -250,7 +381,17 @@ export const NotificationService = {
 
       // Per-category routing rule
       const rules = (prefs?.routingRules ?? {}) as Record<string, string>;
-      const categoryRule = rules[def.category] ?? rules[input.type]; // check category first, then specific type
+      // MORE SPECIFIC WINS. This used to read `rules[def.category] ?? rules[input.type]`,
+      // which made every per-TYPE rule dead the moment its category carried one:
+      // a user who muted `ai` could never re-enable `session.criterion_escalated`
+      // alone, and one who set `ai: "in_app"` could never push that single type.
+      // The per-type half of the vocabulary has existed in `routingRules` all
+      // along, so the settings screen would have rendered a control that wrote a
+      // real row and silently did nothing — a preference shipped without the half
+      // that reads it, in its worst form (the half exists and is overruled).
+      // Category stays the fallback, so a category rule still governs every type
+      // that has not been named individually.
+      const categoryRule = rules[input.type] ?? rules[def.category];
       if (categoryRule === "mute") {
         logger.debug(
           { type: input.type, category: def.category },
@@ -266,8 +407,17 @@ export const NotificationService = {
         prefs.quietHoursStart &&
         prefs.quietHoursEnd
       ) {
-        const now = new Date();
-        const hhmm = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+        // THE RECIPIENT'S clock, not the server's. `notifications.ts:162`
+        // documents this window as "(local time, user's timezone)" and the code
+        // read `now.getHours()` — the SERVER's local time. A pod in UTC serving
+        // a founder in UTC+2 applied a 22:00–08:00 window at 00:00–10:00 their
+        // time: silent through their morning, and ringing at midnight. The
+        // column this needs has existed all along (`users.timezone`, IANA,
+        // default "UTC"), so this was a wrong read, not a missing feature.
+        const hhmm = localHourMinute(
+          new Date(),
+          await recipientTimezone(input.userId)
+        );
         const start = prefs.quietHoursStart;
         const end = prefs.quietHoursEnd;
         // Handle overnight ranges (e.g., 22:00 → 08:00)
@@ -277,6 +427,50 @@ export const NotificationService = {
             : hhmm >= start || hhmm < end;
         if (inQuietHours) {
           suppressRealtime = true;
+        }
+      }
+
+      // ── Dedupe ─────────────────────────────────────────────────────────
+      // A type that declares a suppression window is saying its `groupKey` IS
+      // its identity, so a second event inside the window is the same news.
+      // Checked HERE, before the insert, because the row is what a push is made
+      // from: suppressing the interruption alone would still leave N identical
+      // rows stacking up in the bell, and suppressing after the insert would
+      // race with itself. There is no unique index to lean on — the insert has
+      // no `onConflict` target and `groupKey` is not unique (it must not be:
+      // `proposal.created` shares one key across an agent's whole run) — so
+      // this is a read-then-write, and two truly simultaneous events could both
+      // pass it. That is the honest limit: it collapses a STORM into one
+      // notification, it is not a mutual exclusion.
+      if (def.dedupeWindowMs) {
+        if (!groupKey) {
+          logger.warn(
+            { type: input.type },
+            "Type declares dedupeWindowMs but no groupKey resolved — not deduped"
+          );
+        } else {
+          const [existing] = await db
+            .select({ id: notifications.id })
+            .from(notifications)
+            .where(
+              and(
+                eq(notifications.userId, input.userId),
+                eq(notifications.type, input.type),
+                eq(notifications.groupKey, groupKey),
+                gte(
+                  notifications.createdAt,
+                  new Date(Date.now() - def.dedupeWindowMs)
+                )
+              )
+            )
+            .limit(1);
+          if (existing) {
+            logger.debug(
+              { type: input.type, groupKey, existingId: existing.id },
+              "Notification suppressed — same group already raised inside the dedupe window"
+            );
+            return undefined;
+          }
         }
       }
 
@@ -375,6 +569,8 @@ export const NotificationService = {
         });
       }
 
+      const target = pushTarget(def, input);
+
       if (channels.has("os")) {
         // Native push. Deliberately NOT awaited — Expo is a third-party HTTP
         // hop and `create()` is called from write paths that must not wait on
@@ -404,6 +600,12 @@ export const NotificationService = {
             ...(input.sourceType === "proposal" && input.sourceId
               ? { deepLink: openLink(input.sourceId, { client: "mobile" }) }
               : {}),
+            // …and the ROUTE-TABLE shape, for every type that names an object.
+            // `deepLink` above stays exactly as it was — relay reads a link
+            // FIRST and the proposal path must not change — so this is purely
+            // additive: the `{kind,id}` branch of the same router, which had no
+            // producer until now. See `pushTarget()`.
+            ...(target ?? {}),
           },
         }).catch((err) =>
           logger.warn({ err, notificationId: row.id }, "Push send failed")

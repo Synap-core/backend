@@ -95,6 +95,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { revertSession } from "../../../services/focus-sessions/revert-session.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
@@ -863,7 +864,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       }
 
       if (result.status === "proposed") {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           message: result.message,
           proposalId: result.proposalId,
@@ -1036,7 +1037,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
@@ -1451,21 +1452,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Proposed shape (consistent with PATCH/create) — 403 when governance
         // still forced a proposal (lifecycle escape should normally prevent this).
         if (e.proposalId) {
-          return c.json(
-            {
-              status: "proposed" as const,
-              message:
-                e.message ??
-                "Session completion proposed for review — approval required",
-              proposalId: e.proposalId,
-              summary: e.summary,
-              reasoning: e.reasoning,
-              reviewPath: e.reviewPath,
-              reviewUrl: e.reviewUrl,
-              session: null,
-            },
-            403
-          );
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            message:
+              e.message ??
+              "Session completion proposed for review — approval required",
+            proposalId: e.proposalId,
+            summary: e.summary,
+            reasoning: e.reasoning,
+            reviewPath: e.reviewPath,
+            reviewUrl: e.reviewUrl,
+            session: null,
+          });
         }
         return c.json(
           { error: err instanceof Error ? err.message : "Forbidden" },
@@ -1556,19 +1554,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         reviewUrl?: string;
       };
       if (e.code === "FORBIDDEN" && e.proposalId) {
-        return c.json(
-          {
-            status: "proposed" as const,
-            message: e.message ?? "Session cancel proposed for review",
-            proposalId: e.proposalId,
-            summary: e.summary,
-            reasoning: e.reasoning,
-            reviewPath: e.reviewPath,
-            reviewUrl: e.reviewUrl,
-            session: null,
-          },
-          403
-        );
+        return jsonGoverned(c, {
+          status: "proposed" as const,
+          message: e.message ?? "Session cancel proposed for review",
+          proposalId: e.proposalId,
+          summary: e.summary,
+          reasoning: e.reasoning,
+          reviewPath: e.reviewPath,
+          reviewUrl: e.reviewUrl,
+          session: null,
+        });
       }
       if (e.code === "FORBIDDEN") {
         return c.json({ error: e.message ?? "Forbidden" }, 403);

@@ -319,6 +319,13 @@ describe("POST /import/enqueue-corpus — thin door onto the existing background
       workspaceId: WORKSPACE_ID,
       source: "markdown",
       items: validBody().items,
+      // BOTH doors stamp the resolved import session — routers/import.ts:254
+      // and rest/capture.ts:378, the same `...(session.sessionId ? … : {})`
+      // spread — so a session cancel can find a corpus that has not started
+      // yet. Parity is what this test pins, and it holds. The id is minted by
+      // the real `resolveImportSession` (this file mocks the queue and the
+      // acting context, not the session helper), so it is asserted by shape.
+      sessionId: expect.any(String),
     });
   });
 

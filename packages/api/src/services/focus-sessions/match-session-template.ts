@@ -20,8 +20,10 @@
  *                when its probability ≥ {@link AUTO_APPLY_PROBABILITY}. An IS
  *                that cannot answer applies nothing — suggestions only.
  *
- * The third-party decision model (JEV) is only allowed when the pod opted in
- * (`intelligenceDefaults.thirdPartyDecisionModel`, fail-closed reader).
+ * The decision model (JEV) answers when the IS has one configured; the
+ * per-request `allowDecisionModel` flag is the opt-out. (The per-pod TypeSafe
+ * consent flag was withdrawn 2026-09-20 — provider choice is an operator
+ * decision, uniform across providers.)
  */
 import { db, playbooks, eq, and, desc } from "@synap/database";
 import { requestPlaybookChoice } from "@synap/intelligence-client";
@@ -29,7 +31,6 @@ import { createLogger } from "@synap-core/core";
 import { scopedDb } from "../../access/scoped-db.js";
 import { AccessContext } from "../../access/context.js";
 import { rankRouteCandidates, tokenize } from "../routing/suggest-routes.js";
-import { readPodThirdPartyDecisionModelConsent } from "../intake/pod-vision-preference.js";
 import { getDefaultActiveService } from "../../utils/intelligence-routing.js";
 
 const logger = createLogger({
@@ -71,8 +72,26 @@ export interface SessionTemplateReport {
     decider: "jev" | "llm" | "lexical";
   } | null;
   suggestions: TemplateSuggestion[];
+  /**
+   * WHY nothing was applied, when `applied` is null. "Not confident" and
+   * "the assistant could not answer" are different facts, and a caller that
+   * cannot tell them apart reads an outage as a considered decision.
+   * Absent when a template WAS applied.
+   */
+  notApplied?: TemplateNotAppliedReason;
   optOut: typeof TEMPLATE_OPT_OUT;
 }
+
+/** Why `applied` is null. */
+export type TemplateNotAppliedReason =
+  /** Nothing matched the session's words at all. */
+  | "no_match"
+  /** One candidate, but too weak a word match to apply on its own. */
+  | "weak_match"
+  /** Several candidates; the assistant picked none, or not confidently. */
+  | "not_confident"
+  /** Several candidates; the assistant could not be reached. */
+  | "unavailable";
 
 export interface MatchSessionTemplateInput {
   userId: string;
@@ -86,7 +105,13 @@ export interface MatchSessionTemplateInput {
 export type PlaybookChooser = (input: {
   content: string;
   candidates: Array<{ id: string; name: string; description?: string }>;
-  allowDecisionModel: boolean;
+  /**
+   * Per-request opt-out from the IS decision model. Omitted here ⇒ the IS
+   * decides (it falls back to its LLM cascade when JEV is unconfigured). It
+   * used to carry a per-pod TypeSafe consent flag, withdrawn 2026-09-20:
+   * provider choice is an operator decision, uniform across providers.
+   */
+  allowDecisionModel?: boolean;
 }) => Promise<{
   playbookId: string | null;
   confidence: number;
@@ -112,6 +137,7 @@ export async function matchSessionTemplate(
   const none: SessionTemplateReport = {
     applied: null,
     suggestions: [],
+    notApplied: "no_match",
     optOut: TEMPLATE_OPT_OUT,
   };
   const intentText = [input.title, input.goal].filter(Boolean).join(" ");
@@ -176,12 +202,16 @@ export async function matchSessionTemplate(
         optOut: TEMPLATE_OPT_OUT,
       };
     }
-    return { ...none, suggestions: suggestFrom(null) };
+    return {
+      ...none,
+      notApplied: "weak_match",
+      suggestions: suggestFrom(null),
+    };
   }
 
   const pool = matched.slice(0, IS_CANDIDATES_MAX);
+  let why: TemplateNotAppliedReason = "not_confident";
   try {
-    const consent = await readPodThirdPartyDecisionModelConsent(db);
     const choice = await chooser({
       content: intentText.slice(0, 4000),
       candidates: pool.map((r) => ({
@@ -191,7 +221,6 @@ export async function matchSessionTemplate(
           ? { description: r.candidate.description }
           : {}),
       })),
-      allowDecisionModel: consent.allowed,
     });
     const picked = choice.playbookId
       ? pool.find((r) => r.candidate.id === choice.playbookId)
@@ -210,8 +239,11 @@ export async function matchSessionTemplate(
     }
   } catch (err) {
     // The IS could not answer: nothing is applied on a guess. The lexical
-    // candidates still ride back as suggestions.
+    // candidates still ride back as suggestions, and `notApplied` says the
+    // assistant was unreachable rather than unconvinced — an outage must not
+    // read as a considered decision.
+    why = "unavailable";
     logger.warn({ err }, "playbook choice unavailable — suggestions only");
   }
-  return { ...none, suggestions: suggestFrom(null) };
+  return { ...none, notApplied: why, suggestions: suggestFrom(null) };
 }

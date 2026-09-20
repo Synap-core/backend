@@ -1908,9 +1908,6 @@ export const intelligenceRouter = router({
     const defaults = {
       ...getDefaultPodIntelligenceDefaults(),
       ...(stored ?? {}),
-      // Consent is opt-in: only a stored `true` is on (mirrors the capture
-      // reader, `readPodThirdPartyDecisionModelConsent`).
-      thirdPartyDecisionModel: stored?.thirdPartyDecisionModel === true,
     };
     return { defaults };
   }),
@@ -1921,14 +1918,9 @@ export const intelligenceRouter = router({
    * Upserts the pod-wide intelligence defaults. Pass null for any tier to
    * inherit from the active IS. Pod admins only.
    *
-   * A PATCH over `intelligenceDefaults`: an omitted key keeps its stored value,
-   * so saving the model tiers never clears the decision-model consent and
-   * toggling the consent never clears the tiers.
-   *
-   * `thirdPartyDecisionModel` — the pod's opt-in to the third-party decision
-   * model (TypeSafe JEV) for capture workspace routing. Default OFF. When on,
-   * capture sends the capture text (≤4000 chars), the candidate workspaces'
-   * names/descriptions and recent routing-correction snippets to TypeSafe.
+   * A PATCH over `intelligenceDefaults`: an omitted key keeps its stored
+   * value, so saving one field never clears its siblings (the previous body
+   * replaced the whole object).
    */
   setPodDefaults: podAdminProcedure
     .input(
@@ -1937,7 +1929,6 @@ export const intelligenceRouter = router({
         reasoningModelId: z.string().nullable().optional(),
         embeddingModelId: z.string().nullable().optional(),
         visionModelId: z.string().nullable().optional(),
-        thirdPartyDecisionModel: z.boolean().optional(),
       })
     )
     .mutation(async ({ input }) => {

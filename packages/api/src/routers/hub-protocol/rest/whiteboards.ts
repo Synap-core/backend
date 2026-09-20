@@ -19,6 +19,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 const BoardPlacementOptionsSchema = z.object({
   x: z.number().optional(),
@@ -186,7 +187,7 @@ export function registerWhiteboardsRoutes(app: HubHono) {
       }
 
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: perm.proposalId,
           summary: perm.summary,

@@ -48,15 +48,10 @@ import {
   ChatTurnStatus,
   db,
   eq,
-  gte,
   messages,
   persistAssistantReply,
 } from "@synap/database";
-import {
-  notifications,
-  NotificationCategory,
-  NotificationPriority,
-} from "@synap/database/schema";
+import { createNotificationViaService } from "../utils/notification-creator.js";
 
 const logger = createLogger({ module: "a2ai-response-trigger" });
 
@@ -185,23 +180,28 @@ async function finishHeadlessChatTurn(input: {
  * producer lives in @synap/api, and @synap/jobs cannot depend on @synap/api
  * (api → jobs is the existing direction — see the file header).
  */
-const AGENT_FAILURE_RENOTIFY_COOLDOWN_MS = 60 * 60 * 1000; // 1h
 
 /**
  * Surface a terminal (no-more-retries) headless-turn failure as a durable
  * `agent.task_failed` notification — the SAME registered type the
  * interactive/automation paths already raise for an agent failure, so the
  * bell panel renders it with its existing icon/title/actions. This is the
- * ONLY notification door @synap/jobs can reach: `NotificationService.create`
- * (routing prefs, quiet hours, realtime emit) lives in @synap/api and is
- * unreachable here, so — matching the existing precedent in
- * `utils/proactive-post.ts` and `workers/steps/output.ts` — this inserts the
- * row directly and skips that service's preference/quiet-hours gating.
+ * Goes through the ONE write door, `NotificationService.create`, reached across
+ * the api↔jobs boundary by the `registerNotificationCreator` IoC slot
+ * (`utils/notification-creator.ts`). It used to insert the row directly, which
+ * meant routing prefs, quiet hours and push never applied — and because
+ * `routers/hub-protocol/rest/events.ts` raises the SAME type through the
+ * service, `agent.task_failed` was PARTIALLY governed: muting it silenced
+ * failures reported through the Hub REST door while headless turn failures kept
+ * arriving. A switch that works sometimes reads as flakiness, not as a bug.
+ *
+ * The per-(scope, agentKey) 1h cooldown that used to live here as a hand-rolled
+ * pre-insert SELECT is now declared on the type itself
+ * (`dedupeWindowMs` on `agent.task_failed`), so it is one rule applying to every
+ * producer instead of a copy per caller.
  *
  * Never throws: a failed turn is already recorded in `chat_turns`; losing the
- * notification on top of that must not turn a handled failure into a thrown
- * one. Cooldown-gated per (scope, agentKey) so a burst of identical failures
- * collapses into one bell entry instead of one per attempt.
+ * notification on top of that must not turn a handled failure into a thrown one.
  */
 async function notifyA2AIFailure(input: {
   userId: string;
@@ -216,34 +216,21 @@ async function notifyA2AIFailure(input: {
     const groupKey = input.workspaceId
       ? `${input.workspaceId}:agent.task_failed:${agentKey}`
       : `pod:${input.userId}:agent.task_failed:${agentKey}`;
-    const cooldownFloor = new Date(
-      Date.now() - AGENT_FAILURE_RENOTIFY_COOLDOWN_MS
-    );
 
-    const [recent] = await db
-      .select({ id: notifications.id })
-      .from(notifications)
-      .where(
-        and(
-          eq(notifications.type, "agent.task_failed"),
-          eq(notifications.groupKey, groupKey),
-          gte(notifications.createdAt, cooldownFloor)
-        )
-      )
-      .limit(1);
-    if (recent) return;
-
-    await db.insert(notifications).values({
-      workspaceId: input.workspaceId,
-      userId: input.userId,
+    // Title/category/priority are NOT passed: they are the registry type's to
+    // declare, and restating them here is how two producers of one type drift.
+    // `{{agentName}}` / `{{errorMessage}}` fill the declared templates.
+    await createNotificationViaService({
       type: "agent.task_failed",
-      category: NotificationCategory.AI,
-      priority: NotificationPriority.HIGH,
-      title: `${input.agentType} encountered an error`,
-      body: input.errorMessage,
+      userId: input.userId,
+      workspaceId: input.workspaceId,
       sourceType: "agent",
       sourceId: input.turnId,
       groupKey,
+      data: {
+        agentName: input.agentType,
+        errorMessage: input.errorMessage,
+      },
     });
   } catch (err) {
     logger.warn(

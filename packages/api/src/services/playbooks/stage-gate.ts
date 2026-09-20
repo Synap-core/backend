@@ -43,6 +43,10 @@ import {
   type PlaybookStage,
   type PlaybookStageGate,
 } from "@synap/playbooks";
+import {
+  CHECK_GATE_METADATA_KEY,
+  CHECK_GATE_UNEVALUATED,
+} from "@synap-core/types/focus-sessions";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 
 /** A stage gate's proposal targets the SESSION — see dev-approval's target type. */
@@ -245,15 +249,14 @@ export async function openStageGate(
   };
 }
 
-/** Where a check-gated pause is recorded on `focus_sessions.metadata`. */
-export const CHECK_GATE_METADATA_KEY = "checkGate";
-
-/**
- * Stands in `failing` when the evaluation itself could not run. Not a
- * criterion key: it names the ABSENCE of a verdict, so a surface can say
- * "the check did not run" rather than blaming a criterion.
- */
-export const CHECK_GATE_UNEVALUATED = "__unevaluated";
+// The gate's two stored literals live in `@synap-core/types/focus-sessions`,
+// because their readers are UIs (a pause whose cause is unrendered reads as an
+// ordinary pause). Re-exported here so this service stays the one place a
+// reader of the GATE looks.
+export {
+  CHECK_GATE_METADATA_KEY,
+  CHECK_GATE_UNEVALUATED,
+} from "@synap-core/types/focus-sessions";
 
 export interface CheckGateResult {
   kind: "check";

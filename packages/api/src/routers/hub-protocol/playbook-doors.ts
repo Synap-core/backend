@@ -14,7 +14,7 @@
 
 import { getDb, entities, focusSessions, eq } from "@synap/database";
 
-import { openLink } from "../../utils/deep-links.js";
+import { withReviewUrl } from "./proposal-response.js";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
 import { playbooksRouter } from "../playbooks.js";
 import { createHubProtocolCallerContext } from "./utils.js";
@@ -52,15 +52,6 @@ function callerFor(identity: PlaybookDoorIdentity, workspaceId: string | null) {
     identity.keyType ?? null,
     identity.keyWorkspaceId ?? null
   ).then((ctx) => playbooksRouter.createCaller(ctx));
-}
-
-/** A `proposed` result carries its review link, whichever door asked. */
-function withReviewUrl<T>(result: T): T {
-  const r = result as { status?: unknown; proposalId?: unknown };
-  if (r && r.status === "proposed" && typeof r.proposalId === "string") {
-    return { ...result, reviewUrl: openLink(r.proposalId) };
-  }
-  return result;
 }
 
 /**

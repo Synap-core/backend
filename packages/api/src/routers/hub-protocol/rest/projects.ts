@@ -39,6 +39,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
 import {
@@ -770,15 +771,12 @@ export function registerProjectsRoutes(app: HubHono): void {
       return c.json({ error: perm.reason }, 403);
     }
     if ("proposalId" in perm) {
-      return c.json(
-        {
-          status: "proposed",
-          proposalId: perm.proposalId,
-          ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-          ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-        },
-        202
-      );
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: perm.proposalId,
+        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
+        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
+      });
     }
 
     const eventRepo = new EventRepository(sql);
@@ -870,15 +868,12 @@ export function registerProjectsRoutes(app: HubHono): void {
       return c.json({ error: perm.reason }, 403);
     }
     if ("proposalId" in perm) {
-      return c.json(
-        {
-          status: "proposed",
-          proposalId: perm.proposalId,
-          ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-          ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-        },
-        202
-      );
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: perm.proposalId,
+        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
+        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
+      });
     }
 
     const eventRepo = new EventRepository(sql);
@@ -908,15 +903,12 @@ export function registerProjectsRoutes(app: HubHono): void {
       return c.json({ error: perm.reason }, 403);
     }
     if ("proposalId" in perm) {
-      return c.json(
-        {
-          status: "proposed",
-          proposalId: perm.proposalId,
-          ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
-          ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
-        },
-        202
-      );
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: perm.proposalId,
+        ...(perm.reviewPath ? { reviewPath: perm.reviewPath } : {}),
+        ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
+      });
     }
 
     const eventRepo = new EventRepository(sql);

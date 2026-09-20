@@ -75,6 +75,7 @@ import {
   verifyWorkspaceAccess,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 /** The shallow `impact` block attached to an update response (additive). */
@@ -996,6 +997,15 @@ export function registerEntitiesRoutes(app: HubHono): void {
           "application/json": { schema: CreateEntityResponseSchema },
         },
       },
+      202: {
+        // ONE proposal shape on every hub door: a governed write that became a
+        // proposal is SUCCESS, and it carries its review link.
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        content: {
+          "application/json": { schema: CreateEntityResponseSchema },
+        },
+      },
       400: {
         description: "Bad request",
         content: { "application/json": { schema: ErrorSchema } },
@@ -1173,15 +1183,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // Echo back the resolved workspace context so external callers can
       // confirm where the entity landed (especially useful when the body
       // omitted workspaceId and we resolved it from the profile's entityScope).
-      return c.json(
-        {
-          ...result,
-          effectiveWorkspaceId,
-          writeReceipt,
-          ...(resolution ? { resolution } : {}),
-        },
-        200
-      );
+      return jsonGoverned(c, {
+        ...result,
+        effectiveWorkspaceId,
+        writeReceipt,
+        ...(resolution ? { resolution } : {}),
+      });
     } catch (err) {
       logger.error({ err }, "createEntity failed");
       // Classify instead of a blanket 500: a PropertyValidationError (unknown /
@@ -1676,7 +1683,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       // bytes are staged and ride the proposal, so approval attaches them —
       // return the review handle rather than a false `ok`.
       if (result.status === "proposed") {
-        return c.json({
+        return jsonGoverned(c, {
           ok: false as const,
           status: "proposed" as const,
           entityId,
@@ -1942,15 +1949,12 @@ export function registerEntitiesRoutes(app: HubHono): void {
 
       // Proposed (stricter policy): return the reviewable handle.
       if (result.status === "proposed") {
-        return c.json(
-          {
-            documentId: result.documentId,
-            proposalId: result.proposalId,
-            status: "proposed" as const,
-            reviewUrl: result.reviewUrl,
-          },
-          200
-        );
+        return jsonGoverned(c, {
+          documentId: result.documentId,
+          proposalId: result.proposalId,
+          status: "proposed" as const,
+          reviewUrl: result.reviewUrl,
+        });
       }
 
       // Auto-approved: same `{ fileEntityId, documentId }` shape as before.
@@ -2125,7 +2129,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         entityId,
       });
 
-      return c.json({ ...result, ...(impact ? { impact } : {}) }, 200);
+      return jsonGoverned(c, { ...result, ...(impact ? { impact } : {}) });
     } catch (err) {
       logger.error({ err, entityId }, "updateEntity failed");
       // Same classification as POST /entities — property-validation failures are
@@ -2248,7 +2252,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(q.reasoning ? { reasoning: q.reasoning } : {}),
       });
-      return c.json(result, 200);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, entityId }, "deleteEntity failed");
       return c.json(

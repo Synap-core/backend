@@ -8,6 +8,7 @@
 
 import { z } from "zod";
 import type { HubHono } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import {
   materializeWorkspaceCore,
   ComposeBaseUnavailableError,
@@ -574,7 +575,10 @@ export function registerPackagesRoutes(app: HubHono): void {
       perm.proposalId &&
       !("granted" in perm && perm.granted)
     )
-      return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: perm.proposalId,
+      });
 
     // ── Steps 0-1: Resolve dependencies + create-or-compose (shared core) ──
     // The dependency-resolve + compose-overlay logic is the ONE shared door

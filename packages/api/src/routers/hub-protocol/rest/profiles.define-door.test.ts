@@ -127,10 +127,12 @@ describe("POST /profiles — define a kind or a role through the shared door", (
       },
       AGENT
     );
-    expect(status).toBe(200);
+    // ONE proposal shape on every hub door: 202, and the link the agent shows.
+    expect(status).toBe(202);
     expect(body).toMatchObject({
       status: "proposed",
       proposalId: "prop-profile",
+      reviewUrl: "/open/prop-profile",
       properties: { status: "deferred", pending: 1 },
     });
     expect(h.gateCalls).toHaveLength(1);
@@ -154,8 +156,11 @@ describe("POST /profiles — define a kind or a role through the shared door", (
       },
       AGENT
     );
-    expect(status).toBe(200);
-    expect(body).toMatchObject({ status: "proposed" });
+    expect(status).toBe(202);
+    expect(body).toMatchObject({
+      status: "proposed",
+      reviewUrl: "/open/prop-profile",
+    });
     expect(h.gateCalls[0]).toMatchObject({
       agentUserId: AGENT,
       data: {

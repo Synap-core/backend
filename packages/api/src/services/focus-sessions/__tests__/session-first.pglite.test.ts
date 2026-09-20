@@ -38,7 +38,8 @@ const h = vi.hoisted(() => {
     })) as (input: {
       content: string;
       candidates: Array<{ id: string; name: string; description?: string }>;
-      allowDecisionModel: boolean;
+      // Optional since the per-pod consent flag was withdrawn 2026-09-20.
+      allowDecisionModel?: boolean;
     }) => Promise<{
       playbookId: string | null;
       confidence: number;
@@ -403,6 +404,46 @@ describe("start_session adopts the auto-opened session (never a duplicate)", () 
     });
   });
 
+  it("adoption DROPS the receipt's derived name — it described other writes", async () => {
+    // Live 2026-09-20: a research session was adopted onto a receipt and kept
+    // "[dogfood] the Research pack is enabled…", the name of the write that
+    // opened it. With no explicit title the derived name goes, so lists fall
+    // back to the new goal until the titler names it.
+    const auto = await receipt(
+      "key:A",
+      "Create knowledge The Research pack is enabled"
+    );
+    const before = (await rows())[0];
+    expect(before.title).toBeTruthy();
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Research competitor Notion and compare them to us",
+      clientKey: "key:A",
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.session.id).toBe(auto);
+    expect(result.session.title).toBeNull();
+    expect(result.session.metadata).toMatchObject({ titleSource: "derived" });
+  });
+
+  it("adoption KEEPS a name a person or agent chose", async () => {
+    const auto = await receipt("key:A", "Create task Buy milk");
+    await q(
+      `update focus_sessions set title = $2, metadata = metadata || '{"titleSource":"human"}'::jsonb where id = $1`,
+      [auto, "Groceries, named by me"]
+    );
+    const result = await createFocusSession({
+      userId: USER,
+      agentUserId: AGENT,
+      goal: "Plan the week's groceries",
+      clientKey: "key:A",
+    });
+    if (result.status !== "created") throw new Error(result.status);
+    expect(result.session.title).toBe("Groceries, named by me");
+    expect(result.session.metadata).toMatchObject({ titleSource: "human" });
+  });
+
   it("another client's auto-opened session is never adopted", async () => {
     const other = await receipt("key:B", "Create task");
     const result = await createFocusSession({
@@ -466,6 +507,24 @@ describe("template threshold", () => {
       chooserReturning(0.5, () => weekly)
     );
     expect(report.applied).toBeNull();
+    expect(report.notApplied).toBe("not_confident");
+    expect(report.suggestions.map((s) => s.id)).toContain(weekly);
+  });
+
+  it("an UNREACHABLE assistant is reported as unavailable, not as unsure", async () => {
+    // Two different facts: "it considered them and was not convinced" vs
+    // "it never answered". A caller that cannot tell them apart reads an
+    // outage as a decision.
+    const weekly = await playbook("Weekly review", "Review the week");
+    await playbook("Quarterly review", "Review the quarter");
+    const report = await matchSessionTemplate(
+      { userId: USER, goal: "Weekly review of the pipeline" },
+      async () => {
+        throw new Error("IS down");
+      }
+    );
+    expect(report.applied).toBeNull();
+    expect(report.notApplied).toBe("unavailable");
     expect(report.suggestions.map((s) => s.id)).toContain(weekly);
   });
 

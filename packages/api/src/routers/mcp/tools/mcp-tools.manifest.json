@@ -1670,7 +1670,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). Creates the definition ONLY; surface it with synap_promote_cell_to_renderer.",
+      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. Creates the definition ONLY: the cell is not surfaced anywhere until it is bound as a renderer for a kind, which is a separate step — ask the user to do it in the Synap app.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1793,7 +1793,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). A playbook can be launched via synap_run_playbook (executor) or started as a working session via synap_start_session(templateId).",
+      "description": "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Launch one via synap_run_playbook.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1821,7 +1821,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said) and/or profileSlug (the kind of thing, e.g. 'post'). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_start_session (templateId + optional subjectEntityId) or synap_run_playbook. When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
+      "description": "Suggest playbooks for what the user wants — text-first, suggest-and-confirm, NEVER auto-run the top hit. Pass intentText (what they said) and/or profileSlug (the kind of thing, e.g. 'post'). Read-only. Returns ranked candidates best first ({ id, name, goalTemplate, subjectProfileSlug, params, executor, score, reason, signals }); [] when none. Show the reason when you suggest; wait for confirmation before launching via synap_run_playbook (or, on doors that expose sessions, by opening the template as a working session with the chosen entity as its subject). When profileSlug is omitted, every active visible playbook is a candidate (ranked by intentText). When present, kind/facet matches AND playbooks with no subject (e.g. Plan Next Content) stay in the pool.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1831,7 +1831,7 @@
           },
           "entityId": {
             "type": "string",
-            "description": "Optional UUID of the specific entity — round-trip it into synap_start_session as subjectEntityId once a playbook is chosen. Widens the match with that entity's live facet-role slugs."
+            "description": "Optional UUID of the specific entity — round-trip it as the launch's subject once a playbook is chosen. Widens the match with that entity's live facet-role slugs."
           },
           "workspaceId": {
             "type": "string",
@@ -1853,7 +1853,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, run via synap_start_session with templateId. goalTemplate may contain {{param}} placeholders.",
+      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1937,7 +1937,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created.",
+      "description": "Read workspace governance policy and count of pending proposals. Use before writes to understand auto-approve rules and whether proposals will be created. When called with an agent key it also returns `agentBudget`: YOUR pending-proposal cap, how many of it you are using, whether you are BLOCKED (at the cap your writes are refused — nothing is written), and the remedy, including the link to a cap-raise request already waiting for your owner's review. Read-only: it never files anything.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2409,7 +2409,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. If a same/similar project already exists it is reused (or surfaced) — reuse it instead of making a near-duplicate.",
+      "description": "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. If a same/similar project already exists it is reused (or surfaced) — reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status=\"proposed\" is SUCCESS — say it is awaiting review, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3508,7 +3508,7 @@
         "destructiveHint": true,
         "openWorldHint": true
       },
-      "description": "LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook's workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). Distinct from synap_start_session(templateId). Governed: agent launch returns status='proposed' until approved.",
+      "description": "LAUNCH a playbook via its executor (discover via synap_list_playbooks) — instantiates a session + run channel + playbook_run and dispatches to the playbook's executor (is-agent | external-agent | hybrid). Pass playbookId OR an unambiguous playbookName/name (multi-match returns candidates — never a silent pick). Write home: workspaceId if set, else the playbook's workspace, else subject/session; pod-wide playbooks with no home reject (pass workspaceId). This LAUNCHES the executor — it is not the same as opening a working session from the template. Governed, with THREE normal outcomes: status=\"proposed\" (an agent launch awaits approval — SUCCESS, pass on reviewUrl, do not retry), status=\"blocked\" (nothing ran: the playbook uses skills that are not enabled yet; `unenabledSkills` names them and `enableProposals` carries ONE enable request per pack — relay the message and run it again only after that is approved), status=\"running\" (it started; `run` + `session` are returned).",
       "inputSchema": {
         "type": "object",
         "properties": {

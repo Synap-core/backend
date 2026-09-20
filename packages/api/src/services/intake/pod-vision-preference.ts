@@ -1,7 +1,6 @@
 /**
- * Pod-wide `pod_settings.settings.intelligenceDefaults` readers for capture —
- * the preferred vision model (`.visionModelId`) and the consent to the
- * third-party decision model (`.thirdPartyDecisionModel`), both set by
+ * Pod-wide `pod_settings.settings.intelligenceDefaults` reader for capture —
+ * the preferred vision model (`.visionModelId`), set by
  * `intelligence.setPodDefaults`.
  *
  * The vision model is a PREFERENCE, forwarded on the IS structure request: the IS always executes
@@ -44,37 +43,5 @@ export async function readPodVisionModelPreference(
       "pod vision model preference read failed — the IS picks its own vision model"
     );
     return undefined;
-  }
-}
-
-/**
- * The pod's CONSENT to the third-party decision model (TypeSafe JEV) —
- * `pod_settings.settings.intelligenceDefaults.thirdPartyDecisionModel`, set by
- * `intelligence.setPodDefaults`. Default OFF: only a stored `true` allows it.
- *
- * Unlike the vision preference above this is a CONSENT, not a preference, so
- * it fails CLOSED: a failed read never lets capture text leave for TypeSafe.
- * The failure is logged at error and kept DISTINCT from "not opted in"
- * (`reason`), so a broken read can never pass for a pod's deliberate choice.
- */
-export type ThirdPartyDecisionModelConsent =
-  | { allowed: true }
-  | { allowed: false; reason: "not_opted_in" | "read_failed" };
-
-export async function readPodThirdPartyDecisionModelConsent(
-  database: Pick<typeof DbType, "select">
-): Promise<ThirdPartyDecisionModelConsent> {
-  try {
-    const flag = (await selectIntelligenceDefaults(database))
-      ?.thirdPartyDecisionModel;
-    return flag === true
-      ? { allowed: true }
-      : { allowed: false, reason: "not_opted_in" };
-  } catch (err) {
-    logger.error(
-      { err },
-      "pod third-party decision model consent read FAILED — treating it as OFF (no capture content is sent to the decision model)"
-    );
-    return { allowed: false, reason: "read_failed" };
   }
 }

@@ -24,6 +24,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { AUTOMATION_SCHEMA } from "./automation-schema-doc.js";
 
 export function registerAutomationsRoutes(app: HubHono): void {
@@ -237,7 +238,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
           "draft" | "active" | "paused" | "error",
         metadata: body.metadata as Record<string, unknown> | undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "automations.create failed");
       return c.json(
@@ -328,7 +329,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
         workspaceId: workspaceId ?? null,
         id: c.req.param("automationId"),
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "automations.get failed");
       return c.json(
@@ -396,7 +397,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
           : {}),
         reasoning: body.reasoning as string | undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "automations.trigger failed");
       return c.json(
@@ -466,7 +467,7 @@ export function registerAutomationsRoutes(app: HubHono): void {
           "draft" | "active" | "paused" | "error" | undefined,
         metadata: body.metadata as Record<string, unknown> | undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "automations.update failed");
       return c.json(

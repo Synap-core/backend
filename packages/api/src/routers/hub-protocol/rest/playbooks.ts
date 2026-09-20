@@ -35,6 +35,7 @@ import {
   type HubHono,
   type HubVariables,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 type HubContext = Context<{ Variables: HubVariables }>;
 
@@ -120,13 +121,11 @@ async function resolveWriteAgent(
 /** REST rendering of a shared playbook-door outcome. */
 function renderOutcome<T>(c: HubContext, outcome: PlaybookDoorOutcome<T>) {
   switch (outcome.kind) {
-    case "result": {
-      const status = (outcome.result as { status?: unknown }).status;
-      return c.json(
-        outcome.result as object,
-        status === "proposed" ? 202 : 200
-      );
-    }
+    // The 202-on-proposed rule lives in `jsonGoverned`, not here — this door
+    // had the only correct copy of it, and a second copy is how the doors
+    // diverged in the first place.
+    case "result":
+      return jsonGoverned(c, outcome.result);
     case "invalid":
       return c.json(
         {
@@ -398,7 +397,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
         agentUserId,
         reasoning: body.reasoning,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "playbooks.promote failed");
       return c.json(

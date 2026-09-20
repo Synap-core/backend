@@ -21,6 +21,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 export function registerWidgetDefinitionsRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -140,7 +141,7 @@ export function registerWidgetDefinitionsRoutes(app: HubHono): void {
         workspaceId,
         agentUserId: resolvedAgentUserId,
       } as Parameters<typeof caller.widgetDefinitions.upsertWidgetDef>[0]);
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
       // on `.code` (bundled-build TRPCError identity defeats instanceof).

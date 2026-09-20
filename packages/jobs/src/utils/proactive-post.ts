@@ -28,12 +28,9 @@ import {
 import {
   messages,
   workspaces,
-  notifications,
   MessageRole,
   MessageAuthorType,
   MessageCategory,
-  NotificationCategory,
-  NotificationPriority,
 } from "@synap/database/schema";
 import type {
   WorkspaceSettings,
@@ -45,6 +42,7 @@ import { getDefaultProactiveAiPreferences } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
 import { emitSideEffects } from "@synap/events";
+import { createNotificationViaService } from "./notification-creator.js";
 
 const logger = createLogger({ module: "proactive-post" });
 
@@ -294,30 +292,44 @@ async function postToPersonalChat(
 }
 
 /**
- * Create a notification row for a proactive message.
- * Direct DB insert — no socket emit from the jobs path.
- * The bell updates on next user refresh or via the next socket connection.
+ * Create a notification for a proactive message, through the ONE write door.
+ *
+ * This used to be a direct `db.insert(notifications)` with no socket emit, so
+ * routing preferences, the kill switch, quiet hours and push ALL failed to
+ * apply — and since `ai.proactive.insight` is also raised through the service by
+ * `services/DeliveryService.ts` → `utils/delivery-router.ts`, that type was
+ * PARTIALLY governed: a mute worked for one path and not the other, which reads
+ * as a flaky setting rather than as a bug. `registerNotificationCreator`
+ * (`utils/notification-creator.ts`) is what makes the service reachable from
+ * here without jobs importing @synap/api.
+ *
+ * All seven `ProactiveMessageType` values now have a registry row; the two that
+ * did not (`suggestion`, `alert`) were added in the same change, because routing
+ * without them would have made those two silently stop writing anything.
+ *
+ * `category` and `priority` are no longer passed: they belong to the registry
+ * type. They used to be hardcoded `AI` / `LOW` here for every type, which
+ * already disagreed with the registry (`morning_briefing` is `normal`, not
+ * `low`) — the bell showed one priority and the registry declared another.
  */
 async function postProactiveNotification(
   options: PostProactiveOptions
 ): Promise<PostProactiveResult> {
   const { userId, workspaceId, content, proactiveType } = options;
 
-  const [row] = await db
-    .insert(notifications)
-    .values({
-      workspaceId,
-      userId,
-      type: `ai.proactive.${proactiveType}`,
-      category: NotificationCategory.AI,
-      priority: NotificationPriority.LOW,
+  const id = await createNotificationViaService({
+    type: `ai.proactive.${proactiveType}`,
+    userId,
+    workspaceId,
+    sourceType: "proactive_message",
+    data: {
       title: PROACTIVE_TITLES[proactiveType],
       body: content.substring(0, 300),
-      sourceType: "proactive_message",
-    })
-    .returning({ id: notifications.id });
+      proactiveType,
+    },
+  });
 
-  return { posted: !!row, messageId: row?.id };
+  return { posted: !!id, messageId: id };
 }
 
 /**

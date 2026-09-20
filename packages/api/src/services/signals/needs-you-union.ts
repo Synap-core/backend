@@ -107,6 +107,20 @@ export interface Signal {
    */
   sessionGoal?: string | null;
   /**
+   * The owed slot's OWN `kind` (`ExpectedOutput.kind`) — NOT this signal's
+   * `kind`, which is the union's discriminator and is already `"owed-slot"`.
+   * Named `slotKind` for exactly that reason.
+   *
+   * It is here because one slot kind takes a DIFFERENT VERB: an escalated
+   * criterion (`CRITERION_SLOT_KIND`) is a grade the human owes, so a tray
+   * offering "I did this" / attest on it marks the slot done while the
+   * criterion stays failing and the verdict never moves. Without this field a
+   * tray cannot tell the two apart — and the previous classification withheld
+   * `kind` on the reasoning that renderers draw icons from `category`, which
+   * was true of ICONS and wrong about VERBS.
+   */
+  slotKind?: string;
+  /**
    * Decision CLASS of a `proposal-cluster` signal, carried straight off the
    * cluster (which derives it through `proposalClassFields`, the one door).
    * Absent on every other kind — a notification, an event or an owed slot has
@@ -272,6 +286,12 @@ export interface OwedSlotSignalInput {
   claimedDone?: boolean;
   /** The owning session's declared goal, straight from `listOwedSlots`. */
   sessionGoal?: string | null;
+  /**
+   * The slot's own `ExpectedOutput.kind`, straight from `listOwedSlots`.
+   * Optional here only because this input is a DB-free mirror; every real slot
+   * carries one.
+   */
+  kind?: string;
 }
 
 /**
@@ -290,6 +310,13 @@ export interface OwedSlotSignalInput {
  *                                      from, the context that decides whether
  *                                      to act now
  *   blockedReason, why, claimedDone → carried straight through (be0abb7d)
+ *   kind                            → `slotKind` (renamed: `Signal.kind` is
+ *                                      the union discriminator). A criterion
+ *                                      slot takes a different VERB from an
+ *                                      ordinary deliverable, and a tray that
+ *                                      cannot tell them apart offers attest on
+ *                                      a grade — marking it done while the
+ *                                      criterion stays failing.
  *
  * DELIBERATELY WITHHELD — a real field, not surfaced today, and here is why:
  *   sessionStatus  → no `owed-slot` surface renders a session-lifecycle chip;
@@ -300,9 +327,11 @@ export interface OwedSlotSignalInput {
  *   projectId      → no `Signal` kind carries scope today (a cluster's scope is
  *                     implicit in its target); giving only ONE kind a scope
  *                     field would be state no shared renderer could rely on.
- *   kind, icon     → would let a tray render a per-slot-kind icon, but every
+ *   icon           → would let a tray render a per-slot icon, but every
  *                     `Signal` renderer today draws its icon from `category`,
  *                     never from a kind string — undrawn context, not a hole.
+ *                     (`kind` was withheld under this same reasoning until it
+ *                     turned out to decide the VERB, not the icon.)
  */
 const PROJECTED_OWED_SLOT_FIELDS = [
   "sessionId",
@@ -312,13 +341,13 @@ const PROJECTED_OWED_SLOT_FIELDS = [
   "blockedReason",
   "why",
   "claimedDone",
+  "kind",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
 const WITHHELD_OWED_SLOT_FIELDS = [
   "sessionStatus",
   "workspaceId",
   "projectId",
-  "kind",
   "icon",
 ] as const satisfies ReadonlyArray<keyof OwedSlot>;
 
@@ -390,6 +419,7 @@ export function signalFromOwedSlot(row: OwedSlotSignalInput): Signal {
     ...(row.why ? { why: row.why } : {}),
     ...(row.claimedDone !== undefined ? { claimedDone: row.claimedDone } : {}),
     ...(row.sessionGoal ? { sessionGoal: row.sessionGoal } : {}),
+    ...(row.kind ? { slotKind: row.kind } : {}),
   };
 }
 

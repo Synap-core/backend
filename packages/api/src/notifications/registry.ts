@@ -98,7 +98,44 @@ export interface NotificationDef {
   ttl?: number;
   /** Group notifications sharing the same resolved groupBy field */
   groupBy?: string;
+  /**
+   * SUPPRESSION window, in ms. Declared ⇒ `NotificationService.create()` looks
+   * for an existing row with the SAME `(userId, type, groupKey)` created within
+   * this window and, finding one, writes NOTHING and interrupts nobody.
+   *
+   * This is not `groupBy`. `groupBy` is DISPLAY collapsing — N rows exist and
+   * the bell stacks them, which is fine for a bell and wrong for a phone: N
+   * rows means N pushes. A type that can be emitted repeatedly for the same
+   * subject (a second criterion escalating in the same session, a redelivered
+   * close event) needs the row itself not to be written a second time.
+   *
+   * Opt-IN on purpose. Applying a window to every type would silently swallow
+   * `proposal.created`, which groups by AGENT and legitimately fires once per
+   * proposal — the second proposal from the same agent is real news, not a
+   * duplicate. Only a type whose groupKey IS its identity may declare one.
+   *
+   * WHAT IT DOES NOT COVER, measured: it is keyed on the resolved `groupKey`,
+   * so two notifications that differ in any way the groupKey does not encode
+   * (a DIFFERENT criterion in the same session) are the same key and the second
+   * is suppressed — that is the intent here, not a gap. Conversely it cannot
+   * coalesce two events whose groupKeys differ, however similar they read. A
+   * type with no resolvable groupKey is never deduped (and says so in the log).
+   */
+  dedupeWindowMs?: number;
 }
+
+/**
+ * The suppression window both session-attention types use: one notification per
+ * session per six hours.
+ *
+ * Six hours, not "forever": a redelivered event, a retried evaluation pass, and
+ * a second criterion escalating in the same run all land inside one working
+ * block and are one piece of news ("this session needs you"). A session that
+ * escalates again TOMORROW is genuinely news again, and a permanent key would
+ * silence it forever with nothing to say so. Six hours is the smallest window
+ * that covers a working block without making that claim.
+ */
+export const SESSION_ATTENTION_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -377,10 +414,21 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     titleTemplate: "{{agentName}} encountered an error",
     bodyTemplate: "{{errorMessage}}",
     defaultChannels: ["in_app", "os"],
-    // Group repeated failures of the same agent in the bell. The B2 producer
-    // (events.ts) additionally passes an explicit agentUserId-keyed groupKey and
-    // a cooldown gate — this declares the fallback grouping for any other caller.
+    // Group repeated failures of the same agent in the bell. Producers pass an
+    // explicit agentUserId-keyed groupKey; this declares the fallback grouping
+    // for any other caller.
     groupBy: "agentName",
+    // ONE HOUR, and it is a CONSOLIDATION, not a new rule. This exact cooldown
+    // was hand-rolled twice — `AGENT_FAILURE_RENOTIFY_COOLDOWN_MS`, once in the
+    // headless A2AI response worker in @synap/jobs and again in
+    // `routers/hub-protocol/rest/events.ts`, each with its own pre-insert
+    // SELECT over the same `(type, groupKey, createdAt)`. Two copies of a
+    // suppression rule is two places for it to drift; declaring it on the type
+    // puts it where every producer reaching the one door inherits it.
+    // (The worker is named in prose rather than by filename on purpose: the
+    // `a2ai-one-door` tripwire scans api/src for the queue-name literal and
+    // does NOT strip comments, so spelling the filename here trips it.)
+    dedupeWindowMs: 60 * 60 * 1000,
     ttl: 0,
     actions: [
       {
@@ -525,6 +573,47 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     label: "AI Nudge",
     icon: "sparkles",
     priority: "low",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{body}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+  },
+  /*
+   * `suggestion` and `alert` complete the set. `ProactiveMessageType`
+   * (`jobs/src/utils/proactive-post.ts`) has always had SEVEN members while this
+   * registry declared five, so routing that producer through
+   * `NotificationService.create()` without these two would have made them hit
+   * "Unknown notification type — skipping" and stop writing rows ALTOGETHER —
+   * trading a silent governance gap for a silent data loss.
+   *
+   * Both follow their five siblings exactly: `in_app` only, no push. These are
+   * AI-INITIATED posts — the agent volunteering something — not a decision owed
+   * by the founder, and the two session types in this wave push precisely
+   * because work is stopped until they answer. Nothing is stopped here. `alert`
+   * is the one that invites a push default and still does not get one: its
+   * "alert" is the AI's own word for its message, not a severity this registry
+   * can vouch for, and a type whose urgency is decided by the caller must not
+   * be allowed to ring a phone by default. A founder who wants either on their
+   * phone turns it on per type — which is exactly what the catalogue and the
+   * per-type routing rule are for.
+   */
+  {
+    type: "ai.proactive.suggestion",
+    category: "ai",
+    label: "AI Suggestion",
+    icon: "lightbulb",
+    priority: "low",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{body}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+  },
+  {
+    type: "ai.proactive.alert",
+    category: "ai",
+    label: "AI Alert",
+    icon: "bell-ring",
+    priority: "normal",
     titleTemplate: "{{title}}",
     bodyTemplate: "{{body}}",
     defaultChannels: ["in_app"],
@@ -762,6 +851,92 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         label: "Open room",
         variant: "primary",
         handler: { type: "navigate-object", kind: "session", view: "room" },
+      },
+    ],
+  },
+  {
+    /**
+     * An agent spent its allowed automatic attempts on a REQUIRED criterion and
+     * still could not pass it, so the grade is now the founder's to make.
+     *
+     * Producer: `recordSessionEvaluation` (`evaluations/record.ts`), in the same
+     * `if (outcome.escalate)` block that files the owed slot — so the slot in
+     * the needs-you tray and the notification can never disagree about whether
+     * an escalation happened.
+     *
+     * Category `ai`, not `governance`: nothing is being APPROVED here. The
+     * governance category is the proposal lane (approve/reject an AI's write);
+     * this is an AI handing back a judgement it could not make. `system` would
+     * be a lie too — no component is unhealthy. Priority `high`, and BOTH
+     * channels: the work is stopped until the founder answers, which is the
+     * definition of an interrupt.
+     *
+     * ONE per session, not one per criterion — `dedupeWindowMs` on a
+     * session-keyed groupKey. A second criterion escalating in the same run is
+     * the same news and must not be a second push.
+     */
+    type: "session.criterion_escalated",
+    category: "ai",
+    label: "Criterion needs your call",
+    icon: "user-check",
+    priority: "high",
+    titleTemplate: "Needs your call: {{sessionTitle}}",
+    bodyTemplate:
+      "{{criterionStatement}} — checked {{attempts}} times and still not passing. Mark it pass or fail.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    groupBy: "sessionId",
+    dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open session",
+        variant: "primary",
+        // `sourceId` is the session id (see the producer), so the route table
+        // resolves it — and `pushTarget()` reads THIS handler to give the push
+        // its `{kind,id}`, so the tap and the button land on one screen.
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * A session closed with required criteria still unmet. Producer: the
+     * `session-criteria-unmet-notify` reactor
+     * (`session-criteria-unmet-reactor.ts`), off the close door's
+     * `focus_session.closed` emit.
+     *
+     * PRIOR ART SAYS THIS SHOULD NOT PUSH, and the founder overrode it
+     * knowingly. A finished-but-flagged result is not, by the usual rule, an
+     * interrupt — the work is over; nothing is waiting on the person. The
+     * founder's counter is that a session closing flagged is precisely the
+     * moment a course correction is cheap, and that the override is safe
+     * BECAUSE it is toggleable per type. That toggle is the load-bearing half:
+     * do not remove the `os` default without also removing the setting, and do
+     * not remove the setting while this default stands.
+     *
+     * Priority `normal`, not `high`: nothing is blocked. Category `ai` — same
+     * lane as the escalation, and for the same reason (an AI's judgement about
+     * work, not a governance approval).
+     */
+    type: "session.closed.criteria_unmet",
+    category: "ai",
+    label: "Closed with criteria unmet",
+    icon: "flag",
+    priority: "normal",
+    titleTemplate: "Closed and flagged: {{sessionTitle}}",
+    bodyTemplate:
+      "{{statusLabel}} with {{unmetSummary}} — open the session to decide what to do.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    groupBy: "sessionId",
+    dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open session",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "session" },
       },
     ],
   },

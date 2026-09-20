@@ -19,6 +19,7 @@ import { encryptServiceKey } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { Context as HonoLikeContext } from "hono";
 import { hasScope, type HubHono } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import {
   ProviderUpsertSchema,
@@ -142,14 +143,12 @@ async function applyUpsert(
       .set({ ...rest, encryptedApiKey: resolvedKey, updatedAt: now })
       .where(eq(aiProviders.providerId, rest.providerId));
   } else {
-    await db
-      .insert(aiProviders)
-      .values({
-        ...rest,
-        encryptedApiKey: resolvedKey,
-        createdAt: now,
-        updatedAt: now,
-      });
+    await db.insert(aiProviders).values({
+      ...rest,
+      encryptedApiKey: resolvedKey,
+      createdAt: now,
+      updatedAt: now,
+    });
   }
 }
 
@@ -199,16 +198,13 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     if (gate.kind === "proposed") {
       // 202: nothing has been written. The caller must not read this as success
       // — `eve` surfaces the review link rather than reporting "saved".
-      return c.json(
-        {
-          status: "proposed",
-          proposalId: gate.proposalId,
-          providerId: body.providerId,
-          message:
-            "Provider change filed for approval — it takes effect once approved.",
-        },
-        202
-      );
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: gate.proposalId,
+        providerId: body.providerId,
+        message:
+          "Provider change filed for approval — it takes effect once approved.",
+      });
     }
 
     await applyUpsert(payload);
@@ -284,15 +280,12 @@ export function registerAiProvidersRoutes(app: HubHono): void {
       );
       if (gate.kind === "denied") return c.json({ error: gate.reason }, 403);
       if (gate.kind === "proposed") {
-        return c.json(
-          {
-            status: "proposed",
-            proposalId: gate.proposalId,
-            providerId,
-            message: `Request to ${suffix} "${providerId}" filed for approval.`,
-          },
-          202
-        );
+        return jsonGoverned(c, {
+          status: "proposed",
+          proposalId: gate.proposalId,
+          providerId,
+          message: `Request to ${suffix} "${providerId}" filed for approval.`,
+        });
       }
 
       await applyUpsert(payload);
@@ -351,15 +344,12 @@ export function registerAiProvidersRoutes(app: HubHono): void {
     const gate = await gateProviderWrite(c, "delete", { providerId });
     if (gate.kind === "denied") return c.json({ error: gate.reason }, 403);
     if (gate.kind === "proposed") {
-      return c.json(
-        {
-          status: "proposed",
-          proposalId: gate.proposalId,
-          providerId,
-          message: `Request to remove "${providerId}" filed for approval.`,
-        },
-        202
-      );
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: gate.proposalId,
+        providerId,
+        message: `Request to remove "${providerId}" filed for approval.`,
+      });
     }
 
     await db.delete(aiProviders).where(eq(aiProviders.providerId, providerId));

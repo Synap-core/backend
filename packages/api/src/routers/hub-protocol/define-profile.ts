@@ -15,6 +15,7 @@
 import { PropertyValueType } from "@synap/database";
 
 import type { HubProtocolCaller } from "./rest/_shared.js";
+import { withReviewUrl } from "./proposal-response.js";
 
 const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
 
@@ -108,9 +109,12 @@ export async function defineProfile(
   // on. Return the proposal and say the fields are still pending, rather than
   // half-applying a schema.
   if (result && result.status === "proposed") {
+    // ONE proposal shape: `profiles.createProfile` drops the gate's
+    // `reviewUrl`, so fill it here from the shared `/open/<id>` builder — the
+    // agent must be able to show the review link (see proposal-response.ts).
     return {
       ok: true,
-      result: {
+      result: withReviewUrl({
         ...result,
         ...(fieldSpecs.length > 0
           ? {
@@ -121,7 +125,7 @@ export async function defineProfile(
               },
             }
           : {}),
-      },
+      }),
     };
   }
 

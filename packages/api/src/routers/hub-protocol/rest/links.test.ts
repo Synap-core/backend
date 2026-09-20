@@ -32,8 +32,14 @@ const focusSessionWorkspaceById = new Map<string, string>();
 // floor before governance).
 const visibleProjectIds = new Set<string>();
 
-vi.mock("@synap/database", () => {
+// PARTIAL mock (importOriginal + spread), not a total replacement: a total one
+// makes every export this file does not name `undefined`, so the next export
+// the route starts importing fails at runtime with a mock that still "passes".
+// That is what `__tripwires__/database-mock-total-ratchet` counts.
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
   return {
+    ...actual,
     db: {
       query: {
         workspaces: {

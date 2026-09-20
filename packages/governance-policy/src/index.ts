@@ -1755,6 +1755,12 @@ export const DIRECT_PROPOSAL_DOORS = {
   "entity/import.graph": "direct",
   "entity/merge": "direct",
   "governance/governance.advisory": "direct",
+  // The UNIFIED gov-config settings door (B5). Every gov-config recommender —
+  // raise-ceiling, raise-proposal-cap, tighten — now files `settings.update`
+  // through `insertPendingProposal` rather than the deprecated B4a–B4g types,
+  // and `apply-approval.ts:1780` is its approval half. Undeclared, the
+  // approval-half tripwire could not check that half existed at all.
+  "settings/settings.update": "direct",
   "governance/governance.raise_ceiling": "direct",
   "governance/governance.tighten_lane": "direct",
   "governance/governance.tighten_posture": "direct",

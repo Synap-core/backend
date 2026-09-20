@@ -27,6 +27,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
 const _commandRateLimiter = new Map<
@@ -465,7 +466,7 @@ export function registerCommandsRoutes(app: HubHono): void {
       }
 
       if ("proposalId" in permResult) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: permResult.proposalId,
           summary: permResult.summary,

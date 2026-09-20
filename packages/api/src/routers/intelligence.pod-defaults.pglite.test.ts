@@ -1,13 +1,15 @@
 /**
  * `intelligence.setPodDefaults` / `getPodDefaults` driven through the REAL
- * procedures on PGlite, read back through the REAL capture reader
- * (`readPodThirdPartyDecisionModelConsent`).
+ * procedures on PGlite.
  *
- * What this pins: the decision-model consent is written through the SAME door
- * as the model tiers, and the door PATCHES `intelligenceDefaults` — saving the
- * tiers never clears the consent, toggling the consent never clears the tiers.
- * (The previous body did `settings || {intelligenceDefaults: input}`, which
- * replaced the whole object.)
+ * What this pins: the door PATCHES `intelligenceDefaults` instead of replacing
+ * it, so saving ONE field never clears its siblings. The previous body did
+ * `settings || { intelligenceDefaults: input }`, which replaced the whole
+ * object — a partial save silently dropped every key it did not mention.
+ * (Found while adding a key here; the key itself, a TypeSafe-only consent
+ * flag, was withdrawn on 2026-09-20 — provider choice is an operator decision,
+ * uniform across providers — but the patch semantics it exposed are the real
+ * regression guard and stay.)
  *
  * Stubbed: `db` → a PGlite drizzle over `pod_settings`; `isPodAdmin` → true
  * (the admin gate is not what this test is about).
@@ -44,7 +46,7 @@ vi.mock("../utils/split-brain-service.js", async (importOriginal) => ({
 }));
 
 import { intelligenceRouter } from "./intelligence.js";
-import { readPodThirdPartyDecisionModelConsent } from "../services/intake/pod-vision-preference.js";
+import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
 
 const caller = () =>
   intelligenceRouter.createCaller({
@@ -52,9 +54,10 @@ const caller = () =>
     userId: "admin-1",
   } as never);
 
-const consent = () =>
-  readPodThirdPartyDecisionModelConsent(
-    h.db as Parameters<typeof readPodThirdPartyDecisionModelConsent>[0]
+/** Read back through the REAL capture-side reader, not the router's own echo. */
+const storedVisionModel = () =>
+  readPodVisionModelPreference(
+    h.db as Parameters<typeof readPodVisionModelPreference>[0]
   );
 
 const TIERS = {
@@ -64,7 +67,7 @@ const TIERS = {
   visionModelId: "vision-y",
 };
 
-describe("intelligence.setPodDefaults — decision-model consent (real door, PGlite)", () => {
+describe("intelligence.setPodDefaults — patch, never replace (real door, PGlite)", () => {
   beforeAll(async () => {
     await h.client!.exec(
       `create table pod_settings (id uuid primary key default gen_random_uuid(), settings jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now());`
@@ -74,44 +77,30 @@ describe("intelligence.setPodDefaults — decision-model consent (real door, PGl
     await h.client!.exec(`delete from pod_settings;`);
   });
 
-  it("default OFF: no row, or tiers saved without the key", async () => {
-    expect(await consent()).toEqual({ allowed: false, reason: "not_opted_in" });
-    expect(
-      (await caller().getPodDefaults()).defaults.thirdPartyDecisionModel
-    ).toBe(false);
+  it("first write on an empty pod (insert path) stores what was sent", async () => {
     await caller().setPodDefaults(TIERS);
-    expect(await consent()).toEqual({ allowed: false, reason: "not_opted_in" });
+    expect(await storedVisionModel()).toBe("vision-y");
+    expect((await caller().getPodDefaults()).defaults).toMatchObject(TIERS);
   });
 
-  it("a consent-only call opts in, and a later tiers save does NOT clear it", async () => {
+  it("a PARTIAL save keeps the keys it did not mention", async () => {
+    // The discriminating row: with the old replace-the-object body, this
+    // second call dropped visionModelId entirely.
     await caller().setPodDefaults(TIERS);
-    await caller().setPodDefaults({ thirdPartyDecisionModel: true });
-    expect(await consent()).toEqual({ allowed: true });
-    // The consent-only patch kept the tiers.
+    await caller().setPodDefaults({ chatModelId: "chat-z" });
     expect((await caller().getPodDefaults()).defaults).toMatchObject({
       ...TIERS,
-      thirdPartyDecisionModel: true,
+      chatModelId: "chat-z",
     });
+    expect(await storedVisionModel()).toBe("vision-y");
+  });
 
-    await caller().setPodDefaults({ ...TIERS, chatModelId: "chat-z" });
-    expect(await consent()).toEqual({ allowed: true });
+  it("an explicit null CLEARS that key without touching the others", async () => {
+    await caller().setPodDefaults(TIERS);
+    await caller().setPodDefaults({ visionModelId: null });
+    expect(await storedVisionModel()).toBeUndefined();
     expect((await caller().getPodDefaults()).defaults.chatModelId).toBe(
-      "chat-z"
+      "chat-x"
     );
-
-    await caller().setPodDefaults({ thirdPartyDecisionModel: false });
-    expect(await consent()).toEqual({ allowed: false, reason: "not_opted_in" });
-  });
-
-  it("first write on an empty pod (insert path) records the consent", async () => {
-    await caller().setPodDefaults({ thirdPartyDecisionModel: true });
-    expect(await consent()).toEqual({ allowed: true });
-  });
-
-  it("validates: a non-boolean consent is refused at the door", async () => {
-    await expect(
-      caller().setPodDefaults({ thirdPartyDecisionModel: "yes" as never })
-    ).rejects.toThrow();
-    expect(await consent()).toEqual({ allowed: false, reason: "not_opted_in" });
   });
 });

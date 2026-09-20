@@ -90,10 +90,26 @@ vi.mock("../../notifications/notify-pod-wide-proposal.js", () => ({
   notifyPodWideProposal: mockNotifyPodWideProposal,
 }));
 
-import { recommendRaiseProposalCapForAllAgents } from "./recommend-raise-proposal-cap.js";
+import {
+  recommendRaiseProposalCapForAllAgents,
+  requestRaiseProposalCap,
+  findOpenRaiseProposalCapRequest,
+} from "./recommend-raise-proposal-cap.js";
 
 function agentRow(id: string, createdByUserId = "human-1") {
   return { id, createdByUserId };
+}
+
+/** A PENDING `settings.update` cap-raise row as the dedup lookup reads it. */
+function openRaiseRow(agentUserId: string, id = "open-raise-1") {
+  return {
+    id,
+    data: {
+      store: "governance_ceilings",
+      axis: "pending_proposal_cap",
+      agentUserId,
+    },
+  };
 }
 
 beforeEach(() => {
@@ -148,20 +164,20 @@ describe("recommendRaiseProposalCapForAllAgents", () => {
 
   it("dedupes against an existing PENDING settings.update cap-raise for the agent", async () => {
     queues.users.push([agentRow("agent-1")]);
-    queues.proposals.push([
-      {
-        data: {
-          store: "governance_ceilings",
-          axis: "pending_proposal_cap",
-          agentUserId: "agent-1",
-        },
-      },
-    ]);
+    queues.proposals.push([openRaiseRow("agent-1")]);
+    // A NON-covering ceiling, deliberately: if the dedup lookup stopped
+    // matching, the scan would fall through to this check, find it does NOT
+    // cover 15, and FILE — so `not.toHaveBeenCalled()` below discriminates the
+    // two rules instead of passing on a swallowed error. (Queuing nothing here
+    // would make a fall-through throw into the per-agent catch, which also
+    // reports `proposalsFiled: 0` — a green run over a broken dedup.)
+    queues.governanceCeilings.push([{ limitValue: 1 }]);
 
     const result = await recommendRaiseProposalCapForAllAgents();
 
     expect(result.proposalsFiled).toBe(0);
     expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+    expect(mockCountPending).toHaveBeenCalledWith("agent-1");
   });
 
   it("dedupes against a covering higher pending_proposal_cap ceiling", async () => {
@@ -188,5 +204,128 @@ describe("recommendRaiseProposalCapForAllAgents", () => {
       data: { limitValue: number };
     };
     expect(call.data.limitValue).toBe(45);
+  });
+});
+
+/**
+ * The SINGLE-AGENT entry the F2 cap refusal calls. Same body, same dedup rule
+ * as the cron scan above — only the entry shape differs. These pin the three
+ * things the refusal depends on: it returns a LINKABLE id, a second refusal
+ * gets the SAME id, and the request it files cannot eat the very budget it
+ * exists to unblock.
+ */
+describe("requestRaiseProposalCap (the refusal's door)", () => {
+  it("files ONE request and returns its id for the refusal to link", async () => {
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposals.push([]);
+    queues.governanceCeilings.push([]);
+
+    const result = await requestRaiseProposalCap("agent-1");
+
+    expect(result).toMatchObject({
+      proposalId: "cap-raise-1",
+      deduped: false,
+      cap: 10,
+      proposedLimit: 15,
+    });
+    expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);
+  });
+
+  it("a second refusal returns the SAME open request — no duplicate row", async () => {
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposals.push([openRaiseRow("agent-1", "open-raise-77")]);
+    // Non-covering, for the same discriminating reason as the scan's test.
+    queues.governanceCeilings.push([{ limitValue: 1 }]);
+
+    const result = await requestRaiseProposalCap("agent-1");
+
+    expect(result).toMatchObject({
+      proposalId: "open-raise-77",
+      deduped: true,
+    });
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("the filed request does NOT carry agentUserId — so it cannot consume the cap it is trying to raise", async () => {
+    // THE DESIGN'S LOAD-BEARING FACT. `countPendingAgentProposals` counts rows
+    // by `proposals.agentUserId`. If the cap-raise were stamped with the agent,
+    // filing it would immediately occupy one of the slots the agent is blocked
+    // on — and at the cap it would be the row that keeps it blocked forever.
+    // It is filed on the OWNER's behalf (`createdBy` = the human, who decides).
+    queues.users.push([agentRow("agent-1", "human-owner")]);
+    queues.proposals.push([]);
+    queues.governanceCeilings.push([]);
+
+    await requestRaiseProposalCap("agent-1");
+
+    const call = mockInsertPendingProposal.mock.calls[0]![0] as Record<
+      string,
+      unknown
+    >;
+    expect(call.agentUserId).toBeUndefined();
+    expect(call.createdBy).toBe("human-owner");
+    expect(call.subjectUserId).toBe("human-owner");
+  });
+
+  it("uses the pending/cap the GATE resolved instead of re-querying them", async () => {
+    // The refusal quotes these numbers to the agent; a re-read could return
+    // different ones and the message and the request would then disagree.
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposals.push([]);
+    queues.governanceCeilings.push([]);
+
+    const result = await requestRaiseProposalCap("agent-1", {
+      pendingCount: 30,
+      cap: 30,
+    });
+
+    expect(mockCountPending).not.toHaveBeenCalled();
+    expect(mockAgentProposalCap).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ cap: 30, proposedLimit: 45 });
+  });
+
+  it("files nothing for an agent that is not actually at its cap", async () => {
+    queues.users.push([agentRow("agent-1")]);
+
+    const result = await requestRaiseProposalCap("agent-1", {
+      pendingCount: 3,
+      cap: 10,
+    });
+
+    expect(result).toBeNull();
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("files nothing when a covering ceiling already exists", async () => {
+    queues.users.push([agentRow("agent-1")]);
+    queues.proposals.push([]);
+    queues.governanceCeilings.push([{ limitValue: 20 }]); // >= proposed 15
+
+    expect(await requestRaiseProposalCap("agent-1")).toBeNull();
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("files nothing for an unknown agent id", async () => {
+    queues.users.push([]);
+
+    expect(await requestRaiseProposalCap("ghost")).toBeNull();
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+});
+
+describe("findOpenRaiseProposalCapRequest (read-only, for synap_governance)", () => {
+  it("returns the open request's id and files NOTHING", async () => {
+    queues.proposals.push([openRaiseRow("agent-1", "open-raise-9")]);
+
+    expect(await findOpenRaiseProposalCapRequest("agent-1")).toBe(
+      "open-raise-9"
+    );
+    expect(mockInsertPendingProposal).not.toHaveBeenCalled();
+  });
+
+  it("returns null when another agent's raise is the only one open", async () => {
+    queues.proposals.push([openRaiseRow("agent-OTHER", "open-raise-9")]);
+
+    expect(await findOpenRaiseProposalCapRequest("agent-1")).toBeNull();
   });
 });

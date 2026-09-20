@@ -25,7 +25,6 @@ import {
 } from "@synap/intelligence-client";
 import type { EvaluationVerdict } from "@synap-core/types/focus-sessions";
 import { executeCapability } from "../../capabilities/execute-capability.js";
-import { readPodThirdPartyDecisionModelConsent } from "../../intake/pod-vision-preference.js";
 import {
   CHECK_GATE_METADATA_KEY,
   checkGateFailing,
@@ -259,7 +258,6 @@ export async function evaluateSession(
         userId,
         workspaceId: session.workspaceId ?? undefined,
       });
-      const consent = await readPodThirdPartyDecisionModelConsent(db);
       const modelId = (session.metadata as { modelId?: unknown } | null)
         ?.modelId;
       const judgement = await judgeSessionCriteria(
@@ -275,7 +273,6 @@ export async function evaluateSession(
           ...(typeof modelId === "string" && modelId
             ? { excludeModel: modelId }
             : {}),
-          allowDecisionModel: consent.allowed,
         }
       );
       const byKey = new Map(judgement.verdicts.map((v) => [v.key, v]));

@@ -11,6 +11,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 export function registerRelationDefsRoutes(app: HubHono): void {
   /**
@@ -90,7 +91,7 @@ export function registerRelationDefsRoutes(app: HubHono): void {
         isDirectional: body.isDirectional as boolean | undefined,
         uiHints: body.uiHints as Record<string, unknown> | undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
       // on `.code` (bundled-build TRPCError identity defeats instanceof).

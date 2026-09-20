@@ -130,7 +130,11 @@ describe("POST /workspaces/from-definition — D6 governance", () => {
       forcePropose: true,
     });
     expect(status).toBe(202);
-    expect(body).toEqual({ status: "proposed", proposalId: "prop-1" });
+    expect(body).toEqual({
+      status: "proposed",
+      proposalId: "prop-1",
+      reviewUrl: "/open/prop-1",
+    });
     expect(h.installCalls).toEqual([]);
   });
 

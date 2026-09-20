@@ -38,6 +38,7 @@ import {
   type HubHono,
   httpStatusForTrpcError,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 const CreateBodySchema = z.object({
@@ -252,7 +253,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         return c.json({ status: "denied", message: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: perm.proposalId,
           summary: perm.summary,
@@ -372,7 +373,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         return c.json({ status: "denied", message: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: perm.proposalId,
           summary: perm.summary,
@@ -539,7 +540,7 @@ export function registerCellInstancesRoutes(app: HubHono): void {
         return c.json({ status: "denied", message: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: perm.proposalId,
           summary: perm.summary,

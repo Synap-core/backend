@@ -38,18 +38,12 @@ import {
 } from "@synap/database";
 import type { db as Db } from "@synap/database";
 import {
+  CRITERION_SLOT_KIND,
   latestEvaluationPerCriterion,
   type EvaluationRowLike,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, readCriteria } from "@synap/playbooks";
 import { FOCUS_SESSION_CLOSED_EVENT_TYPE } from "../workers/automation-trigger-matcher.js";
-
-/**
- * The `kind` of the owed slot an escalated criterion files. Mirror of
- * `CRITERION_SLOT_KIND` in `@synap/api` (services/focus-sessions/evaluations/
- * record.ts) — jobs cannot import api.
- */
-const CRITERION_SLOT_KIND = "criterion";
 
 const TERMINAL = new Set(["closed", "cancelled", "failed"]);
 
@@ -96,9 +90,7 @@ export interface PlaybookScorecard {
 }
 
 /** Session ids where a human overrode a non-human verdict, per criterion. */
-export function findOverrides(
-  rows: readonly ScorecardEvaluationRow[]
-): Array<{
+export function findOverrides(rows: readonly ScorecardEvaluationRow[]): Array<{
   sessionId: string;
   criterionKey: string;
   rationale: string | null;

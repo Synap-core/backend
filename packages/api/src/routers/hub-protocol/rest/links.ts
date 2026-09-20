@@ -22,6 +22,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import {
   createLink,
   getLinksFor,
@@ -360,7 +361,7 @@ export function registerLinksRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           proposalId: perm.proposalId,
           reviewPath: perm.reviewPath,

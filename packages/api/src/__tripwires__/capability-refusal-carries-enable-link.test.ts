@@ -258,13 +258,28 @@ describe("TRIPWIRE: capability refusals emit a human-facing record", () => {
     expect(connect![1]).toMatch(/refusalReason: "not_connected"/);
   });
 
-  it("the DAILY-CAP refusal emits too (a logger.warn reaches no user)", () => {
+  it("the PROPOSAL-CAP refusal emits too, and hands back the remedy", () => {
+    // This scan was DEAD until 2026-09-20: it hunted `if (alreadyToday >= cap)`,
+    // an identifier with zero occurrences since the cap became a count of
+    // PENDING proposals rather than a daily tally. A regex that matches nothing
+    // passes every assertion after it, so nobody noticed. Anchored on the live
+    // condition now, and extended to the half that was missing in production:
+    // the refusal must FILE the cap-raise request and put its link in the
+    // reason, because the reason is the only channel every door forwards (the
+    // narrow doors have no `synap_governance` tool to ask).
     const src = readFileSync(PERMISSION_CHECK, "utf-8");
-    const cap = /if \(alreadyToday >= cap\) \{([\s\S]*?)\n    \}/.exec(src);
-    expect(cap, "daily-cap branch not found — did it move?").not.toBeNull();
+    const cap = /if \(pendingCount >= cap\) \{([\s\S]*?)\n    \}/.exec(src);
+    expect(cap, "proposal-cap branch not found — did it move?").not.toBeNull();
     expect(cap![1], WHY_EMIT_MATTERS).toMatch(/emitAiDecision\(/);
     expect(cap![1]).toMatch(/outcome: "refused"/);
     expect(cap![1]).toMatch(/denied: true/);
+    expect(
+      cap![1],
+      "the capped agent must be handed a filed raise request, not advice"
+    ).toMatch(/requestRaiseProposalCap\(/);
+    expect(cap![1], "the review link must ride in the reason").toMatch(
+      /openLink\(capRaise\.proposalId\)/
+    );
   });
 
   it("READER PARITY: the runs feed actually surfaces both refusal kinds", () => {

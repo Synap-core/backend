@@ -1209,9 +1209,12 @@ export class IntelligenceHubClient {
    * `decider: "jev"` with a `probabilities` distribution), else its LLM
    * cascade. `allowFallback: false` asks for JEV only — the IS answers 503
    * (→ null here) rather than spending a second LLM call.
-   * `allowDecisionModel: false` (the pod has not opted in to the third-party
-   * decision model — `intelligenceDefaults.thirdPartyDecisionModel`) makes the
-   * IS never call JEV; its LLM cascade answers. An older IS ignores the flag.
+   * `allowDecisionModel: false` makes the IS never call JEV for this request;
+   * its LLM cascade answers. It is a PER-REQUEST opt-out for a route that
+   * should not use the decision model — not a per-pod consent flag (that
+   * TypeSafe-only flag was withdrawn 2026-09-20: which processors the fleet
+   * uses is an operator decision, uniform across providers). An older IS
+   * ignores the flag.
    */
   async workspaceTiebreak(input: {
     content: string;

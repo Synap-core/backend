@@ -32,85 +32,25 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { NOTIFICATION_REGISTRY } from "./registry.js";
+import { PRODUCERLESS_NOTIFICATION_TYPES } from "./catalogue.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const API_SRC = join(HERE, "..", "..");
 
 /**
  * The explicit, human-reviewed allowlist of registry types with NO producer
- * anywhere in `packages/api/src` as of 2026-09-04 (S3). Every row states WHY
- * it is still declared rather than deleted, and whether it is referenced by a
- * consuming app despite having no backend producer.
+ * anywhere in `packages/api/src` as of 2026-09-04 (S3). Every row's rationale
+ * ("declared, unproduced — remove or produce by 2026-10-01") is kept with the
+ * list itself.
+ *
+ * ⚠️ THE LIST IS NOT DECLARED HERE. It moved to `./catalogue.ts` as
+ * `PRODUCERLESS_NOTIFICATION_TYPES`, because the settings catalogue must
+ * exclude these types at RUNTIME and this file's mechanism — a `readdirSync`
+ * scan of the `.ts` source tree — cannot run in a deployed pod. One list,
+ * imported by both; this test remains the tripwire that pins it to the scan.
+ * Edit the list THERE; this test going red is what tells you to.
  */
-const PRODUCERLESS_ALLOWLIST = new Set<string>([
-  // ── The original ten (pre-S3 audit) ──────────────────────────────────────
-  // Declared, unproduced — remove or produce by 2026-10-01. No governance
-  // auto-approval path emits it yet; `governance.proposal_stale` is the only
-  // proposal-lifecycle alert actually wired.
-  "proposal.auto_approved",
-  // Declared, unproduced — remove or produce by 2026-10-01. Referenced by
-  // synap-app's `NotificationBanner.tsx` icon map (`packages/core/notifications`),
-  // so the FRONTEND already anticipates it — keep the row; only the backend
-  // producer (a terminal-exec capability call site) is missing.
-  "ai_request.terminal_exec",
-  // Declared, unproduced — remove or produce by 2026-10-01. No AI entity-create
-  // path distinguishes "created by AI" from an ordinary `entity.create` today.
-  "entity.created_by_ai",
-  // Declared, unproduced — remove or produce by 2026-10-01. `data.*` bell
-  // notifications for raw CRUD were never wired; the event spine already
-  // carries `entity.delete.validated` etc. for anyone reading events directly.
-  "data.entity.deleted",
-  "data.document.created",
-  "data.view.created",
-  "data.relation.created",
-  // Declared, unproduced — remove or produce by 2026-10-01. Inbox triage
-  // notifications await the inbox-classification feature.
-  "inbox.email",
-  "inbox.mention",
-  "inbox.priority_item",
-
-  // ── Found during S3 (2026-09-04) — NOT among the six the task named as
-  // "raised by live probes / boot reports"; investigation found they have NO
-  // caller ANYWHERE (not just no event, no NOTIFICATION either). They are
-  // dead registry rows, not live alerts missing an event append. ──────────
-  // Declared, unproduced — remove or produce by 2026-10-01. No storage-usage
-  // probe exists; nothing computes a `{{percent}}` to pass it.
-  "pod.storage_warning",
-  // Declared, unproduced — remove or produce by 2026-10-01. Workspace invite
-  // creation (`routers/workspaces/invites.ts`) never calls NotificationService
-  // — invites are delivered by link/email only today. Not referenced by
-  // browser/relay/synap-app either (the string hits found there are an
-  // unrelated `/workspace/invite` URL path and a doc comment).
-  "workspace.invite",
-
-  // ── Also found during S3 (2026-09-04) — not named by the task, discovered
-  // by this same source scan. Each has a SIBLING type in the same category
-  // that DOES have a producer (`connector.auth.expired`, `agent.task_failed`,
-  // `ai.proactive.insight`), so these read as the rest of an intended set
-  // that was never finished, not typos. ──────────────────────────────────
-  // Declared, unproduced — remove or produce by 2026-10-01. No connector-sync
-  // SUCCESS path notifies; only the failure path
-  // (`connector.sync.failed`) and the unhealthy-connection nudge
-  // (`connector.auth.expired`, S3-promoted) do. The frontend-looking hits for
-  // "connector.sync.complete" are actually the unrelated EVENT type
-  // `connector_sync.complete.completed` (underscore grammar, event spine).
-  "connector.sync.complete",
-  // Declared, unproduced — remove or produce by 2026-10-01. Only the FAILURE
-  // half of the agent-task pair (`agent.task_failed`) is wired
-  // (`hub-protocol/rest/events.ts`).
-  "agent.task_complete",
-  // Declared, unproduced — remove or produce by 2026-10-01. `DeliveryService`'s
-  // proactive-message path defaults `notificationType` to `"ai.proactive.insight"`
-  // — the only member of the `ai.proactive.*` family any caller actually passes.
-  "agent.insight",
-  "ai.proactive.morning_briefing",
-  "ai.proactive.weekly_digest",
-  "ai.proactive.health_check",
-  "ai.proactive.nudge",
-  // Declared, unproduced — remove or produce by 2026-10-01. No pod-version
-  // update check exists yet.
-  "pod.update_available",
-]);
+const PRODUCERLESS_ALLOWLIST = PRODUCERLESS_NOTIFICATION_TYPES;
 
 /** Every `.ts` file under `dir`, skipping node_modules/dist/tests/this file. */
 function collectSourceFiles(dir: string): string[] {
@@ -130,6 +70,13 @@ function collectSourceFiles(dir: string): string[] {
   }
   return out;
 }
+
+/**
+ * Prefixes a producer builds with a template literal (`` `ai.proactive.${t}` ``).
+ * Derived from the emitters, not hand-guessed: each entry must appear in source
+ * as that exact backtick prefix, which the scan below asserts.
+ */
+const COMPOSED_TYPE_PREFIXES = ["ai.proactive."] as const;
 
 function findProducerlessTypes(): Set<string> {
   const files = collectSourceFiles(API_SRC);
@@ -152,7 +99,21 @@ function findProducerlessTypes(): Set<string> {
       }
       return false;
     });
-    if (!hasProducer) producerless.add(def.type);
+    // A producer may COMPOSE the type instead of writing it whole:
+    // `delivery-router.ts` emits `ai.proactive.${proactiveType}`. A literal
+    // scan cannot see that, and the four types it hides were real, delivered
+    // notifications the settings screen refused to list — a switch missing for
+    // something the founder actually receives. Treat a template-literal
+    // prefix as a producer for every registry type under that prefix.
+    const composed =
+      !hasProducer &&
+      contents.some((src) =>
+        COMPOSED_TYPE_PREFIXES.some(
+          (prefix) =>
+            def.type.startsWith(prefix) && src.includes(`\`${prefix}$\{`)
+        )
+      );
+    if (!hasProducer && !composed) producerless.add(def.type);
   }
   return producerless;
 }

@@ -43,6 +43,7 @@ import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import { hasScope, logger, type HubHono } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 const PodAdoptSchema = z.object({
   workspaceId: z.string().uuid(),
@@ -146,17 +147,14 @@ export function registerPodAdoptRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm && perm.proposalId) {
-        return c.json(
-          {
-            status: "proposed",
-            workspaceId,
-            proposalId: perm.proposalId,
-            summary: perm.summary,
-            reviewPath: perm.reviewPath,
-            reviewUrl: perm.reviewUrl,
-          },
-          202
-        );
+        return jsonGoverned(c, {
+          status: "proposed",
+          workspaceId,
+          proposalId: perm.proposalId,
+          summary: perm.summary,
+          reviewPath: perm.reviewPath,
+          reviewUrl: perm.reviewUrl,
+        });
       }
 
       // ── Already adopted at this exact version — no-op (mirrors

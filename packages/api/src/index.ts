@@ -351,6 +351,9 @@ export {
 } from "./services/proposals/expire-lapsed-proposals.js";
 // Exported for @synap/jobs' `registerCleanupPackRunner` IoC slot.
 export { fileCleanupPacks } from "./services/pod-hygiene/cleanup-pack.js";
+// Exported for @synap/jobs' `registerNotificationCreator` IoC slot — the ONE
+// notification write door, reached from jobs without jobs importing @synap/api.
+export { NotificationService } from "./notifications/NotificationService.js";
 // Boot-time IoC: api registers the pod-wide proposal notification reactor onto
 // the @synap/events reactor registry, so a proposal filed from @synap/jobs (the
 // widen-lane scanner) still reaches the pod owner + admins without jobs ever
@@ -360,6 +363,9 @@ export { registerPodWideProposalReactor } from "./notifications/pod-wide-proposa
 // `focus_session.closed`, this reactor derives whether the LAST open blocker
 // just went away and notifies once. See session-unblock-reactor.ts.
 export { registerSessionUnblockReactor } from "./notifications/session-unblock-reactor.js";
+// Same close event, different news: the session ENDED with required criteria
+// still unmet. See session-criteria-unmet-reactor.ts.
+export { registerSessionCriteriaUnmetReactor } from "./notifications/session-criteria-unmet-reactor.js";
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.
 export { registerClosingReportReactor } from "./services/session-document/closing-report-reactor.js";

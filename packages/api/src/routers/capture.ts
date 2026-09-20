@@ -26,10 +26,7 @@ import {
 } from "../services/intake/record-structure-intake.js";
 import { ensureIntakeSession } from "../services/intake/ensure-intake-session.js";
 import { stageExecuteSources } from "../services/intake/stage-execute-sources.js";
-import {
-  readPodThirdPartyDecisionModelConsent,
-  readPodVisionModelPreference,
-} from "../services/intake/pod-vision-preference.js";
+import { readPodVisionModelPreference } from "../services/intake/pod-vision-preference.js";
 import {
   captureClarificationAnswered,
   claimCaptureQuestion,
@@ -1665,13 +1662,6 @@ const captureBaseRouter = router({
         ? await readPodVisionModelPreference(database)
         : undefined;
 
-      // The pod's CONSENT to the third-party decision model (TypeSafe JEV) —
-      // opt-in, default OFF, and a failed read fails CLOSED (logged at error).
-      // Off ⇒ no capture content is sent to it: step 3a is not fired at all
-      // and step 1c's tie-break says `allowDecisionModel: false`.
-      const decisionModelConsent =
-        await readPodThirdPartyDecisionModelConsent(database);
-
       // 3a. Workspace DECISION, in parallel with /structure (no added latency).
       // The IS's decision door answers with its typed decision model only
       // (`allowFallback: false`): a calibrated Choice over the domain
@@ -1680,11 +1670,13 @@ const captureBaseRouter = router({
       // the structurer's own catalog pick (step 1a) stands — we never pay for a
       // second LLM opinion on the same question. Best-effort: never fails the
       // capture (an auth failure surfaces on the structure call itself).
-      // Only with the pod's consent (above).
+      //
+      // WHICH processors the fleet may use is an OPERATOR decision (the IS's
+      // provider config), disclosed like every other provider — never a per-pod,
+      // per-vendor switch. The withdrawn TypeSafe-only consent flag is replaced
+      // by a pod-level AI-processing POLICY covering every provider.
       const workspaceDecisionPromise: Promise<WorkspaceTiebreakResult | null> =
-        decisionModelConsent.allowed &&
-        availableWorkspaces.length > 1 &&
-        inputText.trim()
+        availableWorkspaces.length > 1 && inputText.trim()
           ? client
               .workspaceTiebreak({
                 content: inputText.slice(0, 4000),
@@ -1963,7 +1955,6 @@ const captureBaseRouter = router({
               routingMemory,
               // No pod consent ⇒ the IS never calls the third-party decision
               // model; its LLM cascade breaks the tie.
-              allowDecisionModel: decisionModelConsent.allowed,
             });
             workspaceDecision = applyTiebreakOutcome(
               structureResult,

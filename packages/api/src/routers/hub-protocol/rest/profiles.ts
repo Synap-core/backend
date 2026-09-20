@@ -31,6 +31,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 const ProfileRendererContentKindSchema = z.enum([
   "entity-detail",
@@ -295,7 +296,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         { door: "POST /profiles", fieldsParam: "fields" }
       );
       if (!outcome.ok) return c.json({ error: outcome.error }, 400);
-      return c.json(outcome.result);
+      return jsonGoverned(c, outcome.result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: a bound service key targeting another workspace
       // throws FORBIDDEN → 403; a slug the hub door's zod refuses → 400. Never a
@@ -372,7 +373,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         reasoning: body.reasoning,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
       // on `.code` (bundled-build TRPCError identity defeats instanceof).
@@ -503,7 +504,7 @@ export function registerProfilesRoutes(app: HubHono): void {
         displayOrder: body.displayOrder,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
       // on `.code` (bundled-build TRPCError identity defeats instanceof).

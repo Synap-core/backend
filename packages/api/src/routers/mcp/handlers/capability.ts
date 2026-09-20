@@ -148,7 +148,7 @@ export const capabilityHandlers: McpHandlerMap = {
     return ok(outcome.ok ? outcome.result : { error: outcome.error });
   },
   synap_governance: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsId = args.workspaceId as string;
     // Membership floor: getEffectiveGovernance reads ANY workspace's policy by
@@ -157,13 +157,68 @@ export const capabilityHandlers: McpHandlerMap = {
     if (wsId && !(await verifyWorkspaceAccess(userId, wsId))) {
       return ok({ error: `Forbidden: no access to workspace ${wsId}` });
     }
-    const { getEffectiveGovernance } =
-      await import("../../../utils/permission-check.js");
+    const {
+      getEffectiveGovernance,
+      countPendingAgentProposals,
+      agentProposalCap,
+    } = await import("../../../utils/permission-check.js");
     const { countPendingProposals } =
       await import("../../../services/proposals/proposals-service.js");
     const policy = await getEffectiveGovernance(wsId);
     const pendingCount = await countPendingProposals(wsId);
-    return ok({ ...policy, pendingProposals: pendingCount });
+
+    // THE CALLER'S OWN BUDGET. The workspace policy above answers "will my
+    // write propose?"; it never answered "can I propose AT ALL right now?" —
+    // so an agent refused by the F2 pending-proposal cap had no read that
+    // would even name the limit it hit, and reported it as an unconfigurable
+    // runtime constant. Reported here (READ-ONLY — nothing is filed by this
+    // tool) using the SAME two helpers the cap enforces with, never a
+    // re-derivation, so this posture and the refusal can never disagree.
+    // Absent for a human key: the cap is per-agent and never applies to one.
+    let agentBudget: Record<string, unknown> | undefined;
+    if (agentUserId) {
+      const [agentPending, cap] = await Promise.all([
+        countPendingAgentProposals(agentUserId),
+        agentProposalCap(agentUserId),
+      ]);
+      const blocked = agentPending >= cap;
+      // The open cap-raise request, if one is already waiting for the owner —
+      // read through the filer's OWN dedup lookup so this link and the one the
+      // refusal hands back are the same row. Never files: `probe` is read-only.
+      let pendingRaise: { proposalId: string; reviewUrl: string } | undefined;
+      if (blocked) {
+        try {
+          const { findOpenRaiseProposalCapRequest } =
+            await import("../../../services/proposals/recommend-raise-proposal-cap.js");
+          const { openLink } = await import("../../../utils/deep-links.js");
+          const openId = await findOpenRaiseProposalCapRequest(agentUserId);
+          if (openId) {
+            pendingRaise = { proposalId: openId, reviewUrl: openLink(openId) };
+          }
+        } catch {
+          // A failed lookup must not blank the cap numbers above — it is
+          // reported as "no link known", not as "no cap".
+        }
+      }
+      agentBudget = {
+        agentUserId,
+        pendingProposalCap: cap,
+        pendingProposals: agentPending,
+        blocked,
+        ...(pendingRaise ? { pendingCapRaise: pendingRaise } : {}),
+        remedy: blocked
+          ? pendingRaise
+            ? `Blocked: ${agentPending} of ${cap} pending. A request to raise this limit is already waiting for your owner's review (${pendingRaise.reviewUrl}). Until it is approved, ask for pending proposals to be reviewed or cleared — each resolved proposal frees one slot.`
+            : `Blocked: ${agentPending} of ${cap} pending. Your next write will be refused and will file a request to raise this limit for your owner to review. Reviewing or clearing pending proposals also frees a slot immediately.`
+          : `${agentPending} of ${cap} pending proposals used. Writes still propose normally; at ${cap} they are refused until proposals are reviewed or the limit is raised.`,
+      };
+    }
+
+    return ok({
+      ...policy,
+      pendingProposals: pendingCount,
+      ...(agentBudget ? { agentBudget } : {}),
+    });
   },
   synap_list_capabilities: async (
     ctx: McpToolContext

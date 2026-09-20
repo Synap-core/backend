@@ -224,7 +224,8 @@ describe("automation create — an unknown capability verb is refused on every a
   it("REST: an agent key with a resolvable flow gets `proposed`", async () => {
     h.skillRows = [{ id: "skill-ai", name: "ai.generate" }];
     const { status, body } = await restCreate("ai.generate");
-    expect(status).toBe(200);
+    // ONE proposal shape on every hub door: a proposal is success — 202.
+    expect(status).toBe(202);
     expect(body).toMatchObject({ status: "proposed", proposalId: "prop-auto" });
     expect(h.gateCalls).toHaveLength(1);
     expect(h.gateCalls[0]).toMatchObject({

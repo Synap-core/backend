@@ -41,18 +41,20 @@ const mocks = vi.hoisted(() => ({
   selectReturning: [] as unknown[],
   messageLookup: undefined as { id: string } | undefined,
   updateSets: [] as Array<Record<string, unknown>>,
+  /** Inputs handed to the ONE notification write door. */
   notificationInserts: [] as Array<Record<string, unknown>>,
-  // Identity token so the db.insert mock can tell "insert into notifications"
-  // apart from "insert into chatTurns" without re-deriving column shapes.
-  notificationsTable: { __table: "notifications" },
 }));
 
-// notifyA2AIFailure imports the `notifications` table + enums from the
-// schema subpath — a separate module from the "@synap/database" mock below.
-vi.mock("@synap/database/schema", () => ({
-  notifications: mocks.notificationsTable,
-  NotificationCategory: { AI: "ai" },
-  NotificationPriority: { HIGH: "high" },
+// `notifyA2AIFailure` no longer inserts into `notifications` itself: it goes
+// through the ONE write door, reached across the api↔jobs boundary by the
+// `registerNotificationCreator` IoC slot. Mocking the door (rather than the
+// table) is what makes these assertions about GOVERNANCE — a row written here
+// obeys routing prefs, quiet hours and push, and a direct insert would not.
+vi.mock("../../utils/notification-creator.js", () => ({
+  createNotificationViaService: (input: Record<string, unknown>) => {
+    mocks.notificationInserts.push(input);
+    return Promise.resolve("notif-1");
+  },
 }));
 
 // TOTAL module replacement: anything the worker imports from here must be
@@ -90,23 +92,13 @@ vi.mock("@synap/database", () => ({
   persistAssistantReply: (...args: unknown[]) =>
     mocks.persistAssistantReply(...args),
   db: {
-    insert: (table: unknown) => {
-      if (table === mocks.notificationsTable) {
-        return {
-          values: (v: Record<string, unknown>) => {
-            mocks.notificationInserts.push(v);
-            return Promise.resolve(undefined);
-          },
-        };
-      }
-      return {
-        values: () => ({
-          onConflictDoNothing: () => ({
-            returning: async () => mocks.insertReturning,
-          }),
+    insert: () => ({
+      values: () => ({
+        onConflictDoNothing: () => ({
+          returning: async () => mocks.insertReturning,
         }),
-      };
-    },
+      }),
+    }),
     select: () => ({
       from: () => ({
         where: () => ({
@@ -328,7 +320,14 @@ describe("handleA2AIResponseTrigger", () => {
       sourceType: "agent",
       sourceId: turnId,
     });
-    expect(mocks.notificationInserts[0].body).toContain("400");
+    // The producer supplies `errorMessage`; the registry's bodyTemplate
+    // (`{{errorMessage}}`) is what renders it. Asserting the DATA is what the
+    // producer is responsible for — asserting a rendered `body` here would be
+    // testing the registry through the wrong seam.
+    expect(
+      (mocks.notificationInserts[0].data as Record<string, unknown>)
+        .errorMessage
+    ).toContain("400");
   });
 
   it("finishes failed when response is empty", async () => {
@@ -382,7 +381,12 @@ describe("handleA2AIResponseTrigger", () => {
     ).rejects.toThrow("stream boom");
 
     expect(mocks.notificationInserts).toHaveLength(1);
-    expect(mocks.notificationInserts[0].body).toBe("stream boom");
+    // `errorMessage` is what the producer supplies; the registry's
+    // `{{errorMessage}}` bodyTemplate renders it.
+    expect(
+      (mocks.notificationInserts[0].data as Record<string, unknown>)
+        .errorMessage
+    ).toBe("stream boom");
   });
 
   it("notifies a save failure (not an agent fault) when persist fails on the final attempt", async () => {
@@ -401,7 +405,10 @@ describe("handleA2AIResponseTrigger", () => {
     ).rejects.toThrow("db down");
 
     expect(mocks.notificationInserts).toHaveLength(1);
-    expect(mocks.notificationInserts[0].body).toContain("could not be saved");
+    expect(
+      (mocks.notificationInserts[0].data as Record<string, unknown>)
+        .errorMessage
+    ).toContain("could not be saved");
   });
 
   it("skips work when an existing turn is already completed", async () => {

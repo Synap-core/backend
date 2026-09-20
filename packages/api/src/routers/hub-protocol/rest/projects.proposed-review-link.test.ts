@@ -81,7 +81,11 @@ describe("/projects — a proposed write carries its review link", () => {
     }
   );
 
-  it("omits the link keys when the gate supplied none", async () => {
+  it("derives the review link when the gate supplied none", async () => {
+    // The product rule is that a proposal ALWAYS carries its review link, so a
+    // gate that returned only a proposalId no longer leaves the agent without
+    // one: `jsonGoverned` fills it from the shared `/open/<id>` builder
+    // (`openLink`) — never a second URL rule. `reviewPath` stays gate-only.
     checkPermissionOrProposeMock.mockResolvedValueOnce({
       proposalId: "prop-2",
     });
@@ -89,9 +93,11 @@ describe("/projects — a proposed write carries its review link", () => {
       `/projects/${PROJECT_ID}`,
       json("DELETE")
     );
+    expect(res.status).toBe(202);
     expect(await res.json()).toEqual({
       status: "proposed",
       proposalId: "prop-2",
+      reviewUrl: "/open/prop-2",
     });
   });
 

@@ -23,6 +23,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 export function registerViewsRoutes(app: HubHono): void {
   // ── OpenAPI metadata for /views* routes ──────────────────────────────────
@@ -201,7 +202,7 @@ export function registerViewsRoutes(app: HubHono): void {
         reasoning: body.reasoning,
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "createView failed");
       return c.json(
@@ -267,7 +268,7 @@ export function registerViewsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, viewId }, "updateView failed");
       return c.json(
@@ -327,7 +328,7 @@ export function registerViewsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, viewId }, "arrangeBento failed");
       return c.json(

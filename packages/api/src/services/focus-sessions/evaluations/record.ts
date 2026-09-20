@@ -40,12 +40,15 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import {
+  CRITERION_SLOT_KIND,
   computeSessionVerdict,
   latestEvaluationPerCriterion,
+  resolveSessionTitle,
   type EvaluationVerdict,
   type EvaluatorKind,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
+import { NotificationService } from "../../../notifications/NotificationService.js";
 import { updateExpectedOutputsLocked } from "../delegate-output.js";
 import { reconcileOwedSince } from "../update-session.js";
 import { normalizeExpectedLabel } from "../expected-label.js";
@@ -54,8 +57,28 @@ import { attestExpectedOutput } from "../satisfy-expected-output.js";
 /** Non-human attempts allowed per criterion per session before escalation. */
 export const MAX_NON_HUMAN_ATTEMPTS = 2;
 
-/** The owed-slot kind an escalated criterion is filed under. */
-export const CRITERION_SLOT_KIND = "criterion";
+/**
+ * The registry type this file produces — declared under the lowercase name
+ * `notificationType` first, deliberately. `notification-producer-allowlist.test.ts`
+ * proves a registry row has a producer by scanning source for the literal next
+ * to a case-SENSITIVE `(type|notificationType)\s*[:=?]`, so a SCREAMING_SNAKE
+ * declaration alone is invisible to it and a real producer reads as a dead row.
+ * (Same trick, same reason, as `session-unblock-reactor.ts`.)
+ */
+const notificationType = "session.criterion_escalated" as const;
+export const CRITERION_ESCALATED_NOTIFICATION_TYPE = notificationType;
+
+/**
+ * The escalation's identity is the SESSION, not the criterion — the founder's
+ * decision: one grouped notification per session. Used as both the display
+ * group and the suppression key (`dedupeWindowMs` in the registry).
+ */
+export function criterionEscalationGroupKey(sessionId: string): string {
+  return `${CRITERION_ESCALATED_NOTIFICATION_TYPE}:${sessionId}`;
+}
+
+/** Longest criterion statement quoted in the escalation `why` (500-char cap). */
+export const CRITERION_WHY_STATEMENT_MAX = 400;
 
 export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
 
@@ -205,6 +228,16 @@ export async function recordSessionEvaluation(
       evaluation: evaluation!,
       criterion,
       escalate,
+      // Carried out of the transaction so the escalation notification can name
+      // the session without a second read. `attempts` is the count INCLUDING
+      // the row just written — what the founder is told they were checked.
+      session: {
+        id: session.id,
+        userId: session.userId,
+        workspaceId: session.workspaceId,
+        title: resolveSessionTitle(session),
+      },
+      attempts: nonHuman + 1,
     };
   });
 
@@ -214,6 +247,36 @@ export async function recordSessionEvaluation(
   let escalated = false;
   if (outcome.escalate) {
     escalated = await fileCriterionSlot(sessionId, outcome.criterion);
+    // TELL THE PERSON. The owed slot above puts the criterion in the needs-you
+    // tray, which they see only if they open the app and look — and an
+    // escalation is, by definition, work that has STOPPED until they answer.
+    // This call sits inside the same `if` as the slot, not beside it and not in
+    // a reactor, for one reason: there is no escalation EVENT. Escalation is a
+    // branch of this function, so the notification has to be a branch of it
+    // too, and putting it here means the slot and the notification are written
+    // under one condition and can never disagree about whether an escalation
+    // happened.
+    //
+    // ONE per session, not one per criterion: the registry type declares a
+    // session-keyed `dedupeWindowMs`, so the second criterion to escalate in
+    // the same run writes no row and raises no push. `create()` never throws.
+    await NotificationService.create({
+      type: CRITERION_ESCALATED_NOTIFICATION_TYPE,
+      userId: outcome.session.userId,
+      workspaceId: outcome.session.workspaceId,
+      sourceType: "session",
+      // The SESSION is the destination — the registry's `navigate-object`
+      // action and the push tap both read this as the object id.
+      sourceId: outcome.session.id,
+      groupKey: criterionEscalationGroupKey(outcome.session.id),
+      data: {
+        sessionId: outcome.session.id,
+        sessionTitle: outcome.session.title,
+        criterionKey: outcome.criterion.key,
+        criterionStatement: outcome.criterion.statement,
+        attempts: outcome.attempts,
+      },
+    });
   } else if (evaluatorKind === "human") {
     // The human answered the question an escalation asked — discharge the slot
     // through the ONE attest door. Any refusal (no slot, already done) is fine.
@@ -225,6 +288,20 @@ export async function recordSessionEvaluation(
   }
 
   return { status: "recorded", evaluation: outcome.evaluation, escalated };
+}
+
+/**
+ * WHY the person is being asked. Names the criterion's STATEMENT, never its
+ * `key` — the key is a machine slug (`no-stale`) and this sentence is read in
+ * the needs-you tray. The statement is clipped so the whole sentence fits the
+ * 500-char `why` ceiling the slot doors enforce.
+ */
+export function criterionSlotWhy(criterion: SessionCriterion): string {
+  const statement =
+    criterion.statement.length > CRITERION_WHY_STATEMENT_MAX
+      ? `${criterion.statement.slice(0, CRITERION_WHY_STATEMENT_MAX - 1)}…`
+      : criterion.statement;
+  return `Checked ${MAX_NON_HUMAN_ATTEMPTS} times and still not passing — mark "${statement}" pass or fail.`;
 }
 
 /** File the human-owned slot for an escalated criterion; idempotent by label. */
@@ -246,7 +323,7 @@ async function fileCriterionSlot(
         status: "pending",
         owner: "human",
         blockedReason: "decision",
-        why: `Checked ${MAX_NON_HUMAN_ATTEMPTS} times and still not passing — mark "${criterion.key}" pass or fail.`,
+        why: criterionSlotWhy(criterion),
       }),
     ];
   });

@@ -328,6 +328,43 @@ describe("session evaluations", () => {
       status: "pending",
     });
     expect(typeof slots[0]!.owedSince).toBe("string");
+    // The SENTENCE the founder reads in the needs-you tray names the criterion
+    // by its STATEMENT. `typecheck` is the machine key and must not appear —
+    // a slug in a human sentence is the defect this pins.
+    expect(slots[0]!.why).toBe(
+      `Checked ${MAX_NON_HUMAN_ATTEMPTS} times and still not passing — mark "Typecheck passes" pass or fail.`
+    );
+    expect(slots[0]!.why).not.toContain("typecheck");
+    // `why` is capped at 500 by every slot door; a long statement is clipped,
+    // never smuggled past the ceiling.
+    expect(String(slots[0]!.why).length).toBeLessThanOrEqual(500);
+  });
+
+  it("a very long criterion statement is CLIPPED so the sentence still fits `why`", async () => {
+    const statement = "x".repeat(900);
+    const id = await seed({
+      criteria: [
+        {
+          key: "long",
+          statement,
+          check: { kind: "evidence", evidenceKey: "tsc" },
+        },
+      ],
+    });
+    for (let i = 0; i < MAX_NON_HUMAN_ATTEMPTS; i++) {
+      await recordSessionEvaluation({
+        sessionId: id,
+        userId: USER,
+        criterionKey: "long",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+      });
+    }
+    const slot = (await sessionRow(id)).expected_outputs[0]!;
+    expect(String(slot.why).length).toBeLessThanOrEqual(500);
+    expect(slot.why).toContain("…");
+    // It is still the STATEMENT that was clipped, not the instruction.
+    expect(slot.why).toContain("pass or fail.");
   });
 
   it("an OPTIONAL criterion failing twice files no slot", async () => {
@@ -580,6 +617,32 @@ describe("session evaluations", () => {
       ) as Array<{ id: string; verdict?: { passed: number } }>;
       const row = items.find((r) => r.id === id);
       expect(row?.verdict?.passed).toBe(1);
+    });
+
+    it("focusSessions.close returns the verdict AND the warnings (the door, not just the service)", async () => {
+      const id = await seed();
+      await recordSessionEvaluation({
+        sessionId: id,
+        userId: USER,
+        criterionKey: "typecheck",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+      });
+      const caller = focusSessionsRouter.createCaller({
+        authenticated: true,
+        userId: USER,
+      } as never);
+      const out = (await caller.close({ id })) as unknown as {
+        status: string;
+        verdict?: { requiredUnmet: number; state: string };
+        warnings?: string[];
+      };
+      expect(out.status).toBe("closed");
+      // The close's own grade — the browser had to re-derive this from the
+      // PRE-close scorecard because this door returned the bare row.
+      expect(out.verdict).toMatchObject({ state: "failing" });
+      expect(out.verdict!.requiredUnmet).toBeGreaterThan(0);
+      expect(out.warnings?.some((w) => w.includes("not met"))).toBe(true);
     });
   });
 });

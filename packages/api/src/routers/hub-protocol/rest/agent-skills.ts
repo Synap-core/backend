@@ -37,6 +37,7 @@ import {
   logger,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { insertSkillGoverned } from "../../skills.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
@@ -329,7 +330,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         skillId,
         workspaceId: workspaceId || undefined,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "agent-skills/executable get failed");
       return c.json(
@@ -365,7 +366,7 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
       // agent's — see skills-crud.ts's POST /skills for the same fix.
       const agentUserId = c.get("agentUserId") as string | undefined;
       const result = await caller.skills.createSkill({ ...body, agentUserId });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "agent-skills/executable create failed");
       return c.json(
@@ -603,10 +604,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         // Honest contract: no row exists yet. Never fake a created skill for a
         // write that is queued for review — same 202 envelope the other Hub
         // REST doors return (e.g. rest/packages.ts).
-        return c.json(
-          { status: "proposed" as const, proposalId: result.proposalId },
-          202
-        );
+        return jsonGoverned(c, {
+          status: "proposed" as const,
+          proposalId: result.proposalId,
+        });
       }
 
       return c.json(wireSkill(result.skill), 200);
@@ -799,10 +800,10 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
         return c.json({ error: result.reason }, 403);
       }
       if (result.status === "proposed") {
-        return c.json(
-          { status: "proposed" as const, proposalId: result.proposalId },
-          202
-        );
+        return jsonGoverned(c, {
+          status: "proposed" as const,
+          proposalId: result.proposalId,
+        });
       }
       const skillRow = result.skill;
 

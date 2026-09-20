@@ -86,6 +86,9 @@ import { satisfyExpectedOutputs } from "../services/focus-sessions/satisfy-expec
 import { logEvent } from "../lib/event-helpers.js";
 import { AGENT_WRITE_EVENT_KIND } from "../lib/run-event-kinds.js";
 import { openLink, openPath } from "./deep-links.js";
+// TYPE-ONLY: the value import is deferred inside the cap refusal (that module
+// imports this one, so a runtime import here would be a cycle).
+import type { RaiseProposalCapRequest } from "../services/proposals/recommend-raise-proposal-cap.js";
 import { propertyLinkLevel } from "./profile-schema-write-access.js";
 import { profileOwnershipRequirement } from "./profile-pod-wide-fields.js";
 import { isPodAdmin } from "./workspace-role.js";
@@ -434,7 +437,20 @@ export type PermissionResult =
        */
       deduped?: boolean;
     }
-  | { denied: true; reason: string };
+  | {
+      denied: true;
+      reason: string;
+      /**
+       * F2 CAP REFUSAL ONLY — the open `settings.update` cap-raise request the
+       * refusal filed (or found already open) for this agent. The link is
+       * ALSO inlined in `reason`, deliberately: every door surfaces the reason
+       * string, so the remedy travels even to a caller that reads nothing else.
+       * These fields are the structured form for doors that can render a link.
+       */
+      capRaiseProposalId?: string;
+      /** Absolute clickable review link for `capRaiseProposalId`. */
+      capRaiseReviewUrl?: string;
+    };
 
 /**
  * What `checkPermissionOrPropose` WOULD do, resolved without doing it.
@@ -3037,7 +3053,43 @@ async function createProposal(args: {
         },
         "Agent proposal cap reached — refusing further agent proposals"
       );
-      const capReason = `Agent proposal limit reached (${cap} pending). Review or clear this agent's pending proposals to free budget.`;
+      // THE REFUSAL IS THE DOOR. Naming a remedy in prose ("raise its cap via a
+      // governance ceiling") names nothing CALLABLE: the raise lives behind a
+      // builtin verb that `synap_list_capabilities` folds out of its default
+      // view, so an agent that hunts for it finds nothing and reports the cap as
+      // unconfigurable. So the refusal FILES the remedy itself and returns its
+      // review link — which makes this work identically on every door (pod MCP,
+      // Hub REST, Raycast, claude.ai) with no new tool exposure, because they
+      // all refuse through THIS function.
+      //
+      // Deduped by the filer: one open request per agent, so a flooding agent
+      // gets the same id + link on every refusal, never a second row.
+      //
+      // Best-effort by contract (mirrors the emitAiDecision comment below): a
+      // filer failure must degrade to the plain refusal, never turn a refusal
+      // into a 500. DYNAMIC import for the same two reasons emitAiDecision is
+      // deferred — the recommender imports THIS module (a static import would
+      // be a cycle), and it pulls `@synap/database`, which this module's suites
+      // replace with a TOTAL `vi.mock`.
+      let capRaise: RaiseProposalCapRequest | null = null;
+      try {
+        const { requestRaiseProposalCap } =
+          await import("../services/proposals/recommend-raise-proposal-cap.js");
+        capRaise = await requestRaiseProposalCap(attributionAgentUserId, {
+          pendingCount,
+          cap,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, agentUserId: attributionAgentUserId },
+          "Agent proposal cap: failed to file a cap-raise request (refusal stands)"
+        );
+      }
+      // Plain words, in the order a blocked agent needs them: nothing was
+      // written · a raise is waiting for review (here) · the other way out.
+      const capReason = capRaise
+        ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${capRaise.proposedLimit} is waiting for your review: ${openLink(capRaise.proposalId)} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.`
+        : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.`;
       // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
       // a capped agent and a dead agent were byte-identical from the UI: the
       // write neither executed nor proposed, and NOTHING said so. This event is
@@ -3068,14 +3120,22 @@ async function createProposal(args: {
           pendingCount,
           cap,
           reason: capReason,
+          ...(capRaise ? { capRaiseProposalId: capRaise.proposalId } : {}),
           // Read by getRun's agent_write branch as the activity row's hint.
-          fixHint:
-            "Review or clear this agent's pending proposals to free budget, or raise its cap via a governance ceiling.",
+          fixHint: capRaise
+            ? `Approve the pending request to raise this agent's limit to ${capRaise.proposedLimit}, or review/clear its pending proposals to free budget.`
+            : "Review or clear this agent's pending proposals to free budget, or raise its cap via a governance ceiling.",
         },
       });
       return {
         denied: true,
         reason: capReason,
+        ...(capRaise
+          ? {
+              capRaiseProposalId: capRaise.proposalId,
+              capRaiseReviewUrl: openLink(capRaise.proposalId),
+            }
+          : {}),
       };
     }
   }

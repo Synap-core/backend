@@ -21,6 +21,7 @@ import {
   type NotificationSignalInput,
   type OwedSlotSignalInput,
 } from "../services/signals/needs-you-union.js";
+import { CRITERION_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 
 function cluster(over: Partial<ProposalCluster> = {}): ProposalCluster {
@@ -521,5 +522,50 @@ describe("owed-slot signals carry their disclosure fields", () => {
   it("omits sessionGoal when the session has none, rather than inventing one", () => {
     const signal = signalFromOwedSlot(owed({ sessionGoal: null }));
     expect(signal).not.toHaveProperty("sessionGoal");
+  });
+
+  /**
+   * An ESCALATED CRITERION is a slot the human must GRADE, not a deliverable
+   * the human can attest. A tray that cannot tell the two apart offers "I did
+   * this", which marks the slot done while the criterion stays failing and the
+   * session verdict never moves. `kind` was WITHHELD from this projection on
+   * the reasoning that renderers draw icons from `category` — true of icons,
+   * wrong about verbs.
+   *
+   * BOUNDARY: this pins the mapper. `listOwedSlots` → `OwedSlotSignalInput` is
+   * a cast at the router (`routers/signals.ts:199,320`), and the shape parity
+   * there is held by the compile-time `_OwedSlotFieldsClassified` floor, not by
+   * this test.
+   */
+  it("projects the slot's own kind as `slotKind`, so a criterion is recognisable", () => {
+    const [signal] = unionNeedsYou({
+      clusters: [],
+      notifications: [],
+      owedSlots: [
+        owed({
+          sessionId: "44444444-4444-4444-8444-444444444444",
+          kind: CRITERION_SLOT_KIND,
+          blockedReason: "decision",
+          why: 'Checked 2 times and still not passing — mark "Typecheck passes" pass or fail.',
+        }),
+      ],
+    });
+
+    // NOT `signal.kind` — that is the union discriminator and is "owed-slot".
+    expect(signal?.kind).toBe("owed-slot");
+    expect(signal?.slotKind).toBe(CRITERION_SLOT_KIND);
+  });
+
+  it("projects an ORDINARY slot's kind too, so the tray distinguishes by value not by presence", () => {
+    const signal = signalFromOwedSlot(owed({ kind: "doc" }));
+    expect(signal.slotKind).toBe("doc");
+    // The distinguishing assertion: a tray keying on presence alone would treat
+    // every slot as a criterion.
+    expect(signal.slotKind).not.toBe(CRITERION_SLOT_KIND);
+  });
+
+  it("omits slotKind when the mirror carried none, rather than guessing a kind", () => {
+    const signal = signalFromOwedSlot(owed());
+    expect(signal).not.toHaveProperty("slotKind");
   });
 });

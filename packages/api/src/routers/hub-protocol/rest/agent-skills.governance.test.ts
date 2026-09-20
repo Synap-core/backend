@@ -204,7 +204,11 @@ describe("POST /agent-skills — persists through the governed door", () => {
 
     expect(res.status).toBe(202);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ status: "proposed", proposalId: "proposal-1" });
+    expect(body).toEqual({
+      status: "proposed",
+      proposalId: "proposal-1",
+      reviewUrl: "/open/proposal-1",
+    });
     // No skill identity is invented for a write that has not happened.
     expect(body.id).toBeUndefined();
     expect(h.directInsertCalls).toBe(0);

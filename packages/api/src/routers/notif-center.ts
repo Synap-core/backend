@@ -22,6 +22,7 @@ import {
   count,
   inArray,
   isNull,
+  isNotNull,
   lte,
   gte,
 } from "@synap/database";
@@ -35,6 +36,11 @@ import { MessagingAccountService } from "../services/messaging-account-service.j
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { OBJECT_NAV_VIEWS } from "@synap-core/types/navigation";
+import { buildNotificationCatalogue } from "../notifications/catalogue.js";
+import {
+  resolveEffectivePrefs,
+  shadowingWorkspaceIds,
+} from "../notifications/preference-scope.js";
 
 /**
  * Flip any DUE snoozes (snoozedUntil now past) back to `unread` for this user,
@@ -282,24 +288,92 @@ export const notifCenterRouter = router({
     }),
 
   /**
-   * Get notification preferences for the current user + workspace.
+   * The per-type notification CATALOGUE — what a settings picker renders FROM.
+   *
+   * `protectedProcedure`, not `workspaceProcedure`: the registry is a property
+   * of the pod build, identical in every workspace, and preferences written
+   * through `updatePrefs` are pod-wide by default. Requiring a workspace header
+   * would imply a lens this answer does not have.
+   *
+   * Pure and cheap (no DB). It exposes only PRODUCER-BACKED types and only
+   * channels with a real transport — see `notifications/catalogue.ts` for why
+   * each exclusion exists and what the projection deliberately does NOT cover.
+   */
+  types: protectedProcedure.query(() => buildNotificationCatalogue()),
+
+  /**
+   * Notification preferences for the current user.
+   *
+   * Returns the EFFECTIVE row under the same precedence
+   * `NotificationService.create` applies — the workspace override first, the
+   * pod-wide row (`workspaceId IS NULL`) as the fallback. This door previously
+   * read the workspace row ALONE, so a founder whose preferences live on the
+   * pod-wide row saw them as unset in every workspace.
+   *
+   * SHAPE: the effective row's own columns are spread at the top level, so every
+   * existing reader (relay's quiet-hours screen, synap-app's
+   * `NotificationPreferences.tsx`) keeps working unchanged. The scope fields are
+   * ADDITIVE. `null` still means "no row anywhere" — genuinely nothing
+   * configured, and distinct from a failed read, which throws.
    */
   getPrefs: workspaceProcedure.query(async ({ ctx }) => {
-    const prefs = await db.query.notificationPreferences.findFirst({
-      where: and(
-        eq(notificationPreferences.userId, ctx.userId),
-        eq(notificationPreferences.workspaceId, ctx.workspaceId)
-      ),
-    });
-    return prefs ?? null;
+    const [workspaceRow, podRow] = await Promise.all([
+      db.query.notificationPreferences.findFirst({
+        where: and(
+          eq(notificationPreferences.userId, ctx.userId),
+          eq(notificationPreferences.workspaceId, ctx.workspaceId)
+        ),
+      }),
+      db.query.notificationPreferences.findFirst({
+        where: and(
+          eq(notificationPreferences.userId, ctx.userId),
+          isNull(notificationPreferences.workspaceId)
+        ),
+      }),
+    ]);
+
+    const { row, scope } = resolveEffectivePrefs(
+      podRow ?? null,
+      workspaceRow ?? null
+    );
+    if (!row) return null;
+
+    return {
+      ...row,
+      /** Which row this answer came from — "pod" or "workspace". */
+      effectiveScope: scope,
+      /**
+       * True when a workspace override is shadowing the pod-wide row in THIS
+       * workspace. A settings surface should say so rather than present the
+       * override as if it were the pod-wide setting.
+       */
+      shadowedByWorkspaceOverride: scope === "workspace" && Boolean(podRow),
+    };
   }),
 
   /**
    * Update notification preferences.
+   *
+   * POD-WIDE BY DEFAULT (`scope: "pod"`). This used to write `ctx.workspaceId`
+   * unconditionally, so a quiet-hour window or a routing rule set from relay
+   * applied to exactly ONE workspace, silently.
+   *
+   * Nothing is migrated and no existing row is touched: the reader's precedence
+   * is unchanged, so a workspace override the founder already set keeps winning
+   * inside its workspace. That shadow is REPORTED — `shadowingWorkspaceIds`
+   * names every workspace where this pod-wide write will not take effect — and
+   * `clearWorkspaceOverride` is the door that drops one. Reconciling by deleting
+   * overrides here would destroy a preference the founder set on purpose;
+   * reconciling silently would hide one they cannot reach.
    */
   updatePrefs: workspaceProcedure
     .input(
       z.object({
+        /**
+         * Where the write lands. Omit for the pod-wide row — a caller that
+         * means a single workspace must say so.
+         */
+        scope: z.enum(["pod", "workspace"]).default("pod"),
         enabled: z.boolean().optional(),
         quietHoursEnabled: z.boolean().optional(),
         quietHoursStart: z.string().optional(),
@@ -309,28 +383,73 @@ export const notifCenterRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const { scope, ...values } = input;
+      const targetWorkspaceId = scope === "pod" ? null : ctx.workspaceId;
+
       const existing = await db.query.notificationPreferences.findFirst({
         where: and(
           eq(notificationPreferences.userId, ctx.userId),
-          eq(notificationPreferences.workspaceId, ctx.workspaceId)
+          targetWorkspaceId === null
+            ? isNull(notificationPreferences.workspaceId)
+            : eq(notificationPreferences.workspaceId, targetWorkspaceId)
         ),
       });
 
       if (existing) {
         await db
           .update(notificationPreferences)
-          .set({ ...input, updatedAt: new Date() })
+          .set({ ...values, updatedAt: new Date() })
           .where(eq(notificationPreferences.id, existing.id));
       } else {
         await db.insert(notificationPreferences).values({
           userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
-          ...input,
+          workspaceId: targetWorkspaceId,
+          ...values,
         });
       }
 
-      return { success: true };
+      // Only a pod-wide write can be shadowed; a workspace write IS the winner.
+      const shadowedBy =
+        scope === "pod"
+          ? shadowingWorkspaceIds(
+              await db
+                .select({
+                  workspaceId: notificationPreferences.workspaceId,
+                })
+                .from(notificationPreferences)
+                .where(
+                  and(
+                    eq(notificationPreferences.userId, ctx.userId),
+                    isNotNull(notificationPreferences.workspaceId)
+                  )
+                )
+            )
+          : [];
+
+      return { success: true, scope, shadowingWorkspaceIds: shadowedBy };
     }),
+
+  /**
+   * Drop this workspace's override row so the pod-wide preferences apply here
+   * again. The ONE way out of the shadow `updatePrefs` reports; without it a
+   * pod-wide preference set from relay would be permanently unreachable in any
+   * workspace that already had a row.
+   *
+   * Deletes only the caller's own `(userId, workspaceId)` row and never touches
+   * the pod-wide row.
+   */
+  clearWorkspaceOverride: workspaceProcedure.mutation(async ({ ctx }) => {
+    const deleted = await db
+      .delete(notificationPreferences)
+      .where(
+        and(
+          eq(notificationPreferences.userId, ctx.userId),
+          eq(notificationPreferences.workspaceId, ctx.workspaceId)
+        )
+      )
+      .returning({ id: notificationPreferences.id });
+    return { success: true, cleared: deleted.length > 0 };
+  }),
 
   // ── Push devices ────────────────────────────────────────────────────────
   //

@@ -23,6 +23,7 @@ import {
   resolveActorId,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { resolveCaptureActorUserId } from "../../../services/capture-agent/resolve-capture-actor.js";
 
 export function registerRelationsRoutes(app: HubHono): void {
@@ -203,7 +204,7 @@ export function registerRelationsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "createRelation failed");
       // Classify, never a blanket 500: an endpoint still pending as a proposal
@@ -287,7 +288,7 @@ export function registerRelationsRoutes(app: HubHono): void {
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         reasoning: body.reasoning,
       });
-      return c.json(result);
+      return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, relationId }, "deleteRelation failed");
       return c.json(

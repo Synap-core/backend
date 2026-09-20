@@ -29,6 +29,7 @@ import {
   resolveActingContext,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { SESSION_ARTIFACT_KINDS } from "../../../services/focus-sessions/record-session-artifact.js";
 import { queryArtifacts } from "../../artifacts.js";
@@ -340,7 +341,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
@@ -476,7 +477,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
         return c.json({ error: perm.reason }, 403);
       }
       if ("proposalId" in perm) {
-        return c.json({
+        return jsonGoverned(c, {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,

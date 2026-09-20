@@ -55,6 +55,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 import {
   listProjectsUsingWorkspace,
   listProjectsUsingWorkspaces,
@@ -1055,7 +1056,10 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       perm.proposalId &&
       !("granted" in perm && perm.granted)
     ) {
-      return c.json({ status: "proposed", proposalId: perm.proposalId }, 202);
+      return jsonGoverned(c, {
+        status: "proposed",
+        proposalId: perm.proposalId,
+      });
     }
 
     try {
@@ -1524,7 +1528,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       return c.json({ error: perm.reason }, 403);
     }
     if ("proposalId" in perm) {
-      return c.json({
+      return jsonGoverned(c, {
         status: "proposed",
         workspaceId,
         proposalId: perm.proposalId,
@@ -1624,7 +1628,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       return c.json({ error: perm.reason }, 403);
     }
     if ("proposalId" in perm) {
-      return c.json({
+      return jsonGoverned(c, {
         status: "proposed",
         workspaceId,
         proposalId: perm.proposalId,

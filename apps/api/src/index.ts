@@ -53,6 +53,7 @@ import {
   sanitizeErrorEgress,
   registerPodWideProposalReactor,
   registerSessionUnblockReactor,
+  registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
   registerDevAgentSpawner,
 } from "@synap/api";
@@ -1939,6 +1940,11 @@ try {
       // `focus_session.closed`, this reactor derives whether the last open
       // blocker just went away and files ONE `session.unblocked` notification.
       registerSessionUnblockReactor();
+      // Same close event again: a session that ENDED with required criteria
+      // still unmet is news the founder is told once, on the phone — it is the
+      // one moment a course correction is cheap. Re-derives the verdict from
+      // `session_evaluations` rather than trusting the event's payload.
+      registerSessionCriteriaUnmetReactor();
       // Same close event: the session document gains its structured closing
       // report (outcome, definition of done, outputs, decisions).
       registerClosingReportReactor();
@@ -2059,6 +2065,8 @@ try {
               await import("@synap/jobs/workers/broken-automation-cron.js");
             const { registerCleanupPackRunner } =
               await import("@synap/jobs/workers/pod-hygiene-cleanup-pack-cron.js");
+            const { registerNotificationCreator } =
+              await import("@synap/jobs/utils/notification-creator.js");
             const { registerEventEndRunner } =
               await import("@synap/jobs/workers/event-end-cron.js");
             const { registerTightenRecommender } =
@@ -2176,6 +2184,16 @@ try {
             });
             registerBrokenAutomationRunner(() => api.scanBrokenAutomations());
             registerCleanupPackRunner(() => api.fileCleanupPacks());
+            // The ONE notification write door, reached from jobs. Until this
+            // call, three jobs producers inserted into `notifications` directly,
+            // so preferences never applied to them and they never pushed — and
+            // because `agent.task_failed` and `ai.proactive.insight` ALSO have
+            // compliant producers in packages/api, those two types were
+            // PARTIALLY governed: a mute silenced some emissions and not
+            // others, which reads as flakiness rather than as a bug.
+            registerNotificationCreator((input) =>
+              api.NotificationService.create(input)
+            );
             registerSessionRecapRunner((input) => api.runSessionRecap(input));
             registerSignalRouter((input) => api.routeSignal(input));
             // The 2-minute IS health cron used to only log a degraded verdict.

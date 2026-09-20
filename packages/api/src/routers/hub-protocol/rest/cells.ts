@@ -29,6 +29,7 @@ import {
   verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
+import { jsonGoverned } from "../proposal-response.js";
 
 // deps validation now lives INSIDE the defineCell door (security review
 // 2026-07-12: marketplace-install called defineCell without it — enforcing at
@@ -414,22 +415,19 @@ export function registerCellsRoutes(app: HubHono): void {
           return c.json({ error: perm.reason }, 403);
         }
         if ("proposalId" in perm) {
-          return c.json(
-            {
-              status: "proposed",
-              proposalId: perm.proposalId,
-              summary: perm.summary,
-              reasoning: perm.reasoning,
-              reviewPath: perm.reviewPath,
-              reviewUrl: perm.reviewUrl,
-              ...(perm.deduped ? { deduped: true } : {}),
-              message: proposedMessageFor(
-                perm.proposalType,
-                "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval."
-              ),
-            },
-            202
-          );
+          return jsonGoverned(c, {
+            status: "proposed",
+            proposalId: perm.proposalId,
+            summary: perm.summary,
+            reasoning: perm.reasoning,
+            reviewPath: perm.reviewPath,
+            reviewUrl: perm.reviewUrl,
+            ...(perm.deduped ? { deduped: true } : {}),
+            message: proposedMessageFor(
+              perm.proposalType,
+              "Cell definition proposed for review (AI-generated renderer source is governed) — it materializes on approval."
+            ),
+          });
         }
       }
 
