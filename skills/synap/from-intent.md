@@ -20,6 +20,10 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 4. `synap_start_session` — **name the unit of work before you build it.** Title + goal, nothing else; the session is the room the rest of this happens in, not a form to fill. Every write you make afterwards is attributed to it automatically, so the user can open ONE object and see the whole arc instead of loose proposals with no shared story. Reuse an open session that already covers this intent (`synap_list_sessions`) rather than starting a second one. If the intent is a single fact with no structure behind it, skip the session and use the `synap` skill instead — this whole conductor is the wrong door for that.
 
+**Propose its `criteria` — do not grade yourself without them.** Two to five binary, observable statements the person can validate or rewrite ("`list_profiles` returns the `grp-run` kind"), not "the pack is good". They may equally be written by the person; what is not allowed is neither. A session with no criteria leaves you nothing to report against but your own opinion, which is how "85% complete" gets said about work nobody can check. Criteria are declarable at `synap_start_session` and replaceable later with `synap_update_session` — a session created inside a plan carries `expectedOutputs`, not criteria, so set them on the session once it exists.
+
+**A detour is a CHILD session, not an abandoned intent.** If the intent turns out to need infrastructure built first, start the detour with `parentSessionId` (the intent's session) plus `suspendedIntent` — one line naming what you were about to do — so popping back restates the goal instead of relying on memory. The parent stays open.
+
 ### 1. Ask before you build (required)
 
 Do not install templates, define kinds, or create a project until you can answer these. Ask only what is still unknown — one short pass, not a wizard. Never a 7-step implementation plan in the first reply.
@@ -49,11 +53,15 @@ Then **wait**. After that write lands (`proposed` is success), the _next_ turn m
 
 This is the difference between a reviewer seeing one graph and deciding once, and seeing fourteen cards with no visible relationship. **Prefer the plan whenever the structure is connected.** It is not a 7-step sequence — it is one decision about one shape.
 
+**The trigger is countable, so count.** The moment you are about to make a second `create_*` call for objects that reference each other — a kind and the playbook that uses it, a project and its sessions, a skill and the automation that calls it — stop: that is ONE plan, not N proposals. This is the check that was missing when an agent filed fourteen.
+
+**Name what the work will produce.** Each `sessions[]` step takes `expectedOutputs` — the documents, entities and decisions this session owes. List them at plan time: the plan's own object list IS the expected outputs, so "done" is derivable from slots the person can see rather than announced as a percentage. Every slot filled means the work is finished **pending the person's review** — never silently closed.
+
 It also resolves ordering that separate proposals cannot: an `automations[]` step whose flow names a skill created by a `skills[]` step in the SAME call resolves, because the skill is materialized before the automation is validated. Filed separately, the second proposal fails — the first has not been approved yet.
 
 Refs, not ids. To change a pending plan, **revise it** (full updated operations, re-validated). Never file a second proposal pointing at items still pending in the first.
 
-**Budget is per proposal, not per object.** An agent has a cap on how many proposals may sit pending at once. Fourteen objects as fourteen proposals can exhaust it and get the next write refused; the same fourteen as one plan costs one slot. If a write is ever refused for the cap, that refusal carries a link to raise it — follow the link, do not retry the write.
+**Budget is per proposal, not per object.** An agent has a cap on how many proposals may sit pending at once. Fourteen objects as fourteen proposals can exhaust it and get the next write refused; the same fourteen as one plan costs one slot. If a write is ever refused for the cap, that refusal carries a link to raise it — follow the link, do not retry the write. Retrying is worse than waiting: a refused write that you re-send through another door is how the same playbook ends up in the pod twice.
 
 Do **not** declare every provides/consumes/trigger edge in the opening. Edges are a later turn, and only for the pair this work actually reads.
 
@@ -97,6 +105,7 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 - A 7-step "right sequence" in the first confirm. One structural move per turn.
 - **Splitting one coherent structure into N proposals.** If the objects reference each other, they are ONE plan through `synap_capture`, not one `create_*` call each. N cards the reviewer must mentally re-join is the failure this conductor exists to prevent.
 - Building structure with no session open. The unit of work is named first (§0.4) or the work arrives as orphan proposals.
+- Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
 - Nested projects. Phases = sessions.

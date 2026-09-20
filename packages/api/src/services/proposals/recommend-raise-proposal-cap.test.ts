@@ -96,8 +96,8 @@ import {
   findOpenRaiseProposalCapRequest,
 } from "./recommend-raise-proposal-cap.js";
 
-function agentRow(id: string, createdByUserId = "human-1") {
-  return { id, createdByUserId };
+function agentRow(id: string, createdByUserId = "human-1", name = "Builder") {
+  return { id, createdByUserId, name };
 }
 
 /** A PENDING `settings.update` cap-raise row as the dedup lookup reads it. */
@@ -150,6 +150,32 @@ describe("recommendRaiseProposalCapForAllAgents", () => {
       limitValue: 15,
       agentUserId: "agent-1",
     });
+  });
+
+  it("the filed request CARRIES the display evidence the review card needs", async () => {
+    // The card has no user lookup and no gate numbers of its own: whatever the
+    // producer omits here, the reviewer never sees. `agentName` answers WHICH
+    // agent, `currentLimit`+`pendingCount` answer WHY it ran out — and the
+    // pendingCount must be the number this refusal actually resolved, not a
+    // re-query that could disagree with it.
+    queues.users.push([agentRow("agent-1", "human-1", "Builder")]);
+    queues.proposals.push([]);
+    queues.governanceCeilings.push([]);
+
+    await recommendRaiseProposalCapForAllAgents();
+
+    const call = mockInsertPendingProposal.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    expect(call.data).toMatchObject({
+      agentName: "Builder",
+      currentLimit: 10,
+      pendingCount: 10,
+    });
+    // And the notification a human actually receives names the agent too.
+    const notified = mockNotifyPodWideProposal.mock.calls[0]?.[0] as
+      { description?: string } | undefined;
+    expect(notified?.description).toContain("Builder");
   });
 
   it("files nothing when the agent is under cap (pending < cap)", async () => {

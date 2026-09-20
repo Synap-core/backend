@@ -57,11 +57,17 @@ const RAISE_FACTOR = 1.5;
 interface AgentRow {
   id: string;
   createdByUserId: string | null;
+  /** `users.name` — carried so the REVIEW CARD can name the agent asking. */
+  name: string | null;
 }
 
 async function listAgentUsers(): Promise<AgentRow[]> {
   return db
-    .select({ id: users.id, createdByUserId: users.createdByUserId })
+    .select({
+      id: users.id,
+      createdByUserId: users.createdByUserId,
+      name: users.name,
+    })
     .from(users)
     .where(eq(users.userType, "agent"));
 }
@@ -171,12 +177,20 @@ async function requestRaiseProposalCapForAgentRow(
   }
   if (await hasCoveringCapCeiling(agent.id, proposedLimit)) return null;
 
+  // `store`/`op`/`axis`/`limitValue`/`agentUserId` are what the APPLIER reads
+  // (`applyGovConfigChange`). `agentName`/`currentLimit`/`pendingCount` are
+  // DISPLAY-ONLY evidence the applier ignores: they exist so the review card can
+  // say WHICH agent is asking, what its limit is today, and why it ran out —
+  // without the reviewer having to resolve a uuid. Carried by the PRODUCER
+  // rather than re-derived in the UI because the UI has no user lookup, and
+  // because these must be the numbers this refusal actually quoted.
   const data = {
     store: "governance_ceilings",
     op: "set",
     axis: "pending_proposal_cap",
     limitValue: proposedLimit,
     agentUserId: agent.id,
+    agentName: agent.name,
     currentLimit: cap,
     pendingCount,
   };
@@ -201,7 +215,7 @@ async function requestRaiseProposalCapForAgentRow(
       : {
           proposalId: proposal.id,
           proposalType: "settings.update",
-          description: `Raise proposal cap ${cap}→${proposedLimit} (${pendingCount} pending, blocked)`,
+          description: `${agent.name ?? "An agent"} is blocked at its ${cap}-proposal limit (${pendingCount} pending) — raise it to ${proposedLimit}?`,
           agentUserId: agent.id,
         },
     sideEffect: {
@@ -249,7 +263,11 @@ export async function requestRaiseProposalCap(
   known?: { pendingCount?: number; cap?: number }
 ): Promise<RaiseProposalCapRequest | null> {
   const [agent] = await db
-    .select({ id: users.id, createdByUserId: users.createdByUserId })
+    .select({
+      id: users.id,
+      createdByUserId: users.createdByUserId,
+      name: users.name,
+    })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);

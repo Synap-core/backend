@@ -21,6 +21,10 @@ import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js"
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { ABSTRACT_VERBS } from "@synap/database/schema";
+// The catalog names `synap_find` accepts — SPREAD from the service that owns
+// them, never re-typed, so a fourth catalog cannot be advertised without
+// existing (and vice versa). Same idiom as ABSTRACT_VERBS above.
+import { FIND_CATALOGS } from "../../../services/capabilities/find-intent.js";
 // The output-slot `ref` kind union, DERIVED into the three JSON-Schema enums
 // below rather than retyped beside them. It was hand-written three times in
 // this file; @synap/playbooks is dependency-free, so there is no cycle and no
@@ -1317,7 +1321,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. Declare `criteria` for your definition of done.",
+          "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1372,6 +1376,12 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "Optional playbook UUID — the ONE way a playbook binds to this session. Omit and the result's `playbooks` block ranks the pod's playbooks against your words so you can name one (nothing is applied for you); pass null to skip matching entirely.",
+            },
+            params: {
+              type: "object",
+              additionalProperties: true,
+              description:
+                "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused.",
             },
             criteria: SESSION_CRITERIA_PROPERTY,
             parentSessionId: {
@@ -1669,6 +1679,12 @@ export const tools = {
               type: ["string", "null"],
               description:
                 "FOLLOW a playbook with this live session (optional) — the session BECOMES A RUN of it: it appears in that playbook's runs and leaves the plain work list. Its acceptance criteria and deliverables MERGE in (nothing you already have is overwritten or deleted); its title, goal and origin are left alone. Pass null to RELEASE the playbook — the merged criteria and deliverables STAY, and a release is refused while a stage gate is waiting. Find a playbook with synap_list_playbooks / synap_match_playbooks. The reply carries `follow` with what happened.",
+            },
+            params: {
+              type: "object",
+              additionalProperties: true,
+              description:
+                "Only with followPlaybookId: answers to the playbook's declared params. They are stored on the session (so a re-run can reuse them) and merged over any it already carries. A required one you leave out lands as a deliverable OWED BY THE PERSON, never a silent blank; a value of the wrong type is refused.",
             },
             followStageKey: {
               type: ["string", "null"],
@@ -2292,6 +2308,7 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\n" +
           'PLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\\n…", "sessionRef": "s1" } ] }\n' +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
           "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n" +
@@ -2463,6 +2480,8 @@ export const tools = {
                   projectId: { type: "string" },
                   expectedOutputs: {
                     type: "array",
+                    description:
+                      "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded. Acceptance `criteria` are NOT carried by a plan step — set them on the session afterwards with synap_update_session.",
                     items: { type: "object" },
                   },
                 },
@@ -3223,6 +3242,42 @@ export const tools = {
 
       // ── Capabilities (connected-service verbs: Gmail, Calendar, Drive, …) ────
       {
+        name: "synap_find",
+        annotations: {
+          title: "Find what can do this",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          "What can do this? Searches the pod's runnable verbs, the abstract-intent axis and the user's playbooks in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+        inputSchema: {
+          type: "object",
+          properties: {
+            intent: {
+              type: "string",
+              description:
+                "What you want to DO, in your own words (e.g. 'clean up duplicate contacts'). Keep the NOUN — it is the most discriminating word.",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional workspace lens. Omit for pod altitude, which is what 'what can this pod do?' usually means.",
+            },
+            catalogs: {
+              type: "array",
+              items: { type: "string", enum: [...FIND_CATALOGS] },
+              description:
+                "Which catalogs to search. Omit for all three. A catalog you leave out is ABSENT from the result, not empty.",
+            },
+            limit: {
+              type: "number",
+              description: "Max matches per catalog (default 5).",
+            },
+          },
+          required: ["intent"],
+        },
+      },
+      {
         name: "synap_list_capabilities",
         annotations: {
           title: "List capabilities",
@@ -3273,7 +3328,15 @@ export const tools = {
                 "Max entries to return (default 20 when `query` is set; unset otherwise).",
             },
           },
-          required: ["workspaceId"],
+          // workspaceId is OPTIONAL — "what can this pod do?" is almost always
+          // a pod-wide question, and the handler already treats an absent
+          // workspaceId as pod altitude (capability.ts passes it straight to
+          // listCapabilities, which reads null as the pod lens). Declaring it
+          // required was the schema being STRICTER than the implementation: it
+          // forced an orient/list_workspaces round trip purely to obtain an id
+          // the call does not use — on the DISCOVERY path, which is the path
+          // taken by an agent that is already lost.
+          required: [],
         },
       },
       {

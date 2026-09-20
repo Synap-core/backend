@@ -145,6 +145,60 @@ function isFocusSessionLifecycleClose(
 }
 
 /**
+ * CRITERIA on a focus-session update — the session's acceptance contract, not
+ * its orchestration. Same shape as `isFocusSessionLifecycleClose` above: a
+ * `focus_session.update` special-cased by inspecting `data`.
+ *
+ * WHY it is singled out. `focus_session.update` sits in `DEFAULT_AUTO_APPROVE`
+ * (rung 8) and its rationale there is explicitly about orchestration — open a
+ * session, advance its stage, update progress. Criteria are none of those: they
+ * are the standard the work is GRADED against, and an agent that writes both
+ * the standard and the grade is the self-assessment this replaces. The founder's
+ * rule is *proposed by the agent, validated by the person*, so a criteria-bearing
+ * AI update is floored to a PROPOSAL at rung 2.1 (`forcePropose`) and the
+ * already-built `focus_session/update` executor applies `data.criteria` on
+ * approval — with `synap_revise_proposal` letting the person rewrite them first.
+ *
+ * Deliberately NARROW, three ways:
+ *  - only `action: "update"`. A plan's `create_session` carries criteria too
+ *    (`materialize-composite.ts` → `plan-callers.ts` → `createFocusSession`),
+ *    but a plan is approved as ONE proposal, so those criteria are ALREADY
+ *    validated by that approval and must not be gated a second time.
+ *  - only when the payload CARRIES `criteria`. Every gating door composes `data`
+ *    field-by-field from what the caller actually patched (`...(params.criteria
+ *    !== undefined ? { criteria } : {})`), so a progress/stage/outputs tick does
+ *    not carry the key and keeps auto-approving exactly as before. The gate
+ *    cannot diff against the stored list — its one session read is keyed on the
+ *    AMBIENT session (`ctx.sessionId`), not on `data.id` — so "carries criteria"
+ *    is the honest predicate, and a rewrite to the identical list proposing is
+ *    the fail-CLOSED side of that limit.
+ *  - only for AI writes (applied at the call site). A person writing their own
+ *    criteria needs no proposal to themselves; the human tRPC door
+ *    (`focusSessionsRouter.update`) writes `set.criteria` directly and never
+ *    reaches this gate at all.
+ *
+ * WHAT THE GUARD DOES NOT COVER, measured. Deleting the `isAiWrite &&` at the
+ * call site leaves the whole suite GREEN — verified by mutation. That is not a
+ * hole in the rule, it is where the rule is redundant: a plain human write
+ * returns `{ granted: true }` from the unconditional step below WITHOUT ever
+ * reading `effectiveForcePropose`, so no reachable caller can discriminate the
+ * guard. It is kept because the AI/human split is the founder's rule and a
+ * future rung that DOES read the flag on the human path would otherwise start
+ * proposing a person's own criteria to themselves. No fixture can pin it until
+ * such a rung exists; do not claim one does.
+ */
+function isFocusSessionCriteriaUpdate(
+  subjectType: string,
+  action: string,
+  data: Record<string, unknown> | undefined
+): boolean {
+  if (subjectType !== "focus_session" || action !== "update") return false;
+  return (
+    data !== undefined && "criteria" in data && data.criteria !== undefined
+  );
+}
+
+/**
  * Session-scoped force-propose governance. A focus session opened for an
  * unattended, propose-only playbook (e.g. the CRM hygiene maintenance agent) is
  * stamped with `metadata.governance.forceProposeWrites: true` by
@@ -1487,8 +1541,19 @@ async function evaluatePermission(
         },
       }) === "loosening";
 
+    // An AI write that sets the session's CRITERIA is the agent proposing the
+    // standard its own work will be graded against — a contract change, not the
+    // orchestration `focus_session.update` is whitelisted for. Floored to a
+    // proposal here (rung 2.1) so the person validates or rewrites it; every
+    // other `focus_session.update` is untouched. See
+    // `isFocusSessionCriteriaUpdate` for why this is narrow on all three axes.
+    const isAgentCriteriaChange =
+      isAiWrite && isFocusSessionCriteriaUpdate(subjectType, action, data);
+
     const effectiveForcePropose =
-      opts.forcePropose === true || isLooseningSettingsChange
+      opts.forcePropose === true ||
+      isLooseningSettingsChange ||
+      isAgentCriteriaChange
         ? true
         : sessionGovernance && !opts.ignoreSessionForcePropose
           ? sessionGovernance.forceProposeWrites
@@ -3087,9 +3152,16 @@ async function createProposal(args: {
       }
       // Plain words, in the order a blocked agent needs them: nothing was
       // written · a raise is waiting for review (here) · the other way out.
+      // The THIRD way out, and the one a structure-building agent needs most:
+      // the budget is per PROPOSAL, not per object, so a connected plan filed
+      // as ONE `synap_capture` call costs ONE slot instead of N. An agent that
+      // is told only "raise the cap or clear the queue" files its objects one
+      // at a time and duplicates what it already proposed — observed live.
+      const planDoorHint =
+        " If you are building STRUCTURE, file it as ONE plan instead of N proposals: a single `synap_capture` call takes projects[]/sessions[]/documents[]/links[]/entities[]/skills[]/automations[]/rules[] together and costs one slot.";
       const capReason = capRaise
-        ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${capRaise.proposedLimit} is waiting for your review: ${openLink(capRaise.proposalId)} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.`
-        : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.`;
+        ? `Agent proposal limit reached (${cap} pending). Nothing was written. A request to raise this agent's limit to ${capRaise.proposedLimit} is waiting for your review: ${openLink(capRaise.proposalId)} — approving it unblocks this agent. Otherwise, review or clear this agent's pending proposals to free budget.${planDoorHint}`
+        : `Agent proposal limit reached (${cap} pending). Nothing was written. Review or clear this agent's pending proposals to free budget.${planDoorHint}`;
       // HUMAN-facing record of the refusal. A `logger.warn` reaches no user, so
       // a capped agent and a dead agent were byte-identical from the UI: the
       // write neither executed nor proposed, and NOTHING said so. This event is

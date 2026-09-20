@@ -52,9 +52,74 @@ export interface CreateAndLinkPropertyDefInput {
   displayOrder?: number;
 }
 
+/**
+ * A field the caller DECLARED that differs from the def already stored under
+ * this slug — and was therefore NOT written. `property-defs.create` is
+ * slug-idempotent, never convergent: on a slug hit it returns the existing row
+ * untouched. Reporting the declaration as applied is the lie this type exists
+ * to prevent (see `existing` on the result).
+ */
+export interface IgnoredDeclaration {
+  field: "valueType" | "constraints" | "uiHints";
+  declared: unknown;
+  stored: unknown;
+}
+
 export interface CreateAndLinkPropertyDefResult {
   propertyDef: Record<string, unknown> & { id: string };
   link: Record<string, unknown> | null;
+  /**
+   * TRUE when the def already existed under this slug+scope and was returned
+   * as-is. The caller MUST NOT report such a call as "applied": nothing about
+   * the DEFINITION was written. (The profile LINK below is still upserted, so
+   * `required` / `defaultValue` / `displayOrder` do converge.)
+   */
+  existing: boolean;
+  /** Declared def fields that differ from the stored row. Empty unless `existing`. */
+  ignored: IgnoredDeclaration[];
+}
+
+/** Order-insensitive structural compare, so `{a,b}` and `{b,a}` are the same. */
+function canonical(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/**
+ * What the caller declared vs what is stored, for the def fields this helper
+ * would have written on a create. A field the caller did NOT declare
+ * (`undefined`) is not a difference — it was never a claim.
+ */
+export function diffIgnoredDeclarations(
+  declared: Pick<
+    CreateAndLinkPropertyDefInput,
+    "valueType" | "constraints" | "uiHints"
+  >,
+  stored: Record<string, unknown>
+): IgnoredDeclaration[] {
+  const ignored: IgnoredDeclaration[] = [];
+  const compare = (
+    field: IgnoredDeclaration["field"],
+    declaredValue: unknown
+  ) => {
+    if (declaredValue === undefined) return;
+    const storedValue = stored[field];
+    if (canonical(declaredValue) !== canonical(storedValue)) {
+      ignored.push({ field, declared: declaredValue, stored: storedValue });
+    }
+  };
+  compare("valueType", declared.valueType);
+  compare("constraints", declared.constraints);
+  compare("uiHints", declared.uiHints);
+  return ignored;
 }
 
 /**
@@ -104,7 +169,7 @@ export async function createAndLinkPropertyDef(
   } as unknown as Context;
 
   const propertyDefCaller = propertyDefsRouter.createCaller(callerCtx);
-  const { propertyDef } = await propertyDefCaller.create({
+  const createResult = await propertyDefCaller.create({
     slug: input.slug,
     valueType: input.valueType,
     constraints: input.constraints,
@@ -112,6 +177,14 @@ export async function createAndLinkPropertyDef(
     profileId: input.profileId,
     overlay,
   });
+  const { propertyDef } = createResult;
+  // `property-defs.create` returns `existing: true` on a slug hit and writes
+  // NOTHING. That fact used to die here — every caller then reported the call
+  // as "applied" with the caller's declaration nowhere in the stored row.
+  const existing = (createResult as { existing?: boolean }).existing === true;
+  const ignored = existing
+    ? diffIgnoredDeclarations(input, propertyDef as Record<string, unknown>)
+    : [];
 
   let link: Record<string, unknown> | null = null;
   if (input.profileId) {
@@ -130,5 +203,7 @@ export async function createAndLinkPropertyDef(
   return {
     propertyDef: propertyDef as Record<string, unknown> & { id: string },
     link,
+    existing,
+    ignored,
   };
 }

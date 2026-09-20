@@ -8,7 +8,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Fetch the pod's processes before you invent one.** Without `templateId`, the start door hands back the pod's existing playbooks ranked against your title and goal — the response's `playbooks` block lists `candidates` (id, name, score, and the `reason` each one matched) and applies **nothing**. Read them: if one fits, start again naming it with `templateId` (the only way a playbook binds), and if none does, go ad-hoc deliberately. Pass `templateId: null` to skip matching entirely. You can also look first, with `synap_list_playbooks` / `synap_match_playbooks`.
 
-**Declare your definition of done** with `criteria` — binary, observable statements ("Typecheck passes with 0 errors"). Closing never blocks on them; unmet ones are flagged.
+**Declare your definition of done** with `criteria` — binary, observable statements ("Typecheck passes with 0 errors"). Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged. Already open with no criteria? Set them with `synap_update_session` (it replaces the list wholesale).
+
+**Declare what the work will produce** with `expectedOutputs` — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding.
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
 

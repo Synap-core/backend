@@ -57,6 +57,14 @@ export interface SettingsUpdateProposalData {
   posture?: "auto" | "propose";
   // revoke: the id of the row to soft-delete.
   targetId?: string;
+  // DISPLAY-ONLY evidence, written by `recommend-raise-proposal-cap.ts` and read
+  // ONLY by the review card (`useProposalPresentation`). `applyGovConfigChange`
+  // never reads these — a settings proposal that omits them applies identically.
+  // Declared here so the fields are a stated part of the payload rather than
+  // untyped drift a future reader has to discover from a cast.
+  agentName?: string | null;
+  currentLimit?: number;
+  pendingCount?: number;
 }
 
 /** The store-specific fields, sans the `store`/`op` discriminator. */

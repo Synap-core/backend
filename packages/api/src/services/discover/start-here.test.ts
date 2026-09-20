@@ -74,6 +74,18 @@ vi.mock("../../utils/deep-links.js", () => ({
   openLink: (id: string) => `https://pod.example/open/${id}`,
 }));
 
+// `readOpenFindings` reads through its own door. Stubbed to EMPTY (not
+// throwing) so this file keeps testing the shape it is about. Deliberately a
+// DOOR stub and not `vi.mock("@synap/database", …)`: a TOTAL module
+// replacement is what the `database-mock-total-ratchet` tripwire counts, and
+// two of them (this file and start-here-open-findings.test.ts) pushed it from
+// 60 to 62. The openFindings behaviour itself is pinned in
+// `start-here-open-findings.test.ts`.
+vi.mock("./open-findings-door.js", () => ({
+  OPEN_FINDINGS_READ_CAP: 5,
+  readOpenBlockerFindings: async (_userId: string) => [],
+}));
+
 import { buildStartHere } from "./start-here.js";
 
 const caller = {
@@ -127,10 +139,15 @@ describe("startHere", () => {
     });
     expect(Object.keys(s)).toEqual([
       "pendingReview",
+      // Known blockers in Synap itself come SECOND — right after the review
+      // queue and before the agent's own work, because they change what the
+      // agent should attempt at all.
+      "openFindings",
       "openSessions",
       "topKinds",
       "actions",
       "learnMore",
+      "beforeYouFinish",
     ]);
     expect(s.pendingReview).toEqual({
       count: 4,

@@ -72,6 +72,78 @@ describe("deriveNextMove", () => {
     expect(move.actor).toBe("ai");
   });
 
+  /**
+   * FOUNDER DECISION (2026-09-20): when everything the session promised is
+   * produced, the work is finished PENDING THE PERSON'S REVIEW — so the move
+   * belongs to them, not to the agent that produced it.
+   *
+   * DISCRIMINATING against the rule it replaces: `ready_to_close` carried
+   * `actor: "ai"`, which is what every needs-you reader keys on
+   * (`selectNextMoveBanner` promotes the first row whose move is the user's;
+   * the workbench/continue card renders "Next move · You" off the same field),
+   * so the old rule routed a finished session into the AI's lane. The two rules
+   * agree on `kind` and disagree ONLY here — asserting the kind cannot tell
+   * them apart, which is why every fixture below asserts the actor.
+   *
+   * The `undeclared` sibling keeps `actor: "ai"` (pinned at :72): declaring what
+   * a session should produce IS the agent's job. A fixture that flipped both
+   * would rule out nothing.
+   */
+  it("every declared output done is the PERSON's move, not the AI's", () => {
+    const move = deriveNextMove(input({ expectedOutputs: [doneSlot] }));
+    expect(move).toMatchObject({ kind: "ready_to_close", actor: "user" });
+    // The label must name what the person is being asked to do. "None: ready to
+    // close" described the agent's empty queue, not an ask.
+    expect(move.label).toMatch(/review/i);
+  });
+
+  /**
+   * `readyToClose` is ONE object returned from TWO branches: declared slots all
+   * satisfied, and no live declared slot but produced outputs / a closed
+   * sub-session. Both mean the same thing — evidence of work, nothing owed,
+   * pending or left to produce — so both are the person's acceptance and the
+   * shared object is correct. Pinned from the SECOND branch too, so a future
+   * split cannot flip one back to the agent unnoticed (the fixture above only
+   * reaches the first).
+   */
+  it("the undeclared-but-produced branch is the person's move too", () => {
+    expect(deriveNextMove(input({ outputs: ok([output]) }))).toMatchObject({
+      kind: "ready_to_close",
+      actor: "user",
+    });
+    expect(
+      deriveNextMove(input({ children: ok([session("closed", "Detour")]) }))
+    ).toMatchObject({ kind: "ready_to_close", actor: "user" });
+  });
+
+  it("an OWED slot is the person's move and is NOT ready to close", () => {
+    const move = deriveNextMove(
+      input({
+        expectedOutputs: [doneSlot],
+        owedSlots: ok([{ label: "Stripe key", kind: "credential" }]),
+      })
+    );
+    expect(move).toMatchObject({ kind: "owed_slot", actor: "user" });
+  });
+
+  it("an open AGENT slot stays the AI's move, never ready to close", () => {
+    const move = deriveNextMove(
+      input({
+        expectedOutputs: [doneSlot],
+        aiCanDo: ok([{ label: "Draft brief", kind: "document" }]),
+      })
+    );
+    expect(move).toMatchObject({ kind: "agent_slot", actor: "ai" });
+  });
+
+  it("a failed outputs read is never handed to the person as ready", () => {
+    const move = deriveNextMove(
+      input({ outputs: down("outputs read failed") })
+    );
+    expect(move).toMatchObject({ kind: "unknown", actor: "none" });
+    expect(move.reason).toContain("outputs read failed");
+  });
+
   it("an undeclared session that produced an output is ready to close", () => {
     expect(deriveNextMove(input({ outputs: ok([output]) })).kind).toBe(
       "ready_to_close"

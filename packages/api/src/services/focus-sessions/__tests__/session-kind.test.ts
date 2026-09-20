@@ -364,21 +364,58 @@ describe("the runs ledger classifies through this predicate, not its own", () =>
   });
 });
 
-describe("ambient attribution files writes under WORK only", () => {
-  it("the MCP ambient-session resolver narrows to sessionKindWhere('work')", () => {
-    // Which session an agent's write is FILED UNDER is decided here. An open
-    // run or receipt is often the newest open session (08:00 crons), and
-    // attributing a write to it is exactly the mis-grouping this guards.
+describe("ambient attribution files writes under the PERSON's session", () => {
+  /**
+   * BOTH resolvers, not one. This block scanned only the MCP handler until
+   * 2026-09-20, while `resolve-work-session.ts` held the same clause — so
+   * half the rule was unguarded, and the two could have drifted apart with
+   * the gate green. They are listed together here because the pair IS the
+   * population; there is no glob that names "an ambient resolver".
+   */
+  const RESOLVERS: Array<{ file: string; fn: string }> = [
+    {
+      file: "../../../routers/mcp/handlers/shared.ts",
+      fn: "export async function listOpenFocusSessions",
+    },
+    {
+      file: "../resolve-work-session.ts",
+      fn: "export async function listUnclaimedOpenWorkSessions",
+    },
+  ];
+
+  const bodyOf = (file: string, fn: string): string => {
     const here = dirname(fileURLToPath(import.meta.url));
-    const src = readFileSync(
-      join(here, "../../../routers/mcp/handlers/shared.ts"),
-      "utf8"
-    );
-    const fn = src.slice(
-      src.indexOf("export async function listOpenFocusSessions")
-    );
-    const body = fn.slice(0, fn.indexOf(".orderBy("));
-    expect(body).toContain('sessionKindWhere("work")');
+    const src = readFileSync(join(here, file), "utf8");
+    const at = src.indexOf(fn);
+    // NON-VACUITY: a renamed function would otherwise leave this scan reading
+    // an empty string, and `toContain` on "" fails for the wrong reason.
+    expect(at, `${fn} not found in ${file}`).toBeGreaterThan(-1);
+    const rest = src.slice(at);
+    const cut = rest.indexOf(".orderBy(");
+    expect(cut, `no .orderBy( after ${fn}`).toBeGreaterThan(-1);
+    return rest.slice(0, cut);
+  };
+
+  it.each(RESOLVERS)("$fn narrows with ambientWorkWhere()", ({ file, fn }) => {
+    // Which session an agent's unaddressed write is FILED UNDER is decided
+    // here. An open automation run or receipt is often the newest open
+    // session (the 08:00 crons), and attributing a write to it is exactly
+    // the mis-grouping this guards — while a session the person opened and
+    // THEN attached to a playbook reads `run` too, and is where their
+    // writes belong. One predicate owns both facts.
+    const body = bodyOf(file, fn);
+    expect(body).toContain("ambientWorkWhere()");
+    // The work-only narrowing is the defect, not a synonym: it excluded the
+    // followed session. Assert it is GONE, so a revert cannot pass quietly.
+    expect(body).not.toContain('sessionKindWhere("work")');
+  });
+
+  it("SELF-CHECK: the scan can still see what it hunts", () => {
+    // A locator that silently matches nothing passes every assertion after
+    // it. Prove it finds a real body and that the body is substantial.
+    const body = bodyOf(RESOLVERS[0]!.file, RESOLVERS[0]!.fn);
+    expect(body.length).toBeGreaterThan(200);
+    expect(body).toContain("focusSessions");
   });
 });
 

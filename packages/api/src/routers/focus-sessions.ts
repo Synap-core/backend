@@ -1202,6 +1202,11 @@ export const focusSessionsRouter = router({
         /** Sessions this one waits on — `blocked_by` edges, reported per id. */
         blockedBySessionIds: z.array(z.string().uuid()).max(20).optional(),
         templateId: z.string().optional(),
+        /**
+         * Answers to the template's declared params (only meaningful with
+         * `templateId`). Validated against the declaration by the service.
+         */
+        params: z.record(z.string(), z.unknown()).optional(),
         expectedOutputs: z.array(expectedOutputItemSchema).default([]),
         channelId: z.string().uuid().optional(),
         agentIds: z.array(z.string()).default([]),
@@ -1255,6 +1260,7 @@ export const focusSessionsRouter = router({
         title: input.title ?? null,
         goal: input.goal,
         templateId: input.templateId ?? null,
+        params: input.params,
         expectedOutputs: input.expectedOutputs,
         channelId: input.channelId ?? null,
         agentIds: input.agentIds,
@@ -1369,6 +1375,8 @@ export const focusSessionsRouter = router({
          * valid keys.
          */
         followStageKey: z.string().min(1).nullable().optional(),
+        /** @see UpdateSessionParams.params — only with followPlaybookId. */
+        params: z.record(z.string(), z.unknown()).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1555,6 +1563,7 @@ export const focusSessionsRouter = router({
           userId: ctx.userId,
           followPlaybookId: input.followPlaybookId,
           followStageKey: input.followStageKey,
+          params: input.params,
         });
         if (result.status === "refused")
           throw followRefusalError(result.reason);

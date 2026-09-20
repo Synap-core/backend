@@ -41,6 +41,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
           kind: "builtin",
           name,
           providerSpec: null,
+          metadata: null,
         })
       ).toBe(false);
     }
@@ -54,6 +55,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
           name: "provider.read",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           providerSpec: { method } as any,
+          metadata: null,
         })
       ).toBe(false);
     }
@@ -67,6 +69,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
           name: "provider.write",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           providerSpec: { method } as any,
+          metadata: null,
         })
       ).toBe(true);
     }
@@ -78,6 +81,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
         kind: "declarative",
         name: "provider.mystery",
         providerSpec: null,
+        metadata: null,
       })
     ).toBe(true);
   });
@@ -89,6 +93,7 @@ describe("capabilityVerbHasExternalEffect — only EXTERNAL-send verbs get a rec
           kind,
           name: "some.skill",
           providerSpec: null,
+          metadata: null,
         })
       ).toBe(true);
     }

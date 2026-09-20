@@ -225,7 +225,17 @@ export const capabilityHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const wsId = args.workspaceId as string;
+    // OPTIONAL — absent means the POD lens, which is what "what can this pod
+    // do?" almost always means. It is a LENS here, never an authorization: no
+    // access check gates it, and `listCapabilities` already reads a null
+    // workspace as pod altitude. Typed honestly rather than cast to `string`,
+    // so nothing downstream assumes it is present.
+    // `null`, not `undefined`: the registry's lens parameter spells "pod
+    // altitude" as null, and every consumer below takes `string | null`.
+    const wsId =
+      typeof args.workspaceId === "string" && args.workspaceId.trim()
+        ? args.workspaceId
+        : null;
     const query =
       typeof args.query === "string" && args.query.trim().length > 0
         ? args.query
@@ -467,10 +477,23 @@ export const capabilityHandlers: McpHandlerMap = {
         // never entered `cappedInput`, so `sections.builtins` is empty and
         // would undercount every built-in the ranked cap never saw.
         builtinTools: fullSections.builtins.length - sections.builtins.length,
+        // WORDING IS LOAD-BEARING — do not reintroduce the word "Core" here.
+        // This note describes the `kind:"builtin-tool"` fold ONLY: those rows
+        // mirror tools the MCP caller already holds natively, so re-listing
+        // them would be a weaker second copy. It does NOT describe the Synap
+        // Core PACK, which is a separate fold (`builtInPack` above) whose
+        // verbs — `entity.delete`, `entity_facet.detach` and 32 others — are
+        // NOT MCP tools and are reachable only via `synap_run_capability`.
+        // Saying "Core built-in tools are already available to you directly as
+        // MCP tools" conflated the two folds and was read as a claim about the
+        // pack: an agent concluded deletion was impossible and told the user
+        // so. Name the mechanism, never the reassurance.
         note:
-          "Core built-in tools are already available to you directly as MCP tools; teaching docs are prose, not actions — both are folded out of this actionable view by DEFAULT. " +
+          "Built-in TOOL rows mirror MCP tools you already hold natively; teaching docs are prose, not actions — both are folded out of this actionable view by DEFAULT. " +
           'Pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, ' +
-          'or call synap_load_skill("catalog") for every teaching doc grouped by topic (your own authored skills included, under "yours").',
+          'or call synap_load_skill("catalog") for every teaching doc grouped by topic (your own authored skills included, under "yours"). ' +
+          "SEPARATELY: the Synap Core pack's verbs (entity.delete, entity_facet.detach, …) are NOT MCP tools — run them with " +
+          'synap_run_capability({ verbId: "entity.delete", … }) and list them with synap_list_capabilities({ containerId: "<Synap Core container id>" }).',
       },
       ...(zeroHitNote || containerNote
         ? { note: [zeroHitNote, containerNote].filter(Boolean).join(" ") }
@@ -532,6 +555,15 @@ export const capabilityHandlers: McpHandlerMap = {
         error: outcome.message,
         ...(outcome.errorClass ? { errorClass: outcome.errorClass } : {}),
         ...(outcome.providerRef ? { providerRef: outcome.providerRef } : {}),
+        // REPAIR — the structured argument diagnosis ({missing, wrongType,
+        // unknown}) when the call was refused for bad parameters. The whole
+        // point of validating BEFORE filing a proposal is that the agent can
+        // fix the call itself in one round trip; a bare "invalid arguments"
+        // string leaves it guessing, which is the 42%-of-tool-failures class
+        // this exists to close. Computed by the service and forwarded by no
+        // door until now — caught by `cross-door-field-parity`, which is the
+        // same shape as the `truncated` field that shipped unpopulated.
+        ...(outcome.repair ? { repair: outcome.repair } : {}),
         // CONNECTION moment — a no_connection/auth failure carries the link to
         // the card where the account is connected. Without this the `errorClass`
         // told the agent WHAT kind of failure it was and nothing about where to
@@ -865,5 +897,42 @@ export const capabilityHandlers: McpHandlerMap = {
       metadata,
     });
     return ok(result);
+  },
+  /**
+   * ONE discovery door across three catalogs. See
+   * `services/capabilities/find-intent.ts` for every founder decision it
+   * encodes; this adapter only reads args and hands the result back whole.
+   */
+  synap_find: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const intent = typeof args.intent === "string" ? args.intent.trim() : "";
+    if (!intent) {
+      return ok({
+        error:
+          'intent is required — say what you want to DO, in your own words (e.g. "send an email to a client"). To browse instead of search, call synap_list_capabilities with no query.',
+      });
+    }
+    // Same lens rule as synap_list_capabilities: absent = POD altitude, which
+    // is what "what can this pod do?" almost always means. A LENS, never an
+    // authorization — `listCapabilities` reads null as pod altitude.
+    const wsId =
+      typeof args.workspaceId === "string" && args.workspaceId.trim()
+        ? args.workspaceId
+        : null;
+    const { findByIntent } =
+      await import("../../../services/capabilities/find-intent.js");
+    return ok(
+      await findByIntent({
+        intent,
+        workspaceId: wsId,
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        // Unknown names are dropped by the service, and a list that ends up
+        // empty falls back to all three — never "searched nothing, no match".
+        ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
+        ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      })
+    );
   },
 };

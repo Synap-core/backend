@@ -109,6 +109,17 @@ export interface RunPlaybookInput {
   /** The acting principal — used for session.userId, run.createdBy, channel.userId. */
   userId: string;
   params?: Record<string, unknown>;
+  /**
+   * What to do when the playbook declares a `required` param this call did not
+   * answer. Forwarded verbatim to the ONE funnel (`instantiateSession`), whose
+   * `InstantiateInput.onMissingRequired` docblock owns the contract.
+   *
+   * ABSENT ⇒ `"refuse"` (the funnel's fail-closed default), which is right for
+   * `playbooks.run` driven by a person with a form. Every HEADLESS caller —
+   * the MCP/Hub run door, the automation `playbook_run` step — passes `"owe"`
+   * explicitly, because there is nobody to show a form to.
+   */
+  onMissingRequired?: "refuse" | "owe";
   /** Extra agent members to add to the run channel. */
   agentIds?: string[];
   /** AI attribution — when set, the run is owned by the agent-user. */
@@ -563,6 +574,9 @@ async function executeSingleRun(
     workspaceId: input.workspaceId,
     userId: actorId,
     params,
+    ...(input.onMissingRequired
+      ? { onMissingRequired: input.onMissingRequired }
+      : {}),
     agentIds: input.agentIds,
     subjectId: input.subjectId ?? null,
     // Two grammars, one resolution. `goalResolver` handles {{mustache}} against

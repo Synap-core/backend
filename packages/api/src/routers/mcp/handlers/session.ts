@@ -189,6 +189,13 @@ export const sessionHandlers: McpHandlerMap = {
             ? args.templateId
             : undefined,
       matchTemplate: true,
+      // Answers to the named template's declared params. Free-form on the wire
+      // (the playbook owns the shape); validated against the declaration by the
+      // service, with the same pure function the run funnel uses.
+      params:
+        args.params && typeof args.params === "object"
+          ? (args.params as Record<string, unknown>)
+          : undefined,
       // Binds the session to THIS client and adopts the session the gate
       // auto-opened for it, if any (never a duplicate).
       clientKey: requestClientKey(agentUserId) ?? null,
@@ -609,6 +616,12 @@ export const sessionHandlers: McpHandlerMap = {
           : {}),
       ...(typeof args.followStageKey === "string"
         ? { followStageKey: args.followStageKey }
+        : {}),
+      // Answers to the followed playbook's declared params. Free-form on the
+      // wire (the playbook owns the shape); `followPlaybook` validates them
+      // against the declaration.
+      ...(args.params && typeof args.params === "object"
+        ? { params: args.params as Record<string, unknown> }
         : {}),
     });
     switch (result.status) {

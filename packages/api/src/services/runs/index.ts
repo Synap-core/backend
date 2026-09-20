@@ -158,6 +158,27 @@ export interface RunScope {
   projectId?: string;
   /** Entity-focus: runs about / touching this entity. */
   subjectEntityId?: string;
+  /**
+   * SESSION lens — "every run that happened inside this focus session".
+   *
+   * The data has always landed, on two INDEXED columns, and no reader asked for
+   * it: a PROPOSED capability run stamps `proposals.session_id`
+   * (`proposals_session_id_idx`), and a DIRECT run — which has no proposal row —
+   * stamps `events.session_id` (`idx_events_session_id`, partial on
+   * `session_id IS NOT NULL`). Both branches of `listCapabilityRuns` filter on
+   * it, so the answer spans both paths.
+   *
+   * SCOPE OF THE LENS, measured: only the `capability` ledger honours it today.
+   * Every other ledger (automation / playbook / capture / session / agent_write
+   * / chat) carries no session key its rows can be filtered by, so `listRuns`
+   * EXCLUDES them when this is set rather than returning their rows unfiltered —
+   * the same "a ledger that cannot answer contributes nothing" rule the `status`
+   * filter uses. Returning an unfiltered automation run under a session lens
+   * would be a confident wrong answer; contributing nothing is a true partial
+   * one. Widening the lens means teaching a ledger the filter, not deleting the
+   * exclusion.
+   */
+  sessionId?: string;
 }
 
 export interface ListRunsInput {
@@ -616,8 +637,32 @@ async function listCapabilityRuns(
   status?: RunStatus,
   exactRunId?: string
 ): Promise<UnifiedRun[]> {
+  // CAVEAT 2 — `sessionId` + `projectId` is INCOHERENT, and its silent form is
+  // the exact class this repo has shipped four times. `events` carries no
+  // project column, so the DIRECT-run branch below is skipped wholesale under a
+  // project scope; combined with a session lens that would drop EVERY
+  // ungoverned/owner-bypass run in the session while still returning the
+  // proposal-backed ones — a half-answer indistinguishable from a whole one.
+  // A session already pins its own project, so the combination adds nothing a
+  // caller needs. Make it LOUD rather than lossy: `sessionId` is a new field,
+  // so no existing caller can reach this, and a future one learns at the first
+  // call instead of from a wrong screen.
+  if (scope.sessionId && scope.projectId) {
+    throw new Error(
+      "RunScope: `sessionId` and `projectId` cannot be combined — `events` has no project column, so a session lens under a project scope would silently drop every direct (non-proposal) capability run. Pass one or the other."
+    );
+  }
+
   // No entity-subject linkage exists for a capability run (unlike capture's
   // materialized entityIds) — an entity-focused scope has nothing to match.
+  //
+  // CAVEAT 1 — precedence with `sessionId` is INTERSECTION, deliberately, like
+  // every other RunScope field: the scope fields AND together, they do not
+  // override one another. "Capability runs in session X that touch entity Y" is
+  // genuinely empty, because a capability run has no entity subject at all —
+  // not because the session lens lost to the entity lens. `subjectEntityId`
+  // therefore still short-circuits with `sessionId` set, and that empty is
+  // TRUE, not a swallow.
   if (scope.subjectEntityId) return [];
 
   const rows = await db
@@ -648,7 +693,11 @@ async function listCapabilityRuns(
         scope.workspaceId
           ? eq(proposals.workspaceId, scope.workspaceId)
           : undefined,
-        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined
+        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined,
+        // SESSION lens (proposed path). `proposals.session_id` is stamped by
+        // every capability door that forwards a session; `proposals_session_id_idx`
+        // is the index it was created for.
+        scope.sessionId ? eq(proposals.sessionId, scope.sessionId) : undefined
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -720,6 +769,14 @@ async function listCapabilityRuns(
               exactRunId ? eq(events.correlationId, exactRunId) : undefined,
               scope.workspaceId
                 ? drizzleSql`${events.data}->>'workspaceId' = ${scope.workspaceId}`
+                : undefined,
+              // SESSION lens (direct path). `recordDirectCapabilityRun` rides
+              // the `events.session_id` COLUMN (0241) — never a `data` field —
+              // which is exactly what `idx_events_session_id` keys on. This is
+              // the only way a direct run is attributable to a session at all:
+              // it has no proposal row to carry one.
+              scope.sessionId
+                ? eq(events.sessionId, scope.sessionId)
                 : undefined
             )
           )
@@ -1226,6 +1283,36 @@ async function listChatRuns(
   });
 }
 
+// ── Session lens coverage — a COMPILE-TIME floor, not a hand list ───────────
+//
+// Which ledgers can honour `RunScope.sessionId`. A ledger that cannot must be
+// EXCLUDED under a session lens, never queried unfiltered — see RunScope's
+// `sessionId` docblock. Every `FlowType` has to be classified into exactly one
+// of these two sets: adding an eighth member without saying which side it is on
+// makes `_SessionLensClassified` resolve to `never` and the BUILD stops, so a
+// new ledger can never inherit "returns unfiltered rows under a session lens"
+// by omission. (Positive-controlled: see the report for the induced error.)
+const SESSION_LENSED_FLOWS = [
+  "capability",
+] as const satisfies ReadonlyArray<FlowType>;
+const SESSION_BLIND_FLOWS = [
+  "automation",
+  "playbook",
+  "capture",
+  "session",
+  "chat",
+  "agent_write",
+] as const satisfies ReadonlyArray<FlowType>;
+type _SessionLensClassified =
+  Exclude<
+    FlowType,
+    (typeof SESSION_LENSED_FLOWS)[number]
+  > extends (typeof SESSION_BLIND_FLOWS)[number]
+    ? true
+    : never;
+const _sessionLensClassified: _SessionLensClassified = true;
+void _sessionLensClassified;
+
 // ── Public: list (merged cross-flow feed) ────────────────────────────────────
 
 /**
@@ -1242,20 +1329,44 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   // `listAutomationRuns` like every other ledger.
   const automationExcluded = !!scope.projectId;
 
+  // SESSION lens: a ledger that cannot filter by session contributes NOTHING
+  // rather than its unfiltered rows. Read from the classified sets above, so a
+  // new ledger joins the right side by being classified, not by someone
+  // remembering to edit this line.
+  const sessionLensed = (f: FlowType): boolean =>
+    !scope.sessionId ||
+    (SESSION_LENSED_FLOWS as ReadonlyArray<FlowType>).includes(f);
+
   const jobs: Array<Promise<UnifiedRun[]>> = [];
-  if ((!flowType || flowType === "automation") && !automationExcluded)
+  if (
+    (!flowType || flowType === "automation") &&
+    !automationExcluded &&
+    sessionLensed("automation")
+  )
     jobs.push(listAutomationRuns(userId, flowId, scope, perFlow, status));
-  if (!flowType || flowType === "playbook")
+  if ((!flowType || flowType === "playbook") && sessionLensed("playbook"))
     jobs.push(listPlaybookRuns(userId, flowId, scope, perFlow, status));
   // capture/capability/session/chat have no per-flow id, so a flowId filter
   // excludes them.
-  if ((!flowType || flowType === "capture") && !flowId)
+  if (
+    (!flowType || flowType === "capture") &&
+    !flowId &&
+    sessionLensed("capture")
+  )
     jobs.push(listCaptureRuns(userId, scope, perFlow, status));
   if ((!flowType || flowType === "capability") && !flowId)
     jobs.push(listCapabilityRuns(userId, scope, perFlow, status));
-  if ((!flowType || flowType === "session") && !flowId)
+  if (
+    (!flowType || flowType === "session") &&
+    !flowId &&
+    sessionLensed("session")
+  )
     jobs.push(listSessionRuns(userId, scope, perFlow, status));
-  if ((!flowType || flowType === "agent_write") && !flowId)
+  if (
+    (!flowType || flowType === "agent_write") &&
+    !flowId &&
+    sessionLensed("agent_write")
+  )
     jobs.push(listAgentWriteRuns(userId, scope, perFlow, status));
   // Chat in the merged feed only when the caller is looking for trouble
   // (running/failed) or explicitly filters flowType=chat — avoids flooding the
@@ -1264,7 +1375,8 @@ export async function listRuns(input: ListRunsInput): Promise<UnifiedRun[]> {
   const includeChat =
     flowType === "chat" ||
     (!flowType && !flowId && (status === "running" || status === "failed"));
-  if (includeChat) jobs.push(listChatRuns(userId, scope, perFlow, status));
+  if (includeChat && sessionLensed("chat"))
+    jobs.push(listChatRuns(userId, scope, perFlow, status));
 
   const merged = (await Promise.all(jobs)).flat();
   // Dedupe by (flowType,id) — a defensive guard against a run row being

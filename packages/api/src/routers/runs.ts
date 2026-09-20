@@ -62,6 +62,15 @@ export const runsRouter = router({
             workspaceId: z.string().uuid().optional(),
             projectId: z.string().uuid().optional(),
             subjectEntityId: z.string().uuid().optional(),
+            /**
+             * SESSION lens — "every run that happened inside this focus
+             * session". Covers the `capability` ledger only; every other
+             * ledger carries no session key and is EXCLUDED rather than
+             * returned unfiltered (see `RunScope.sessionId`). Combining it
+             * with `projectId` THROWS by design — a session already pins its
+             * project, and the pair would silently drop every direct run.
+             */
+            sessionId: z.string().uuid().optional(),
           })
           .optional(),
         /** Filter to one lifecycle status, pushed down per ledger (server-side). */

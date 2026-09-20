@@ -135,6 +135,10 @@ describe("playbooks.matchForEntity", () => {
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
         subjectProfileSlug: "post",
         params: [{ key: "platform", type: "string" }],
+        // The fixture row declares neither, so BOTH come back as the
+        // resolver's documented reading of NULL — never `null`, never absent.
+        kind: "make",
+        intakeStyle: "auto",
         executor: "is-agent",
         score: 2,
         reason: "Made for post items",
@@ -206,6 +210,8 @@ describe("playbooks.matchForEntity", () => {
         goalTemplate: "Enrich {{subject}}",
         subjectProfileSlug: "lead",
         params: [],
+        kind: "make",
+        intakeStyle: "auto",
         executor: "is-agent",
         score: 1.5,
         reason: "Matches its lead role",

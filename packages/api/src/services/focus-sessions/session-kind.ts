@@ -167,6 +167,51 @@ function noRunSignalWhere(): SQL {
   ) as SQL;
 }
 
+/**
+ * A work session a PERSON later attached to a playbook — `noRunSignalWhere`'s
+ * conjunction with the `playbookId IS NULL` clause swapped for the attach mark.
+ * Every other term is unchanged, so a machine-minted row can never enter here.
+ */
+function followedWorkWhere(): SQL {
+  return and(
+    drizzleSql`${focusSessions.metadata} #>> '{followedVia}' IS NOT NULL`,
+    or(
+      isNull(focusSessions.origin),
+      not(inArray(focusSessions.origin, [...RUN_ORIGINS]))
+    ),
+    ...RUN_METADATA_KEYS.map((key) => metadataKeyWhere(key, "IS NULL"))
+  ) as SQL;
+}
+
+/**
+ * The population the two AMBIENT-ATTRIBUTION resolvers narrow to — the session
+ * a PERSON is working in right now, which an agent's unaddressed write is
+ * filed under. `work`, PLUS the one row `work` stopped covering on 2026-09-20.
+ *
+ * Following a playbook writes `playbookId` onto a LIVE session, and that flips
+ * its kind to `run` by design. But `run` is also what the 08:00 crons mint, and
+ * keeping an ambient write out of a cron run is the entire reason both
+ * resolvers narrow at all. A followed session is the opposite case: the person
+ * opened it and then attached a process to it. Dropping it does not send the
+ * write somewhere sensible — `resolveWorkSession` falls to `none` and a NEW
+ * receipt is auto-opened, so the writes that had been landing in their session
+ * go on landing beside it, silently, for as long as the attach lasts.
+ *
+ * `followedVia` is stamped at exactly one place (`follow-playbook.ts:476`) and
+ * by no run-minting path, so it separates the two populations exactly.
+ *
+ * The KIND derivation is deliberately untouched: a followed session still reads
+ * `run` in every lens and every list, which is the point of following one. This
+ * is an attribution predicate, not a second opinion about kind — which is why
+ * it lives here, beside the rule it qualifies, rather than in either resolver.
+ */
+export function ambientWorkWhere(): SQL {
+  return and(
+    notReceiptWhere(),
+    or(noRunSignalWhere(), followedWorkWhere())
+  ) as SQL;
+}
+
 /** SQL: rows of exactly one kind. Apply as a WHERE clause, never a post-filter. */
 export function sessionKindWhere(kind: SessionKind): SQL {
   if (kind === "receipt") return receiptWhere();

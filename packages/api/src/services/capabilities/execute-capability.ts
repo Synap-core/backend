@@ -88,6 +88,12 @@ import { runSkillInSandbox } from "../skills/run-skill-in-sandbox.js";
 import { executeProviderVerb } from "./execute-provider-verb.js";
 import { isProposedEnvelope } from "./proposed-envelope.js";
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import { declaredReadOnly } from "./capability-drift.js";
+import {
+  checkVerbParameters,
+  describeParameterRepair,
+  type ParameterRepair,
+} from "./validate-verb-parameters.js";
 import type {
   ConnectionSelector,
   FailureErrorClass,
@@ -174,6 +180,14 @@ export type ExecuteCapabilityResult =
        * approval `deny` above, so it says `connect`, never `enable`.
        */
       enable?: CapabilityNextAction;
+      /**
+       * ARGUMENT moment: the call did not match the verb's DECLARED schema, so
+       * nothing was proposed and nothing ran. Structured on purpose — a generic
+       * "invalid arguments" string is not repairable by the caller, and the
+       * caller here is usually an LLM. Present ONLY on that refusal; see
+       * `validate-verb-parameters.ts`.
+       */
+      repair?: ParameterRepair;
     }
   | { kind: "not_found"; message: string };
 
@@ -442,6 +456,15 @@ export async function executeCapability(input: {
       userId: skills.userId,
       kind: skills.kind,
       providerSpec: skills.providerSpec,
+      // Carries the AUTHORED `readOnly` declaration the gate honours below.
+      // Without this column in the select the declaration reads `undefined`
+      // and every declared read verb silently keeps proposing.
+      metadata: skills.metadata,
+      // The verb's DECLARED argument schema — the same value the tool catalog
+      // advertises as `ToolVerbCatalogEntry.argsSchema` (`deriveToolVerbs`
+      // copies it verbatim). Read by `checkVerbParameters` before a proposal is
+      // filed. Absent = cannot validate, never "no arguments allowed".
+      parameters: skills.parameters,
     })
     .from(skills)
     .where(
@@ -472,8 +495,24 @@ export async function executeCapability(input: {
   // is enforced by the access layer inside the handler, NOT by the gate. Mirrors
   // execute-provider-verb's `isReadMethod → alreadyApproved:true`. WRITE builtins
   // (and every non-builtin) leave this false and flow through the full ladder.
+  // ...and a NON-builtin verb gets the same short-circuit when — and ONLY when
+  // — its definition AUTHORED `metadata.readOnly: true`. This is what unblocks
+  // `exa_search`: a read with no side effects that is an HTTP POST, so the
+  // provider path's HTTP-method test (`/^(GET|HEAD)$/` in execute-provider-verb)
+  // called it a write and every lookup in an agent research loop stalled on a
+  // human click — unattended runs could not proceed at all.
+  //
+  // DELIBERATELY NOT `deriveVerbKind()` / `ToolVerbCatalogEntry.kind`. That axis
+  // exists and says "read" for this verb, but it is a GUESS over the verb's NAME
+  // and DESCRIPTION. Honouring a naming convention here would make any future
+  // verb called `*_search` auto-run ungoverned, and a mis-named mutating verb
+  // would widen the auto path by accident. A name is not a permission; the
+  // declaration is. See `SKILL_METADATA_READ_ONLY` for the trust argument and
+  // for the re-approval demotion that guards widening it.
   const readOnly =
-    skillRow.kind === "builtin" && READ_ONLY_BUILTIN_VERBS.has(skillRow.name);
+    (skillRow.kind === "builtin" &&
+      READ_ONLY_BUILTIN_VERBS.has(skillRow.name)) ||
+    verbDeclaresReadOnly(skillRow);
 
   // #4 instruction-provenance ACTIVATION (rung 2.55): resolve the acting channel
   // for this turn. An explicit `channelId` wins; otherwise derive it from the
@@ -544,6 +583,32 @@ export async function executeCapability(input: {
     return { kind: "dry-run", skillId: skillRow.id };
   }
   if (decision.decision === "propose") {
+    // VALIDATE BEFORE ASKING A HUMAN. A proposal is a request to SPEND an
+    // approval; filing one whose arguments cannot work spends it on a call that
+    // will fail after the yes. Checked against the verb's own declared schema —
+    // absent/unreadable schema proceeds unchanged (honest-unknown), and an
+    // extra key alone never refuses. See `validate-verb-parameters.ts`.
+    //
+    // DELIBERATELY ONLY ON THIS BRANCH. A `run` reaches the handler, whose own
+    // `parse()` produces a real error immediately, so there is no unknown-until-
+    // approved window to close there — and a validator standing in front of
+    // every run is a second place a false rejection could break a working call.
+    const paramCheck = checkVerbParameters(skillRow, parameters);
+    if (paramCheck.status === "invalid") {
+      const message = describeParameterRepair(
+        verbId ?? skillRow.name,
+        paramCheck.repair
+      );
+      logger.warn(
+        {
+          skillId: skillRow.id,
+          verbId: verbId ?? null,
+          repair: paramCheck.repair,
+        },
+        "capability run refused: parameters do not match the declared schema"
+      );
+      return { kind: "error", message, repair: paramCheck.repair };
+    }
     if (input.suppressProposal) {
       const enable = await resolveRefusalBlock({
         skillId: skillRow.id,
@@ -705,6 +770,36 @@ export async function executeCapability(input: {
   return { ...ran, ackState: "applied" as const, correlationId };
 }
 
+/** Anything carrying the live `skills.metadata` bag the declaration lives in. */
+export interface DeclaredReadOnlyBearing {
+  metadata: Record<string, unknown> | null;
+}
+
+/**
+ * THE read of the AUTHORED read-only declaration — the single expression BOTH
+ * consumers in this file go through:
+ *
+ *   1. the governance gate (`readOnly` → `gateCapabilityExecution`), and
+ *   2. the at-most-once receipt router (`capabilityVerbHasExternalEffect`).
+ *
+ * They are ONE concept ("this verb does not change anything") and they were
+ * TWO expressions: the gate honoured the declaration while the router still
+ * classified by `skill.kind` + HTTP method, so `exa_search` auto-ran (correct)
+ * and was then receipt-deduped as an external send (wrong — a repeated search
+ * replayed a ≤10-minute-old result). This helper is why they cannot drift
+ * again, and `execute-capability.readonly-parity.tripwire.test.ts` pins that
+ * `declaredReadOnly(` has exactly ONE call site: this one.
+ *
+ * `metadata` is REQUIRED (not optional) on purpose: a caller that forgets to
+ * select the column would silently read `undefined` and get the pre-fix
+ * behaviour back at BOTH sites. Making the omission a compile error is the
+ * cheapest floor available — `executeCapability`'s own `select` already carries
+ * a comment saying so.
+ */
+export function verbDeclaresReadOnly(skill: DeclaredReadOnlyBearing): boolean {
+  return declaredReadOnly(skill.metadata) === true;
+}
+
 /**
  * Does a DIRECT-run of this verb fire an irreversible EXTERNAL effect (a send to
  * a third party / provider) that needs the at-most-once receipt? Only external
@@ -720,14 +815,29 @@ export async function executeCapability(input: {
  * idempotency, if ever wanted, belongs in an explicit-key mechanism, not this
  * external-send guard. Fail-CLOSED — an unknown/absent provider method is treated
  * as external (a redundant receipt is far cheaper than a double-send).
+ *   - DECLARED read-only → no effect at all, whatever its kind or method (see
+ *                    `verbDeclaresReadOnly` — the SAME authored declaration the
+ *                    governance gate honours; that is the whole point).
  *   - builtin      → local hub op, never an external send → false.
  *   - declarative  → external iff its provider method is NOT GET/HEAD (the SAME
  *                    `isReadMethod` notion execute-provider-verb gates on).
  *   - code / other → may send externally → true.
  */
 export function capabilityVerbHasExternalEffect(
-  skill: Pick<ResolvedSkillRow, "kind" | "name" | "providerSpec">
+  skill: Pick<ResolvedSkillRow, "kind" | "name" | "providerSpec"> &
+    DeclaredReadOnlyBearing
 ): boolean {
+  // The AUTHORED declaration is authoritative here EXACTLY as it is at the gate
+  // — same helper, same field, no second opinion. A verb whose definition says
+  // `metadata.readOnly: true` performs no external send, so it must NOT be
+  // routed through the at-most-once receipt runner: that runner's DERIVED
+  // content-hash key is WINDOWED (~10 min), so two identical reads inside the
+  // window would replay the first's stored result instead of reading again.
+  // For `exa_search` (kind:"code", so the fail-closed `return true` below) that
+  // was a silently STALE answer to a fresh web search.
+  if (verbDeclaresReadOnly(skill)) {
+    return false;
+  }
   if (skill.kind === "builtin") {
     return false;
   }

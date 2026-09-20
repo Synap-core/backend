@@ -34,6 +34,11 @@ import {
   persistCaptureQuestion,
   restructureInput,
 } from "../services/intake/capture-clarification.js";
+import {
+  dismissCaptureResultRow,
+  persistCaptureResult,
+  type PersistedCaptureResult,
+} from "../services/intake/capture-result-part.js";
 import { CaptureAnswerSchema } from "@synap-core/types/capture";
 import {
   KNOWN_SOURCE_HASHES_MAX,
@@ -1055,6 +1060,31 @@ const captureBaseRouter = router({
    * Extract multiple entities + relations from raw text.
    * Calls IS /api/structure, then searches Typesense for dedup candidates.
    */
+  // ── dismissResultRow (drop / restore one row of the capture report) ─────
+  //
+  // The report is a PROJECTION of the room's newest `capture_result` part, so
+  // an untick has to land there: untick on the report and the room sees it,
+  // dismiss in the room and the report sees it. One fact, one home.
+  //
+  // Owner-floored and idempotent; every authorization miss is NOT_FOUND.
+  dismissResultRow: podProcedure
+    .input(
+      z.object({
+        sessionId: z.string().uuid(),
+        tempId: z.string().min(1).max(200),
+        dismissed: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return dismissCaptureResultRow({
+        userId,
+        sessionId: input.sessionId,
+        tempId: input.tempId,
+        dismissed: input.dismissed,
+      });
+    }),
+
   structure: podProcedure
     .use(aiRateLimitMiddleware)
     .input(
@@ -2249,7 +2279,7 @@ const captureBaseRouter = router({
         "Structure capture: proposals ready"
       );
 
-      return finishIntake(
+      const structured = await finishIntake(
         {
           proposals: structureResult.entities,
           relations: structureResult.relations,
@@ -2305,6 +2335,39 @@ const captureBaseRouter = router({
         },
         { meta: (structureResult as { meta?: StructureRunMeta }).meta }
       );
+
+      // THE result part — the ONE place `capture_result` is written (see
+      // `capture-result-part.ts`). This terminal return is also where an
+      // `answerFollowUp` re-run lands (it always sets `suppressFollowUp`), so
+      // the refined result is no longer thrown away when the answer came from
+      // the session room instead of the sheet.
+      //
+      // A failure here is LOUD but never fails the capture: the caller keeps
+      // its response and `captureResult` comes back null.
+      let captureResult: PersistedCaptureResult | null = null;
+      if (structured.sessionId) {
+        try {
+          captureResult = await persistCaptureResult({
+            sessionId: structured.sessionId,
+            userId,
+            workspaceId: workspaceId ?? null,
+            proposals: structureResult.entities,
+            dedupCandidates,
+            dedupSkipped,
+          });
+        } catch (err) {
+          logger.error(
+            { err, userId, sessionId: structured.sessionId },
+            "capture.structure: result NOT persisted — the response carries captureResult null and the report stays client-local"
+          );
+        }
+      } else {
+        logger.error(
+          { userId },
+          "capture.structure: result NOT persisted — the run has no session"
+        );
+      }
+      return { ...structured, captureResult };
     }),
 
   // ── analyzeBulkMapping (AI-driven CSV mapping plan) ─────────────────────

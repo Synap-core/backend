@@ -109,9 +109,22 @@ const NAMED_BY_AUTOMATION = drizzleSql`(
  * A playbook or automation run — named right at creation, never generated for.
  * Negated as `IS NOT TRUE`, never `NOT`: `origin`/`source` are NULL on a work
  * session, the OR is then NULL, and `NOT NULL` would exclude every one of them.
+ *
+ * ── WHY `playbookId` IS QUALIFIED (2026-09-20) ────────────────────────────
+ * "Named right at creation" is the whole justification for skipping these, and
+ * it stopped being true for one row when `followPlaybookId` shipped. Following
+ * writes `playbookId` onto a LIVE session and deliberately NEVER rewrites its
+ * title or goal (`follow-playbook.ts`), so an unnamed work session that
+ * attaches a playbook would be excluded from the early pass AND from the
+ * close pass — permanently unnamed, with `titleEarlyLastReason` never able to
+ * say why, because the row simply stops being a candidate.
+ *
+ * `origin` and `source` are untouched by following, so they still carry the
+ * honest "minted as a run" signal and are left alone.
  */
 const TEMPLATE_RUN = drizzleSql`(
-  ${focusSessions.playbookId} IS NOT NULL
+  (${focusSessions.playbookId} IS NOT NULL
+   AND ${focusSessions.metadata}->>'followedVia' IS NULL)
   OR ${focusSessions.origin} IN ('playbook', 'automation')
   OR ${focusSessions.metadata}->>'source' = 'automation'
 )`;
@@ -161,11 +174,22 @@ export const CLOSE_TITLE_CANDIDATE = and(
   drizzleSql`COALESCE(${focusSessions.verificationReport}->>'summary', '') <> ''`
 );
 
-/** A run or capture that predates derived names. Work sessions are left to phase 2. */
+/**
+ * A run or capture that predates derived names. Work sessions are left to
+ * phase 2.
+ *
+ * A FOLLOWED session is excluded for the mirror of the reason above: the
+ * backfill would name it `kind: "run", name: <playbook>` and throw away the
+ * person's own goal, which is the only thing that row was ever named by. The
+ * two jobs have to agree about which population it is in, or one names it
+ * after the process and the other declines to name it at all.
+ */
 export const BACKFILL_CANDIDATE = and(
   drizzleSql`${focusSessions.title} IS NULL`,
   drizzleSql`${focusSessions.metadata}->>'titleSource' IS NULL`,
-  drizzleSql`(${focusSessions.playbookId} IS NOT NULL OR ${focusSessions.metadata}->>'source' IS NOT NULL)`
+  drizzleSql`((${focusSessions.playbookId} IS NOT NULL
+               AND ${focusSessions.metadata}->>'followedVia' IS NULL)
+              OR ${focusSessions.metadata}->>'source' IS NOT NULL)`
 );
 
 // ── The write ───────────────────────────────────────────────────────────────

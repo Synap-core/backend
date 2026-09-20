@@ -124,6 +124,11 @@ export function registerRunsRoutes(app: HubHono): void {
       "workspaceId",
       "projectId",
       "subjectEntityId",
+      // SESSION lens — see `RunScope.sessionId`. Listed here because the
+      // scope keys are hand-enumerated at this door: a field added to
+      // `RunScope` and not to this array is reachable by NOBODY, which is how
+      // this lens shipped unreachable in the first place.
+      "sessionId",
     ] as const) {
       const value = c.req.query(key);
       if (!value) continue;

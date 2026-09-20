@@ -114,7 +114,7 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       "DRIFT_COMPARATOR_VERSION must be bumped (and this pin updated) whenever " +
         "the comparator's coverage changes — otherwise every container already " +
         "stamped by the OLD comparator keeps its stamp and is never re-diffed."
-    ).toBe(4);
+    ).toBe(5);
   });
 
   /** A value pair per field: what the template declares vs what the live row has. */

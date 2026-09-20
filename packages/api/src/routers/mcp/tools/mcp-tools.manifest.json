@@ -1000,7 +1000,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. Declare `criteria` for your definition of done.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1047,6 +1047,11 @@
           "templateId": {
             "type": ["string", "null"],
             "description": "Optional playbook UUID — the ONE way a playbook binds to this session. Omit and the result's `playbooks` block ranks the pod's playbooks against your words so you can name one (nothing is applied for you); pass null to skip matching entirely."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Answers to the template's declared params (only with templateId). Each playbook declares its own: synap_list_playbooks / synap_match_playbooks return the declaration, including which are `required`, their `type` and any `options`. A required one you leave out is NOT an error here — it lands as a deliverable OWED BY THE PERSON on the session, so the question is visible and ages rather than being silently answered with an empty string. A value of the wrong type IS refused."
           },
           "criteria": {
             "type": "array",
@@ -1437,6 +1442,11 @@
           "followPlaybookId": {
             "type": ["string", "null"],
             "description": "FOLLOW a playbook with this live session (optional) — the session BECOMES A RUN of it: it appears in that playbook's runs and leaves the plain work list. Its acceptance criteria and deliverables MERGE in (nothing you already have is overwritten or deleted); its title, goal and origin are left alone. Pass null to RELEASE the playbook — the merged criteria and deliverables STAY, and a release is refused while a stage gate is waiting. Find a playbook with synap_list_playbooks / synap_match_playbooks. The reply carries `follow` with what happened."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Only with followPlaybookId: answers to the playbook's declared params. They are stored on the session (so a re-run can reuse them) and merged over any it already carries. A required one you leave out lands as a deliverable OWED BY THE PERSON, never a silent blank; a value of the wrong type is refused."
           },
           "followStageKey": {
             "type": ["string", "null"],
@@ -2005,7 +2015,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nPLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ \"entities\": [ { \"ref\": \"acme\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"projects\": [ { \"ref\": \"p1\", \"name\": \"Acme onboarding\", \"subjectRef\": \"acme\", \"evidenceRefs\": [\"acme\"] } ], \"sessions\": [ { \"ref\": \"s0\", \"title\": \"Onboard Acme\", \"goal\": \"Acme is live on the platform\", \"projectRef\": \"p1\", \"subjectRef\": \"acme\" }, { \"ref\": \"s1\", \"title\": \"Write the spec\", \"goal\": \"Spec signed off by Acme\", \"parentRef\": \"s0\", \"projectRef\": \"p1\" }, { \"ref\": \"s2\", \"title\": \"Build the import\", \"goal\": \"Acme data imported\", \"parentRef\": \"s0\", \"projectRef\": \"p1\", \"blockedByRefs\": [\"s1\"] } ], \"documents\": [ { \"ref\": \"spec\", \"title\": \"Acme onboarding spec\", \"content\": \"# Spec\\n…\", \"sessionRef\": \"s1\" } ] }\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n\nEXAMPLE 1 — raw text:\n{ \"text\": \"Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March.\" }\n\nEXAMPLE 2 — one structured entity, with properties + a long body:\n{ \"entities\": [ { \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\", \"role\": \"Head of Data\" }, \"content\": \"## Notes\\nOwns the data platform. Wants a March demo.\" } ] }\n\nEXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ \"entities\": [ { \"ref\": \"p1\", \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\" } }, { \"ref\": \"c1\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"relations\": [ { \"sourceRef\": \"p1\", \"targetRef\": \"c1\", \"type\": \"works_at\" } ] }\n\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
+      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nCOUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap, and re-sending a capped write through another door is how the same playbook lands in the pod twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person can see what is still owed instead of being told a percentage.\nPLAN EXAMPLE — a project, a root session with two children (one blocked by the other), a spec document:\n{ \"entities\": [ { \"ref\": \"acme\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"projects\": [ { \"ref\": \"p1\", \"name\": \"Acme onboarding\", \"subjectRef\": \"acme\", \"evidenceRefs\": [\"acme\"] } ], \"sessions\": [ { \"ref\": \"s0\", \"title\": \"Onboard Acme\", \"goal\": \"Acme is live on the platform\", \"projectRef\": \"p1\", \"subjectRef\": \"acme\" }, { \"ref\": \"s1\", \"title\": \"Write the spec\", \"goal\": \"Spec signed off by Acme\", \"parentRef\": \"s0\", \"projectRef\": \"p1\" }, { \"ref\": \"s2\", \"title\": \"Build the import\", \"goal\": \"Acme data imported\", \"parentRef\": \"s0\", \"projectRef\": \"p1\", \"blockedByRefs\": [\"s1\"] } ], \"documents\": [ { \"ref\": \"spec\", \"title\": \"Acme onboarding spec\", \"content\": \"# Spec\\n…\", \"sessionRef\": \"s1\" } ] }\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. Sending a URL under any other key (e.g. `url`) is NOT a dedup signal and will duplicate the entity.\n\nEXAMPLE 1 — raw text:\n{ \"text\": \"Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March.\" }\n\nEXAMPLE 2 — one structured entity, with properties + a long body:\n{ \"entities\": [ { \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\", \"role\": \"Head of Data\" }, \"content\": \"## Notes\\nOwns the data platform. Wants a March demo.\" } ] }\n\nEXAMPLE 3 — a small graph (refs link entities that do not exist yet):\n{ \"entities\": [ { \"ref\": \"p1\", \"profileSlug\": \"person\", \"title\": \"Ada Lovelace\", \"properties\": { \"email\": \"ada@acme.com\" } }, { \"ref\": \"c1\", \"profileSlug\": \"company\", \"title\": \"Acme Corp\", \"properties\": { \"website\": \"https://acme.com\" } } ], \"relations\": [ { \"sourceRef\": \"p1\", \"targetRef\": \"c1\", \"type\": \"works_at\" } ] }\n\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2185,6 +2195,7 @@
                 },
                 "expectedOutputs": {
                   "type": "array",
+                  "description": "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded. Acceptance `criteria` are NOT carried by a plan step — set them on the session afterwards with synap_update_session.",
                   "items": {
                     "type": "object"
                   }
@@ -2935,6 +2946,41 @@
       }
     },
     {
+      "name": "synap_find",
+      "annotations": {
+        "title": "Find what can do this",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "What can do this? Searches the pod's runnable verbs, the abstract-intent axis and the user's playbooks in ONE call, and returns each match WITH its argument schema, so you can run it without a second lookup. Pass `intent` as free text (not the closed intent vocabulary). A block that is absent was not searched; `matches: []` means it was searched and nothing fit. Matching is lexical, so a miss is never proof of absence — `coverage` says how much was searched and `noConfidentMatch` carries the escalation ladder. Run a hit with synap_run_capability (verbId) or synap_run_playbook (playbook id).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "intent": {
+            "type": "string",
+            "description": "What you want to DO, in your own words (e.g. 'clean up duplicate contacts'). Keep the NOUN — it is the most discriminating word."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional workspace lens. Omit for pod altitude, which is what 'what can this pod do?' usually means."
+          },
+          "catalogs": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["capabilities", "intents", "playbooks"]
+            },
+            "description": "Which catalogs to search. Omit for all three. A catalog you leave out is ABSENT from the result, not empty."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Max matches per catalog (default 5)."
+          }
+        },
+        "required": ["intent"]
+      }
+    },
+    {
       "name": "synap_list_capabilities",
       "annotations": {
         "title": "List capabilities",
@@ -2985,7 +3031,7 @@
             "description": "Max entries to return (default 20 when `query` is set; unset otherwise)."
           }
         },
-        "required": ["workspaceId"]
+        "required": []
       }
     },
     {

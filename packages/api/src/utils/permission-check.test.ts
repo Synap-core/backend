@@ -1477,6 +1477,43 @@ describe("checkPermissionOrPropose — agent proposal cap (F2 floor)", () => {
       ).toBeUndefined();
     });
 
+    it("BOTH refusal branches teach the plan door — one call, one slot", async () => {
+      // The observed live failure: an agent told only "raise the cap or clear
+      // the queue" filed its structure one object at a time and re-created two
+      // playbooks. The third way out must be in the refusal itself, on the
+      // filed branch AND the degraded branch — an agent that hits the cap while
+      // the filer is down needs the cheaper path most of all.
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockResolvedValue({
+        proposalId: "prop-cap-raise-plan",
+        deduped: false,
+        cap: 10,
+        proposedLimit: 15,
+      });
+      const filed = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-plan-hint",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      setupAgentBudget(10);
+      mockRequestRaiseProposalCap.mockResolvedValue(null);
+      const plain = await checkPermissionOrPropose({
+        ...BASE_OPTS,
+        agentUserId: "agent-plan-hint-2",
+        subjectType: "entity",
+        action: "create",
+      });
+
+      for (const result of [filed, plain]) {
+        const reason = (result as { reason: string }).reason;
+        expect(reason).toContain("ONE plan instead of N proposals");
+        expect(reason).toContain("synap_capture");
+        expect(reason).toContain("costs one slot");
+      }
+    });
+
     it("a filer failure degrades to the plain refusal — it can never turn a refusal into a throw", async () => {
       setupAgentBudget(10);
       mockRequestRaiseProposalCap.mockRejectedValue(new Error("db down"));

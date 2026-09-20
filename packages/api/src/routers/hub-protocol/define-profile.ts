@@ -12,7 +12,7 @@
  * proposal there. This file only shapes the input and the per-field ledger.
  */
 
-import { PropertyValueType } from "@synap/database";
+import { PropertyValueType, slugifyPropertyKey } from "@synap/database";
 
 import type { HubProtocolCaller } from "./rest/_shared.js";
 import { withReviewUrl } from "./proposal-response.js";
@@ -68,6 +68,15 @@ export async function defineProfile(
     };
   }
 
+  // ONE normalisation for every caller-supplied slug on this door — the SAME
+  // `slugifyPropertyKey` the approve-side reconciliation uses, never a second
+  // table. Before this, a key was slugified by the reconciliation door
+  // (`ek_type` → `ek-type`, its label kept) and HARD-REJECTED here by the
+  // `/^[a-z0-9-]+$/` zod downstream: one product, two answers for one input.
+  // `|| raw` keeps a slug that slugifies to nothing (`"!!!"`) reaching the
+  // validator, so it still fails loudly instead of becoming "".
+  const profileSlug = slugifyPropertyKey(input.slug) || input.slug;
+
   const uiHints: Record<string, unknown> = { ...(input.uiHints ?? {}) };
   if (input.icon !== undefined) uiHints.icon = input.icon;
   if (input.description !== undefined) uiHints.description = input.description;
@@ -83,7 +92,7 @@ export async function defineProfile(
   const result = (await caller.profiles.createProfile({
     userId: input.userId,
     workspaceId: input.workspaceId,
-    slug: input.slug,
+    slug: profileSlug,
     displayName: input.displayName,
     profileKind,
     ...(applicableKinds ? { applicableKinds } : {}),
@@ -120,7 +129,7 @@ export async function defineProfile(
           ? {
               properties: {
                 status: "deferred",
-                message: `The kind itself is awaiting review. Re-call ${labels.door} with the same slug once the proposal is approved to add these fields (the call is slug-idempotent).`,
+                message: `The kind itself is awaiting review. Re-call ${labels.door} with the same slug once the proposal is approved to add these fields (the call is slug-idempotent: it ADDS fields that do not exist yet and reports \`status: "unchanged"\` for any slug that already does — it never rewrites a stored definition).`,
                 pending: fieldSpecs.length,
               },
             }
@@ -137,12 +146,21 @@ export async function defineProfile(
 
   const properties: Array<Record<string, unknown>> = [];
   for (const spec of fieldSpecs) {
-    const propSlug = typeof spec.slug === "string" ? spec.slug : undefined;
+    const declaredSlug = typeof spec.slug === "string" ? spec.slug : undefined;
+    // Same ONE normalisation as the profile slug above.
+    const propSlug = declaredSlug
+      ? slugifyPropertyKey(declaredSlug) || declaredSlug
+      : undefined;
+    const normalized =
+      propSlug && declaredSlug && propSlug !== declaredSlug
+        ? { normalizedFrom: declaredSlug }
+        : {};
     const valueType =
       typeof spec.valueType === "string" ? spec.valueType : undefined;
     if (!propSlug || !valueType) {
       properties.push({
         slug: propSlug ?? null,
+        ...normalized,
         status: "error",
         error: "Each property requires `slug` and `valueType`.",
       });
@@ -154,6 +172,7 @@ export async function defineProfile(
     if (!PROPERTY_VALUE_TYPES.includes(valueType)) {
       properties.push({
         slug: propSlug,
+        ...normalized,
         status: "error",
         error: `Unsupported valueType '${valueType}'. Valid: ${PROPERTY_VALUE_TYPES.join(", ")}.`,
       });
@@ -189,15 +208,16 @@ export async function defineProfile(
           ? { displayOrder: spec.displayOrder }
           : {}),
         ...(spec.overlay === true ? { overlay: true } : {}),
-        reasoning: `Field of kind '${input.slug}' defined via ${labels.door}`,
+        reasoning: `Field of kind '${profileSlug}' defined via ${labels.door}`,
         ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
       });
-      properties.push({ slug: propSlug, ...propResult });
+      properties.push({ slug: propSlug, ...normalized, ...propResult });
     } catch (err) {
       // One rejected field must not discard the fields that did land — the
       // caller gets a per-field ledger and can retry just the failures.
       properties.push({
         slug: propSlug,
+        ...normalized,
         status: "error",
         error: err instanceof Error ? err.message : String(err),
       });

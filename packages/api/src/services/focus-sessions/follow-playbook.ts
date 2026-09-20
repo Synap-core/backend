@@ -66,11 +66,17 @@ import {
   collectPlaybookCriteria,
   mergeCriteria,
   readCriteria,
+  readPlaybookParams,
+  validatePlaybookParams,
   type ExpectedOutput,
   type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
-import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  PARAM_SLOT_KIND,
+} from "@synap-core/types/focus-sessions";
+import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
   createLinks,
@@ -164,6 +170,23 @@ export interface FollowPlaybookParams {
    * valid keys listed — never silently ignored, never mapped to stage 1.
    */
   followStageKey?: string | null;
+  /**
+   * Answers to the playbook's declared params. Until this existed the door
+   * could not accept them AT ALL — a live session could be made a run of a
+   * parameterised playbook while remembering nothing about what it was for.
+   *
+   * They are validated with the SAME pure function the run funnel uses
+   * (`validatePlaybookParams`), stored on `metadata.params` under the same key
+   * (`RUN_PARAMS_METADATA_KEY`) and MERGED over whatever the session already
+   * carried, so following twice (or following after a `start` that supplied
+   * some) accumulates rather than replaces.
+   *
+   * An unanswered REQUIRED param becomes an owed slot, never a refusal, for the
+   * same reason it does on the start door: this session's instruction is its
+   * own `goal`, not the playbook's rendered template, so nothing is mutilated
+   * by the gap. A MISTYPED value IS refused — that is a malformed call.
+   */
+  params?: Record<string, unknown>;
 }
 
 function stageKeysOf(playbook: { stages: unknown }): string[] {
@@ -321,6 +344,24 @@ export async function followPlaybook(
     };
   }
 
+  // PARAMS — validated before anything is written, with the one pure
+  // validator. A mistyped value is a malformed call and refuses here; an
+  // unanswered required one becomes an owed slot below (see
+  // `FollowPlaybookParams.params`).
+  const paramResolution = validatePlaybookParams(
+    readPlaybookParams(playbook.params),
+    params.params
+  );
+  if (paramResolution.typeErrors.length > 0) {
+    const [first] = paramResolution.typeErrors;
+    return {
+      status: "refused",
+      reason: first!.options
+        ? `"${first!.name}" must be one of ${first!.options.map((o) => `"${o}"`).join(", ")} — got "${first!.received}". Nothing was changed.`
+        : `"${first!.name}" must be a ${first!.type} — got "${first!.received}". Nothing was changed.`,
+    };
+  }
+
   // GRANT WIDENING — governed, never silent. The playbook's capabilities are
   // read at run time from its `grants` links, so binding this session to it
   // widens what the session may call the moment the row is written.
@@ -376,6 +417,7 @@ export async function followPlaybook(
         .select({
           criteria: focusSessions.criteria,
           expectedOutputs: focusSessions.expectedOutputs,
+          metadata: focusSessions.metadata,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -392,7 +434,33 @@ export async function followPlaybook(
       )
         ? (locked.expectedOutputs as ExpectedOutput[])
         : [];
-      const added = newSlotsFrom(playbook, currentOutputs);
+      const paramSlots: ExpectedOutput[] = paramResolution.missingRequired.map(
+        (p) => ({
+          kind: PARAM_SLOT_KIND,
+          label: `Answer: ${p.label?.trim() || p.name}`,
+          owner: "human" as const,
+          blockedReason: "decision" as const,
+          why: `"${playbook.name}" needs a value for "${p.label?.trim() || p.name}"${
+            p.options?.length
+              ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
+              : ` (${p.type})`
+          }. Nobody supplied it when this session began following it.`,
+          owedSince: followedAt,
+        })
+      );
+      // Merged by label like the playbook's own slots, so following twice does
+      // not file the same question again.
+      const added = [
+        ...newSlotsFrom(playbook, currentOutputs),
+        ...paramSlots.filter(
+          (slot) =>
+            !currentOutputs.some(
+              (o) =>
+                normalizeExpectedLabel(o?.label) ===
+                normalizeExpectedLabel(slot.label)
+            )
+        ),
+      ];
       // Through the ONE merge, with the stored array echoed verbatim: every
       // receipt on a live slot (a delegation, an `owedSince` clock, an
       // approval's lineage) is carried forward, and the playbook's slots land
@@ -417,6 +485,16 @@ export async function followPlaybook(
             {
               [FOLLOWED_AT_METADATA_KEY]: followedAt,
               [FOLLOWED_VIA_METADATA_KEY]: FOLLOWED_VIA_ATTACH,
+              // MERGED over what the row already carried, never replacing it:
+              // a session that was started with some answers and later follows
+              // the playbook keeps them. Read out of the LOCKED row inside the
+              // transaction for the same reason the criteria merge is.
+              [RUN_PARAMS_METADATA_KEY]: {
+                ...((locked?.metadata as Record<string, unknown> | null)?.[
+                  RUN_PARAMS_METADATA_KEY
+                ] as Record<string, unknown> | undefined),
+                ...paramResolution.declaredValues,
+              },
             }
           )}::jsonb`,
           updatedAt: new Date(),

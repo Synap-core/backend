@@ -29,6 +29,7 @@ import {
 import { gateCapabilityExecution } from "../services/capabilities/gate-capability-execution.js";
 import {
   allowedHostsChanged,
+  readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../services/proposals/proposal-class.js";
@@ -250,6 +251,7 @@ export function assertSkillGlobalsAllowed(
 export {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
+  readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
 
@@ -1346,6 +1348,13 @@ export const skillsRouter = router({
         // in `RE_APPROVAL_FIELDS` because `metadata` is peeled off `updateData`
         // above and merged separately, so the fields check never sees it.
         allowedHostsChanged(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // Turning `metadata.readOnly` ON makes the capability gate auto-run
+        // this verb before any grant rung — a reviewed action becomes an
+        // unattended one. Same peeled-off-metadata blind spot as above.
+        readOnlyWidened(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         );

@@ -239,6 +239,12 @@ export async function runPlaybookDoor(
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
+    // HEADLESS DOOR — MCP, Raycast, the Hub REST run endpoint. There is no
+    // form to put in front of anybody, so an unanswered required param files
+    // an OWED SLOT on the run rather than refusing it (or, as before this
+    // existed, rendering `""` into the agent's instruction and calling it a
+    // success). See `InstantiateInput.onMissingRequired`.
+    onMissingRequired: "owe",
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

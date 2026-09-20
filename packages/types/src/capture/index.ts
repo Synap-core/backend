@@ -154,7 +154,117 @@ export const CaptureAnswerPartSchema = z.object({
 });
 export type CaptureAnswerPart = z.infer<typeof CaptureAnswerPartSchema>;
 
+// ─── The RESULT part: what structuring produced ─────────────────────────────
+//
+// WHY THIS EXISTS. "One conversation, two views" (see the header) was true for
+// the QUESTION and the ANSWER and false for the thing that matters — the rows
+// structuring produced. Those lived only in the caller that triggered the run:
+// `useAnswerFollowUp`'s own docblock says it plainly, "the sheet applies it, a
+// room can ignore it". So answering in the room threw the refined result away,
+// and nothing could recover it: the capture router is all writes
+// (`structure`, `execute`, `answerFollowUp`, …) with NO read door.
+//
+// Persisting the result as a PART — not as a column on the session — is what
+// makes the report a projection rather than a second copy: both views already
+// read the room, `messages.metadata` is already JSONB (so no migration), and a
+// result genuinely IS something the AI said in the conversation.
+//
+// ⚠️ THIS IS A PROJECTION, DELIBERATELY. A raw structure response carries dedup
+// candidates, a workspace decision and a follow-up; a message part must stay
+// bounded (that is what CAPTURE_PART_LIMITS is for). So the part carries the
+// fields a REPORT needs and nothing else, `PROJECTED_RESULT_ROW_FIELDS` records
+// that choice in the type system, and the row bound is reported rather than
+// applied in silence — see `truncated`.
+
+export const CAPTURE_RESULT_LIMITS = {
+  /** Rows one part may carry. Past this, `truncated` says so. */
+  rowsMax: 40,
+  titleMaxChars: 300,
+  /** The one-line WHY under a row — same budget as a question's. */
+  whyMaxChars: 200,
+  noticeMaxChars: 500,
+} as const;
+
+export const CaptureResultRowSchema = z.object({
+  /**
+   * STABLE ACROSS ROUNDS, and that is load-bearing: a follow-up chip addresses
+   * a proposal by this id (`applyDismissChip` matches `p.tempId ===
+   * chip.entityId`), so a user's dismissal survives a re-structure. Without
+   * that stability, answering a question in the room would silently re-tick
+   * every row the user had unticked.
+   */
+  tempId: z.string().min(1).max(200),
+  profileSlug: z.string().min(1).max(200),
+  title: z.string().min(1).max(CAPTURE_RESULT_LIMITS.titleMaxChars),
+  /** The pod's reason. `null` when it gave none — never an invented one. */
+  why: z.string().max(CAPTURE_RESULT_LIMITS.whyMaxChars).nullable(),
+  /** True when this UPDATES an existing record rather than creating one. */
+  updatesExisting: z.boolean(),
+  /**
+   * The user dropped this row.
+   *
+   * On the PART rather than in client state, because that is the whole point:
+   * untick on the report and the room sees it; dismiss in the room and the
+   * report sees it. One fact, one home.
+   */
+  dismissed: z.boolean(),
+});
+export type CaptureResultRow = z.infer<typeof CaptureResultRowSchema>;
+
+/**
+ * Every field the part projects, DERIVED from the row type.
+ *
+ * A projection in this repo has silently dropped fields twice, so the set is
+ * classified in the type system instead of being remembered: a new key on
+ * `CaptureResultRow` that is listed in neither array makes `_RowClassified`
+ * resolve to `never` and STOPS THE BUILD.
+ */
+export const PROJECTED_RESULT_ROW_FIELDS = [
+  "tempId",
+  "profileSlug",
+  "title",
+  "why",
+  "updatesExisting",
+  "dismissed",
+] as const satisfies ReadonlyArray<keyof CaptureResultRow>;
+
+/** Withheld from the part, each with its reason — never merely forgotten. */
+export const WITHHELD_RESULT_ROW_FIELDS = {} as const satisfies Partial<
+  Record<keyof CaptureResultRow, string>
+>;
+
+type _RowClassified =
+  Exclude<
+    keyof CaptureResultRow,
+    (typeof PROJECTED_RESULT_ROW_FIELDS)[number]
+  > extends keyof typeof WITHHELD_RESULT_ROW_FIELDS
+    ? true
+    : never;
+const _rowClassified: _RowClassified = true;
+void _rowClassified;
+
+export const CaptureResultPartSchema = z.object({
+  kind: z.literal("capture_result"),
+  v: z.literal(1),
+  sessionId: z.string().uuid(),
+  /** Which structuring round produced these rows. Matches the question's. */
+  round: z.number().int().min(1),
+  rows: z.array(CaptureResultRowSchema).max(CAPTURE_RESULT_LIMITS.rowsMax),
+  /**
+   * The pod produced MORE rows than the part may carry.
+   *
+   * An empty result and a bounded one are different facts. A reader that
+   * cannot tell them apart shows "4 things" when there were fifty — a calm,
+   * confident, wrong screen. Writers set this; readers must surface it.
+   */
+  truncated: z.boolean(),
+  /** A sentence the pod said that the user needs (a degraded pass). */
+  notice: z.string().max(CAPTURE_RESULT_LIMITS.noticeMaxChars).nullable(),
+});
+export type CaptureResultPart = z.infer<typeof CaptureResultPartSchema>;
+
 export const CaptureClarificationPartSchema = z.discriminatedUnion("kind", [
+  CaptureResultPartSchema,
   CaptureQuestionPartSchema,
   CaptureAnswerPartSchema,
 ]);

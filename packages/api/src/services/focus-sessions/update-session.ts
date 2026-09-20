@@ -121,6 +121,14 @@ export interface UpdateFocusSessionParams {
    */
   followPlaybookId?: string | null;
   /**
+   * Answers to the FOLLOWED playbook's declared params — only meaningful with
+   * `followPlaybookId`. Validated against the declaration, stored on
+   * `metadata.params` (merged over what the session already carried) and, for
+   * an unanswered required one, filed as an owed slot. See
+   * `FollowPlaybookParams.params`.
+   */
+  params?: Record<string, unknown>;
+  /**
    * Which stage this work is ALREADY in. Absent ⇒ `currentStage` is left
    * exactly as it is (NEVER seeded to stage 1 — an unmapped stage is Jira's
    * hidden-issue failure). A key the playbook does not declare is REFUSED with
@@ -977,6 +985,9 @@ export async function updateFocusSession(
       ...(params.followStageKey !== undefined
         ? { followStageKey: params.followStageKey }
         : {}),
+      // Same reason: without this the answers land on the direct path and
+      // vanish on the approved one.
+      ...(params.params !== undefined ? { params: params.params } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1126,6 +1137,7 @@ export async function updateFocusSession(
       agentUserId,
       followPlaybookId: params.followPlaybookId,
       followStageKey: params.followStageKey,
+      params: params.params,
     });
     switch (followed.status) {
       case "ok":

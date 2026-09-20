@@ -5,6 +5,7 @@ import {
   CAPTURE_PART_LIMITS,
   CaptureClarificationPartSchema,
   readCapturePart,
+  CAPTURE_RESULT_LIMITS,
 } from "./index.js";
 
 /**
@@ -44,6 +45,20 @@ const PLACEHOLDERS: Record<string, unknown> = {
   "@@K201@@": "k".repeat(201),
   "@@FL201@@": "f".repeat(201),
   "@@Y65@@": "y".repeat(65),
+  // ── capture_result bounds ────────────────────────────────────────────────
+  "@@TI301@@": "t".repeat(CAPTURE_RESULT_LIMITS.titleMaxChars + 1),
+  "@@N501@@": "n".repeat(CAPTURE_RESULT_LIMITS.noticeMaxChars + 1),
+  "@@ROWS41@@": Array.from(
+    { length: CAPTURE_RESULT_LIMITS.rowsMax + 1 },
+    (_, i) => ({
+      tempId: `t${i}`,
+      profileSlug: "task",
+      title: "r",
+      why: null,
+      updatesExisting: false,
+      dismissed: false,
+    })
+  ),
 };
 
 describe("golden fixture placeholders", () => {
@@ -80,10 +95,19 @@ describe("capture clarification part — golden fixture", () => {
         kind: string;
         status?: string;
         answer?: { type: string };
+        rows?: Array<{ dismissed: boolean }>;
+        truncated?: boolean;
       };
-      return p.kind === "capture_question"
-        ? `q:${p.status}`
-        : `a:${p.answer!.type}`;
+      if (p.kind === "capture_question") return `q:${p.status}`;
+      if (p.kind === "capture_answer") return `a:${p.answer!.type}`;
+      // A result's variants are the facts a REPORT must not collapse: rows
+      // present, a row the user dropped, a bounded read, and an empty-but-not-
+      // failed read. Each is a different sentence on screen.
+      if (p.truncated) return "r:truncated";
+      if ((p.rows ?? []).length === 0) return "r:empty";
+      return (p.rows ?? []).some((row) => row.dismissed)
+        ? "r:dismissed"
+        : "r:rows";
     });
     expect(new Set(shapes)).toEqual(
       new Set([
@@ -95,6 +119,10 @@ describe("capture clarification part — golden fixture", () => {
         "a:text",
         "a:form",
         "a:skip",
+        "r:rows",
+        "r:dismissed",
+        "r:truncated",
+        "r:empty",
       ])
     );
     expect(fixture.invalid.length).toBeGreaterThanOrEqual(10);

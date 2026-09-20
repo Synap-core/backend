@@ -262,10 +262,16 @@ describe("assertApprovalTargetResolves — stale-target preflight", () => {
 // OPERATION (all GraphQL is a POST), never the HTTP method.
 describe("capabilityVerbHasExternalEffect — read/write classification", () => {
   const decl = (providerSpec: unknown) =>
-    ({ kind: "declarative", name: "v", providerSpec }) as Pick<
-      ResolvedSkillRow,
-      "kind" | "name" | "providerSpec"
-    >;
+    ({
+      kind: "declarative",
+      name: "v",
+      providerSpec,
+      // No AUTHORED read-only declaration — these rows exercise the
+      // kind/method fallback that applies when nothing is declared.
+      metadata: null,
+    }) as Pick<ResolvedSkillRow, "kind" | "name" | "providerSpec"> & {
+      metadata: Record<string, unknown> | null;
+    };
 
   it("builtin is never an external send", () => {
     expect(
@@ -273,6 +279,7 @@ describe("capabilityVerbHasExternalEffect — read/write classification", () => 
         kind: "builtin",
         name: "feed.post",
         providerSpec: null,
+        metadata: null,
       })
     ).toBe(false);
   });
@@ -283,6 +290,7 @@ describe("capabilityVerbHasExternalEffect — read/write classification", () => 
         kind: "code",
         name: "x",
         providerSpec: null,
+        metadata: null,
       })
     ).toBe(true);
   });

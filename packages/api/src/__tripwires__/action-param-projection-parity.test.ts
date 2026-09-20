@@ -213,3 +213,89 @@ describe("playbook param projection carries the authored type", () => {
     }
   });
 });
+
+/**
+ * The FOURTH producer/projection pair — the browser-side run FORM.
+ *
+ * `playbookParamsToFormSpec`
+ * (`synap-app/packages/core/property-renderer/src/playbookParamsToFormSpec.ts`)
+ * maps `PlaybookParam[]` onto a `DynamicFormSpec`, i.e. onto the actual
+ * CONTROL the user fills. It is a third mirror of `PlaybookParamType`, after
+ * `playbookActionOptions` and `playbookContract.readParams`, and it fails the
+ * same way: a sixth member added to the authoring union and not to the mirror
+ * silently degrades to a text box, with every type still checking.
+ *
+ * What the MAPPER's own file already guards, and this therefore does NOT
+ * duplicate: `PLAYBOOK_PARAM_FIELD_TYPE` is declared
+ * `satisfies Record<PlaybookParamType, DynamicFormFieldType>`, a compile-time
+ * coverage floor in both directions — but only against the MIRRORED union.
+ * Nothing inside synap-app can see the authoring contract. This is the one
+ * place both files are readable at once, so it is the only place the mirror
+ * can be held to the original.
+ *
+ * SCOPE, stated honestly: this is a SOURCE SCAN of the mirror's member list,
+ * pinned at both ends (`PLAYBOOK_PARAM_TYPES = [ … ]`). It proves the mirror
+ * declares the same members as the contract. It does NOT prove the mapping
+ * target is right for any member — `playbookParamsToFormSpec.test.ts` covers
+ * that behaviourally, on the real function, which is the better tool wherever
+ * one is available.
+ *
+ * Cross-repo, guarded like `rule-loop-op-mirrors-in-lockstep`: with `synap-app`
+ * not checked out beside `synap-backend` the assertion SKIPS rather than
+ * reading an empty string and reporting green.
+ */
+describe("the browser run-form mirror of PlaybookParamType stays in lock-step", () => {
+  /** `src/__tripwires__` → src → api → packages → synap-backend → repo root. */
+  const REPO_ROOT = path.resolve(__dirname, "../../../../..");
+  const MIRROR = path.join(
+    REPO_ROOT,
+    "synap-app/packages/core/property-renderer/src/playbookParamsToFormSpec.ts"
+  );
+  const CONTRACT = path.resolve(__dirname, "../../../playbooks/src/index.ts");
+
+  it("declares every PlaybookParamType member, and no extra", () => {
+    if (!fs.existsSync(MIRROR)) {
+      // Not a silent pass: say WHY, so a green run in a backend-only checkout
+      // is never mistaken for a checked one.
+      console.warn(
+        "[tripwire] synap-app is not checked out beside synap-backend — " +
+          "the run-form mirror of PlaybookParamType was NOT verified."
+      );
+      return;
+    }
+
+    const contract = fs.readFileSync(CONTRACT, "utf8");
+    const union = /export type PlaybookParamType =\s*([^;]+);/.exec(contract);
+    expect(union, "PlaybookParamType moved — re-derive this test").toBeTruthy();
+    const members = [...union![1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
+    expect(
+      members.length,
+      "the contract union scan matched nothing"
+    ).toBeGreaterThan(0);
+
+    const mirrorSrc = fs.readFileSync(MIRROR, "utf8");
+    const list = /PLAYBOOK_PARAM_TYPES = \[([^\]]*)\]/.exec(mirrorSrc);
+    expect(
+      list,
+      "`PLAYBOOK_PARAM_TYPES = [ … ]` not found in playbookParamsToFormSpec.ts " +
+        "— the mirror was renamed or reshaped; re-derive this test rather " +
+        "than deleting it."
+    ).toBeTruthy();
+    const mirrored = [...list![1].matchAll(/"(\w+)"/g)].map((m) => m[1]);
+    expect(
+      mirrored.length,
+      "the mirror scan matched zero members — a scan that finds nothing " +
+        "passes every assertion after it"
+    ).toBeGreaterThan(0);
+
+    expect(
+      mirrored.sort(),
+      "The browser run form's mirror of `PlaybookParamType` has drifted from " +
+        "the authoring contract. A member the mirror is missing renders as a " +
+        "plain text box — the exact defect `playbookActionOptions` shipped " +
+        "for months. Add it to `PLAYBOOK_PARAM_TYPES` and to " +
+        "`PLAYBOOK_PARAM_FIELD_TYPE` (the `satisfies` there will not compile " +
+        "until you do)."
+    ).toEqual([...members].sort());
+  });
+});

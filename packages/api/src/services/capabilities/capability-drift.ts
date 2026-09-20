@@ -59,6 +59,10 @@ export function canonicalJson(value: unknown): string {
  * teaching the comparator a new field invalidates every stamp it ever wrote and
  * every pod re-diffs exactly once. Absent (legacy) = pre-versioned = re-diff.
  *
+ * v5 = v4 + `metadata.readOnly` (the AUTHORED read-only declaration the
+ *      capability gate honours — see `SKILL_METADATA_READ_ONLY`). Adding it
+ *      retires every v4 stamp so each container re-diffs once and a declared
+ *      read verb actually stops proposing on every call.
  * v4 = v3 + the tool row's merged JSONB (`PROJECTED_TOOL_MERGE_FIELDS`: config,
  *      metadata) via `capabilityToolMergeDrift`. Before it, a template change
  *      touching only `tools[].metadata` (nango-google's `metadata.sync`
@@ -69,7 +73,7 @@ export function canonicalJson(value: unknown): string {
  * v2 = the ten `PROJECTED_SKILL_FIELDS` + the projected verb catalog (intent).
  * v1 (never written) = the original providerSpec/parameters/code/description.
  */
-export const DRIFT_COMPARATOR_VERSION = 4;
+export const DRIFT_COMPARATOR_VERSION = 5;
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return (
@@ -122,8 +126,9 @@ export interface InstalledSkillRow {
   agentTypes?: string[] | null;
   executionMode?: string | null;
   timeoutSeconds?: number | null;
-  /** The live row's `skills.metadata` bag. Only its `allowedHosts` key is
-   *  definition-owned; every other key is DB state (see `SKILL_METADATA_*`). */
+  /** The live row's `skills.metadata` bag. Only its `allowedHosts` and
+   *  `readOnly` keys are definition-owned; every other key is DB state (see
+   *  the `SKILL_METADATA_*` constants). */
   metadata?: Record<string, unknown> | null;
 }
 
@@ -142,12 +147,14 @@ export interface DefinitionSkillRow {
   agentTypes?: string[] | null;
   executionMode?: string | null;
   timeoutSeconds?: number | null;
-  /** The definition's `metadata` bag — see `declaredAllowedHosts`. */
+  /** The definition's `metadata` bag — see `declaredAllowedHosts` and
+   *  `declaredReadOnly`. */
   metadata?: Record<string, unknown> | null;
 }
 
 /**
- * The ONLY key of a `skills.metadata` bag that a capability definition owns.
+ * The FIRST of the two keys of a `skills.metadata` bag that a capability
+ * definition owns (the other is `SKILL_METADATA_READ_ONLY`, just below).
  *
  * `metadata` is otherwise DB state — `marketSource` (the standalone-config
  * reconcile's install baseline), `rule`, `skillType`, execution counters — and
@@ -164,6 +171,40 @@ export interface DefinitionSkillRow {
  * whole DB-owned bag into template-owned state.
  */
 export const SKILL_METADATA_ALLOWED_HOSTS = "allowedHosts";
+
+/**
+ * The SECOND definition-owned key of a `skills.metadata` bag: the verb's
+ * AUTHORED read-only declaration.
+ *
+ * WHY IT IS AUTHORED AND NOT DERIVED. `ToolVerbCatalogEntry.kind`
+ * ("read" | "write" | "action") already exists, but it is a GUESS —
+ * `deriveVerbKind()` classifies whole-word tokens of the verb's NAME and
+ * DESCRIPTION and falls back to "action" for anything it cannot read. That is
+ * fine for a DISPLAY axis (which is all it has ever been: the actions-door
+ * projection and the intent index). It is NOT fine as an AUTHORIZATION axis:
+ * honouring it at the gate would mean any future verb whose name happens to
+ * contain "search" or "find" auto-runs ungoverned, and a mis-named mutating
+ * verb would widen the auto path by accident. A naming convention must never
+ * be a permission.
+ *
+ * So the gate honours ONLY this explicit declaration. `deriveVerbKind` stays
+ * display-only and is deliberately NOT consulted by `execute-capability.ts`.
+ *
+ * WHAT IT BUYS. `exa_search` is a read with no side effects, but it is an HTTP
+ * POST, and the provider path classified reads by HTTP METHOD
+ * (`execute-provider-verb.ts`: `/^(GET|HEAD)$/`). So every search stalled on a
+ * proposal and an unattended research loop could not proceed at all. A verb
+ * that DECLARES `metadata.readOnly: true` is marked `readOnly` at the gate and
+ * returns `run` before any grant rung — the same short-circuit builtin read
+ * verbs already get via `READ_ONLY_BUILTIN_VERBS`.
+ *
+ * TRUST. Same boundary as `allowedHosts`: the declaration is disclosed on the
+ * install/proposal card and WIDENING it (false/absent → true) on an
+ * already-approved skill demotes that skill back to unapproved, exactly like
+ * `allowedHostsChanged`. An approved verb can never become auto-running
+ * without re-earning approval.
+ */
+export const SKILL_METADATA_READ_ONLY = "readOnly";
 
 /**
  * The egress allowlist a definition DECLARES, or `undefined` when it declares
@@ -191,28 +232,51 @@ export function declaredAllowedHosts(
 }
 
 /**
+ * The read-only posture a definition DECLARES, or `undefined` when it declares
+ * none. Same `undefined`-is-load-bearing contract as `declaredAllowedHosts`:
+ * absent → the applier writes nothing and the comparator skips the field, so a
+ * template that omits the key does NOT revoke a posture set elsewhere.
+ *
+ * A NON-BOOLEAN declaration is ignored rather than coerced. `"false"`,
+ * `0` and `"no"` are all truthy-or-falsy in ways that differ from what the
+ * author meant, and this value gates an auto-execute path — the one place a
+ * lenient parse is never worth it. Only a real `true`/`false` is honoured.
+ */
+export function declaredReadOnly(
+  metadata: Record<string, unknown> | null | undefined
+): boolean | undefined {
+  const raw = (metadata ?? {})[SKILL_METADATA_READ_ONLY];
+  return typeof raw === "boolean" ? raw : undefined;
+}
+
+/**
  * THE applier's `skills.metadata` projection — the single expression the
  * template applier's `.set({ metadata: ... })` uses, and the one the drift
  * comparator is derived from.
  *
  * Contract, pinned by `capability-drift.projection-parity.tripwire.test.ts`:
- * every key of the live bag is preserved byte-identically and ONLY
- * `allowedHosts` is ever written. That is what lets `PROJECTED_SKILL_FIELDS`
- * carry a `metadata` entry that reads just this one key without the stamp
- * overclaiming: the marker asserts exactly what the comparator checked.
+ * every key of the live bag is preserved byte-identically and ONLY the
+ * definition-owned keys (`allowedHosts`, `readOnly`) are ever written. That is
+ * what lets `PROJECTED_SKILL_FIELDS` carry a `metadata` entry that reads just
+ * those keys without the stamp overclaiming: the marker asserts exactly what
+ * the comparator checked.
  *
- * Returns `undefined` when the definition declares nothing — Drizzle's `.set()`
- * SKIPS an undefined key, so the live bag is not rewritten at all.
+ * Each key is INDEPENDENTLY skippable — a template declaring only `readOnly`
+ * must not blank an `allowedHosts` list set through the tRPC door, and vice
+ * versa. Returns `undefined` only when the definition declares NEITHER, so
+ * Drizzle's `.set()` skips the key and the live bag is not rewritten at all.
  */
 export function projectSkillMetadata(
   existing: Record<string, unknown> | null | undefined,
   definitionMetadata: Record<string, unknown> | null | undefined
 ): Record<string, unknown> | undefined {
-  const declared = declaredAllowedHosts(definitionMetadata);
-  if (declared === undefined) return undefined;
+  const hosts = declaredAllowedHosts(definitionMetadata);
+  const readOnly = declaredReadOnly(definitionMetadata);
+  if (hosts === undefined && readOnly === undefined) return undefined;
   return {
     ...((existing ?? {}) as Record<string, unknown>),
-    [SKILL_METADATA_ALLOWED_HOSTS]: declared,
+    ...(hosts !== undefined ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts } : {}),
+    ...(readOnly !== undefined ? { [SKILL_METADATA_READ_ONLY]: readOnly } : {}),
   };
 }
 
@@ -241,7 +305,15 @@ export const PROJECTED_SKILL_FIELDS: Record<
   string,
   {
     expected: (def: DefinitionSkillRow) => unknown;
-    actual: (installed: InstalledSkillRow) => unknown;
+    /**
+     * `def` is passed so an entry NARROWED to a subset of keys can read the
+     * SAME subset on both sides. Only `metadata` needs it: its keys are
+     * INDEPENDENTLY declarable, and a key the definition omits is not written
+     * by the applier — so including the live value for that key would report
+     * drift a re-apply can never converge, i.e. a re-apply on every boot.
+     * Every other entry ignores it.
+     */
+    actual: (installed: InstalledSkillRow, def: DefinitionSkillRow) => unknown;
   }
 > = {
   providerSpec: {
@@ -281,8 +353,46 @@ export const PROJECTED_SKILL_FIELDS: Record<
   // bag would report drift on `marketSource`/counters the template never owns,
   // i.e. a re-apply on every boot. Marker coverage == applier coverage.
   metadata: {
-    expected: (d) => declaredAllowedHosts(d.metadata),
-    actual: (i) => declaredAllowedHosts(i.metadata) ?? null,
+    expected: (d) => {
+      const hosts = declaredAllowedHosts(d.metadata);
+      const readOnly = declaredReadOnly(d.metadata);
+      // BOTH absent → the applier writes nothing, so there is nothing to
+      // converge to and the field is skipped (the shared rule above).
+      if (hosts === undefined && readOnly === undefined) return undefined;
+      // Only the DECLARED keys are present. A key the definition omits is not
+      // written by the applier, so it must not appear on either side.
+      return {
+        ...(hosts !== undefined
+          ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts }
+          : {}),
+        ...(readOnly !== undefined
+          ? { [SKILL_METADATA_READ_ONLY]: readOnly }
+          : {}),
+      };
+    },
+    // Mirrors `expected`'s key set EXACTLY — driven by what the DEFINITION
+    // declares, never by what the live bag happens to hold. A template that
+    // declares only `readOnly` must not blank (or diff against) an
+    // `allowedHosts` list set through the tRPC door.
+    actual: (i, d) => {
+      const hosts =
+        declaredAllowedHosts(d.metadata) === undefined
+          ? undefined
+          : (declaredAllowedHosts(i.metadata) ?? null);
+      const readOnly =
+        declaredReadOnly(d.metadata) === undefined
+          ? undefined
+          : (declaredReadOnly(i.metadata) ?? null);
+      if (hosts === undefined && readOnly === undefined) return undefined;
+      return {
+        ...(hosts !== undefined
+          ? { [SKILL_METADATA_ALLOWED_HOSTS]: hosts }
+          : {}),
+        ...(readOnly !== undefined
+          ? { [SKILL_METADATA_READ_ONLY]: readOnly }
+          : {}),
+      };
+    },
   },
 };
 
@@ -328,7 +438,10 @@ export function capabilityDefinitionDrift(
       const expected = field.expected(skill);
       // The applier writes nothing for this field — nothing to converge to.
       if (expected === undefined) return false;
-      return canonicalJson(expected) !== canonicalJson(field.actual(installed));
+      return (
+        canonicalJson(expected) !==
+        canonicalJson(field.actual(installed, skill))
+      );
     });
     if (differs) drifted.push(skill.name);
   }

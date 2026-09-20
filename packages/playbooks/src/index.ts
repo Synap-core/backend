@@ -148,6 +148,98 @@ export interface PlaybookParam {
   required?: boolean;
 }
 
+// Reading a stored `params` bag, and validating the answers against it. In its
+// own file because the run funnel is its only caller and the rules are long;
+// re-exported here so `@synap/playbooks` stays the one import.
+export * from "./params.js";
+
+/**
+ * WHAT KIND of work a playbook is — the semantic axis Relay filters on.
+ *
+ *   `interrogation` — it ASKS. The value is the answers it collects.
+ *   `make`          — it PRODUCES a deliverable.
+ *   `review`        — it JUDGES something that already exists.
+ *
+ * NULL reads as `"make"`, exactly like `playbooks.scope`'s `"session"`: no
+ * existing playbook reclassifies itself, so there is no backfill and no DB
+ * default. Read it through {@link resolvePlaybookKind}, never off the column.
+ */
+export type PlaybookKind = "interrogation" | "make" | "review";
+
+export const PLAYBOOK_KINDS = [
+  "interrogation",
+  "make",
+  "review",
+] as const satisfies readonly PlaybookKind[];
+
+/** @see PlaybookKind — the value a playbook that declares none reads as. */
+export const DEFAULT_PLAYBOOK_KIND: PlaybookKind = "make";
+
+/**
+ * HOW a playbook collects its params.
+ *
+ *   `form`     — show every declared param up front.
+ *   `adaptive` — ask for them conversationally, as the run needs them.
+ *   `auto`     — the door decides (a form where there is a form, otherwise ask).
+ *
+ * NULL reads as `"auto"`. Same contract as {@link PlaybookKind}.
+ */
+export type PlaybookIntakeStyle = "form" | "adaptive" | "auto";
+
+export const PLAYBOOK_INTAKE_STYLES = [
+  "form",
+  "adaptive",
+  "auto",
+] as const satisfies readonly PlaybookIntakeStyle[];
+
+/** @see PlaybookIntakeStyle */
+export const DEFAULT_PLAYBOOK_INTAKE_STYLE: PlaybookIntakeStyle = "auto";
+
+// Coverage floors — a value added to either union but not to its list makes
+// this `never` and the BUILD stops. (`satisfies` alone only catches the
+// reverse.) Same idiom as `_scheduleModesExhaustive` below.
+const _playbookKindsExhaustive: Exclude<
+  PlaybookKind,
+  (typeof PLAYBOOK_KINDS)[number]
+> extends never
+  ? true
+  : never = true;
+void _playbookKindsExhaustive;
+
+const _intakeStylesExhaustive: Exclude<
+  PlaybookIntakeStyle,
+  (typeof PLAYBOOK_INTAKE_STYLES)[number]
+> extends never
+  ? true
+  : never = true;
+void _intakeStylesExhaustive;
+
+/**
+ * Resolve a possibly-legacy playbook's kind. THE ONE defaulting site — never
+ * read `playbook.kind` directly, for the reason `resolveStageCategory` spells
+ * out: a second defaulting site is how a rollup starts disagreeing with itself.
+ * Takes `unknown` because callers hold a loosely-typed row.
+ */
+export function resolvePlaybookKind(playbook: unknown): PlaybookKind {
+  const raw = (playbook as { kind?: unknown } | null | undefined)?.kind;
+  return typeof raw === "string" &&
+    (PLAYBOOK_KINDS as readonly string[]).includes(raw)
+    ? (raw as PlaybookKind)
+    : DEFAULT_PLAYBOOK_KIND;
+}
+
+/** @see resolvePlaybookKind — the same contract for `intake_style`. */
+export function resolvePlaybookIntakeStyle(
+  playbook: unknown
+): PlaybookIntakeStyle {
+  const raw = (playbook as { intakeStyle?: unknown } | null | undefined)
+    ?.intakeStyle;
+  return typeof raw === "string" &&
+    (PLAYBOOK_INTAKE_STYLES as readonly string[]).includes(raw)
+    ? (raw as PlaybookIntakeStyle)
+    : DEFAULT_PLAYBOOK_INTAKE_STYLE;
+}
+
 /** "What to check" — the dynamic input set a scheduled run draws from. */
 export type InputStrategy =
   | { kind: "none" }

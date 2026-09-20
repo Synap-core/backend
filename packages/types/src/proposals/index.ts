@@ -687,6 +687,16 @@ export interface CompositeCreateSessionOp {
   projectId?: string;
   /** Declared deliverables — sanitized by the session door at apply time. */
   expectedOutputs?: Array<Record<string, unknown>>;
+  /**
+   * The session's acceptance criteria, PROPOSED by the plan for the person to
+   * validate or rewrite. A plan is the architecture its author is committing
+   * to, so it is exactly where "what would make this done" is known; carrying
+   * them here saves the second `update_session` call the plan door exists to
+   * remove. Shape only at this layer — the create door runs the real
+   * `sessionCriteriaSchema`, so a malformed list is refused there rather than
+   * reaching a person as a broken contract.
+   */
+  criteria?: Array<Record<string, unknown>>;
 }
 
 export interface CompositeCreateDocumentOp {

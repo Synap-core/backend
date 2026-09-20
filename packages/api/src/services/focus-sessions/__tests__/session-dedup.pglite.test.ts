@@ -107,7 +107,11 @@ function ddlFor(table: PgTable): string {
     const t = c.getSQLType();
     const type = BASIC.test(t) ? t : "text";
     const def =
-      c.name === "status" ? " default 'active'" : c.name === "started_at" ? " default now()" : "";
+      c.name === "status"
+        ? " default 'active'"
+        : c.name === "started_at"
+          ? " default now()"
+          : "";
     return `"${c.name}" ${type}${c.primary ? " primary key default gen_random_uuid()" : ""}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -218,9 +222,7 @@ describe("session dedup — one open session per goal + scope", () => {
       if (res.status !== "deduped") return;
       expect(res.session.id).toBe(existing);
       expect(await countByGoal("Ship billing")).toBe(1);
-      expect(
-        (await q(`select id from focus_sessions`)).rows
-      ).toHaveLength(1);
+      expect((await q(`select id from focus_sessions`)).rows).toHaveLength(1);
     });
 
     it("a different scope ⇒ created", async () => {
@@ -235,7 +237,11 @@ describe("session dedup — one open session per goal + scope", () => {
     });
 
     it("a CLOSED twin ⇒ created", async () => {
-      await seed({ goal: "Ship billing", projectId: PROJECT, status: "closed" });
+      await seed({
+        goal: "Ship billing",
+        projectId: PROJECT,
+        status: "closed",
+      });
       const res = await createFocusSession({
         userId: USER,
         projectId: PROJECT,
@@ -351,6 +357,7 @@ describe("session dedup — one open session per goal + scope", () => {
         subjectEntityId: null,
         projectId: PROJECT,
         expectedOutputs: [],
+        criteria: [],
       });
       expect(out).toEqual({ id: existing, linked: true });
       expect(await countByGoal("Draft offer")).toBe(1);

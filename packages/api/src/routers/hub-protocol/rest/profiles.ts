@@ -8,6 +8,7 @@ import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
   CreateProfileRequestSchema,
   CreatePropertyDefRequestSchema,
+  UpdatePropertyDefRequestSchema,
   ListProfilesQuerySchema,
   ListPropertyDefsQuerySchema,
   WireProfileDigestSchema,
@@ -110,6 +111,28 @@ export function registerProfilesRoutes(app: HubHono): void {
       },
       400: { description: "Missing required query param", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "patch",
+    path: "/property-defs/{id}",
+    tags: ["Profiles"],
+    summary: "Edit an existing property definition",
+    description:
+      "Changes a stored def's slug / valueType / constraints / uiHints. This is the ONE edit door — `POST /property-defs` is slug-idempotent and never converges, so it reports `status: \"unchanged\"` and points here. Governed: an agent caller gets `status: 'proposed'` (that is success, not an error), because narrowing a def re-interprets every existing row of every profile that links it.",
+    request: {
+      body: UpdatePropertyDefRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Updated property def",
+        schema: WirePropertyDefSchema,
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Property def not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
   });
@@ -514,6 +537,89 @@ export function registerProfilesRoutes(app: HubHono): void {
           403
         );
       logger.error({ err }, "createPropertyDef failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        500
+      );
+    }
+  });
+
+  /**
+   * PATCH /property-defs/:id — the EDIT door.
+   *
+   * Same acting-identity + service-key confinement rules as POST
+   * /property-defs; the governance decision and the apply both live in the hub
+   * procedure, which is the ONE governed door (this is only its HTTP edge).
+   */
+  app.patch("/property-defs/:id", async (c) => {
+    const propertyDefId = c.req.param("id");
+    const body = (await c.req.json()) as {
+      userId: string;
+      workspaceId: string;
+      slug?: string;
+      valueType?: string;
+      constraints?: Record<string, unknown>;
+      uiHints?: Record<string, unknown>;
+      agentUserId?: string;
+      sourceMessageId?: string;
+      reasoning?: string;
+    };
+    try {
+      const clampedWorkspaceId = getConfinedWorkspace(c, body.workspaceId);
+      const acting = await resolveActingContext(c, {
+        userId: body.userId,
+        ...(clampedWorkspaceId ? { workspaceId: clampedWorkspaceId } : {}),
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      if (!acting.workspaceId) {
+        return c.json({ error: "workspaceId is required" }, 400);
+      }
+      const ctxAgentUserId = c.get("agentUserId") as string | undefined;
+      const resolvedAgentUserId = body.agentUserId ?? ctxAgentUserId;
+      const actorResolution = await resolveActorId(
+        resolvedAgentUserId,
+        acting.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+      const workspaceId = acting.workspaceId;
+      const caller = await getCaller(c, {
+        userId: actorResolution.actorId,
+        workspaceId,
+        sourceMessageId: body.sourceMessageId,
+      });
+      const result = await caller.profiles.updatePropertyDef({
+        userId: acting.userId,
+        workspaceId,
+        propertyDefId,
+        slug: body.slug,
+        valueType: body.valueType,
+        constraints: body.constraints,
+        uiHints: body.uiHints,
+        reasoning: body.reasoning,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      // SERVICE-KEY CONFINEMENT: FORBIDDEN → 403, not a blanket 500. Duck-typed
+      // on `.code` (bundled-build TRPCError identity defeats instanceof).
+      const code = (err as { code?: unknown })?.code;
+      if (code === "FORBIDDEN")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Forbidden" },
+          403
+        );
+      if (code === "NOT_FOUND")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Not found" },
+          404
+        );
+      if (code === "BAD_REQUEST" || code === "CONFLICT")
+        return c.json(
+          { error: err instanceof Error ? err.message : "Bad request" },
+          400
+        );
+      logger.error({ err }, "updatePropertyDef failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
         500

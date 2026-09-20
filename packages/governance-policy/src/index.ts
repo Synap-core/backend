@@ -178,6 +178,13 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
   // proposals"). `focus_session.grant_capability` is DELIBERATELY excluded — it
   // widens a session's egress abilities, so it still routes to a proposal.
   // delete/archive remain destructive → proposal.
+  // ONE carve-out INSIDE `focus_session.update`: an AI update that CARRIES
+  // `criteria` is floored to a proposal at rung 2.1 by
+  // `isFocusSessionCriteriaUpdate` (api/src/utils/permission-check.ts). Criteria
+  // are the session's acceptance CONTRACT, not its orchestration — the agent
+  // proposes them, the person validates or rewrites them, and the
+  // `focus_session/update` executor applies them on approval. Everything else
+  // this key covers (progress, stage, outputs, title, goal) still auto-approves.
   "focus_session.create",
   "focus_session.update",
   "focus_session.stage_changed",
@@ -1675,6 +1682,15 @@ export const GATE_WRITE_DOORS = {
   "project/update": "gate",
   "projectMember/create": "gate",
   "property_def/create": "gate",
+  // The EDIT door for an existing def (hub `profiles.updatePropertyDef` /
+  // `PATCH /api/hub/property-defs/:id`). Added because the CREATE door is
+  // slug-idempotent and never converges: a declaration that differs from the
+  // stored def is reported `unchanged` and pointed here, rather than silently
+  // applied. Gated, and deliberately NOT in DEFAULT_AUTO_APPROVE — narrowing a
+  // def's constraints or changing its valueType re-interprets every existing
+  // row of every profile that links it. (`property_def.update` was a DEAD key
+  // until this door existed; this is its first call site.)
+  "property_def/update": "gate",
   "relation/create": "gate",
   "relation/delete": "gate",
   "relation/update": "gate",

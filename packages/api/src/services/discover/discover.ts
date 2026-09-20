@@ -97,6 +97,30 @@ export interface StartHere {
         lens: "authored";
       }
     | StartHereUnavailable;
+  /**
+   * Open BLOCKER-class `finding` entities — known defects in Synap itself the
+   * agent is about to walk into. Pod-wide (findings are a pod-scoped kind, and
+   * a broken door is not a fact about the caller's workspace lens). Each row
+   * carries its own `surface` so the agent can match it against the door it is
+   * about to use; orient runs before that door is chosen, so it cannot filter.
+   */
+  openFindings:
+    | {
+        count: number;
+        /** True when `count` hit the read cap — "at least this many". */
+        countIsLowerBound: boolean;
+        items: Array<{
+          id: string;
+          /** `entities.title` is nullable — reported as null, never as "". */
+          title: string | null;
+          link: string;
+          /** The door it was hit on (mcp, ask, capture…), or null if unset. */
+          surface: string | null;
+          /** What to do in the meantime, verbatim from the finding. */
+          workaround: string | null;
+        }>;
+      }
+    | StartHereUnavailable;
   openSessions:
     | {
         count: number;
@@ -126,6 +150,14 @@ export interface StartHere {
       }
     | StartHereUnavailable;
   learnMore: { skill: string };
+  /**
+   * The standing ask, carried by the pod rather than by a prompt: file what
+   * broke before you finish. Constant text — it is an INSTRUCTION, not state,
+   * and it is here because `orient` is the one door every agent already calls.
+   * See the construction site in `start-here.ts` for why a playbook cannot do
+   * this job.
+   */
+  beforeYouFinish: string;
 }
 export type DiscoverScope = "workspaces" | "projects" | "profiles";
 

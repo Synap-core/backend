@@ -692,6 +692,11 @@ export function registerFocusSessionExecutors(): void {
               typeof innerData.followStageKey === "string"
                 ? innerData.followStageKey
                 : undefined,
+            // Carried on the proposal so the approved follow stores the same
+            // answers a direct follow would.
+            ...(innerData.params && typeof innerData.params === "object"
+              ? { params: innerData.params as Record<string, unknown> }
+              : {}),
           });
           if (followed.status === "ok") {
             updated = followed.session as typeof updated;
@@ -851,8 +856,19 @@ async function instantiateApprovedPlaybook(args: {
     agentIds: Array.isArray(innerData.agentIds)
       ? innerData.agentIds.filter((id): id is string => typeof id === "string")
       : [],
-    // The prompt was rendered against the caller's params at propose time;
-    // the params themselves are not carried, so the render is reused as-is.
+    // The prompt was rendered against the caller's RESOLVED params at propose
+    // time and rides here, so the approved row dispatches exactly what the
+    // reviewer read. The params themselves ride too (`data.params`, written by
+    // `playbooks.instantiate`) so the session STORES what it was given —
+    // without them `metadata.params` would be `{}` on the approved path alone,
+    // which is the two-paths-disagree shape.
+    ...(innerData.params && typeof innerData.params === "object"
+      ? { params: innerData.params as Record<string, unknown> }
+      : {}),
+    // An APPROVED proposal must not fail to apply over an unanswered question:
+    // a person already said yes, and refusing here would leave an approved row
+    // that never materialized. The question becomes an owed slot instead.
+    onMissingRequired: "owe",
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),

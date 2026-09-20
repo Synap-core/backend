@@ -50,6 +50,37 @@ describe("buildDerivedSessionTitle", () => {
     ).toBe("Import Q3 ledger");
   });
 
+  it("strips markdown markup a captured document's first line carries", () => {
+    // Live 2026-09-20: a session on the pod was named
+    // "## Design Philosophy: The Spine and the Flow". The GENERATED path
+    // already stripped these; the derived path did not, so the same text read
+    // as prose when a model named it and as raw markup when the pod did.
+    expect(
+      buildDerivedSessionTitle({
+        kind: "capture",
+        label: "## Design Philosophy: The Spine and the Flow",
+      })
+    ).toBe("Design Philosophy: The Spine and the Flow");
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "**Bold thing**" })
+    ).toBe("Bold thing");
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "> quoted line" })
+    ).toBe("quoted line");
+  });
+
+  it("DISCRIMINATING: leaves markup that is the person's own words alone", () => {
+    // The whole reason both regexes are anchored. A reader that strips `#`
+    // anywhere agrees with a correct one on every heading above, and only
+    // these rows rule it out.
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "Acme is #1 in EMEA" })
+    ).toBe("Acme is #1 in EMEA");
+    expect(
+      buildDerivedSessionTitle({ kind: "capture", label: "Revenue > costs" })
+    ).toBe("Revenue > costs");
+  });
+
   it("keeps a label that only RESEMBLES the machine verb", () => {
     // The strip is anchored and case-sensitive on purpose: these are a
     // person's own words, not a creator's prefix, and eating them would be a

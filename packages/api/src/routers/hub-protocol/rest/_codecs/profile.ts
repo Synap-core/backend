@@ -197,3 +197,27 @@ export const CreatePropertyDefRequestSchema = z
       ),
   })
   .openapi("CreatePropertyDefRequest");
+
+/**
+ * PATCH /property-defs/:id request — the EDIT door.
+ *
+ * Every field is optional, but at least one of slug / valueType / constraints /
+ * uiHints must be present: an update naming nothing would apply nothing and
+ * report success, which is the receipt lie this door exists to retire.
+ */
+export const UpdatePropertyDefRequestSchema = z
+  .object({
+    userId: z.string(),
+    workspaceId: z.string(),
+    slug: z
+      .string()
+      .optional()
+      .describe("Rename. Normalised to kebab-case by the one slugifier."),
+    valueType: z.string().optional(),
+    constraints: z.record(z.string(), z.unknown()).optional(),
+    uiHints: z.record(z.string(), z.unknown()).optional(),
+    agentUserId: z.string().optional(),
+    sourceMessageId: z.string().optional(),
+    reasoning: z.string().optional(),
+  })
+  .openapi("UpdatePropertyDefRequest");

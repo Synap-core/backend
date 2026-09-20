@@ -55,6 +55,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import {
   resolveSessionTitle,
+  readSuspendedNote,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { SessionCriterion } from "@synap/playbooks";
@@ -128,6 +129,19 @@ export interface PacketOutputItem {
 export interface PacketChildItem {
   id: string;
   /** Display name via `resolveSessionTitle` — title, else the goal's first line. */
+  title: string;
+  status: string;
+  statusLabel: string;
+}
+
+/**
+ * A session named by the detour stack — the one you pop back TO, or the detour
+ * this one was put down FOR. Identity only: never a bare id, because "come back
+ * to 9f3c-…" is the unreadable row this projection exists to prevent.
+ */
+export interface PacketResumeSession {
+  sessionId: string;
+  /** `resolveSessionTitle` — the same rule every other session name uses. */
   title: string;
   status: string;
   statusLabel: string;
@@ -250,6 +264,43 @@ export interface ContinuationPacket {
    */
   parent:
     | { status: "ok"; session: PacketChildItem | null }
+    | { status: "unavailable"; reason: string };
+  /**
+   * THE POP — the two questions a returning reader must answer without a
+   * second call: *which session am I coming back to*, and *what was I about to
+   * do there*. Both directions of the detour stack, at most one populated:
+   *
+   *  - `returnTo` — THIS session is a detour. It names the parent (title, not
+   *    an id) and, when the push recorded one, the line the parent was about to
+   *    act on. `intent` is GATED on the parent's note naming THIS child: the
+   *    note is one slot and the last push wins, so a parent that has since
+   *    pushed a SECOND detour carries a line about that one, and restating it
+   *    here would be a confidently wrong sentence. `returnTo: null` means no
+   *    parent — the overwhelmingly normal case.
+   *  - `suspended` — THIS session is the parent: it was put down for a detour.
+   *    `intent` is what it was about to do; `child` is that detour with its
+   *    CURRENT status, so a surface can say "the detour finished, pick this back
+   *    up" without a second read. `child: null` means the named detour no
+   *    longer resolves (deleted, or not this user's) — a true state, not a
+   *    failure. `suspended: null` means this session was never put down.
+   *
+   * Both read `focus_sessions.metadata.suspended`, written by
+   * `recordSessionSpawn`, through the one narrowing door
+   * (`readSuspendedNote`). Absence is normal everywhere here and NO consumer
+   * may treat it as an error; only a failed query is `unavailable`.
+   */
+  resume:
+    | {
+        status: "ok";
+        returnTo:
+          | (PacketResumeSession & { intent?: string; suspendedAt?: string })
+          | null;
+        suspended: {
+          intent: string;
+          at: string | null;
+          child: PacketResumeSession | null;
+        } | null;
+      }
     | { status: "unavailable"; reason: string };
   /**
    * Sessions this one waits on (`this --blocked_by--> blocker`), closed ones
@@ -568,22 +619,151 @@ async function readOutboundSessions(
   };
 }
 
-/** The parent, from the ONE outbound reader (a session has at most one). */
-async function readParent(
+/**
+ * The parent ROW — `this --spawned_from--> parent`, owner-floored, at most one.
+ *
+ * ONE query, and it carries `metadata` because `parent` (identity) and
+ * `resume.returnTo` (identity + the parent's suspend note) are two projections
+ * of the SAME row. Reading it twice — once through `readOutboundSessions` for
+ * the title, once more for the note — would be a second lineage read that could
+ * disagree with the first about which session the parent even is.
+ *
+ * NOT folded into `readOutboundSessions`: that reader serves three sections
+ * (`children`, `blockedBy`, `unblocks`) that have no use for a jsonb column,
+ * and widening its select would pull every child's metadata over the wire.
+ */
+async function readParentRow(
   database: typeof db,
   userId: string,
   sessionId: string
-): Promise<ContinuationPacket["parent"]> {
-  const found = await readOutboundSessions(
-    database,
-    userId,
-    sessionId,
-    "spawned_from"
-  );
+): Promise<{
+  id: string;
+  title: string | null;
+  goal: string;
+  status: string;
+  metadata: unknown;
+} | null> {
+  const [row] = await database
+    .select({
+      id: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      status: focusSessions.status,
+      metadata: focusSessions.metadata,
+    })
+    .from(links)
+    .innerJoin(
+      focusSessions,
+      eq(drizzleSql`${focusSessions.id}::text`, links.toId)
+    )
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        eq(links.toType, "session"),
+        eq(links.linkType, "spawned_from"),
+        eq(links.fromId, sessionId),
+        eq(focusSessions.userId, userId)
+      )
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/** Identity projection of the parent row — `session: null` when there is none. */
+function parentSection(
+  parent: Awaited<ReturnType<typeof readParentRow>>
+): ContinuationPacket["parent"] {
   return {
     status: "ok",
-    session: found.status === "ok" ? (found.items[0] ?? null) : null,
+    session: parent
+      ? {
+          id: parent.id,
+          title: resolveSessionTitle(parent),
+          status: parent.status,
+          statusLabel: resolveStatusLabel(parent.status),
+        }
+      : null,
   };
+}
+
+/** The detour named by this session's OWN suspend note, with its live status. */
+async function readSuspendedChild(
+  database: typeof db,
+  userId: string,
+  childSessionId: string
+): Promise<PacketResumeSession | null> {
+  const [row] = await database
+    .select({
+      id: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      status: focusSessions.status,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, childSessionId),
+        eq(focusSessions.userId, userId)
+      )
+    )
+    .limit(1);
+  if (!row) return null;
+  return {
+    sessionId: row.id,
+    title: resolveSessionTitle(row),
+    status: row.status,
+    statusLabel: resolveStatusLabel(row.status),
+  };
+}
+
+/**
+ * The POP, both directions — see {@link ContinuationPacket.resume}.
+ *
+ * Takes the parent row already loaded by {@link readParentRow} so the lineage
+ * is read once; the only query it can make of its own is the detour lookup,
+ * and only when this session's own note names one.
+ */
+async function readResume(
+  database: typeof db,
+  userId: string,
+  row: { id: string; metadata: unknown },
+  parent: Awaited<ReturnType<typeof readParentRow>>
+): Promise<ContinuationPacket["resume"]> {
+  let returnTo: Extract<
+    ContinuationPacket["resume"],
+    { status: "ok" }
+  >["returnTo"] = null;
+  if (parent) {
+    const note = readSuspendedNote(parent.metadata);
+    // The note is ONE slot and the last push wins, so it only speaks for the
+    // child it names. Anything else here would restate a later detour's line.
+    const speaksForThisChild = note?.childSessionId === row.id;
+    returnTo = {
+      sessionId: parent.id,
+      title: resolveSessionTitle(parent),
+      status: parent.status,
+      statusLabel: resolveStatusLabel(parent.status),
+      ...(note && speaksForThisChild
+        ? {
+            intent: note.intent,
+            ...(note.at ? { suspendedAt: note.at } : {}),
+          }
+        : {}),
+    };
+  }
+
+  const own = readSuspendedNote(row.metadata);
+  const suspended = own
+    ? {
+        intent: own.intent,
+        at: own.at,
+        child: own.childSessionId
+          ? await readSuspendedChild(database, userId, own.childSessionId)
+          : null,
+      }
+    : null;
+
+  return { status: "ok", returnTo, suspended };
 }
 
 /**
@@ -920,7 +1100,9 @@ const isOpenStatus = (status: string): boolean =>
  *     and nothing above remains; with no evidence at all it is `undeclared`:
  *     an empty session is unplanned, not finished. A retired slot is neither
  *     owed nor produced, so it declares nothing; a cancelled, failed or stale
- *     sub-session produced nothing, so it is no evidence either.
+ *     sub-session produced nothing, so it is no evidence either. Its actor is
+ *     the USER: everything promised is produced, so what remains is the
+ *     person's acceptance, never the agent closing its own work.
  *
  * Never claims a move from a section it could not read: an `unavailable`
  * section it would have consulted yields `unknown`.
@@ -1021,11 +1203,25 @@ export function deriveNextMove(input: {
       reason: `The session is ${resolveStatusLabel(input.status).toLowerCase()} and nothing is owed or pending.`,
     };
   }
+  // THE PERSON'S MOVE, not the AI's. Everything the session declared is
+  // produced — which is where the work is *finished pending review*, and the
+  // person validates it (founder decision, 2026-09-20). It carried
+  // `actor: "ai"`, which told every surface the machine closes this: the exact
+  // self-grading move being replaced.
+  //
+  // `actor: "user"` IS the routing — there is no parallel list to add it to.
+  // `userMustDecide` on this packet is two typed ledgers (`owedSlots`,
+  // `pendingProposals`), not next-move-shaped, so a third entry there would be
+  // the parallel list, not the reuse. The needs-you predicate readers already
+  // share is the actor: `selectNextMoveBanner` (@synap-core/session-continuation)
+  // promotes the first row whose `nextMove.actor === "user"`, and the workbench /
+  // relay continue card render it "Next move · You" off the same field.
   const readyToClose: ContinuationNextMove = {
     kind: "ready_to_close",
-    actor: "ai",
-    label: "None: ready to close",
-    reason: "Nothing is owed, pending review, or left to produce.",
+    actor: "user",
+    label: "Review and close this session",
+    reason:
+      "Everything this session declared is produced, and nothing is owed or pending review — accepting the work and closing it is yours to decide.",
   };
   if (input.children.status === "unavailable") {
     return {
@@ -1118,7 +1314,7 @@ export async function projectContinuationPacket(
     outputs,
     rerun,
     children,
-    parent,
+    parentRow,
     blockedBy,
     unblocks,
     openQuestions,
@@ -1165,13 +1361,13 @@ export async function projectContinuationPacket(
         "This session's sub-sessions could not be read."
       )
     ),
-    readParent(database, ctx.userId, row.id).catch(
-      unavailable(
-        row.id,
-        "parent",
-        "This session's parent session could not be read."
-      )
-    ),
+    readParentRow(database, ctx.userId, row.id).catch((err) => {
+      logger.warn(
+        { err, sessionId: row.id, section: "parent" },
+        "continuation packet: section read failed"
+      );
+      return "unavailable" as const;
+    }),
     readOutboundSessions(database, ctx.userId, row.id, "blocked_by").catch(
       unavailable(
         row.id,
@@ -1244,6 +1440,34 @@ export async function projectContinuationPacket(
       ),
   ]);
 
+  // ONE lineage read, TWO projections: `parent` (identity) and `resume`
+  // (identity + the suspend note). A failed parent read fails BOTH — the pop
+  // is not "no parent", it is unknown.
+  const parentFailed = parentRow === "unavailable";
+  const parent: ContinuationPacket["parent"] = parentFailed
+    ? {
+        status: "unavailable",
+        reason: "This session's parent session could not be read.",
+      }
+    : parentSection(parentRow);
+  const resume: ContinuationPacket["resume"] = parentFailed
+    ? {
+        status: "unavailable",
+        reason: "This session's parent session could not be read.",
+      }
+    : await readResume(database, ctx.userId, row, parentRow).catch(
+        (err): ContinuationPacket["resume"] => {
+          logger.warn(
+            { err, sessionId: row.id, section: "resume" },
+            "continuation packet: section read failed"
+          );
+          return {
+            status: "unavailable",
+            reason: "The detour this session belongs to could not be read.",
+          };
+        }
+      );
+
   const manifest = readSessionRunManifest(row.metadata);
 
   return {
@@ -1266,6 +1490,7 @@ export async function projectContinuationPacket(
     outputs,
     children,
     parent,
+    resume,
     blockedBy,
     unblocks,
     openQuestions,

@@ -65,12 +65,18 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   collectPlaybookCriteria,
+  describeMissingParams,
   readCriteria,
+  readPlaybookParams,
+  validatePlaybookParams,
   type ExpectedOutput,
   type LinkInput,
+  type PlaybookParam,
+  type PlaybookParamTypeError,
   type PlaybookStage,
   type SessionCriterion,
 } from "@synap/playbooks";
+import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { createLogger } from "@synap-core/core";
 import { parseCommandTemplate } from "../../utils/command-template.js";
 import { authoringMisses } from "../../utils/template-diagnostics.js";
@@ -133,10 +139,70 @@ export function resolveGoal(
 
 /**
  * The `focus_sessions.metadata` key holding a run session's rendered agent
- * prompt. The column is a free-form bag (schema/focus-sessions.ts:192); this is
- * the only key this module writes.
+ * prompt. The column is a free-form bag (schema/focus-sessions.ts:192).
+ *
+ * This module writes THREE keys: this one, {@link RUN_PARAMS_METADATA_KEY}, and
+ * `titleSource`. (It said "the only key this module writes" until params became
+ * enforced; that sentence was already false of `titleSource` and is now false
+ * twice over.)
  */
 export const RUN_PROMPT_METADATA_KEY = "prompt";
+
+/**
+ * The `focus_sessions.metadata` key holding the run's RESOLVED param answers —
+ * what was actually substituted into the prompt, defaults applied and values
+ * coerced to their declared types.
+ *
+ * It exists because the param map was previously CONSUMED AND DISCARDED: the
+ * substitution happened and nothing remembered what the answers were, so
+ * "what was this run given?" had no answer anywhere in the pod, and a re-run
+ * could not reuse them. Stored on the metadata bag rather than a new column
+ * deliberately — `focusSessions.get` already projects `metadata`, so this is
+ * zero new surface: no migration, no baseline edit, no schema-coherence entry.
+ */
+export const RUN_PARAMS_METADATA_KEY = "params";
+
+/**
+ * A run refused because the playbook's declared params were not satisfied.
+ *
+ * TYPED rather than a bare `Error` so a door can render the refusal instead of
+ * 500-ing on it — the shape `PromoteResult`'s typed refusal exists for, and the
+ * same reason: an unanswered form is a legitimate refusal, not an invariant
+ * break. `missingRequired` / `typeErrors` ride on it so the door can name the
+ * fields rather than re-deriving them.
+ */
+export class PlaybookParamsError extends Error {
+  readonly code = "PLAYBOOK_PARAMS_INVALID" as const;
+  constructor(
+    readonly playbookId: string,
+    readonly missingRequired: PlaybookParam[],
+    readonly typeErrors: PlaybookParamTypeError[]
+  ) {
+    super(describeParamFailure(missingRequired, typeErrors));
+    this.name = "PlaybookParamsError";
+  }
+}
+
+/** The refusal sentence — one place, so every door says the same thing. */
+export function describeParamFailure(
+  missingRequired: readonly PlaybookParam[],
+  typeErrors: readonly PlaybookParamTypeError[]
+): string {
+  const parts: string[] = [];
+  if (missingRequired.length > 0) {
+    parts.push(
+      `This playbook requires ${describeMissingParams(missingRequired)}. Nothing was started — supply ${missingRequired.length === 1 ? "it" : "them"} and run again.`
+    );
+  }
+  for (const e of typeErrors) {
+    parts.push(
+      e.options
+        ? `"${e.name}" must be one of ${e.options.map((o) => `"${o}"`).join(", ")} — got "${e.received}".`
+        : `"${e.name}" must be a ${e.type}${e.fromDefault ? " (its own default is not one)" : ""} — got "${e.received}".`
+    );
+  }
+  return parts.join(" ");
+}
 
 /** Max length of a generated run title (the column allows far more; a title should not need it). */
 const RUN_TITLE_MAX = 300;
@@ -271,6 +337,31 @@ export interface InstantiateInput {
    * playbook's own (`collectPlaybookCriteria`).
    */
   criteria?: SessionCriterion[];
+  /**
+   * WHAT TO DO when the playbook declares a `required` param the caller did not
+   * answer. The choice belongs to the DOOR, not to this function — it turns on
+   * whether the caller has a person in front of it:
+   *
+   * - `"refuse"` (DEFAULT) — throw {@link PlaybookParamsError} naming the
+   *   fields. For an INTERACTIVE door the form IS the gate: a run started with
+   *   a hole in its instruction is not a run the person asked for.
+   * - `"owe"` — start the run and file an OWED SLOT per unanswered param
+   *   (`PARAM_SLOT_KIND`, `owner: "human"`, `blockedReason: "decision"`). For a
+   *   HEADLESS door (MCP / CLI / cron / Raycast), which has no form: refusing
+   *   would kill an unattended run over a question nobody was asked, and the
+   *   pre-existing behaviour — substituting `""` and dispatching — handed the
+   *   agent a mutilated instruction and called it success.
+   *
+   * The default is the FAIL-CLOSED one: a door that forgets to declare itself
+   * refuses loudly rather than quietly running on a hole.
+   *
+   * TYPE ERRORS are NOT covered by this flag — they refuse on BOTH paths. A
+   * mistyped value is a malformed call, not an unanswered question, and no
+   * amount of human waiting fixes a caller passing a string where the playbook
+   * declared a number. Filing it as an owed slot would ask a person to fix a
+   * bug they cannot see.
+   */
+  onMissingRequired?: "refuse" | "owe";
 }
 
 /**
@@ -366,17 +457,44 @@ export async function instantiateSessionRow(
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
 
+  // PARAMS — validated HERE and nowhere else. This function is the single
+  // funnel behind all six run doors (playbooks.run, playbooks.instantiate, the
+  // Hub run door, MCP synap_run_playbook, the cron path and the
+  // approved-proposal path); six doors each validating is how drift starts.
+  //
+  // Until this existed the declaration was decorative: nothing read `required`,
+  // `default` or `type` on any run path, so a missing required param rendered
+  // as `""` and a default never reached the prompt at all.
+  const paramResolution = validatePlaybookParams(
+    readPlaybookParams(playbook.params),
+    input.params
+  );
+  const onMissingRequired = input.onMissingRequired ?? "refuse";
+  if (
+    paramResolution.typeErrors.length > 0 ||
+    (paramResolution.missingRequired.length > 0 &&
+      onMissingRequired === "refuse")
+  ) {
+    throw new PlaybookParamsError(
+      playbook.id,
+      // Only the half this path is actually refusing over: on the `owe` path a
+      // missing param is not a refusal, so naming it in the type-error message
+      // would report a failure that is about to be filed as a slot instead.
+      onMissingRequired === "refuse" ? paramResolution.missingRequired : [],
+      paramResolution.typeErrors
+    );
+  }
+
   // The rendered goalTemplate is the agent's PROMPT, not the row's title. The
   // scheduled path's `goalOverride` (resolved against the automation
   // StepContext) is the same thing — an instruction — so it overrides the
   // prompt, never the title.
+  //
+  // Substituted against the RESOLVED values, so a declared `default` finally
+  // reaches the agent's instruction.
   const prompt =
     input.goalOverride ??
-    resolveGoal(
-      playbook.goalTemplate,
-      (input.params ?? {}) as Record<string, unknown>,
-      playbook.id
-    );
+    resolveGoal(playbook.goalTemplate, paramResolution.values, playbook.id);
 
   // Title = playbook name + the bound subject's own title. Read the entity here
   // rather than trusting a caller-passed name: `instantiateSession` has three
@@ -394,7 +512,31 @@ export async function instantiateSessionRow(
   // dedup/proposal key other doors compare on — and the short name is written
   // beside it, marked `derived` so the background titler may improve it.
   const title = buildRunSessionName(playbook.name, subjectTitle);
-  const expectedOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
+  const declaredOutputs = (playbook.expectedOutputs as ExpectedOutput[]) ?? [];
+  // On the `owe` path, every unanswered required param becomes an owed slot the
+  // run carries from birth. `owedSince` is stamped here because the invariant
+  // is exact — it is present IFF `owner === 'human'` — and the needs-you feed
+  // has nothing to order or age the row by without it.
+  const owedAt = new Date().toISOString();
+  const paramSlots: ExpectedOutput[] =
+    onMissingRequired === "owe"
+      ? paramResolution.missingRequired.map((p) => ({
+          kind: PARAM_SLOT_KIND,
+          label: `Answer: ${p.label?.trim() || p.name}`,
+          owner: "human" as const,
+          // `decision` is the honest blocker: there is nothing to BUILD to
+          // remove it (no credential to mint, no rule to write, no tool to
+          // install) — a person has to choose a value. See BLOCKED_REASONS.
+          blockedReason: "decision" as const,
+          why: `"${playbook.name}" needs a value for "${p.label?.trim() || p.name}"${
+            p.options?.length
+              ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
+              : ` (${p.type})`
+          }. Nobody supplied it, so the run started without it.`,
+          owedSince: owedAt,
+        }))
+      : [];
+  const expectedOutputs = [...declaredOutputs, ...paramSlots];
   // Seed the active stage from the playbook's first stage (null when stageless,
   // so a no-stage playbook stays progress-only — currentStage never NOT NULL).
   const stages = (playbook.stages as PlaybookStage[]) ?? [];
@@ -426,6 +568,11 @@ export async function instantiateSessionRow(
     metadata: {
       ...(input.metadata ?? {}),
       [RUN_PROMPT_METADATA_KEY]: prompt,
+      // The answers the run was actually given — see RUN_PARAMS_METADATA_KEY.
+      // Written unconditionally (an empty object for a param-less playbook) so
+      // a reader can tell "this run was given nothing" from "this row predates
+      // the field", which absence alone cannot say.
+      [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues,
       titleSource: "derived" satisfies SessionTitleSource,
     },
   });

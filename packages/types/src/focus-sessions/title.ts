@@ -164,6 +164,22 @@ export function sanitizeGeneratedTitle(
   return clip(line, GENERATED_TITLE_MAX);
 }
 
+/**
+ * Markdown BLOCK syntax a captured first line carries when its source was a
+ * document: a heading's `#`, a blockquote's `>`. Anchored at the START only —
+ * mid-string, `#` is a person's own word ("#1 priority", a hashtag) and `>` is
+ * a comparison, so a loose match would eat their text.
+ *
+ * Live on 2026-09-20 a session on the pod was named
+ * "## Design Philosophy: The Spine and the Flow". The GENERATED path already
+ * stripped these ({@link sanitizeGeneratedTitle} trims `#`/`*`/`_`/backticks at
+ * both edges); the DERIVED path did not, so the same text read as prose when a
+ * model named it and as raw markup when the pod did.
+ */
+const MD_BLOCK_RE = /^(?:\s*(?:#{1,6}|>)\s*)+/;
+/** Emphasis wrapping the whole label (`**Bold thing**`, `_note_`, `` `x` ``). */
+const MD_EDGE_RE = /^[*_`]+|[*_`]+$/g;
+
 /** Strip links (kept as their host) and bare ids from a derived label. */
 function readableLabel(label: string | null | undefined): string {
   const line =
@@ -180,6 +196,8 @@ function readableLabel(label: string | null | undefined): string {
       .replace(UUID_RE, "")
       .replace(EDGE_RE, "")
       .replace(/(["'“”])\s*\1/g, "")
+      .replace(MD_BLOCK_RE, "")
+      .replace(MD_EDGE_RE, "")
   ).replace(/^[\s·:,-]+|[\s·:,-]+$/g, "");
 }
 

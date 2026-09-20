@@ -435,6 +435,13 @@ export function validatePlanOperations(
         ) {
           push(i, "expectedOutputs must be an array");
         }
+        // Criteria are the session's definition of done, PROPOSED here for the
+        // person to validate. Shape only at this layer — the create door runs
+        // the real `sessionCriteriaSchema`, and duplicating that here would be
+        // a second copy of one rule.
+        if (op.criteria !== undefined && !Array.isArray(op.criteria)) {
+          push(i, "criteria must be an array");
+        }
         return;
       }
       case "create_document":

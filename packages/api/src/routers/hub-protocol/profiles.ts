@@ -25,7 +25,16 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import type { RendererRef } from "@synap/database";
-import { and, db, eq, isNull, or, widgetDefinitions } from "@synap/database";
+import {
+  and,
+  db,
+  eq,
+  isNull,
+  or,
+  widgetDefinitions,
+  PropertyValueType,
+  slugifyPropertyKey,
+} from "@synap/database";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { profilesRouter as regularProfilesRouter } from "../profiles.js";
@@ -39,6 +48,10 @@ import {
   RENDERER_SLOTS,
 } from "../../services/profiles/renderer-slots.js";
 import { createAndLinkPropertyDef } from "../../services/profiles/create-and-link-property-def.js";
+import { updatePropertyDef as updatePropertyDefApply } from "../../services/profiles/update-property-def.js";
+
+/** The `property_defs.value_type` PG enum values, as strings. */
+const PROPERTY_VALUE_TYPE_VALUES: string[] = Object.values(PropertyValueType);
 
 /**
  * Frame definitions are registered directly. Iframe widgets resolve through the
@@ -497,25 +510,195 @@ export const hubProfilesRouter = router({
 
       // Granted (operator, or agent within DEFAULT_AUTO_APPROVE) → apply
       // immediately via the shared create+link path.
-      const { propertyDef, link } = await createAndLinkPropertyDef({
-        userId: input.userId,
-        workspaceId: input.workspaceId,
-        profileId: input.profileId,
-        slug: input.slug,
-        valueType,
-        constraints: input.constraints,
-        uiHints: input.uiHints,
-        overlay,
-        required: input.required,
-        defaultValue: input.defaultValue,
-        displayOrder: input.displayOrder,
-      });
+      const { propertyDef, link, existing, ignored } =
+        await createAndLinkPropertyDef({
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+          profileId: input.profileId,
+          slug: input.slug,
+          valueType,
+          constraints: input.constraints,
+          uiHints: input.uiHints,
+          overlay,
+          required: input.required,
+          defaultValue: input.defaultValue,
+          displayOrder: input.displayOrder,
+        });
+
+      // HONESTY FLOOR: `property-defs.create` is slug-idempotent and NOT
+      // convergent — on a slug hit it returns the stored row untouched. Saying
+      // "applied" there is a receipt for a write that did not happen, and it is
+      // exactly the path the two-phase define flow tells agents to re-walk
+      // ("re-call with the same slug once approved"). Report `unchanged`, and
+      // name every declared def field that was ignored — declared value AND
+      // stored value, so the caller can read the divergence from the receipt
+      // alone. Convergence (silently updating the stored def) is deliberately
+      // NOT implemented: the founder's rule is no silent convergence, but the
+      // thing must stay editable through a door — so the receipt NAMES that
+      // door (`updatePropertyDef` below) and the def's id.
+      if (existing) {
+        return {
+          status: "unchanged" as const,
+          proposalId: null,
+          propertyDef,
+          link,
+          ignored,
+          message:
+            ignored.length > 0
+              ? `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and its DEFINITION was left as-is. NOT written: ${ignored
+                  .map(
+                    (i) =>
+                      `${i.field} — you declared ${JSON.stringify(i.declared)}, the pod holds ${JSON.stringify(i.stored)}`
+                  )
+                  .join(
+                    "; "
+                  )}. This door never converges. To apply those changes, use the EDIT door: hub \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\` (governed — an agent caller gets a proposal). The profile link WAS re-applied, so required/defaultValue/displayOrder did take effect.`
+              : `A property def '${input.slug}' (id ${propertyDef.id}) already exists in this scope and matched this declaration; its definition was left as-is. To change it later, use the edit door \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${propertyDef.id}\`.`,
+        };
+      }
 
       return {
         status: "applied" as const,
         proposalId: null,
         propertyDef,
         link,
+      };
+    }),
+
+  /**
+   * EDIT an existing property definition — the agent-reachable half of the
+   * edit door. `propertyDefs.update` (tRPC) has always existed for a signed-in
+   * human; nothing on the Hub/agent surface could reach it, and the create door
+   * is slug-idempotent, NEVER convergent. So a declaration that differed from a
+   * stored def had no door at all: `createPropertyDef` reports `unchanged` and
+   * points HERE rather than silently converging (a deliberate product decision
+   * — no silent convergence).
+   *
+   * Requires: hub-protocol.write scope
+   *
+   * GOVERNANCE: `checkPermissionOrPropose` with `subjectType: 'property_def'`,
+   * `action: 'update'`. That key is deliberately ABSENT from
+   * DEFAULT_AUTO_APPROVE (it was a dead key until this door — see the
+   * META-MODEL note in packages/governance-policy), so an agent caller gets
+   * `status: 'proposed'`: narrowing a def's constraints or changing its
+   * valueType re-interprets EVERY existing row of every profile that links it,
+   * which is structural, not additive. On approval the `property_def/update`
+   * executor materializes through the SAME `updatePropertyDef` helper used
+   * below, so proposal and direct-apply can never drift.
+   *
+   * The row's own ownership rule is NOT re-implemented here: the shared helper
+   * delegates to `propertyDefs.update`, which gates on the LOADED row (overlay
+   * → that workspace's editor, base def → the profile's owner, global → pod
+   * admin) and re-checks slug conflicts.
+   */
+  updatePropertyDef: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        userId: z.string(),
+        workspaceId: z.string().uuid(),
+        propertyDefId: z.string().uuid(),
+        /** Rename. Normalised through the ONE slugifier before it is stored. */
+        slug: z.string().min(1).max(100).optional(),
+        valueType: z.string().min(1).optional(),
+        constraints: z.record(z.string(), z.unknown()).optional(),
+        uiHints: z.record(z.string(), z.unknown()).optional(),
+        agentUserId: z.string().uuid().optional(),
+        reasoning: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      // Identity floor — same rule as createPropertyDef: a hub PAT may act
+      // only as its own owner.
+      assertMayActAs(ctx, input.userId);
+
+      const slug =
+        input.slug !== undefined
+          ? slugifyPropertyKey(input.slug) || input.slug
+          : undefined;
+
+      // An update naming NOTHING would apply nothing and report success — the
+      // exact receipt lie this whole door exists to retire.
+      if (
+        slug === undefined &&
+        input.valueType === undefined &&
+        input.constraints === undefined &&
+        input.uiHints === undefined
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Nothing to update: pass at least one of slug, valueType, constraints, uiHints.",
+        });
+      }
+
+      // Same reason as createPropertyDef: an unknown valueType string reaches
+      // the PG enum cast and fails with an error the agent cannot act on.
+      if (
+        input.valueType !== undefined &&
+        !PROPERTY_VALUE_TYPE_VALUES.includes(input.valueType)
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Unsupported valueType '${input.valueType}'. Valid: ${PROPERTY_VALUE_TYPE_VALUES.join(", ")}.`,
+        });
+      }
+      const valueType = input.valueType as
+        | "string"
+        | "number"
+        | "boolean"
+        | "object"
+        | "array"
+        | "date"
+        | "secret"
+        | "entity_id"
+        | undefined;
+
+      const perm = await checkPermissionOrPropose({
+        userId: input.userId,
+        agentUserId: input.agentUserId,
+        workspaceId: input.workspaceId,
+        subjectType: "property_def",
+        action: "update",
+        source: "intelligence",
+        reasoning: input.reasoning,
+        data: {
+          propertyDefId: input.propertyDefId,
+          workspaceId: input.workspaceId,
+          ...(slug !== undefined ? { slug } : {}),
+          ...(valueType !== undefined ? { valueType } : {}),
+          ...(input.constraints !== undefined
+            ? { constraints: input.constraints }
+            : {}),
+          ...(input.uiHints !== undefined ? { uiHints: input.uiHints } : {}),
+        },
+      });
+
+      if ("denied" in perm && perm.denied) {
+        throw new Error(perm.reason);
+      }
+      if ("proposalId" in perm) {
+        return {
+          status: "proposed" as const,
+          proposalId: perm.proposalId,
+        };
+      }
+
+      const { propertyDef } = await updatePropertyDefApply({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        propertyDefId: input.propertyDefId,
+        ...(slug !== undefined ? { slug } : {}),
+        ...(valueType !== undefined ? { valueType } : {}),
+        ...(input.constraints !== undefined
+          ? { constraints: input.constraints }
+          : {}),
+        ...(input.uiHints !== undefined ? { uiHints: input.uiHints } : {}),
+      });
+
+      return {
+        status: "applied" as const,
+        proposalId: null,
+        propertyDef,
       };
     }),
 });

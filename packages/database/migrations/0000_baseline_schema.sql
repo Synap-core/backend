@@ -4503,6 +4503,10 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 -- session is graded against; the grade itself lives in session_evaluations.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0268: semantic discriminators. Both NULLABLE; NULL has a documented reading
+-- (kind → "make", intake_style → "auto"), resolved in @synap/playbooks.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "kind" text;
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "intake_style" text;
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.

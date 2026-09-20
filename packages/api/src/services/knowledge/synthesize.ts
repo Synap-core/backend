@@ -28,6 +28,28 @@ export interface SynthesisSource {
   title: string;
 }
 
+/**
+ * What the context budget left OUT — and, crucially, WHICH items.
+ *
+ * `omitted`/`total` alone told a caller only that its answer was partial, with
+ * no door to complete it: the agent read "16 of 20 items are not shown" and had
+ * no cursor, no id and no follow-up call. `omittedSources` closes that — every
+ * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
+ * carries, so the agent completes the answer with a tool it already has
+ * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
+ * server-side paging state: the ids were already computed before the budget
+ * check ran, so naming them costs nothing new.
+ *
+ * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
+ * is counted as dropped but cannot be offered as a fetchable source — the same
+ * rule `sources` already follows (it admits only id-bearing rows).
+ */
+export interface SynthesisTruncation {
+  omitted: number;
+  total: number;
+  omittedSources: SynthesisSource[];
+}
+
 export interface SynthesisResult {
   answer: string | null;
   sources: SynthesisSource[];
@@ -51,7 +73,7 @@ export interface SynthesisResult {
    * populates this field, since `buildSynthesisContext` runs before any
    * network call — the omission is real whether or not synthesis succeeded).
    */
-  truncated?: { omitted: number; total: number };
+  truncated?: SynthesisTruncation;
 }
 
 /**
@@ -220,7 +242,7 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
   sources: SynthesisSource[];
   context: string;
   /** Present only when items were dropped — see `SynthesisResult.truncated`. */
-  truncated?: { omitted: number; total: number };
+  truncated?: SynthesisTruncation;
 } {
   const sources: SynthesisSource[] = [];
   const contextParts: string[] = [];
@@ -238,6 +260,12 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
    * the model can say "I found X but could not read it" instead of "I couldn't
    * find that". */
   const omittedTitles: string[] = [];
+  /**
+   * The omitted items themselves, as FETCHABLE sources — the machine-readable
+   * half of the prose notice. Built at the same three drop sites that increment
+   * `omitted`, so the list and the count can never drift apart.
+   */
+  const omittedSources: SynthesisSource[] = [];
   const budget = MAX_CONTEXT_CHARS - TRUNCATION_NOTICE_RESERVE;
   let totalItems = 0;
   /**
@@ -299,12 +327,30 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       ) {
         omitted++;
         omittedTitles.push(String(title));
+        // Machine-readable twin of the line above — same site, so a future
+        // drop site cannot add to one and forget the other without the
+        // count/list mismatch showing up immediately.
+        if (id)
+          omittedSources.push({
+            substrate: block.substrate,
+            id,
+            title: String(title),
+          });
         continue;
       }
 
       if (!isProtectedFirst && contextLen >= budget) {
         omitted++;
         omittedTitles.push(String(title));
+        // Machine-readable twin of the line above — same site, so a future
+        // drop site cannot add to one and forget the other without the
+        // count/list mismatch showing up immediately.
+        if (id)
+          omittedSources.push({
+            substrate: block.substrate,
+            id,
+            title: String(title),
+          });
         continue;
       }
 
@@ -358,6 +404,15 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       if (!isProtectedFirst && contextLen + entry.length > budget) {
         omitted++;
         omittedTitles.push(String(title));
+        // Machine-readable twin of the line above — same site, so a future
+        // drop site cannot add to one and forget the other without the
+        // count/list mismatch showing up immediately.
+        if (id)
+          omittedSources.push({
+            substrate: block.substrate,
+            id,
+            title: String(title),
+          });
         continue;
       }
       // Safety net for the rank-1 unconditional admit ONLY (see the comment on
@@ -385,7 +440,18 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
     );
   }
 
-  return { sources, context: contextParts.join("\n") };
+  return {
+    sources,
+    context: contextParts.join("\n"),
+    // Present ONLY when something was actually dropped — same "present only
+    // when it happened" convention as `error`/`failureClass`. This field was
+    // DECLARED on this return type (and forwarded by all three doors) but never
+    // populated: every caller received `undefined`, so the only signal that
+    // reached anyone was the model re-narrating the prose [NOTICE].
+    ...(omitted > 0
+      ? { truncated: { omitted, total: totalItems, omittedSources } }
+      : {}),
+  };
 }
 
 /**
@@ -448,7 +514,7 @@ export async function synthesizeAnswer(
    */
   degraded: string[] = []
 ): Promise<SynthesisResult> {
-  const { sources, context } = buildSynthesisContext(answers);
+  const { sources, context, truncated } = buildSynthesisContext(answers);
 
   // Call the IS "answer" door — one focused LLM call. Resolve the IS endpoint +
   // the pod's PER-CONNECTION key from the DB (registered IS), NEVER from env.
@@ -486,6 +552,10 @@ export async function synthesizeAnswer(
       answer,
       sources,
       routedTo,
+      // The omission and its fetchable ids survive a SUCCESSFUL synthesis too —
+      // the prose notice only reaches the reader if the model chooses to repeat
+      // it, and it never carries ids at all.
+      ...(truncated ? { truncated } : {}),
     };
   } catch (err) {
     // Synthesis unavailable — return sources so callers can still show matches.
@@ -500,6 +570,10 @@ export async function synthesizeAnswer(
       answer: null,
       sources,
       routedTo,
+      // `buildSynthesisContext` ran BEFORE the network call, so the omission is
+      // real whether or not synthesis succeeded — and this is the path where
+      // the prose notice is lost entirely.
+      ...(truncated ? { truncated } : {}),
       error: "synthesis_unavailable",
       failureClass: classifyAiFailure(err),
     };

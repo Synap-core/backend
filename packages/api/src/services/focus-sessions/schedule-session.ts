@@ -336,6 +336,11 @@ export async function materializeScheduledSession(
     workspaceId: input.workspaceId,
     userId: input.userId,
     params: input.params,
+    // UNATTENDED, like every cron path: an unanswered required param becomes an
+    // owed slot on the appointment rather than killing the recurrence. The
+    // person opening the appointment then sees the question waiting for them —
+    // which is exactly where an appointment puts them anyway.
+    onMissingRequired: "owe",
     subjectId,
     goalOverride: input.goalResolver
       ? input.goalResolver(playbook.goalTemplate)

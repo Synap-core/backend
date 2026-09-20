@@ -122,6 +122,59 @@ async function readActions(p: {
   }
 }
 
+/**
+ * Open blocker-class findings — defects in SYNAP ITSELF that an agent is about
+ * to walk into.
+ *
+ * WHY THIS IS A FIELD ON `orient` AND NOT A PLAYBOOK. A playbook only runs if
+ * the agent knows the playbook exists, and it will not. `orient` is the one
+ * door every agent already calls at the start of every session, so a known
+ * blocker reaches the agent BEFORE it spends a call discovering the blocker the
+ * hard way — which is exactly how the 2026-09-20 dogfood session concluded that
+ * entity deletion was impossible and told the user so.
+ *
+ * FILTERED BY SEVERITY, SURFACED WITH `surface`. "Filter to the door the agent
+ * is about to use" is not knowable here — orient runs before the agent has
+ * chosen a door. So every row carries its own `surface` and the agent matches
+ * it. That is honest; guessing the door would drop findings that apply.
+ *
+ * Pod-wide on purpose: `finding` is a pod-scoped kind, and a defect in the MCP
+ * surface is not a fact about the workspace lens the caller happens to hold.
+ *
+ * A failed read is `{ status: "unavailable" }` — NEVER an empty list. "No open
+ * blockers" and "could not check for blockers" are different facts, and folding
+ * the second into the first is how a broken lookup renders as a calm, confident
+ * all-clear.
+ */
+async function readOpenFindings(
+  userId: string
+): Promise<StartHere["openFindings"]> {
+  try {
+    const { readOpenBlockerFindings, OPEN_FINDINGS_READ_CAP } =
+      await import("./open-findings-door.js");
+    const rows = await readOpenBlockerFindings(userId);
+    const shown = rows.slice(0, OPEN_FINDINGS_READ_CAP);
+    return {
+      count: shown.length,
+      countIsLowerBound: rows.length > OPEN_FINDINGS_READ_CAP,
+      items: shown.map((r) => {
+        const props = (r.properties ?? {}) as Record<string, unknown>;
+        const surface = props.surface;
+        const workaround = props.workaround;
+        return {
+          id: r.id,
+          title: r.title,
+          link: openLink(r.id),
+          surface: typeof surface === "string" ? surface : null,
+          workaround: typeof workaround === "string" ? workaround : null,
+        };
+      }),
+    };
+  } catch {
+    return UNAVAILABLE;
+  }
+}
+
 export async function buildStartHere(p: {
   caller: HubProtocolCaller;
   userId: string;
@@ -129,10 +182,11 @@ export async function buildStartHere(p: {
   pending: PendingReviewState;
   learnMoreSkill: string;
 }): Promise<StartHere> {
-  const [openSessions, topKinds, actions] = await Promise.all([
+  const [openSessions, topKinds, actions, openFindings] = await Promise.all([
     readOpenSessions(p.userId),
     readTopKinds(p),
     readActions(p),
+    readOpenFindings(p.userId),
   ]);
   const pendingReview: StartHere["pendingReview"] =
     p.pending.status === "unavailable"
@@ -147,12 +201,27 @@ export async function buildStartHere(p: {
             lens: "authored",
           }
         : { count: 0, lens: "authored" };
-  // Key order is the briefing order — pending review first.
+  // Key order is the briefing order — pending review first, then the blockers
+  // the agent is about to walk into, then its own open work.
   return {
     pendingReview,
+    openFindings,
     openSessions,
     topKinds,
     actions,
     learnMore: { skill: p.learnMoreSkill },
+    // THE INSTRUCTION LIVES IN THE POD, NOT IN A PROMPT. This session produced
+    // findings only because a human framed the session as dogfooding; an agent
+    // doing ordinary work hits the same walls and says nothing, because nothing
+    // asked it to. Put the ask where every agent already looks. In a prompt
+    // instead, findings arrive only on the days someone remembers to ask —
+    // which is the failure this is escaping.
+    beforeYouFinish:
+      "If something in Synap itself broke, was missing, or cost you a wasted " +
+      "call — file it as a `finding` entity before you finish, with VERBATIM " +
+      "evidence (the exact error string, the exact failing input, the exact " +
+      "receipt line). Never summarise the evidence: a summary is worthless in " +
+      "three weeks, a verbatim payload is a ticket. Check `startHere.openFindings` " +
+      "first and do not file a twin — findings are deduped by hand today.",
   };
 }

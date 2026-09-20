@@ -144,6 +144,16 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
                   >,
               }
             : {}),
+          // Criteria the plan proposed. The door validates them with the same
+          // schema every other session door uses, so a malformed list is
+          // refused here rather than reaching a person as a broken contract.
+          ...(input.criteria.length > 0
+            ? {
+                criteria: input.criteria as unknown as NonNullable<
+                  Parameters<typeof createFocusSession>[0]["criteria"]
+                >,
+              }
+            : {}),
         });
         if (out.status === "created") {
           return { id: out.session.id, linked: false };

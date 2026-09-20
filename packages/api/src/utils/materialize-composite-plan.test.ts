@@ -352,3 +352,55 @@ describe("materializeCompositeGraph — connected plan", () => {
     expect(callers.projectCaller.setSubject).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A plan's session carries the CRITERIA it proposes, not only its outputs.
+ *
+ * The founder's rule (2026-09-20): a session's definition of done may be
+ * PROPOSED by the agent and validated or rewritten by the person. A plan is
+ * the architecture its author is committing to, so it is exactly where those
+ * statements are known — and before this, `materializeCompositeGraph` passed
+ * `expectedOutputs` and silently dropped `criteria`, forcing a second
+ * `update_session` round-trip the plan door exists to remove.
+ *
+ * The DISCRIMINATING pair is a step WITH criteria and a step WITHOUT: a
+ * materializer that dropped the field entirely, and one that always sent `[]`,
+ * agree on the second row and differ only on the first.
+ */
+describe("materializeCompositeGraph — a plan proposes the session's criteria", () => {
+  const criteria = [
+    {
+      key: "schema-live",
+      statement: "The two profiles are live on the pod",
+      check: { kind: "human" },
+    },
+  ];
+
+  it("carries criteria through to the session door, and sends [] when a step declares none", async () => {
+    const seen: Array<{ goal: string; criteria: unknown }> = [];
+    const { callers } = stubPlanCallers({
+      sessionCreate: (async (input: { goal: string; criteria: unknown }) => {
+        seen.push({ goal: input.goal, criteria: input.criteria });
+        return { id: `session-${seen.length}`, linked: false };
+      }) as unknown as PlanCallers["sessionCaller"]["create"],
+    });
+
+    await materializeCompositeGraph(
+      [
+        { op: "create_session", ref: "with", goal: "Build the pack", criteria },
+        { op: "create_session", ref: "without", goal: "Plain session" },
+      ] as CompositeProposalOperation[],
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    );
+
+    expect(seen).toEqual([
+      { goal: "Build the pack", criteria },
+      // Absent is not malformed: the door reads an empty list as "none
+      // proposed", never as a criteria set that failed to arrive.
+      { goal: "Plain session", criteria: [] },
+    ]);
+  });
+});

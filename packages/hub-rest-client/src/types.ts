@@ -780,7 +780,17 @@ export interface KnowledgeAnswerResponse {
   routedTo: string[];
   degraded: string[];
   pending?: KnowledgeAnswerPending;
-  truncated?: { omitted: number; total: number };
+  /**
+   * Present only when the context budget dropped retrieved items.
+   * `omittedSources` names the dropped items so the caller can fetch them by id
+   * — without it the caller was told its answer was partial and given no door
+   * to complete it.
+   */
+  truncated?: {
+    omitted: number;
+    total: number;
+    omittedSources: KnowledgeAnswerSource[];
+  };
   error?: string;
   failure?: KnowledgeAnswerFailure;
 }

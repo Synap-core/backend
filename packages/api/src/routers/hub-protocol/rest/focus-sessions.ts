@@ -158,6 +158,12 @@ const CreateBodySchema = z
      * `null` opts out of matching.
      */
     templateId: z.string().nullable().optional(),
+    /**
+     * Answers to the template's declared params (only meaningful with
+     * `templateId`). Free-form on the wire — the playbook owns the shape — and
+     * validated against its declaration by the service.
+     */
+    params: z.record(z.string(), z.unknown()).optional(),
     expectedOutputs: z.array(ExpectedOutputItemSchema).optional(),
     /** Binary acceptance criteria (validated by the service's shared schema). */
     criteria: z.array(z.unknown()).optional(),
@@ -259,6 +265,8 @@ const UpdateBodySchema = z.object({
   // Which stage the work is ALREADY in. Omitted ⇒ the stage is left alone
   // (never seeded to stage 1); an unknown key is REFUSED with the valid keys.
   followStageKey: z.string().min(1).nullable().optional(),
+  /** @see UpdateSessionParams.params — only with followPlaybookId. */
+  params: z.record(z.string(), z.unknown()).optional(),
   agentUserId: z.string().uuid().optional(),
   reasoning: z.string().optional(),
 });
@@ -846,6 +854,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         channelId: body.channelId ?? null,
         agentIds: body.agentIds,
         templateId: body.templateId,
+        params: body.params,
         // Session-first defaults are for AI starts only — keyed on the KEY's
         // own agent, not the capture-path remap above: a person's start (or a
         // capture they made) is never re-shaped by a guessed template.
@@ -1049,6 +1058,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ...(patch.followStageKey !== undefined
             ? { followStageKey: patch.followStageKey }
             : {}),
+          // Same reason as `followPlaybookId` above: without this the answers
+          // would land on the direct path and vanish on the approved one.
+          ...(patch.params !== undefined ? { params: patch.params } : {}),
         },
       });
 
@@ -1240,6 +1252,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           agentUserId,
           followPlaybookId: patch.followPlaybookId,
           followStageKey: patch.followStageKey,
+          params: patch.params,
         });
         if (result.status === "refused") {
           return c.json({ error: result.reason }, 400);

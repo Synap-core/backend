@@ -66,6 +66,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_list_projects: ["synap_list_projects"],
   synap_list_profiles: ["list_profiles"],
   synap_orient: ["synap_orient"],
+  synap_find: ["synap_find"],
   synap_list_capabilities: ["list_capabilities", "synap_list_capabilities"],
   synap_run_capability: ["run_capability", "synap_run_capability"],
   synap_governance: ["synap_governance"],

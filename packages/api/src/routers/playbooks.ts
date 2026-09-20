@@ -54,7 +54,13 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
+  PLAYBOOK_INTAKE_STYLES,
+  PLAYBOOK_KINDS,
+  readPlaybookParams,
+  resolvePlaybookIntakeStyle,
+  resolvePlaybookKind,
   resolveStageCategory,
+  validatePlaybookParams,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
@@ -78,6 +84,8 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   instantiateSession,
+  PlaybookParamsError,
+  describeParamFailure,
   buildRunSessionTitle,
   buildRunSessionName,
   RUN_PROMPT_METADATA_KEY,
@@ -260,6 +268,20 @@ export const createInputSchema = z.object({
    */
   scope: z.enum(["session", "project"]).optional(),
   /**
+   * WHAT KIND of work this is — `interrogation` (it asks; the value is the
+   * answers), `make` (it produces a deliverable), `review` (it judges something
+   * that exists). Omitted reads as `make`; the resolver owns the default, so
+   * nothing is written here to make an unstated kind explicit. Derived from
+   * `PLAYBOOK_KINDS` so the door can never accept a value the union does not
+   * declare.
+   */
+  kind: z.enum(PLAYBOOK_KINDS).optional(),
+  /**
+   * HOW it collects its params — `form` (all up front), `adaptive`
+   * (conversationally), `auto` (the door decides). Omitted reads as `auto`.
+   */
+  intakeStyle: z.enum(PLAYBOOK_INTAKE_STYLES).optional(),
+  /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
    * linked to the playbook via a `documents` edge; the executor prepends its
@@ -297,6 +319,10 @@ export const updateInputSchema = z.object({
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
   scope: z.enum(["session", "project"]).optional(),
+  /** See `createInputSchema.kind`. */
+  kind: z.enum(PLAYBOOK_KINDS).optional(),
+  /** See `createInputSchema.intakeStyle`. */
+  intakeStyle: z.enum(PLAYBOOK_INTAKE_STYLES).optional(),
 });
 
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
@@ -1349,7 +1375,15 @@ export const playbooksRouter = router({
           name: candidate.row.name,
           goalTemplate: candidate.row.goalTemplate,
           subjectProfileSlug: candidate.subjectProfileSlug,
+          // The DECLARATION (name/type/required/options/default), so a caller
+          // choosing a candidate can see what it must supply BEFORE it runs —
+          // the match→confirm→run path's whole intake contract.
           params: candidate.row.params,
+          // WHAT KIND of work it is, and HOW it wants its params collected.
+          // Both resolved through the one defaulting site, so a legacy NULL
+          // reads as `make`/`auto` here exactly as it does everywhere else.
+          kind: resolvePlaybookKind(candidate.row),
+          intakeStyle: resolvePlaybookIntakeStyle(candidate.row),
           executor: candidate.row.executor,
           score,
           reason,
@@ -1445,6 +1479,8 @@ export const playbooksRouter = router({
           executor: input.executor,
           status: input.status,
           scope: input.scope,
+          kind: input.kind,
+          intakeStyle: input.intakeStyle,
           contextSkill: input.contextSkill,
         },
       };
@@ -1544,6 +1580,11 @@ export const playbooksRouter = router({
             // is "NULL means session", and writing the default eagerly would
             // make an unstated scope indistinguishable from a chosen one.
             scope: input.scope ?? null,
+            // Same contract as `scope` above: NULL, never the resolver's
+            // default, so an unstated kind stays distinguishable from a chosen
+            // one.
+            kind: input.kind ?? null,
+            intakeStyle: input.intakeStyle ?? null,
           })
           .returning();
         created = row as Playbook;
@@ -1710,6 +1751,10 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.kind !== undefined ? { kind: input.kind } : {}),
+          ...(input.intakeStyle !== undefined
+            ? { intakeStyle: input.intakeStyle }
+            : {}),
         },
       });
 
@@ -1945,6 +1990,29 @@ export const playbooksRouter = router({
         ctx.workspaceId
       );
 
+      // PARAMS — validated at PROPOSE time as well as at write time, with the
+      // same pure function the funnel uses. Two reasons it cannot wait for
+      // `instantiateSession` below: the proposal's `prompt` is rendered HERE
+      // (so a default that never reached it would make the reviewed payload
+      // differ from what gets written), and filing a proposal a human must
+      // read, approve and watch fail is a worse refusal than refusing now.
+      const instantiateParams = validatePlaybookParams(
+        readPlaybookParams(playbook.params),
+        input.params
+      );
+      if (
+        instantiateParams.missingRequired.length > 0 ||
+        instantiateParams.typeErrors.length > 0
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: describeParamFailure(
+            instantiateParams.missingRequired,
+            instantiateParams.typeErrors
+          ),
+        });
+      }
+
       // The subject's own title, for the run title on the PROPOSE path (the
       // direct path resolves it inside instantiateSession).
       let subjectTitle: string | null = null;
@@ -1985,9 +2053,18 @@ export const playbooksRouter = router({
           ...(subjectId ? { subjectEntityId: subjectId } : {}),
           ...(input.channelId ? { channelId: input.channelId } : {}),
           ...(input.agentIds?.length ? { agentIds: input.agentIds } : {}),
+          // The DECLARED answers, carried so the approved path stores the same
+          // `metadata.params` the direct path does. `declaredValues`, not
+          // `values`: the prompt was already rendered above (and rides as
+          // `prompt`), so an undeclared key has nothing left to substitute
+          // into — carrying it would only put unbounded caller JSON into a
+          // payload a human reads.
+          params: instantiateParams.declaredValues,
           [RUN_PROMPT_METADATA_KEY]: resolveGoal(
             playbook.goalTemplate,
-            (input.params ?? {}) as Record<string, unknown>,
+            // The RESOLVED values — defaults applied, types coerced — so the
+            // payload a reviewer reads is the one that gets written.
+            instantiateParams.values,
             input.playbookId
           ),
         },
@@ -2153,6 +2230,14 @@ export const playbooksRouter = router({
         subjectId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
+        /**
+         * What to do about a `required` param this call did not answer — see
+         * `InstantiateInput.onMissingRequired` for the contract. DEFAULT
+         * `"refuse"`, because this door's primary caller is a person with a
+         * form in front of them; the headless doors (MCP / Hub REST, through
+         * `runPlaybookDoor`) pass `"owe"`.
+         */
+        onMissingRequired: z.enum(["refuse", "owe"]).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2247,6 +2332,12 @@ export const playbooksRouter = router({
         };
       }
 
+      // Declared params that were not satisfied are a REFUSAL the caller can
+      // act on (fill the form), never a 500 — the same reason `PromoteResult`
+      // carries a typed refusal. Handled with `.catch` rather than a
+      // `try`/`let` pair so the call keeps the exact `const { run, session } =
+      // await runPlaybook({` shape that `severed-approval-doors.test.ts` (6b)
+      // scans for when it proves this door passes no `idempotentBySubject`.
       const { run, session } = await runPlaybook({
         playbookId: input.playbookId,
         workspaceId: ctx.workspaceId,
@@ -2255,6 +2346,14 @@ export const playbooksRouter = router({
         agentIds: input.agentIds,
         agentUserId: input.agentUserId,
         subjectId,
+        ...(input.onMissingRequired
+          ? { onMissingRequired: input.onMissingRequired }
+          : {}),
+      }).catch((err: unknown) => {
+        if (err instanceof PlaybookParamsError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
       });
 
       return {

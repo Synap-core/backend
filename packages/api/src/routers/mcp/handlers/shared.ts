@@ -375,6 +375,7 @@ export const READ_ONLY_TOOLS = new Set([
   "synap_ask",
   "synap_orient",
   "synap_diagnose",
+  "synap_find",
   "synap_load_skill",
   "synap_match_playbooks",
   "synap_resolve_identity",
@@ -394,7 +395,7 @@ export function isReadOnlyTool(toolName: string): boolean {
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
 import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
-import { sessionKindWhere } from "../../../services/focus-sessions/session-kind.js";
+import { ambientWorkWhere } from "../../../services/focus-sessions/session-kind.js";
 import {
   resolveWorkSession,
   requestClientKey,
@@ -441,15 +442,18 @@ export async function listOpenFocusSessions(
             focusSessions.status,
             OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
           ),
-          // WORK only. This resolver decides which session an agent's write is
-          // FILED UNDER. An open automation run or a receipt is newer than the
-          // person's work most mornings (the 08:00 crons), and filing a write
-          // there is the mis-grouping ambient attach exists to avoid.
-          sessionKindWhere("work")
+          // The session the PERSON is in. This resolver decides which session
+          // an agent's write is FILED UNDER. An open automation run or a
+          // receipt is newer than the person's work most mornings (the 08:00
+          // crons), and filing a write there is the mis-grouping ambient
+          // attach exists to avoid — but a session the person opened and THEN
+          // attached to a playbook reads `run` too, and is exactly where their
+          // writes belong. `ambientWorkWhere` is the one rule for both.
+          ambientWorkWhere()
         )
       )
       // SESSION-KIND-LENS-EXEMPT: the ambient-session RESOLVER returns ids for
-      // attribution, not a page a consumer renders — it NARROWS to work above
+      // attribution, not a page a consumer renders — it NARROWS above
       // (which session a write is filed under is the whole question) and
       // projects nothing.
       .orderBy(desc(focusSessions.startedAt))

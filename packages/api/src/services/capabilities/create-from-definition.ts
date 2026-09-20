@@ -75,6 +75,7 @@ import {
 import {
   skillExecFieldsChanged,
   allowedHostsChanged,
+  readOnlyWidened,
 } from "./skill-exec-fields.js";
 import {
   canonicalJson,
@@ -826,6 +827,14 @@ export async function createCapabilityFromDefinition(
         // door — the two doors drifted once, which is why the rule lives in
         // `skill-exec-fields.ts` and both doors call it.
         allowedHostsChanged(
+          s.metadata as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // Same blind spot, same bag, same both-doors rule: turning
+        // `metadata.readOnly` ON makes the capability gate auto-run this verb
+        // before any grant rung, converting a reviewed action into an
+        // unattended one. Widening it must re-earn approval.
+        readOnlyWidened(
           s.metadata as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         );

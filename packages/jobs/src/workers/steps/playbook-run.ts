@@ -338,6 +338,11 @@ export async function executePlaybookRun(
     // grammars resolve the same string.
     goalTemplateOverride: data.goalOverride,
     chainContext,
+    // UNATTENDED: no caller to ask, exactly like `unenabledSkillPreflight`
+    // above. A required param nobody supplied becomes an owed slot on the run
+    // (visible, aging, owned by a person) rather than a refused schedule — or,
+    // as before, `""` silently substituted into the agent's instruction.
+    onMissingRequired: "owe",
   });
 
   await backStampEventSession(

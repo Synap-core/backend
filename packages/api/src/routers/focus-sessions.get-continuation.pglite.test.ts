@@ -893,7 +893,14 @@ describe("focusSessions.get returns the continuation packet", () => {
     }
     const c = (await get(parent)).continuation;
     expect(c.children).toMatchObject({ status: "ok", total: 6 });
-    expect(c.nextMove).toMatchObject({ kind: "ready_to_close" });
+    // REACHABILITY, not shape: the actor the pure rule assigns must survive the
+    // whole read and land on the wire the phone and the workbench parse. It is
+    // `user` — everything promised is produced, so the close is the person's
+    // call — and `user` is the field every needs-you reader keys on.
+    expect(c.nextMove).toMatchObject({
+      kind: "ready_to_close",
+      actor: "user",
+    });
   });
 
   it("more than PACKET_TOP_N children and outputs: totals stay exact, items stop at 5", async () => {

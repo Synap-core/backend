@@ -50,6 +50,37 @@ export function allowedHostsChanged(
   return canonicalJson(metadataPatch["allowedHosts"]) !== canonicalJson(before);
 }
 
+/**
+ * `metadata.readOnly` WIDENED — false/absent → true — on an already-approved
+ * skill.
+ *
+ * Same blind spot as `allowedHostsChanged` and for the same structural reason:
+ * `metadata` is shallow-merged and peeled off the update payload before
+ * `RE_APPROVAL_FIELDS` is compared, so the fields check cannot see it.
+ *
+ * Why it is execution-defining. The capability gate short-circuits a verb
+ * declaring `readOnly: true` to `run` BEFORE any grant rung
+ * (`execute-capability.ts`) — it stops proposing and starts auto-executing on
+ * every call. Flipping this bit on an approved verb therefore converts a
+ * human-reviewed action into an unattended one without anyone re-reviewing it,
+ * which is precisely the escalation the approval gate exists to prevent.
+ *
+ * ONE-DIRECTIONAL on purpose. true → false TIGHTENS governance (the verb goes
+ * back to proposing), so it needs no re-approval; demoting on it would punish
+ * the safe edit and train people to ignore demotions. Only the widening
+ * direction resets approval.
+ */
+export function readOnlyWidened(
+  metadataPatch: Record<string, unknown> | undefined,
+  existingMetadata: Record<string, unknown> | null | undefined
+): boolean {
+  if (!metadataPatch || !("readOnly" in metadataPatch)) return false;
+  // VALUE, not presence — a form re-sending an unchanged `true` must not
+  // demote, the same regression a presence test caused on the MCP-server door.
+  const before = (existingMetadata ?? {})["readOnly"] === true;
+  return metadataPatch["readOnly"] === true && !before;
+}
+
 export const RE_APPROVAL_FIELDS = [
   "code",
   // For a `declarative` skill the providerSpec IS the executable — it defines

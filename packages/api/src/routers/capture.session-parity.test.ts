@@ -156,8 +156,9 @@ describe("both doors reach the same verified handle", () => {
         /^\s*input\.sessionId,?\s*$/.test(l) || // an argument to the verified door
         /input\.sessionId \?\? ctx\.sessionId \?\? null/.test(l) || // execute's requested handle, verified next line
         /bodyHandle: input\.sessionId \?\? null/.test(l) || // structure's intake run verifies bodyHandle
-        // answerFollowUp: `claimCaptureQuestion` loads the session WHERE userId =
-        // caller and NOT_FOUNDs any miss before the re-run reads it again.
+        // A `sessionId: input.sessionId,` forward is safe ONLY where the door
+        // it feeds owner-floors the session itself. Which procedures those are
+        // is derived below, not counted.
         /^\s*sessionId: input\.sessionId,\s*$/.test(l) ||
         /restructureInput\(claim\.refine, input\.answer, input\.sessionId\)/.test(
           l
@@ -171,10 +172,45 @@ describe("both doors reach the same verified handle", () => {
     expect(answerSrc.indexOf("claimCaptureQuestion(")).toBeLessThan(
       answerSrc.indexOf("restructureInput(claim.refine")
     );
-    expect(
-      rawReads.filter((l) => /^\s*sessionId: input\.sessionId,\s*$/.test(l))
-        .length
-    ).toBe(1);
+    // Every `sessionId: input.sessionId,` forward must sit in a procedure that
+    // owner-floors the session in the door it calls. Counting them (the old
+    // `toBe(1)`) made a legitimate second door look like the defect AND would
+    // have waved through a third once the number was bumped — so the ENCLOSING
+    // PROCEDURE is derived from the source and matched against a set where each
+    // member carries its reason. A new forward lands in a procedure that is not
+    // in the set and fails here.
+    const OWNER_FLOORED_FORWARDS: Record<string, string> = {
+      // `claimCaptureQuestion` loads the session WHERE userId = caller and
+      // NOT_FOUNDs any miss before the re-run reads it again.
+      answerFollowUp: "claimCaptureQuestion",
+      // `dismissCaptureResultRow` loads the session WHERE userId = caller and
+      // NOT_FOUNDs every miss (foreign session, no room, no part, no row).
+      dismissResultRow: "dismissCaptureResultRow",
+    };
+    const forwards = [
+      ...captureSrc.matchAll(/^[ \t]*sessionId: input\.sessionId,[ \t]*$/gm),
+    ];
+    expect(forwards.length).toBeGreaterThan(0);
+    const enclosing = forwards.map((m) => {
+      const before = captureSrc.slice(0, m.index!);
+      const decls = [...before.matchAll(/^  (\w+): podProcedure/gm)];
+      const name = decls[decls.length - 1]?.[1];
+      expect(
+        name,
+        `no enclosing procedure for a sessionId forward`
+      ).toBeTruthy();
+      // The floor must be called BEFORE the forward, inside that procedure.
+      const floor = OWNER_FLOORED_FORWARDS[name!];
+      expect(floor, `unjustified sessionId forward in ${name}`).toBeTruthy();
+      expect(
+        before.lastIndexOf(`${floor}(`),
+        `${name}: ${floor}( must precede the forward`
+      ).toBeGreaterThan(decls[decls.length - 1]!.index!);
+      return name;
+    });
+    expect(new Set(enclosing)).toEqual(
+      new Set(Object.keys(OWNER_FLOORED_FORWARDS))
+    );
     expect(rawReads.length).toBeGreaterThan(0);
     expect(rawReads).toEqual(knownSafe);
   });

@@ -37,7 +37,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
-import { sessionKindWhere } from "./session-kind.js";
+import { ambientWorkWhere } from "./session-kind.js";
 
 const logger = createLogger({ module: "focus-sessions/resolve-work-session" });
 
@@ -100,7 +100,7 @@ async function checkOwnership(
   }
 }
 
-/** Open WORK sessions no client has claimed (newest first, at most `limit`). */
+/** Open sessions the person is in, unclaimed (newest first, at most `limit`). */
 export async function listUnclaimedOpenWorkSessions(
   userId: string,
   limit = 2
@@ -117,12 +117,14 @@ export async function listUnclaimedOpenWorkSessions(
             focusSessions.status,
             OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
           ),
-          sessionKindWhere("work"),
+          // A session the PERSON is in — `work`, plus a work session they
+          // later attached to a playbook (which reads `run` by design).
+          ambientWorkWhere(),
           drizzleSql`${focusSessions.metadata} ->> 'clientKey' IS NULL`
         )
       )
       // SESSION-KIND-LENS-EXEMPT: an attribution resolver, not a list door — it
-      // NARROWS to work above and returns ids only.
+      // NARROWS via `ambientWorkWhere` above and returns ids only.
       .orderBy(desc(focusSessions.startedAt))
       .limit(limit)
   );

@@ -238,6 +238,26 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
               424
             );
           }
+          // REPAIRABLE ARGUMENTS — a 400, never a 500. The call was refused
+          // because the CALLER's parameters did not match the verb's declared
+          // schema; that is a client error, and routing it through the 5xx
+          // branch both mislabels it and loses the detail (the 5xx egress
+          // sanitizer strips the body). `repair` carries {missing, wrongType,
+          // unknown} so the caller can fix the call in one round trip instead
+          // of guessing — the 42%-of-tool-failures class. The field was
+          // computed by the service and forwarded by no door until now; caught
+          // by `cross-door-field-parity`, same shape as the `truncated` field
+          // that shipped unpopulated.
+          if (outcome.repair) {
+            return c.json(
+              {
+                error: outcome.message,
+                code: "INVALID_PARAMETERS",
+                repair: outcome.repair,
+              },
+              400
+            );
+          }
           return c.json(
             { error: `Capability execution failed: ${outcome.message}` },
             500

@@ -509,6 +509,14 @@ export interface PlanCallers {
       subjectEntityId: string | null;
       projectId: string | null;
       expectedOutputs: Array<Record<string, unknown>>;
+      /**
+       * The session's acceptance criteria, PROPOSED by the plan's author for
+       * the person to validate or rewrite. A plan is the architecture an agent
+       * is committing to, so it is the moment it knows what "done" means —
+       * carrying them here saves the second `update_session` round-trip the
+       * plan door exists to remove.
+       */
+      criteria: Array<Record<string, unknown>>;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
   };
@@ -1311,6 +1319,7 @@ export async function materializeCompositeGraph(
               ? resolveCompositeRef(refToRealId, op.projectRef)
               : null),
           expectedOutputs: op.expectedOutputs ?? [],
+          criteria: op.criteria ?? [],
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({

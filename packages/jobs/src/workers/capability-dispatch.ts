@@ -106,6 +106,13 @@ export interface PlaybookRunnerInput {
    */
   goalTemplateOverride?: string;
   chainContext?: PlaybookRunnerChainContext;
+  /**
+   * Forwarded verbatim to the run spine — see `InstantiateInput.
+   * onMissingRequired` (@synap/api). The automation step passes `"owe"`: an
+   * unattended run has nobody to ask, so a required param nobody supplied
+   * becomes an owed slot on the session instead of killing the schedule.
+   */
+  onMissingRequired?: "refuse" | "owe";
   /** Agent selector (`agents.slug`) — absent ⇒ the default orchestrator. */
   agentType?: string | null;
   /**

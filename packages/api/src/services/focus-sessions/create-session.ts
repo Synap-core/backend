@@ -28,8 +28,14 @@ import { emitHubRealtimeEvent } from "../../utils/domain-event-bridge.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
-import { collectPlaybookCriteria, mergeCriteria } from "@synap/playbooks";
+import {
+  collectPlaybookCriteria,
+  mergeCriteria,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
+import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import {
   matchSessionTemplate,
   type SessionPlaybookCandidates,
@@ -57,6 +63,7 @@ import {
 } from "./find-open-session-twin.js";
 import {
   normalizeSessionTitle,
+  PARAM_SLOT_KIND,
   SESSION_TITLE_MAX,
   titleSourcePatch,
   canAutoRetitle,
@@ -106,6 +113,22 @@ export interface CreateFocusSessionParams {
   channelId?: string | null;
   agentIds?: string[];
   templateId?: string | null;
+  /**
+   * Answers to the playbook's declared params, when `templateId` names a real
+   * playbook. Until this existed the door could not accept them AT ALL: a
+   * session started from a parameterised playbook remembered nothing about what
+   * it was for.
+   *
+   * This door ALWAYS OWES an unanswered required param and never refuses one —
+   * unlike the run doors, and deliberately. A run's instruction IS the rendered
+   * `goalTemplate`, so a hole in it mutilates the agent's whole brief; here the
+   * instruction is the CALLER's own `goal` and the playbook is structure laid
+   * beside it. Nothing is mutilated by an unanswered param, so refusing would
+   * block a session the person is already describing in their own words.
+   * A MISTYPED value still refuses, on every door — see
+   * `InstantiateInput.onMissingRequired`.
+   */
+  params?: Record<string, unknown>;
   /**
    * Declared deliverables. The SHARED type, not an inline copy — the four-field
    * inline shape that used to sit here quietly narrowed what this door believed
@@ -447,6 +470,14 @@ export async function createFocusSession(
       // branch needs the workspace the playbook runs in, so a project-only
       // (workspace-less) start keeps the legacy row on the proposed path.
       ...(playbook && workspaceId ? { playbookId: playbook.id } : {}),
+      // The template's param answers ride the proposal too. Without them the
+      // PROPOSED path would materialize a run that remembers nothing it was
+      // given, while the direct path stored them — the two-paths-disagree
+      // shape. Validated at the funnel on approval (`instantiateSessionRow`,
+      // which the `playbookId` branch materializes through).
+      ...(playbook && workspaceId && params.params
+        ? { params: params.params }
+        : {}),
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
       // Sanitized BEFORE it is proposed, so the payload a human reviews is the
@@ -493,6 +524,41 @@ export async function createFocusSession(
   const sessionCriteria = playbook
     ? mergeCriteria(criteria, collectPlaybookCriteria(playbook))
     : criteria;
+
+  // PARAMS — the same pure validator the run funnel uses, so this door and
+  // `instantiateSessionRow` can never disagree about what an answer is. A
+  // MISTYPED value refuses (a malformed call, not an unanswered question); a
+  // missing required one becomes an owed slot, for the reason stated on
+  // `CreateFocusSessionParams.params`.
+  const paramResolution = playbook
+    ? validatePlaybookParams(readPlaybookParams(playbook.params), params.params)
+    : null;
+  if (paramResolution && paramResolution.typeErrors.length > 0) {
+    const [first] = paramResolution.typeErrors;
+    throw Object.assign(
+      new Error(
+        first!.options
+          ? `"${first!.name}" must be one of ${first!.options.map((o) => `"${o}"`).join(", ")} — got "${first!.received}".`
+          : `"${first!.name}" must be a ${first!.type} — got "${first!.received}".`
+      ),
+      { code: "BAD_REQUEST" }
+    );
+  }
+  const paramOwedAt = new Date().toISOString();
+  const paramSlots: ExpectedOutput[] = (
+    paramResolution?.missingRequired ?? []
+  ).map((p) => ({
+    kind: PARAM_SLOT_KIND,
+    label: `Answer: ${p.label?.trim() || p.name}`,
+    owner: "human" as const,
+    blockedReason: "decision" as const,
+    why: `"${playbook!.name}" needs a value for "${p.label?.trim() || p.name}"${
+      p.options?.length
+        ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
+        : ` (${p.type})`
+    }. Nobody supplied it when this session was started.`,
+    owedSince: paramOwedAt,
+  }));
 
   // Session + its playbook_runs ledger row land in ONE transaction: the
   // correlationId idempotency check returns the existing session on retry, so
@@ -552,7 +618,15 @@ export async function createFocusSession(
       // already carrying `attestedBy` (a forged human confirmation) or
       // `retiredAt` (born invisible to the owed board). The update door had
       // refused both for as long as the floor existed; this one had not.
-      expectedOutputs: sanitizeDeclaredOutputs(expectedOutputs),
+      // The param slots are appended AFTER the floor, deliberately: they are
+      // server-minted, not client-declared, and `sanitizeDeclaredOutputs`
+      // exists to strip exactly the `owner`/`owedSince` a caller must not
+      // forge. Running them through it would erase the ownership this door is
+      // the authority on.
+      expectedOutputs: [
+        ...sanitizeDeclaredOutputs(expectedOutputs),
+        ...paramSlots,
+      ],
       criteria: sessionCriteria,
     };
 
@@ -601,6 +675,12 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
+              // What this run was actually given — same key, same meaning as
+              // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
+              // playbook resolved; an ad-hoc session has no params to store.
+              ...(paramResolution
+                ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
+                : {}),
               ...(title
                 ? titleSourcePatch("agent")
                 : adoptKeepsTitle
@@ -630,12 +710,19 @@ export async function createFocusSession(
           // explicit title is its author's (agent or person), which automation
           // never renames. D8: conditional, so an untitled human session keeps
           // the column default.
-          ...(clientKey || title || isProbeWriteContext()
+          ...(clientKey || title || paramResolution || isProbeWriteContext()
             ? {
                 metadata: stampProbeMarker({
                   ...(clientKey ? { clientKey } : {}),
                   ...(title
                     ? titleSourcePatch(agentUserId ? "agent" : "human")
+                    : {}),
+                  // @see the adopt branch above.
+                  ...(paramResolution
+                    ? {
+                        [RUN_PARAMS_METADATA_KEY]:
+                          paramResolution.declaredValues,
+                      }
                     : {}),
                 }),
               }

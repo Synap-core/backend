@@ -210,6 +210,31 @@ describe("early phase — who is selected", () => {
     expect(requestTitle).not.toHaveBeenCalled();
   });
 
+  it("DISCRIMINATING: names a session that FOLLOWED a playbook, not one minted as a run", async () => {
+    // `TEMPLATE_RUN` skips a playbook run because it was "named right at
+    // creation". Following writes `playbookId` onto a LIVE session and
+    // deliberately never rewrites its title or goal — so the justification
+    // does not hold for it, and without the `followedVia` qualifier it would
+    // be excluded from the early pass AND the close pass, permanently.
+    //
+    // The pair is what discriminates: both rows carry a `playbookId` and both
+    // read `run`. A rule keyed on `playbookId` alone skips both; the correct
+    // rule skips only the minted one. A row without a playbookId agrees under
+    // either rule and would prove nothing.
+    await session({
+      goal: "followed",
+      playbookId: randomUUID(),
+      metadata: { followedVia: "attach" },
+    });
+    await session({
+      goal: "minted",
+      playbookId: randomUUID(),
+      origin: "playbook",
+    });
+    await handleSessionTitler({ requestTitle: answering("Named") });
+    expect(asked).toEqual(["early:followed"]);
+  });
+
   it("generates for a write receipt but not for a capture room", async () => {
     await session({ goal: "receipt", metadata: { source: "agent-write" } });
     await session({ goal: "capture", metadata: { source: "intake:capture" } });

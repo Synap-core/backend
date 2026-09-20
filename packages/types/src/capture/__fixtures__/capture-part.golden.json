@@ -15,7 +15,11 @@
             "action": "link_entity",
             "entityId": "7d9c1f00-1111-4c22-8a33-445566778899"
           },
-          { "label": "Someone new", "value": "new", "action": "confirm" }
+          {
+            "label": "Someone new",
+            "value": "new",
+            "action": "confirm"
+          }
         ],
         "partialCount": 2,
         "status": "open",
@@ -46,7 +50,11 @@
             "recommended": false,
             "description": "→ files a question to investigate"
           },
-          { "label": "Just a note", "value": "note", "action": "confirm" }
+          {
+            "label": "Just a note",
+            "value": "note",
+            "action": "confirm"
+          }
         ],
         "partialCount": 1,
         "status": "open",
@@ -167,7 +175,100 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
-        "answer": { "type": "skip" }
+        "answer": {
+          "type": "skip"
+        }
+      }
+    },
+    {
+      "name": "result with rows, none dismissed, not truncated",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "Fix the capture widget 404",
+            "why": "Already exists as a task",
+            "updatesExisting": false,
+            "dismissed": false
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "task",
+            "title": "Ship the channel filter",
+            "why": null,
+            "updatesExisting": true,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result with a DISMISSED row and a null why — the two facts a report must keep",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 2,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "Draft the launch post",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": true
+          },
+          {
+            "tempId": "t2",
+            "profileSlug": "project",
+            "title": "Relay launch",
+            "why": "Existing project",
+            "updatesExisting": true,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result TRUNCATED at the row bound — more rows existed than the part may carry",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "One of many",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": true,
+        "notice": null
+      }
+    },
+    {
+      "name": "result with ZERO rows and a notice — empty is not failed",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [],
+        "truncated": false,
+        "notice": "The structuring pass ran degraded; some fields were skipped."
       }
     }
   ],
@@ -240,7 +341,13 @@
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "round": 1,
         "question": "Q?",
-        "chips": [{ "label": "@@L81@@", "value": "x", "action": "confirm" }],
+        "chips": [
+          {
+            "label": "@@L81@@",
+            "value": "x",
+            "action": "confirm"
+          }
+        ],
         "partialCount": 0,
         "status": "open"
       }
@@ -253,7 +360,13 @@
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "round": 1,
         "question": "Q?",
-        "chips": [{ "label": "x", "value": "x", "action": "delete_entity" }],
+        "chips": [
+          {
+            "label": "x",
+            "value": "x",
+            "action": "delete_entity"
+          }
+        ],
         "partialCount": 0,
         "status": "open"
       }
@@ -265,7 +378,10 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
-        "answer": { "type": "text", "text": "@@T2001@@" }
+        "answer": {
+          "type": "text",
+          "text": "@@T2001@@"
+        }
       }
     },
     {
@@ -275,7 +391,12 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
-        "answer": { "type": "form", "values": { "blob": "@@B8193@@" } }
+        "answer": {
+          "type": "form",
+          "values": {
+            "blob": "@@B8193@@"
+          }
+        }
       }
     },
     {
@@ -285,7 +406,9 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-8988-a776-655443322110",
-        "answer": { "type": "voice" }
+        "answer": {
+          "type": "voice"
+        }
       }
     },
     {
@@ -294,7 +417,9 @@
         "kind": "capture_answer",
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
-        "answer": { "type": "skip" }
+        "answer": {
+          "type": "skip"
+        }
       }
     },
     {
@@ -305,7 +430,13 @@
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "round": 1,
         "question": "Q?",
-        "chips": [{ "label": "x", "value": "@@V501@@", "action": "confirm" }],
+        "chips": [
+          {
+            "label": "x",
+            "value": "@@V501@@",
+            "action": "confirm"
+          }
+        ],
         "partialCount": 0,
         "status": "open"
       }
@@ -319,7 +450,12 @@
         "round": 1,
         "question": "Q?",
         "chips": [
-          { "label": "x", "value": "x", "action": "confirm", "icon": "@@I65@@" }
+          {
+            "label": "x",
+            "value": "x",
+            "action": "confirm",
+            "icon": "@@I65@@"
+          }
         ],
         "partialCount": 0,
         "status": "open"
@@ -375,7 +511,13 @@
         "question": "Q?",
         "chips": [],
         "formSpec": {
-          "fields": [{ "key": "@@K201@@", "label": "x", "type": "text" }]
+          "fields": [
+            {
+              "key": "@@K201@@",
+              "label": "x",
+              "type": "text"
+            }
+          ]
         },
         "partialCount": 0,
         "status": "open"
@@ -391,7 +533,13 @@
         "question": "Q?",
         "chips": [],
         "formSpec": {
-          "fields": [{ "key": "k", "label": "@@FL201@@", "type": "text" }]
+          "fields": [
+            {
+              "key": "k",
+              "label": "@@FL201@@",
+              "type": "text"
+            }
+          ]
         },
         "partialCount": 0,
         "status": "open"
@@ -407,7 +555,13 @@
         "question": "Q?",
         "chips": [],
         "formSpec": {
-          "fields": [{ "key": "k", "label": "x", "type": "@@Y65@@" }]
+          "fields": [
+            {
+              "key": "k",
+              "label": "x",
+              "type": "@@Y65@@"
+            }
+          ]
         },
         "partialCount": 0,
         "status": "open"
@@ -459,7 +613,9 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-4988-c776-655443322110",
-        "answer": { "type": "skip" }
+        "answer": {
+          "type": "skip"
+        }
       }
     },
     {
@@ -469,7 +625,12 @@
         "v": 1,
         "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
         "questionMessageId": "2f3e4d5c-6b7a-4988-a776-655443322110",
-        "answer": { "type": "form", "values": { "a": "@@EA4093@@" } }
+        "answer": {
+          "type": "form",
+          "values": {
+            "a": "@@EA4093@@"
+          }
+        }
       }
     },
     {
@@ -531,6 +692,144 @@
         "partialCount": 0,
         "status": "open"
       }
+    },
+    {
+      "name": "result row missing dismissed",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result row why UNDEFINED instead of null — nullable is not optional",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result title over 300 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "@@TI301@@",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result why over 200 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": "@@W201@@",
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "truncated": false,
+        "notice": null
+      }
+    },
+    {
+      "name": "result notice over 500 chars",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [],
+        "truncated": false,
+        "notice": "@@N501@@"
+      }
+    },
+    {
+      "name": "result with 41 rows — over the row bound",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": "@@ROWS41@@",
+        "truncated": true,
+        "notice": null
+      }
+    },
+    {
+      "name": "result missing truncated — the bound must be stated, never assumed",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 1,
+        "rows": [
+          {
+            "tempId": "t1",
+            "profileSlug": "task",
+            "title": "x",
+            "why": null,
+            "updatesExisting": false,
+            "dismissed": false
+          }
+        ],
+        "notice": null
+      }
+    },
+    {
+      "name": "result round zero",
+      "part": {
+        "kind": "capture_result",
+        "v": 1,
+        "sessionId": "5b0f6c1e-4a4e-4f55-9f3a-0d1c2b3a4e5f",
+        "round": 0,
+        "rows": [],
+        "truncated": false,
+        "notice": null
+      }
     }
   ],
   "placeholders": {
@@ -548,6 +847,9 @@
     "@@CHIPS9@@": "9 × { label: 'c', value: 'c', action: 'confirm' }",
     "@@L81@@": "81 × 'l'",
     "@@T2001@@": "2001 × 't'",
-    "@@B8193@@": "8193 × 'b' (serialized form values then exceed 8192 bytes)"
+    "@@B8193@@": "8193 × 'b' (serialized form values then exceed 8192 bytes)",
+    "@@TI301@@": "301 × 't'",
+    "@@N501@@": "501 × 'n'",
+    "@@ROWS41@@": "41 × a minimal valid result row"
   }
 }

@@ -3664,6 +3664,14 @@ export type Tool = typeof tools.$inferSelect;
  */
 /** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * Mirrors @synap/playbooks `PlaybookKind` / `PlaybookIntakeStyle`, re-declared
+ * here (not imported) for the same reason `PlaybookExecutorRef` is: this
+ * package stays dependency-free. Both must stay in lock-step with the unions
+ * there, which carry the build-stopping coverage floors.
+ */
+export type PlaybookKind = "interrogation" | "make" | "review";
+export type PlaybookIntakeStyle = "form" | "adaptive" | "auto";
 declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "playbooks";
 	schema: undefined;
@@ -3946,7 +3954,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "archived" | "paused" | "draft";
+			data: "draft" | "active" | "paused" | "archived";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -3968,7 +3976,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "project" | "session";
+			data: "session" | "project";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -3983,7 +3991,51 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "project" | "session";
+			$type: "session" | "project";
+		}>;
+		kind: import("drizzle-orm/pg-core").PgColumn<{
+			name: "kind";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: PlaybookKind;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: PlaybookKind;
+		}>;
+		intakeStyle: import("drizzle-orm/pg-core").PgColumn<{
+			name: "intake_style";
+			tableName: "playbooks";
+			dataType: "string";
+			columnType: "PgText";
+			data: PlaybookIntakeStyle;
+			driverParam: string;
+			notNull: false;
+			hasDefault: false;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: [
+				string,
+				...string[]
+			];
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {
+			$type: PlaybookIntakeStyle;
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -5202,6 +5254,19 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+export interface PersistedCaptureResult {
+	messageId: string;
+	channelId: string;
+	round: number;
+}
+export interface DismissCaptureResultRowResult {
+	messageId: string;
+	round: number;
+	tempId: string;
+	dismissed: boolean;
+	/** False when the row was already in the requested state (idempotent no-op). */
+	changed: boolean;
+}
 /**
  * View Query Types
  *
@@ -5805,6 +5870,16 @@ export interface CompositeCreateSessionOp {
 	projectId?: string;
 	/** Declared deliverables — sanitized by the session door at apply time. */
 	expectedOutputs?: Array<Record<string, unknown>>;
+	/**
+	 * The session's acceptance criteria, PROPOSED by the plan for the person to
+	 * validate or rewrite. A plan is the architecture its author is committing
+	 * to, so it is exactly where "what would make this done" is known; carrying
+	 * them here saves the second `update_session` call the plan door exists to
+	 * remove. Shape only at this layer — the create door runs the real
+	 * `sessionCriteriaSchema`, so a malformed list is refused there rather than
+	 * reaching a person as a broken contract.
+	 */
+	criteria?: Array<Record<string, unknown>>;
 }
 export interface CompositeCreateDocumentOp {
 	op: "create_document";
@@ -7835,6 +7910,27 @@ export interface SynthesisSource {
 	title: string;
 }
 /**
+ * What the context budget left OUT — and, crucially, WHICH items.
+ *
+ * `omitted`/`total` alone told a caller only that its answer was partial, with
+ * no door to complete it: the agent read "16 of 20 items are not shown" and had
+ * no cursor, no id and no follow-up call. `omittedSources` closes that — every
+ * dropped item's `{substrate, id, title}`, the SAME shape `sources` already
+ * carries, so the agent completes the answer with a tool it already has
+ * (`synap_get_entity` / `synap_get_entities` on those ids). No cursor and no
+ * server-side paging state: the ids were already computed before the budget
+ * check ran, so naming them costs nothing new.
+ *
+ * `omittedSources.length` can be SHORTER than `omitted`: an item with no `id`
+ * is counted as dropped but cannot be offered as a fetchable source — the same
+ * rule `sources` already follows (it admits only id-bearing rows).
+ */
+export interface SynthesisTruncation {
+	omitted: number;
+	total: number;
+	omittedSources: SynthesisSource[];
+}
+/**
  * @synap/playbooks — Playbooks & Capability Substrate contracts
  *
  * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
@@ -7914,6 +8010,8 @@ export type GrantableKind = "tool" | "skill" | "command";
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
  */
 export type ExecMode = "auto" | "propose" | "dry-run";
+type PlaybookKind$1 = "interrogation" | "make" | "review";
+type PlaybookIntakeStyle$1 = "form" | "adaptive" | "auto";
 declare const BLOCKED_REASONS: readonly [
 	"credential",
 	"permission",
@@ -9424,6 +9522,57 @@ export interface CapabilityReconcileReport {
 	 *  param the reconcile has no value for) — reported, never forced. */
 	conflicts: CapabilityReconcileEntry[];
 }
+/**
+ * ARGUMENT VALIDATION AT THE PROPOSE MOMENT — check the call against the verb's
+ * DECLARED schema before a human is asked to approve it.
+ *
+ * THE DEFECT. `entity.delete` was called with `{"entityIds":[…]}` — plural, a
+ * field the verb does not declare — and the gate filed proposal
+ * `81417965-cf1d-456c-8149-d747ba9115fb` with no complaint. Nothing between the
+ * caller and the review queue reads the arguments: the gate reasons about WHO
+ * and WHAT KIND, never about the payload, and the handler's own
+ * `entityDeleteParams.parse(params)` runs only on APPROVAL. So the reviewer
+ * spends their approval on a call whose validity is unknown, and learns it was
+ * malformed after saying yes. (Parameter Mismatch is the single largest
+ * tool-failure class at 42%.)
+ *
+ * THE SCHEMA IS NOT A NEW TABLE. Both sources here are the ones that already
+ * exist and are already asserted to agree with the catalog:
+ *   - builtin verbs → `BUILTIN_VERB_PARAM_SCHEMAS` (`builtin-verbs.ts`), the
+ *     handler's OWN Zod schema and the SSOT the `catalog-schema-coherence`
+ *     tripwire holds the advertised catalog against. Validating against the
+ *     HANDLER (not the catalog projection) is deliberate: where the two are
+ *     known to disagree today — `market.install` accepts `projectId`/
+ *     `projectName` without advertising them, which is why that tripwire is
+ *     RED — validating against the catalog would REJECT a call the handler
+ *     accepts. A false rejection is worse than the miss it fixes.
+ *   - every other verb → `skills.parameters`, which IS the catalog's
+ *     `ToolVerbCatalogEntry.argsSchema` (`deriveToolVerbs` copies it verbatim).
+ *
+ * ABSENT SCHEMA MEANS "CANNOT VALIDATE", NEVER "NO ARGUMENTS ALLOWED". A verb
+ * that declares nothing — and a declared shape this module does not understand
+ * — returns `unvalidated`, and the call proceeds exactly as it does today.
+ * Honest-unknown; never a false rejection.
+ *
+ * UNKNOWN KEYS ARE REPORTED, NOT REJECTED. `missing` and `wrongType` mean the
+ * call CANNOT work. An extra key is usually harmless (a Zod object strips it;
+ * a declarative verb ignores it), and the two sources are known to be narrower
+ * than reality in at least one live case, so rejecting on `unknown` alone would
+ * refuse calls that work today. It rides in the repair payload so the caller
+ * can still see and fix it.
+ */
+/** What the caller must change, machine-readable. */
+export interface ParameterRepair {
+	/** Declared, required, and absent from the call. */
+	missing: string[];
+	/** Present but the wrong type — `field → { expected, received }`. */
+	wrongType: Record<string, {
+		expected: string;
+		received: string;
+	}>;
+	/** Passed but not declared. Informational — never a rejection on its own. */
+	unknown: string[];
+}
 export type ExecuteCapabilityResult = {
 	kind: "run";
 	skillId: string;
@@ -9478,6 +9627,14 @@ export type ExecuteCapabilityResult = {
 	 * approval `deny` above, so it says `connect`, never `enable`.
 	 */
 	enable?: CapabilityNextAction;
+	/**
+	 * ARGUMENT moment: the call did not match the verb's DECLARED schema, so
+	 * nothing was proposed and nothing ran. Structured on purpose — a generic
+	 * "invalid arguments" string is not repairable by the caller, and the
+	 * caller here is usually an LLM. Present ONLY on that refusal; see
+	 * `validate-verb-parameters.ts`.
+	 */
+	repair?: ParameterRepair;
 } | {
 	kind: "not_found";
 	message: string;
@@ -9808,6 +9965,9 @@ export interface SettingsUpdateProposalData {
 	text?: string;
 	posture?: "auto" | "propose";
 	targetId?: string;
+	agentName?: string | null;
+	currentLimit?: number;
+	pendingCount?: number;
 }
 export interface ApplyGovConfigChangeResult {
 	rows: number;
@@ -10569,6 +10729,18 @@ export interface PacketChildItem {
 	status: string;
 	statusLabel: string;
 }
+/**
+ * A session named by the detour stack — the one you pop back TO, or the detour
+ * this one was put down FOR. Identity only: never a bare id, because "come back
+ * to 9f3c-…" is the unreadable row this projection exists to prevent.
+ */
+export interface PacketResumeSession {
+	sessionId: string;
+	/** `resolveSessionTitle` — the same rule every other session name uses. */
+	title: string;
+	status: string;
+	statusLabel: string;
+}
 /** A capture clarification question still waiting for the user's answer. */
 export interface PacketQuestionItem {
 	/** The question message id. */
@@ -10679,6 +10851,45 @@ export interface ContinuationPacket {
 	parent: {
 		status: "ok";
 		session: PacketChildItem | null;
+	} | {
+		status: "unavailable";
+		reason: string;
+	};
+	/**
+	 * THE POP — the two questions a returning reader must answer without a
+	 * second call: *which session am I coming back to*, and *what was I about to
+	 * do there*. Both directions of the detour stack, at most one populated:
+	 *
+	 *  - `returnTo` — THIS session is a detour. It names the parent (title, not
+	 *    an id) and, when the push recorded one, the line the parent was about to
+	 *    act on. `intent` is GATED on the parent's note naming THIS child: the
+	 *    note is one slot and the last push wins, so a parent that has since
+	 *    pushed a SECOND detour carries a line about that one, and restating it
+	 *    here would be a confidently wrong sentence. `returnTo: null` means no
+	 *    parent — the overwhelmingly normal case.
+	 *  - `suspended` — THIS session is the parent: it was put down for a detour.
+	 *    `intent` is what it was about to do; `child` is that detour with its
+	 *    CURRENT status, so a surface can say "the detour finished, pick this back
+	 *    up" without a second read. `child: null` means the named detour no
+	 *    longer resolves (deleted, or not this user's) — a true state, not a
+	 *    failure. `suspended: null` means this session was never put down.
+	 *
+	 * Both read `focus_sessions.metadata.suspended`, written by
+	 * `recordSessionSpawn`, through the one narrowing door
+	 * (`readSuspendedNote`). Absence is normal everywhere here and NO consumer
+	 * may treat it as an error; only a failed query is `unavailable`.
+	 */
+	resume: {
+		status: "ok";
+		returnTo: (PacketResumeSession & {
+			intent?: string;
+			suspendedAt?: string;
+		}) | null;
+		suspended: {
+			intent: string;
+			at: string | null;
+			child: PacketResumeSession | null;
+		} | null;
 	} | {
 		status: "unavailable";
 		reason: string;
@@ -12133,115 +12344,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[]>;
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
-			} & IntakeEcho) | ({
-				extraction: {
-					kind: string;
-					extractor: string;
-					metadata?: Record<string, unknown>;
-					warnings?: string[];
-					text?: string;
-					textTruncated?: boolean;
-					degraded?: boolean;
-					degradedReason?: string;
-				};
-				degradedReason?: string | undefined;
-				degraded: boolean;
-				dedupSkipped?: true | undefined;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
-				followUpMessageId: string | null;
-				channelId: string | null;
-				architectureSuggestions?: {
-					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
-					title: string;
-					reason?: string;
-					confidence?: number;
-					payload?: Record<string, unknown>;
-				}[] | undefined;
-				placement: CapturePlacement;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
-				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
-				proposals: {
-					tempId: string;
-					profileSlug: string;
-					title: string;
-					description?: string;
-					properties?: Record<string, unknown>;
-					confidence: number;
-					facets?: Array<{
-						profileSlug: string;
-						status?: string;
-						properties?: Record<string, unknown>;
-						contextTempId?: string;
-					}>;
-				}[];
-				relations: {
-					sourceTempId: string;
-					targetTempId: string;
-					relationType: string;
-				}[];
-				followUp: string | StructuredFollowUp | null;
-				targetWorkspaceId: string | null;
-				targetWorkspaceName: string | null;
-				targetWorkspaceReason: string | null;
-				targetWorkspaceConfidence: number | null;
-			} & IntakeEcho) | ({
-				extraction?: undefined;
-				degradedReason?: string | undefined;
-				degraded: boolean;
-				dedupSkipped?: true | undefined;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
-				followUpMessageId: string | null;
-				channelId: string | null;
-				architectureSuggestions?: {
-					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
-					title: string;
-					reason?: string;
-					confidence?: number;
-					payload?: Record<string, unknown>;
-				}[] | undefined;
-				placement: CapturePlacement;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
-				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
-				proposals: {
-					tempId: string;
-					profileSlug: string;
-					title: string;
-					description?: string;
-					properties?: Record<string, unknown>;
-					confidence: number;
-					facets?: Array<{
-						profileSlug: string;
-						status?: string;
-						properties?: Record<string, unknown>;
-						contextTempId?: string;
-					}>;
-				}[];
-				relations: {
-					sourceTempId: string;
-					targetTempId: string;
-					relationType: string;
-				}[];
-				followUp: string | StructuredFollowUp | null;
-				targetWorkspaceId: string | null;
-				targetWorkspaceName: string | null;
-				targetWorkspaceReason: string | null;
-				targetWorkspaceConfidence: number | null;
 			} & IntakeEcho) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
@@ -12319,6 +12421,139 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					profileSlug: string;
 					score: number;
 				}>>;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
+				placement: CapturePlacement;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | StructuredFollowUp | null;
+				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
+			} | {
+				captureResult: PersistedCaptureResult | null;
+				extraction: {
+					kind: string;
+					extractor: string;
+					metadata?: Record<string, unknown>;
+					warnings?: string[];
+					text?: string;
+					textTruncated?: boolean;
+					degraded?: boolean;
+					degradedReason?: string;
+				};
+				degradedReason?: string | undefined;
+				degraded: boolean;
+				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				followUpMessageId: string | null;
+				channelId: string | null;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
+				placement: CapturePlacement;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | StructuredFollowUp | null;
+				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
+			} | {
+				captureResult: PersistedCaptureResult | null;
+				extraction?: undefined;
+				degradedReason?: string | undefined;
+				degraded: boolean;
+				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				followUpMessageId: string | null;
+				channelId: string | null;
 				architectureSuggestions?: {
 					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
 					title: string;
@@ -12485,115 +12720,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[]>;
 				degraded: true;
 				degradedReason: (string & {}) | ("is_auth_error" | "is_invalid_response" | "is_empty_result");
-			} & IntakeEcho) | ({
-				extraction: {
-					kind: string;
-					extractor: string;
-					metadata?: Record<string, unknown>;
-					warnings?: string[];
-					text?: string;
-					textTruncated?: boolean;
-					degraded?: boolean;
-					degradedReason?: string;
-				};
-				degradedReason?: string | undefined;
-				degraded: boolean;
-				dedupSkipped?: true | undefined;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
-				followUpMessageId: string | null;
-				channelId: string | null;
-				architectureSuggestions?: {
-					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
-					title: string;
-					reason?: string;
-					confidence?: number;
-					payload?: Record<string, unknown>;
-				}[] | undefined;
-				placement: CapturePlacement;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
-				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
-				proposals: {
-					tempId: string;
-					profileSlug: string;
-					title: string;
-					description?: string;
-					properties?: Record<string, unknown>;
-					confidence: number;
-					facets?: Array<{
-						profileSlug: string;
-						status?: string;
-						properties?: Record<string, unknown>;
-						contextTempId?: string;
-					}>;
-				}[];
-				relations: {
-					sourceTempId: string;
-					targetTempId: string;
-					relationType: string;
-				}[];
-				followUp: string | StructuredFollowUp | null;
-				targetWorkspaceId: string | null;
-				targetWorkspaceName: string | null;
-				targetWorkspaceReason: string | null;
-				targetWorkspaceConfidence: number | null;
-			} & IntakeEcho) | ({
-				extraction?: undefined;
-				degradedReason?: string | undefined;
-				degraded: boolean;
-				dedupSkipped?: true | undefined;
-				dedupCandidates: Record<string, {
-					entityId: string;
-					title: string;
-					profileSlug: string;
-					score: number;
-				}[]>;
-				followUpMessageId: string | null;
-				channelId: string | null;
-				architectureSuggestions?: {
-					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
-					title: string;
-					reason?: string;
-					confidence?: number;
-					payload?: Record<string, unknown>;
-				}[] | undefined;
-				placement: CapturePlacement;
-				targetProjectId: string | null;
-				targetProjectReason: string | null;
-				targetProjectConfidence: number | null;
-				formSpec: DynamicFormSpec | null;
-				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
-				proposals: {
-					tempId: string;
-					profileSlug: string;
-					title: string;
-					description?: string;
-					properties?: Record<string, unknown>;
-					confidence: number;
-					facets?: Array<{
-						profileSlug: string;
-						status?: string;
-						properties?: Record<string, unknown>;
-						contextTempId?: string;
-					}>;
-				}[];
-				relations: {
-					sourceTempId: string;
-					targetTempId: string;
-					relationType: string;
-				}[];
-				followUp: string | StructuredFollowUp | null;
-				targetWorkspaceId: string | null;
-				targetWorkspaceName: string | null;
-				targetWorkspaceReason: string | null;
-				targetWorkspaceConfidence: number | null;
 			} & IntakeEcho) | {
 				followUpMessageId: string | null;
 				channelId: string | null;
@@ -12719,7 +12845,149 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					originalRetainedUntilStructured?: true;
 					errors?: string[];
 				};
+			} | {
+				captureResult: PersistedCaptureResult | null;
+				extraction: {
+					kind: string;
+					extractor: string;
+					metadata?: Record<string, unknown>;
+					warnings?: string[];
+					text?: string;
+					textTruncated?: boolean;
+					degraded?: boolean;
+					degradedReason?: string;
+				};
+				degradedReason?: string | undefined;
+				degraded: boolean;
+				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				followUpMessageId: string | null;
+				channelId: string | null;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
+				placement: CapturePlacement;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | StructuredFollowUp | null;
+				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
+			} | {
+				captureResult: PersistedCaptureResult | null;
+				extraction?: undefined;
+				degradedReason?: string | undefined;
+				degraded: boolean;
+				dedupSkipped?: true | undefined;
+				dedupCandidates: Record<string, {
+					entityId: string;
+					title: string;
+					profileSlug: string;
+					score: number;
+				}[]>;
+				followUpMessageId: string | null;
+				channelId: string | null;
+				architectureSuggestions?: {
+					kind?: "workspace_template" | "new_workspace" | "project" | "view" | "role" | "playbook";
+					title: string;
+					reason?: string;
+					confidence?: number;
+					payload?: Record<string, unknown>;
+				}[] | undefined;
+				placement: CapturePlacement;
+				targetProjectId: string | null;
+				targetProjectReason: string | null;
+				targetProjectConfidence: number | null;
+				formSpec: DynamicFormSpec | null;
+				targetWorkspaceDecision?: WorkspaceDecisionRecord | undefined;
+				proposals: {
+					tempId: string;
+					profileSlug: string;
+					title: string;
+					description?: string;
+					properties?: Record<string, unknown>;
+					confidence: number;
+					facets?: Array<{
+						profileSlug: string;
+						status?: string;
+						properties?: Record<string, unknown>;
+						contextTempId?: string;
+					}>;
+				}[];
+				relations: {
+					sourceTempId: string;
+					targetTempId: string;
+					relationType: string;
+				}[];
+				followUp: string | StructuredFollowUp | null;
+				targetWorkspaceId: string | null;
+				targetWorkspaceName: string | null;
+				targetWorkspaceReason: string | null;
+				targetWorkspaceConfidence: number | null;
+				sessionId: string | null;
+				intake: {
+					status: "recorded" | "partial" | "failed";
+					sessionSource: "provided" | "minted" | "failed";
+					requestedSessionIgnored: boolean;
+					sourceDocumentIds: string[];
+					degradedSourceKept?: boolean;
+					sourcesKept?: boolean;
+					originalRetainedUntilStructured?: true;
+					errors?: string[];
+				};
 			};
+			meta: object;
+		}>;
+		dismissResultRow: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				sessionId: string;
+				tempId: string;
+				dismissed: boolean;
+			};
+			output: DismissCaptureResultRowResult;
 			meta: object;
 		}>;
 		analyzeBulkMapping: import("@trpc/server").TRPCMutationProcedure<{
@@ -12786,7 +13054,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						name: string;
 					}[] | undefined;
 				} | null | undefined;
-				workspaceChoice?: "removed" | "changed" | "accepted" | "ignored" | undefined;
+				workspaceChoice?: "removed" | "ignored" | "changed" | "accepted" | undefined;
 				aiProjectId?: string | null | undefined;
 				aiProjectConfidence?: number | null | undefined;
 				aiProjectReason?: string | null | undefined;
@@ -14518,7 +14786,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "chat" | "comment" | "system_notification" | "review";
+					messageCategory: "review" | "chat" | "comment" | "system_notification";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
@@ -15189,7 +15457,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentId: string | null;
 					role: "system" | "user" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "chat" | "comment" | "system_notification" | "review";
+					messageCategory: "review" | "chat" | "comment" | "system_notification";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					content: string;
@@ -15368,7 +15636,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "chat" | "comment" | "system_notification" | "review";
+					messageCategory: "review" | "chat" | "comment" | "system_notification";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
@@ -15403,7 +15671,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentId: string | null;
 					role: "system" | "user" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "chat" | "comment" | "system_notification" | "review";
+					messageCategory: "review" | "chat" | "comment" | "system_notification";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					content: string;
@@ -19336,10 +19604,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				degraded: DegradedTag[];
 				verdict: RetrievalVerdict;
 				failureClass: AiFailureClass | undefined;
-				truncated: {
-					omitted: number;
-					total: number;
-				} | undefined;
+				truncated: SynthesisTruncation | undefined;
 			};
 			meta: object;
 		}>;
@@ -20772,7 +21037,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds: never[];
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "reconciled" | "unchanged";
+				outcome: "unchanged" | "reconciled";
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
@@ -20783,7 +21048,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "reconciled" | "unchanged";
+				outcome: "unchanged" | "reconciled";
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
@@ -21595,7 +21860,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds: never[];
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "reconciled" | "unchanged";
+				outcome: "unchanged" | "reconciled";
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
@@ -21606,7 +21871,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "reconciled" | "unchanged";
+				outcome: "unchanged" | "reconciled";
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
@@ -30401,6 +30666,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				parentSessionId?: string | undefined;
 				blockedBySessionIds?: string[] | undefined;
 				templateId?: string | undefined;
+				params?: Record<string, unknown> | undefined;
 				expectedOutputs?: {
 					kind: string;
 					label: string;
@@ -30558,6 +30824,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				}[] | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
+				params?: Record<string, unknown> | undefined;
 			};
 			output: {
 				id: string;
@@ -31032,6 +31299,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor: PlaybookExecutorRef;
 				status: "active" | "archived" | "paused" | "draft";
 				scope: "project" | "session" | null;
+				kind: PlaybookKind | null;
+				intakeStyle: PlaybookIntakeStyle | null;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
 				metadata: unknown;
@@ -31065,6 +31334,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookExecutorRef;
 					status: "active" | "archived" | "paused" | "draft";
 					scope: "project" | "session" | null;
+					kind: PlaybookKind | null;
+					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 					metadata: unknown;
@@ -31101,6 +31372,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookExecutorRef;
 					status: "active" | "archived" | "paused" | "draft";
 					scope: "project" | "session" | null;
+					kind: PlaybookKind | null;
+					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 					metadata: unknown;
@@ -31124,6 +31397,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goalTemplate: string;
 				subjectProfileSlug: string | null;
 				params: unknown;
+				kind: PlaybookKind$1;
+				intakeStyle: PlaybookIntakeStyle$1;
 				executor: PlaybookExecutorRef;
 				score: number;
 				reason: string;
@@ -31146,6 +31421,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: unknown;
 				status: "active" | "archived" | "paused" | "draft";
 				createdBy: string;
+				kind: PlaybookKind | null;
 				scope: "project" | "session" | null;
 				executor: PlaybookExecutorRef;
 				goalTemplate: string;
@@ -31156,6 +31432,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stages: unknown;
 				criteria: unknown;
 				schedule: unknown;
+				intakeStyle: PlaybookIntakeStyle | null;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
 			};
@@ -31237,6 +31514,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "archived" | "paused" | "draft" | undefined;
 				scope?: "project" | "session" | undefined;
+				kind?: "interrogation" | "make" | "review" | undefined;
+				intakeStyle?: "form" | "adaptive" | "auto" | undefined;
 				contextSkill?: {
 					body: string;
 					name?: string | undefined;
@@ -31254,6 +31533,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
+					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31264,6 +31544,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
+					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};
@@ -31347,6 +31628,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "archived" | "paused" | "draft" | undefined;
 				scope?: "project" | "session" | undefined;
+				kind?: "interrogation" | "make" | "review" | undefined;
+				intakeStyle?: "form" | "adaptive" | "auto" | undefined;
 			};
 			output: {
 				playbook: Playbook | null;
@@ -31365,6 +31648,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
+					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31375,6 +31659,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
+					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};
@@ -31481,6 +31766,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
+					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31491,6 +31777,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
+					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};
@@ -31511,6 +31798,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				subjectId?: string | undefined;
 				source?: string | undefined;
 				reasoning?: string | undefined;
+				onMissingRequired?: "refuse" | "owe" | undefined;
 			};
 			output: {
 				run: null;
@@ -31770,6 +32058,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId?: string | undefined;
 					projectId?: string | undefined;
 					subjectEntityId?: string | undefined;
+					sessionId?: string | undefined;
 				} | undefined;
 				status?: "running" | "completed" | "failed" | "cancelled" | "skipped" | "proposed" | undefined;
 				limit?: number | undefined;
