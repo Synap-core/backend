@@ -92,6 +92,18 @@ vi.mock(
   }
 );
 
+// The handler now applies a MEMBERSHIP FLOOR before using `workspaceId` as a
+// lens (`listCapabilities` treats a non-null workspaceId as a lens, never an
+// authorization, so the caller must supply the floor). That is a real
+// `workspace_members` read, which this DB-free unit test cannot serve — it is
+// about the query/fold behaviour, not about authorization. PARTIAL mock so
+// everything else in `_shared` stays real.
+vi.mock("../../hub-protocol/rest/_shared.js", async (orig) => {
+  const actual =
+    await orig<typeof import("../../hub-protocol/rest/_shared.js")>();
+  return { ...actual, verifyWorkspaceAccess: async () => true };
+});
+
 const { capabilityHandlers } = await import("./capability.js");
 
 async function listCaps(

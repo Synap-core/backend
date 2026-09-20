@@ -275,6 +275,80 @@ describe("persistCaptureResult — the rows reach the room and read back", () =>
       ["t3", false],
     ]);
   });
+
+  it("ROUND INCREASES across re-structures, so a superseded verdict never ties with the live one", async () => {
+    const sessionId = await seedSession();
+    const runs = [
+      PROPOSALS,
+      [...PROPOSALS, { tempId: "t3", profileSlug: "note", title: "Sushi" }],
+      [{ tempId: "t9", profileSlug: "task", title: "Book a table" }],
+    ];
+    const rounds: number[] = [];
+    for (const proposals of runs) {
+      const { messageId } = await persistCaptureResult({
+        sessionId,
+        userId: USER,
+        proposals,
+        dedupCandidates: {},
+        dedupSkipped: false,
+      });
+      rounds.push((await resultPartOf(messageId)).round);
+    }
+    expect(rounds).toEqual([1, 2, 3]);
+
+    // The reader's rule — highest round wins — now picks the LIVE verdict.
+    const stored = await q<{ round: number; rows: string }>(
+      `select (metadata -> 'capturePart' ->> 'round')::int as round,
+              metadata -> 'capturePart' ->> 'rows' as rows
+         from messages
+        where metadata -> 'capturePart' ->> 'kind' = 'capture_result'
+        order by round desc limit 1`
+    );
+    expect(stored[0]!.round).toBe(3);
+    expect(stored[0]!.rows).toContain("Book a table");
+  });
+
+  it("a re-structure with an UNCHANGED verdict does not burn a round", async () => {
+    const sessionId = await seedSession();
+    const first = await persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: PROPOSALS,
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+    const same = await persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: PROPOSALS,
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+    expect(same).toEqual(first);
+    expect(same.round).toBe(1);
+    expect(await countResults()).toBe(1);
+  });
+
+  it("an ANSWERED follow-up's result still lands on the question's round", async () => {
+    const sessionId = await seedSession();
+    const asked = await persistCaptureQuestion({
+      sessionId,
+      userId: USER,
+      followUp: "Which Alice?",
+      partialCount: 1,
+      refine: { text: "Lunch with Alice" },
+    });
+    expect(asked.status === "persisted" && asked.round).toBe(1);
+    // The re-run after the answer is the FIRST result this room ever gets.
+    const { messageId } = await persistCaptureResult({
+      sessionId,
+      userId: USER,
+      proposals: PROPOSALS,
+      dedupCandidates: {},
+      dedupSkipped: false,
+    });
+    expect((await resultPartOf(messageId)).round).toBe(1);
+  });
 });
 
 describe("dismissResultRow — one fact, one home", () => {

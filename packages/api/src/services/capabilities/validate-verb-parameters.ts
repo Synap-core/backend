@@ -52,8 +52,20 @@ export interface ParameterRepair {
 }
 
 export type VerbParameterCheck =
-  /** No schema this module can read → proceed exactly as before. */
-  | { status: "unvalidated"; reason: "no_declared_schema" }
+  /**
+   * No schema this module can read → proceed exactly as before.
+   *
+   * TWO DISTINCT REASONS, deliberately not collapsed:
+   *  - `no_declared_schema` — the verb declares nothing. Nothing to check.
+   *  - `unreadable_dialect` — a schema EXISTS but is in a form this module does
+   *    not parse (today: JSON Schema, where we read the shorthand type map).
+   *    Folding it into the first would report "this verb has no schema" about a
+   *    verb that has one, and that lie would later read as "nothing to fix".
+   */
+  | {
+      status: "unvalidated";
+      reason: "no_declared_schema" | "unreadable_dialect";
+    }
   /** Checked and usable. `unknown` may still be non-empty. */
   | { status: "ok"; unknown: string[] }
   /** Checked and NOT usable — the call cannot succeed as written. */
@@ -82,10 +94,51 @@ const KNOWN_DECLARED_TYPES = new Set([
   "array",
 ]);
 
+/**
+ * Is this bag JSON Schema rather than the shorthand type map?
+ *
+ * DISCRIMINATE ON `properties`, NOT ON `type`. A type map may legitimately
+ * declare a FIELD named `type` — `exa_search` does (`"type": "string?"`) — so
+ * keying on `type` alone would misread a real type map as a schema. Only the
+ * pairing of `type: "object"` with a `properties` OBJECT identifies the
+ * dialect.
+ */
+function looksLikeJsonSchema(declared: Record<string, unknown>): boolean {
+  return (
+    declared.type === "object" &&
+    typeof declared.properties === "object" &&
+    declared.properties !== null &&
+    !Array.isArray(declared.properties)
+  );
+}
+
 function checkTypeMap(
   declared: Record<string, unknown>,
   params: Record<string, unknown>
 ): VerbParameterCheck {
+  // WRONG DIALECT → `unvalidated`, never a rejection.
+  //
+  // Read as a type map, a JSON-Schema bag `{type:"object", properties, required}`
+  // reports the KEY `type` (whose value "object" is a known type name, with no
+  // `?` suffix) as a MISSING REQUIRED ARGUMENT, and dumps every real argument
+  // into `unknown`. The repair text is then nonsense and the verb becomes
+  // permanently uncallable through the governed path.
+  //
+  // This is not hypothetical: `find-intent` advertises `argsSchema` to agents
+  // as "the verb's declared arg schema", and that column holds JSON Schema for
+  // agent-authored declarative verbs (`create-declarative-verb.ts` types
+  // `parameters?: unknown` and copies it verbatim — no dialect enforcement).
+  // So the two dialects already coexist, and an agent obeying what we
+  // advertised would have been refused for it.
+  //
+  // Shipped CP templates are clean today (63 type-map, 15 none, 0 JSON-Schema),
+  // which is why this was latent rather than live. Honouring the module's own
+  // rule — "a false rejection is worse than the miss it fixes" — we decline to
+  // judge instead of guessing.
+  if (looksLikeJsonSchema(declared)) {
+    return { status: "unvalidated", reason: "unreadable_dialect" };
+  }
+
   const repair: ParameterRepair = { missing: [], wrongType: {}, unknown: [] };
   let checkedSomething = false;
 

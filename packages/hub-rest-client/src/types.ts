@@ -789,7 +789,17 @@ export interface KnowledgeAnswerResponse {
   truncated?: {
     omitted: number;
     total: number;
-    omittedSources: KnowledgeAnswerSource[];
+    /**
+     * OPTIONAL for VERSION SKEW, not because the pod may omit it.
+     *
+     * A current pod always sends this. But the IS and the CLI talk to pods
+     * they do not deploy in lockstep, and a pod running the build before this
+     * field existed returns `truncated` WITHOUT it. Typing it as required made
+     * every consumer's `truncated.omittedSources.length` a crash against an
+     * older pod — turning a graceful degradation into an outage. Read it as
+     * "the ids, when the pod is new enough to send them".
+     */
+    omittedSources?: KnowledgeAnswerSource[];
   };
   error?: string;
   failure?: KnowledgeAnswerFailure;

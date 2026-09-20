@@ -226,3 +226,60 @@ describe("guard: executeCapability validates before it proposes", () => {
  *   path, but the type-map dialect is flat by construction, so nested
  *   validation exists only for builtins.
  */
+
+describe("JSON-Schema dialect — declines to judge, never false-rejects", () => {
+  // THE REGRESSION: read as a type map, `{type:"object", properties, required}`
+  // reports the KEY `type` as a missing required argument (its value "object"
+  // is a known type name with no `?` suffix) and dumps every real argument into
+  // `unknown`. The verb becomes permanently uncallable through the governed
+  // path with a nonsense repair message.
+  //
+  // It is reachable, not theoretical: `find-intent` advertises `argsSchema` to
+  // agents as the verb's declared schema, and that column holds JSON Schema for
+  // agent-authored declarative verbs.
+  const jsonSchema = {
+    type: "object",
+    properties: { to: { type: "string" }, body: { type: "string" } },
+    required: ["to"],
+  };
+
+  it("a JSON-Schema bag is `unreadable_dialect`, NOT `invalid`", () => {
+    const out = checkVerbParameters(
+      { kind: "declarative", name: "v", parameters: jsonSchema },
+      { to: "a@b.c" }
+    );
+    expect(out).toEqual({
+      status: "unvalidated",
+      reason: "unreadable_dialect",
+    });
+  });
+
+  it("it is NOT reported as `no_declared_schema` — a schema DOES exist", () => {
+    // Collapsing the two reasons would claim this verb declares nothing, which
+    // later reads as "nothing to fix".
+    const out = checkVerbParameters(
+      { kind: "declarative", name: "v", parameters: jsonSchema },
+      {}
+    );
+    expect(out).toMatchObject({ reason: "unreadable_dialect" });
+  });
+
+  it("DISCRIMINATES ON `properties`, not on `type` — a real type-map field named `type` still validates", () => {
+    // `exa_search` genuinely declares a field called `type` (`"type": "string?"`).
+    // Keying the dialect check on `type` alone would misread it as a schema and
+    // silently stop validating a verb we CAN check.
+    const exaLike = { query: "string", type: "string?", numResults: "number?" };
+    expect(
+      checkVerbParameters(
+        { kind: "code", name: "exa_search", parameters: exaLike },
+        { query: "hi" }
+      )
+    ).toEqual({ status: "ok", unknown: [] });
+    expect(
+      checkVerbParameters(
+        { kind: "code", name: "exa_search", parameters: exaLike },
+        { type: 7, query: "hi" }
+      )
+    ).toMatchObject({ status: "invalid" });
+  });
+});

@@ -115,7 +115,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": null,
     raycast: null,
   },
-  synap_find: { "pod-mcp": "synap_find", "cp-connector": null, raycast: null },
+  synap_find: {
+    "pod-mcp": "synap_find",
+    "cp-connector": "pod__find",
+    raycast: null,
+  },
   synap_get_channel: {
     "pod-mcp": "synap_get_channel",
     "cp-connector": "pod__get_channel",

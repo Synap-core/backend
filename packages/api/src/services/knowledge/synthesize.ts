@@ -292,6 +292,28 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
   /** Procedural rows admitted so far — see `MAX_PROCEDURAL_ROWS`. */
   let proceduralAdmitted = 0;
 
+  // ONE drop site, so the count and the id list CANNOT diverge.
+  //
+  // This was three identical blocks, each carrying a comment claiming that a
+  // future drop site "cannot add to one and forget the other without the
+  // count/list mismatch showing up immediately". Nothing made that true — it
+  // asserted a guarantee the code did not provide, which is the one kind of
+  // comment worse than no comment. A shared closure makes the claim STRUCTURAL.
+  //
+  // `omittedSources.length < omitted` remains a legal state, deliberately: a
+  // dropped row with no id contributes to the count and cannot contribute an
+  // id. That is precisely why "the mismatch would show up" was never true, and
+  // why the list is a best-effort companion to the count, never a mirror of it.
+  const dropItem = (
+    substrate: SynthesisSource["substrate"],
+    id: string | undefined,
+    title: string
+  ): void => {
+    omitted++;
+    omittedTitles.push(title);
+    if (id) omittedSources.push({ substrate, id, title });
+  };
+
   for (const block of answers) {
     if (block.status !== "ok") continue;
     const isProcedural = block.substrate === "procedural";
@@ -325,32 +347,12 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
         isProcedural &&
         proceduralAdmitted >= MAX_PROCEDURAL_ROWS
       ) {
-        omitted++;
-        omittedTitles.push(String(title));
-        // Machine-readable twin of the line above — same site, so a future
-        // drop site cannot add to one and forget the other without the
-        // count/list mismatch showing up immediately.
-        if (id)
-          omittedSources.push({
-            substrate: block.substrate,
-            id,
-            title: String(title),
-          });
+        dropItem(block.substrate, id, String(title));
         continue;
       }
 
       if (!isProtectedFirst && contextLen >= budget) {
-        omitted++;
-        omittedTitles.push(String(title));
-        // Machine-readable twin of the line above — same site, so a future
-        // drop site cannot add to one and forget the other without the
-        // count/list mismatch showing up immediately.
-        if (id)
-          omittedSources.push({
-            substrate: block.substrate,
-            id,
-            title: String(title),
-          });
+        dropItem(block.substrate, id, String(title));
         continue;
       }
 
@@ -402,17 +404,7 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       }
       const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
       if (!isProtectedFirst && contextLen + entry.length > budget) {
-        omitted++;
-        omittedTitles.push(String(title));
-        // Machine-readable twin of the line above — same site, so a future
-        // drop site cannot add to one and forget the other without the
-        // count/list mismatch showing up immediately.
-        if (id)
-          omittedSources.push({
-            substrate: block.substrate,
-            id,
-            title: String(title),
-          });
+        dropItem(block.substrate, id, String(title));
         continue;
       }
       // Safety net for the rank-1 unconditional admit ONLY (see the comment on

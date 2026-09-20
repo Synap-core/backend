@@ -109,13 +109,13 @@ export function resultSummary(rowCount: number, truncated: boolean): string {
 }
 
 /**
- * How many clarification questions this room has asked. The result's `round`
+ * How many clarification questions this room has asked. A result's FIRST round
  * is derived from the SAME count `persistCaptureQuestion` uses (which adds one
  * because it is about to insert), so a result written after round-N's answer
  * carries round N. A run that never asked has no question and still needs a
  * round ≥ 1 by contract, hence the floor.
  */
-async function captureRound(channelId: string): Promise<number> {
+async function askedRound(channelId: string): Promise<number> {
   const [{ n } = { n: 0 }] = await db
     .select({ n: drizzleSql<number>`count(*)::int` })
     .from(messages)
@@ -128,7 +128,19 @@ async function captureRound(channelId: string): Promise<number> {
   return Math.max(1, Number(n));
 }
 
-/** The newest result part in a room, with the message id that holds it. */
+/** A part's VERDICT — everything except which round produced it. */
+function sansRound(part: CaptureResultPart) {
+  return { rows: part.rows, truncated: part.truncated, notice: part.notice };
+}
+
+/**
+ * The room's LIVE result part, with the message id that holds it.
+ *
+ * "Latest" is HIGHEST ROUND, ties broken on later position — the same rule the
+ * readers apply (relay's `latestResultPart`). Ordering by time alone would let
+ * a writer and a reader disagree about which verdict is current the moment two
+ * parts share a round.
+ */
 async function latestResult(
   channelId: string
 ): Promise<{ id: string; part: CaptureResultPart } | null> {
@@ -142,7 +154,9 @@ async function latestResult(
         drizzleSql`${messages.metadata} -> 'capturePart' ->> 'kind' = 'capture_result'`
       )
     )
-    .orderBy(drizzleSql`${messages.timestamp} desc, ${messages.id} desc`)
+    .orderBy(
+      drizzleSql`(${messages.metadata} -> 'capturePart' ->> 'round')::int desc nulls last, ${messages.timestamp} desc, ${messages.id} desc`
+    )
     .limit(1);
   const part = readCapturePart(rows[0]?.metadata);
   return part?.kind === "capture_result" && rows[0]
@@ -186,7 +200,6 @@ export async function persistCaptureResult(
   });
   if (!channelId) throw new Error("capture result: the session has no room");
 
-  const round = await captureRound(channelId);
   const previous = await latestResult(channelId);
   const dismissedTempIds = new Set(
     (previous?.part.rows ?? []).filter((r) => r.dismissed).map((r) => r.tempId)
@@ -206,14 +219,45 @@ export async function persistCaptureResult(
     dismissedTempIds,
   });
 
+  const verdict = {
+    rows,
+    truncated,
+    notice: input.dedupSkipped ? DEDUP_SKIPPED_NOTICE : null,
+  };
+
+  // NOTHING CHANGED ⇒ no new part. Checked on the VERDICT (rows, truncated,
+  // notice) rather than on the whole part, because `round` is about to be
+  // derived from whether this verdict is new — comparing a part that already
+  // contains the bumped round would never match itself.
+  if (
+    previous &&
+    stableStringify(sansRound(previous.part)) === stableStringify(verdict)
+  ) {
+    return {
+      messageId: previous.id,
+      channelId,
+      round: previous.part.round,
+    };
+  }
+
+  // ROUND MUST INCREASE ACROSS RE-STRUCTURES. Readers pick "the latest result"
+  // by highest round, so a second, different verdict written at the same round
+  // would leave a superseded verdict tied with the live one and the reader's
+  // position tie-break doing all the work silently. The question count alone
+  // could not express that: a re-structure that asks nothing leaves it flat.
+  // So: the asked-round is the FLOOR (it keeps round-N's answer landing on
+  // round N), and any previous verdict pushes it past itself.
+  const round = Math.max(
+    await askedRound(channelId),
+    previous ? previous.part.round + 1 : 1
+  );
+
   const part: CaptureResultPart = CaptureResultPartSchema.parse({
     kind: "capture_result",
     v: 1,
     sessionId: input.sessionId,
     round,
-    rows,
-    truncated,
-    notice: input.dedupSkipped ? DEDUP_SKIPPED_NOTICE : null,
+    ...verdict,
   } satisfies CaptureResultPart);
 
   const id = deterministicUuidFromKey(

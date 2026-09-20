@@ -236,6 +236,17 @@ export const capabilityHandlers: McpHandlerMap = {
       typeof args.workspaceId === "string" && args.workspaceId.trim()
         ? args.workspaceId
         : null;
+    // MEMBERSHIP FLOOR — a lens still has to be a workspace you belong to.
+    // `listCapabilities`' own contract says a non-null workspaceId is "a LENS,
+    // not an authorization" (`capability-registry.ts:78`), and its tools
+    // predicate is `isNull(workspaceId) OR eq(workspaceId, …)` with NO
+    // membership check. So the CALLER must supply the floor, exactly as the
+    // sibling handler above does. Without it, passing a workspace id you are
+    // not a member of enumerates that workspace's tool rows and verb labels.
+    // (The skills arm is owner-floored downstream; tools/commands are not.)
+    if (wsId && !(await verifyWorkspaceAccess(userId, wsId))) {
+      return ok({ error: `Forbidden: no access to workspace ${wsId}` });
+    }
     const query =
       typeof args.query === "string" && args.query.trim().length > 0
         ? args.query
@@ -920,6 +931,17 @@ export const capabilityHandlers: McpHandlerMap = {
       typeof args.workspaceId === "string" && args.workspaceId.trim()
         ? args.workspaceId
         : null;
+    // MEMBERSHIP FLOOR — a lens still has to be a workspace you belong to.
+    // `listCapabilities`' own contract says a non-null workspaceId is "a LENS,
+    // not an authorization" (`capability-registry.ts:78`), and its tools
+    // predicate is `isNull(workspaceId) OR eq(workspaceId, …)` with NO
+    // membership check. So the CALLER must supply the floor, exactly as the
+    // sibling handler above does. Without it, passing a workspace id you are
+    // not a member of enumerates that workspace's tool rows and verb labels.
+    // (The skills arm is owner-floored downstream; tools/commands are not.)
+    if (wsId && !(await verifyWorkspaceAccess(userId, wsId))) {
+      return ok({ error: `Forbidden: no access to workspace ${wsId}` });
+    }
     const { findByIntent } =
       await import("../../../services/capabilities/find-intent.js");
     return ok(

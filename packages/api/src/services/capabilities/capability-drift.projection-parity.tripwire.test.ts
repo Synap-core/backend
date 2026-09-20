@@ -141,12 +141,29 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       def: { timeoutSeconds: 60 },
       live: { timeoutSeconds: 30 },
     },
-    // The applier writes exactly ONE key of this bag (`projectSkillMetadata`),
-    // so the perturbation is on that key — a `marketSource` difference is DB
-    // state and must NOT be drift (asserted separately below).
+    // The applier writes TWO keys of this bag (`projectSkillMetadata`:
+    // `allowedHosts` and `readOnly`), so the perturbation must move BOTH — a
+    // `marketSource` difference is DB state and must NOT be drift (asserted
+    // separately below).
+    //
+    // NOTE — perturbing both keys here does NOT, by itself, catch a dropped
+    // key. This table is keyed by FIELD NAME and the row goes red if ANY
+    // perturbed key differs, so `allowedHosts` alone keeps it red-capable and a
+    // regression removing `readOnly` from the projection would still pass.
+    // VERIFIED by mutation, and the nuance matters: removing `readOnly` from
+    // the `expected` side ALONE leaves every test green (the two sides then
+    // differ, so it still reads as drift). Only removing it from BOTH
+    // `expected` and `actual` — a comparator that genuinely stops covering the
+    // key — turns the test below red, and nothing else in this file.
+    // The DISCRIMINATING input — the one where the two candidate rules actually
+    // disagree — is a pair differing ONLY in `readOnly`, pinned in its own test
+    // below ("a key the projection FORGETS is not drift"). Both are kept: this
+    // one mirrors what the applier writes, that one is what fails on a drop.
     metadata: {
-      def: { metadata: { allowedHosts: ["api.vendor.com"] } },
-      live: { metadata: { allowedHosts: [] } },
+      def: {
+        metadata: { allowedHosts: ["api.vendor.com"], readOnly: true },
+      },
+      live: { metadata: { allowedHosts: [], readOnly: false } },
     },
   };
 
@@ -186,10 +203,11 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
     ).toEqual([]);
   });
 
-  // The `metadata` entry is NARROWED to one key, so it needs its own pins: the
-  // comparator must be blind to DB-owned keys (else every boot re-applies), and
-  // the applier's projection must in fact write only that key (else the marker
-  // asserts a convergence nobody checked — the durable-lie shape).
+  // The `metadata` entry is NARROWED to the two definition-owned keys
+  // (`allowedHosts`, `readOnly`), so it needs its own pins: the comparator must
+  // be blind to DB-owned keys (else every boot re-applies), and the applier's
+  // projection must in fact write only those keys (else the marker asserts a
+  // convergence nobody checked — the durable-lie shape).
   describe("metadata is narrowed to the egress declaration, honestly", () => {
     it("a DB-owned metadata key is not drift", () => {
       const live: InstalledSkillRow = {
@@ -219,7 +237,30 @@ describe("drift comparator ↔ applier projection parity (skills row)", () => {
       expect(projectSkillMetadata(live.metadata, def.metadata)).toBeUndefined();
     });
 
-    it("the applier's projection writes ONLY allowedHosts, preserving the rest", () => {
+    it("a key the projection FORGETS is not drift — the discriminating input", () => {
+      // def and live agree on `allowedHosts` and differ ONLY on `readOnly`.
+      // While the projection reads both keys this is drift. Remove `readOnly`
+      // from `PROJECTED_SKILL_FIELDS.metadata` and it silently stops being
+      // drift — which is a template change that reaches NO pod, permanently,
+      // because the reconcile then stamps the new contentHash anyway.
+      //
+      // This is the assertion the field-name-keyed PERTURBATIONS table cannot
+      // make: there, `allowedHosts` alone keeps the row red-capable.
+      const def = {
+        name: "exa_search",
+        metadata: { allowedHosts: ["api.exa.ai"], readOnly: true },
+      };
+      const live = {
+        name: "exa_search",
+        metadata: { allowedHosts: ["api.exa.ai"], readOnly: false },
+      };
+      expect(
+        capabilityDefinitionDrift([live], { skills: [def] }).drifted,
+        "a readOnly-only difference must be drift — if it is not, the projection has stopped reading the key and no pod will ever receive it"
+      ).toEqual(["exa_search"]);
+    });
+
+    it("the applier's projection writes ONLY the definition-owned keys, preserving the rest", () => {
       const existing = {
         allowedHosts: ["old.example.com"],
         marketSource: { slug: "x" },

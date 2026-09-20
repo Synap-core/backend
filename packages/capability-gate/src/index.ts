@@ -296,6 +296,36 @@ export async function gateCapabilityExecution(
     };
   }
 
+  // ── 0.5 ORIGIN TRUST — resolved BEFORE the read-only short-circuit.
+  //
+  // WHY IT MOVED (2026-09-20): it used to sit below, on the reasoning that
+  // "owner/read-only runs already returned above and are unaffected". That was
+  // safe only while `readOnly` meant a BUILTIN read (a local hub op) or a
+  // GET/HEAD provider call. The authored `metadata.readOnly` declaration widened
+  // it to any verb whose definition claims it — including `exa_search`, a
+  // `kind:"code"` verb that makes an outbound HTTP POST carrying a
+  // CALLER-SUPPLIED body.
+  //
+  // The attack that opened: content arriving on an untrusted bridge/EXTERNAL
+  // channel prompt-injects the agent into `exa_search({query: "<pod content>"})`.
+  // Under the old order that force-proposed; with the short-circuit above the
+  // rung it would have auto-run, shipping pod text to a third party with no
+  // human in the loop. `readOnly` means "does not mutate POD state" — it has
+  // never meant "no external effect", and this wave made that split explicit by
+  // returning false from `capabilityVerbHasExternalEffect` for the same verbs.
+  //
+  // Only agent runs are classified; absent channelId → undefined → no downgrade,
+  // so operator and unchannelled runs pay nothing.
+  const originTrust = input.agentUserId
+    ? await resolveOriginTrust({
+        db: await getDb(),
+        channelId: input.channelId,
+        userId: input.actorUserId,
+        workspaceId: input.workspaceId ?? null,
+        capabilityId: input.capabilityId,
+      })
+    : undefined;
+
   // ── READ-ONLY short-circuit — mirrors execute-provider-verb's
   //    `isReadMethod → alreadyApproved:true`. A read is not a mutation: once it
   //    clears the APPROVAL gate above, it never needs a grant and never proposes.
@@ -305,7 +335,15 @@ export async function gateCapabilityExecution(
   //    EVERY caller (operator AND agent), which is why it precedes owner-bypass
   //    and the grant-existence check. WRITES leave `readOnly` unset and fall
   //    through to the full ladder below.
+  //
+  // ⚠️ IT DOES **NOT** BYPASS ORIGIN TRUST. Resolved above, and an untrusted
+  // origin force-proposes even a declared read — see the block just above for
+  // why (a read that carries a caller-supplied body outward is an exfiltration
+  // channel, not a harmless lookup).
   if (input.readOnly) {
+    if (originTrust === "untrusted") {
+      return buildProposeDecision(input, "UNTRUSTED_ORIGIN");
+    }
     return { decision: "run" };
   }
 
@@ -320,21 +358,10 @@ export async function gateCapabilityExecution(
     return { decision: "run" };
   }
 
-  // ── 1.5 ORIGIN TRUST (#4 instruction-provenance) — resolve ONCE for this
-  //       agent run. An untrusted-origin channel (EXTERNAL / bridge / `source`)
-  //       force-proposes the run: it can NEVER auto-run via grant exec-mode, an
-  //       "auto" capability, or a governance rule. Owner/read-only runs already
-  //       returned above and are unaffected. Only agent runs are classified;
-  //       absent channelId → no channel read → undefined (no downgrade).
-  const originTrust = input.agentUserId
-    ? await resolveOriginTrust({
-        db: await getDb(),
-        channelId: input.channelId,
-        userId: input.actorUserId,
-        workspaceId: input.workspaceId ?? null,
-        capabilityId: input.capabilityId,
-      })
-    : undefined;
+  // ── 1.5 ORIGIN TRUST — RESOLVED AT 0.5 above (it must precede the read-only
+  //       short-circuit). An untrusted-origin channel force-proposes: it can
+  //       NEVER auto-run via grant exec-mode, an "auto" capability, or a
+  //       governance rule. Owner runs returned above and are unaffected.
   const originUntrusted = originTrust === "untrusted";
 
   // ── 2. GRANT EXISTENCE + exec-mode (the model's namesake) ───────────────────
