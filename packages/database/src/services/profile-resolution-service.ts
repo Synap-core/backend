@@ -309,6 +309,32 @@ const LEGACY_SLOT_BY_CONTENT_KIND: Partial<
   "entity-profile": "dashboard",
 };
 
+/** The layer a property def belongs to: base (`workspaceId: null`) or overlay. */
+function layerRank(p: { workspaceId: string | null }): number {
+  return p.workspaceId === null ? 0 : 1;
+}
+
+/**
+ * THE total ordering for effective property defs — exported so it can be
+ * tested directly, and so every consumer that re-sorts agrees with the
+ * resolver instead of inventing its own order.
+ *
+ * Total on purpose: two defs can only tie on all three keys if they share a
+ * slug, and `getEffectiveProperties` keys its map BY slug, so slugs are
+ * unique. The result is therefore deterministic without relying on
+ * `Array.prototype.sort` stability.
+ */
+export function compareEffectiveProperties(
+  a: { workspaceId: string | null; displayOrder: number; slug: string },
+  b: { workspaceId: string | null; displayOrder: number; slug: string }
+): number {
+  return (
+    layerRank(a) - layerRank(b) ||
+    a.displayOrder - b.displayOrder ||
+    a.slug.localeCompare(b.slug)
+  );
+}
+
 export class ProfileResolutionService {
   private _db: PostgresJsDatabase<typeof schema>;
   private profileRepo: ProfileRepository;
@@ -569,8 +595,39 @@ export class ProfileResolutionService {
       }
     }
 
+    /**
+     * ORDERING — layer first, then the layer's own sequence, then slug.
+     *
+     * THE DEFECT THIS FIXES, measured on the live pod 2026-09-21. Base defs
+     * (`workspaceId: null`) and workspace-overlay defs each run their OWN
+     * `0..n` `displayOrder` sequence, and this merge used to sort on that
+     * number alone. Every rank was therefore a multi-way tie across layers,
+     * broken only by hierarchy-iteration order. On `task` in the Builder
+     * workspace that produced:
+     *   0 → `title` (base) AND `task-status` (overlay)
+     *   1 → `task-priority` (overlay) AND `status` (base)
+     *   2 → `priority` AND `task-project`
+     * — an interleaving with no meaning, in which the overlay twins that won
+     * some ties were the EMPTY ones (`task-status` filled 4/60 entities vs
+     * `status` 51/60).
+     *
+     * That made `displayOrder` unusable as an ordering signal for anything
+     * derived from the schema — a derived column list would have been ordered
+     * by coin-flip and led by dead fields, i.e. WORSE than the hardcoded list
+     * it was meant to replace. Fixing it here fixes every consumer at once,
+     * which is why it is done at this seam and not in each caller.
+     *
+     * The comparator is TOTAL: two defs can only tie on all three keys if they
+     * share a slug, and the map above guarantees slugs are unique. So the
+     * result is deterministic without relying on sort stability.
+     *
+     * Base before overlay is deliberate: base defs are the kind's own fields,
+     * an overlay is a workspace REFINING that kind. It is not a claim that
+     * overlay fields matter less — only that a stable, explicable order beats
+     * an interleaving nobody chose.
+     */
     const result = Array.from(propertyMap.values()).sort(
-      (a, b) => a.displayOrder - b.displayOrder
+      compareEffectiveProperties
     );
 
     // Resolve entity-link targets → uiHints.linkedProfileSlug so the entity

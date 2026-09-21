@@ -140,19 +140,6 @@ export const KIND_CUES: Record<string, string[]> = {
 };
 
 /**
- * Single-word KIND_CUES vocabulary — the type-noun words themselves ("people",
- * "company", "task"). Stripped from `cleanedQuery` whether or not a catalog
- * profile matched, so the no-vocabulary fallback still reduces "show all people"
- * to "" (the residual filter is empty). Multi-word cues are skipped to avoid
- * fragmenting common words ("action item" → "action").
- */
-const KIND_CUE_WORDS = new Set(
-  Object.values(KIND_CUES)
-    .flat()
-    .filter((c) => /^[a-z]+$/.test(c))
-);
-
-/**
  * Enumerative / imperative framing words ("show all …", "list my …") plus
  * function words and interrogatives — filler that frames a request but carries
  * no filter signal. Stripped from `cleanedQuery` alongside the matched type
@@ -359,10 +346,18 @@ export function understandQuery(
   const propertyHints = extractPropertyHints(query);
 
   // cleanedQuery: the original words minus (a) the type words that produced the
-  // FINAL profileTypes, (b) the property-hint value tokens, (c) the type-noun
-  // vocabulary (KIND_CUES) even when no catalog profile matched — the
-  // no-vocabulary fallback, and (d) enumerative/function framing. Matching is
-  // plural-tolerant; the surviving words keep their original order and casing.
+  // FINAL profileTypes, (b) the property-hint value tokens, and (c)
+  // enumerative/function framing. Matching is plural-tolerant; the surviving
+  // words keep their original order and casing.
+  //
+  // A KIND_CUE word is removed ONLY through (a) — i.e. only once it actually
+  // resolved to a profile in THIS pod's catalog. It used to be stripped
+  // unconditionally from a hardcoded 10-kind vocabulary, which silently deleted
+  // the user's most important term whenever the word was CONTENT rather than a
+  // type: a company named "Pipeline", a document named "Memo", a project named
+  // "Review" all searched as if that word had never been typed. A pod with no
+  // matching kind now keeps the word and searches for it, which is the only
+  // answer that can be right for a pod whose vocabulary we do not own.
   const removal = new Set<string>();
   for (const slug of profileTypes) {
     for (const w of termsBySlug.get(slug) ?? []) removal.add(w);
@@ -373,8 +368,6 @@ export function understandQuery(
   const normRemoval = new Set([...removal].map(norm));
   const isStripped = (key: string): boolean =>
     CLEANED_QUERY_FILLER.has(key) ||
-    KIND_CUE_WORDS.has(key) ||
-    KIND_CUE_WORDS.has(norm(key)) ||
     removal.has(key) ||
     normRemoval.has(norm(key));
 

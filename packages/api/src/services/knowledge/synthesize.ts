@@ -158,7 +158,34 @@ const MAX_PROCEDURAL_CHARS = 6_000;
  * this cap would reintroduce the exact "rank-1 dropped" bug 1a fixes.
  */
 const MAX_PROCEDURAL_ROWS = 2;
-/** Common JSONB `properties` keys that hold prose worth surfacing verbatim. */
+/**
+ * JSONB `properties` keys known to hold LONG-FORM prose, so they get the full
+ * `MAX_FIELD_CHARS` budget first.
+ *
+ * THIS IS A PRIORITY ORDER, NOT AN ALLOWLIST — and the distinction is the
+ * whole bug. It used to be the only way a `properties` value reached the
+ * model, which made `ask()` blind to every key a USER-DEFINED kind actually
+ * stores its substance under.
+ *
+ * MEASURED, live 2026-09-21: asked "what is Synap's branding — colors, logo,
+ * voice, tagline?", `ask()` retrieved exactly the right rows (`Synap Brand
+ * Identity`, `Synap Color Usage Rule`, `Spine & Flow Token Set`) and then
+ * answered "the actual colour values are not included in the provided
+ * context", "no brand voice guidelines are present", "no formal tagline".
+ * Every one of those facts was in the retrieved rows — under `rule-content`,
+ * `brand-tagline`, `voice-tone-descriptors`, `color-usage`. None of those six
+ * literals matched, so the values were dropped before synthesis and the model
+ * truthfully reported an absence that did not exist.
+ *
+ * The failure SCALES WITH SCHEMA QUALITY, which is why it matters: a kind
+ * modelled with well-named domain fields is MORE invisible than a sloppy one
+ * that happens to dump everything into `content`. That is the reverse of the
+ * product's promise.
+ *
+ * Same defect class this codebase already names: a hand-maintained set
+ * standing in for a derivable one. The derivable source is the kind's own
+ * property defs — the pod knows these keys, it defined them.
+ */
 const PROPERTY_TEXT_KEYS = [
   "content",
   "conclusion",
@@ -167,6 +194,20 @@ const PROPERTY_TEXT_KEYS = [
   "body",
   "notes",
 ];
+
+/**
+ * Per-field cap for properties OUTSIDE the long-form list above. Matches the
+ * cap the top-level string fallback already uses, so a wide property bag
+ * cannot crowd out the long-form body.
+ */
+const MAX_OTHER_PROPERTY_CHARS = 300;
+
+/**
+ * Ceiling on snippet fragments per record. Pre-existing behaviour (the
+ * top-level fallback stopped at 8); applied to the property scan too so a
+ * 40-key bag cannot blow the context budget.
+ */
+const MAX_SNIPPET_BITS = 8;
 
 /**
  * Lead with an honest acknowledgment when the caller has matching pending
@@ -382,10 +423,31 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
       //    dropped entirely because it's an object, not a top-level string.
       if (rec.properties && typeof rec.properties === "object") {
         const props = rec.properties as Record<string, unknown>;
+        // 2a. Long-form keys first, at the full field budget.
+        const seen = new Set<string>();
         for (const key of PROPERTY_TEXT_KEYS) {
           const v = props[key];
           if (typeof v === "string" && v.trim()) {
+            seen.add(key);
             snippetBits.push(`${key}: ${v.slice(0, MAX_FIELD_CHARS)}`);
+          }
+        }
+        // 2b. THEN EVERY OTHER STRING PROPERTY. This is the fix: a
+        //     user-defined kind keeps its substance under its OWN keys
+        //     (`rule-content`, `brand-tagline`, `color-usage`…), and dropping
+        //     them made the pod answer "not documented" about data it held.
+        //     Capped per field and bounded by `MAX_SNIPPET_BITS` so the
+        //     long-form body above is never crowded out.
+        //
+        //     `title` is skipped because it is already the first bit, and
+        //     objects/arrays are skipped because a JSON blob costs budget
+        //     without reading as prose — that is a known, deliberate limit,
+        //     not an oversight.
+        for (const [k, v] of Object.entries(props)) {
+          if (snippetBits.length >= MAX_SNIPPET_BITS) break;
+          if (seen.has(k) || k === "title") continue;
+          if (typeof v === "string" && v.trim()) {
+            snippetBits.push(`${k}: ${v.slice(0, MAX_OTHER_PROPERTY_CHARS)}`);
           }
         }
       }
@@ -400,7 +462,7 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
         if (typeof v === "string" && v.trim()) {
           snippetBits.push(`${k}: ${v.slice(0, 300)}`);
         }
-        if (snippetBits.length >= 8) break;
+        if (snippetBits.length >= MAX_SNIPPET_BITS) break;
       }
       const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
       if (!isProtectedFirst && contextLen + entry.length > budget) {

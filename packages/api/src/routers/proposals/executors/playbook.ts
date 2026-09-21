@@ -618,6 +618,12 @@ export function registerPlaybookExecutors(): void {
       await dispatchExternalOnce(input.proposalId, async () => {
         const result = await playbookCaller.run({
           playbookId,
+          // EXPLICIT write lens — `proposal.workspaceId` is the workspace the
+          // gate ran against when this run was proposed, so the replay must
+          // land there. Passed explicitly (not left to the ambient ctx rung of
+          // `resolvePlaybookRunWriteWorkspace`) so the approved run is filed in
+          // exactly the workspace that was reviewed.
+          workspaceId,
           // The run arguments the caller actually asked with, replayed from the
           // proposal. Guarded above: whatever this playbook declares and this
           // proposal did not carry has already been refused, so a run reaching

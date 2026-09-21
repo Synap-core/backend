@@ -25,25 +25,22 @@ const FeedSourceSchema = z.object({
 const FeedPreferencesSchema = z.object({
   interests: z.array(z.string()),
   dislikedTopics: z.array(z.string()),
-  persona: z.enum([
-    "cto",
-    "marketing",
-    "sales",
-    "project-manager",
-    "founder",
-    "researcher",
-    "general",
-  ]),
-  // Relay-local goal for now (not used server-side beyond persistence)
-  goal: z
-    .enum([
-      "startup-leads",
-      "market-intelligence",
-      "personal-learning",
-      "competitor-watch",
-      "trend-monitoring",
-    ])
-    .optional(),
+  /**
+   * The user's OWN word for who they are — deliberately NOT an enum.
+   *
+   * Synap's promise is the user's own vocabulary; a fixed seven-value enum
+   * 400'd every persona outside it ("teacher", "vigneron", "solo-dev") at the
+   * API boundary, which is the opposite of agnostic. Bounded + trimmed is the
+   * only constraint this value needs: nothing server-side switches on it — the
+   * read door below already returns it as a plain string with a "general"
+   * fallback, and no backend/relay consumer looks it up in a table. If a label
+   * is ever needed, `humanizeToken` from `@synap-core/types/vocabulary` is the
+   * one door — never a local label map.
+   */
+  persona: z.string().trim().min(1).max(64),
+  // Relay-local goal for now (not used server-side beyond persistence).
+  // Same reasoning as `persona`: a free, bounded string, not a fixed enum.
+  goal: z.string().trim().min(1).max(64).optional(),
   frequency: z.enum(["realtime", "hourly", "daily", "weekly"]),
   sources: z.array(FeedSourceSchema),
   relevanceThreshold: z.number(),

@@ -20,7 +20,12 @@ import { randomUUID } from "node:crypto";
 import { createLogger } from "@synap-core/core";
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
+import {
+  router,
+  protectedProcedure,
+  workspaceProcedure,
+  assertWorkspaceUsable,
+} from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import {
   getDb,
@@ -95,6 +100,7 @@ import {
   resolveGoal,
 } from "../services/playbooks/playbook-lifecycle.js";
 import { runPlaybook } from "../services/playbooks/run-playbook.js";
+import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
   materializePlaybookCronAutomation,
@@ -1238,10 +1244,22 @@ export const playbooksRouter = router({
   enrollments: playbookEnrollmentsRouter,
 
   /**
-   * List playbooks visible in the active workspace (pod-wide + this workspace),
-   * most recent first. Visibility enforced via scopedDb predicate.
+   * List playbooks on the caller's USER FLOOR (every member workspace +
+   * pod-wide rows), most recent first. Visibility enforced via the scopedDb
+   * predicate.
+   *
+   * `protectedProcedure`, NOT `workspaceProcedure`: the predicate is
+   * `scopedDb(AccessContext.from(ctx)).predicate(playbooks)` with NO workspace
+   * lens, so `ctx.workspaceId` never narrowed this query — the header gate only
+   * REFUSED callers who had no active workspace, while returning the same rows
+   * to everyone who did. Dropping it changes no result set; it lets a pod-wide
+   * surface (Relay) list exactly what `run` — now also pod-wide — can run.
+   *
+   * There is deliberately NO `playbooks.listAll`: the list/listAll two-door
+   * split was COLLAPSED to one floor-first `.list` door, and
+   * `access/read-scoping.tripwire.test.ts` fails CI on a new `listAll:`.
    */
-  list: workspaceProcedure
+  list: protectedProcedure
     .input(
       z
         .object({
@@ -2407,15 +2425,47 @@ export const playbooksRouter = router({
    * instantiates a session, creates the run channel, records a playbook_run, and
    * dispatches to the playbook's executor (is-agent | external-agent | hybrid).
    *
+   * POD-WIDE DOOR (parity with `runPlaybookDoor`, the Hub/MCP door). This is a
+   * `protectedProcedure`, NOT a `workspaceProcedure`: the playbook is resolved
+   * on the USER FLOOR and the run's write workspace is then derived FROM the
+   * playbook through the one ladder `resolvePlaybookRunWriteWorkspace`.
+   *
+   * Why: `list` (and Relay's picker on top of it) is already pod-wide — its
+   * predicate carries no workspace lens — so what a caller can SEE and what it
+   * could RUN disagreed. A playbook in workspace A launched while
+   * `X-Workspace-Id` said B was filed into B, and `resolveRunnablePlaybook`'s
+   * cross-workspace floor threw "playbook <id> not visible in workspace B".
+   * The header is now the LAST rung of the ladder (an ambient lens), never the
+   * first.
+   *
+   * Nothing is widened. The playbook read is the same `scopedDb` user floor it
+   * always was (`workspaceProcedure` never narrowed it — it only forced a
+   * header to exist). Every guard below now runs against the RESOLVED
+   * workspace, which is the one the session/channel/run rows actually land in:
+   *   - `assertWorkspaceUsable` — membership + not-archived, the same check
+   *     `workspaceProcedure` applies, on the resolved workspace.
+   *   - `assertWorkspaceWrite`  — the editor+ write floor (strictly stronger
+   *     than `workspaceProcedure`'s any-role membership).
+   *   - `resolveVisibleSubjectId` — the subject IDOR guard.
+   *   - `findUnenabledPlaybookSkills` / `checkPermissionOrPropose` — preflight
+   *     and governance.
+   * A pod-wide playbook with no explicit/subject/ambient workspace REFUSES
+   * (BAD_REQUEST) rather than picking a membership.
+   *
    * Governance: editor+ write floor + checkPermissionOrPropose
    * ({ subjectType: "playbook", action: "run" }). On "denied" → 403; on
    * "proposed" → no run is created (the proposal is the record). Only on
    * approval does `runPlaybook` execute.
    */
-  run: workspaceProcedure
+  run: protectedProcedure
     .input(
       z.object({
         playbookId: z.string().uuid(),
+        /**
+         * Explicit write lens — the caller NAMING where this run belongs. Tops
+         * the ladder. Omit it and the run lands in the playbook's own home.
+         */
+        workspaceId: z.string().uuid().optional(),
         params: z.record(z.string(), z.unknown()).optional(),
         agentIds: z.array(z.string()).optional(),
         agentUserId: z.string().uuid().optional(),
@@ -2434,7 +2484,9 @@ export const playbooksRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
-      // The playbook must be visible in this workspace (pod-wide or a member ws).
+      // The playbook must be on the caller's USER FLOOR (every member
+      // workspace + pod-wide rows) — unchanged predicate, pod-wide as it
+      // always was.
       const playbook = await scopedDb(
         AccessContext.from(ctx)
       ).findFirst<Playbook>(playbooks, {
@@ -2447,18 +2499,49 @@ export const playbooksRouter = router({
         });
       }
 
+      const database = await getDb();
+
+      // WRITE HOME — the ONE ladder, shared with `runPlaybookDoor`:
+      // explicit → playbook home → subject home → ambient header. Never a
+      // membership pick.
+      let subjectWorkspaceId: string | null | undefined;
+      if (!input.workspaceId && !playbook.workspaceId && input.subjectId) {
+        const subjectRow = await database.query.entities.findFirst({
+          columns: { workspaceId: true },
+          where: eq(entities.id, input.subjectId),
+        });
+        subjectWorkspaceId = subjectRow?.workspaceId ?? null;
+      }
+      const runWorkspaceId = resolvePlaybookRunWriteWorkspace({
+        explicitWorkspaceId: input.workspaceId,
+        playbookWorkspaceId: playbook.workspaceId,
+        subjectWorkspaceId,
+        ambientWorkspaceId: ctx.workspaceId,
+      });
+      if (!runWorkspaceId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `"${playbook.name}" is a pod-wide playbook, so nothing says which workspace this run belongs to. Pass workspaceId (or a subject entity that has one).`,
+        });
+      }
+
+      // Membership + not-archived on the RESOLVED workspace — the same gate
+      // `workspaceProcedure` applies, moved after resolution because the
+      // workspace comes from the playbook, not the header.
+      await assertWorkspaceUsable(ctx.userId, runWorkspaceId);
+
       // Editor+ write floor — running a playbook spawns a session + channel +
       // run (all writes), so require editor+ like the rest of this router.
-      const database = await getDb();
       await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: ctx.workspaceId,
+        workspaceId: runWorkspaceId,
       });
 
-      // Validate the subject (if any) is visible here before binding (IDOR guard).
+      // Validate the subject (if any) is visible in the workspace the run will
+      // be FILED IN before binding (IDOR guard).
       const subjectId = await resolveVisibleSubjectId(
         database,
         input.subjectId,
-        ctx.workspaceId
+        runWorkspaceId
       );
 
       // D3 preflight — a playbook that depends on installed-but-not-enabled
@@ -2469,7 +2552,7 @@ export const playbooksRouter = router({
       const unenabledSkills = await findUnenabledPlaybookSkills({
         playbook,
         userId: ctx.userId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: runWorkspaceId,
       });
       if (unenabledSkills.length > 0) {
         const names = unenabledSkills.map((s) => s.name).join(", ");
@@ -2482,7 +2565,7 @@ export const playbooksRouter = router({
         const enableProposals = await proposeCapabilityEnable({
           refused: unenabledSkills,
           userId: ctx.userId,
-          workspaceId: ctx.workspaceId,
+          workspaceId: runWorkspaceId,
           agentUserId: input.agentUserId,
         });
         const filed = enableProposals.some((o) => o.status === "proposed");
@@ -2502,7 +2585,7 @@ export const playbooksRouter = router({
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: runWorkspaceId,
         subjectType: "playbook",
         action: "run",
         source: input.source,
@@ -2557,7 +2640,7 @@ export const playbooksRouter = router({
       // scans for when it proves this door passes no `idempotentBySubject`.
       const { run, session } = await runPlaybook({
         playbookId: input.playbookId,
-        workspaceId: ctx.workspaceId,
+        workspaceId: runWorkspaceId,
         userId: ctx.userId,
         params: input.params,
         agentIds: input.agentIds,

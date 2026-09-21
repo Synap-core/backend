@@ -85,7 +85,13 @@ import {
   profiles,
   focusSessions,
 } from "@synap/database";
-import { loadEntityUsage, usageByWorkspace } from "./usage-aggregate.js";
+import {
+  loadEntityUsage,
+  loadProfileFill,
+  loadPropertyFill,
+  invalidateProfileFillCache,
+  usageByWorkspace,
+} from "./usage-aggregate.js";
 import { rankProfilesByUsage } from "./profile-ranking.js";
 import { discover } from "./discover.js";
 import { buildGrounding } from "../../routers/mcp/http-handler.js";
@@ -420,5 +426,188 @@ describe("MCP instructions — the live initialize path on a hostile pod", () =>
       INSTRUCTIONS_BUDGET_BYTES
     );
     expect(live).toContain(grounding!);
+  });
+});
+
+/**
+ * ── Per-property FILL ───────────────────────────────────────────────────────
+ *
+ * Two of these fixtures exist because they are the DISCRIMINATING inputs —
+ * the only ones where a wrong design and the right one disagree:
+ *
+ *  (a) entities whose `properties` is `{}`. `jsonb_each('{}')` yields ZERO
+ *      rows, so a denominator taken from the lateral cannot see them. Here 2
+ *      of 4 entities are property-less, so a lateral-derived sample size reads
+ *      2 instead of 4 and every rate doubles. This is what the mutation test
+ *      below flips.
+ *
+ *  (b) a profile with NO entities at all. `{filled, sampleSize}` reports
+ *      `sampleSize: 0` — UNMEASURABLE. A `fillRate: number` design would
+ *      report `0`, which is indistinguishable from a kind whose entities all
+ *      leave the field blank. It is the one input where the two designs
+ *      produce different wire values, so it is the one that rules one out.
+ */
+const WF = randomUUID();
+const F = "user-fill";
+const P_FILL = randomUUID();
+const P_EMPTY = randomUUID();
+
+describe("per-property fill — numerator and denominator come from DIFFERENT scans", () => {
+  beforeAll(async () => {
+    await q(
+      `insert into workspaces (id, name, workspace_type, settings, created_at, updated_at) values ($1, 'Fill', 'personal', '{}'::jsonb, now(), now())`,
+      [WF]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), WF, F]
+    );
+
+    const mk = (
+      properties: Record<string, unknown>,
+      over?: { deleted?: boolean; userId?: string; workspaceId?: string | null }
+    ) =>
+      entity({
+        userId: over?.userId ?? F,
+        workspaceId: over?.workspaceId === undefined ? WF : over.workspaceId,
+        profileId: P_FILL,
+        type: "fillable",
+        properties,
+        ...(over?.deleted ? { deleted: true } : {}),
+      });
+
+    // 4 live entities. Only ONE carries a non-empty value for each key.
+    await mk({ status: "open", note: "hello", tags: ["a"] });
+    // Empty string, JSON null and empty array are PRESENT keys but NOT filled.
+    await mk({ status: "", note: null, tags: [] });
+    // (a) THE denominator trap: two entities with no properties at all.
+    await mk({});
+    await mk({});
+
+    // The floor must still hold: neither of these may be counted anywhere.
+    await mk({ status: "open", note: "x", tags: ["z"] }, { deleted: true });
+    await mk({ status: "open" }, { userId: O, workspaceId: null });
+  });
+
+  it("(a) the sample size counts property-less entities; the lateral cannot see them", async () => {
+    const fill = await loadProfileFill({
+      userId: F,
+      profileId: P_FILL,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    });
+
+    // 4 live entities — including the two carrying `{}`. A denominator derived
+    // from `jsonb_each` would read 2 here, and every rate below would double.
+    expect(fill.sampleSize).toBe(4);
+
+    // The lateral genuinely sees a SMALLER population — measured, not implied,
+    // so this test knows the trap is present rather than assuming it.
+    const lateralRows = await loadPropertyFill({
+      userId: F,
+      workspaceIds: [WF],
+      includePodScoped: true,
+      profileIds: [P_FILL],
+    });
+    const lateralEntities = (await q(
+      `select count(*) as n from (select distinct id from entities, lateral jsonb_each(properties) kv where profile_id = $1 and deleted_at is null and workspace_id = $2) s`,
+      [P_FILL, WF]
+    )) as { rows: Array<{ n: string | number }> };
+    expect(Number(lateralEntities.rows[0].n)).toBe(2);
+    expect(lateralRows.length).toBeGreaterThan(0);
+
+    // Numerators: "", null and [] are present-but-empty, never filled.
+    expect(fill.filledBySlug.get("status")).toBe(1);
+    expect(fill.filledBySlug.get("note")).toBe(1);
+    expect(fill.filledBySlug.get("tags")).toBe(1);
+
+    // 1/4, not 1/2 — the whole point of the two numbers.
+    expect(fill.filledBySlug.get("status")! / fill.sampleSize).toBe(0.25);
+  });
+
+  it("(b) a kind with no entities is UNMEASURABLE (sampleSize 0), not a measured zero", async () => {
+    const fill = await loadProfileFill({
+      userId: F,
+      profileId: P_EMPTY,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    });
+    expect(fill.sampleSize).toBe(0);
+    expect([...fill.filledBySlug.keys()]).toEqual([]);
+    // A `fillRate: number` design would emit 0 here AND for a real measured
+    // zero. `{filled, sampleSize}` keeps them apart — this is the assertion
+    // the collapsed design cannot satisfy.
+    expect(fill.sampleSize === 0).toBe(true);
+  });
+
+  it("reuses the aggregate's floor: soft-deletes and another user's pod rows are counted by neither scan", async () => {
+    const fill = await loadProfileFill({
+      userId: F,
+      profileId: P_FILL,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    });
+    // 6 rows exist for P_FILL; the floor admits 4.
+    const all = (await q(
+      `select count(*) as n from entities where profile_id = $1`,
+      [P_FILL]
+    )) as { rows: Array<{ n: string | number }> };
+    expect(Number(all.rows[0].n)).toBe(6);
+    expect(fill.sampleSize).toBe(4);
+    // The soft-deleted row and O's pod row both carry `status: "open"`; if
+    // either leaked, this would be 2 or 3.
+    expect(fill.filledBySlug.get("status")).toBe(1);
+  });
+
+  it("the denominator agrees with THE entity aggregate, because it IS the entity aggregate", async () => {
+    const usage = await loadEntityUsage({
+      userId: F,
+      workspaceIds: [WF],
+      includePodScoped: true,
+      profileIds: [P_FILL],
+    });
+    const fromAggregate = usage.reduce((n, r) => n + r.count, 0);
+    const fill = await loadProfileFill({
+      userId: F,
+      profileId: P_FILL,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    });
+    expect(fill.sampleSize).toBe(fromAggregate);
+  });
+
+  it("concurrent cold-key callers share ONE in-flight promise (no stampede)", async () => {
+    invalidateProfileFillCache(P_FILL);
+    const args = {
+      userId: F,
+      profileId: P_FILL,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    } as const;
+    const a = loadProfileFill({ ...args });
+    const b = loadProfileFill({ ...args });
+    // Identity, not equality: the SECOND caller got the FIRST caller's promise
+    // back before it resolved. Caching the resolved value cannot do this.
+    expect(b).toBe(a);
+    expect((await a).sampleSize).toBe(4);
+  });
+
+  it("invalidation re-measures; a different user gets their OWN floor, not a cached one", async () => {
+    const args = {
+      profileId: P_FILL,
+      workspaceId: WF,
+      workspaceIds: [WF],
+    } as const;
+    const mine = await loadProfileFill({ ...args, userId: F });
+    expect(mine.sampleSize).toBe(4);
+
+    // U is not a member of WF — the floor admits nothing. A cache key without
+    // the user would hand U the 4 it just cached for F.
+    const theirs = await loadProfileFill({ ...args, userId: U });
+    expect(theirs.sampleSize).toBe(0);
+
+    invalidateProfileFillCache(P_FILL);
+    expect(await loadProfileFill({ ...args, userId: F })).not.toBe(mine);
+    expect((await loadProfileFill({ ...args, userId: F })).sampleSize).toBe(4);
   });
 });

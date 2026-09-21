@@ -521,7 +521,15 @@ describe("the handler still routes through both projections", () => {
   );
 
   it("the handler maps its defs through `toDiscoverProperty`", () => {
-    expect(src).toMatch(/defs\.map\(\s*toDiscoverProperty\s*\)/);
+    // WIDENED 2026-09-21: the call gained a second argument (measured fill),
+    // so the point-free `defs.map(toDiscoverProperty)` became an arrow. Both
+    // alternatives are pinned at BOTH ends and the arrow window is bounded, so
+    // it cannot drift to an unrelated call site. What it CANNOT see: that the
+    // arrow passes its own parameter through. The pglite harness and the
+    // projection tests below cover the VALUES; this only sees the call named.
+    expect(src).toMatch(
+      /defs\.map\(\s*(?:toDiscoverProperty\s*\)|\([\s\S]{0,40}?\)\s*=>[\s\S]{0,80}?toDiscoverProperty\()/
+    );
   });
 
   it("the handler resolves each row through `resolveRowSchema`, never by slug alone", () => {
@@ -533,5 +541,116 @@ describe("the handler still routes through both projections", () => {
     expect(src).not.toMatch(/constraints\s*\??\.\s*options/);
     expect(src).not.toMatch(/uiHints\s*\??\.\s*options/);
     expect(src).not.toMatch(/uiHints\s*\??\.\s*displayName/);
+  });
+});
+
+// ── The projection must carry what a consumer needs to RENDER a field ──────
+
+/**
+ * `displayOrder` and most of `uiHints` were resolved by
+ * `getEffectiveProperties` and then dropped by `toDiscoverProperty` — measured
+ * on the live pod 2026-09-21: 0 of 458 projected properties carried
+ * `displayOrder`. That is why nothing downstream could build a schema-derived
+ * form or projection from this door: it had no field order and no input hints.
+ *
+ * These assert the VALUE ARRIVES (the repeated defect here is a key that is
+ * declared on the wire and populated by nobody), and they are driven through
+ * the REAL exported projection.
+ */
+describe("the schema door projects field order and ui hints", () => {
+  it("`displayOrder` reaches the wire", () => {
+    expect(
+      toDiscoverProperty({ slug: "s", valueType: "string", displayOrder: 7 })
+        .displayOrder
+    ).toBe(7);
+    // Absent, not 0 — an unordered def must not be pinned to the front.
+    expect(
+      toDiscoverProperty({ slug: "s", valueType: "string" })
+    ).not.toHaveProperty("displayOrder");
+  });
+
+  it("`uiHints` reaches the wire WHOLE — the per-key allowlist is what lost them", () => {
+    const hints = {
+      inputType: "textarea",
+      placeholder: "…",
+      readOnly: true,
+      helpText: "h",
+      linkedProfileSlug: "person",
+    };
+    const emitted = toDiscoverProperty({
+      slug: "s",
+      valueType: "string",
+      uiHints: hints,
+    });
+    expect(emitted.uiHints).toEqual(hints);
+    // The existing linkedProfileSlug contract still holds alongside it.
+    expect(emitted.targetProfileSlug).toBe("person");
+    expect(
+      toDiscoverProperty({ slug: "s", valueType: "string", uiHints: {} })
+    ).not.toHaveProperty("uiHints");
+  });
+
+  it("the SEEDED defs carry order and hints through the real projection (reachability, not shape)", () => {
+    const ordered = SEEDED_DEFS.map((d, i) =>
+      toDiscoverProperty({ ...d, displayOrder: i })
+    );
+    expect(ordered.length).toBeGreaterThan(0);
+    expect(ordered.every((p) => typeof p.displayOrder === "number")).toBe(true);
+    const withHints = SEEDED_DEFS.filter(
+      (d) => d.uiHints && Object.keys(d.uiHints as object).length > 0
+    );
+    expect(withHints.length).toBeGreaterThan(0);
+    expect(
+      withHints.every((d) => toDiscoverProperty(d).uiHints !== undefined)
+    ).toBe(true);
+  });
+});
+
+describe("`fill` is two numbers, and ABSENT when unmeasured", () => {
+  const def = { slug: "status", valueType: "string" };
+
+  it("absent when not supplied — UNMEASURED is encoded by absence, never by zeros", () => {
+    expect(toDiscoverProperty(def)).not.toHaveProperty("fill");
+  });
+
+  it("carries BOTH numbers; it never pre-divides", () => {
+    const emitted = toDiscoverProperty(def, { filled: 3, sampleSize: 12 });
+    expect(emitted.fill).toEqual({ filled: 3, sampleSize: 12 });
+    expect(emitted).not.toHaveProperty("fillRate");
+  });
+
+  it("the three states a `fillRate: number` would collapse stay distinguishable", () => {
+    const unmeasured = toDiscoverProperty(def).fill;
+    const unmeasurable = toDiscoverProperty(def, {
+      filled: 0,
+      sampleSize: 0,
+    }).fill;
+    const measuredZero = toDiscoverProperty(def, {
+      filled: 0,
+      sampleSize: 40,
+    }).fill;
+    expect(unmeasured).toBeUndefined();
+    expect(unmeasurable).toEqual({ filled: 0, sampleSize: 0 });
+    expect(measuredZero).toEqual({ filled: 0, sampleSize: 40 });
+    // A single ratio would render all three as `0`.
+    expect(
+      new Set([
+        JSON.stringify(unmeasured),
+        JSON.stringify(unmeasurable),
+        JSON.stringify(measuredZero),
+      ]).size
+    ).toBe(3);
+  });
+
+  it("the handler asks for fill only when the caller does, and never filters on it", () => {
+    const src = readFileSync(DISCOVER_FILE, "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      ""
+    );
+    expect(src).toMatch(/wantsFill/);
+    // A fill stat is a TIEBREAKER, never a gate: no filter/gate on `fill` may
+    // remove a property from the emitted schema.
+    expect(src).not.toMatch(/\.filter\([^)]*\bfill\b/);
+    expect(src).not.toMatch(/properties\s*\.\s*filter/);
   });
 });

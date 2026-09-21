@@ -118,13 +118,77 @@ describe("understandQuery — cleanedQuery (residual free-text)", () => {
     expect(u.cleanedQuery).toBe("blue");
   });
 
-  it("strips KIND_CUES vocabulary even with no matching catalog profile", () => {
-    // The no-vocabulary fallback: "people" is type-noun vocabulary, so it's
-    // stripped whether or not a `person` profile exists in the catalog.
+  // ── The strip is CONDITIONAL on the cue resolving to a real profile ────────
+  //
+  // These four cases are the discriminating set for "strip KIND_CUE words
+  // unconditionally" vs "strip only what resolved". The old rule deleted the
+  // cue word in ALL of them; the corrected rule keeps it in exactly the two
+  // where nothing in THIS pod's catalog claimed it. A test that only covers a
+  // matching catalog cannot tell the two rules apart.
+
+  it("KEEPS a cue word that resolved to NO profile in this pod (the bug)", () => {
+    // "pipeline" is a hardcoded `deal` cue, but this pod has no deal kind — the
+    // word is the name of the company the user is looking for. Deleting it
+    // silently threw away the entire query.
+    const sparse: ProfileCatalogEntry[] = [
+      { slug: "company", displayName: "Company" },
+    ];
+    const u = understandQuery("Pipeline", sparse);
+    expect(u.profileTypes).toHaveLength(0);
+    expect(u.cleanedQuery).toBe("Pipeline");
+  });
+
+  it("KEEPS a cue word of a kind this pod does not have, beside a kind it does", () => {
+    // "review" is a hardcoded `event` cue; this pod has no event kind, so
+    // "Review" is the project's NAME. The resolved `project` hit must not
+    // license deleting a cue word belonging to a kind that does not exist here.
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "project", displayName: "Project" },
+    ];
+    const u = understandQuery("project Review", catalog);
+    expect(u.profileTypes).toContain("project");
+    expect(u.cleanedQuery).toBe("Review");
+  });
+
+  // KNOWN, DELIBERATE LIMITATION: when the pod DOES have the kind a cue
+  // belongs to, every single-word cue of that kind still strips — so a pod
+  // with a `document` kind searching "document Memo" still loses "Memo".
+  // Narrowing `addTerms` to only the cues present in the query does not fix
+  // it (both words are present) and costs plural-tolerance elsewhere;
+  // disambiguating "which cue was the type word" is a separate change.
+
+  it("KEEPS type-noun vocabulary when the pod has no such kind", () => {
+    // Was: "stripped whether or not a `person` profile exists". A pod with no
+    // person kind searching for "people" means the WORD, so it survives.
     const sparse: ProfileCatalogEntry[] = [
       { slug: "note", displayName: "Note" },
     ];
-    expect(understandQuery("show all people", sparse).cleanedQuery).toBe("");
+    const u = understandQuery("show all people", sparse);
+    expect(u.profileTypes).toHaveLength(0);
+    expect(u.cleanedQuery).toBe("people");
+  });
+
+  it("still strips a cue word that DID resolve (behaviour unchanged)", () => {
+    // Control for the three above: with a `person` profile in the catalog the
+    // cue resolves, so it is removed exactly as before.
+    const u = understandQuery("show all people", CATALOG);
+    expect(u.profileTypes).toContain("person");
+    expect(u.cleanedQuery).toBe("");
+  });
+});
+
+describe("understandQuery — cue boost is preserved by the conditional strip", () => {
+  it("still boosts the resolved kind when cued by a non-name word", () => {
+    // The fix narrows what is REMOVED, never what is SCORED: "pipeline" must
+    // still resolve the deal kind on a pod that has one.
+    const catalog: ProfileCatalogEntry[] = [
+      { slug: "deal", displayName: "Deal" },
+    ];
+    const u = understandQuery("acme pipeline", catalog);
+    expect(u.profileTypes).toContain("deal");
+    expect(u.confidence).toBeGreaterThan(0);
+    // and the cue that produced the hit is still the thing removed
+    expect(u.cleanedQuery).toBe("acme");
   });
 });
 

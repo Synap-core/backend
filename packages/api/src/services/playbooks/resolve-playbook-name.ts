@@ -132,20 +132,32 @@ export async function resolvePlaybookByIdVisible(opts: {
  * Write workspace for a playbook run — never membership[0].
  *
  * Ladder: explicit/focused lens → playbook home → subject entity home →
- * ambient session home. Pod-wide playbooks with none of these must reject
- * (caller uses `rejectMissingWriteWorkspace`).
+ * ambient session home → ambient request lens. Pod-wide playbooks with none of
+ * these must reject (caller uses `rejectMissingWriteWorkspace`).
+ *
+ * The LAST two rungs are AMBIENT — a workspace the caller did not name for
+ * THIS run (the agent's current session, the UI's `X-Workspace-Id` header).
+ * They rank BELOW the playbook's own home deliberately: Relay lists playbooks
+ * pod-wide, so its active-workspace header is a lens on the app, not a
+ * statement about where this run belongs. Ranking the header first is exactly
+ * the defect this ladder exists to prevent — a playbook in workspace A
+ * launched under header B reached `resolveRunnablePlaybook` mismatched and
+ * threw "not visible in workspace B".
  */
 export function resolvePlaybookRunWriteWorkspace(opts: {
   explicitWorkspaceId?: string | null;
   playbookWorkspaceId: string | null;
   subjectWorkspaceId?: string | null;
   sessionWorkspaceId?: string | null;
+  /** Ambient request lens (`X-Workspace-Id`) — never a named choice. */
+  ambientWorkspaceId?: string | null;
 }): string | null {
   return (
     nullIfEmpty(opts.explicitWorkspaceId) ??
     nullIfEmpty(opts.playbookWorkspaceId) ??
     nullIfEmpty(opts.subjectWorkspaceId) ??
     nullIfEmpty(opts.sessionWorkspaceId) ??
+    nullIfEmpty(opts.ambientWorkspaceId) ??
     null
   );
 }

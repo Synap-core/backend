@@ -59,17 +59,28 @@ export interface EntityUsageParams {
   includePodScoped?: boolean;
   /** Join the caller's open/pin state (ranking callers only). */
   withOpens?: boolean;
+  /**
+   * Narrow to these profile rows. A pure filter on top of the floor — omitting
+   * it counts every profile, exactly as before. Used by the per-property fill
+   * door, which only ever needs one profile's rows and must not pay for a
+   * whole-pod GROUP BY to get its denominator.
+   */
+  profileIds?: readonly string[];
 }
 
 const toDate = (v: unknown): Date | null =>
   v == null ? null : v instanceof Date ? v : new Date(String(v));
 
-export async function loadEntityUsage(
-  params: EntityUsageParams
-): Promise<EntityUsageRow[]> {
-  const { userId, workspaceIds, includePodScoped, withOpens } = params;
+/**
+ * THE floor, built once — `loadEntityUsage` and `loadPropertyFill` must be
+ * counting the SAME rows or the fill numerator and its denominator come from
+ * two different populations. Returns `null` when the lens can admit nothing.
+ */
+function entityFloor(params: EntityUsageParams) {
+  const { userId, workspaceIds, includePodScoped, profileIds } = params;
   const ids = [...workspaceIds];
-  if (ids.length === 0 && !includePodScoped) return [];
+  if (ids.length === 0 && !includePodScoped) return null;
+  if (profileIds && profileIds.length === 0) return null;
 
   const lens =
     ids.length === 0
@@ -77,11 +88,20 @@ export async function loadEntityUsage(
       : includePodScoped
         ? or(isNull(entities.workspaceId), inArray(entities.workspaceId, ids))
         : inArray(entities.workspaceId, ids);
-  const where = and(
+  return and(
     isNull(entities.deletedAt),
     ownerPrivateVisibleWhere(entities.workspaceId, entities.userId, userId),
-    lens
+    lens,
+    ...(profileIds ? [inArray(entities.profileId, [...profileIds])] : [])
   );
+}
+
+export async function loadEntityUsage(
+  params: EntityUsageParams
+): Promise<EntityUsageRow[]> {
+  const { userId, withOpens } = params;
+  const where = entityFloor(params);
+  if (!where) return [];
 
   const base = {
     workspaceId: entities.workspaceId,
@@ -129,6 +149,194 @@ export async function loadEntityUsage(
       pinnedCount: Number(o.pinnedCount) || 0,
     };
   });
+}
+
+// ── Per-property FILL — a SIBLING of the aggregate above, not a second one ──
+
+export interface PropertyFillRow {
+  workspaceId: string | null;
+  profileId: string | null;
+  /** The property key as it is stored on `entities.properties`. */
+  slug: string;
+  /** Entities of this group whose value for this key is present and non-empty. */
+  filled: number;
+}
+
+/**
+ * How many entities carry a NON-EMPTY value for each property key, per
+ * `(workspace_id, profile_id, key)`. Same table, same floor as
+ * `loadEntityUsage` (both build it through `entityFloor`); the only addition is
+ * a LATERAL over the `properties` JSONB.
+ *
+ * ── THE DENOMINATOR TRAP — why this returns a NUMERATOR ONLY ───────────────
+ * `jsonb_each` over `{}` yields ZERO rows. An entity that has never had a
+ * property written therefore contributes NOTHING here — not a zero row, no row
+ * at all. So any `count(*)` taken from this lateral counts "entities that have
+ * at least one property key", which is NOT the population of the kind.
+ *
+ * Dividing by it inflates every rate, silently and in the flattering direction:
+ * a kind with 100 entities, 10 carrying `{"status":"x"}` and 90 carrying `{}`,
+ * would report `status` as 10/10 = 100% filled instead of 10/100 = 10%.
+ *
+ * So this function deliberately exposes no sample size. The denominator is
+ * `loadEntityUsage`'s `count` — a GROUP BY over `entities` ITSELF, where a
+ * property-less entity is still a row. `loadProfileFill` below is the one place
+ * the two are joined, and it takes the denominator from the entity count.
+ *
+ * `jsonb_typeof(...) = 'object'` guard: `jsonb_each` RAISES on a non-object
+ * (an array or scalar `properties`). One malformed row would 500 the whole
+ * request; it contributes zero keys instead.
+ */
+export async function loadPropertyFill(
+  params: EntityUsageParams
+): Promise<PropertyFillRow[]> {
+  const where = entityFloor(params);
+  if (!where) return [];
+
+  const result = await db.execute(drizzleSql`
+    SELECT ${entities.workspaceId} AS "workspaceId",
+           ${entities.profileId} AS "profileId",
+           kv.key AS "slug",
+           cast(count(*) FILTER (
+             WHERE jsonb_typeof(kv.value) <> 'null'
+               AND kv.value NOT IN ('""'::jsonb, '[]'::jsonb, '{}'::jsonb)
+           ) as integer) AS "filled"
+    FROM ${entities},
+         LATERAL jsonb_each(
+           CASE WHEN jsonb_typeof(${entities.properties}) = 'object'
+                THEN ${entities.properties}
+                ELSE '{}'::jsonb END
+         ) kv
+    WHERE ${where}
+    GROUP BY 1, 2, 3
+  `);
+
+  // postgres-js `execute` resolves to the row array itself; pglite's resolves
+  // to `{ rows }`. Both drivers run this file (prod / the PGlite harness).
+  const raw = result as unknown;
+  const rows = (
+    Array.isArray(raw)
+      ? raw
+      : ((raw as { rows?: unknown[] } | null)?.rows ?? [])
+  ) as Array<Partial<PropertyFillRow>>;
+  return rows.map((r) => ({
+    workspaceId: r.workspaceId ?? null,
+    profileId: r.profileId ?? null,
+    slug: String(r.slug),
+    filled: Number(r.filled) || 0,
+  }));
+}
+
+/**
+ * ONE profile's fill at ONE lens: a numerator per property key, and the sample
+ * size they are all out of.
+ *
+ * Two numbers, never a pre-divided ratio — the consumer divides. A single
+ * `fillRate: number` collapses three different facts into `0`:
+ *   • the stat was not requested / could not be read  → `fill` ABSENT
+ *   • the kind has no entities at this lens           → `sampleSize === 0`
+ *   • a real, measured zero                           → `sampleSize > 0, filled === 0`
+ * That is the `empty ≠ failed ≠ unmeasured` collapse this codebase keeps
+ * paying for. Keeping both numbers on the wire makes all three distinguishable.
+ */
+export interface ProfileFill {
+  /**
+   * Filled count per property key. A key NOBODY has filled may be ABSENT from
+   * this map (the lateral produced no group for it) — read a missing key as 0,
+   * which is safe precisely because `sampleSize` is independent of this map.
+   */
+  filledBySlug: ReadonlyMap<string, number>;
+  /**
+   * Entities of this profile at this lens — from `loadEntityUsage`, NEVER from
+   * the property lateral (see the trap above). `0` means the kind has no
+   * entities here: UNMEASURABLE (new kind / cold start), not "0% filled".
+   */
+  sampleSize: number;
+}
+
+/** 10 minutes. A fill stat is a tiebreaker; it never needs to be fresh. */
+const FILL_CACHE_TTL_MS = 600_000;
+
+/**
+ * In-process TTL cache, the idiom already used ~6× in this repo
+ * (`ProfileResolutionService.entityScopeCache` et al) — WITH one change.
+ *
+ * It caches the IN-FLIGHT PROMISE, not the resolved value. None of the six
+ * existing caches do, which leaves every one of them open to a cold-key
+ * stampede: N concurrent requests all miss, all issue the query, and N-1 of
+ * them are wasted. Storing the promise makes the second caller await the first
+ * caller's query. It is one line, and it removes the question entirely.
+ *
+ * A REJECTED promise is evicted (see below), so a failed read is never cached
+ * as a durable answer — the next caller retries and gets a real error or a real
+ * value. An error must not become a 10-minute-old "unmeasured".
+ *
+ * Key: `${profileId}:${workspaceId ?? "__nows__"}:${userId}`. `profileId` LEADS
+ * so `invalidateProfileFillCache(profileId)` can prefix-match, matching the
+ * existing `invalidateEntityScopeCache` shape. `userId` is appended — a
+ * DELIBERATE addition to the designed key: the floor is `ownerPrivateVisibleWhere`,
+ * so two users on one pod see genuinely different counts for the same
+ * (profile, workspace), and a user-less key would serve one user the other's.
+ */
+const profileFillCache = new Map<
+  string,
+  { value: Promise<ProfileFill>; expiresAt: number }
+>();
+
+/** Drop cached fill (call after a bulk property write, or in tests). */
+export function invalidateProfileFillCache(profileId?: string): void {
+  if (!profileId) {
+    profileFillCache.clear();
+    return;
+  }
+  for (const key of profileFillCache.keys()) {
+    if (key.startsWith(`${profileId}:`)) profileFillCache.delete(key);
+  }
+}
+
+export function loadProfileFill(params: {
+  /** The AUTHENTICATED user — the floor. Never a request-supplied id. */
+  userId: string;
+  profileId: string;
+  /** The requested lens; part of the cache key. `undefined` = no workspace lens. */
+  workspaceId?: string;
+  /** The ALREADY-FLOORED workspace ids to count over (as `rankProfilesByUsage` computes them). */
+  workspaceIds: readonly string[];
+}): Promise<ProfileFill> {
+  const { userId, profileId, workspaceId, workspaceIds } = params;
+  const key = `${profileId}:${workspaceId ?? "__nows__"}:${userId}`;
+  const cached = profileFillCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const scope = {
+    userId,
+    workspaceIds,
+    includePodScoped: true,
+    profileIds: [profileId],
+  } as const;
+
+  const value = (async (): Promise<ProfileFill> => {
+    const [usage, fill] = await Promise.all([
+      loadEntityUsage(scope),
+      loadPropertyFill(scope),
+    ]);
+    // THE denominator: entity rows, not lateral rows. See loadPropertyFill.
+    const sampleSize = usage.reduce((n, r) => n + r.count, 0);
+    const filledBySlug = new Map<string, number>();
+    for (const r of fill)
+      filledBySlug.set(r.slug, (filledBySlug.get(r.slug) ?? 0) + r.filled);
+    return { filledBySlug, sampleSize };
+  })();
+
+  value.catch(() => {
+    if (profileFillCache.get(key)?.value === value)
+      profileFillCache.delete(key);
+  });
+  profileFillCache.set(key, {
+    value,
+    expiresAt: Date.now() + FILL_CACHE_TTL_MS,
+  });
+  return value;
 }
 
 // ── PURE tier ────────────────────────────────────────────────────────────────

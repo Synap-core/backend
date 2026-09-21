@@ -24529,8 +24529,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				identifier: string;
+				fill?: boolean | undefined;
 			};
 			output: {
+				fill?: Record<string, {
+					filled: number;
+					sampleSize: number;
+				}> | undefined;
 				profile: {
 					id: string;
 					userId: string | null;
@@ -31853,6 +31858,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		run: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				playbookId: string;
+				workspaceId?: string | undefined;
 				params?: Record<string, unknown> | undefined;
 				agentIds?: string[] | undefined;
 				agentUserId?: string | undefined;
@@ -33474,7 +33480,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				preferences: {
 					interests: string[];
 					dislikedTopics: string[];
-					persona: "cto" | "sales" | "marketing" | "founder" | "general" | "project-manager" | "researcher";
+					persona: string;
 					frequency: "hourly" | "daily" | "weekly" | "realtime";
 					sources: {
 						id: string;
@@ -33491,7 +33497,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notifications: boolean;
 					autoCreateEntities: boolean;
 					onboardingCompleted: boolean;
-					goal?: "startup-leads" | "market-intelligence" | "personal-learning" | "competitor-watch" | "trend-monitoring" | undefined;
+					goal?: string | undefined;
 				};
 			};
 			output: {

@@ -216,6 +216,18 @@ export const profilesRouter = router({
     .input(
       z.object({
         identifier: z.string(), // slug or ID
+        /**
+         * Opt-in per-property FILL statistic, for a caller deriving a
+         * projection (which columns to show, which fields to summarise).
+         *
+         * OPT-IN because it costs an extra aggregate; OFF by default so no
+         * existing caller pays for it. The Hub REST `/discover?fill=true`
+         * door serves the same shape — this is the tRPC twin, because the
+         * browser and synap-app read THIS procedure, not that route. Without
+         * it the projection door would be reachable from the UI while its
+         * ranking signal was not: built, and severed.
+         */
+        fill: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -247,9 +259,55 @@ export const profilesRouter = router({
           ctx.workspaceId
         );
 
+      // Measured through THE one aggregate (`loadProfileFill` →
+      // `loadEntityUsage`), never a second count beside it. A failed read
+      // leaves `fill` UNDEFINED rather than emitting zeros: "nobody has filled
+      // this" and "we could not measure it" are different facts, and a
+      // consumer that cannot tell them apart will rank a healthy field last.
+      let fill:
+        Record<string, { filled: number; sampleSize: number }> | undefined;
+      if (input.fill) {
+        try {
+          const [{ loadProfileFill }, { getUserAccessibleWorkspaceIds }] =
+            await Promise.all([
+              import("../services/discover/usage-aggregate.js"),
+              import("./hub-protocol/rest/_shared.js"),
+            ]);
+          // The floor, computed the SAME way the REST door computes it: every
+          // workspace this user can reach, narrowed to the requested lens when
+          // one is pinned. Passing a caller-supplied id straight through would
+          // let the count span workspaces the user cannot see.
+          const accessible = await getUserAccessibleWorkspaceIds(ctx.userId);
+          const lens = ctx.workspaceId
+            ? accessible.filter((id) => id === ctx.workspaceId)
+            : accessible;
+          const measured = await loadProfileFill({
+            userId: ctx.userId,
+            profileId: profile.id,
+            ...(ctx.workspaceId ? { workspaceId: ctx.workspaceId } : {}),
+            workspaceIds: lens,
+          });
+          fill = Object.fromEntries(
+            effectiveProperties.map((p) => [
+              p.slug,
+              {
+                filled: measured.filledBySlug.get(String(p.slug)) ?? 0,
+                sampleSize: measured.sampleSize,
+              },
+            ])
+          );
+        } catch (err) {
+          logger.warn(
+            { err, profileId: profile.id },
+            "getEffectiveProperties: fill measurement failed; omitting"
+          );
+        }
+      }
+
       return {
         profile,
         effectiveProperties,
+        ...(fill ? { fill } : {}),
       };
     }),
 

@@ -28,6 +28,14 @@ vi.mock("@synap/database", async (importOriginal) => {
     where: vi.fn(() => chain),
     orderBy: vi.fn(() => chain),
     limit: vi.fn(async () => []),
+    // Drizzle's query builder is THENABLE — awaiting it WITHOUT `.limit()`
+    // executes the query. `playbooks.create`'s near-duplicate overlap scan
+    // does exactly that, so without this the builder object itself reached
+    // `rankByTerms` ("candidates.map is not a function") and every agent
+    // create came back 500. Resolves EMPTY: no playbook pre-exists in these
+    // fixtures, so the scan must find no overlap and the create must proceed
+    // to the gate — which is precisely what this file asserts.
+    then: (resolve: (v: unknown) => unknown) => resolve([]),
   };
   const fakeDb = {
     select: vi.fn(() => chain),

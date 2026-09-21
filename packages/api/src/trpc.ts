@@ -185,6 +185,47 @@ async function workspaceMembershipDenied(
 }
 
 /**
+ * The workspace gate, extracted from `workspaceProcedure` so a procedure that
+ * must resolve its workspace FROM ITS INPUT (rather than from the ambient
+ * `X-Workspace-Id` header) can apply the identical checks afterwards instead of
+ * forking them. `playbooks.run` is the first such caller: it derives the run's
+ * write workspace from the playbook via `resolvePlaybookRunWriteWorkspace` and
+ * then gates on THAT workspace.
+ *
+ * Checks, in order: membership (with the candidate-listing denial message) and
+ * the archived-workspace refusal. Returns the member's role.
+ */
+export async function assertWorkspaceUsable(
+  userId: string,
+  workspaceId: string
+): Promise<{ role: string }> {
+  const membership = await db.query.workspaceMembers.findFirst({
+    where: and(
+      eq(workspaceMembers.workspaceId, workspaceId),
+      eq(workspaceMembers.userId, userId)
+    ),
+  });
+
+  if (!membership) {
+    throw await workspaceMembershipDenied(userId, workspaceId);
+  }
+
+  const workspace = await db.query.workspaces.findFirst({
+    where: eq(workspaces.id, workspaceId),
+    columns: { archivedAt: true },
+  });
+
+  if (workspace?.archivedAt != null) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "This workspace has been archived.",
+    });
+  }
+
+  return { role: membership.role };
+}
+
+/**
  * Workspace-scoped procedure (auth + workspace required)
  *
  * Automatically validates workspace membership and adds workspaceId to context.
@@ -207,29 +248,9 @@ export const workspaceProcedure = protectedProcedure.use(async (opts) => {
     });
   }
 
-  // Verify user has access to workspace
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, ctx.workspaceId),
-      eq(workspaceMembers.userId, ctx.userId)
-    ),
-  });
-
-  if (!membership) {
-    throw await workspaceMembershipDenied(ctx.userId, ctx.workspaceId);
-  }
-
-  const workspace = await db.query.workspaces.findFirst({
-    where: eq(workspaces.id, ctx.workspaceId),
-    columns: { archivedAt: true },
-  });
-
-  if (workspace?.archivedAt != null) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message: "This workspace has been archived.",
-    });
-  }
+  // Verify user has access to workspace (membership + not archived) — the ONE
+  // derivation, shared with input-resolved-workspace callers.
+  const membership = await assertWorkspaceUsable(ctx.userId, ctx.workspaceId);
 
   logger.debug(
     { userId: ctx.userId, workspaceId: ctx.workspaceId, role: membership.role },

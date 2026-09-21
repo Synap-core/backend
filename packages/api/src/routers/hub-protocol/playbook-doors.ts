@@ -233,6 +233,11 @@ export async function runPlaybookDoor(
   // on skills that are not enabled. Never a direct-active bypass.
   const result = await caller.run({
     playbookId: resolvedPlaybookId,
+    // EXPLICIT write lens — this door already ran the ladder above (it can see
+    // the agent's session home, which the router cannot). Passing the outcome
+    // as the router's top rung means the ladder resolves ONCE, here, and the
+    // router cannot re-derive a different answer.
+    workspaceId: runWsId,
     params: input.params,
     subjectId: input.subjectId,
     agentIds: input.agentIds,

@@ -1,11 +1,20 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("./_shared.js", () => ({
-  getCaller: vi.fn(),
-  hasScope: vi.fn(() => true),
-  logger: { error: vi.fn() },
-}));
+// PARTIAL mock (importOriginal + spread), not a total replacement. `discover.ts`
+// gained a `getUserAccessibleWorkspaceIds` import from this module; a total
+// factory silently omits whatever the module-under-test imports NEXT, and the
+// file then dies at COLLECTION — which reads as a pass in a summary. The
+// `total-mock-missing-export-ratchet` tripwire caught exactly that here.
+vi.mock("./_shared.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./_shared.js")>();
+  return {
+    ...actual,
+    getCaller: vi.fn(),
+    hasScope: vi.fn(() => true),
+    logger: { error: vi.fn() },
+  };
+});
 
 import { registerDiscoverRoutes } from "./discover.js";
 import { getCaller } from "./_shared.js";

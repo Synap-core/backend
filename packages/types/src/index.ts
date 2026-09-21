@@ -112,3 +112,6 @@ export * from "./focus-sessions/index.js";
 
 // AI Capture Routing Types — Single Source of Truth (Phase 2 Week 2 consolidation)
 export * from "./capture-routing-types.js";
+
+// Per-kind projection (pure, leaf module — browser/relay/CLI/IS safe)
+export * from "./projection/index.js";

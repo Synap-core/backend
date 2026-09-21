@@ -153,6 +153,10 @@
       "types": "./dist/external-connect/index.d.ts",
       "import": "./dist/external-connect/index.js"
     },
+    "./projection": {
+      "types": "./dist/projection/index.d.ts",
+      "import": "./dist/projection/index.js"
+    },
     "./capture-routing": {
       "types": "./dist/capture-routing-types.d.ts",
       "import": "./dist/capture-routing-types.js"

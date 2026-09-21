@@ -38,7 +38,17 @@ import { listEffectiveRelationTypes } from "../../../utils/relation-types.js";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { getCaller, hasScope, logger, type HubHono } from "./_shared.js";
+import {
+  getCaller,
+  getUserAccessibleWorkspaceIds,
+  hasScope,
+  logger,
+  type HubHono,
+} from "./_shared.js";
+import {
+  loadProfileFill,
+  type ProfileFill,
+} from "../../../services/discover/usage-aggregate.js";
 import {
   resolveProfileDescription,
   resolveProfileIcon,
@@ -66,6 +76,33 @@ const DiscoverPropertySchema = z.object({
     .enum(["base", "workspace"])
     .describe("base = global/profile definition; workspace = explicit overlay"),
   workspaceId: z.string().nullable().optional(),
+  displayOrder: z
+    .number()
+    .optional()
+    .describe(
+      "The resolver's own field order (`compareEffectiveProperties`: base layer before overlay, then displayOrder, then slug). The projection dropped it until 2026-09-21, which is why no schema-derived form/projection could be built from this door."
+    ),
+  uiHints: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "The stored `uiHints` blob (PropertyUIHints): placeholder, inputType, displayAs, format, includeTime, linkedProfileSlug, helpText, description, readOnly, … Emitted whole rather than cherry-picked — a per-key allowlist is exactly how `displayOrder` and most of this object went missing. Labels and options are NOT read from here; they come from the shared resolvers."
+    ),
+  fill: z
+    .object({
+      filled: z
+        .number()
+        .describe("Entities with a non-empty value for this property."),
+      sampleSize: z
+        .number()
+        .describe(
+          "Entities of this kind at this lens — the denominator. Counted over `entities` itself, so a property-less entity IS counted."
+        ),
+    })
+    .optional()
+    .describe(
+      "TWO NUMBERS, never a ratio — the consumer divides. ABSENT = not requested (?fill=true) or unreadable: UNMEASURED. `sampleSize === 0` = the kind has no entities at this lens: UNMEASURABLE (new kind / cold start), NOT zero. `sampleSize > 0 && filled === 0` = a real measured zero. A `fillRate: number` collapses all three into `0`. This is a TIEBREAKER for ranking fields, never a gate — nothing filters a property out on it."
+    ),
 });
 
 /**
@@ -90,7 +127,15 @@ const DiscoverPropertySchema = z.object({
  * the old spellings as fallbacks, so this is strictly widening: a custom def
  * already authored with `options` is unaffected.
  */
-export function toDiscoverProperty(d: Record<string, unknown>) {
+export function toDiscoverProperty(
+  d: Record<string, unknown>,
+  /**
+   * Optional measured fill. OMIT it (not `{filled:0,sampleSize:0}`) when the
+   * stat was not requested or could not be read — absence is the encoding of
+   * UNMEASURED, and it must stay distinguishable from a measured zero.
+   */
+  fill?: { filled: number; sampleSize: number }
+) {
   const constraints =
     d.constraints && typeof d.constraints === "object"
       ? (d.constraints as Record<string, unknown>)
@@ -117,6 +162,17 @@ export function toDiscoverProperty(d: Record<string, unknown>) {
         : {}),
     schemaScope: (d.workspaceId ? "workspace" : "base") as "workspace" | "base",
     workspaceId: typeof d.workspaceId === "string" ? d.workspaceId : null,
+    // RESTORED 2026-09-21. `displayOrder` and most of `uiHints` were resolved
+    // by `getEffectiveProperties` and then dropped here — measured: 0 of 458
+    // projected properties carried `displayOrder`. Without it a consumer has no
+    // field order and no input hints, so no schema-derived form or projection
+    // could be built from this door at all. Emitted WHOLE rather than
+    // cherry-picked: a per-key allowlist is how they went missing.
+    ...(typeof d.displayOrder === "number"
+      ? { displayOrder: d.displayOrder }
+      : {}),
+    ...(uiHints && Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+    ...(fill ? { fill } : {}),
   };
 }
 
@@ -269,6 +325,13 @@ const DiscoverQuerySchema = z.object({
    * context (Raycast), and the rows already carry `rank` and `origin`.
    */
   groups: z.enum(["origin"]).optional(),
+  /**
+   * Opt-in: `true` measures how many entities of each kind carry a value for
+   * each property, and emits `fill: { filled, sampleSize }` per property in the
+   * full tier. Off by default — it is an extra aggregate per profile, and a
+   * caller that does not ask must get ABSENCE (= unmeasured), never zeros.
+   */
+  fill: z.enum(["true", "false"]).optional(),
 });
 
 const ProfileOriginSchema = z
@@ -496,6 +559,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
       profileSlugs: c.req.query("profileSlugs"),
       sort: c.req.query("sort"),
       groups: c.req.query("groups"),
+      fill: c.req.query("fill"),
     });
     if (!query.success) {
       return c.json(
@@ -508,6 +572,7 @@ export function registerDiscoverRoutes(app: HubHono): void {
     }
     const { userId, workspaceId, profileSlugs } = query.data;
     const summary = query.data.summary === "true";
+    const wantsFill = query.data.fill === "true";
     const selectedSlugs = profileSlugs
       ? [...new Set(profileSlugs.split(",").map((slug) => slug.trim()))]
       : undefined;
@@ -659,11 +724,56 @@ export function registerDiscoverRoutes(app: HubHono): void {
         })
       );
 
+      // Opt-in fill, measured through THE aggregate (`loadProfileFill` →
+      // `loadEntityUsage` + `loadPropertyFill`, one owner-private floor).
+      // A FAILED read leaves the profile OUT of this map, so its properties
+      // carry no `fill` key at all — unmeasured, never a fabricated zero.
+      const fillByProfileId = new Map<string, ProfileFill>();
+      if (wantsFill) {
+        const accessible = await getUserAccessibleWorkspaceIds(userId);
+        const lens = workspaceId
+          ? accessible.filter((id) => id === workspaceId)
+          : accessible;
+        await Promise.all(
+          selectedProfiles.map(async (p) => {
+            try {
+              fillByProfileId.set(
+                p.id,
+                await loadProfileFill({
+                  userId,
+                  profileId: p.id,
+                  ...(workspaceId ? { workspaceId } : {}),
+                  workspaceIds: lens,
+                })
+              );
+            } catch (err) {
+              logger.error(
+                { err, profileId: p.id },
+                "discover: property fill read failed"
+              );
+            }
+          })
+        );
+      }
+
       const discoveredProfiles = selectedProfiles.map((p) => {
         const rowSchema = schemaByProfileId.get(p.id);
         const defs =
           rowSchema?.status === "resolved" ? rowSchema.effectiveProperties : [];
-        const properties = defs.map(toDiscoverProperty);
+        const profileFill = fillByProfileId.get(p.id);
+        const properties = defs.map((d) =>
+          toDiscoverProperty(
+            d,
+            profileFill
+              ? {
+                  // A key nobody has filled has no group in the lateral — read
+                  // as 0, which is only safe because sampleSize is independent.
+                  filled: profileFill.filledBySlug.get(String(d.slug)) ?? 0,
+                  sampleSize: profileFill.sampleSize,
+                }
+              : undefined
+          )
+        );
 
         const propExample =
           properties.length > 0

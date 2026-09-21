@@ -30,6 +30,22 @@ vi.mock("@synap/database", async (importOriginal) => {
     async getBySlug() {
       return null;
     }
+    /**
+     * The pod-wide slug probe `profiles.create` runs for AI callers before
+     * minting a kind, to refuse a cross-workspace TWIN (two profiles with one
+     * slug resolve differently depending on the lens — that is how this pod
+     * ended up with two `finding` kinds). Returns EMPTY here: these fixtures
+     * are defining a genuinely new kind, which is the path under test.
+     *
+     * It is stubbed rather than omitted deliberately — omitting it made the
+     * door throw `findActiveBySlugAnyScope is not a function` and every agent
+     * define came back 500 instead of 202. A stub that silently lacks a method
+     * the code under test calls is the same class of defect as a total
+     * vi.mock missing an export.
+     */
+    async findActiveBySlugAnyScope() {
+      return [];
+    }
   }
   return {
     ...actual,
