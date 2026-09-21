@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
     title: string | null;
     properties: Record<string, unknown> | null;
   }>,
+  /** Open findings at ANY severity, as the door reports them. */
+  openTotal: 0 as number,
   dbThrows: false,
   /** How many rows the caller asked the door for — proves the +1 probe. */
   requested: 0 as number,
@@ -51,7 +53,7 @@ vi.mock("./open-findings-door.js", () => ({
     h.requested += 1;
     h.calledWithUserId = userId;
     if (h.dbThrows) throw new Error("pool exhausted");
-    return h.rows;
+    return { blockers: h.rows, openTotal: h.openTotal };
   },
 }));
 
@@ -96,6 +98,7 @@ const finding = (
 
 beforeEach(() => {
   h.rows = [];
+  h.openTotal = 0;
   h.dbThrows = false;
   h.requested = 0;
   h.calledWithUserId = null;
@@ -111,10 +114,13 @@ describe("startHere.openFindings", () => {
         workaround: "use kebab-case slugs",
       }),
     ];
+    h.openTotal = 1;
     const out = await build();
     expect(out.openFindings).toEqual({
       count: 1,
       countIsLowerBound: false,
+      severity: "blocker",
+      openTotal: 1,
       items: [
         {
           id: "f1",
@@ -144,11 +150,49 @@ describe("startHere.openFindings", () => {
     expect(h.calledWithUserId).toBe("u1");
   });
 
+  /**
+   * FINDING 14005d59, filed against this code by another dogfooding agent and
+   * correct: `count` is SEVERITY-FILTERED while `beforeYouFinish` told agents
+   * to dedupe against it. An agent checking a blocker-only list, finding no
+   * twin, and filing a duplicate of an open `minor` finding would have been
+   * obeying the instruction exactly. The number was true; the conclusion a
+   * reader drew from it was false.
+   */
+  it("names the severity filter and reports the UNFILTERED open total", async () => {
+    h.rows = [finding("f1")]; // one blocker…
+    h.openTotal = 9; // …out of nine open findings
+    const out = await build();
+    expect(out.openFindings).toMatchObject({
+      count: 1,
+      severity: "blocker",
+      openTotal: 9,
+    });
+    // The pairing is the point: a reader seeing `count: 1` alone concludes
+    // "one open finding", which is wrong by a factor of nine.
+    expect(
+      (out.openFindings as { openTotal: number }).openTotal,
+      "openTotal collapsed into the blocker count — the filter is invisible again"
+    ).not.toBe(1);
+  });
+
+  it("the dedup instruction points past the blocker page", async () => {
+    const out = await build();
+    // Non-vacuity: the instruction must still exist at all.
+    expect(out.beforeYouFinish.length).toBeGreaterThan(100);
+    expect(
+      out.beforeYouFinish,
+      "the instruction still sends agents to dedupe against a filtered list"
+    ).toContain("openTotal");
+    expect(out.beforeYouFinish).toContain("finding");
+  });
+
   it("nothing open is count 0 — a real, readable answer", async () => {
     const out = await build();
     expect(out.openFindings).toEqual({
       count: 0,
       countIsLowerBound: false,
+      severity: "blocker",
+      openTotal: 0,
       items: [],
     });
   });

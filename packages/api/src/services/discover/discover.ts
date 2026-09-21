@@ -106,9 +106,17 @@ export interface StartHere {
    */
   openFindings:
     | {
+        /** Blocker-severity rows returned below — NOT all open findings. */
         count: number;
         /** True when `count` hit the read cap — "at least this many". */
         countIsLowerBound: boolean;
+        /**
+         * The severity `count`/`items` are filtered to. Stated so a reader can
+         * never mistake this page for the whole set (finding 14005d59).
+         */
+        severity: "blocker";
+        /** Open findings at ANY severity — the dedup denominator. */
+        openTotal: number;
         items: Array<{
           id: string;
           /** `entities.title` is nullable — reported as null, never as "". */

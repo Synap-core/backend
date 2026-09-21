@@ -75,6 +75,8 @@ import {
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
+import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+import { rankByTerms, queryTerms } from "../utils/term-match.js";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
 import {
   listCapabilities,
@@ -243,6 +245,12 @@ export const createInputSchema = z.object({
    * Validated like `stages`: a criterion is a control, not a loose bag.
    */
   criteria: sessionCriteriaSchema.optional(),
+  /**
+   * Bypass the near-duplicate refusal below. Same name and same meaning as
+   * `entities.create.forceCreate`: the caller has SEEN the candidates and
+   * judged this genuinely distinct.
+   */
+  forceCreate: z.boolean().optional(),
   subjectProfile: jsonRecord.optional(),
   /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
   schedule: playbookScheduleInputSchema.optional(),
@@ -1065,6 +1073,154 @@ const playbookEnrollmentsRouter = router({
 
 // ── Playbooks router ─────────────────────────────────────────────────────────
 
+/**
+ * Refuse a `subjectProfile` that names a kind/role slug no profile resolves.
+ *
+ * MEASURED DEFECT (live, 2026-09-21). The shipped CRM playbook "Qualify a CRM
+ * lead" carries `subjectProfile: { profileSlug: "crm-lead" }`, and NO profile
+ * with that slug exists in the pod. Nothing ever checked. The playbook is
+ * permanently unusable — `matchForEntity` keys candidates off
+ * `subjectProfile->>'profileSlug'` (see the matcher below), so a slug that
+ * resolves to nothing can never match any entity, and the failure is silent:
+ * the playbook simply never appears as a candidate for anything. A second
+ * playbook in the same workspace points at `lead`, which IS real but is a
+ * ROLE in another workspace — the "two lead models" the dogfood report hit.
+ *
+ * This is the same class as the twin-slug `finding` bug: a STORED CONFIG
+ * references a kind by slug, and nothing validates the reference at write
+ * time. Config-over-code only works if the references are checked when they
+ * are written; otherwise the config is a dangling pointer nobody can see.
+ *
+ * Deliberately routed through `assertKnownProfileSlug` — the ONE existing door
+ * for "does this slug resolve" (it is what every entity read already uses, and
+ * it returns the rows so no second query is needed). A local `profiles WHERE
+ * slug = ?` here would be a second implementation of a question that already
+ * has an answer.
+ *
+ * Checked BEFORE the governance gate on purpose: otherwise an agent's bad slug
+ * is filed as a proposal that can only fail at approve time, handing the user
+ * a review item that was never approvable. Same placement and same reason as
+ * the reserved-kind guard in `entities/create.ts`.
+ *
+ * A `subjectProfile` with no `profileSlug` key is untouched — the column is a
+ * free JSON bag and this guard makes no claim about its other contents.
+ */
+async function assertSubjectProfileResolves(
+  db: Parameters<typeof assertKnownProfileSlug>[0],
+  subjectProfile: unknown
+): Promise<void> {
+  if (!subjectProfile || typeof subjectProfile !== "object") return;
+  const slug = (subjectProfile as { profileSlug?: unknown }).profileSlug;
+  if (typeof slug !== "string" || slug.length === 0) return;
+  // Throws TRPCError NOT_FOUND naming the slug and pointing at list_profiles.
+  await assertKnownProfileSlug(db, slug);
+}
+
+/** How many near-duplicates to hand back. The report asked for three. */
+const OVERLAP_CANDIDATE_LIMIT = 3;
+
+/**
+ * Score PER QUERY TERM above which an AI create is refused as a probable
+ * duplicate.
+ *
+ * NORMALISED by term count, and that matters for SHORT inputs. `rankByTerms`
+ * sums over every query term, so a raw total grows with how much the caller
+ * wrote. Note `queryTerms` caps at `MAX_QUERY_TERMS` (8) after stopword
+ * removal and de-duplication, so for any reasonably-worded playbook the
+ * divisor is simply 8 — the normalisation earns its keep only on a terse
+ * one-or-two-word create, which would otherwise be scored on a different
+ * scale from everything else.
+ *
+ * TUNED ON THE TWO REAL CASES, measured 2026-09-21 against the live CRM
+ * workspace rows (the same rows `playbooks.create-overlap-guard.test.ts`
+ * uses, copied verbatim from `synap_list_playbooks`):
+ *   - the duplicate that was actually filed, "Lead → qualified (discovery)"
+ *     vs "Qualify a CRM lead":                47.0 / term  → must refuse
+ *   - a genuinely distinct playbook in the same workspace,
+ *     "Quarterly revenue forecast":           21.1 / term  → must allow
+ * 30 sits between them with roughly equal margin on both sides.
+ *
+ * HONEST LIMITATION: two data points is a weak basis for a constant, and this
+ * WILL misjudge some pair. That is survivable only because `forceCreate` makes
+ * a false refusal a one-call recovery rather than a dead end — do not remove
+ * that escape hatch, and do not raise this into a hard block without one.
+ */
+const OVERLAP_REFUSE_SCORE_PER_TERM = 30;
+
+/**
+ * "Discover before inventing", enforced at the write door instead of asked for
+ * in a prompt.
+ *
+ * MEASURED DEFECT (live, 2026-09-21). The CRM workspace already held "Qualify a
+ * CRM lead", "Enrich Lead/Company", "Lead Outreach" and "CRM Hygiene". An agent
+ * created "Lead → qualified (discovery)", overlapping three of them, and the
+ * pod accepted it without a word. The rule existed only as instruction prose,
+ * and prose is followed on the days somebody remembers it.
+ *
+ * Deliberately reuses `rankByTerms` — the pod's existing IDF-weighted ranker,
+ * already the "closest by name/description" helper behind capability search —
+ * rather than adding a second similarity implementation. `rankRouteCandidates`
+ * was the other candidate and is the wrong shape here: its kind/facet signals
+ * score an ENTITY against playbooks, and its `anyKind` bonus would rank every
+ * subject-less playbook highly regardless of text.
+ *
+ * AI CALLERS ONLY, mirroring the exact-name idempotency directly below it: a
+ * template install, a reconciler, a marketplace apply and a human author all
+ * create playbooks deliberately and must not be second-guessed. `forceCreate`
+ * is the escape hatch, named and behaved identically to `entities.create`.
+ */
+async function findOverlappingPlaybooks(
+  database: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string | null | undefined,
+  input: {
+    name: string;
+    description?: string | null;
+    goalTemplate?: string | null;
+  }
+): Promise<
+  Array<{ id: string; name: string; description: string | null; score: number }>
+> {
+  const scope =
+    workspaceId == null || workspaceId === ""
+      ? isNull(playbooks.workspaceId)
+      : eq(playbooks.workspaceId, workspaceId);
+  const rows = await database
+    .select({
+      id: playbooks.id,
+      name: playbooks.name,
+      description: playbooks.description,
+      goalTemplate: playbooks.goalTemplate,
+    })
+    .from(playbooks)
+    .where(and(scope, ne(playbooks.status, "archived")));
+  if (rows.length === 0) return [];
+
+  // Rank the NEW playbook's own words against the existing ones. Rarity is
+  // measured over this workspace's set, so workspace-wide boilerplate ("the",
+  // "lead" in a lead-heavy CRM) is discounted automatically.
+  const query = [input.name, input.description, input.goalTemplate]
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
+    .join(" ");
+  const termCount = queryTerms(query).length;
+  if (termCount === 0) return [];
+  return rankByTerms(query, rows, (r) => ({
+    // Weighted, not a flat bag: a name collision is the strongest duplicate
+    // signal, the goal template is the motion itself, and the description is
+    // prose that varies most between two playbooks doing the same thing.
+    primary: r.name,
+    secondary: r.goalTemplate ? [r.goalTemplate] : [],
+    tertiary: r.description,
+  }))
+    .slice(0, OVERLAP_CANDIDATE_LIMIT)
+    .map(({ item, score }) => ({
+      id: item.id,
+      name: item.name,
+      description: item.description,
+      // Normalised, so the caller compares against a scale-stable threshold.
+      score: score / termCount,
+    }));
+}
+
 export const playbooksRouter = router({
   links: linksRouter,
   // Named `capabilityRegistry` (not `capabilities`) to avoid colliding with the
@@ -1449,6 +1605,8 @@ export const playbooksRouter = router({
       // Decode an agent's XML-escaped name once, at the one create door —
       // see `entities/create.ts` for the full rationale.
       if (input.name) input.name = decodeHtmlEntities(input.name);
+      // Dangling `subjectProfile` slugs are refused here, before the gate.
+      await assertSubjectProfileResolves(await getDb(), input.subjectProfile);
       const gateOpts = {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -1527,6 +1685,31 @@ export const playbooksRouter = router({
             message: "Playbook already exists (idempotent create)",
             proposalId: null as string | null,
           };
+        }
+
+        // DISCOVER BEFORE INVENTING — enforced, not asked for. An exact name
+        // match was handled above; this catches the overlap that actually
+        // happens, where an agent invents a near-twin under a different name.
+        if (!input.forceCreate) {
+          const overlapping = await findOverlappingPlaybooks(
+            await getDb(),
+            ctx.workspaceId,
+            input
+          );
+          const top = overlapping[0];
+          if (top && top.score >= OVERLAP_REFUSE_SCORE_PER_TERM) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message:
+                `This looks like an existing playbook. Closest matches: ` +
+                overlapping.map((c) => `"${c.name}" (${c.id})`).join(", ") +
+                `. Extend one of them with playbooks.update, or resend with ` +
+                `forceCreate: true if this is genuinely a different motion.`,
+              // Machine-readable, same shape as the entity door's candidates
+              // so a caller can act on it without parsing the sentence.
+              cause: { overlapping } as unknown as Error,
+            });
+          }
         }
       }
 
@@ -1709,6 +1892,16 @@ export const playbooksRouter = router({
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: existing.workspaceId,
       });
+
+      // 2b. A patch that REPOINTS the subject must name a slug that resolves —
+      // same guard and same reason as the create door. Only when the field is
+      // actually in the patch: an update that does not mention it must not be
+      // refused for a dangling value it did not introduce (that is the create
+      // door's job, and refusing here would make an existing broken playbook
+      // uneditable — including uneditable to FIX it).
+      if (input.subjectProfile !== undefined) {
+        await assertSubjectProfileResolves(database, input.subjectProfile);
+      }
 
       // 3. Governance membrane decides approve vs propose.
       const perm = await checkPermissionOrPropose({
@@ -2314,7 +2507,31 @@ export const playbooksRouter = router({
         action: "run",
         source: input.source,
         reasoning: input.reasoning,
-        data: { playbookId: input.playbookId, name: playbook.name },
+        /**
+         * The RUN ARGUMENTS ride with the proposal, not just the target.
+         *
+         * They used to be dropped here, and the approval executor could not
+         * recover them from anywhere — so it refused every parameterised
+         * playbook outright (`executors/playbook.ts`, which says so in its own
+         * header). That was the honest choice while the arguments were lost:
+         * starting a session under a goal with `{}` substituted into it is
+         * worse than not starting one. But it meant the governed path — the
+         * DEFAULT for every agent — could not run any playbook that declares
+         * params, which is 14 of the ones installed on this pod.
+         *
+         * `params` feeds both `resolveInputItems` and the goalTemplate
+         * substitution, `subjectId` becomes `focus_sessions.subjectEntityId`
+         * ("onboard Acme" vs "onboard nobody"), and `agentIds` are the extra
+         * agents on the run channel. Storing them is what lets the executor
+         * replay the run the caller actually asked for.
+         */
+        data: {
+          playbookId: input.playbookId,
+          name: playbook.name,
+          ...(input.params ? { params: input.params } : {}),
+          ...(input.subjectId ? { subjectId: input.subjectId } : {}),
+          ...(input.agentIds?.length ? { agentIds: input.agentIds } : {}),
+        },
       });
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

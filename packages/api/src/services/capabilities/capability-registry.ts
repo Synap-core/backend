@@ -60,6 +60,7 @@ import {
 } from "./run-posture.js";
 import { userVisibleWhere } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
+import { declaredReadOnly } from "./capability-drift.js";
 import { toolNotRetiredWhere } from "../tools/visibility.js";
 import { rankByTerms, type TermMatch } from "../../utils/term-match.js";
 import {
@@ -124,6 +125,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
    * Optional: a verb state built by any other path simply does not carry it.
    */
   backingSkillExecutable?: boolean;
+  /**
+   * The backing skill's AUTHORED `metadata.readOnly` declaration, when it
+   * declares one. The gate short-circuits to `run` on it, so every door's
+   * `governance` must see it too — without this the registry displayed
+   * `propose` for a verb the gate would RUN (observed live on `exa_search`).
+   * Absent = the skill declares nothing, never `false`.
+   */
+  declaredReadOnly?: boolean;
 }
 
 /**
@@ -444,7 +453,8 @@ export function buildVerbStates(
   grant: { execMode: ExecMode } | undefined,
   toolKind: string,
   providerSpecByName: Map<string, ProviderVerbSpec>,
-  backingSkillExecutableByName: Map<string, boolean>
+  backingSkillExecutableByName: Map<string, boolean>,
+  declaredReadOnlyByName: Map<string, boolean> = new Map()
 ): CapabilityVerbStateWithResponseShape[] {
   if (!Array.isArray(catalog) || catalog.length === 0) return [];
   const granted = !!grant;
@@ -469,6 +479,12 @@ export function buildVerbStates(
       // execute door's lifecycle + approval gates. The tool row's own approval
       // is not enough: executeCapability resolves and gates this skill.
       backingSkillExecutable: backingSkillExecutableByName.get(v.id) === true,
+      // Only when the backing skill actually declares it — an absent key must
+      // stay absent, so a consumer can tell "declares false" from "declares
+      // nothing".
+      ...(declaredReadOnlyByName.has(v.id)
+        ? { declaredReadOnly: declaredReadOnlyByName.get(v.id) }
+        : {}),
     };
   });
 }
@@ -644,7 +660,12 @@ export async function listCapabilities(
   // in create-from-definition.ts), so this is a direct lookup, no join needed.
   const providerSpecByName = new Map<string, ProviderVerbSpec>();
   const backingSkillExecutableByName = new Map<string, boolean>();
+  // verb id (= skill name) → the skill's authored read-only declaration, read
+  // through the same helper the gate uses.
+  const declaredReadOnlyByName = new Map<string, boolean>();
   for (const s of skillRows) {
+    const declared = declaredReadOnly(s.metadata);
+    if (declared !== undefined) declaredReadOnlyByName.set(s.name, declared);
     if (s.kind === "declarative" && s.providerSpec) {
       providerSpecByName.set(s.name, s.providerSpec as ProviderVerbSpec);
     }
@@ -729,7 +750,8 @@ export async function listCapabilities(
       grantByGrantableId.get(row.id),
       row.kind,
       providerSpecByName,
-      backingSkillExecutableByName
+      backingSkillExecutableByName,
+      declaredReadOnlyByName
     ),
     ...(row.kind === "provider"
       ? {
@@ -1133,7 +1155,11 @@ export function sectionCapabilities(
           id: c.id,
           name: c.name,
           description: c.description ?? null,
-          governance: runPosture({ verbId: c.name, skillKind: c.skillKind }),
+          governance: runPosture({
+            verbId: c.name,
+            skillKind: c.skillKind,
+            declaredReadOnly: declaredReadOnly(c.skillMetadata),
+          }),
           enabled: c.enabled,
           containerId: c.containerId ?? null,
           containerName: c.containerName ?? null,

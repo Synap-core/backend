@@ -5669,6 +5669,56 @@ export interface ProposalReviewGraph {
 		/** Stable per-item address: `$linkN` in derivation order. */
 		itemRef: string;
 	}>;
+	/**
+	 * ── RULE LOOP config steps ─────────────────────────────────────────────
+	 * `create_skill` / `create_automation` / `create_rule`. Present whenever the
+	 * composite carries them, INDEPENDENTLY of `isPlan` — they are not plan ops
+	 * (they stay per-op resilient, see `RESILIENT_OPERATION_KINDS`), so a batch
+	 * of config alone has these keys and no `isPlan`.
+	 *
+	 * These render BECAUSE `assertEveryOperationRendered` refuses any composite
+	 * with an unrendered op: the three arms were declared, materialized and
+	 * finally PRODUCED before the review pipeline could draw them, which made a
+	 * filed proposal unreadable AND unapprovable (the guard threw for the whole
+	 * page). Adding an op arm means adding it here in the same change.
+	 */
+	skills?: Array<{
+		ref: string;
+		name: string;
+		scope: "pod" | "user" | "workspace";
+		/** NULL/absent = every agent type. */
+		agentTypes?: string[] | null;
+		/**
+		 * First lines of the instruction body. A skill is a FACT the agent will
+		 * read on every later turn, so a reviewer who sees only a name is
+		 * consenting to text they have not read. Truncated, never omitted.
+		 */
+		bodyExcerpt: string;
+		/** True when the body was longer than the excerpt. */
+		bodyTruncated: boolean;
+	}>;
+	automations?: Array<{
+		ref: string;
+		name: string;
+		description?: string;
+		triggerType: "event" | "cron" | "webhook" | "manual";
+		/**
+		 * ALWAYS false: an approved automation is born INERT and a human activates
+		 * it. Carried so the surface can say so rather than leaving the reviewer to
+		 * assume it starts firing.
+		 */
+		bornEnabled: false;
+	}>;
+	rules?: Array<{
+		ref: string;
+		/** The user's stated rule, in their words. */
+		intent: string;
+		scopeKind: "pod" | "user" | "workspace";
+		/** Ref (or id) of the FACT half. */
+		factRef?: string;
+		/** Refs (or ids) of the BEHAVIOUR halves. */
+		behaviourRefs?: string[];
+	}>;
 }
 export interface ProposalReviewModel {
 	summary: string;
@@ -8534,6 +8584,14 @@ export interface CapabilityVerbStateWithResponseShape extends CapabilityVerbStat
 	 * Optional: a verb state built by any other path simply does not carry it.
 	 */
 	backingSkillExecutable?: boolean;
+	/**
+	 * The backing skill's AUTHORED `metadata.readOnly` declaration, when it
+	 * declares one. The gate short-circuits to `run` on it, so every door's
+	 * `governance` must see it too — without this the registry displayed
+	 * `propose` for a verb the gate would RUN (observed live on `exa_search`).
+	 * Absent = the skill declares nothing, never `false`.
+	 */
+	declaredReadOnly?: boolean;
 }
 /**
  * The registry's own capability row: the shared `Capability` contract with the
@@ -31508,6 +31566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 				}[] | undefined;
+				forceCreate?: boolean | undefined;
 				subjectProfile?: Record<string, unknown> | undefined;
 				schedule?: unknown;
 				metadata?: Record<string, unknown> | undefined;

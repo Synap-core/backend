@@ -10,6 +10,7 @@
 import type { Capability } from "@synap/playbooks";
 import { verbType } from "./capability-catalog.js";
 import { runPosture } from "./run-posture.js";
+import { declaredReadOnly } from "./capability-drift.js";
 
 export interface RunnableActionConnection {
   required: boolean;
@@ -145,6 +146,11 @@ function projectWithSource(
             skillKind: capability.kind === "builtin-tool" ? "builtin" : null,
             granted: verb.granted,
             execMode: verb.effectiveExecMode,
+            // The backing skill's authored read-only declaration, projected by
+            // the registry. The gate honours it, so this door must too.
+            declaredReadOnly: (
+              verb as typeof verb & { declaredReadOnly?: boolean }
+            ).declaredReadOnly,
           }),
           enabled: true,
           ...(verb.effectiveExecMode
@@ -187,6 +193,7 @@ function projectWithSource(
           governance: runPosture({
             verbId: capability.name,
             skillKind: skill.skillKind,
+            declaredReadOnly: declaredReadOnly(skill.skillMetadata),
           }),
           enabled: true,
           // Direction for the Synap Core builtins too — the same `verbType` the

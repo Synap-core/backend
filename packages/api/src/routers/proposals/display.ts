@@ -1063,6 +1063,14 @@ export function buildProposalGraph(
   // these keys and renders byte-identically.
   const plan = buildPlanReviewGraph(data, renderedOpIndexes);
 
+  // ── RULE LOOP config steps ─────────────────────────────────────────────
+  // Runs for EVERY composite, not just a plan batch: skill/automation/rule are
+  // resilient ops, so a batch may carry them with no plan op at all. Guarding
+  // this on `isPlanBatch` (as the plan builder is) would leave exactly that
+  // batch unrendered — and unrendered means the refusal below throws for the
+  // whole page.
+  const config = buildConfigReviewItems(data, renderedOpIndexes);
+
   // REFUSE a composite whose ops this pipeline cannot fully render — no member
   // may reach a reviewer invisibly (and then apply undeniably).
   assertEveryOperationRendered(data.operations, renderedOpIndexes);
@@ -1081,6 +1089,80 @@ export function buildProposalGraph(
     relationCount: relations.length,
     facetCount,
     ...plan,
+    ...config,
+  };
+}
+
+/**
+ * The RULE LOOP half of the review graph: `create_skill` / `create_automation`
+ * / `create_rule`. Unlike the plan builder this has NO batch guard — these ops
+ * are per-op resilient, never plan ops, so they can arrive with no plan op
+ * beside them.
+ *
+ * WHY THIS EXISTS: the three arms were declared in the op union, materialized
+ * by `materializeCompositeGraph`, and finally given a PRODUCER
+ * (`submit-capture-graph`, reachable from `synap_capture`'s `skills[]` /
+ * `automations[]` / `rules[]`) while this pipeline still had no arm for them.
+ * `assertEveryOperationRendered` then refused the whole review model, so one
+ * such proposal made `proposals.list` throw for every row on the page — filed,
+ * counted against the agent's cap, and impossible to read, approve or reject.
+ * The guard was right; the renderer was missing.
+ */
+const SKILL_BODY_EXCERPT_CHARS = 280;
+
+function buildConfigReviewItems(
+  data: CompositeProposalData,
+  renderedOpIndexes: Set<number>
+): Partial<ProposalReviewGraph> {
+  const skills: NonNullable<ProposalReviewGraph["skills"]> = [];
+  const automations: NonNullable<ProposalReviewGraph["automations"]> = [];
+  const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
+
+  data.operations.forEach((op, index) => {
+    switch (op.op) {
+      case "create_skill": {
+        renderedOpIndexes.add(index);
+        const body = op.body ?? "";
+        skills.push({
+          ref: op.ref,
+          name: op.name,
+          scope: op.scope,
+          ...(op.agentTypes !== undefined ? { agentTypes: op.agentTypes } : {}),
+          bodyExcerpt: body.slice(0, SKILL_BODY_EXCERPT_CHARS),
+          bodyTruncated: body.length > SKILL_BODY_EXCERPT_CHARS,
+        });
+        return;
+      }
+      case "create_automation":
+        renderedOpIndexes.add(index);
+        automations.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          triggerType: op.triggerType,
+          // Forced false at materialization — see CompositeCreateAutomationOp.
+          bornEnabled: false,
+        });
+        return;
+      case "create_rule":
+        renderedOpIndexes.add(index);
+        rules.push({
+          ref: op.ref,
+          intent: op.intent,
+          scopeKind: op.scope.kind,
+          ...(op.factRef ? { factRef: op.factRef } : {}),
+          ...(op.behaviourRefs ? { behaviourRefs: op.behaviourRefs } : {}),
+        });
+        return;
+      default:
+        return;
+    }
+  });
+
+  return {
+    ...(skills.length ? { skills } : {}),
+    ...(automations.length ? { automations } : {}),
+    ...(rules.length ? { rules } : {}),
   };
 }
 

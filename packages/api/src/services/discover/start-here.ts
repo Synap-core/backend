@@ -152,11 +152,17 @@ async function readOpenFindings(
   try {
     const { readOpenBlockerFindings, OPEN_FINDINGS_READ_CAP } =
       await import("./open-findings-door.js");
-    const rows = await readOpenBlockerFindings(userId);
-    const shown = rows.slice(0, OPEN_FINDINGS_READ_CAP);
+    const { blockers, openTotal } = await readOpenBlockerFindings(userId);
+    const shown = blockers.slice(0, OPEN_FINDINGS_READ_CAP);
     return {
       count: shown.length,
-      countIsLowerBound: rows.length > OPEN_FINDINGS_READ_CAP,
+      countIsLowerBound: blockers.length > OPEN_FINDINGS_READ_CAP,
+      // NAME THE FILTER. `count` is blockers only; `openTotal` is every open
+      // finding. Without both, an agent told to "check openFindings before
+      // filing" dedupes against a filtered list and files a twin of a `minor`
+      // finding while following the instruction exactly (finding 14005d59).
+      severity: "blocker" as const,
+      openTotal,
       items: shown.map((r) => {
         const props = (r.properties ?? {}) as Record<string, unknown>;
         const surface = props.surface;
@@ -221,7 +227,11 @@ export async function buildStartHere(p: {
       "call — file it as a `finding` entity before you finish, with VERBATIM " +
       "evidence (the exact error string, the exact failing input, the exact " +
       "receipt line). Never summarise the evidence: a summary is worthless in " +
-      "three weeks, a verbatim payload is a ticket. Check `startHere.openFindings` " +
-      "first and do not file a twin — findings are deduped by hand today.",
+      "three weeks, a verbatim payload is a ticket. Before filing, dedupe " +
+      "against ALL open findings — `startHere.openFindings.items` is the " +
+      "BLOCKER page only (`openTotal` is how many are open at any severity), " +
+      "so list the rest with the entity-listing tool this door exposes " +
+      '(`profileSlug: "finding"`) rather than treating those items as the ' +
+      "whole set. Findings are deduped by hand today.",
   };
 }

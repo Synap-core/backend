@@ -446,3 +446,125 @@ describe("tripwire — every door's label equals the gate verdict over a derived
     expect(wrong).toEqual([]);
   });
 });
+
+/**
+ * THE AUTHORED READ-ONLY DECLARATION REACHES EVERY DOOR.
+ *
+ * THE DEFECT THIS PINS, observed LIVE on 2026-09-21. The capability gate was
+ * taught to short-circuit to `run` for any verb whose backing skill declares
+ * `metadata.readOnly` — but this module, whose own docblock says it is
+ * "transcribed from `gateCapabilityExecution`", was not. So `exa_search` kept
+ * reporting `governance: "propose"` on `synap_list_capabilities` while the gate
+ * would have RUN it. A door that says one thing while the gate does another is
+ * the exact drift this file exists to prevent; it was the THIRD stale
+ * transcription from the same change.
+ *
+ * WHAT THIS DOES NOT COVER, measured: these drive the three PURE posture
+ * functions and the actions projection. They do NOT prove `listCapabilities`
+ * populates `declaredReadOnly` from the `skills.metadata` column — that join
+ * needs a DB and is covered by the projection-parity tripwire plus the fact
+ * that removing the map from `buildVerbStates` fails typecheck at the call site.
+ */
+describe("the authored readOnly declaration is honoured by every door", () => {
+  const declaringVerb = (declaredReadOnly?: boolean) =>
+    ({
+      id: "exa_search",
+      label: "Search",
+      kind: "read",
+      granted: false, // no grant: the ONLY thing that can flip this is the declaration
+      effectiveExecMode: "propose",
+      backingSkillExecutable: true,
+      ...(declaredReadOnly === undefined ? {} : { declaredReadOnly }),
+    }) as unknown as CapabilityVerbState;
+
+  const exaTool = (declaredReadOnly?: boolean) =>
+    ({
+      kind: "tool",
+      id: "tool-exa",
+      name: "exa",
+      inputSchema: {},
+      executor: "is-agent",
+      governance: "none",
+      enabled: true,
+      verbs: [declaringVerb(declaredReadOnly)],
+    }) as unknown as ProjectableCapability;
+
+  it("NON-VACUITY: without the declaration this verb proposes", () => {
+    // If this ever reads `auto`, every assertion below is satisfied by
+    // something other than the declaration and proves nothing.
+    expect(projectRunnableActions([exaTool(undefined)])[0]?.governance).toBe(
+      "propose"
+    );
+    expect(capabilityRowPosture(exaTool(undefined) as never)).toBe("propose");
+  });
+
+  it("GET /capabilities/actions labels a declared read `auto`", () => {
+    const actions = projectRunnableActions([exaTool(true)]);
+    expect(actions).toHaveLength(1);
+    expect(
+      actions[0]?.governance,
+      "the actions door still proposes a verb the gate will run"
+    ).toBe("auto");
+  });
+
+  it("the flat registry row labels a declared read `auto`", () => {
+    expect(capabilityRowPosture(exaTool(true) as never)).toBe("auto");
+  });
+
+  it("a declared `false` is NOT a declaration of auto", () => {
+    // The value gates auto-execution: only an explicit `true` may widen it.
+    expect(projectRunnableActions([exaTool(false)])[0]?.governance).toBe(
+      "propose"
+    );
+  });
+
+  it("a skill-only row reads the declaration off its own metadata bag", () => {
+    const skillRow = (metadata: Record<string, unknown> | null) =>
+      ({
+        kind: "skill",
+        id: "skill-exa_search",
+        name: "exa_search",
+        inputSchema: {},
+        executor: "is-agent",
+        governance: "none",
+        enabled: true,
+        skillKind: "code",
+        skillMetadata: metadata,
+      }) as unknown as ProjectableCapability;
+
+    expect(capabilityRowPosture(skillRow(null) as never)).toBe("propose");
+    expect(capabilityRowPosture(skillRow({ readOnly: true }) as never)).toBe(
+      "auto"
+    );
+    // A truthy STRING must not widen it — same contract as `declaredReadOnly`.
+    expect(capabilityRowPosture(skillRow({ readOnly: "false" }) as never)).toBe(
+      "propose"
+    );
+    expect(
+      projectRunnableActions([skillRow({ readOnly: true })])[0]?.governance
+    ).toBe("auto");
+  });
+
+  it("sectionCapabilities (MCP synap_list_capabilities) honours it too", () => {
+    const sectioned = sectionCapabilities([
+      {
+        kind: "skill",
+        id: "skill-exa_search",
+        name: "exa_search",
+        inputSchema: {},
+        executor: "is-agent",
+        governance: "none",
+        enabled: true,
+        runnable: true,
+        skillKind: "code",
+        skillMetadata: { readOnly: true },
+      },
+    ] as never);
+    const skill = sectioned.skills?.find((s) => s.name === "exa_search");
+    expect(
+      skill,
+      "the MCP section dropped the row — the scan is broken"
+    ).toBeDefined();
+    expect(skill?.governance).toBe("auto");
+  });
+});

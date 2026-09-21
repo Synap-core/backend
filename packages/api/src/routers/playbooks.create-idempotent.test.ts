@@ -30,6 +30,14 @@ const {
     where: vi.fn().mockReturnThis(),
     orderBy: vi.fn().mockReturnThis(),
     limit: selectLimit,
+    // Drizzle's query builder is THENABLE — awaiting it without `.limit()`
+    // runs the query. `playbooks.create`'s near-duplicate overlap scan does
+    // exactly that, so without this the chain object itself was handed to
+    // `rankByTerms` ("candidates.map is not a function"). Resolves empty: in
+    // this file no playbook pre-exists, so the overlap scan must find nothing
+    // and the create must proceed untouched — which is precisely what these
+    // tests assert about the pre-existing flow.
+    then: (resolve: (v: unknown) => unknown) => resolve([]),
   };
   const insertChain = {
     values: vi.fn().mockReturnThis(),

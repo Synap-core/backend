@@ -32,7 +32,10 @@ import {
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
 } from "@synap/database";
-import { buildDerivedSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  buildDerivedSessionTitle,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   resolveAgentGovernanceDecision,
   resolveGovernanceRule,
@@ -2426,10 +2429,39 @@ export function buildProposalSummary(
     typeof data.profileSlug === "string" && data.profileSlug
       ? data.profileSlug
       : (composite?.objectKind ?? subjectType);
+  // A FOCUS SESSION is named by `resolveSessionTitle` — the ONE display-name
+  // door — not by picking `goal` out of the chain below.
+  //
+  // The chain prefers `title`, so a session that HAS one would look fine. But
+  // an `update` payload carries only the fields being changed: a criteria
+  // update sends `criteria` and no `title`, so the chain fell through to
+  // `goal` and quoted the whole outcome paragraph, hard-truncated mid-word.
+  // Observed live 2026-09-20 on a session titled "Dogfood 09-21: sessions
+  // wave end to end", which rendered as: Update Session "Verify on the
+  // deployed pod that the sessions wave works end to end: the start door
+  // offers playbook candidates without applying one, criteria can be proposed
+  // and stored, a live session can follow a playbook and become a run, and
+  // evaluation produces a verdict that keeps" — beside a sibling row reading
+  // Run Playbook "Client Onboarding".
+  //
+  // The resolver is what every list, card, tab and breadcrumb already uses,
+  // and it clips the goal fallback at a WORD boundary, so the pathological
+  // case degrades to a readable phrase instead of a severed sentence. Rare
+  // before this week: `focus_session.update` only started reaching the gate
+  // when criteria updates began proposing.
+  const sessionName =
+    subjectType === "focus_session"
+      ? resolveSessionTitle({
+          title: (data.title ?? data.targetName) as string | null | undefined,
+          goal: data.goal as string | null | undefined,
+        }) || undefined
+      : undefined;
   // goal is a first-class label for focus_session (and harmless elsewhere)
   const objectName =
+    sessionName ??
     ((data.targetName || data.title || data.name || data.goal || data.slug) as
-      string | undefined) ?? composite?.objectName;
+      string | undefined) ??
+    composite?.objectName;
   // The remainder is DISCLOSED, never hidden: naming one of three operations
   // and staying silent about the other two tells the reviewer something true
   // and something misleading in the same sentence.
@@ -2706,6 +2738,28 @@ async function createPendingProposalRow(
   // the bare ACTION ("create" / "update"), so the old `proposalType` test never
   // fired — every agent session proposal also minted a junk "Start session …"
   // package session. Same rule as the hoist in `checkPermissionOrPropose`.
+  // Rung 3.5 of the project ladder — the acting agent's DECLARED sticky focus.
+  // Read ONLY when nothing more specific could pin a project, so the extra
+  // lookup costs nothing on the common path. Same lazy shape `entities/create.ts`
+  // uses, and the SAME reader (`getAgentFocusProjectId`) — this is a DECLARATION
+  // made through `synap_set_project_focus`, never anything derived from content.
+  //
+  // HOISTED ABOVE THE SESSION MINT, and that ordering is the whole point. This
+  // lookup used to sit BELOW the mint, so the PROPOSAL row got the focused
+  // project while the receipt SESSION minted just above it got `projectId:
+  // null` — every ambient agent write landed in a FLOATING session, invisible
+  // from the project it belonged to. Observed live: an evening of lead sourcing
+  // for a project whose page showed one unrelated session. The ladder was
+  // right; only the call order was wrong. Keep the read before the mint.
+  const focusProjectId =
+    !input.projectId && input.agentUserId
+      ? await getAgentFocusProjectId(input.agentUserId)
+      : null;
+
+  // The project this write belongs to, resolved ONCE and used by BOTH the
+  // receipt session and the proposal row — they can no longer disagree.
+  const resolvedProjectId = input.projectId ?? focusProjectId;
+
   let sessionId = input.sessionId ?? null;
   if (
     input.agentUserId &&
@@ -2718,7 +2772,7 @@ async function createPendingProposalRow(
           userId: input.userId,
           agentUserId: input.agentUserId,
           workspaceId: input.workspaceId,
-          projectId: input.projectId,
+          projectId: resolvedProjectId,
           goal: deriveAgentProposalSessionGoal({
             data: input.data,
             proposalType: input.proposalType,
@@ -2738,16 +2792,6 @@ async function createPendingProposalRow(
       sessionId = null;
     }
   }
-
-  // Rung 3.5 of the project ladder — the acting agent's DECLARED sticky focus.
-  // Read ONLY when nothing more specific could pin a project, so the extra
-  // lookup costs nothing on the common path. Same lazy shape `entities/create.ts`
-  // uses, and the SAME reader (`getAgentFocusProjectId`) — this is a DECLARATION
-  // made through `synap_set_project_focus`, never anything derived from content.
-  const focusProjectId =
-    !input.projectId && input.agentUserId
-      ? await getAgentFocusProjectId(input.agentUserId)
-      : null;
 
   // Shared PENDING-proposal INSERT (SSOT in @synap/database) — the same row
   // shape the automation write path uses via proposeAutomationWrite. createdBy

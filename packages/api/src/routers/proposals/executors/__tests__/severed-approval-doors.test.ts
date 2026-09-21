@@ -39,6 +39,7 @@ import {
   type ProposalExecutor,
 } from "../../execution-registry.js";
 import { registerApproveExecutors } from "../../approve-executors.js";
+import { missingRunArgs } from "../playbook.js";
 
 const EXECUTORS_DIR = join(process.cwd(), "src/routers/proposals/executors");
 
@@ -274,49 +275,82 @@ describe("(5) the workspaces→workspace key strip is pinned", () => {
 //     only one whose gate discards data the replay needs.
 // ───────────────────────────────────────────────────────────────────────────
 
-describe("(6) playbook/run refuses the runs whose arguments the gate dropped", () => {
+describe("(6) playbook/run refuses a run whose arguments the PROPOSAL lost", () => {
   const b = block("playbook.ts", "playbook/run");
 
   /**
-   * Executable mirror of the executor's refusal rule. `playbooks.run` forwards
-   * `params` / `subjectId` / `agentIds` to `runPlaybook`, and the gate
-   * (`routers/playbooks.ts:2018`) stores only `{playbookId, name}` — so at
-   * approval time those three are gone for good. Starting a session + channel +
-   * executor dispatch under the wrong goal or with no subject is worse than the
-   * no-op it replaces, so the executor refuses whenever the PLAYBOOK'S OWN
-   * config proves the run needed arguments.
+   * No hand-mirror here any more, deliberately.
+   *
+   * This block used to re-implement the refusal rule locally and assert the
+   * copy agreed with a source scan for `declaredParams.length > 0`. That is a
+   * convergence guard: it proves SAMENESS, never correctness — and when the
+   * real rule changed (the gate now stores `params`/`subjectId`/`agentIds`, so
+   * refusing on "the playbook declares params" was refusing every
+   * parameterised playbook), the mirror went on asserting the old behaviour
+   * and the scan went red for the right reason by luck rather than design.
+   *
+   * The rule is now an exported pure function, so this tests THE RULE. The
+   * source scans below are kept only for the properties a unit test cannot
+   * see: that the refusal is a THROW, and that attribution is restored.
    */
-  function refuses(playbook: {
-    params?: unknown;
-    subjectProfile?: unknown | null;
-  }): boolean {
-    const declared = Array.isArray(playbook.params) ? playbook.params : [];
-    return declared.length > 0 || (playbook.subjectProfile ?? null) != null;
-  }
-
-  it("refuses a playbook that declares params", () => {
-    expect(refuses({ params: [{ name: "clientName" }] })).toBe(true);
+  it("refuses a playbook that declares params the proposal did not carry", () => {
+    expect(
+      missingRunArgs({
+        declaredParamCount: 1,
+        hasSubjectProfile: false,
+        carriedParams: undefined,
+        carriedSubjectId: undefined,
+      }).refuse
+    ).toBe(true);
   });
 
-  it("refuses a subject-bound playbook", () => {
-    expect(refuses({ params: [], subjectProfile: { slug: "client" } })).toBe(
-      true
-    );
+  it("APPLIES the same playbook once the proposal carries them", () => {
+    // The row the old mirror could not express, and the one that matters: the
+    // governed path is the DEFAULT for agents, and this is what unblocks it.
+    expect(
+      missingRunArgs({
+        declaredParamCount: 1,
+        hasSubjectProfile: false,
+        carriedParams: { clientName: "Acme" },
+        carriedSubjectId: undefined,
+      }).refuse
+    ).toBe(false);
   });
 
-  it("APPLIES a playbook that takes neither — the faithful case", () => {
-    // Anti-vacuity: the rule must not refuse everything, or the executor would
-    // be a no-op wearing a comment.
-    expect(refuses({ params: [], subjectProfile: null })).toBe(false);
-    // `params` is `jsonb notNull default []`, so the empty array is the norm.
-    expect(refuses({ params: [] })).toBe(false);
+  it("refuses a subject-bound playbook with no carried subject", () => {
+    expect(
+      missingRunArgs({
+        declaredParamCount: 0,
+        hasSubjectProfile: true,
+        carriedParams: undefined,
+        carriedSubjectId: undefined,
+      }).refuse
+    ).toBe(true);
   });
 
-  it("the executor encodes exactly that rule, and refuses LOUDLY", () => {
-    expect(b).toContain("declaredParams.length > 0");
-    expect(b).toContain("playbook.subjectProfile != null");
-    // A throw, never a silent skip that would flip the row APPROVED anyway.
+  it("APPLIES a playbook that takes neither — the anti-vacuity case", () => {
+    // The rule must not refuse everything, or the executor is a no-op wearing
+    // a comment.
+    expect(
+      missingRunArgs({
+        declaredParamCount: 0,
+        hasSubjectProfile: false,
+        carriedParams: undefined,
+        carriedSubjectId: undefined,
+      }).refuse
+    ).toBe(false);
+  });
+
+  it("the executor refuses LOUDLY, never a silent skip", () => {
+    // Not expressible in the unit test: a silent skip would flip the proposal
+    // row APPROVED while nothing ran.
     expect(b).toContain("PRECONDITION_FAILED");
+    expect(b).toContain("missingRunArgs");
+  });
+
+  it("replays the arguments the proposal DID carry", () => {
+    expect(b).toContain("carriedParams");
+    expect(b).toContain("carriedSubjectId");
   });
 
   it("restores the ONE dropped field the proposal can still supply", () => {

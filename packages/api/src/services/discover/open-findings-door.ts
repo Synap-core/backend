@@ -37,6 +37,27 @@ export interface OpenFindingRow {
 }
 
 /**
+ * What the door read: the blocker page, PLUS how many open findings exist at
+ * ANY severity.
+ *
+ * WHY `openTotal` is here — finding 14005d59, filed against this very code by
+ * another dogfooding agent, and it was right. The door returned five blocker
+ * rows with `countIsLowerBound: false`, and `beforeYouFinish` told every agent
+ * to dedupe against that list. But the list is SEVERITY-FILTERED, and nothing
+ * in the payload said so. An agent that checked it, found no twin, and filed a
+ * duplicate of an existing `minor` finding would have been following the
+ * instruction exactly. A filtered count rendered as a total is the same defect
+ * class as an empty result rendered for a failed read: the number is true, the
+ * thing the reader concludes from it is false.
+ */
+export interface OpenFindings {
+  /** Blocker-severity rows, newest first, `CAP + 1` deep. */
+  blockers: OpenFindingRow[];
+  /** Open findings at ANY severity. The dedup denominator. */
+  openTotal: number;
+}
+
+/**
  * Open + blocker-severity `finding` rows, newest first, pod-wide.
  *
  * Reads `CAP + 1` deliberately so the caller can answer "is there more?" rather
@@ -47,7 +68,7 @@ export interface OpenFindingRow {
  */
 export async function readOpenBlockerFindings(
   userId: string
-): Promise<OpenFindingRow[]> {
+): Promise<OpenFindings> {
   // Resolved through the SHARED slug-scope condition, never a direct equality
   // against the deprecated type column. A raw text match is KIND-BLIND: it sees
   // only entities whose own kind is `finding` and misses any entity carrying
@@ -89,5 +110,22 @@ export async function readOpenBlockerFindings(
     .orderBy(desc(entities.updatedAt))
     .limit(OPEN_FINDINGS_READ_CAP + 1);
 
-  return rows as OpenFindingRow[];
+  // The dedup denominator: open at ANY severity. Same kind match, same open
+  // predicate, minus the severity filter — so the two numbers can never be
+  // derived from different populations.
+  const [total] = await db
+    .select({ n: drizzleSql<number>`count(*)::int` })
+    .from(entities)
+    .where(
+      and(
+        isNull(entities.deletedAt),
+        kindMatch,
+        drizzleSql`${entities.properties}->>'finding-status' = 'open'`
+      )
+    );
+
+  return {
+    blockers: rows as OpenFindingRow[],
+    openTotal: total?.n ?? 0,
+  };
 }

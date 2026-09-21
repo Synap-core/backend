@@ -25,6 +25,27 @@ import {
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 
 /** Register the playbook/* approve executors. */
+/**
+ * Can this approval be applied, or did the proposal lose the arguments the run
+ * needs? Pure, and exported so it can be tested — the inline version had no
+ * coverage at all, and it decides between starting a run and refusing one.
+ *
+ * The rule: refuse only when the playbook DECLARES an argument that THIS
+ * proposal did not carry. It used to refuse whenever the playbook declared
+ * anything, because the gate stored nothing — which made every parameterised
+ * playbook un-approvable (14 of the ones installed on this pod).
+ */
+export function missingRunArgs(input: {
+  declaredParamCount: number;
+  hasSubjectProfile: boolean;
+  carriedParams: Record<string, unknown> | undefined;
+  carriedSubjectId: string | undefined;
+}): { needsParams: boolean; needsSubject: boolean; refuse: boolean } {
+  const needsParams = input.declaredParamCount > 0 && !input.carriedParams;
+  const needsSubject = input.hasSubjectProfile && !input.carriedSubjectId;
+  return { needsParams, needsSubject, refuse: needsParams || needsSubject };
+}
+
 export function registerPlaybookExecutors(): void {
   // ── playbook / create ────────────────────────────────────────────────────────
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
@@ -450,25 +471,25 @@ export function registerPlaybookExecutors(): void {
   // playbook id would run the wrong thing (or nothing). Both the flat and the
   // `data.data` nesting are read; `targetId` deliberately is NOT.
   //
-  // ⚠️ WHAT THE GATE DROPS, AND WHY THIS EXECUTOR REFUSES SOME RUNS.
+  // ⚠️ RUN ARGUMENTS, AND WHY THIS EXECUTOR STILL REFUSES SOME RUNS.
   // `playbooks.run` accepts `params`, `subjectId`, `agentIds` and `agentUserId`
-  // and forwards all four to `runPlaybook`. The gate stores NONE of the first
-  // three. They are not recoverable at approval time — nothing else persists
-  // them. Their loss is not cosmetic:
+  // and forwards all four to `runPlaybook`. The gate NOW STORES the first three
+  // (`routers/playbooks.ts`, the `checkPermissionOrPropose` `data`), and this
+  // executor replays them. It previously stored none, which mattered because:
   //   - `params` feeds `resolveInputItems` AND the goalTemplate substitution in
   //     `instantiateSession` — a run with `{}` gets a different GOAL.
   //   - `subjectId` becomes `focus_sessions.subjectEntityId` — dropping it is
   //     the difference between "onboard Acme Corp" and "onboard nobody".
   //   - `agentIds` are the extra agents added to the run channel.
   // Starting a session + channel + executor dispatch under the wrong goal or no
-  // subject is WORSE than the silent no-op it replaces, so this executor does
-  // not guess. It refuses whenever the PLAYBOOK'S OWN CONFIG proves the run
-  // needed arguments — a non-empty declared `params[]`, or a `subjectProfile`
-  // (the playbook is about an entity). That check uses only data available at
-  // approval time and needs no gate change. Every other run — a playbook that
-  // declares no params and no subject — replays EXACTLY.
-  // The real fix is four fields at the gate (`params`, `subjectId`, `agentIds`);
-  // that is a router edit, not an executor one.
+  // subject is WORSE than the silent no-op it replaces, so this executor still
+  // does not guess. What changed is the TEST: it used to refuse whenever the
+  // PLAYBOOK declared arguments (which refused every parameterised playbook,
+  // i.e. the governed path could not run 14 of the ones installed on this pod);
+  // it now refuses only when THIS PROPOSAL did not carry what the playbook
+  // needs. Proposals filed BEFORE the gate was widened carry nothing, so they
+  // are still refused, with the same reason and a re-run instruction.
+  // `agentUserId` was always recoverable from `proposal.agentUserId`.
   // `agentUserId` IS recoverable — `proposal.agentUserId` carries it — and is
   // threaded back so `actorId = agentUserId ?? userId` owns the session, run and
   // channel exactly as it would have on the direct path.
@@ -549,17 +570,36 @@ export function registerPlaybookExecutors(): void {
       const declaredParams = Array.isArray(playbook.params)
         ? playbook.params
         : [];
-      if (declaredParams.length > 0 || playbook.subjectProfile != null) {
+      // The gate NOW stores `params`/`subjectId`/`agentIds`, so the question is
+      // no longer "does this playbook take arguments" (it refused every
+      // parameterised playbook on that test) but "did THIS proposal carry the
+      // ones it needs". A proposal filed before the gate was widened still
+      // carries none, and is still refused — correctly, and with the same
+      // reason — rather than replaying under a goal with `{}` substituted in.
+      const carriedParams =
+        inner.params && typeof inner.params === "object"
+          ? (inner.params as Record<string, unknown>)
+          : undefined;
+      const carriedSubjectId =
+        typeof inner.subjectId === "string" ? inner.subjectId : undefined;
+      const { needsParams, needsSubject, refuse } = missingRunArgs({
+        declaredParamCount: declaredParams.length,
+        hasSubjectProfile: playbook.subjectProfile != null,
+        carriedParams,
+        carriedSubjectId,
+      });
+      if (refuse) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
           message:
             `Cannot apply this approval: "${playbook.name}" takes run arguments ` +
-            `(${declaredParams.length > 0 ? "params" : ""}` +
-            `${declaredParams.length > 0 && playbook.subjectProfile != null ? " and " : ""}` +
-            `${playbook.subjectProfile != null ? "a subject entity" : ""}), ` +
-            "but the propose gate did not store them, so approving would start a " +
-            "run with the wrong goal or no subject. Run it directly instead, and " +
-            "widen the gate at routers/playbooks.ts to store params/subjectId/agentIds.",
+            `(${needsParams ? "params" : ""}` +
+            `${needsParams && needsSubject ? " and " : ""}` +
+            `${needsSubject ? "a subject entity" : ""}), ` +
+            "but this proposal did not carry them, so approving would start a " +
+            "run with the wrong goal or no subject. Run it directly instead. " +
+            "(Proposals filed before the gate stored run arguments cannot be " +
+            "applied — re-run the playbook to file a new one.)",
         });
       }
 
@@ -578,6 +618,15 @@ export function registerPlaybookExecutors(): void {
       await dispatchExternalOnce(input.proposalId, async () => {
         const result = await playbookCaller.run({
           playbookId,
+          // The run arguments the caller actually asked with, replayed from the
+          // proposal. Guarded above: whatever this playbook declares and this
+          // proposal did not carry has already been refused, so a run reaching
+          // here is the one the caller described, not a guess at it.
+          ...(carriedParams ? { params: carriedParams } : {}),
+          ...(carriedSubjectId ? { subjectId: carriedSubjectId } : {}),
+          ...(Array.isArray(inner.agentIds) && inner.agentIds.length > 0
+            ? { agentIds: inner.agentIds as string[] }
+            : {}),
           // Attribution is the ONE dropped field the proposal can restore, so
           // the session/run/channel are owned by the agent that asked, exactly
           // as on the direct path (`actorId = agentUserId ?? userId`).

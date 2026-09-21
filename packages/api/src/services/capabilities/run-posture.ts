@@ -33,6 +33,7 @@
  *     "for THIS agent" — `buildVerbStates` resolves it without a redeemer.
  */
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
+import { declaredReadOnly } from "./capability-drift.js";
 
 export type RunPosture = "auto" | "propose";
 
@@ -46,7 +47,26 @@ export function runPosture(input: {
   granted?: boolean;
   /** The verb's effective exec mode (grant mode, else `govDefault`). */
   execMode?: string | null;
+  /**
+   * The verb's AUTHORED read-only declaration (`skills.metadata.readOnly`).
+   *
+   * WHY IT IS HERE: this module is "transcribed from `gateCapabilityExecution`",
+   * and the gate now short-circuits to `run` for ANY verb declaring it — not
+   * only a builtin in `READ_ONLY_BUILTIN_VERBS`. Without this parameter every
+   * capability door displayed `propose` for a verb the gate would actually
+   * RUN. A door that says one thing while the gate does another is the exact
+   * drift this file exists to prevent.
+   *
+   * Absent = unmeasured, which reads as "not declared" — never as false.
+   */
+  declaredReadOnly?: boolean;
 }): RunPosture {
+  // The AUTHORED declaration first — it is authoritative at the gate, so it
+  // must be authoritative here. Mirrors `verbDeclaresReadOnly` in
+  // `execute-capability.ts`; the two must not diverge.
+  if (input.declaredReadOnly === true) {
+    return "auto";
+  }
   if (
     input.skillKind === "builtin" &&
     READ_ONLY_BUILTIN_VERBS.has(input.verbId)
@@ -68,16 +88,27 @@ export function capabilityRowPosture(row: {
   name: string;
   catalogOnly?: boolean;
   skillKind?: string | null;
+  /**
+   * The skill row's `metadata` bag. Read through the SAME `declaredReadOnly`
+   * helper the gate uses, so a door can never disagree with the gate about
+   * whether a verb declares itself read-only.
+   */
+  skillMetadata?: Record<string, unknown> | null;
   verbs?: Array<{
     id: string;
     granted?: boolean;
     effectiveExecMode?: string | null;
+    declaredReadOnly?: boolean;
   }>;
 }): RunPosture | "none" {
   if (row.kind === "teaching-doc" || row.catalogOnly) return "none";
   // A skill or command row carries no grant state of its own.
   if (row.kind === "skill") {
-    return runPosture({ verbId: row.name, skillKind: row.skillKind });
+    return runPosture({
+      verbId: row.name,
+      skillKind: row.skillKind,
+      declaredReadOnly: declaredReadOnly(row.skillMetadata),
+    });
   }
   if (row.kind === "command") return "propose";
   const verbs = row.verbs ?? [];
@@ -90,6 +121,7 @@ export function capabilityRowPosture(row: {
         skillKind,
         granted: v.granted,
         execMode: v.effectiveExecMode,
+        declaredReadOnly: v.declaredReadOnly,
       }) === "auto"
   )
     ? "auto"

@@ -278,6 +278,61 @@ const BASE_OPTS = {
 // ---------------------------------------------------------------------------
 
 describe("buildProposalSummary", () => {
+  /**
+   * A SESSION IS NAMED BY ITS TITLE, NOT BY ITS OUTCOME PARAGRAPH.
+   *
+   * Discovered live on 2026-09-20: a criteria update on a session titled
+   * "Dogfood 09-21: sessions wave end to end" rendered in the queue as
+   * Update Session "Verify on the deployed pod that the sessions wave works
+   * end to end: the start door offers playbook candidates without applying
+   * one, criteria can be proposed and stored, a live session can follow a
+   * playbook and become a run, and evaluation produces a verdict that keeps"
+   * — severed mid-word, beside a sibling reading Run Playbook "Client
+   * Onboarding".
+   *
+   * THE DISCRIMINATING INPUT is an update that carries NO title. The old
+   * chain preferred `title` when present, so every fixture that passes one
+   * agrees under both rules and rules nothing out. Only a payload with `goal`
+   * alone — which is what a real `update` sends, since it carries just the
+   * changed fields — tells them apart.
+   */
+  it("DISCRIMINATING: names a session by its resolved title even when the payload carries only a goal", () => {
+    const longGoal =
+      "Verify on the deployed pod that the sessions wave works end to end: " +
+      "the start door offers playbook candidates without applying one, and " +
+      "closing writes a structured report.";
+
+    // A real criteria update: changed fields only, no title on the payload.
+    const withoutTitle = buildProposalSummary("focus_session", "update", {
+      goal: longGoal,
+      criteria: [{ key: "k", statement: "s" }],
+    });
+    // Clipped at a WORD boundary by the shared resolver, never mid-word.
+    expect(withoutTitle).toContain("Session");
+    expect(withoutTitle).not.toContain("structured report");
+    expect(withoutTitle).toMatch(/…"$/);
+    expect(withoutTitle.length).toBeLessThan(longGoal.length);
+
+    // When the payload DOES carry a title, that title wins outright — this
+    // arm agrees under both rules and is coverage, not detection.
+    const withTitle = buildProposalSummary("focus_session", "update", {
+      title: "Dogfood 09-21: sessions wave end to end",
+      goal: longGoal,
+    });
+    expect(withTitle).toContain('"Dogfood 09-21: sessions wave end to end"');
+    expect(withTitle).not.toContain("Verify on the deployed pod");
+  });
+
+  it("leaves other kinds' naming untouched", () => {
+    // The resolver is scoped to focus_session; a goal-bearing payload of any
+    // other kind must still name itself exactly as it did before.
+    const summary = buildProposalSummary("playbook", "run", {
+      name: "Client Onboarding",
+      goal: "some long outcome text that must not be used as the name",
+    });
+    expect(summary).toContain('"Client Onboarding"');
+  });
+
   // Generic `entity` is suppressed as a noun (see `buildObjectActionTitle`),
   // so a bare entity with no profileSlug titles as verb + quoted name only —
   // no raw "entity" token reaches the reviewer.
