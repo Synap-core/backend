@@ -76,6 +76,9 @@ export const capabilityHandlers: McpHandlerMap = {
         reasoning:
           readReasoning(args) ?? "Role type defined via MCP synap_define_role",
         ...(agentUserId ? { agentUserId } : {}),
+        // The twin-slug refusal's escape hatch. Without it an agent that hits
+        // a pod-wide twin is stuck on CONFLICT with no way forward.
+        ...(args.forceCreate === true ? { forceCreate: true } : {}),
       },
       { door: "synap_define_role", fieldsParam: "fields" }
     );
@@ -142,6 +145,9 @@ export const capabilityHandlers: McpHandlerMap = {
           readReasoning(args) ??
           "Entity kind defined via MCP synap_define_kind",
         ...(agentUserId ? { agentUserId } : {}),
+        // The twin-slug refusal's escape hatch. Without it an agent that hits
+        // a pod-wide twin is stuck on CONFLICT with no way forward.
+        ...(args.forceCreate === true ? { forceCreate: true } : {}),
       },
       { door: "synap_define_kind", fieldsParam: "properties" }
     );

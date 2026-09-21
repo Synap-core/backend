@@ -62,6 +62,18 @@ const CreatePlaybookBodySchema = z.object({
   description: z.string().optional(),
   stages: z.array(z.record(z.string(), z.unknown())).optional(),
   status: PlaybookStatusSchema.optional().describe("Defaults to active."),
+  subjectProfile: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
+    ),
+  forceCreate: z
+    .boolean()
+    .optional()
+    .describe(
+      "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
+    ),
   agentUserId: z.string().optional(),
 });
 
@@ -265,7 +277,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
 
   /**
    * POST /playbooks
-   * Body: { workspaceId, name, goalTemplate, description?, stages?, status?, agentUserId? }
+   * Body: { workspaceId, name, goalTemplate, description?, stages?, status?,
+   *         subjectProfile?, forceCreate?, agentUserId? }
    */
   app.post("/playbooks", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -291,6 +304,10 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           // Validated for real by `playbooks.create`'s `playbookStagesSchema`.
           stages: body.stages as PlaybookStageInput[] | undefined,
           status: body.status,
+          ...(body.subjectProfile
+            ? { subjectProfile: body.subjectProfile }
+            : {}),
+          ...(body.forceCreate ? { forceCreate: true } : {}),
         }
       );
       return renderOutcome(c, outcome);

@@ -30,6 +30,7 @@ import {
   reservedProfileSlugReason,
   workspaces,
   eq,
+  getActingAgentUserId,
 } from "@synap/database";
 import type { RendererRef, ProfileRendererSource } from "@synap/database";
 import { TRPCError } from "@trpc/server";
@@ -475,7 +476,12 @@ export const profilesRouter = router({
        * (the same one the template-apply resolver uses to resolve-and-share
        * instead of minting a duplicate), never a second lookup.
        */
+      // The AI signal is read AMBIENTLY first, for the same reason the delete
+      // door does: `input.agentUserId` and `source` are both caller-supplied,
+      // so an agent could omit them and walk past this guard. The ALS value is
+      // set server-side at every key-auth entry point and cannot be dropped.
       const isAiCaller =
+        Boolean(getActingAgentUserId()) ||
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
         input.source === "intelligence";

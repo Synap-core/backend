@@ -1,0 +1,31 @@
+-- 0269_drop_playbook_kind_and_intake_style.sql
+--
+-- Retires the two columns 0268 added, and the whole "work is typed by a closed
+-- enum" axis with them.
+--
+-- WHY. `kind` ("interrogation" | "make" | "review") and `intake_style`
+-- ("form" | "adaptive" | "auto") shipped 2026-09-20 and were never adopted:
+-- 0 of 29 live playbooks set either column, there is no backfill, no seeded
+-- data, and nothing branched on the VALUE — every reader ran it through a
+-- resolver that returned the NULL default. The phase/shape of work is carried
+-- by `PlaybookStage` (a free key/name plus a closed `category`) and by the
+-- child sessions a run spawns, which is where a real, extensible vocabulary
+-- already lives. A second, closed, parallel axis on the parent row could only
+-- ever disagree with it.
+--
+-- SAFETY. Both columns are NULL on every row, so this drops no information.
+-- `IF EXISTS` on both, so a pod that never ran 0268 is a no-op.
+--
+-- NOT TOUCHED, and NOT A COLUMN: the session kind ("work" | "run" | "receipt").
+-- `focus_sessions` has no `kind` column at all — verified against this repo's
+-- own baseline. That axis is PROJECTED from `origin`/`playbookId`/`metadata`/
+-- `status` by `sessionKindWhere` (services/focus-sessions/session-kind.ts) and
+-- drives real SQL WHERE clauses (session-list-conditions.ts, services/runs,
+-- pod-hygiene/cleanup-pack, diagnose/schema-hygiene), validated across MCP,
+-- tRPC and Hub REST. It stays — and the reason it is healthy is exactly the
+-- reason the two columns above were not: it is DERIVED from data the row
+-- already holds, so it can never disagree with that data or go stale against
+-- it. Nothing here should be read as a precedent for dropping it.
+
+ALTER TABLE "playbooks" DROP COLUMN IF EXISTS "kind";
+ALTER TABLE "playbooks" DROP COLUMN IF EXISTS "intake_style";

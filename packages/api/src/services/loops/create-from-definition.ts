@@ -87,9 +87,11 @@ export interface CreateLoopResult {
   created: {
     playbooks: {
       ref: string;
-      status: "created" | "proposed" | "reused";
+      status: "created" | "proposed" | "reused" | "skipped";
       playbookId: string | null;
       proposalId: string | null;
+      /** Why a "skipped" entry was skipped. Absent otherwise. */
+      reason?: string;
     }[];
     triggers: {
       name: string;
@@ -226,28 +228,46 @@ export async function createLoopFromDefinition(
         continue;
       }
     }
-    const result = await playbooksCaller.create({
-      name: pb.name,
-      description: pb.description,
-      goalTemplate: pb.goalTemplate,
-      params: pb.params,
-      inputStrategy: pb.inputStrategy,
-      channelSpec: pb.channelSpec,
-      expectedOutputs: pb.expectedOutputs,
-      // `LoopPlaybookDef.stages` is the package's deliberately-loose jsonb
-      // shape; `playbooks.create` validates it with `playbookStagesSchema`.
-      stages: pb.stages as PlaybookStageInput[] | undefined,
-      // `session` (default) | `project` — see `createInputSchema.scope`. Read
-      // off the def locally because `LoopPlaybookDef` (@synap/playbooks, a
-      // frozen contract package) has no `scope` field yet; absent → undefined →
-      // `playbooks.create` reads it as `session`, i.e. no behaviour change.
-      scope: (pb as { scope?: "session" | "project" }).scope,
-      subjectProfile: pb.subjectProfile,
-      schedule: pb.schedule,
-      executor: pb.executor ?? "is-agent",
-      agentUserId,
-      source,
-    });
+    // PER-ITEM, never the whole install. `playbooks.create` refuses an
+    // AI-initiated name that overlaps an existing playbook, and this applier
+    // runs with `source: "intelligence"` — so before this catch, ONE refused
+    // playbook threw a CONFLICT out of the loop and aborted the entire loop
+    // install, discarding every playbook and trigger after it. Degrade the way
+    // `package-apply-post-workspace.ts` does: record the item and carry on.
+    let result: Awaited<ReturnType<typeof playbooksCaller.create>>;
+    try {
+      result = await playbooksCaller.create({
+        name: pb.name,
+        description: pb.description,
+        goalTemplate: pb.goalTemplate,
+        params: pb.params,
+        inputStrategy: pb.inputStrategy,
+        channelSpec: pb.channelSpec,
+        expectedOutputs: pb.expectedOutputs,
+        // `LoopPlaybookDef.stages` is the package's deliberately-loose jsonb
+        // shape; `playbooks.create` validates it with `playbookStagesSchema`.
+        stages: pb.stages as PlaybookStageInput[] | undefined,
+        // `session` (default) | `project` — see `createInputSchema.scope`. Read
+        // off the def locally because `LoopPlaybookDef` (@synap/playbooks, a
+        // frozen contract package) has no `scope` field yet; absent → undefined →
+        // `playbooks.create` reads it as `session`, i.e. no behaviour change.
+        scope: (pb as { scope?: "session" | "project" }).scope,
+        subjectProfile: pb.subjectProfile,
+        schedule: pb.schedule,
+        executor: pb.executor ?? "is-agent",
+        agentUserId,
+        source,
+      });
+    } catch (err) {
+      createdPlaybooks.push({
+        ref: pb.ref,
+        status: "skipped",
+        playbookId: null,
+        proposalId: null,
+        reason: err instanceof Error ? err.message : "create failed",
+      });
+      continue;
+    }
 
     const playbookId = result.playbook?.id ?? null;
     if (playbookId) playbookIdByRef.set(pb.ref, playbookId);

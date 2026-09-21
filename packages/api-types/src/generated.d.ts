@@ -3664,14 +3664,6 @@ export type Tool = typeof tools.$inferSelect;
  */
 /** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/**
- * Mirrors @synap/playbooks `PlaybookKind` / `PlaybookIntakeStyle`, re-declared
- * here (not imported) for the same reason `PlaybookExecutorRef` is: this
- * package stays dependency-free. Both must stay in lock-step with the unions
- * there, which carry the build-stopping coverage floors.
- */
-export type PlaybookKind = "interrogation" | "make" | "review";
-export type PlaybookIntakeStyle = "form" | "adaptive" | "auto";
 declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	name: "playbooks";
 	schema: undefined;
@@ -3992,50 +3984,6 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			generated: undefined;
 		}, {}, {
 			$type: "session" | "project";
-		}>;
-		kind: import("drizzle-orm/pg-core").PgColumn<{
-			name: "kind";
-			tableName: "playbooks";
-			dataType: "string";
-			columnType: "PgText";
-			data: PlaybookKind;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {
-			$type: PlaybookKind;
-		}>;
-		intakeStyle: import("drizzle-orm/pg-core").PgColumn<{
-			name: "intake_style";
-			tableName: "playbooks";
-			dataType: "string";
-			columnType: "PgText";
-			data: PlaybookIntakeStyle;
-			driverParam: string;
-			notNull: false;
-			hasDefault: false;
-			isPrimaryKey: false;
-			isAutoincrement: false;
-			hasRuntimeDefault: false;
-			enumValues: [
-				string,
-				...string[]
-			];
-			baseColumn: never;
-			identity: undefined;
-			generated: undefined;
-		}, {}, {
-			$type: PlaybookIntakeStyle;
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -8060,8 +8008,6 @@ export type GrantableKind = "tool" | "skill" | "command";
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
  */
 export type ExecMode = "auto" | "propose" | "dry-run";
-type PlaybookKind$1 = "interrogation" | "make" | "review";
-type PlaybookIntakeStyle$1 = "form" | "adaptive" | "auto";
 declare const BLOCKED_REASONS: readonly [
 	"credential",
 	"permission",
@@ -14844,7 +14790,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "review" | "chat" | "comment" | "system_notification";
+					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
@@ -15515,7 +15461,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentId: string | null;
 					role: "system" | "user" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "review" | "chat" | "comment" | "system_notification";
+					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					content: string;
@@ -15694,7 +15640,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					content: string;
 					parentId: string | null;
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "review" | "chat" | "comment" | "system_notification";
+					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					routedTeammateId: string | null;
@@ -15729,7 +15675,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parentId: string | null;
 					role: "system" | "user" | "assistant";
 					authorType: "human" | "ai_agent" | "external" | "bot";
-					messageCategory: "review" | "chat" | "comment" | "system_notification";
+					messageCategory: "chat" | "comment" | "system_notification" | "review";
 					externalSource: string | null;
 					inboxItemId: string | null;
 					content: string;
@@ -31364,8 +31310,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor: PlaybookExecutorRef;
 				status: "active" | "archived" | "paused" | "draft";
 				scope: "project" | "session" | null;
-				kind: PlaybookKind | null;
-				intakeStyle: PlaybookIntakeStyle | null;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
 				metadata: unknown;
@@ -31399,8 +31343,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookExecutorRef;
 					status: "active" | "archived" | "paused" | "draft";
 					scope: "project" | "session" | null;
-					kind: PlaybookKind | null;
-					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 					metadata: unknown;
@@ -31437,8 +31379,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookExecutorRef;
 					status: "active" | "archived" | "paused" | "draft";
 					scope: "project" | "session" | null;
-					kind: PlaybookKind | null;
-					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 					metadata: unknown;
@@ -31462,8 +31402,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				goalTemplate: string;
 				subjectProfileSlug: string | null;
 				params: unknown;
-				kind: PlaybookKind$1;
-				intakeStyle: PlaybookIntakeStyle$1;
 				executor: PlaybookExecutorRef;
 				score: number;
 				reason: string;
@@ -31486,7 +31424,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				metadata: unknown;
 				status: "active" | "archived" | "paused" | "draft";
 				createdBy: string;
-				kind: PlaybookKind | null;
 				scope: "project" | "session" | null;
 				executor: PlaybookExecutorRef;
 				goalTemplate: string;
@@ -31497,7 +31434,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				stages: unknown;
 				criteria: unknown;
 				schedule: unknown;
-				intakeStyle: PlaybookIntakeStyle | null;
 				flowAutomationId: string | null;
 				subjectProfile: unknown;
 			};
@@ -31580,8 +31516,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "archived" | "paused" | "draft" | undefined;
 				scope?: "project" | "session" | undefined;
-				kind?: "interrogation" | "make" | "review" | undefined;
-				intakeStyle?: "form" | "adaptive" | "auto" | undefined;
 				contextSkill?: {
 					body: string;
 					name?: string | undefined;
@@ -31599,7 +31533,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
-					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31610,7 +31543,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
-					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};
@@ -31694,8 +31626,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor?: "is-agent" | "external-agent" | "hybrid" | undefined;
 				status?: "active" | "archived" | "paused" | "draft" | undefined;
 				scope?: "project" | "session" | undefined;
-				kind?: "interrogation" | "make" | "review" | undefined;
-				intakeStyle?: "form" | "adaptive" | "auto" | undefined;
 			};
 			output: {
 				playbook: Playbook | null;
@@ -31714,7 +31644,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
-					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31725,7 +31654,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
-					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};
@@ -31832,7 +31760,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					metadata: unknown;
 					status: "active" | "archived" | "paused" | "draft";
 					createdBy: string;
-					kind: PlaybookKind | null;
 					scope: "project" | "session" | null;
 					executor: PlaybookExecutorRef;
 					goalTemplate: string;
@@ -31843,7 +31770,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					stages: unknown;
 					criteria: unknown;
 					schedule: unknown;
-					intakeStyle: PlaybookIntakeStyle | null;
 					flowAutomationId: string | null;
 					subjectProfile: unknown;
 				};

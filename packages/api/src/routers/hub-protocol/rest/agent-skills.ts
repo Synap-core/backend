@@ -18,7 +18,7 @@
  *   GET    /agent-skills/by-slug/:slug      — get a skill by slug
  *   POST   /agent-skills                    — create a skill
  *   PATCH  /agent-skills/:slug              — update a skill by slug
- *   DELETE /agent-skills/:id                — delete a skill by id
+ *   DELETE /agent-skills/:id                — delete a skill by id (governed)
  */
 
 import { z } from "@hono/zod-openapi";
@@ -33,12 +33,14 @@ import {
 import {
   getCaller,
   hasScope,
+  resolveActingContext,
   httpStatusForTrpcError,
   logger,
   type HubHono,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
-import { insertSkillGoverned } from "../../skills.js";
+import { insertSkillGoverned, skillsRouter } from "../../skills.js";
+import { createHubProtocolCallerContext } from "../utils.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { searchInstructionSkills } from "../../../services/skills/search.js";
 import { reservedSkillSlugReason } from "../../../services/skills/reserved-slug.js";
@@ -654,19 +656,55 @@ export function registerAgentSkillsRoutes(app: HubHono): void {
   });
 
   /**
-   * DELETE /agent-skills/:id — delete a skill by UUID
+   * DELETE /agent-skills/:id — delete a skill by UUID.
+   *
+   * A THIN DOOR over the governed `skillsRouter.delete`, identical to
+   * `DELETE /skills/:id`. It used to be a bare `db.delete(skills)` behind a
+   * scope check alone: no governance gate, no owner floor, no workspace floor
+   * and no acting agent — so any key with `hub-protocol.write` could hard-delete
+   * ANY skill row on the pod by id, including the rows backing the Synap Core
+   * verbs. Two REST doors deleting the same table must share the same gate;
+   * there is no second delete path here any more.
    */
   app.delete("/agent-skills/:id", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Insufficient scope" }, 403);
     }
     const id = c.req.param("id");
+    const idCheck = z.string().uuid().safeParse(id);
+    if (!idCheck.success) {
+      return c.json({ error: "id must be a UUID" }, 400);
+    }
     try {
-      await db.delete(skills).where(eq(skills.id, id));
-      return c.json({ success: true }, 200);
+      const acting = await resolveActingContext(c, {});
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const ctx = await createHubProtocolCallerContext(
+        acting.userId,
+        c.get("scopes") as string[]
+      );
+      const caller = skillsRouter.createCaller(ctx as never);
+      // Forward the acting agent. Without it the gate takes the HUMAN path and
+      // hard-deletes — see the field's doc on `skills.delete`.
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const result = await caller.delete({
+        id,
+        ...(agentUserId ? { agentUserId } : {}),
+      });
+
+      return c.json(
+        {
+          success: result.status === "deleted",
+          status: result.status,
+          proposalId:
+            "proposalId" in result ? (result.proposalId ?? null) : null,
+        },
+        200
+      );
     } catch (err) {
-      logger.error({ err }, "delete agent skill failed");
-      return c.json({ error: "Internal error" }, 500);
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      logger.error({ err, id }, "delete agent skill failed");
+      return c.json({ error: msg }, httpStatusForTrpcError(err));
     }
   });
 

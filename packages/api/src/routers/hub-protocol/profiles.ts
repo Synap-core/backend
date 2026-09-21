@@ -186,6 +186,16 @@ export const hubProfilesRouter = router({
          * kind. 'pod' on a role is rejected by that resolver.
          */
         entityScope: z.enum(["pod", "workspace"]).optional(),
+        /**
+         * Override the pod-wide twin-slug refusal. `profiles.create` refuses an
+         * AI-initiated slug that already exists ANYWHERE on the pod, because a
+         * twin is how a kind's properties silently split in two. The refusal is
+         * a heuristic, so it needs an escape — and an escape the agent doors
+         * cannot reach is not an escape: it leaves an agent that legitimately
+         * wants a second scope permanently stuck on CONFLICT. Set only after
+         * reading the refusal's named candidates and deciding a twin is right.
+         */
+        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -219,6 +229,7 @@ export const hubProfilesRouter = router({
         // `resolveEntityScope` as undefined so the kind→pod / role→workspace
         // doctrine default applies instead of a value invented here.
         ...(input.entityScope ? { entityScope: input.entityScope } : {}),
+        ...(input.forceCreate ? { forceCreate: true } : {}),
       });
     }),
 

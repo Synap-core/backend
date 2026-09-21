@@ -95,6 +95,12 @@ vi.mock("@synap/database", async () => {
     and: drizzle.and,
     inArray: drizzle.inArray,
     reservedProfileSlugReason: reserved.reservedProfileSlugReason,
+    // The AMBIENT acting-agent read (AsyncLocalStorage, set at every key-auth
+    // entry point). These tests drive the router directly, outside any request
+    // scope, so the real function would return undefined here too — the stub
+    // matches that, and the AI signal under test comes from `agentUserId` /
+    // `source` on the input, which is what each case varies.
+    getActingAgentUserId: () => undefined,
     getDb: vi.fn(async () => ({})),
     db: {
       query: {

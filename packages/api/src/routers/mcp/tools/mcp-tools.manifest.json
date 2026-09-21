@@ -433,7 +433,7 @@
         "properties": {
           "profileSlug": {
             "type": "string",
-            "description": "Entity profile slug (e.g., note, task, project, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types."
+            "description": "Entity profile slug (e.g., note, task, event, person, contact, company, deal, bookmark, article). Use synap_list_profiles to discover available types. The cross-cutting container that spans workspaces is NOT an entity kind — it has its own door, synap_create_project."
           },
           "title": {
             "type": "string"
@@ -836,6 +836,10 @@
             "type": "string",
             "description": "Workspace to define the role in."
           },
+          "forceCreate": {
+            "type": "boolean",
+            "description": "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
@@ -943,6 +947,10 @@
           "workspaceId": {
             "type": "string",
             "description": "Workspace to define the kind in."
+          },
+          "forceCreate": {
+            "type": "boolean",
+            "description": "Only after a CONFLICT naming an existing twin. The pod refuses an AI-initiated slug that already exists anywhere, because a twin silently splits a kind's properties in two. Read the candidates it named; set this ONLY if a separate one is genuinely right."
           },
           "reasoning": {
             "type": "string",
@@ -1943,6 +1951,14 @@
           "workspaceId": {
             "type": "string",
             "description": "Home workspace (optional — falls back to the user's first workspace)."
+          },
+          "subjectProfileSlug": {
+            "type": "string",
+            "description": "Slug of the kind or role this playbook runs ON (e.g. 'crm-lead'), so synap_match_playbooks can offer it for that kind. A slug that resolves to no profile is refused — define the kind first."
+          },
+          "forceCreate": {
+            "type": "boolean",
+            "description": "Only after a CONFLICT naming an overlapping playbook. The pod refuses a near-twin name so processes don't silently fork. Read the candidates it named; set this ONLY if a separate playbook is genuinely right."
           }
         },
         "required": ["name", "goalTemplate"]

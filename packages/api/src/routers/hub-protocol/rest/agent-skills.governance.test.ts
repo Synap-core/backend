@@ -30,6 +30,11 @@ const h = vi.hoisted(() => ({
   /** Rows the slug-uniqueness pre-check finds. Empty = slug is free. */
   slugLookupRows: [] as Array<{ id: string }>,
   directInsertCalls: 0,
+  /** Every `skillsRouter.delete` call the DELETE door made. */
+  deleteCalls: [] as Array<Record<string, unknown>>,
+  deleteResult: {} as Record<string, unknown>,
+  /** Raw `db.delete(skills)` calls — must stay at ZERO on every door. */
+  directDeleteCalls: 0,
 }));
 
 vi.mock("@synap/database", () => {
@@ -45,6 +50,14 @@ vi.mock("@synap/database", () => {
         return {
           values: vi.fn(() => ({ returning: vi.fn(async () => []) })),
         };
+      }),
+      // A raw delete is the DEFECT, not a fixture: the door used to run
+      // `db.delete(skills).where(eq(skills.id, id))` behind a scope check with
+      // no gate, no owner floor and no actor. Counting it lets the test assert
+      // ZERO rather than assert on a mock that was never called.
+      delete: vi.fn(() => {
+        h.directDeleteCalls++;
+        return { where: vi.fn(async () => undefined) };
       }),
     },
     eq: (a: unknown, b: unknown) => ({ op: "eq", a, b }),
@@ -63,6 +76,15 @@ vi.mock("./_shared.js", () => ({
   getCaller: async () => ({
     documents: { createDocument: async () => ({ documentId: "doc-1" }) },
   }),
+  resolveActingContext: async (c: { get: (k: string) => unknown }) => ({
+    ok: true as const,
+    userId: c.get("userId") as string,
+  }),
+  httpStatusForTrpcError: () => 500,
+}));
+
+vi.mock("../utils.js", () => ({
+  createHubProtocolCallerContext: async () => ({}),
 }));
 
 // Mocked like `visibility.js` below: this file tests GOVERNANCE, not SQL, and
@@ -97,6 +119,17 @@ vi.mock("../../skills.js", () => ({
   insertSkillGoverned: async (input: Record<string, unknown>) => {
     h.governedCalls.push(input);
     return h.governedResult;
+  },
+  // The governed delete the door now re-enters. Recording the INPUT is the
+  // point: "does this door call the gate" is the weak question — "can it TELL
+  // the gate who is acting" is the one that catches an ungoverned delete.
+  skillsRouter: {
+    createCaller: () => ({
+      delete: async (input: Record<string, unknown>) => {
+        h.deleteCalls.push(input);
+        return h.deleteResult;
+      },
+    }),
   },
 }));
 
@@ -154,6 +187,9 @@ beforeEach(() => {
   h.slugLookupRows = [];
   h.directInsertCalls = 0;
   h.governedResult = { status: "installed", skill: SKILL_ROW };
+  h.deleteCalls.length = 0;
+  h.directDeleteCalls = 0;
+  h.deleteResult = { status: "deleted" };
 });
 
 describe("POST /agent-skills — persists through the governed door", () => {
@@ -240,5 +276,80 @@ describe("POST /agent-skills — persists through the governed door", () => {
     expect(res.status).toBe(401);
     expect(h.governedCalls).toHaveLength(0);
     expect(h.directInsertCalls).toBe(0);
+  });
+});
+
+/**
+ * DELETE /agent-skills/:id used to be a bare `db.delete(skills)` behind a scope
+ * check alone — no governance gate, no owner floor, no workspace floor, no
+ * acting agent. Any key holding `hub-protocol.write` could hard-delete ANY
+ * skill row on the pod by id, including the rows backing the Synap Core verbs.
+ * Its sibling `DELETE /skills/:id` was already governed, so the pod had two
+ * REST doors onto one table with two different answers.
+ *
+ * These cases assert the ACTOR ARRIVES, not merely that a gate is called: an
+ * unattributed delete reaches the gate on the HUMAN path and hard-deletes, so
+ * "the door calls the governed router" alone would pass on the live defect.
+ */
+describe("DELETE /agent-skills/:id — governed, never a raw delete", () => {
+  const ID = "33333333-3333-4333-8333-333333333333";
+
+  it("re-enters the governed skillsRouter.delete and runs NO raw db.delete", async () => {
+    const app = buildApp({ userId: USER });
+    const res = await app.request(`/agent-skills/${ID}`, { method: "DELETE" });
+
+    expect(res.status).toBe(200);
+    expect(h.directDeleteCalls).toBe(0);
+    expect(h.deleteCalls).toHaveLength(1);
+    expect(h.deleteCalls[0]).toMatchObject({ id: ID });
+  });
+
+  it("forwards the acting agent, so the gate can take the AI path", async () => {
+    const app = buildApp({ userId: USER, agentUserId: AGENT });
+    await app.request(`/agent-skills/${ID}`, { method: "DELETE" });
+
+    expect(h.deleteCalls).toHaveLength(1);
+    expect(h.deleteCalls[0]?.agentUserId).toBe(AGENT);
+  });
+
+  it("an operator delete carries no agentUserId", async () => {
+    const app = buildApp({ userId: USER });
+    await app.request(`/agent-skills/${ID}`, { method: "DELETE" });
+
+    // Assert the call happened first — otherwise `[0]?.x` is undefined for the
+    // wrong reason and the assertion below passes vacuously.
+    expect(h.deleteCalls).toHaveLength(1);
+    expect(h.deleteCalls[0]?.agentUserId).toBeUndefined();
+  });
+
+  it("surfaces a PROPOSED delete honestly, never as a completed one", async () => {
+    h.deleteResult = { status: "proposed", proposalId: "prop-1" };
+    const app = buildApp({ userId: USER, agentUserId: AGENT });
+    const res = await app.request(`/agent-skills/${ID}`, { method: "DELETE" });
+
+    expect(await res.json()).toMatchObject({
+      success: false,
+      status: "proposed",
+      proposalId: "prop-1",
+    });
+  });
+
+  it("rejects a non-UUID id before reaching the router at all", async () => {
+    const app = buildApp({ userId: USER });
+    const res = await app.request("/agent-skills/not-a-uuid", {
+      method: "DELETE",
+    });
+
+    expect(res.status).toBe(400);
+    expect(h.deleteCalls).toHaveLength(0);
+    expect(h.directDeleteCalls).toBe(0);
+  });
+
+  it("still refuses without the write scope", async () => {
+    const app = buildApp({ userId: USER, scopes: ["hub-protocol.read"] });
+    const res = await app.request(`/agent-skills/${ID}`, { method: "DELETE" });
+
+    expect(res.status).toBe(403);
+    expect(h.deleteCalls).toHaveLength(0);
   });
 });

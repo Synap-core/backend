@@ -31,15 +31,6 @@ import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 /** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
 
-/**
- * Mirrors @synap/playbooks `PlaybookKind` / `PlaybookIntakeStyle`, re-declared
- * here (not imported) for the same reason `PlaybookExecutorRef` is: this
- * package stays dependency-free. Both must stay in lock-step with the unions
- * there, which carry the build-stopping coverage floors.
- */
-export type PlaybookKind = "interrogation" | "make" | "review";
-export type PlaybookIntakeStyle = "form" | "adaptive" | "auto";
-
 /** Sentinel used when workspace_id IS NULL so pod-wide names participate in uniqueness. */
 export const PLAYBOOK_POD_WIDE_WORKSPACE_SENTINEL =
   "00000000-0000-0000-0000-000000000000";
@@ -112,30 +103,6 @@ export const playbooks = pgTable(
      * NULL reads as `"session"` — no existing playbook reclassifies itself.
      */
     scope: text("scope").$type<"session" | "project">(),
-    /**
-     * WHAT KIND of work this playbook is (migration 0268).
-     *
-     * `"interrogation"` — it ASKS; the value is the answers it collects.
-     * `"make"` — it PRODUCES a deliverable.
-     * `"review"` — it JUDGES something that already exists.
-     *
-     * NULL reads as `"make"`, exactly like `scope` above reads as `"session"`:
-     * no existing playbook reclassifies itself, so there is no backfill and no
-     * DB default. Read it through `resolvePlaybookKind` (@synap/playbooks), the
-     * ONE defaulting site — never off this column.
-     */
-    kind: text("kind").$type<PlaybookKind>(),
-    /**
-     * HOW this playbook collects its params (migration 0268).
-     *
-     * `"form"` — show every declared param up front.
-     * `"adaptive"` — ask for them conversationally, as the run needs them.
-     * `"auto"` — the door decides.
-     *
-     * NULL reads as `"auto"` — today's behaviour exactly, since no door has
-     * ever shown a form. Read through `resolvePlaybookIntakeStyle`.
-     */
-    intakeStyle: text("intake_style").$type<PlaybookIntakeStyle>(),
     /**
      * The automation that drives this playbook's flow.
      * Process North Star Wave 0: links a playbook to a specific automation

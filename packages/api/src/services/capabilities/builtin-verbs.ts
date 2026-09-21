@@ -52,6 +52,7 @@ import {
   profilesByRoleCategory,
   MessageRole,
   MessageAuthorType,
+  getActingAgentUserId,
 } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import type { SQL } from "drizzle-orm";
@@ -1514,11 +1515,23 @@ const entityCreateHandler: BuiltinVerbHandler = async (params, ctx) => {
   // entities.create governs the write (checkPermissionOrPropose): it returns
   // either the created entity OR { status: "proposed", proposalId }. Surface
   // that verbatim so an unapproved create is not reported as done.
+  //
+  // THE ACTOR IS LOAD-BEARING, not decoration. `permission-check.ts` keys the
+  // whole AI ladder on `if (agentUserId)` — by-kind floors,
+  // AgentKindRequiresProposalError, the DEFAULT_AUTO_APPROVE classification.
+  // Reaching that gate with `undefined` means the write is judged on the
+  // OPERATOR path: gated in form, ungoverned in substance. The outer
+  // capability gate still governs the RUN, but it cannot see the kind.
+  // Ambient first — the ALS value is set server-side at every key-auth entry
+  // point, so it survives a call site that forgot to populate `ctx`.
+  const actingAgentUserId =
+    getActingAgentUserId() ?? ctx.agentUserId ?? undefined;
   const result = await caller.create({
     profileSlug: input.profileSlug,
     title: input.title,
     description: input.description,
     properties: input.properties,
+    ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
   });
 
   return result;
@@ -1565,11 +1578,17 @@ const entityUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
   // entities.update governs the write (checkPermissionOrPropose): it returns
   // either the updated entity OR { status: "proposed", proposalId }. Surface
   // that verbatim so an unapproved update is not reported as done.
+  // Same reason as entity.create/entity.delete: `entities.update` keys its AI
+  // ladder on `input.agentUserId`, so an unforwarded actor is judged on the
+  // operator path.
+  const actingAgentUserId =
+    getActingAgentUserId() ?? ctx.agentUserId ?? undefined;
   const result = await caller.update({
     id: input.entityId,
     title: input.title,
     description: input.description,
     properties: input.properties,
+    ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
   });
 
   return result;
@@ -1987,7 +2006,18 @@ const entityDeleteHandler: BuiltinVerbHandler = async (params, ctx) => {
 
   // delete governs the write (checkPermissionOrPropose). Surface verbatim so an
   // unapproved (proposed) delete is not reported as done.
-  const result = await caller.delete({ id: input.entityId });
+  //
+  // The ACTOR is what arms rung 2.5 DESTRUCTIVE. `entities.delete` reads
+  // `input.agentUserId` and nothing else — no ambient read of its own — so a
+  // verb run that forwards nothing reaches the gate on the OPERATOR path and
+  // the destructive floor never fires. Ambient first: set server-side at every
+  // key-auth entry point, so it survives a call site that never populated `ctx`.
+  const deleteAgentUserId =
+    getActingAgentUserId() ?? ctx.agentUserId ?? undefined;
+  const result = await caller.delete({
+    id: input.entityId,
+    ...(deleteAgentUserId ? { agentUserId: deleteAgentUserId } : {}),
+  });
   return result;
 };
 

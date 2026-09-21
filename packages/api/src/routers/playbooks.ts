@@ -59,11 +59,7 @@ import type {
   Automation,
 } from "@synap/database/schema";
 import {
-  PLAYBOOK_INTAKE_STYLES,
-  PLAYBOOK_KINDS,
   readPlaybookParams,
-  resolvePlaybookIntakeStyle,
-  resolvePlaybookKind,
   resolveStageCategory,
   validatePlaybookParams,
   type PlaybookStageCategory,
@@ -282,20 +278,6 @@ export const createInputSchema = z.object({
    */
   scope: z.enum(["session", "project"]).optional(),
   /**
-   * WHAT KIND of work this is — `interrogation` (it asks; the value is the
-   * answers), `make` (it produces a deliverable), `review` (it judges something
-   * that exists). Omitted reads as `make`; the resolver owns the default, so
-   * nothing is written here to make an unstated kind explicit. Derived from
-   * `PLAYBOOK_KINDS` so the door can never accept a value the union does not
-   * declare.
-   */
-  kind: z.enum(PLAYBOOK_KINDS).optional(),
-  /**
-   * HOW it collects its params — `form` (all up front), `adaptive`
-   * (conversationally), `auto` (the door decides). Omitted reads as `auto`.
-   */
-  intakeStyle: z.enum(PLAYBOOK_INTAKE_STYLES).optional(),
-  /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
    * linked to the playbook via a `documents` edge; the executor prepends its
@@ -333,10 +315,6 @@ export const updateInputSchema = z.object({
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
   scope: z.enum(["session", "project"]).optional(),
-  /** See `createInputSchema.kind`. */
-  kind: z.enum(PLAYBOOK_KINDS).optional(),
-  /** See `createInputSchema.intakeStyle`. */
-  intakeStyle: z.enum(PLAYBOOK_INTAKE_STYLES).optional(),
 });
 
 // ── Links sub-router (read-only) ─────────────────────────────────────────────
@@ -1553,11 +1531,6 @@ export const playbooksRouter = router({
           // choosing a candidate can see what it must supply BEFORE it runs —
           // the match→confirm→run path's whole intake contract.
           params: candidate.row.params,
-          // WHAT KIND of work it is, and HOW it wants its params collected.
-          // Both resolved through the one defaulting site, so a legacy NULL
-          // reads as `make`/`auto` here exactly as it does everywhere else.
-          kind: resolvePlaybookKind(candidate.row),
-          intakeStyle: resolvePlaybookIntakeStyle(candidate.row),
           executor: candidate.row.executor,
           score,
           reason,
@@ -1655,8 +1628,6 @@ export const playbooksRouter = router({
           executor: input.executor,
           status: input.status,
           scope: input.scope,
-          kind: input.kind,
-          intakeStyle: input.intakeStyle,
           contextSkill: input.contextSkill,
         },
       };
@@ -1781,11 +1752,6 @@ export const playbooksRouter = router({
             // is "NULL means session", and writing the default eagerly would
             // make an unstated scope indistinguishable from a chosen one.
             scope: input.scope ?? null,
-            // Same contract as `scope` above: NULL, never the resolver's
-            // default, so an unstated kind stays distinguishable from a chosen
-            // one.
-            kind: input.kind ?? null,
-            intakeStyle: input.intakeStyle ?? null,
           })
           .returning();
         created = row as Playbook;
@@ -1962,10 +1928,6 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
-          ...(input.kind !== undefined ? { kind: input.kind } : {}),
-          ...(input.intakeStyle !== undefined
-            ? { intakeStyle: input.intakeStyle }
-            : {}),
         },
       });
 

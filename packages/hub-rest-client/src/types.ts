@@ -1418,6 +1418,32 @@ export interface HubDiscoverProperty {
   /** Base definitions are always visible; workspace definitions require this lens. */
   schemaScope?: "base" | "workspace";
   workspaceId?: string | null;
+  /**
+   * The property's position in its layer's sequence.
+   *
+   * The wire has carried this since the projection was widened; this interface
+   * did not declare it, so every typed caller (the IS, Raycast) was blind to
+   * it even though the bytes were arriving. Absent when the def declares no
+   * order — NOT `0`, which would pin unordered defs to the front.
+   */
+  displayOrder?: number;
+  /**
+   * The def's presentation hints, whole. Emitted unabridged on purpose: a
+   * per-key allowlist here is exactly how `inputType`/`displayAs` went missing
+   * from this projection in the first place.
+   */
+  uiHints?: Record<string, unknown>;
+  /**
+   * How often this property is actually populated, when the caller asked for
+   * it (`HubDiscoverOptions.fill`).
+   *
+   * TWO NUMBERS, NEVER A RATIO — the three states must stay distinguishable:
+   * `fill` absent = UNMEASURED (not requested, or the read failed);
+   * `sampleSize === 0` = UNMEASURABLE (the kind has no entities yet);
+   * `sampleSize > 0 && filled === 0` = a real, measured zero.
+   * A single `fillRate: number` collapses all three into `0`.
+   */
+  fill?: { filled: number; sampleSize: number };
 }
 
 export interface HubDiscoverProfile {
@@ -1451,6 +1477,16 @@ export interface HubDiscoverOptions {
   summary?: boolean;
   /** Limit full discovery to these profile slugs when the pod supports it. */
   profileSlugs?: string[];
+  /**
+   * Ask the pod to measure how often each property is populated, so a caller
+   * can rank fields by what is actually used rather than by declaration order.
+   *
+   * OPT-IN: it costs an extra aggregate per profile, so it is off unless
+   * requested. Without this option the pod cannot be asked for it at all —
+   * which is why a schema-derived projection was unreachable from the IS and
+   * Raycast even after the pod began serving it.
+   */
+  fill?: boolean;
 }
 
 export type HubOrientScope = "workspaces" | "projects" | "profiles";
@@ -1844,6 +1880,41 @@ export type HubUpdateProjectResult = HubProject | HubProposedResult;
 /** POST /api/hub/links (`project --uses--> workspace`) outcome. */
 export type HubLinkProjectWorkspaceResult =
   { status: "created"; uses?: { indexed: boolean } } | HubProposedResult;
+
+/**
+ * PATCH /api/hub/proposals/:id — amend a PENDING proposal you authored.
+ * `data` REPLACES the proposal's inner payload (it is not a merge), so read the
+ * current one first (`listProposals({ detail: "full" })`). `expectedRevision`
+ * is the revision you read: a stale one is refused 409 rather than clobbering
+ * a concurrent edit. Revising never approves — a human still decides.
+ */
+export interface ReviseProposalInput {
+  data: Record<string, unknown>;
+  summary?: string;
+  expectedRevision?: number;
+}
+
+/** Per-domain role this workspace plays for a data domain. */
+export type WorkspaceSourceRole = "provider" | "consumer" | "provider-consumer";
+
+/** Where a workspace READS one domain from (its source of truth). */
+export interface WorkspaceDefaultSource {
+  workspaceId: string;
+  capability?: string;
+  profileSlug?: string;
+  label?: string;
+}
+
+/**
+ * PATCH /api/hub/workspaces/:workspaceId/source-edges — declare the
+ * cross-workspace data edges. MERGES per domain: domains you do not name are
+ * preserved. At least one of `sourceRoles` / `defaultSources` is required.
+ */
+export interface DeclareWorkspaceSourceInput {
+  sourceRoles?: Record<string, WorkspaceSourceRole>;
+  defaultSources?: Record<string, WorkspaceDefaultSource>;
+  reasoning?: string;
+}
 
 /** Attach an existing role-profile to a primary-kind entity. */
 export interface AttachFacetInput {

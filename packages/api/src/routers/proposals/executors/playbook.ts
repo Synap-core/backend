@@ -134,12 +134,6 @@ export function registerPlaybookExecutors(): void {
         // materialize as a session template — the one field that decides what
         // the template even is.
         scope: innerData.scope as "session" | "project" | undefined,
-        // 0268, same reason as `scope` above: a kind/intake style approved
-        // without being read back would materialize as the resolver's default
-        // and the author's choice would be silently dropped.
-        kind: innerData.kind as "interrogation" | "make" | "review" | undefined,
-        intakeStyle: innerData.intakeStyle as
-          "form" | "adaptive" | "auto" | undefined,
         // The propose gate stores the Layer-2 context skill in `data`; without
         // reading it back here an APPROVED playbook materialized with no context
         // skill at all — i.e. the feature was a no-op on the agent-proposed path,
@@ -257,8 +251,6 @@ export function registerPlaybookExecutors(): void {
         "executor",
         "status",
         "scope",
-        "kind",
-        "intakeStyle",
       ] as const;
       const patch: Record<string, unknown> = { id: playbookId };
       for (const key of REPLAYED) {

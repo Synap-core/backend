@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { isReservedProfileSlug } from "@synap/database";
 import { readFileSync } from "fs";
 import { join } from "path";
 
@@ -42,6 +43,14 @@ import { join } from "path";
  *    the client call sites themselves are not scanned here — there is no
  *    second filter on the client to drift, since the server never sends the
  *    row.
+ *  - the MCP TOOL SURFACE is covered by the last test here, added 2026-09-21
+ *    after the same defect recurred through a different surface: the pod
+ *    listing doors were filtered, but `synap_create_entity`'s own
+ *    `profileSlug` description still read "(e.g., note, task, project, …)",
+ *    and a Raycast agent built a whole mental model on it (property defs on a
+ *    project, a `wedge_stage` field) before asking why the tool was missing.
+ *    A filtered listing does not help an agent that reads the KIND out of the
+ *    tool description it is handed first.
  *  - a NEW listing door added later that reads `profiles` directly (e.g. a
  *    raw drizzle `.select().from(profiles)` bypassing the repository) is
  *    NOT caught by this file. `project-is-not-an-entity-profile.test.ts`'s
@@ -147,4 +156,64 @@ describe("tripwire: reserved profile slugs are never advertised by a listing doo
       ).toContain("caller.profiles.listProfiles(");
     });
   }
+
+  /**
+   * Keys whose description names WHICH ENTITY KIND to pick. `synap_get_graph`'s
+   * `type` is deliberately NOT here: it enumerates OBJECT kinds (entity,
+   * project, view, session…), where a project is a real, addressable object —
+   * the reservation is about entity PROFILES only.
+   */
+  const KIND_CHOOSING_KEYS = new Set([
+    "profileSlug",
+    "profileSlugs",
+    "kindSlug",
+  ]);
+
+  it("no MCP tool advertises a reserved slug as a choosable entity kind", () => {
+    const manifest = JSON.parse(
+      read(API_SRC, "routers", "mcp", "tools", "mcp-tools.manifest.json")
+    ) as { tools: Array<Record<string, any>> };
+    expect(
+      manifest.tools.length,
+      "manifest parsed no tools — the scan proves nothing"
+    ).toBeGreaterThan(30);
+
+    const scanned: string[] = [];
+    const offenders: string[] = [];
+    for (const tool of manifest.tools) {
+      const props = (tool.inputSchema?.properties ?? {}) as Record<
+        string,
+        { description?: string }
+      >;
+      for (const [key, schema] of Object.entries(props)) {
+        if (!KIND_CHOOSING_KEYS.has(key)) continue;
+        const description = schema?.description;
+        if (typeof description !== "string") continue;
+        scanned.push(`${tool.name}.${key}`);
+        // Bare words only: `synap_create_project` is a TOOL NAME an agent
+        // should be pointed at, and `_project` carries no word boundary.
+        for (const word of description.match(/\b[a-z][a-z-]*\b/g) ?? []) {
+          if (isReservedProfileSlug(word)) {
+            offenders.push(`${tool.name}.${key}: "${word}"`);
+          }
+        }
+      }
+    }
+    // Non-vacuity: these keys exist on the create/classify tools today.
+    expect(
+      scanned.length,
+      "found no kind-choosing property at all — the key set is stale"
+    ).toBeGreaterThanOrEqual(2);
+    expect(offenders, "reserved slug advertised as an entity kind").toEqual([]);
+  });
+
+  it("self-check: the manifest scan flags a synthetic offender", () => {
+    const bare = "Entity profile slug (e.g., note, project, person).";
+    const pointer = "Not an entity kind — use synap_create_project.";
+    const words = (d: string) =>
+      (d.match(/\b[a-z][a-z-]*\b/g) ?? []).filter(isReservedProfileSlug);
+    expect(words(bare)).toEqual(["project"]);
+    // The tool-name pointer must stay allowed, or the fix is unwritable.
+    expect(words(pointer)).toEqual([]);
+  });
 });

@@ -605,19 +605,6 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0240_process_plane_tiers.sql",
   },
 
-  // playbooks — semantic discriminators (0268). Both are SELECTed by every
-  // playbook read; a missing column 500s the playbooks list and Relay's
-  // kind filter.
-  {
-    table: "playbooks",
-    column: "kind",
-    addedBy: "0268_playbook_kind_and_intake_style.sql",
-  },
-  {
-    table: "playbooks",
-    column: "intake_style",
-    addedBy: "0268_playbook_kind_and_intake_style.sql",
-  },
   {
     table: "projects",
     column: "phase",

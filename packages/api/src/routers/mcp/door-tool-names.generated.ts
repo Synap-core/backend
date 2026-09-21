@@ -57,13 +57,13 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_create_rule: {
     "pod-mcp": "synap_create_rule",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__create_rule",
+    raycast: "create-rule",
   },
   synap_create_skill: {
     "pod-mcp": "synap_create_skill",
-    "cp-connector": null,
-    raycast: null,
+    "cp-connector": "pod__create_skill",
+    raycast: "create-skill",
   },
   synap_create_verb: {
     "pod-mcp": "synap_create_verb",
@@ -83,7 +83,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_declare_workspace_source: {
     "pod-mcp": "synap_declare_workspace_source",
     "cp-connector": "pod__declare_workspace_source",
-    raycast: null,
+    raycast: "declare-workspace-source",
   },
   synap_define_kind: {
     "pod-mcp": "synap_define_kind",
@@ -288,7 +288,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_revise_proposal: {
     "pod-mcp": "synap_revise_proposal",
     "cp-connector": "pod__revise_proposal",
-    raycast: null,
+    raycast: "revise-proposal",
   },
   synap_run_capability: {
     "pod-mcp": "synap_run_capability",

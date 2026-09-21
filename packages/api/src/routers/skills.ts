@@ -9,7 +9,16 @@
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, or, desc, inArray, type SQL } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  or,
+  desc,
+  inArray,
+  getActingAgentUserId,
+  type SQL,
+} from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
 import type { ProviderVerbSpec } from "@synap/database/schema";
 import {
@@ -1461,9 +1470,22 @@ export const skillsRouter = router({
       }
 
       // 1. Permission check
+      // The acting agent is read AMBIENTLY first. `skillsRouter` is mounted on
+      // plain tRPC as well as behind the hub door, and a caller-supplied
+      // `input.agentUserId` is omittable: an agent could simply leave the field
+      // out and take the HUMAN path straight to a hard delete. The ALS value is
+      // set server-side at every key-auth entry point (api-key-auth,
+      // hub-protocol auth, MCP http-handler) and cannot be forged or dropped by
+      // the caller, so it is the floor; `input`/`ctx` only fill it in where the
+      // scope was not entered.
+      const actingAgentUserId =
+        getActingAgentUserId() ??
+        input.agentUserId ??
+        ctx.agentUserId ??
+        undefined;
       const perm = await checkPermissionOrPropose({
         userId,
-        agentUserId: input.agentUserId,
+        agentUserId: actingAgentUserId,
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "delete",

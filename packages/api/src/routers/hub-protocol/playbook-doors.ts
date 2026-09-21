@@ -87,6 +87,21 @@ export async function createPlaybookDoor(
     description?: string;
     stages?: PlaybookStageInput[];
     status?: PlaybookStatus;
+    /**
+     * The kind this playbook runs ON — a record, `{ profileSlug }` being the
+     * key the matcher reads. `playbooks.create` refuses a `profileSlug` that
+     * resolves to no profile, so a dangling subject can no longer be stored;
+     * the door has to carry the field for that guard to be reachable at all.
+     */
+    subjectProfile?: Record<string, unknown>;
+    /**
+     * Override the overlap refusal. `playbooks.create` refuses a name that
+     * scores as a near-twin of an existing playbook, and names the candidates.
+     * An escape hatch the agent doors cannot reach is not an escape hatch —
+     * without this, an agent whose playbook legitimately overlaps is stuck on
+     * CONFLICT forever.
+     */
+    forceCreate?: boolean;
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -118,6 +133,8 @@ export async function createPlaybookDoor(
     // draft would be invisible to run.
     status: input.status ?? "active",
     agentUserId: identity.agentUserId,
+    ...(input.subjectProfile ? { subjectProfile: input.subjectProfile } : {}),
+    ...(input.forceCreate ? { forceCreate: true } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

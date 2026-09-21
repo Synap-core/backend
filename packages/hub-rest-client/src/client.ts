@@ -213,6 +213,8 @@ import type {
   UpdateProjectInput,
   HubUpdateProjectResult,
   HubLinkProjectWorkspaceResult,
+  ReviseProposalInput,
+  DeclareWorkspaceSourceInput,
   AttachFacetInput,
   HubAttachFacetResult,
   CreateViewInput,
@@ -811,6 +813,37 @@ export class HubRestClient {
     );
   }
 
+  /**
+   * Amend a PENDING proposal you authored — the other half of the review loop:
+   * the reviewer's `rejectionReason` comes back on the row, you fix the payload
+   * and resubmit rather than filing a second proposal. Does NOT approve it.
+   */
+  async reviseProposal(
+    proposalId: string,
+    input: ReviseProposalInput
+  ): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      "PATCH",
+      `/api/hub/proposals/${encodeURIComponent(proposalId)}`,
+      input
+    );
+  }
+
+  /**
+   * Declare a workspace's cross-workspace data edges (provides / consumes and
+   * the default source per domain). Merges per domain. Governed: may propose.
+   */
+  async declareWorkspaceSource(
+    workspaceId: string,
+    input: DeclareWorkspaceSourceInput
+  ): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(
+      "PATCH",
+      `/api/hub/workspaces/${encodeURIComponent(workspaceId)}/source-edges`,
+      input
+    );
+  }
+
   // ─── Unified Search ───────────────────────────────────────────────────────
 
   /**
@@ -1058,6 +1091,12 @@ export class HubRestClient {
       params.set("summary", String(normalized.summary));
     if (normalized.profileSlugs?.length)
       params.set("profileSlugs", normalized.profileSlugs.join(","));
+    // Only sent when asked. The route reads `fill === "true"` and skips the
+    // aggregate entirely otherwise, so an omitted option costs nothing.
+    // Forwarded here and not merely declared on the options type: an option a
+    // caller can set but the client never sends is the declared-but-unwired
+    // defect this codebase keeps paying for.
+    if (normalized.fill) params.set("fill", "true");
     return this.request<HubDiscoverResult>(
       "GET",
       `/api/hub/discover?${params}`
@@ -1300,6 +1339,13 @@ export class HubRestClient {
      * "all" — omits workspaceId so results span every workspace the user can see.
      */
     scope?: "workspace" | "all";
+    /**
+     * AIP-157 representation. The ROUTE defaults to `full`, so a caller that
+     * wants the compact row must ask: `basic`. Worth asking for — a full queue
+     * runs ~6k chars a row (33 rows measured at 283,737), past an agent's
+     * tool-output ceiling. `full` carries `data` and `rejectionReason`.
+     */
+    view?: "basic" | "full";
     limit?: number;
     /** Rows to skip. Pair with `listProposalsPage` to page a queue. */
     offset?: number;
@@ -1314,6 +1360,7 @@ export class HubRestClient {
       if (wsId) params.set("workspaceId", wsId);
     }
     if (options?.status) params.set("status", options.status);
+    if (options?.view) params.set("view", options.view);
     if (options?.limit) params.set("limit", String(options.limit));
     if (options?.offset !== undefined) {
       params.set("offset", String(options.offset));

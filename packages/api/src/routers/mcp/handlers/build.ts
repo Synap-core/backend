@@ -353,6 +353,15 @@ export const buildHandlers: McpHandlerMap = {
       stages: args.stages as PlaybookStageInput[] | undefined,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
+      // Agents name a kind by SLUG; the column is a record keyed `profileSlug`,
+      // which is what the matcher and the dangling-slug guard both read.
+      ...(typeof args.subjectProfileSlug === "string" &&
+      args.subjectProfileSlug.trim()
+        ? { subjectProfile: { profileSlug: args.subjectProfileSlug.trim() } }
+        : {}),
+      // The overlap refusal's escape hatch. Without it an agent whose playbook
+      // legitimately overlaps an existing one is stuck on CONFLICT.
+      ...(args.forceCreate === true ? { forceCreate: true } : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
