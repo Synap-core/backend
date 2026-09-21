@@ -1422,6 +1422,24 @@ export const skillsRouter = router({
     .input(
       z.object({
         id: z.string().uuid(),
+        /**
+         * The acting AGENT, when this delete comes from one.
+         *
+         * SECURITY — this field is load-bearing, not metadata. `agentUserId`
+         * is the canonical signal that a write is an AI action
+         * (`permission-check.ts:1599`: `if (agentUserId) { …AI policy… }`).
+         * Without it the gate SKIPS the entire AI-policy block and executes on
+         * the human path — so this procedure called `checkPermissionOrPropose`
+         * and then hard-deleted anyway for every agent caller, because its
+         * input could not express who was asking.
+         *
+         * That was reachable in production: `DELETE /api/hub/skills/:id`
+         * (scope `hub-protocol.write`, i.e. any agent key) called
+         * `caller.delete({ id })` with no acting identity, and the body below
+         * is `db.delete(skills)` — a HARD delete, of any pod-scoped skill,
+         * including the rows backing the Synap Core verbs.
+         */
+        agentUserId: z.string().uuid().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1445,6 +1463,7 @@ export const skillsRouter = router({
       // 1. Permission check
       const perm = await checkPermissionOrPropose({
         userId,
+        agentUserId: input.agentUserId,
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "delete",

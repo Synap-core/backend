@@ -291,6 +291,12 @@ export const profilesRouter = router({
         /** Role-category grouping key (0222): clusters role-profiles so
          *  `entity.query { roleCategory }` matches every role in the category. */
         roleCategory: z.string().optional(),
+        /**
+         * Bypass the cross-workspace TWIN-SLUG refusal below. Same name and
+         * meaning as on `entities.create` and `playbooks.create`: the caller
+         * has SEEN the existing profiles and judged this genuinely separate.
+         */
+        forceCreate: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -382,6 +388,62 @@ export const profilesRouter = router({
           }
         }
         return { profile: existing, existing: true };
+      }
+
+      /**
+       * TWIN SLUG ACROSS WORKSPACES — the gap the check above cannot see.
+       *
+       * `getBySlug(slug, ctx.workspaceId)` only finds a profile VISIBLE from
+       * the calling workspace. A profile with the same slug owned by a
+       * DIFFERENT workspace is invisible here, so the create proceeds and the
+       * pod ends up with two profiles carrying one slug.
+       *
+       * MEASURED (live, 2026-09-21): the pod has two `finding` profiles, both
+       * `scope=workspace` — Research (2026-07-22, "a validated fact") and
+       * Builder (2026-09-20, a defect report). Different concepts, one slug,
+       * created exactly this way. Resolution then depends on the lens, which
+       * is how 44 rows ended up split across two schemas.
+       *
+       * WHY REFUSE RATHER THAN REUSE: the two really are different concepts.
+       * Silently returning the Research profile would be worse than either
+       * creating a twin or refusing — it would file defect reports against a
+       * research kind. So: hand the caller the candidates and make it choose.
+       *
+       * AI CALLERS ONLY, and `forceCreate` escapes it. Two workspaces each
+       * legitimately owning their own `deal` or `report` is normal
+       * multi-tenancy, and a human or a template install doing that
+       * deliberately must not be second-guessed. Reuses
+       * `findActiveBySlugAnyScope` — the EXISTING pod-wide existence probe
+       * (the same one the template-apply resolver uses to resolve-and-share
+       * instead of minting a duplicate), never a second lookup.
+       */
+      const isAiCaller =
+        Boolean(input.agentUserId) ||
+        input.source === "ai" ||
+        input.source === "intelligence";
+      if (isAiCaller && !input.forceCreate) {
+        const elsewhere = await profileRepo.findActiveBySlugAnyScope(
+          input.slug
+        );
+        if (elsewhere.length > 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              `The kind "${input.slug}" already exists on this pod, owned by ` +
+              `another workspace: ` +
+              elsewhere
+                .map(
+                  (p) =>
+                    `"${p.displayName}" (${p.id}, scope ${p.scope}` +
+                    `${p.workspaceId ? `, workspace ${p.workspaceId}` : ""})`
+                )
+                .join(", ") +
+              `. Creating a second one makes the slug resolve differently ` +
+              `depending on the lens. Either reuse it (ask for access), pick a ` +
+              `distinct slug, or resend with forceCreate: true if this really ` +
+              `is a separate concept that happens to share a name.`,
+          });
+        }
       }
 
       // A role profile (attachable facet type) MUST declare which base kinds it

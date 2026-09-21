@@ -23954,6 +23954,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		delete: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				agentUserId?: string | undefined;
 			};
 			output: {
 				status: "proposed";
@@ -24581,6 +24582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileKind?: "kind" | "role" | undefined;
 				applicableKinds?: string[] | undefined;
 				roleCategory?: string | undefined;
+				forceCreate?: boolean | undefined;
 			};
 			output: {
 				profile: {

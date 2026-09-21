@@ -367,6 +367,198 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "playbook.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "REVISE an existing playbook via the governed playbooks.update path (checkPermissionOrPropose). Patch semantics: omit what you are not changing; stages/criteria REPLACE the list when sent. `subjectProfile` ({ profileSlug }) is validated against the live profiles and a dangling slug is REFUSED — this is the door that repairs a playbook pointing at a kind that no longer exists. Returns the updated playbook or { status: 'proposed', proposalId }.",
+      parameters: {
+        type: "object",
+        required: ["playbookId"],
+        properties: {
+          playbookId: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          description: { type: "string" },
+          goalTemplate: { type: "string" },
+          subjectProfile: { type: "object" },
+          stages: { type: "array", items: { type: "object" } },
+          criteria: { type: "array", items: { type: "object" } },
+          status: {
+            type: "string",
+            enum: ["draft", "active", "paused", "archived"],
+          },
+          executor: {
+            type: "string",
+            enum: ["is-agent", "external-agent", "hybrid"],
+          },
+          reasoning: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "automation.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "REVISE an automation's DEFINITION via the governed automations.update path. Patch semantics: triggerConfig and flowDefinition REPLACE, metadata MERGES. A submitted flow is re-validated (a capability step naming a verb that does not resolve is refused) and an AI-authored automation must keep a valid metadata.dataContract. Does NOT change status — use automation.activate / automation.pause, which are the only paths that also compute nextRunAt for a cron trigger.",
+      parameters: {
+        type: "object",
+        required: ["automationId"],
+        properties: {
+          automationId: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          description: { type: "string" },
+          triggerType: {
+            type: "string",
+            enum: ["event", "cron", "webhook", "manual"],
+          },
+          triggerConfig: { type: "object" },
+          flowDefinition: {
+            type: "object",
+            properties: {
+              nodes: { type: "array", items: { type: "object" } },
+              edges: { type: "array", items: { type: "object" } },
+            },
+          },
+          metadata: { type: "object" },
+        },
+      },
+    },
+    {
+      name: "automation.activate",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Switch a draft/paused automation ON via the governed automations.activate path. Computes nextRunAt for a cron trigger and clears errorMessage — the reason activation is NOT a status patch. An AGENT activation always PROPOSES (rung 2.09 automation/activate, unwidenable): { status: 'proposed', proposalId }. { status: 'already_active' } is a normal outcome, not an error.",
+      parameters: {
+        type: "object",
+        required: ["automationId"],
+        properties: {
+          automationId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "automation.pause",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Switch an active automation OFF via the governed automations.pause path (workspace-write gated on the automation's own workspace). De-escalation: stopping a misbehaving automation deliberately does not wait for review. Returns { status: 'paused' }.",
+      parameters: {
+        type: "object",
+        required: ["automationId"],
+        properties: {
+          automationId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "view.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "REVISE a view's DEFINITION via views.update — name/description/scope/query/config/embeddedViewIds/type, with metadata MERGED. This is the door that VALIDATES: config is checked against the view type, an invalid renderer ref is refused, and only a workspace admin/owner may edit the workspace Home. It does NOT write board CONTENT — views.save is a different act (it uploads the snapshot, mints a document version and REPLACES metadata), and content is deliberately unreachable from a verb. Access is gated on the loaded view (assertViewAccess write); this door files no proposal.",
+      parameters: {
+        type: "object",
+        required: ["viewId"],
+        properties: {
+          viewId: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          description: { type: "string" },
+          scopeProfileIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+          },
+          scopeMode: { type: "string", enum: ["explicit", "observed"] },
+          query: { type: "object" },
+          config: { type: "object" },
+          embeddedViewIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+          },
+          metadata: { type: "object" },
+          type: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "cell.update",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Patch a cell instance's config via cellInstances.updateConfig. `config` REPLACES the stored config in full — read the instance first and send the whole object; there is no merge. Owner-scoped by the door (the UPDATE matches on id AND userId), so another member's placement is unreachable and surfaces as NOT_FOUND. Policy classifies cell/update as widenable (a config patch of an existing placement), unlike cell/create and cell/define which are floored.",
+      parameters: {
+        type: "object",
+        required: ["cellInstanceId", "config"],
+        properties: {
+          cellInstanceId: { type: "string", format: "uuid" },
+          config: { type: "object" },
+        },
+      },
+    },
+    {
+      name: "playbook.archive",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "RETIRE a playbook via the governed playbooks.archive path. DESTRUCTIVE — rung 2.5 floors it, so an AGENT always gets { status: 'proposed', proposalId } and no governance rule can widen that. Use THIS rather than playbook.update with status 'archived': the update path reaches the gate as playbook/update, which the destructive floor does not match, so archiving through it would slip the floor.",
+      parameters: {
+        type: "object",
+        required: ["playbookId"],
+        properties: {
+          playbookId: { type: "string", format: "uuid" },
+          reasoning: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "skill.update_rule",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "REVISE a standing rule via skills.updateRule, which delegates to updateRuleGoverned — gated at { rule, update } with the acting agent attributed, so an agent edit returns { status: 'proposed', proposalId }. THREE-STATE fields: `expiresAt` and `sentence` each distinguish absent (leave alone) from null (clear/remove) from a value (set/replace); `automationIds` REPLACES the bound list. `draft: true` keeps the rule in draft, false/absent activates it.",
+      parameters: {
+        type: "object",
+        required: ["ruleId", "intent", "scope"],
+        properties: {
+          ruleId: { type: "string", format: "uuid" },
+          intent: { type: "string" },
+          scope: {
+            type: "object",
+            required: ["kind"],
+            properties: {
+              kind: { type: "string", enum: ["pod", "workspace", "user"] },
+              workspaceId: { type: "string", format: "uuid" },
+              projectId: { type: "string", format: "uuid" },
+            },
+          },
+          expiresAt: { type: "string" },
+          factSkillId: { type: "string", format: "uuid" },
+          automationIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+          },
+          sentence: { type: "object" },
+          draft: { type: "boolean" },
+        },
+      },
+    },
+    {
+      name: "profile.propose_retire",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Propose RETIRING a kind or role via profiles.proposeRetire. This door has no execute branch at all — it files a PENDING retirement proposal unconditionally, for anyone — so the answer is always a review item, never a direct schema write. Requires an acting workspace (the profile is resolved through the caller's lens and the schema-write floor is editor+ on the loaded row). Hard deletion of a profile is deliberately NOT exposed.",
+      parameters: {
+        type: "object",
+        required: ["profileId"],
+        properties: {
+          profileId: { type: "string", format: "uuid" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    {
       name: "entity.delete",
       kind: "builtin",
       scope: "pod",
@@ -569,6 +761,27 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           // exact undiscoverable state this catalog exists to prevent.
           definition: { type: "object" },
         },
+      },
+    },
+    {
+      name: "market.scaffold",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Author a NEW marketplace package: generate its skeleton and SAVE it on the pod as a draft `document` entity you can open and edit (the CLI equivalent writes a file to disk, which an agent door cannot). category defaults to 'workspace' (a workspace template); cell/view/workflow/capability produce a standalone package file. 'skill' is refused — the Control Plane's package schema has no standalone slot for one; scaffold a capability and edit its skills[] instead. Goes through the governed entities.create door, so an agent call may come back { status: 'proposed' } — that is SUCCESS, it is queued for review. Pass projectId to file it into a project, or omit it and the door resolves one. Returns { status, entityId, url, proposalId?, slug, category, fileName, summary } — NOT the definition body; open the url to edit it, then `synap market validate` / `synap market publish`.",
+      parameters: {
+        type: "object",
+        required: ["slug"],
+        properties: {
+          slug: { type: "string" },
+          category: {
+            type: "string",
+            enum: ["workspace", "cell", "view", "workflow", "capability"],
+          },
+          workspaceId: { type: "string", format: "uuid" },
+          projectId: { type: "string", format: "uuid" },
+        },
+        additionalProperties: false,
       },
     },
     {

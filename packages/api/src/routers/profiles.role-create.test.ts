@@ -15,6 +15,8 @@ import { TRPCError } from "@trpc/server";
 
 const h = vi.hoisted(() => ({
   createCalls: [] as Array<Record<string, unknown>>,
+  /** What the POD-WIDE slug probe finds — the twin-slug suite sets this. */
+  slugElsewhere: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("../utils/split-brain-service.js", () => ({
@@ -51,7 +53,13 @@ vi.mock("@synap/database", async () => {
 
   class ProfileRepository {
     async getBySlug() {
-      return null; // no slug conflict
+      // Nothing visible from the CALLING workspace — which is also the blind
+      // spot the twin-slug suite below exercises: a profile with this slug
+      // owned by ANOTHER workspace is invisible to this lookup.
+      return null;
+    }
+    async findActiveBySlugAnyScope() {
+      return h.slugElsewhere;
     }
     async getById() {
       return null;
@@ -224,5 +232,102 @@ describe("profiles.create — role (facet type) minting", () => {
       })
     );
     expect(h.createCalls).toHaveLength(0);
+  });
+});
+
+/**
+ * A kind may not be minted by an AGENT when the slug already exists elsewhere
+ * on the pod.
+ *
+ * MEASURED DEFECT (live, 2026-09-21). `profiles.create` checks
+ * `getBySlug(slug, ctx.workspaceId)`, which only sees profiles VISIBLE FROM
+ * THE CALLING WORKSPACE. A profile with the same slug owned by a DIFFERENT
+ * workspace is invisible there, so the create proceeds and the pod ends up
+ * with two profiles carrying one slug.
+ *
+ * That is how this pod acquired two `finding` kinds — Research (2026-07-22,
+ * "a validated fact") and Builder (2026-09-20, a defect report). Different
+ * concepts, one slug. Resolution then depends on the lens, and 44 rows split
+ * across two schemas.
+ *
+ * WHY REFUSE AND NOT SILENTLY REUSE: they are genuinely different concepts.
+ * Returning the Research profile would file defect reports against a research
+ * kind — worse than either alternative.
+ *
+ * WHAT THIS DOES NOT COVER, measured: the repository is stubbed, so this
+ * proves the DOOR's control flow (probe consulted, refusal raised, escape
+ * honoured), not that `findActiveBySlugAnyScope` returns the right rows —
+ * that is its own contract and it is the pre-existing probe the template-apply
+ * resolver already relies on.
+ */
+
+const AGENT = "44444444-4444-4444-8444-444444444444";
+const TWIN = {
+  id: "bc633e0d-32ae-4431-be9f-0363517c3f01",
+  displayName: "Finding",
+  slug: "finding",
+  scope: "workspace",
+  workspaceId: "86a87213-9df5-445f-b2fa-3675b15ff4c5",
+};
+
+function caller() {
+  return profilesRouter.createCaller({
+    authenticated: true,
+    userId: "user-1",
+    workspaceId: "808939d1-86b3-4c52-a153-ae06ece2c54e",
+  } as never);
+}
+
+const base = {
+  slug: "finding",
+  displayName: "Finding",
+  agentUserId: AGENT,
+};
+
+/** This suite owns `h.slugElsewhere`; the host suite leaves it empty. */
+beforeEach(() => {
+  h.createCalls.length = 0;
+  h.slugElsewhere = [];
+});
+
+describe("profiles.create refuses a cross-workspace twin slug", () => {
+  it("NON-VACUITY: with no twin on the pod, the SAME create succeeds", () => {
+    // Without this, a create failing for any unrelated reason would satisfy
+    // every rejection assertion below while proving nothing.
+    return expect(caller().create({ ...base } as never)).resolves.toBeTruthy();
+  });
+
+  it("THE LIVE CASE: a twin owned by ANOTHER workspace is refused, naming it", async () => {
+    h.slugElsewhere = [TWIN];
+    await expect(caller().create({ ...base } as never)).rejects.toThrow(
+      /already exists on this pod/
+    );
+    expect(h.createCalls, "a twin profile was minted anyway").toHaveLength(0);
+  });
+
+  it("the refusal names the existing profile so the agent can act on it", async () => {
+    h.slugElsewhere = [TWIN];
+    const err = await caller()
+      .create({ ...base } as never)
+      .catch((e: TRPCError) => e);
+    expect((err as TRPCError).message).toContain(TWIN.id);
+    expect((err as TRPCError).message).toContain("forceCreate");
+  });
+
+  it("forceCreate escapes it — a separate concept sharing a name is allowed", async () => {
+    h.slugElsewhere = [TWIN];
+    await expect(
+      caller().create({ ...base, forceCreate: true } as never)
+    ).resolves.toBeTruthy();
+    expect(h.createCalls).toHaveLength(1);
+  });
+
+  it("a HUMAN caller is never second-guessed", async () => {
+    // Two workspaces each owning their own `deal` or `report` is normal
+    // multi-tenancy; only the AI branch runs the probe.
+    h.slugElsewhere = [TWIN];
+    await expect(
+      caller().create({ slug: "finding", displayName: "Finding" } as never)
+    ).resolves.toBeTruthy();
   });
 });

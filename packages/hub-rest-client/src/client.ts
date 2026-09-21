@@ -252,6 +252,10 @@ import type {
   HubCreatePlaybookResult,
   RunPlaybookInput,
   HubRunPlaybookResult,
+  CreateSkillInput,
+  HubCreateSkillResult,
+  CreateRuleInput,
+  HubCreateRuleResult,
   ReactionKind,
   ReactionLens,
   HubReactionEvent,
@@ -2400,5 +2404,39 @@ export class HubRestClient {
       HubWebhookDelivery[] | HubListResponse<HubWebhookDelivery>
     >("GET", `/api/hub/webhooks/${subscriptionId}/deliveries${qs}`);
     return unwrapList(result);
+  }
+
+  // ─── Skills & rules (prompt-injecting authoring doors) ─────────────────────
+  //
+  // Both of these write PROSE that the pod's dynamic-skill-loader can inject
+  // into the OWNER's own agents' prompts. The pod — not this client — is what
+  // keeps that safe: the capability gate routes an agent-authored write to a
+  // proposal, and an agent-authored skill/rule is born UNAPPROVED so it cannot
+  // load into a prompt before a human approves it. Neither method exposes an
+  // approve/auto-approve affordance, and neither may ever grow one.
+
+  /**
+   * Author a skill — Documentation (`body`) + OPTIONAL executable (`code`).
+   *
+   * `kind` is DERIVED by the pod from code presence; prose-only is a teaching
+   * skill and needs a `slug`, because `load_skill` resolves `skills.body` BY
+   * SLUG and by nothing else. An agent key gets `status: "proposed"` — that is
+   * a SUCCESS, queued for the owner's review.
+   */
+  async createSkill(input: CreateSkillInput): Promise<HubCreateSkillResult> {
+    return this.request<HubCreateSkillResult>("POST", "/api/hub/skills", input);
+  }
+
+  /**
+   * Create a rule — `intent` alone is a prose FACT rule; `intent` + `sentence`
+   * is a BEHAVIOUR rule the pod compiles into an automation or REFUSES.
+   *
+   * A refusal (`status: "denied"`) comes back as HTTP 403 and therefore THROWS
+   * a `HubApiError` carrying the pod's reason — it is a verdict, not a
+   * transient error, so resending it unchanged fails identically.
+   * `status: "proposed"` resolves normally and is a SUCCESS.
+   */
+  async createRule(input: CreateRuleInput): Promise<HubCreateRuleResult> {
+    return this.request<HubCreateRuleResult>("POST", "/api/hub/rules", input);
   }
 }

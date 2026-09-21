@@ -216,4 +216,10 @@ export type {
   RunPlaybookInput,
   HubCapabilityEnableOffer,
   HubRunPlaybookResult,
+  CreateSkillInput,
+  HubCreateSkillResult,
+  HubRuleCondition,
+  HubRuleSentence,
+  CreateRuleInput,
+  HubCreateRuleResult,
 } from "./types.js";

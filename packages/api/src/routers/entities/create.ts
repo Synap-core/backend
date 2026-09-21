@@ -48,6 +48,7 @@ import {
   ENTITY_JUNK_TITLE_CODE,
   reservedEntityKindReason,
 } from "@synap/database";
+import { reconcileKindWithPlacement } from "./kind-placement.js";
 import { entities, workspaces, links } from "@synap/database/schema";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
@@ -823,45 +824,121 @@ export const createProcs = {
       const facetSlugsForPlacement = (input.facets ?? [])
         .map((f) => f.profileSlug)
         .filter((s): s is string => typeof s === "string" && s.length > 0);
-      const entityPlacement = await resolveWorkspacePlacement(placementDb, {
-        userId: ctx.userId,
-        // Only an EXPLICIT target is rung-1. Omitting is undefined (not null)
-        // so ontology can place; deliberate pod-wide uses global:true.
-        explicitWorkspaceId: input.targetWorkspaceId
-          ? input.targetWorkspaceId
-          : undefined,
-        globalFlag: input.global,
-        workspaceScopedFlag: input.workspaceScoped === true,
-        entityScope: earlyResolvedProfile.entityScope as
-          "pod" | "workspace" | null | undefined,
-        kindSlug:
-          profileSlug ?? (earlyResolvedProfile as { slug?: string }).slug,
-        ...(facetSlugsForPlacement.length
-          ? { facetSlugs: facetSlugsForPlacement }
-          : {}),
-        // Ambient is advisory (MCP URL pin / session ctx) — never invent a
-        // membership[0] ambient here. Ontology (rung 2) wins when definitive.
-        ambientWorkspaceId: governanceWorkspaceId,
-        ...(ctx.sessionId ? { context: { sessionId: ctx.sessionId } } : {}),
-      });
-      // Placement accept policy (shared pure helper with graph capture/import):
-      // - Explicit pin / global / workspaceScoped → trust door result as-is
-      // - Else deterministic ontology (rung ≤4, single candidate) → place
-      // - Else K1: pod-scope kinds → null; workspace-scope → ambient only
-      let resolvedEntityWorkspaceId: string | null;
-      if (input.global || input.targetWorkspaceId || input.workspaceScoped) {
-        resolvedEntityWorkspaceId = entityPlacement.workspaceId;
-      } else {
+      /**
+       * Placement for ONE candidate profile, as a closure so it can be run a
+       * SECOND time after the kind is re-resolved below. Placement reads the
+       * profile's `entityScope` and slug, so a different profile can imply a
+       * different home — see the re-resolution block after this.
+       */
+      const computePlacement = async (
+        profile: typeof earlyResolvedProfile
+      ): Promise<string | null> => {
+        const entityPlacement = await resolveWorkspacePlacement(placementDb, {
+          userId: ctx.userId,
+          // Only an EXPLICIT target is rung-1. Omitting is undefined (not null)
+          // so ontology can place; deliberate pod-wide uses global:true.
+          explicitWorkspaceId: input.targetWorkspaceId
+            ? input.targetWorkspaceId
+            : undefined,
+          globalFlag: input.global,
+          workspaceScopedFlag: input.workspaceScoped === true,
+          entityScope: profile.entityScope as
+            "pod" | "workspace" | null | undefined,
+          kindSlug: profileSlug ?? (profile as { slug?: string }).slug,
+          ...(facetSlugsForPlacement.length
+            ? { facetSlugs: facetSlugsForPlacement }
+            : {}),
+          // Ambient is advisory (MCP URL pin / session ctx) — never invent a
+          // membership[0] ambient here. Ontology (rung 2) wins when definitive.
+          ambientWorkspaceId: governanceWorkspaceId,
+          ...(ctx.sessionId ? { context: { sessionId: ctx.sessionId } } : {}),
+        });
+        // Placement accept policy (shared pure helper with graph capture/import):
+        // - Explicit pin / global / workspaceScoped → trust door result as-is
+        // - Else deterministic ontology (rung ≤4, single candidate) → place
+        // - Else K1: pod-scope kinds → null; workspace-scope → ambient only
+        if (input.global || input.targetWorkspaceId || input.workspaceScoped) {
+          return entityPlacement.workspaceId;
+        }
         const deterministic =
           acceptDeterministicGraphWorkspace(entityPlacement);
-        if (deterministic) {
-          resolvedEntityWorkspaceId = deterministic;
-        } else if (
-          normalizeEntityScope(earlyResolvedProfile.entityScope) === "pod"
-        ) {
-          resolvedEntityWorkspaceId = null;
-        } else {
-          resolvedEntityWorkspaceId = entityPlacement.workspaceId;
+        if (deterministic) return deterministic;
+        if (normalizeEntityScope(profile.entityScope) === "pod") return null;
+        return entityPlacement.workspaceId;
+      };
+
+      let resolvedEntityWorkspaceId =
+        await computePlacement(earlyResolvedProfile);
+
+      /**
+       * THE KIND MUST BE VALID WHERE THE ROW LANDS — re-resolution pass.
+       *
+       * MEASURED DEFECT (live, 2026-09-21). Kind resolution and placement read
+       * DIFFERENT workspace values: the profile is resolved with
+       * `governanceWorkspaceId` (`targetWorkspaceId ?? ctx.workspaceId ?? null`)
+       * while the row's home comes from `resolveWorkspacePlacement` above. When
+       * they disagree AND the slug has a TWIN, the entity is stored in
+       * workspace W carrying a profile that is not even visible under W's lens.
+       *
+       * Observed: the pod has two `finding` profiles, both `scope=workspace`
+       * (Research 2026-07-22, Builder 2026-09-20). At pod altitude
+       * `ProfileRepository.getBySlug` ties them on priority and breaks on
+       * `createdAt ASC`, handing back the Research one; the row then landed in
+       * Builder. Every property the Builder profile models came back
+       * `unmodeled`, and the row was written anyway — a silently wrong kind.
+       *
+       * WHY THIS IS A SECOND PASS AND NOT JUST A REORDER. Placement CONSUMES
+       * the profile (`entityScope`, `kindSlug` above), so the dependency is
+       * circular: you cannot resolve the kind in the placement workspace
+       * before you know the placement workspace. So: place, then re-resolve
+       * the kind THERE, and only if the corrected profile carries a different
+       * `entityScope` does placement need recomputing — bounded at one extra
+       * pass, and a disagreement that survives it is refused rather than
+       * guessed at.
+       *
+       * An explicit pin is left alone: `targetWorkspaceId` already feeds BOTH
+       * sides, so they cannot disagree, and `global:true` is a deliberate
+       * pod-wide write.
+       */
+      if (
+        profileSlug &&
+        !input.global &&
+        !input.targetWorkspaceId &&
+        resolvedEntityWorkspaceId &&
+        resolvedEntityWorkspaceId !== governanceWorkspaceId
+      ) {
+        const resolutionService = new ProfileResolutionService(placementDb);
+        const profileHere = await resolutionService.resolveProfile(
+          profileSlug,
+          ctx.userId,
+          resolvedEntityWorkspaceId
+        );
+        const decision = reconcileKindWithPlacement({
+          initial: earlyResolvedProfile,
+          inPlacement: profileHere,
+        });
+        if (decision.action === "adopt") {
+          earlyResolvedProfile = profileHere!;
+          if (decision.recomputePlacement) {
+            // The corrected kind files differently — recompute ONCE.
+            const replaced = await computePlacement(profileHere!);
+            if (replaced !== resolvedEntityWorkspaceId) {
+              // Two passes disagree: the slug resolves to one kind in the home
+              // its own kind chose, and another kind in the home THAT one
+              // chooses. Refusing beats picking a side silently — the caller
+              // pins `targetWorkspaceId` and both sides then agree by
+              // construction.
+              throw new TRPCError({
+                code: "BAD_REQUEST",
+                message:
+                  `The kind "${profileSlug}" resolves to a different profile ` +
+                  `depending on where this entity is filed, and the two do not ` +
+                  `converge. Pass targetWorkspaceId to say which workspace this ` +
+                  `belongs to; that pins the kind and the placement together.`,
+              });
+            }
+            resolvedEntityWorkspaceId = replaced;
+          }
         }
       }
 

@@ -81,6 +81,11 @@ import { recommendRaiseProposalCapForAllAgents } from "../proposals/recommend-ra
 import { recommendTightenPostureForAllChannels } from "../proposals/recommend-tighten-posture.js";
 import { scanAutomationHealth } from "../proposals/automation-health.js";
 import { assertPodAdmin } from "../../trpc.js";
+import { openLink } from "../../utils/deep-links.js";
+import {
+  buildPackageSkeleton,
+  SCAFFOLDABLE_CATEGORIES,
+} from "./market-scaffold.js";
 // marketplace-install.ts pulls in the full router graph (create-from-definition.ts
 // imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
 // level) — it and catalog-cache-query.ts are lazy-imported inside the two
@@ -2204,6 +2209,178 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
 };
 
 /**
+ * market.scaffold — generate a marketplace package SKELETON and PERSIST it on
+ * the pod as a `document` ENTITY, returning an id + URL rather than the
+ * definition body.
+ *
+ * WHY IT EXISTS: `synap market scaffold <slug>` (the CLI) writes
+ * `<slug>.template.yaml` to DISK. An agent door has no disk, so marketplace
+ * authoring was unreachable from an agent. This verb keeps the SAME skeletons
+ * (see `market-scaffold.ts` for why they are a copy rather than a shared
+ * import) and swaps the destination: the pod.
+ *
+ * WHY THE `entity.create` DOOR AND NOT `document.create`: a document is not an
+ * entity here (`documents.entityId` was REMOVED; the relationship is
+ * `entities WHERE documentId = ?`), so a bare `documents.create` row has no
+ * entity — nothing `ask` / `get_entities` / the graph can find, and nothing
+ * `linkEntityToProject` (which takes an entityId) could ever be filed into a
+ * project. `entitiesRouter.create` gives all three at once: it SYNTHESIZES the
+ * document from `content` via `EntityBodyService.setBody`, it resolves PROJECT
+ * placement itself (explicit `projectId` → producing session → the agent's
+ * declared focus) and files `belongs_to_project` idempotently, and — unlike
+ * `documents.create`, which carries no gate call at all — it runs
+ * `checkPermissionOrPropose`. So a `proposed` verdict is now genuinely
+ * reachable, and it is surfaced as SUCCESS.
+ *
+ * WHAT IT RETURNS: `{ status, entityId, url, proposalId?, slug, category,
+ * fileName, summary }` — deliberately NOT the definition body. A skeleton is
+ * hundreds to thousands of characters of boilerplate the agent does not need to
+ * read back, and MCP responses are capped.
+ *
+ * NO PROPERTY BAG IS SENT, on purpose. The `document` kind models ZERO
+ * properties (it has no entry in `SYSTEM_PROFILE_PROPERTY_LINKS`), so a
+ * `packageSlug`/`category`/`status` bag would be stored unmodeled and stay
+ * invisible to a schema-driven UI. Findability comes from the TITLE (which
+ * carries the package name + category), the BODY (which carries `meta.slug`
+ * verbatim), the PROJECT link, and the entity row itself.
+ *
+ * `category: "skill"` is NOT offered, matching the CLI: the Control Plane's
+ * package schema has no standalone slot for a skill, so a skeleton for one
+ * could never publish.
+ *
+ * This is a WRITE verb: it is absent from READ_ONLY_BUILTIN_VERBS and flows
+ * through the full capability gate as well.
+ */
+const marketScaffoldParams = z
+  .object({
+    /** Package slug, e.g. `book-club`. Also names the file the CLI would write. */
+    slug: z
+      .string()
+      .trim()
+      .min(1)
+      .max(200)
+      .regex(
+        /^[a-z0-9][a-z0-9-]*$/,
+        "slug must be lowercase kebab-case (a-z, 0-9, '-')"
+      ),
+    /** Which package shape to scaffold. Defaults to a workspace template. */
+    category: z.enum(SCAFFOLDABLE_CATEGORIES).default("workspace"),
+    /** Optional explicit workspace lens; defaults to the acting workspace (or pod-wide). */
+    workspaceId: z.string().uuid().optional(),
+    /**
+     * Optional explicit project lens. Omit it and `entities.create`'s own
+     * placement ladder resolves one (producing session → the agent's declared
+     * focus) — never hand-roll a `belongs_to_project` relation here.
+     */
+    projectId: z.string().uuid().optional(),
+  })
+  .strict();
+
+const marketScaffoldHandler: BuiltinVerbHandler = async (params, ctx) => {
+  // Honour the CLI's known refusal WITH ITS REASON rather than letting the enum
+  // emit a generic "invalid value" — the caller is asking for something that
+  // cannot exist, not something misspelled.
+  if ((params as { category?: unknown }).category === "skill") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A skill is not scaffoldable: the Control Plane's package schema has no standalone slot for one (skills only exist nested inside a capability's skills[]). Scaffold a capability instead and edit its skills[].",
+    });
+  }
+  const input = marketScaffoldParams.parse(params);
+  const skeleton = buildPackageSkeleton(input.slug, input.category);
+
+  // Mirrors entityCreateHandler exactly: entities.create is a podProcedure, so
+  // membership is pre-checked only when a workspace lens IS in play (a
+  // pod-scoped profile — `document` is one — tolerates a null workspace).
+  const workspaceId = input.workspaceId ?? ctx.workspaceId ?? null;
+  let workspaceRole: string | undefined;
+  if (workspaceId) {
+    const membership = await getWorkspaceMembership(
+      db,
+      workspaceId,
+      ctx.userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No access to the acting workspace.",
+      });
+    }
+    workspaceRole = membership.role;
+  }
+
+  const { entitiesRouter } = await import("../../routers/entities.js");
+  const caller = entitiesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId,
+    workspaceRole,
+  } as unknown as Context);
+
+  const result = await caller.create({
+    profileSlug: "document",
+    title: skeleton.title,
+    // The BODY. `EntityBodyService.setBody` materializes it as a real versioned
+    // document when it reads as long-form (see `shouldMaterializeAsDocument`);
+    // a short skeleton stays inline on the entity instead. Either way the whole
+    // skeleton is stored and the caller never has to carry it.
+    content: skeleton.body,
+    // Explicit lens only; absent, the door's own placement ladder resolves it.
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+    // Forwarded so an AGENT run is governed as an agent (the gate branches on
+    // it). `entity.create` does not thread this today; market.install does, and
+    // it is the stricter, correct direction — without it an agent write would
+    // be judged on the operator path.
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+  });
+
+  // `status` is surfaced VERBATIM. "proposed" is SUCCESS: the skeleton is
+  // queued for the owner's review, not lost.
+  //
+  // The router's return is a UNION whose arms widen `status` to `string`, so
+  // TS cannot discriminate on it. Read the propose-only fields through a narrow
+  // structural view rather than `any` — the shape below is exactly what the
+  // `status: "proposed"` arm of `entities.create` returns.
+  const proposedView = result as {
+    status: string;
+    proposalId?: string;
+    reviewUrl?: string;
+    proposedEntityId?: string;
+  };
+  if (proposedView.status === "proposed") {
+    return {
+      status: proposedView.status,
+      // Allocated at propose-time so the caller can reference it before
+      // approval; absent on a join gate, where no id was ever allocated.
+      entityId: proposedView.proposedEntityId ?? null,
+      proposalId: proposedView.proposalId,
+      // The door already built the review link — never rebuild it here.
+      url:
+        proposedView.reviewUrl ??
+        (proposedView.proposalId ? openLink(proposedView.proposalId) : null),
+      slug: input.slug,
+      category: input.category,
+      fileName: skeleton.fileName,
+      summary: `Skeleton for ${input.category} package "${input.slug}" (${skeleton.body.length} chars) is awaiting your review. Open the url to approve it, then edit and publish with \`synap market publish\`.`,
+    };
+  }
+
+  return {
+    status: result.status,
+    entityId: result.id,
+    // The ONE link builder (deep-links.ts), never a concatenated URL.
+    url: openLink(result.id),
+    slug: input.slug,
+    category: input.category,
+    fileName: skeleton.fileName,
+    // ONE LINE. The body is deliberately not returned — open the url to edit it.
+    summary: `Skeleton for ${input.category} package "${input.slug}" saved as a draft document entity (${skeleton.body.length} chars). Open the url to edit, then publish with \`synap market publish\`.`,
+  };
+};
+
+/**
  * connector.health_check — probe a connector for a provider and, if its OAuth
  * connection is dead (refresh token expired / never connected), emit the operator
  * reconnect nudge — so a CONFIG feed nudges instead of going SILENTLY dead on an
@@ -2835,6 +3012,588 @@ const automationRecommendHealthHandler: BuiltinVerbHandler = async (
   return scanAutomationHealth();
 };
 
+// ── Config REVISION half — playbook + automation ─────────────────────────────
+//
+// The substrate could BUILD config (playbook.create / automation.create) but
+// never REVISE it: a live playbook whose `subjectProfile` pointed at a kind
+// that no longer exists could not be repaired from any agent surface, and an
+// agent-authored automation — which ALWAYS lands `draft`
+// (`insertAutomationAfterGovernance`'s `forceDraft`) — could never be switched
+// on. These four verbs close that, each delegating to the EXISTING governed
+// tRPC procedure exactly like `entity.update` does. No logic is re-implemented
+// here, and every return is surfaced VERBATIM so a `{ status: "proposed" }`
+// outcome is reported as the success it is.
+//
+// WHY `automation.activate` IS ITS OWN VERB rather than `automation.update`
+// with `status: "active"` — MEASURED, not stylistic. `automations.update`
+// writes `status` straight into the row and computes NOTHING else;
+// `automations.activate` additionally computes `nextRunAt` from the cron
+// expression and clears `errorMessage`. Activating a cron automation through
+// the update path therefore produces a row that reads "active" and is never
+// scheduled — the silent dead-automation defect. So `automation.update` does
+// NOT accept `status` at all (the parameter is deliberately absent, not
+// forwarded-and-dropped), and the lifecycle lives on its own verbs.
+
+/**
+ * playbook.update — patch a playbook through the governed
+ * `playbooksRouter.update` caller.
+ *
+ * `subjectProfile` is passed THROUGH, never pre-checked: `playbooks.update`
+ * calls `assertSubjectProfileResolves`, which refuses a slug that does not
+ * resolve. A second check here would be a fork of that rule.
+ */
+const playbookUpdateParams = z
+  .object({
+    playbookId: z.string().uuid(),
+    name: z.string().min(1).max(500).optional(),
+    description: z.string().max(5000).optional(),
+    goalTemplate: z.string().min(1).max(5000).optional(),
+    /** `{ profileSlug }` — validated against the live profiles by the door. */
+    subjectProfile: z.record(z.string(), z.unknown()).optional(),
+    /** REPLACES the stage list. Shape validated by `playbookStagesSchema`. */
+    stages: z.array(z.record(z.string(), z.unknown())).optional(),
+    /** REPLACES the criteria list. Shape validated by `sessionCriteriaSchema`. */
+    criteria: z.array(z.record(z.string(), z.unknown())).optional(),
+    status: z.enum(["draft", "active", "paused", "archived"]).optional(),
+    executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
+    /** Shown to the reviewer when the write lands as a proposal. */
+    reasoning: z.string().max(2000).optional(),
+    // STRICT, like `tool.request`: an unknown key is REFUSED, never accepted and
+    // silently dropped. A dropped param on a write door reads to the caller as
+    // "applied".
+  })
+  .strict();
+
+const playbookUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = playbookUpdateParams.parse(params);
+
+  // playbooks.update is a protectedProcedure that loads the row by id ALONE and
+  // then gates on the LOADED row's workspace (`assertWorkspaceWrite`). There is
+  // therefore no workspace lens to pre-check here — pre-checking `ctx.workspaceId`
+  // would refuse a pod-wide run without making the real gate any stricter.
+  const { playbooksRouter } = await import("../../routers/playbooks.js");
+  const caller = playbooksRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  const result = await caller.update({
+    id: input.playbookId,
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+    ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.description !== undefined
+      ? { description: input.description }
+      : {}),
+    ...(input.goalTemplate !== undefined
+      ? { goalTemplate: input.goalTemplate }
+      : {}),
+    ...(input.subjectProfile !== undefined
+      ? { subjectProfile: input.subjectProfile }
+      : {}),
+    ...(input.stages !== undefined
+      ? {
+          stages: input.stages as unknown as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["update"]
+          >[0]["stages"],
+        }
+      : {}),
+    ...(input.criteria !== undefined
+      ? {
+          criteria: input.criteria as unknown as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["update"]
+          >[0]["criteria"],
+        }
+      : {}),
+    ...(input.status !== undefined ? { status: input.status } : {}),
+    ...(input.executor !== undefined ? { executor: input.executor } : {}),
+  });
+
+  return result;
+};
+
+/**
+ * automation.update — patch an automation's DEFINITION through the governed
+ * `automationsRouter.update` caller. Lifecycle is NOT here: see the section
+ * note above and `automation.activate` / `automation.pause`.
+ */
+const automationUpdateParams = z
+  .object({
+    automationId: z.string().uuid(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(5000).optional(),
+    triggerType: z.enum(["event", "cron", "webhook", "manual"]).optional(),
+    /** REPLACES the trigger settings. Event patterns + filters re-validated by the door. */
+    triggerConfig: z.record(z.string(), z.unknown()).optional(),
+    /** REPLACES the flow. Capability steps re-validated against what the owner can see. */
+    flowDefinition: z
+      .object({
+        nodes: z.array(z.record(z.string(), z.unknown())),
+        edges: z.array(z.record(z.string(), z.unknown())),
+      })
+      .optional(),
+    /** MERGED into the stored metadata bag by the door (never a wholesale replace). */
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    // STRICT, and `status` is the reason. `automations.update` writes `status`
+    // and computes nothing else, so activating a cron automation through it
+    // yields a row that reads "active" and is never scheduled. Accepting-and-
+    // dropping `status` here would tell the caller it activated something.
+    // Refusing sends them to `automation.activate`, which computes `nextRunAt`.
+  })
+  .strict();
+
+const automationUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = automationUpdateParams.parse(params);
+
+  // automations.update loads by id alone and gates on the LOADED row's
+  // workspace (`assertWorkspaceWrite`) — same reasoning as playbook.update.
+  const { automationsRouter } = await import("../../routers/automations.js");
+  const caller = automationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  const result = await caller.update({
+    id: input.automationId,
+    // A LENS only: the door never gates on this value.
+    workspaceId: ctx.workspaceId,
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.description !== undefined
+      ? { description: input.description }
+      : {}),
+    ...(input.triggerType !== undefined
+      ? { triggerType: input.triggerType }
+      : {}),
+    ...(input.triggerConfig !== undefined
+      ? { triggerConfig: input.triggerConfig }
+      : {}),
+    ...(input.flowDefinition !== undefined
+      ? { flowDefinition: input.flowDefinition }
+      : {}),
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+  });
+
+  return result;
+};
+
+/**
+ * automation.activate — switch a draft/paused automation ON through the
+ * governed `automationsRouter.activate` caller, which computes `nextRunAt` for
+ * a cron trigger, clears `errorMessage`, and routes an AGENT activation through
+ * `checkPermissionOrPropose` (rung 2.09 `automation/activate`, floored) so it
+ * comes back `{ status: "proposed" }`. `{ status: "already_active" }` is also a
+ * normal, non-error outcome.
+ */
+const automationActivateParams = z
+  .object({
+    automationId: z.string().uuid(),
+  })
+  .strict();
+
+const automationActivateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = automationActivateParams.parse(params);
+
+  const { automationsRouter } = await import("../../routers/automations.js");
+  const caller = automationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  return caller.activate({
+    id: input.automationId,
+    workspaceId: ctx.workspaceId,
+  });
+};
+
+/**
+ * automation.pause — switch an active automation OFF through the governed
+ * `automationsRouter.pause` caller. De-escalation: the door gates on the loaded
+ * row's workspace (`assertWorkspaceWrite`) and deliberately does NOT propose —
+ * stopping a runaway automation must not itself wait for review.
+ */
+const automationPauseParams = z
+  .object({
+    automationId: z.string().uuid(),
+  })
+  .strict();
+
+const automationPauseHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = automationPauseParams.parse(params);
+
+  const { automationsRouter } = await import("../../routers/automations.js");
+  const caller = automationsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  return caller.pause({
+    id: input.automationId,
+    workspaceId: ctx.workspaceId,
+  });
+};
+
+// ── Lifecycle REVISION half (Wave B) — view / cell / playbook / rule / kind ──
+//
+// Wave A closed config REVISION for playbook + automation. This wave closes the
+// remaining lifecycle doors an agent could CREATE through but never REVISE or
+// RETIRE. Same contract as Wave A: delegate to the EXISTING governed tRPC
+// procedure, re-implement nothing, and surface a `{ status: "proposed" }`
+// return VERBATIM as the success it is.
+//
+// WHAT WAS DELIBERATELY **NOT** PROJECTED, and why — a reasoned exclusion is
+// worth more than a verb nobody should call. Every one of these was measured
+// against the door's actual source, not its name:
+//
+//   view.delete / document.delete / property_def.delete / workspace.archive
+//     — DESTRUCTIVE by `DESTRUCTIVE_ACTIONS` (rung 2.5), but their doors carry
+//       NO `checkPermissionOrPropose` at all (`views.ts` gates only `create`;
+//       `documents.ts` and `property-defs.ts` have zero gate calls;
+//       `workspaces.archive` is owner/pod-admin RBAC only). The rung-2.5 floor
+//       is invisible at the OUTER capability/run gate (see the tripwire
+//       `synap-core-risky-verbs-reenter-a-governed-door.test.ts`), so a verb
+//       over an ungated destructive door is an UNGOVERNED delete, not a
+//       floored one. `view.delete` additionally drops the board's document +
+//       every MinIO version blob via `deleteDocumentAndBlobs`. Gate the doors
+//       first; then project them.
+//
+//   workspace.update / skill.delete / project.delete
+//     — THE ATTRIBUTION TRAP, and the sharpest finding of this wave. All three
+//       DO call `checkPermissionOrPropose`, so they read as governed. But none
+//       of them accepts an `agentUserId` (or a `source`) on its input, and
+//       `permission-check.ts` treats `agentUserId` as "the canonical signal
+//       that this is an AI action". With it absent the gate takes the HUMAN
+//       path and EXECUTES — so the rung-2 ADMIN floor that makes
+//       `workspaces.update` look safe (it is in `ADMIN_ACTIONS_LIVE`) would
+//       never fire for an agent. Wrapping them would ship an ungoverned admin
+//       write behind a gate call that proves nothing. Thread `agentUserId`
+//       through those three procedures first (the shape `playbooks.update` and
+//       `playbooks.archive` already use), then they can be projected.
+//
+//   property_def.upsert — asked for as one verb; it cannot honestly be one.
+//     `propertyDefs.create` gates at schema level "additive" and, on a slug
+//     conflict, RETURNS THE EXISTING DEF (`{ existing: true }`) WITHOUT
+//     applying the submitted valueType/constraints; `propertyDefs.update`
+//     gates at level "editor" with `actingWorkspaceId: null` (a base def on a
+//     system kind ⇒ pod admin) because a valueType change re-types every
+//     entity of every profile that links the def. One "upsert" over those two
+//     would report success for a change that silently did not happen AND blur
+//     two different authority floors. Two verbs would be the right shape — but
+//     neither door gates at all today, so both are excluded with the group
+//     above.
+//
+//   cells.uninstall — no gate, no proposal; `requireAdminRole` only, which an
+//     agent acting as the pod owner passes. Its action ("uninstall") is not in
+//     `DESTRUCTIVE_ACTIONS`, so nothing would even flag it — an agent could
+//     silently deactivate a workspace's installed cell type. Judgement, not
+//     derivation: excluded.
+//
+//   skills.setApproved — excluded on principle, not plumbing. It IS the
+//     approval act. An agent that can approve a skill can approve the prose it
+//     just wrote, which turns any successful prompt injection into a durable,
+//     self-certified capability. This one should stay unreachable even if the
+//     door were gated.
+//
+//   profiles.delete — the hard-delete twin of `profile.propose_retire` below.
+//     Retirement is the door with a review step by construction; deletion is
+//     not, so only the former is projected.
+
+/**
+ * view.update — patch a view's DEFINITION through `viewsRouter.update`.
+ *
+ * WHY `update` AND NOT `save` — measured, the same class of trap as Wave A's
+ * `automation.activate`/`nextRunAt`. They are not two spellings of one door:
+ *   • `views.save` writes the view's CONTENT. For a whiteboard it uploads the
+ *     tldraw snapshot to MinIO, then always mints a `document_versions` row and
+ *     bumps `documents.currentVersion` / `lastSavedVersion`. Its `metadata`
+ *     REPLACES the stored bag wholesale, and it runs NEITHER
+ *     `validateViewConfig` NOR `assertValidRendererRef` NOR the workspace-Home
+ *     admin floor.
+ *   • `views.update` writes the view ROW. It validates `config` against the
+ *     view type, refuses an invalid renderer ref, enforces that only a
+ *     workspace admin/owner may edit the workspace Home, and MERGES `metadata`.
+ * Routing a config patch through `save` would therefore skip every validation
+ * and silently replace the metadata bag; routing content through `update` is
+ * impossible (there is no content field). So this verb wraps `update`, and the
+ * schema is `.strict()` so a caller reaching for `content` is REFUSED rather
+ * than told a snapshot was saved that never was. Board CONTENT is deliberately
+ * not reachable from a capability verb at all.
+ */
+const viewUpdateParams = z
+  .object({
+    viewId: z.string().uuid(),
+    name: z.string().min(1).max(100).optional(),
+    description: z.string().optional(),
+    /** REPLACES the scope list. */
+    scopeProfileIds: z.array(z.string().uuid()).optional(),
+    scopeMode: z.enum(["explicit", "observed"]).optional(),
+    /** REPLACES the stored query. */
+    query: z.record(z.string(), z.unknown()).optional(),
+    /** REPLACES render config; validated against the view type by the door. */
+    config: z.record(z.string(), z.unknown()).optional(),
+    /** REPLACES the embedded-view list (composite views). */
+    embeddedViewIds: z.array(z.string().uuid()).optional(),
+    /** MERGED onto the existing view metadata by the door. */
+    metadata: z.record(z.string(), z.unknown()).optional(),
+    /** Switch the view type; `config` is then validated against the NEW type. */
+    type: z.string().min(1).optional(),
+  })
+  .strict();
+
+const viewUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = viewUpdateParams.parse(params);
+
+  // views.update is a protectedProcedure that loads the row by id alone and
+  // gates on the LOADED row (`assertViewAccess(view, userId, "write")`), plus a
+  // workspace-admin floor for the workspace Home. No lens to pre-check here.
+  const { viewsRouter } = await import("../../routers/views.js");
+  const caller = viewsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId,
+  } as unknown as Context);
+
+  return caller.update({
+    id: input.viewId,
+    ...(input.name !== undefined ? { name: input.name } : {}),
+    ...(input.description !== undefined
+      ? { description: input.description }
+      : {}),
+    ...(input.scopeProfileIds !== undefined
+      ? { scopeProfileIds: input.scopeProfileIds }
+      : {}),
+    ...(input.scopeMode !== undefined ? { scopeMode: input.scopeMode } : {}),
+    ...(input.query !== undefined ? { query: input.query } : {}),
+    ...(input.config !== undefined ? { config: input.config } : {}),
+    ...(input.embeddedViewIds !== undefined
+      ? { embeddedViewIds: input.embeddedViewIds }
+      : {}),
+    ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
+    ...(input.type !== undefined ? { type: input.type } : {}),
+  } as unknown as Parameters<
+    ReturnType<typeof viewsRouter.createCaller>["update"]
+  >[0]);
+};
+
+/**
+ * cell.update — patch a cell instance's config through
+ * `cellInstancesRouter.updateConfig`.
+ *
+ * OWNER-SCOPED BY THE DOOR, which is what makes this safe without a gate: the
+ * UPDATE's WHERE is `id = ? AND userId = ?`, so the acting identity can never
+ * reach another member's placement — a miss surfaces as NOT_FOUND, not as a
+ * cross-user write. Policy already agrees this need not be floored:
+ * `AGENT_STRUCTURE_DOOR_CLASS` classifies `cell/update` as "widenable" ("config
+ * patch of an existing placement"), in contrast to `cell/create` and
+ * `cell/define`, which are "floored".
+ *
+ * `config` REPLACES the stored config wholesale — `updateConfig` does no merge.
+ * Callers must read the instance first and send the full object.
+ */
+const cellUpdateParams = z
+  .object({
+    cellInstanceId: z.string().uuid(),
+    /** REPLACES the stored config in full. Not a patch. */
+    config: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
+const cellUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = cellUpdateParams.parse(params);
+
+  const { cellInstancesRouter } =
+    await import("../../routers/cell-instances.js");
+  const caller = cellInstancesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId,
+  } as unknown as Context);
+
+  return caller.updateConfig({
+    id: input.cellInstanceId,
+    config: input.config,
+  });
+};
+
+/**
+ * playbook.archive — retire a playbook through the governed
+ * `playbooksRouter.archive` caller.
+ *
+ * FULLY GATED, and it is the destructive twin of Wave A's `playbook.update`:
+ * the door runs `assertWorkspaceWrite` on the LOADED row and then
+ * `checkPermissionOrPropose({ subjectType: "playbook", action: "archive" })`
+ * with the `agentUserId` threaded from here — so rung 2.5
+ * (`DESTRUCTIVE_ACTIONS` contains "archive") floors an agent to
+ * `{ status: "proposed" }` and NO governance rule can widen it.
+ *
+ * This is the reason `status: "archived"` on `playbook.update` is not the same
+ * act: that path reaches the gate as `playbook/update`, which rung 2.5 does not
+ * match, so archiving through it would slip the destructive floor. The dedicated
+ * verb is the one that gets floored.
+ */
+const playbookArchiveParams = z
+  .object({
+    playbookId: z.string().uuid(),
+    /** Shown to the reviewer when the write lands as a proposal. */
+    reasoning: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const playbookArchiveHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = playbookArchiveParams.parse(params);
+
+  const { playbooksRouter } = await import("../../routers/playbooks.js");
+  const caller = playbooksRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+  } as unknown as Context);
+
+  return caller.archive({
+    id: input.playbookId,
+    ...(ctx.agentUserId ? { agentUserId: ctx.agentUserId } : {}),
+    ...(input.reasoning !== undefined ? { reasoning: input.reasoning } : {}),
+  });
+};
+
+/**
+ * skill.update_rule — revise a standing RULE through `skillsRouter.updateRule`.
+ *
+ * GATED, but INDIRECTLY: `skillsRouter.updateRule` carries no inline
+ * `checkPermissionOrPropose`. It delegates to `updateRuleGoverned`
+ * (`services/rules/update.ts`), which gates at
+ * `{ subjectType: "rule", action: "update" }` and threads `agentUserId`, and
+ * whose own return type includes `{ status: "proposed"; proposalId }`. The
+ * tripwire's AST hop cannot see through the dynamic import, so this verb is
+ * classified `gatedVia` there — proven by parsing the delegate, never assumed.
+ *
+ * `agentUserId` REACHES THE DOOR THROUGH THE CONTEXT, not the input: the
+ * procedure reads `ctx.agentUserId`. Omitting it from the synthesized caller
+ * context would make an agent's rule edit look like the owner's own and
+ * auto-execute — the same attribution trap that disqualified
+ * `workspaces.update` above, avoided here only because this door reads the
+ * context.
+ *
+ * THREE-STATE FIELDS ARE PRESERVED DELIBERATELY. `expiresAt` and `sentence`
+ * each distinguish ABSENT (leave alone) from `null` (clear / remove) from a
+ * value (set / replace). `z.nullish()` plus a `!== undefined` spread keeps all
+ * three spellable; a truthiness check would collapse "make this rule
+ * prose-only" into "leave the automation alone".
+ */
+const skillUpdateRuleParams = z
+  .object({
+    ruleId: z.string().uuid(),
+    intent: z.string().min(1),
+    scope: z.object({
+      kind: z.enum(["pod", "workspace", "user"]),
+      workspaceId: z.string().uuid().optional(),
+      projectId: z.string().uuid().optional(),
+    }),
+    /** ISO instant SETS, `null` CLEARS, ABSENT leaves the review date alone. */
+    expiresAt: z.string().datetime({ offset: true }).nullish(),
+    factSkillId: z.string().uuid().optional(),
+    /** REPLACES the bound automation list. */
+    automationIds: z.array(z.string().uuid()).optional(),
+    /** A sentence REPLACES the behaviour, `null` REMOVES it, ABSENT keeps it. */
+    sentence: z.record(z.string(), z.unknown()).nullish(),
+    /** `true` keeps/returns the rule to draft; `false`/absent ACTIVATES it. */
+    draft: z.boolean().optional(),
+  })
+  .strict();
+
+const skillUpdateRuleHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = skillUpdateRuleParams.parse(params);
+
+  const { skillsRouter } = await import("../../routers/skills.js");
+  const caller = skillsRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    // LOAD-BEARING: this door reads `ctx.agentUserId`, not an input field.
+    agentUserId: ctx.agentUserId,
+  } as unknown as Context);
+
+  return caller.updateRule({
+    id: input.ruleId,
+    intent: input.intent,
+    scope: input.scope,
+    ...(input.expiresAt !== undefined ? { expiresAt: input.expiresAt } : {}),
+    ...(input.factSkillId !== undefined
+      ? { factSkillId: input.factSkillId }
+      : {}),
+    automationIds: input.automationIds ?? [],
+    ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
+    draft: input.draft ?? false,
+  } as unknown as Parameters<
+    ReturnType<typeof skillsRouter.createCaller>["updateRule"]
+  >[0]);
+};
+
+/**
+ * profile.propose_retire — retire a kind/role through
+ * `profilesRouter.proposeRetire`.
+ *
+ * THE ONE RETIREMENT DOOR AN AGENT MAY REACH, and the reason is structural, not
+ * a policy preference: `proposeProfileRetire` files a PENDING proposal
+ * unconditionally. The procedure has NO execute branch at all, so there is
+ * nothing for `checkPermissionOrPropose` to decide and nothing an attribution
+ * miss could turn into a direct write. Its only floor is
+ * `assertProfileSchemaWrite(level: "editor")` on the LOADED row, i.e. who may
+ * FILE the request. Contrast `profilesRouter.delete` (hard delete, no review
+ * step), which is deliberately not projected.
+ *
+ * `workspaceProcedure`: an acting workspace lens is required, and the door
+ * re-validates membership in that workspace itself.
+ */
+const profileProposeRetireParams = z
+  .object({
+    profileId: z.string().uuid(),
+    /** Shown to the reviewer on the retirement proposal. */
+    reason: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const profileProposeRetireHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = profileProposeRetireParams.parse(params);
+
+  if (!ctx.workspaceId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "profile.propose_retire requires an acting workspace — " +
+        "profiles.proposeRetire is a workspaceProcedure and resolves the " +
+        "profile through the caller's lens.",
+    });
+  }
+
+  const { profilesRouter } = await import("../../routers/profiles.js");
+  const caller = profilesRouter.createCaller({
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: ctx.agentUserId,
+  } as unknown as Context);
+
+  return caller.proposeRetire({
+    id: input.profileId,
+    ...(input.reason !== undefined ? { reason: input.reason } : {}),
+  });
+};
+
 /**
  * verbName (= skill.name = verbId) → in-process handler. Populated by W5 (the
  * write/emit pilots) + W6 (the read/resolve half) + Spine-2 (entity/document
@@ -2873,6 +3632,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Marketplace AUTHORING — generate a package skeleton and persist it on the
+  // pod as a draft document (the CLI writes it to disk; an agent door cannot).
+  "market.scaffold": marketScaffoldHandler,
   // Tool demand — a tool the user needs that Synap cannot connect yet.
   "tool.request": toolRequestHandler,
   // Connection health — probe a connector + nudge the operator if it's dead, so
@@ -2902,6 +3664,22 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
     governanceRecommendTightenPostureHandler,
   // Automation-health warden — the zero-run finding.
   "automation.recommend_health": automationRecommendHealthHandler,
+  // Config REVISION (see the section above): the substrate could build a
+  // playbook/automation but never revise one, and an agent-authored automation
+  // always lands `draft` with no door to switch it on.
+  "playbook.update": playbookUpdateHandler,
+  "automation.update": automationUpdateHandler,
+  "automation.activate": automationActivateHandler,
+  "automation.pause": automationPauseHandler,
+  // Lifecycle REVISION (Wave B): the remaining doors an agent could CREATE
+  // through but never REVISE or RETIRE. See the section note above for the
+  // FOUR groups deliberately left out (ungated destructive doors, the
+  // agentUserId attribution trap, property_def, and skills.setApproved).
+  "view.update": viewUpdateHandler,
+  "cell.update": cellUpdateHandler,
+  "playbook.archive": playbookArchiveHandler,
+  "skill.update_rule": skillUpdateRuleHandler,
+  "profile.propose_retire": profileProposeRetireHandler,
 };
 
 /**
@@ -2943,6 +3721,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
   "connector.health_check": connectorHealthCheckParams,
   "channel.ingest": channelIngestParams,
@@ -2954,6 +3733,15 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "governance.recommend_tighten_posture":
     governanceRecommendTightenPostureParams,
   "automation.recommend_health": automationRecommendHealthParams,
+  "playbook.update": playbookUpdateParams,
+  "automation.update": automationUpdateParams,
+  "automation.activate": automationActivateParams,
+  "automation.pause": automationPauseParams,
+  "view.update": viewUpdateParams,
+  "cell.update": cellUpdateParams,
+  "playbook.archive": playbookArchiveParams,
+  "skill.update_rule": skillUpdateRuleParams,
+  "profile.propose_retire": profileProposeRetireParams,
 };
 
 /**

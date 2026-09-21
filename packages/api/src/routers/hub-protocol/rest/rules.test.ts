@@ -214,6 +214,57 @@ describe("POST /rules — governed create", () => {
     });
   });
 
+  /**
+   * The BEHAVIOUR arm of the door. `intent` alone was already pinned above;
+   * these are the fields that make a rule RUN (or stop running), and they are
+   * exactly what the Raycast `create-rule` tool sends. Without this, the
+   * sentence could be dropped between the wire schema and
+   * `createRuleGoverned` and the door would still answer 200 with a
+   * prose-only rule — the "declared on the wire, produced by nobody" defect.
+   */
+  it("forwards the WHEN/WHERE/THEN sentence, the scope lenses and expiresAt verbatim", async () => {
+    h.createResult = { status: "proposed", proposalId: "prop-9" };
+    const sentence = {
+      trigger: {
+        triggerType: "event",
+        subjectCategory: "entity",
+        profileSlug: "deal",
+        actionVerb: "created",
+      },
+      conditions: [
+        { id: "c1", key: "stage", operator: "is", value: "negotiation" },
+      ],
+      actions: [{ type: "notify", config: { destination: "operator" } }],
+    };
+    const app = buildApp({ agentUserId: AGENT });
+    const res = await app.request(
+      "/rules",
+      post({
+        intent: "Ping me whenever a deal reaches negotiation",
+        scope: {
+          kind: "workspace",
+          workspaceId: "33333333-3333-4333-8333-333333333333",
+          projectId: "44444444-4444-4444-8444-444444444444",
+        },
+        expiresAt: "2026-12-31T00:00:00Z",
+        sentence,
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(h.createCalls).toHaveLength(1);
+    expect(h.createCalls[0]).toMatchObject({
+      intent: "Ping me whenever a deal reaches negotiation",
+      expiresAt: "2026-12-31T00:00:00Z",
+      sentence,
+      scope: {
+        kind: "workspace",
+        workspaceId: "33333333-3333-4333-8333-333333333333",
+        projectId: "44444444-4444-4444-8444-444444444444",
+      },
+    });
+  });
+
   it("omits agentUserId entirely for a human key (no fabricated agent)", async () => {
     const app = buildApp();
     await app.request("/rules", post({ intent: "x", scope: { kind: "pod" } }));

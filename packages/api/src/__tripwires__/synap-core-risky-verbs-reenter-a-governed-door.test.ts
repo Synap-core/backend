@@ -503,6 +503,68 @@ type GateResult =
   | { resolved: true; gated: boolean; where: string }
   | { resolved: false; why: string };
 
+/**
+ * A top-level `function f(){…}` / `const f = (…) => …` body in this file, or null.
+ */
+function topLevelFunctionBody(sf: ts.SourceFile, name: string): ts.Node | null {
+  for (const st of sf.statements) {
+    if (ts.isFunctionDeclaration(st) && st.name?.text === name && st.body) {
+      return st.body;
+    }
+    if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) {
+        if (
+          ts.isIdentifier(d.name) &&
+          d.name.text === name &&
+          d.initializer &&
+          (ts.isArrowFunction(d.initializer) ||
+            ts.isFunctionExpression(d.initializer))
+        ) {
+          return d.initializer.body;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Does this procedure body reach `checkPermissionOrPropose` — DIRECTLY, or via
+ * ONE hop into a module-level helper declared in the SAME file that the body
+ * calls?
+ *
+ * WHY THE HOP EXISTS (measured, 2026-09-21): `automationsRouter.activate` and
+ * `.update` DO gate — through the local `proposeAgentActivation(...)`, which is
+ * where the `checkPermissionOrPropose` call actually lives. A
+ * direct-reference-only scan read that as UNGOVERNED and would have declared a
+ * genuinely gated verb unsafe, which is the kind of false alarm that gets a
+ * guard deleted.
+ *
+ * BOUNDED, AND IT FAILS CLOSED: exactly one hop, same file only, and the callee
+ * must be a top-level function declaration or an arrow/function const. A gate
+ * two helpers deep, or in another module, still reads as NOT gated — a false
+ * negative (too strict), never a false pass. It also cannot tell WHICH branch
+ * of the helper runs; see limitation (a) in the header, which this inherits.
+ */
+function reachesGateWithOneHop(sf: ts.SourceFile, body: ts.Node): boolean {
+  if (subtreeReferences(body, "checkPermissionOrPropose")) return true;
+  const called = new Set<string>();
+  const collect = (n: ts.Node): void => {
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) {
+      called.add(n.expression.text);
+    }
+    ts.forEachChild(n, collect);
+  };
+  collect(body);
+  for (const name of called) {
+    const helper = topLevelFunctionBody(sf, name);
+    if (helper && subtreeReferences(helper, "checkPermissionOrPropose")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function procedureReachesGate(
   verbsSf: ts.SourceFile,
   routerName: string,
@@ -534,6 +596,8 @@ function procedureReachesGate(
   }
 
   let body: ts.Node = unwrap(prop.initializer);
+  // The file `body` lives in — the one-hop helper lookup is same-file only.
+  let bodySf: ts.SourceFile = routerSf;
   let where = `${spec}#${routerName}.${procName}`;
 
   // Follow ONE level of `nsProcs.<proc>` indirection into a co-located module.
@@ -564,12 +628,13 @@ function procedureReachesGate(
       return { resolved: false, why: `${ns}.${member} not found in ${nsSpec}` };
     }
     body = unwrap(memberProp.initializer);
+    bodySf = nsSf;
     where = `${nsSpec}#${ns}.${member}`;
   }
 
   return {
     resolved: true,
-    gated: subtreeReferences(body, "checkPermissionOrPropose"),
+    gated: reachesGateWithOneHop(bodySf, body),
     where,
   };
 }
@@ -579,7 +644,21 @@ function procedureReachesGate(
 //    Keys are DERIVED-checked: a re-entering verb missing here is RED.
 // ---------------------------------------------------------------------------
 
-type Classification = "gated" | { ungated: string };
+/**
+ * THREE outcomes, not two. The third exists because a real door was found that
+ * hop-3 provably cannot see: `skillsRouter.updateRule` carries no inline
+ * `checkPermissionOrPropose` — it `await import(...)`s `updateRuleGoverned`
+ * and that delegate does the gating. Recording it as `{ ungated }` would be a
+ * FALSEHOOD in the one file whose job is to be true about which doors gate, and
+ * recording it as "gated" would make the hop-3 assertion fail. `gatedVia` says
+ * exactly where the gate is and is PROVEN by parsing that module — see the
+ * "`gatedVia` verbs really do gate" test below. It is never a self-declared
+ * exemption.
+ */
+type Classification =
+  | "gated"
+  | { ungated: string }
+  | { gatedVia: { module: string; fn: string; why: string } };
 
 const REENTRY_CLASS: Record<string, Classification> = {
   "entity.create": "gated",
@@ -590,6 +669,80 @@ const REENTRY_CLASS: Record<string, Classification> = {
   "entity_facet.detach": "gated",
   "graph.link": "gated",
   "tool.request": "gated",
+  "playbook.update": "gated",
+  "automation.activate": "gated",
+  "automation.update": {
+    ungated:
+      "automationsRouter.update carries no gate on the path this verb can " +
+      "reach. Its ONLY gate call is the activation branch " +
+      '(`input.status === "active"` -> proposeAgentActivation), and ' +
+      "`automation.update` deliberately does NOT accept `status` at all — the " +
+      "lifecycle lives on automation.activate / automation.pause, which are " +
+      "also the only paths that compute `nextRunAt`. What is left is a " +
+      "definition patch on an object the operator already sees, workspace-write " +
+      "gated on the LOADED row (assertWorkspaceWrite) and re-validated " +
+      "(event pattern, filters, flow verbs, dataContract). Not " +
+      "destructive/admin/structural by the derivation below; `automation.update` " +
+      "is absent from AGENT_STRUCTURE_DOOR_CLASS, which classifies only " +
+      "create/activate/execute.",
+  },
+  "automation.pause": {
+    ungated:
+      "automationsRouter.pause carries no checkPermissionOrPropose, " +
+      "deliberately: pausing is DE-ESCALATION — stopping a misbehaving " +
+      "automation must not itself wait for review. It is workspace-write gated " +
+      "on the loaded row (assertWorkspaceWrite) and fully reversible via " +
+      "automation.activate, which DOES propose for an agent.",
+  },
+  // ── Wave B — lifecycle revision/retire ─────────────────────────────────
+  "playbook.archive": "gated",
+  "skill.update_rule": {
+    gatedVia: {
+      module: "../services/rules/update.ts",
+      fn: "updateRuleGoverned",
+      why:
+        "skillsRouter.updateRule has no inline gate; it dynamically imports " +
+        "updateRuleGoverned, which calls checkPermissionOrPropose with " +
+        "{ subjectType: 'rule' } and the ctx.agentUserId this verb threads " +
+        "through the synthesized caller context. Hop-3 resolves neither a " +
+        "dynamic import nor a cross-module helper, so the gate is asserted " +
+        "against that module directly instead of assumed.",
+    },
+  },
+  "profile.propose_retire": {
+    ungated:
+      "profilesRouter.proposeRetire has NO execute branch to gate: it calls " +
+      "proposeProfileRetire, which files a PENDING proposal unconditionally " +
+      "for every caller. There is no verdict for checkPermissionOrPropose to " +
+      "make and no attribution miss that could turn this into a direct write " +
+      "— the output IS the review item. Its floor " +
+      "(assertProfileSchemaWrite, level editor, on the LOADED row) governs " +
+      "who may FILE, not what executes. The hard-delete twin " +
+      "(profilesRouter.delete) is deliberately not projected as a verb.",
+  },
+  "view.update": {
+    ungated:
+      "viewsRouter.update carries no checkPermissionOrPropose (views.ts gates " +
+      "only `create` — creating a SURFACE the operator does not know about is " +
+      "the act policy wants reviewed). Update is a reversible patch on a view " +
+      "the operator already sees, floored on the LOADED row by " +
+      "assertViewAccess(write) plus an admin/owner-only floor for the " +
+      "workspace Home, and it VALIDATES what it writes (validateViewConfig + " +
+      "assertValidRendererRef). Not destructive/admin/structural by the " +
+      "derivation below. NOTE the deliberate omission: views.delete IS " +
+      "destructive (it also drops the document and its MinIO version blobs) " +
+      "and is ungated, so no `view.delete` verb exists — see the exclusion " +
+      "note in builtin-verbs.ts.",
+  },
+  "cell.update": {
+    ungated:
+      "cellInstancesRouter.updateConfig carries no checkPermissionOrPropose. " +
+      "It is OWNER-SCOPED by the UPDATE's own WHERE (id AND userId), so it " +
+      "cannot reach another member's placement at all, and " +
+      "AGENT_STRUCTURE_DOOR_CLASS already classifies `cell/update` as " +
+      '"widenable" (a config patch of an existing placement) in explicit ' +
+      'contrast to cell/create and cell/define, which are "floored".',
+  },
   "channel.create": {
     ungated:
       "channelsRouter.createChannel has no checkPermissionOrPropose. " +
@@ -611,6 +764,7 @@ const REENTRY_CLASS: Record<string, Classification> = {
       "carries no gate call at all). `document.create` IS in DEFAULT_AUTO_APPROVE, " +
       "i.e. policy intends it to auto-run; it is not destructive/admin/structural.",
   },
+  "market.scaffold": "gated",
   "document.update": {
     ungated:
       "documentsRouter.update has no checkPermissionOrPropose. Document edits " +
@@ -626,8 +780,9 @@ describe("TRIPWIRE: HIGH-RISK Synap Core verbs re-enter a governed door", () => 
   const { handlerByVerb, reentryByVerb, sf } = readHandlerReentries();
 
   it("NON-VACUITY: the scans see the things they hunt", () => {
-    // The verb list is real and plausibly sized (34 at 2026-09-20).
-    expect(verbs.length).toBeGreaterThanOrEqual(30);
+    // The verb list is real and plausibly sized (43 at 2026-09-21; 34 before
+    // Wave A's four config-revision verbs and Wave B's five lifecycle verbs).
+    expect(verbs.length).toBeGreaterThanOrEqual(38);
     expect(new Set(verbs).size).toBe(verbs.length);
     // Literal samples the scan MUST still be able to see.
     expect(verbs).toContain("entity.delete");
@@ -696,6 +851,58 @@ describe("TRIPWIRE: HIGH-RISK Synap Core verbs re-enter a governed door", () => 
       stale,
       "REENTRY_CLASS classifies verbs that no longer re-enter"
     ).toEqual([]);
+  });
+
+  it("every `gatedVia` verb's named delegate really does gate", () => {
+    const viaEntries = Object.entries(REENTRY_CLASS).flatMap(([verb, cls]) =>
+      typeof cls === "object" && "gatedVia" in cls
+        ? [[verb, cls.gatedVia] as const]
+        : []
+    );
+
+    // NON-VACUITY: if this list empties, the loop below asserts nothing. That
+    // is fine only if nobody still CLAIMS an indirect gate — which is exactly
+    // what emptiness means. But while entries exist, the prover must be seen
+    // to work, so assert the known one is still here.
+    expect(
+      viaEntries.map(([v]) => v),
+      "no verb claims an indirect gate — if that is intentional, delete this test"
+    ).toContain("skill.update_rule");
+
+    const failures: string[] = [];
+    for (const [verb, via] of viaEntries) {
+      // 1. The verb must actually re-enter the router it is classified under
+      //    (staleness is the previous test's job, but a gatedVia entry that
+      //    names a module for a verb nobody calls is worse than stale).
+      if (!reentryByVerb.has(verb)) {
+        failures.push(`${verb}: classified gatedVia but re-enters no router`);
+        continue;
+      }
+      // 2. The named module must exist on disk.
+      const file = resolve(HERE, via.module);
+      if (!existsSync(file)) {
+        failures.push(`${verb}: gatedVia module not found: ${via.module}`);
+        continue;
+      }
+      // 3. The named FUNCTION in it must reach checkPermissionOrPropose —
+      //    parsed, not grepped, so a mention in a comment or an unrelated
+      //    function cannot satisfy it.
+      const sfVia = parse(file);
+      const fnBody = topLevelFunctionBody(sfVia, via.fn);
+      if (!fnBody) {
+        failures.push(
+          `${verb}: ${via.fn} is not a top-level function in ${via.module}`
+        );
+        continue;
+      }
+      if (!subtreeReferences(fnBody, "checkPermissionOrPropose")) {
+        failures.push(
+          `${verb}: ${via.module}#${via.fn} does NOT reach ` +
+            `checkPermissionOrPropose — the indirect-gate claim is false.`
+        );
+      }
+    }
+    expect(failures).toEqual([]);
   });
 
   it("every verb classified `gated` actually reaches checkPermissionOrPropose", () => {

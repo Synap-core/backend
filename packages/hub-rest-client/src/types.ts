@@ -2457,3 +2457,109 @@ export type HubRunPlaybookResult =
       }>;
       enableProposals: HubCapabilityEnableOffer[];
     };
+
+// ─── Skills / Rules (prompt-injecting authoring doors) ───────────────────────
+// BOTH of these write PROSE that the pod's dynamic-skill-loader can inject into
+// the owner's own agents' prompts. That is why an agent-authored write here is
+// born UNAPPROVED and/or routed to a proposal by the capability gate — the
+// client never asks for, and must never gain, an auto-approve affordance.
+
+export interface CreateSkillInput {
+  /** Stable skill name, e.g. "normalize_phone_numbers". */
+  name: string;
+  /** One line: what it does + when to use it. */
+  description?: string;
+  /**
+   * Markdown documentation. For a teaching skill this IS the skill — the pod
+   * stores it in `skills.body`, which is the ONLY column `load_skill`
+   * resolves. Required unless `code` is given.
+   */
+  body?: string;
+  /** Optional executable source (sandboxed). Present ⇒ the skill is runnable. */
+  code?: string;
+  /**
+   * Stable ref `load_skill` resolves (lowercase path segments, e.g.
+   * "biz/business-plan"). REQUIRED when there is no `code` — without it a
+   * documentation skill is authored but unreachable.
+   */
+  slug?: string;
+  /** Optional runtime parameter schema (shorthand types). */
+  parameters?: Record<string, unknown>;
+  /** Optional workspace lens. Omit for a pod-wide skill. */
+  workspaceId?: string;
+}
+
+export interface HubCreateSkillResult {
+  id: string;
+  /** `"proposed"` is SUCCESS — the write is queued for the owner's review. */
+  status: "created" | "proposed";
+  proposalId: string | null;
+  requires?: string[];
+}
+
+/** One WHERE row of a rule sentence. */
+export interface HubRuleCondition {
+  id: string;
+  key: string;
+  operator: string;
+  value: string;
+}
+
+/** The rule's structured WHEN / WHERE / THEN. The pod compiles it or refuses. */
+export interface HubRuleSentence {
+  trigger: Record<string, unknown> | null;
+  conditions: HubRuleCondition[];
+  actions: Array<{ type: string | null; config: Record<string, unknown> }>;
+}
+
+export interface CreateRuleInput {
+  /** The rule in the user's own words — this IS the prose an agent reads later. */
+  intent: string;
+  scope: {
+    kind: "pod" | "workspace" | "user";
+    workspaceId?: string;
+    /** Cross-cutting project lens — composes with the workspace lens. */
+    projectId?: string;
+  };
+  /** ISO-8601 instant with offset after which the rule stops applying. */
+  expiresAt?: string;
+  factSkillId?: string;
+  automationIds?: string[];
+  /** Omit for a prose-only FACT rule; send it to compile a BEHAVIOUR rule. */
+  sentence?: HubRuleSentence;
+}
+
+/**
+ * What the rule door answers.
+ *
+ * `denied` is returned by the pod with HTTP 403, so `createRule` THROWS a
+ * `HubApiError` for it rather than resolving to this arm — the arm is kept
+ * because the pod's wire contract has it and a future non-throwing reader
+ * must not have to re-derive the shape.
+ *
+ * `needsBehaviour` means the intent read as something that should RUN but no
+ * `sentence` was sent: the rule was stored as prose and will not execute. Say
+ * so; do not report it as in effect.
+ */
+export type HubCreateRuleResult =
+  | {
+      status: "created";
+      ruleId: string;
+      automationIds?: string[];
+      needsBehaviour?: { shape: string; reason: string };
+      scopeNote?: string;
+    }
+  /** SUCCESS, queued for review — never an error. */
+  | {
+      status: "proposed";
+      /** The pod returns no reviewUrl on this door — build it with `openUrl`. */
+      proposalId: string;
+      needsBehaviour?: { shape: string; reason: string };
+      scopeNote?: string;
+    }
+  | {
+      status: "denied";
+      reason: string;
+      /** Names the failing clause when the refusal came from COMPILING. */
+      failure?: { clause?: string; [key: string]: unknown };
+    };

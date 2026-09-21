@@ -56,12 +56,26 @@ const CreateSkillRequestSchema = z.object({
   agentTypes: z.array(z.string()).optional(),
   description: z.string().optional(),
   /**
-   * The skill payload. For kind='code' this is executable source; for
-   * kind='instruction' it is the instruction text. `body` is accepted as an
-   * alias for `code` (both map to the skills.code column).
+   * A skill is Documentation (`body`) + OPTIONAL executable (`code`) — TWO
+   * distinct columns, forwarded separately to `skillsRouter.create`.
+   *
+   * 2026-09-21: `body` used to be folded into `code` here ("an alias"), which
+   * predated the `skills.body` column. That fold made a documentation-only
+   * skill authored through this door UNREACHABLE — `resolveSkillContent`
+   * (the resolver behind `load_skill`) selects `skills.body` and nothing
+   * else — and mis-derived its `kind` as "code", i.e. an executable whose
+   * source is Markdown. The fold is gone; this door now matches the MCP
+   * `synap_create_skill` handler and the tRPC contract 1:1.
    */
   code: z.string().min(1).optional(),
   body: z.string().min(1).optional(),
+  /**
+   * Stable ref `load_skill` resolves by (e.g. "biz/business-plan"). REQUIRED
+   * for a documentation-only skill: without it the skill is authored but
+   * unreachable. Shape/namespace validation is the router's (`skills.create`)
+   * — not re-implemented here.
+   */
+  slug: z.string().min(1).max(255).optional(),
   parameters: z.record(z.string(), z.unknown()).optional(),
   category: z.string().optional(),
   executionMode: z.enum(["sync", "async"]).optional(),
@@ -119,7 +133,10 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     tags: ["Skills"],
     summary: "Create a skill (capability substrate)",
     description:
-      "Seeds a `skills` row — AI know-how. kind='instruction' injects into the " +
+      "Seeds a `skills` row — AI know-how. Documentation (`body`) + OPTIONAL " +
+      "executable (`code`); `kind` is DERIVED from code presence, so prose-only " +
+      "is an 'instruction' skill and needs a `slug` (the ref load_skill " +
+      "resolves). kind='instruction' injects into the " +
       "agent prompt; kind='code' is sandbox-executed. Proposal-gated: returns " +
       "status='proposed' with a proposalId when governance requires review. " +
       "Optional `requires` writes `skill → requires → tool` links. Requires " +
@@ -257,11 +274,29 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
     }
     const body = parsed.data;
 
-    // `body` is an alias for `code` — the skills.code column stores both
-    // executable source and instruction text (kind discriminates).
-    const codeText = body.code ?? body.body;
-    if (!codeText) {
-      return c.json({ error: "code (or body) is required" }, 400);
+    // Documentation-or-code, never code specifically — the SAME floor the MCP
+    // `synap_create_skill` handler applies. `body` and `code` are separate
+    // columns and are forwarded separately (see the schema note above).
+    const codeText = body.code?.trim() ? body.code : undefined;
+    const bodyText = body.body?.trim() ? body.body : undefined;
+    if (!codeText && !bodyText) {
+      return c.json(
+        {
+          error:
+            "a skill needs documentation or code — pass `body` (Markdown) to author a teaching skill, `code` to author a runnable one, or both.",
+        },
+        400
+      );
+    }
+    const slug = body.slug?.trim() ? body.slug.trim() : undefined;
+    if (!codeText && !slug) {
+      return c.json(
+        {
+          error:
+            "slug is required for a documentation-only skill — it is the ref load_skill resolves (e.g. 'biz/business-plan'). Without one the skill is authored but unreachable.",
+        },
+        400
+      );
     }
 
     // Service-key workspace confinement (Item 3): pin/clamp the requested
@@ -293,12 +328,18 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
       // silently auto-approving what should route to propose. Mirrors the
       // established pattern in /agent-skills/import (agent-skills.ts:656).
       const agentUserId = c.get("agentUserId") as string | undefined;
+      // `kind` is NOT defaulted here: the router derives it from code presence
+      // (hasCode ? "code" : "instruction"). Defaulting it to "code" forked that
+      // derivation and stored prose as an executable. An explicit caller-sent
+      // `kind` is still honoured (back-compat).
       const result = await caller.create({
         name: body.name,
-        kind: body.kind ?? "code",
+        ...(body.kind ? { kind: body.kind } : {}),
         scope: body.scope ?? "pod",
         agentTypes: body.agentTypes,
         description: body.description,
+        slug,
+        body: bodyText,
         code: codeText,
         parameters: body.parameters,
         category: body.category,
@@ -644,7 +685,13 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
         c.get("scopes") as string[]
       );
       const caller = skillsRouter.createCaller(ctx as never);
-      const result = await caller.delete({ id });
+      // Forward the acting agent. Without it the gate takes the HUMAN path and
+      // hard-deletes — see the field's doc on `skills.delete`.
+      const agentUserId = c.get("agentUserId") as string | undefined;
+      const result = await caller.delete({
+        id,
+        ...(agentUserId ? { agentUserId } : {}),
+      });
 
       return c.json(
         {
