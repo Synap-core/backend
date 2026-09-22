@@ -20,23 +20,10 @@
  *    this file already uses — and the hint is verified LIVE, not here.
  *  - The load-bearing half is the REFUSAL, which needs no profile lookup.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
-const { resolveProfile } = vi.hoisted(() => ({
-  resolveProfile: vi.fn(
-    async (_slug: string, _userId?: string, _workspaceId?: string | null) =>
-      null as { profileKind: string } | null
-  ),
-}));
-vi.mock("@synap/database", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@synap/database")>()),
-  ProfileResolutionService: class {
-    resolveProfile = resolveProfile;
-  },
-}));
-
 import { validateCaptureRelationTypes } from "./submit-capture-graph.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
@@ -51,10 +38,7 @@ const relationDefs = [
   },
 ];
 
-function makeDb(roleSlugs: string[] = []) {
-  resolveProfile.mockImplementation(async (slug: string) =>
-    roleSlugs.includes(slug) ? { profileKind: "role" } : null
-  );
+function makeDb() {
   return {
     query: { relationDefs: { findMany: async () => relationDefs } },
   } as never;
@@ -70,114 +54,24 @@ const edge = (type: string): CompositeProposalOperation =>
 
 describe("validateCaptureRelationTypes", () => {
   it("passes a known slug and a builtin", async () => {
-    const out = await validateCaptureRelationTypes(
-      makeDb([]),
-      null,
-      [edge("works_at"), edge("same_subject")],
-      "u1"
-    );
+    const out = await validateCaptureRelationTypes(makeDb(), null, [
+      edge("works_at"),
+      edge("same_subject"),
+    ]);
     expect(out).toEqual([]);
   });
 
   it("names the unknown slug, its op index, and the valid vocabulary", async () => {
-    const out = await validateCaptureRelationTypes(
-      makeDb([]),
-      null,
-      [
-        { op: "create_entity", ref: "q1", profileSlug: "question" } as never,
-        edge("no_such_edge"),
-      ],
-      "u1"
-    );
+    const out = await validateCaptureRelationTypes(makeDb(), null, [
+      { op: "create_entity", ref: "q1", profileSlug: "question" } as never,
+      edge("no_such_edge"),
+    ]);
     expect(out).toHaveLength(1);
     expect(out[0].opIndex).toBe(1);
     expect(out[0].op).toBe("create_relation");
     expect(out[0].message).toMatch(/q1 -> q2/);
     expect(out[0].message).toMatch(/no_such_edge/);
     expect(out[0].message).toMatch(/works_at/);
-  });
-
-  it("points a ROLE slug at facets[] — the mistake that actually happened", async () => {
-    const out = await validateCaptureRelationTypes(
-      makeDb(["grp-interrogation"]),
-      null,
-      [edge("grp-interrogation")],
-      "u1"
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0].message).toMatch(/is a ROLE, not a relation/);
-    expect(out[0].message).toMatch(/facets\[\]/);
-  });
-
-  it("falls back to the caller's floor when the LENS cannot see the role", async () => {
-    // The production failure, twice: a SHARED role needs a grant row for the
-    // lens, and a WORKSPACE-scoped role is invisible pod-wide. The lensed
-    // lookup returns null; the workspace-less one is the caller's real floor.
-    resolveProfile.mockClear();
-    resolveProfile.mockImplementation(
-      async (_slug: string, _u?: string, ws?: string | null) =>
-        ws === null ? ({ profileKind: "role" } as never) : null
-    );
-    const out = await validateCaptureRelationTypes(
-      {
-        query: { relationDefs: { findMany: async () => relationDefs } },
-      } as never,
-      "ws-1",
-      [edge("client")],
-      "u1"
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0].message).toMatch(/is a ROLE, not a relation/);
-    expect(resolveProfile).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not double-look-up when there is no lens to fall back from", async () => {
-    resolveProfile.mockClear();
-    resolveProfile.mockImplementation(async () => null);
-    await validateCaptureRelationTypes(
-      {
-        query: { relationDefs: { findMany: async () => relationDefs } },
-      } as never,
-      null,
-      [edge("client")],
-      "u1"
-    );
-    expect(resolveProfile).toHaveBeenCalledTimes(1);
-  });
-
-  it("says the role check DID NOT RUN when the lookup throws (failed != empty)", async () => {
-    resolveProfile.mockImplementation(async () => {
-      throw new Error("pg down");
-    });
-    const out = await validateCaptureRelationTypes(
-      {
-        query: { relationDefs: { findMany: async () => relationDefs } },
-      } as never,
-      null,
-      [edge("nope")],
-      "u1"
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0].message).toMatch(/nope/);
-    // The distinction this repo requires: a failed read is never reported as
-    // "not a role".
-    expect(out[0].message).toMatch(
-      /could not check whether this slug is a ROLE/
-    );
-  });
-
-  it("skips the hint (but still refuses) when no userId is given", async () => {
-    resolveProfile.mockImplementation(async () => ({ profileKind: "role" }));
-    const out = await validateCaptureRelationTypes(
-      {
-        query: { relationDefs: { findMany: async () => relationDefs } },
-      } as never,
-      null,
-      [edge("client")]
-    );
-    expect(out).toHaveLength(1);
-    expect(out[0].message).not.toMatch(/is a ROLE/);
-    expect(out[0].message).not.toMatch(/could not check/);
   });
 });
 
@@ -202,11 +96,19 @@ describe("one validator, reached by BOTH doors", () => {
     );
     expect(submitBody.length).toBeGreaterThan(1000);
     expect(submitBody).toContain("await validateCaptureRelationTypes(");
-    // The thrown error must carry them, not merely compute them.
+    // The thrown error must carry them, not merely compute them. Asserting
+    // the NAME `submitProblems` is not enough: dropping `...relationProblems`
+    // from its initialiser leaves the name intact and the guard green (proved
+    // by mutation). Pin the COMPOSITION as well.
     const throwLine = submitBody.match(
       /throw new CaptureGraphValidationError\([^)]*\)/
     );
     expect(throwLine?.[0]).toContain("submitProblems");
+    const composition = submitBody.match(
+      /const submitProblems = \[([^\]]*)\];/
+    );
+    expect(composition?.[1]).toContain("...relationProblems");
+    expect(composition?.[1]).toContain("...planProblems");
   });
 
   it("the validate door reaches the same helper", () => {

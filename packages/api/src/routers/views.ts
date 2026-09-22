@@ -224,6 +224,53 @@ const ViewRendererRefSchema = z.discriminatedUnion("kind", [
  * `view.config → RenderSettings` and either nesting could reach it.
  * Absent binding ⇒ no-op, so every existing config still validates.
  */
+/**
+ * A view-config failure, as a sentence that NAMES the failing fields.
+ *
+ * It used to be the constant "Invalid view config" with the real ZodError
+ * hidden on `cause`, which nothing surfaces. A proposal that failed this way
+ * stored exactly that constant as its `rejectionReason` and an `errorClass` of
+ * `validation` with no `missingFields` — so neither the reviewer nor the
+ * authoring agent could tell WHICH field was wrong (measured live on proposals
+ * 73af3b54 / a75b63d1, "Invalid view config", 2026-09-22).
+ *
+ * A missing key is phrased `<path> is required` on purpose: that is the
+ * in-house phrasing `missingFieldsFromMessage` parses, so the failure record
+ * gains `missingFields` for free and the repair affordance lights up.
+ */
+export function describeViewConfigErrors(error: unknown): string {
+  const issues =
+    error && typeof error === "object" && "issues" in error
+      ? ((error as { issues?: unknown }).issues ?? [])
+      : [];
+  if (!Array.isArray(issues) || issues.length === 0) {
+    return "Invalid view config";
+  }
+  const parts: string[] = [];
+  for (const raw of issues.slice(0, 5)) {
+    const issue = raw as {
+      path?: unknown[];
+      message?: string;
+      code?: string;
+      received?: string;
+    };
+    const path = Array.isArray(issue.path) ? issue.path.join(".") : "";
+    if (!path) {
+      parts.push(issue.message ?? "invalid");
+      continue;
+    }
+    const missing =
+      issue.code === "invalid_type" && issue.received === "undefined";
+    // QUOTED on purpose. `missingFieldsFromMessage` refuses an UNQUOTED
+    // all-lowercase token (it would parse "field" out of "At least one state
+    // field is required"), so a plain path like `blocks` would be dropped.
+    // Quoting is the documented way to be seen, and it reads better too.
+    parts.push(missing ? `"${path}" is required` : `${path}: ${issue.message}`);
+  }
+  const more = issues.length > 5 ? ` (and ${issues.length - 5} more)` : "";
+  return `Invalid view config — ${parts.join("; ")}${more}`;
+}
+
 function assertValidRendererRef(config: Record<string, unknown>): void {
   const nested = config.render;
   const candidates: unknown[] = [config.rendererRef];
@@ -434,6 +481,60 @@ export const viewsRouter = router({
           }
         }
 
+        // ── VALIDATE THE PAYLOAD BEFORE THE GATE ────────────────────────
+        // These three checks used to sit BELOW `checkPermissionOrPropose`,
+        // which RETURNS on the propose branch — so for an agent they never ran
+        // at propose time. The proposal was filed, the caller was told
+        // "proposed", and the payload was first validated when a HUMAN pressed
+        // approve, where it threw and the row went APPROVAL_FAILED. That is the
+        // whole "unapprovable proposal" class: proposals 73af3b54 / a75b63d1 /
+        // b919206e all failed this way (2026-09-22).
+        //
+        // Hoisted, the agent gets the error SYNCHRONOUSLY in its own tool
+        // response — it can fix and re-send immediately, no proposal is filed,
+        // no human is involved, and the review queue never sees a row that
+        // could not have applied. Every check here is pure (input + schemas),
+        // so it reads nothing and leaks nothing about stored data.
+        const categoryForValidation = getViewCategory(input.type);
+
+        if (categoryForValidation === "structured") {
+          if (!input.scopeProfileIds || input.scopeProfileIds.length === 0) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "scopeProfileIds is required for structured views",
+            });
+          }
+        }
+
+        if (input.initialContent && categoryForValidation === "canvas") {
+          const parseResult = ViewContentSchema.safeParse(input.initialContent);
+          if (!parseResult.success) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Invalid view content structure",
+              cause: parseResult.error,
+            });
+          }
+          if (parseResult.data.category !== categoryForValidation) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `View type '${input.type}' requires '${categoryForValidation}' content, got '${parseResult.data.category}'`,
+            });
+          }
+        }
+
+        if (input.config) {
+          const validation = validateViewConfig(input.type, input.config);
+          if (!validation.valid) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: describeViewConfigErrors(validation.errors),
+              cause: validation.errors,
+            });
+          }
+          assertValidRendererRef(input.config);
+        }
+
         const perm = await checkPermissionOrPropose(gateOpts);
 
         if ("denied" in perm && perm.denied) {
@@ -453,50 +554,8 @@ export const viewsRouter = router({
         }
       }
 
-      // Compute category from view type
+      // Compute category from view type (payload was validated above the gate).
       const category = getViewCategory(input.type);
-
-      // Validate scopeProfileIds for structured views
-      if (category === "structured") {
-        if (!input.scopeProfileIds || input.scopeProfileIds.length === 0) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "scopeProfileIds is required for structured views",
-          });
-        }
-      }
-
-      // Validate initial content if provided (canvas views)
-      if (input.initialContent && category === "canvas") {
-        const parseResult = ViewContentSchema.safeParse(input.initialContent);
-        if (!parseResult.success) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Invalid view content structure",
-            cause: parseResult.error,
-          });
-        }
-
-        if (parseResult.data.category !== category) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: `View type '${input.type}' requires '${category}' content, got '${parseResult.data.category}'`,
-          });
-        }
-      }
-
-      // Validate config against view type schema
-      if (input.config) {
-        const validation = validateViewConfig(input.type, input.config);
-        if (!validation.valid) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "Invalid view config",
-            cause: validation.errors,
-          });
-        }
-        assertValidRendererRef(input.config);
-      }
 
       // Audit: log the requested event
       await ViewEvents.createRequested(ctx.userId, {
@@ -1513,7 +1572,7 @@ export const viewsRouter = router({
         if (!validation.valid) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "Invalid view config",
+            message: describeViewConfigErrors(validation.errors),
             cause: validation.errors,
           });
         }

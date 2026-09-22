@@ -708,6 +708,16 @@ export async function preflightCaptureGraphOperations(
  * validator — shared by the `validate` door AND the filing door, so a slug
  * that fails the dry run can never be FILED by submit.
  *
+ * NO ROLE HINT. Three implementations tried to add "that slug is a ROLE, use
+ * `facets[]`" — a raw `profiles` select, then `ProfileResolutionService`, then
+ * the same with a workspace-less fallback. All three shipped green unit tests
+ * and produced NOTHING in production against two real roles (`client`,
+ * `grp-interrogation`), for a reason the source does not explain. The refusal
+ * below already names the offending slug and lists every valid relation type,
+ * which is what a caller needs; the hint was a nicety that cost three cycles
+ * and a profile lookup per failed capture. Do not add a fourth without first
+ * measuring `resolveProfile` against a live pod.
+ *
  * Why it exists: `submitCaptureGraph` preflighted `create_entity` ops but not
  * `create_relation` ones, so a graph whose edges named a non-existent relation
  * def filed a PENDING proposal that then FAILED at approve — the exact class
@@ -730,10 +740,7 @@ export interface CaptureRelationProblem extends CapturePlanProblem {
 export async function validateCaptureRelationTypes(
   database: CaptureGraphDb,
   workspaceId: string | null,
-  operations: CompositeProposalOperation[],
-  /** Needed for the role hint, which resolves through the access-scoped
-   *  profile resolver. Omit and the hint is skipped (the refusal still fires). */
-  userId?: string
+  operations: CompositeProposalOperation[]
 ): Promise<CaptureRelationProblem[]> {
   const relationOps = operations
     .map((op, opIndex) => ({ op, opIndex }))
@@ -770,68 +777,7 @@ export async function validateCaptureRelationTypes(
       });
     }
   }
-  if (problems.length === 0) return problems;
-
-  // Name the role mistake instead of only listing valid relation slugs.
-  //
-  // Resolved through `ProfileResolutionService` — the SAME access-scoped door
-  // the preflight above uses — not a raw `db.select` on `profiles`. The first
-  // implementation here DID use a raw select and returned zero rows for every
-  // role in production (verified live 2026-09-22 against `grp-interrogation`
-  // and `client`, both real roles), while a mocked unit test passed. A door
-  // this file already trusts cannot be wrong in a way the mock hides.
-  if (!userId) return problems;
-  let roleSlugs: Set<string> | null = new Set<string>();
-  try {
-    const resolver = new ProfileResolutionService(database);
-    const found = new Set<string>();
-    for (const slug of badSlugs) {
-      // The capture's lens FIRST, then the caller's own workspace-less floor.
-      // The fallback is what makes the hint fire at all: `getBySlugForWorkspace`
-      // resolves a SHARED profile only when a `profile_workspace_access` grant
-      // row exists for that lens, and a WORKSPACE-scoped one only under that
-      // exact lens — so `client` (shared, no grant) and `grp-interrogation`
-      // (workspace-scoped, captured pod-wide) both resolved to nothing and the
-      // hint stayed silent in production, twice (measured 2026-09-22).
-      //
-      // Widening is safe HERE and nowhere else: this reads a slug the caller
-      // already typed, to append one sentence of advice. It grants nothing,
-      // and the workspace-less branch is still the caller's REAL floor
-      // (SYSTEM + SHARED + their USER profiles + their member workspaces),
-      // never another user's private profile.
-      const profile =
-        (await resolver.resolveProfile(slug, userId, workspaceId)) ??
-        (workspaceId
-          ? await resolver.resolveProfile(slug, userId, null)
-          : null);
-      if (profile?.profileKind === "role") found.add(slug);
-    }
-    roleSlugs = found;
-  } catch (err) {
-    // EMPTY and FAILED are different facts: a failed lookup must not be
-    // reported as "this is not a role". Say the check did not run.
-    logger.warn({ err }, "capture/graph: role-slug hint lookup failed");
-    roleSlugs = null;
-  }
-  if (roleSlugs === null) {
-    const note =
-      " (could not check whether this slug is a ROLE — the profile lookup failed)";
-    return problems.map((p) => ({
-      ...p,
-      reason: `${p.reason}${note}`,
-      message: `${p.message}${note}`,
-    }));
-  }
-  if (roleSlugs.size === 0) return problems;
-  return problems.map((p) => {
-    if (!roleSlugs.has(p.type)) return p;
-    const hint = ` — "${p.type}" is a ROLE, not a relation: attach it with \`facets[]\` on the entity op, not as an edge.`;
-    return {
-      ...p,
-      reason: `${p.reason}${hint}`,
-      message: `${p.message}${hint}`,
-    };
-  });
+  return problems;
 }
 
 export async function validateCompositeOperations(
@@ -861,8 +807,7 @@ export async function validateCompositeOperations(
   const relationProblems = await validateCaptureRelationTypes(
     database,
     input.workspaceId,
-    operations,
-    input.userId
+    operations
   );
   problems.push(
     ...relationProblems.map((p) => `${p.op} (#${p.opIndex}) ${p.message}`)
@@ -928,12 +873,7 @@ export async function dryRunCaptureGraph(
   // The SAME helper submit runs — so a slug the dry run reports is exactly the
   // slug that would block filing, and neither door can drift from the other.
   const relationsFailed: MaterializeRelationFailure[] = (
-    await validateCaptureRelationTypes(
-      database,
-      input.workspaceId,
-      operations,
-      input.userId
-    )
+    await validateCaptureRelationTypes(database, input.workspaceId, operations)
   ).map(({ sourceRef, targetRef, type, reason }) => ({
     sourceRef,
     targetRef,
@@ -1256,8 +1196,7 @@ export async function submitCaptureGraph(
   const relationProblems = await validateCaptureRelationTypes(
     db,
     workspaceId,
-    operations,
-    userId
+    operations
   );
   const submitProblems = [...planProblems, ...relationProblems];
   if (invalidEntities.length > 0 || submitProblems.length > 0) {
