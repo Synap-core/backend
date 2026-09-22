@@ -38,7 +38,6 @@ import {
   and,
   or,
   isNull,
-  inArray,
   entities,
   projects,
   getWorkspaceMembership,
@@ -47,7 +46,6 @@ import {
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   deriveProposalProjectId,
-  profiles,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
@@ -732,7 +730,10 @@ export interface CaptureRelationProblem extends CapturePlanProblem {
 export async function validateCaptureRelationTypes(
   database: CaptureGraphDb,
   workspaceId: string | null,
-  operations: CompositeProposalOperation[]
+  operations: CompositeProposalOperation[],
+  /** Needed for the role hint, which resolves through the access-scoped
+   *  profile resolver. Omit and the hint is skipped (the refusal still fires). */
+  userId?: string
 ): Promise<CaptureRelationProblem[]> {
   const relationOps = operations
     .map((op, opIndex) => ({ op, opIndex }))
@@ -772,21 +773,37 @@ export async function validateCaptureRelationTypes(
   if (problems.length === 0) return problems;
 
   // Name the role mistake instead of only listing valid relation slugs.
-  let roleSlugs = new Set<string>();
+  //
+  // Resolved through `ProfileResolutionService` — the SAME access-scoped door
+  // the preflight above uses — not a raw `db.select` on `profiles`. The first
+  // implementation here DID use a raw select and returned zero rows for every
+  // role in production (verified live 2026-09-22 against `grp-interrogation`
+  // and `client`, both real roles), while a mocked unit test passed. A door
+  // this file already trusts cannot be wrong in a way the mock hides.
+  if (!userId) return problems;
+  let roleSlugs: Set<string> | null = new Set<string>();
   try {
-    const rows = await database
-      .select({ slug: profiles.slug })
-      .from(profiles)
-      .where(
-        and(
-          eq(profiles.profileKind, "role"),
-          inArray(profiles.slug, [...badSlugs])
-        )
-      );
-    roleSlugs = new Set(rows.map((r) => r.slug));
+    const resolver = new ProfileResolutionService(database);
+    const found = new Set<string>();
+    for (const slug of badSlugs) {
+      const profile = await resolver.resolveProfile(slug, userId, workspaceId);
+      if (profile?.profileKind === "role") found.add(slug);
+    }
+    roleSlugs = found;
   } catch (err) {
-    // Advisory only — never fail the validation on the hint lookup.
+    // EMPTY and FAILED are different facts: a failed lookup must not be
+    // reported as "this is not a role". Say the check did not run.
     logger.warn({ err }, "capture/graph: role-slug hint lookup failed");
+    roleSlugs = null;
+  }
+  if (roleSlugs === null) {
+    const note =
+      " (could not check whether this slug is a ROLE — the profile lookup failed)";
+    return problems.map((p) => ({
+      ...p,
+      reason: `${p.reason}${note}`,
+      message: `${p.message}${note}`,
+    }));
   }
   if (roleSlugs.size === 0) return problems;
   return problems.map((p) => {
@@ -827,7 +844,8 @@ export async function validateCompositeOperations(
   const relationProblems = await validateCaptureRelationTypes(
     database,
     input.workspaceId,
-    operations
+    operations,
+    input.userId
   );
   problems.push(
     ...relationProblems.map((p) => `${p.op} (#${p.opIndex}) ${p.message}`)
@@ -893,7 +911,12 @@ export async function dryRunCaptureGraph(
   // The SAME helper submit runs — so a slug the dry run reports is exactly the
   // slug that would block filing, and neither door can drift from the other.
   const relationsFailed: MaterializeRelationFailure[] = (
-    await validateCaptureRelationTypes(database, input.workspaceId, operations)
+    await validateCaptureRelationTypes(
+      database,
+      input.workspaceId,
+      operations,
+      input.userId
+    )
   ).map(({ sourceRef, targetRef, type, reason }) => ({
     sourceRef,
     targetRef,
@@ -1216,7 +1239,8 @@ export async function submitCaptureGraph(
   const relationProblems = await validateCaptureRelationTypes(
     db,
     workspaceId,
-    operations
+    operations,
+    userId
   );
   const submitProblems = [...planProblems, ...relationProblems];
   if (invalidEntities.length > 0 || submitProblems.length > 0) {

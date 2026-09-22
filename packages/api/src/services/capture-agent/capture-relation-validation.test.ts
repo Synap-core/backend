@@ -8,16 +8,34 @@
  * agent filed 9 edges typed with a ROLE slug (`grp-interrogation`); the
  * proposal was unapprovable and sat in the queue with nothing recorded.
  *
- * What these tests do NOT cover: granularity is the file. The convergence test
- * proves both doors call the ONE helper; it cannot prove the helper's result is
- * wired into submit's rejection — that is what the `submitProblems` assertion
- * below reads, and it reads SOURCE, not behaviour, because reaching submit's
- * throw needs a live pod.
+ * What these tests do NOT cover, and it matters:
+ *  - Granularity is the file. The convergence test proves both doors call the
+ *    ONE helper; the `submitProblems` assertion reads SOURCE, not behaviour,
+ *    because reaching submit's throw needs a live pod.
+ *  - The ROLE HINT is MOCKED here and a mock cannot prove it fires in
+ *    production. It already failed to: the first implementation used a raw
+ *    `db.select` on `profiles`, passed this file green, and returned zero rows
+ *    for every real role against the live pod (`grp-interrogation`, `client`,
+ *    2026-09-22). It now goes through `ProfileResolutionService` — the door
+ *    this file already uses — and the hint is verified LIVE, not here.
+ *  - The load-bearing half is the REFUSAL, which needs no profile lookup.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+const { resolveProfile } = vi.hoisted(() => ({
+  resolveProfile: vi.fn(
+    async (_slug: string) => null as { profileKind: string } | null
+  ),
+}));
+vi.mock("@synap/database", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database")>()),
+  ProfileResolutionService: class {
+    resolveProfile = resolveProfile;
+  },
+}));
+
 import { validateCaptureRelationTypes } from "./submit-capture-graph.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
@@ -32,15 +50,12 @@ const relationDefs = [
   },
 ];
 
-/** `profileKind = 'role'` rows the hint lookup finds. */
-function makeDb(roleSlugs: string[]) {
+function makeDb(roleSlugs: string[] = []) {
+  resolveProfile.mockImplementation(async (slug: string) =>
+    roleSlugs.includes(slug) ? { profileKind: "role" } : null
+  );
   return {
     query: { relationDefs: { findMany: async () => relationDefs } },
-    select: () => ({
-      from: () => ({
-        where: async () => roleSlugs.map((slug) => ({ slug })),
-      }),
-    }),
   } as never;
 }
 
@@ -54,18 +69,25 @@ const edge = (type: string): CompositeProposalOperation =>
 
 describe("validateCaptureRelationTypes", () => {
   it("passes a known slug and a builtin", async () => {
-    const out = await validateCaptureRelationTypes(makeDb([]), null, [
-      edge("works_at"),
-      edge("same_subject"),
-    ]);
+    const out = await validateCaptureRelationTypes(
+      makeDb([]),
+      null,
+      [edge("works_at"), edge("same_subject")],
+      "u1"
+    );
     expect(out).toEqual([]);
   });
 
   it("names the unknown slug, its op index, and the valid vocabulary", async () => {
-    const out = await validateCaptureRelationTypes(makeDb([]), null, [
-      { op: "create_entity", ref: "q1", profileSlug: "question" } as never,
-      edge("no_such_edge"),
-    ]);
+    const out = await validateCaptureRelationTypes(
+      makeDb([]),
+      null,
+      [
+        { op: "create_entity", ref: "q1", profileSlug: "question" } as never,
+        edge("no_such_edge"),
+      ],
+      "u1"
+    );
     expect(out).toHaveLength(1);
     expect(out[0].opIndex).toBe(1);
     expect(out[0].op).toBe("create_relation");
@@ -78,27 +100,47 @@ describe("validateCaptureRelationTypes", () => {
     const out = await validateCaptureRelationTypes(
       makeDb(["grp-interrogation"]),
       null,
-      [edge("grp-interrogation")]
+      [edge("grp-interrogation")],
+      "u1"
     );
     expect(out).toHaveLength(1);
     expect(out[0].message).toMatch(/is a ROLE, not a relation/);
     expect(out[0].message).toMatch(/facets\[\]/);
   });
 
-  it("still reports the problem when the role-hint lookup throws", async () => {
-    const db = {
-      query: { relationDefs: { findMany: async () => relationDefs } },
-      select: () => ({
-        from: () => ({
-          where: async () => {
-            throw new Error("pg down");
-          },
-        }),
-      }),
-    } as never;
-    const out = await validateCaptureRelationTypes(db, null, [edge("nope")]);
+  it("says the role check DID NOT RUN when the lookup throws (failed != empty)", async () => {
+    resolveProfile.mockImplementation(async () => {
+      throw new Error("pg down");
+    });
+    const out = await validateCaptureRelationTypes(
+      {
+        query: { relationDefs: { findMany: async () => relationDefs } },
+      } as never,
+      null,
+      [edge("nope")],
+      "u1"
+    );
     expect(out).toHaveLength(1);
     expect(out[0].message).toMatch(/nope/);
+    // The distinction this repo requires: a failed read is never reported as
+    // "not a role".
+    expect(out[0].message).toMatch(
+      /could not check whether this slug is a ROLE/
+    );
+  });
+
+  it("skips the hint (but still refuses) when no userId is given", async () => {
+    resolveProfile.mockImplementation(async () => ({ profileKind: "role" }));
+    const out = await validateCaptureRelationTypes(
+      {
+        query: { relationDefs: { findMany: async () => relationDefs } },
+      } as never,
+      null,
+      [edge("client")]
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].message).not.toMatch(/is a ROLE/);
+    expect(out[0].message).not.toMatch(/could not check/);
   });
 });
 
