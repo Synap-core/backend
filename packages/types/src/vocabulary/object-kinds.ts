@@ -442,6 +442,58 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     label: "Notification",
     labelPlural: "Notifications",
   },
+
+  // ── Account setup / landing page kinds ──
+  pod: {
+    kind: "pod",
+    category: "workspace",
+    icon: "Server",
+    color: ID(6),
+    label: "Data Pod",
+    labelPlural: "Data Pods",
+  },
+  "data-pod": {
+    kind: "data-pod",
+    category: "workspace",
+    icon: "Server",
+    color: ID(6),
+    label: "Data Pod",
+    labelPlural: "Data Pods",
+  },
+
+  // ── Surface kinds (landing page) ──
+  desktop: {
+    kind: "desktop",
+    category: "tool",
+    icon: "Monitor",
+    color: ID(2),
+    label: "Desktop app",
+    labelPlural: "Desktop apps",
+  },
+  cli: {
+    kind: "cli",
+    category: "tool",
+    icon: "Terminal",
+    color: ID(1),
+    label: "CLI agent",
+    labelPlural: "CLI agents",
+  },
+  telegram: {
+    kind: "telegram",
+    category: "tool",
+    icon: "MessageSquare",
+    color: ID(3),
+    label: "Telegram",
+    labelPlural: "Telegram",
+  },
+  raycast: {
+    kind: "raycast",
+    category: "tool",
+    icon: "Keyboard",
+    color: ID(11),
+    label: "Raycast",
+    labelPlural: "Raycast",
+  },
 };
 
 // ─── View lenses ─────────────────────────────────────────────────────────────
@@ -623,6 +675,12 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
    */
   workflow: "automation",
   workflows: "automation",
+  pod: "pod",
+  "data-pod": "pod",
+  desktop: "desktop",
+  cli: "cli",
+  telegram: "telegram",
+  raycast: "raycast",
 };
 
 /**

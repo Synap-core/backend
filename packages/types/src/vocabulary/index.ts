@@ -190,6 +190,16 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   // matter — the button asks, the session receipt reports.
   plan_approval: { imperative: "Approve plan", past: "Approved plan" },
   deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
+
+  // Account setup / landing page verbs
+  provision: { imperative: "Provision", past: "Provisioned" },
+  download: { imperative: "Download", past: "Downloaded" },
+  sign_in: { imperative: "Sign in", past: "Signed in" },
+  start: { imperative: "Start", past: "Started" },
+  check: { imperative: "Check", past: "Checked" },
+  compare: { imperative: "Compare", past: "Compared" },
+  see: { imperative: "See", past: "Seen" },
+  open: { imperative: "Open", past: "Opened" },
 };
 
 /**

@@ -279,6 +279,84 @@ function prependPendingNotice(answer: string, pendingCount: number): string {
  * repository. `synthesizeAnswer` is otherwise an IS round-trip and cannot be
  * asserted on cheaply.
  */
+/**
+ * How OLD a retrieved item is, who wrote it, and whether anyone re-verified it.
+ *
+ * Why this exists: on 2026-09-22 an agent asked the pod why an entity write was
+ * failing, `ask` returned a `knowledge` gotcha authored by an AI agent on
+ * 2026-06-08, and the synthesized answer opened *"yes — this is a confirmed
+ * gotcha"*. The note described a DIFFERENT failure (a 500 from sending the
+ * wrong userId; the live one was a 400 from sending none), and the agent
+ * reported its stale cause to the founder as today's diagnosis — recommending
+ * the OPPOSITE of the correct fix.
+ *
+ * The row carried its own age and author the whole time; the context string
+ * just never showed them, so the model could not distinguish a fact measured
+ * this morning from a guess recorded in June. Provenance goes in the entry
+ * PREFIX — always visible, never crowded out by the snippet budget.
+ *
+ * `lastVerifiedAt` is read when present (a property a pod may add to its
+ * `knowledge` kind via `synap_define_kind`); its ABSENCE is stated rather than
+ * assumed to mean fresh.
+ */
+export function describeItemProvenance(
+  rec: Record<string, unknown>,
+  now: Date = new Date()
+): string | null {
+  const asDate = (v: unknown): Date | null => {
+    if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v;
+    if (typeof v !== "string" || !v.trim()) return null;
+    const d = new Date(v);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+  const ago = (d: Date): string => {
+    const days = Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+    if (days < 0) return "dated in the future";
+    if (days === 0) return "today";
+    if (days === 1) return "yesterday";
+    if (days < 30) return `${days}d ago`;
+    if (days < 365) return `${Math.floor(days / 30)}mo ago`;
+    return `${Math.floor(days / 365)}y ago`;
+  };
+
+  const created = asDate(rec.createdAt);
+  const props =
+    rec.properties && typeof rec.properties === "object"
+      ? (rec.properties as Record<string, unknown>)
+      : {};
+  // KEY-SHAPE TOLERANT on purpose. `slugifyPropertyKey` lowercases a camelCase
+  // key WITHOUT inserting a separator, so declaring `lastVerifiedAt` through
+  // `synap_define_kind` stores the DEF as `lastverifiedat` (measured
+  // 2026-09-22) — while a writer may put the VALUE under the camelCase key it
+  // authored, or a hyphenated variant. Reading one spelling would have made
+  // this field look permanently unset, which is the exact defect class this
+  // whole change exists to remove.
+  const pick = (bag: Record<string, unknown>): unknown => {
+    for (const [k, v] of Object.entries(bag)) {
+      if (k.toLowerCase().replace(/[-_]/g, "") === "lastverifiedat") return v;
+    }
+    return undefined;
+  };
+  const verified = asDate(pick(props) ?? pick(rec));
+
+  const bits: string[] = [];
+  if (created) bits.push(`recorded ${ago(created)}`);
+  // `createdByKind` is the row's own attribution; an agent-authored claim is
+  // an OPINION a model wrote down, not an observation the product made.
+  if (rec.createdByKind === "ai_agent" || rec.agentUserId) {
+    bits.push("by an AI agent");
+  } else if (rec.createdByKind === "human") {
+    bits.push("by the user");
+  }
+  if (verified) {
+    bits.push(`last verified ${ago(verified)}`);
+  } else if (created) {
+    // EMPTY and UNKNOWN are different facts — say which this is.
+    bits.push("never re-verified");
+  }
+  return bits.length > 0 ? bits.join(", ") : null;
+}
+
 export function buildSynthesisContext(answers: AskAnswer[]): {
   sources: SynthesisSource[];
   context: string;
@@ -464,7 +542,12 @@ export function buildSynthesisContext(answers: AskAnswer[]): {
         }
         if (snippetBits.length >= MAX_SNIPPET_BITS) break;
       }
-      const entry = `- [${block.substrate}] ${snippetBits.join(" · ")}`;
+      // Provenance rides in the PREFIX so the snippet budget can never drop
+      // it — see `describeItemProvenance`.
+      const provenance = describeItemProvenance(rec);
+      const entry = `- [${block.substrate}${
+        provenance ? ` · ${provenance}` : ""
+      }] ${snippetBits.join(" · ")}`;
       if (!isProtectedFirst && contextLen + entry.length > budget) {
         dropItem(block.substrate, id, String(title));
         continue;

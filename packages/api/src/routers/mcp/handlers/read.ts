@@ -49,6 +49,25 @@ import {
   McpHandlerMap,
 } from "./shared.js";
 
+/**
+ * Postgres 22P02 — "invalid input syntax for type uuid" — anywhere in the
+ * error chain. Drizzle wraps the driver error, so the code can sit on `cause`.
+ */
+function isInvalidUuidInput(err: unknown): boolean {
+  for (let e: unknown = err, hops = 0; e && hops < 5; hops++) {
+    const rec = e as { code?: unknown; message?: unknown; cause?: unknown };
+    if (rec.code === "22P02") return true;
+    if (
+      typeof rec.message === "string" &&
+      /invalid input syntax for type uuid/i.test(rec.message)
+    ) {
+      return true;
+    }
+    e = rec.cause;
+  }
+  return false;
+}
+
 export const readHandlers: McpHandlerMap = {
   synap_ask: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, caller } = ctx;
@@ -760,7 +779,29 @@ export const readHandlers: McpHandlerMap = {
       gId = matches[0].id;
     }
     if (!gId) return ok({ error: "id or name is required" });
-    const envelope = await buildGraphEnvelope(userId, apiKeyScopes, gKind, gId);
+    // An id whose SHAPE the target table cannot accept (an 8-char short id
+    // against a uuid column) used to reach Postgres, throw 22P02, and surface
+    // as the generic "failed against the pod's storage layer... a pod-side
+    // fault, not something your arguments caused" — a server-fault message for
+    // what is purely a bad argument. Measured live 2026-09-22 with `9d43e988`,
+    // the short id the product prints elsewhere.
+    //
+    // Caught rather than shape-guarded: `get_graph` serves kinds whose ids are
+    // NOT uuids (a `capability` resolves ids like "exa-search"), so a blanket
+    // uuid test would refuse legitimate calls. The DRIVER knows which columns
+    // are uuid; we only translate its verdict into an actionable sentence.
+    let envelope;
+    try {
+      envelope = await buildGraphEnvelope(userId, apiKeyScopes, gKind, gId);
+    } catch (err) {
+      if (isInvalidUuidInput(err)) {
+        return ok({
+          error: `'${gId}' is not a valid id for a ${gKind}. This object's ids are uuids — short ids are not resolved here.`,
+          hint: "Pass `name` to look it up by name, or take the full id from synap_ask / synap_get_entities / synap_list_*.",
+        });
+      }
+      throw err;
+    }
     // A table-backed id that hydrated to nothing with no visible edges — the id
     // genuinely doesn't exist / isn't visible. Return not-found, never a shell
     // node named by its own UUID (mirrors the name-not-found branch above).

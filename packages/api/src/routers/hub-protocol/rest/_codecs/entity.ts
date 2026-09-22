@@ -186,7 +186,21 @@ export const CreateEntityRequestSchema = z
 /** PATCH /entities/:entityId request body. */
 export const UpdateEntityRequestSchema = z
   .object({
-    userId: z.string(),
+    /**
+     * OPTIONAL — the acting user defaults to the authenticated principal.
+     *
+     * This was `z.string()` (required) while the handler has always written
+     * `const userId = body.userId ?? authUserId` and gated it with
+     * `mayActAsUser(c, body.userId)`, which explicitly permits an absent value
+     * ("acting as self"). The schema runs BEFORE the handler, so that fallback
+     * was unreachable dead code and every caller that did not send a userId —
+     * including `HubRestClient.updateEntity`, which never sends one — got
+     * `400 userId: Invalid input: expected string, received undefined`.
+     * Measured live 2026-09-22: PATCH /api/hub/entities/:id 400s for the
+     * official client while the MCP door (tRPC) updates the same entity fine.
+     * Send it only to act on behalf of another user, which `mayActAsUser` gates.
+     */
+    userId: z.string().optional(),
     agentUserId: z.string().optional(),
     workspaceId: z.string().nullable().optional(),
     title: z.string().optional(),

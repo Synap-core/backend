@@ -420,7 +420,7 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "The object's id (uuid, or kind short-id). Provide id OR name."
+            "description": "The object's FULL uuid — short ids are not resolved by this tool. Provide id OR name."
           },
           "name": {
             "type": "string",

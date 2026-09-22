@@ -141,7 +141,9 @@ export type LinkType =
    * "merged_into" twin. Git's branch/merge model is a researched conceptual
    * defect, and no comparable system merges units of work — the pattern that
    * actually ships is a coordinator with sibling children, where fan-in is a
-   * SUMMARY, not a merge. The UI says "forked from"; it never draws a graph.
+   * SUMMARY, not a merge. The room says "forked from". Since 2026-09-22
+   * (founder decision) the desktop WORK MAP does draw these edges — lanes on
+   * a time axis, spawn and `blocked_by` lines only, never a merge line.
    */
   | "spawned_from"
   // dynamic tool-auth binding: principal|entity --provides_credential--> secret.

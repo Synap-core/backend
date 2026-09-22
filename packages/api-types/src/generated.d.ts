@@ -4327,7 +4327,9 @@ export type LinkType = "grants" | "requires" | "instantiated_from" | "used" | "t
  * "merged_into" twin. Git's branch/merge model is a researched conceptual
  * defect, and no comparable system merges units of work — the pattern that
  * actually ships is a coordinator with sibling children, where fan-in is a
- * SUMMARY, not a merge. The UI says "forked from"; it never draws a graph.
+ * SUMMARY, not a merge. The room says "forked from". Since 2026-09-22
+ * (founder decision) the desktop WORK MAP does draw these edges — lanes on
+ * a time axis, spawn and `blocked_by` lines only, never a merge line.
  */
  | "spawned_from" | "provides_credential"
 /**
@@ -10632,87 +10634,6 @@ export interface SessionOutputDependencies {
 	/** Sessions waiting on THIS session's outputs (only while it is open). */
 	outputsWaitedOnBy: OutputWaitedOnBy[];
 }
-/** The kinds a session can be converted INTO. */
-export type ConversionKind = "playbook" | "project";
-/** The receipt every conversion verb returns. Frontend renders it verbatim. */
-export interface ConversionReceipt {
-	created: {
-		kind: ConversionKind;
-		id: string;
-		name: string;
-	};
-	/** The session's goal BEFORE the rename (null when the rename was skipped). */
-	renamedFrom: string | null;
-	/** The session's goal AFTER the rename. */
-	renamedTo: string;
-	/** ISO deadline after which `revertConversion` refuses. */
-	undoUntil: string;
-}
-export interface CancelRecordItem {
-	kind: "job" | "chat_turn" | "proposal";
-	id: string;
-	detail: string;
-}
-export interface SessionCancelOutcome {
-	stopped: CancelRecordItem[];
-	notStoppable: CancelRecordItem[];
-	/** Work that names no session, so it cannot be tied to this cancel. */
-	notLinked: CancelRecordItem[];
-	/** A stop that errored — the cancel still stands. `id: "*"` = a whole scan. */
-	stopFailed: CancelRecordItem[];
-	finished: CancelRecordItem[];
-}
-export interface SessionCancelRecord extends SessionCancelOutcome {
-	at: string;
-	by: string;
-	reason?: string;
-	/** `stopping`: committed with the cancel, stop not yet run. `done`: outcome recorded. */
-	state: "stopping" | "done";
-}
-export interface RunSourceRow {
-	sourceDocumentId: string;
-	title: string;
-	kind: IntakeSourceKind;
-	/** Structuring did not run on it (spend guard, IS down) — kept for re-structure. */
-	degraded: {
-		reason: string;
-		at: string;
-	} | null;
-	/** A later structure of the same source cleared its degraded marker. */
-	restructuredAt: string | null;
-	filename: string | null;
-	url: string | null;
-}
-export interface RunSources {
-	sessionId: string;
-	sources: RunSourceRow[];
-	/** In the manifest, but the document is gone (deleted / not the caller's). */
-	missing: string[];
-	/** Every source id the manifest holds, listed or not. */
-	total: number;
-	/** The rerun door's cap, so a selection can say it before the dry run does. */
-	rerunCap: number;
-}
-export type StructureAgainRefusal = "not_found" | "no_text" | "mint_failed" | "source_not_kept";
-export type StructureAgainResult = {
-	ok: false;
-	reason: StructureAgainRefusal;
-	message: string;
-} | {
-	ok: true;
-	/** The same request already started this run: nothing was replayed again. */
-	status: "reused";
-	sessionId: string;
-	entityId: string;
-} | ({
-	ok: true;
-	status: "structured";
-	sessionId: string;
-	entityId: string;
-	sourceDocumentId: string;
-	/** False when the manifest could not record the source (rerun can't see it). */
-	manifestRecorded: boolean;
-} & Omit<RerunItemResult, "sourceDocumentIds" | "door">);
 /**
  * One thing a session produced. `id` is the STABLE join coordinate
  * (`<kind>:<refId>`), not a row id — two ledgers describing the same object
@@ -11038,6 +10959,87 @@ export interface PacketEvaluationItem {
 	rationale: string | null;
 	createdAt: string;
 }
+/** The kinds a session can be converted INTO. */
+export type ConversionKind = "playbook" | "project";
+/** The receipt every conversion verb returns. Frontend renders it verbatim. */
+export interface ConversionReceipt {
+	created: {
+		kind: ConversionKind;
+		id: string;
+		name: string;
+	};
+	/** The session's goal BEFORE the rename (null when the rename was skipped). */
+	renamedFrom: string | null;
+	/** The session's goal AFTER the rename. */
+	renamedTo: string;
+	/** ISO deadline after which `revertConversion` refuses. */
+	undoUntil: string;
+}
+export interface CancelRecordItem {
+	kind: "job" | "chat_turn" | "proposal";
+	id: string;
+	detail: string;
+}
+export interface SessionCancelOutcome {
+	stopped: CancelRecordItem[];
+	notStoppable: CancelRecordItem[];
+	/** Work that names no session, so it cannot be tied to this cancel. */
+	notLinked: CancelRecordItem[];
+	/** A stop that errored — the cancel still stands. `id: "*"` = a whole scan. */
+	stopFailed: CancelRecordItem[];
+	finished: CancelRecordItem[];
+}
+export interface SessionCancelRecord extends SessionCancelOutcome {
+	at: string;
+	by: string;
+	reason?: string;
+	/** `stopping`: committed with the cancel, stop not yet run. `done`: outcome recorded. */
+	state: "stopping" | "done";
+}
+export interface RunSourceRow {
+	sourceDocumentId: string;
+	title: string;
+	kind: IntakeSourceKind;
+	/** Structuring did not run on it (spend guard, IS down) — kept for re-structure. */
+	degraded: {
+		reason: string;
+		at: string;
+	} | null;
+	/** A later structure of the same source cleared its degraded marker. */
+	restructuredAt: string | null;
+	filename: string | null;
+	url: string | null;
+}
+export interface RunSources {
+	sessionId: string;
+	sources: RunSourceRow[];
+	/** In the manifest, but the document is gone (deleted / not the caller's). */
+	missing: string[];
+	/** Every source id the manifest holds, listed or not. */
+	total: number;
+	/** The rerun door's cap, so a selection can say it before the dry run does. */
+	rerunCap: number;
+}
+export type StructureAgainRefusal = "not_found" | "no_text" | "mint_failed" | "source_not_kept";
+export type StructureAgainResult = {
+	ok: false;
+	reason: StructureAgainRefusal;
+	message: string;
+} | {
+	ok: true;
+	/** The same request already started this run: nothing was replayed again. */
+	status: "reused";
+	sessionId: string;
+	entityId: string;
+} | ({
+	ok: true;
+	status: "structured";
+	sessionId: string;
+	entityId: string;
+	sourceDocumentId: string;
+	/** False when the manifest could not record the source (rerun can't see it). */
+	manifestRecorded: boolean;
+} & Omit<RerunItemResult, "sourceDocumentIds" | "door">);
 export type SessionEvaluationRow = typeof sessionEvaluations.$inferSelect;
 export interface SessionEvaluationSummary {
 	criteria: SessionCriterion[];
@@ -11349,6 +11351,10 @@ export type PathCount = {
 	status: "ok";
 	total: number;
 } | Unavailable;
+type Unavailable$1 = {
+	status: "unavailable";
+	reason: string;
+};
 export interface ProjectPathRow {
 	id: string;
 	/** The stored name, `null` when untitled. */
@@ -11379,7 +11385,7 @@ export interface ProjectPathRow {
 	hasOutputs: {
 		status: "ok";
 		value: boolean;
-	} | Unavailable;
+	} | Unavailable$1;
 	nextMove: ContinuationNextMove;
 }
 export interface ProjectPathResult {
@@ -30276,6 +30282,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				limit?: number | undefined;
 				edges?: boolean | undefined;
+				nextMove?: boolean | undefined;
 				lens?: "default" | "all" | "triage" | undefined;
 				kind?: "run" | "all" | "receipt" | "work" | undefined;
 				playbookId?: string | undefined;
@@ -30314,7 +30321,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				kind: SessionKind;
 			} & SessionParticipants & {
 				verdict?: SessionVerdict;
-			} & Partial<SessionEdges> & Partial<SessionOutputDependencies>)[];
+			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
+				nextMove?: ContinuationNextMove;
+			})[];
 			meta: object;
 		}>;
 		browse: import("@trpc/server").TRPCQueryProcedure<{

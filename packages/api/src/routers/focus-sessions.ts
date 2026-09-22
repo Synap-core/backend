@@ -112,6 +112,8 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
+import { attachNextMove } from "../services/focus-sessions/session-path-sections.js";
+import type { ContinuationNextMove } from "../services/focus-sessions/continuation-packet.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
   attachSessionParticipants,
@@ -381,7 +383,7 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
 } & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
-  Partial<SessionOutputDependencies>;
+  Partial<SessionOutputDependencies> & { nextMove?: ContinuationNextMove };
 
 /**
  * Merge `metadata.titleSource` into the row — never assign over metadata. A
@@ -436,6 +438,14 @@ export const focusSessionsRouter = router({
          * door would be a second shape to keep in lockstep.
          */
         edges: z.boolean().optional(),
+        /**
+         * Also project each row's `nextMove` — THE continuation rule
+         * (`deriveNextMove`), whose inputs are gathered for the whole page by
+         * `attachNextMove` (`session-path-sections.ts`), the same batch the
+         * project path reads. Opt-in: four more indexed reads for the page.
+         * The work map needs it to mark who owns each session's next move.
+         */
+        nextMove: z.boolean().optional(),
         /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
         lens: sessionLensSchema,
         /** Which population — see `sessionKindFilterSchema`. Default `work`. */
@@ -480,9 +490,15 @@ export const focusSessionsRouter = router({
         input.limit
       );
       const withParticipants = await projectSessionRows(sessions, ctx.userId);
-      if (!input.edges) return withParticipants;
+      const withMove: SessionListRow[] = input.nextMove
+        ? await attachNextMove(withParticipants, {
+            userId: requireUserId(ctx.userId),
+            logContext: { door: "focusSessions.list" },
+          })
+        : withParticipants;
+      if (!input.edges) return withMove;
       // Second batch projection, ONE more links query for the whole page.
-      const withEdges = await attachSessionEdges(withParticipants);
+      const withEdges = await attachSessionEdges(withMove);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.

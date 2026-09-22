@@ -54,6 +54,7 @@ import {
   eq,
 } from "@synap/database";
 import { getProjectPath } from "./project-path.js";
+import { attachNextMove } from "../focus-sessions/session-path-sections.js";
 import { projectContinuationPacket } from "../focus-sessions/continuation-packet.js";
 import { projectsRouter } from "../../routers/projects.js";
 import { registerProjectsRoutes } from "../../routers/hub-protocol/rest/projects.js";
@@ -314,6 +315,36 @@ describe("getProjectPath", () => {
     expect(byId.get(S.e)!.parentCount).toEqual({ status: "ok", total: 1 });
     expect(byId.get(S.e)!.hasOutputs).toEqual({ status: "ok", value: true });
     expect(byId.get(S.a)!.hasOutputs).toEqual({ status: "ok", value: false });
+  });
+
+  it("SEAM (list door): attachNextMove gives every row the packet's nextMove and keeps the row's own blockedBy", async () => {
+    // `focusSessions.list` rows already carry `blockedBy` as an ID LIST; the
+    // work map asks for `nextMove` on top. The wrapper must add the rule's
+    // answer and leave the list-shaped field alone.
+    const rows = (await db.select().from(focusSessions)).filter(
+      (r) => r.userId === USER
+    );
+    const listShaped = rows.map((r) => ({ ...r, blockedBy: ["list-shape"] }));
+    const out = await attachNextMove(listShaped, {
+      userId: USER,
+      database: db,
+    });
+    expect(out).toHaveLength(rows.length);
+    const kinds = new Set<string>();
+    for (const item of out) {
+      const packet = await projectContinuationPacket(
+        rows.find((x) => x.id === item.id)!,
+        { database: db, userId: USER }
+      );
+      expect(item.nextMove, `nextMove for ${item.goal}`).toEqual(
+        packet.nextMove
+      );
+      expect(item.blockedBy).toEqual(["list-shape"]);
+      kinds.add(item.nextMove.kind);
+    }
+    // Non-vacuity: a blocked session and a pending proposal are both on the page.
+    expect(kinds).toContain("waiting_on_session");
+    expect(kinds).toContain("pending_proposal");
   });
 
   it("SEAM: every row's nextMove equals the continuation packet's for that session", async () => {

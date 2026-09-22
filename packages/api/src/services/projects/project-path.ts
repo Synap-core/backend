@@ -38,43 +38,27 @@ import {
   projects,
   focusSessions,
   proposals,
-  links,
-  artifacts,
   workspaces,
   and,
   eq,
-  asc,
   desc,
   inArray,
-  lte,
   count,
-  drizzleSql,
   ProposalStatus,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "@synap/database";
-import {
-  buildObjectActionTitle,
-  resolveStatusLabel,
-} from "@synap-core/types/vocabulary";
+import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
-import type { ExpectedOutput } from "@synap/playbooks";
-import { createLogger } from "@synap-core/core";
-import {
-  deriveNextMove,
-  isOpenAgentSlot,
-  PACKET_TOP_N,
-  type ContinuationNextMove,
-  type PacketChildItem,
-  type PacketProposalItem,
-  type PacketSection,
-  type PacketSlotItem,
+import type {
+  ContinuationNextMove,
+  PacketChildItem,
+  PacketSection,
 } from "../focus-sessions/continuation-packet.js";
 import {
   owedSlotPrefilter,
   owedSlotWhere,
   projectOwedSlots,
-  type OwedSlot,
 } from "../focus-sessions/owed-outputs.js";
 import {
   sessionListConditions,
@@ -89,10 +73,15 @@ import {
   attachSessionKind,
   type SessionKind,
 } from "../focus-sessions/session-kind.js";
-import { extractProposalName } from "../proposals/fingerprint.js";
+import {
+  attachPathSections,
+  settle,
+  type PathCount,
+  type Settled,
+} from "../focus-sessions/session-path-sections.js";
 import { buildPaginatedResponse } from "../../utils/pagination.js";
 
-const logger = createLogger({ module: "project-path" });
+export type { PathCount };
 
 export interface ProjectPathQuery {
   database?: typeof db;
@@ -108,8 +97,6 @@ export interface ProjectPathQuery {
 }
 
 type Unavailable = { status: "unavailable"; reason: string };
-
-export type PathCount = { status: "ok"; total: number } | Unavailable;
 
 export interface ProjectPathRow {
   id: string;
@@ -157,227 +144,8 @@ export interface ProjectPathResult {
   pagination: { hasMore: boolean; limit: number; offset: number };
 }
 
-type Settled<T> = { status: "ok"; value: T } | Unavailable;
-
-/** Log the cause; hand consumers only a fixed sentence (never driver text). */
-function settle<T>(
-  projectId: string,
-  part: string,
-  reason: string,
-  read: () => Promise<T>
-): Promise<Settled<T>> {
-  return read().then(
-    (value) => ({ status: "ok" as const, value }),
-    (err: unknown) => {
-      logger.warn(
-        { err, projectId, section: part },
-        "project path: section read failed"
-      );
-      return { status: "unavailable" as const, reason };
-    }
-  );
-}
-
 const iso = (d: Date | string | null | undefined): string | null =>
   d ? new Date(d).toISOString() : null;
-
-function slotsOf(row: { expectedOutputs: unknown }): ExpectedOutput[] {
-  return Array.isArray(row.expectedOutputs)
-    ? (row.expectedOutputs as ExpectedOutput[]).filter(
-        (s) => !!s && typeof s === "object"
-      )
-    : [];
-}
-
-function section<T>(all: T[]): PacketSection<T> {
-  return { status: "ok", total: all.length, items: all.slice(0, PACKET_TOP_N) };
-}
-
-const emptySection = <T>(): PacketSection<T> => ({
-  status: "ok",
-  total: 0,
-  items: [],
-});
-
-function owedItem(slot: OwedSlot): PacketSlotItem {
-  return {
-    label: slot.label,
-    kind: slot.kind,
-    ...(slot.blockedReason !== undefined
-      ? { blockedReason: slot.blockedReason }
-      : {}),
-    ...(slot.why !== undefined ? { why: slot.why } : {}),
-    owedSince: slot.owedSince,
-  };
-}
-
-/** Group window-ranked rows (already cut to PACKET_TOP_N) into sections. */
-function groupSections<R extends { total: number }, T>(
-  rows: R[],
-  keyOf: (r: R) => string,
-  itemOf: (r: R) => T
-): Map<string, PacketSection<T>> {
-  const out = new Map<string, { status: "ok"; total: number; items: T[] }>();
-  for (const r of rows) {
-    const key = keyOf(r);
-    const s = out.get(key) ?? {
-      status: "ok",
-      total: Number(r.total),
-      items: [],
-    };
-    s.items.push(itemOf(r));
-    out.set(key, s);
-  }
-  return out;
-}
-
-/**
- * Session-to-session edges (`blocked_by`, `spawned_from`) for the whole page in
- * ONE query. `anchor` is the page session, the joined row the OTHER end,
- * owner-floored like the packet's readers. `outbound` reads
- * `anchor --type--> other`; `inbound` reads `other --type--> anchor`.
- */
-async function readEdges(
-  database: typeof db,
-  userId: string,
-  ids: string[],
-  direction: "outbound" | "inbound"
-): Promise<Map<string, PacketSection<PacketChildItem>>> {
-  const anchor = direction === "outbound" ? links.fromId : links.toId;
-  const other = direction === "outbound" ? links.toId : links.fromId;
-  // The packet readers' orderings, mirrored (they are module-private there).
-  // Outbound (blockers, parent): OPEN first. Inbound (children, unblocks): OPEN,
-  // then CLOSED, then the rest — a closed child is the rule's evidence of work
-  // and must not hide behind PACKET_TOP_N cancelled ones. The seam test pins
-  // both against the real packet.
-  const open = inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]);
-  const statusOrder =
-    direction === "inbound"
-      ? drizzleSql`${open} desc, ${eq(focusSessions.status, "closed")} desc`
-      : drizzleSql`${open} desc`;
-  const ranked = database
-    .select({
-      anchor: drizzleSql<string>`${anchor}`.as("anchor"),
-      linkType: links.linkType,
-      id: focusSessions.id,
-      title: focusSessions.title,
-      goal: focusSessions.goal,
-      status: focusSessions.status,
-      rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${statusOrder}, ${focusSessions.createdAt} asc)`.as(
-        "rn"
-      ),
-      total:
-        drizzleSql<number>`count(*) over (partition by ${anchor}, ${links.linkType})`.as(
-          "total"
-        ),
-    })
-    .from(links)
-    .innerJoin(focusSessions, eq(drizzleSql`${focusSessions.id}::text`, other))
-    .where(
-      and(
-        eq(links.fromType, "session"),
-        eq(links.toType, "session"),
-        inArray(links.linkType, ["blocked_by", "spawned_from"]),
-        inArray(anchor, ids),
-        eq(focusSessions.userId, userId)
-      )
-    )
-    .as("ranked");
-  const rows = await database
-    .select()
-    .from(ranked)
-    .where(lte(ranked.rn, PACKET_TOP_N))
-    .orderBy(asc(ranked.anchor), asc(ranked.linkType), asc(ranked.rn));
-  return groupSections(
-    rows,
-    (r) => `${r.anchor}|${r.linkType}`,
-    (r) => ({
-      id: r.id,
-      title: resolveSessionTitle(r),
-      status: r.status,
-      statusLabel: resolveStatusLabel(r.status),
-    })
-  );
-}
-
-/** Pending proposals for the whole page, the oldest PACKET_TOP_N per session. */
-async function readPendingProposals(
-  database: typeof db,
-  ids: string[]
-): Promise<Map<string, PacketSection<PacketProposalItem>>> {
-  const ranked = database
-    .select({
-      sessionId: proposals.sessionId,
-      id: proposals.id,
-      proposalType: proposals.proposalType,
-      targetType: proposals.targetType,
-      data: proposals.data,
-      createdAt: proposals.createdAt,
-      rn: drizzleSql<number>`row_number() over (partition by ${proposals.sessionId} order by ${proposals.createdAt} asc)`.as(
-        "rn"
-      ),
-      total:
-        drizzleSql<number>`count(*) over (partition by ${proposals.sessionId})`.as(
-          "total"
-        ),
-    })
-    .from(proposals)
-    .where(
-      and(
-        inArray(proposals.sessionId, ids),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    )
-    .as("ranked");
-  const rows = await database
-    .select()
-    .from(ranked)
-    .where(lte(ranked.rn, PACKET_TOP_N))
-    .orderBy(asc(ranked.sessionId), asc(ranked.rn));
-  return groupSections(
-    rows,
-    (r) => String(r.sessionId),
-    (r) => ({
-      id: r.id,
-      title: buildObjectActionTitle({
-        action: r.proposalType,
-        objectKind: r.targetType,
-        objectName: extractProposalName(r.data) ?? null,
-        mood: "imperative",
-      }),
-      proposalType: r.proposalType,
-      createdAt: iso(r.createdAt),
-    })
-  );
-}
-
-/** Which page sessions produced anything, from both output ledgers. */
-async function readOutputPresence(
-  database: typeof db,
-  ids: string[]
-): Promise<Set<string>> {
-  const [artifactRows, producedRows] = await Promise.all([
-    database
-      .selectDistinct({ sessionId: artifacts.sessionId })
-      .from(artifacts)
-      .where(inArray(artifacts.sessionId, ids)),
-    database
-      .selectDistinct({ sessionId: links.fromId })
-      .from(links)
-      .where(
-        and(
-          eq(links.fromType, "session"),
-          inArray(links.fromId, ids),
-          eq(links.linkType, "produced")
-        )
-      ),
-  ]);
-  return new Set(
-    [...artifactRows, ...producedRows]
-      .map((r) => r.sessionId)
-      .filter((id): id is string => !!id)
-  );
-}
 
 /** Returns `null` when the project does not exist or the caller cannot see it. */
 export async function getProjectPath(
@@ -432,56 +200,15 @@ export async function getProjectPath(
     limit,
     offset,
   });
-  const ids = page.map((r) => r.id);
   const wsIds = [
     ...new Set(page.map((r) => r.workspaceId).filter((w): w is string => !!w)),
   ];
-  const emptyPage = ids.length === 0;
-
-  const [
-    proposalsBy,
-    outbound,
-    inbound,
-    outputsWith,
-    wsNames,
-    open,
-    owed,
-    pending,
-  ] = await Promise.all([
-    settle(
-      projectId,
-      "pendingProposals",
-      "Pending proposals could not be read.",
-      () =>
-        emptyPage
-          ? Promise.resolve(
-              new Map<string, PacketSection<PacketProposalItem>>()
-            )
-          : readPendingProposals(database, ids)
-    ),
-    settle(
-      projectId,
-      "outboundEdges",
-      "The sessions these wait on could not be read.",
-      () =>
-        emptyPage
-          ? Promise.resolve(new Map<string, PacketSection<PacketChildItem>>())
-          : readEdges(database, userId, ids, "outbound")
-    ),
-    settle(
-      projectId,
-      "inboundEdges",
-      "The sessions these unblock could not be read.",
-      () =>
-        emptyPage
-          ? Promise.resolve(new Map<string, PacketSection<PacketChildItem>>())
-          : readEdges(database, userId, ids, "inbound")
-    ),
-    settle(projectId, "outputs", "Session outputs could not be read.", () =>
-      emptyPage
-        ? Promise.resolve(new Set<string>())
-        : readOutputPresence(database, ids)
-    ),
+  const [sectioned, wsNames, open, owed, pending] = await Promise.all([
+    attachPathSections(attachSessionKind(attachTriage(page)), {
+      userId,
+      database,
+      logContext: { projectId },
+    }),
     // Names only for workspaces the caller can see — a session's stored id is
     // not permission to learn a workspace's name.
     wsIds.length
@@ -497,7 +224,7 @@ export async function getProjectPath(
           .then((rows) => new Map(rows.map((w) => [w.id, w.name])))
       : Promise.resolve(new Map<string, string>()),
     settle(
-      projectId,
+      { projectId },
       "openSessions",
       "Open sessions could not be counted.",
       () =>
@@ -513,7 +240,7 @@ export async function getProjectPath(
           .then(([r]) => Number(r?.n ?? 0))
     ),
     settle(
-      projectId,
+      { projectId },
       "owedSlots",
       "Decisions waiting could not be counted.",
       () =>
@@ -533,7 +260,7 @@ export async function getProjectPath(
           )
     ),
     settle(
-      projectId,
+      { projectId },
       "pendingTotal",
       "Decisions waiting could not be counted.",
       () =>
@@ -555,89 +282,28 @@ export async function getProjectPath(
         ? pending
         : { status: "ok", total: owed.value + pending.value };
 
-  /** A section from a settled page-wide map, or that read's `unavailable`. */
-  const pick = <T>(
-    s: Settled<Map<string, PacketSection<T>>>,
-    key: string
-  ): PacketSection<T> =>
-    s.status === "ok" ? (s.value.get(key) ?? emptySection<T>()) : s;
-  const countOf = (s: PacketSection<unknown>): PathCount =>
-    s.status === "ok" ? { status: "ok", total: s.total } : s;
-
-  const items = attachSessionKind(attachTriage(page)).map(
-    (row): ProjectPathRow => {
-      const all = slotsOf(row);
-      const owedSlots = section(
-        projectOwedSlots({
-          id: row.id,
-          goal: row.goal,
-          status: row.status,
-          workspaceId: row.workspaceId,
-          projectId: row.projectId,
-          expectedOutputs: all,
-        })
-          .sort((a, b) =>
-            a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
-          )
-          .map(owedItem)
-      );
-      const aiCanDo = section(
-        all.filter(isOpenAgentSlot).map((s) => ({
-          label: s.label,
-          kind: s.kind,
-          ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-        }))
-      );
-      const pendingProposals = pick(proposalsBy, row.id);
-      const blockedBy = pick(outbound, `${row.id}|blocked_by`);
-      const parent = pick(outbound, `${row.id}|spawned_from`);
-      const unblocks = pick(inbound, `${row.id}|blocked_by`);
-      const children = pick(inbound, `${row.id}|spawned_from`);
-      const outputs: PacketSection<never> =
-        outputsWith.status === "ok"
-          ? {
-              status: "ok",
-              total: outputsWith.value.has(row.id) ? 1 : 0,
-              items: [],
-            }
-          : outputsWith;
-
-      return {
-        id: row.id,
-        title: row.title ?? null,
-        displayTitle: resolveSessionTitle(row),
-        goal: row.goal,
-        status: row.status,
-        statusLabel: resolveStatusLabel(row.status),
-        kind: row.kind,
-        triage: row.triage,
-        workspace: row.workspaceId
-          ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
-          : null,
-        startedAt: iso(row.startedAt),
-        updatedAt: iso(row.updatedAt),
-        closedAt: iso(row.closedAt),
-        blockedBy,
-        unblocks,
-        parentCount: countOf(parent),
-        childrenCount: countOf(children),
-        hasOutputs:
-          outputsWith.status === "ok"
-            ? { status: "ok", value: outputsWith.value.has(row.id) }
-            : outputsWith,
-        nextMove: deriveNextMove({
-          status: row.status,
-          owedSlots,
-          pendingProposals,
-          aiCanDo,
-          blockedBy,
-          expectedOutputs: all,
-          outputs,
-          children,
-        }),
-      };
-    }
-  );
+  const items = sectioned.map((row): ProjectPathRow => ({
+    id: row.id,
+    title: row.title ?? null,
+    displayTitle: resolveSessionTitle(row),
+    goal: row.goal,
+    status: row.status,
+    statusLabel: resolveStatusLabel(row.status),
+    kind: row.kind,
+    triage: row.triage,
+    workspace: row.workspaceId
+      ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
+      : null,
+    startedAt: iso(row.startedAt),
+    updatedAt: iso(row.updatedAt),
+    closedAt: iso(row.closedAt),
+    blockedBy: row.blockedBy,
+    unblocks: row.unblocks,
+    parentCount: row.parentCount,
+    childrenCount: row.childrenCount,
+    hasOutputs: row.hasOutputs,
+    nextMove: row.nextMove,
+  }));
 
   return {
     project: {

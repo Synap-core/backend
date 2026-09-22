@@ -637,7 +637,7 @@ export const tools = {
             id: {
               type: "string",
               description:
-                "The object's id (uuid, or kind short-id). Provide id OR name.",
+                "The object's FULL uuid — short ids are not resolved by this tool. Provide id OR name.",
             },
             name: {
               type: "string",
