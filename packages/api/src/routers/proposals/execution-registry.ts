@@ -28,45 +28,33 @@ import type {
   ProposalMaterializedRecord,
 } from "@synap-core/types";
 import type { PropertyDecisionMap } from "@synap/database";
-import type { FailureErrorClass } from "../../connectors/external-dispatch.js";
 import type { MaterializeRelationFailure } from "../../utils/materialize-composite.js";
 
 const logger = createLogger({ module: "proposal-execution-registry" });
 
 /**
  * P1 "every failure carries a next action" — the structured failure scalars an
- * approval failure carries, so `onApprovalFailed` can persist them on the proposal
- * (`data.failure`) for the browser to derive a one-click action. Threaded from
- * `dispatchExternalOnce`'s `{delivered:false, …}` through the thrown error's
- * carrier (attach/readFailureMeta) — the human `rejectionReason` string is
- * UNCHANGED; these ride alongside it.
+ * approval failure carries, so `onApprovalFailed` can persist them on the
+ * proposal (`data.failure`) for the client to derive a one-click action.
+ *
+ * The taxonomy, the carriers it understands and the SAFE user sentence all live
+ * in `failure-classification.ts`; this module only re-exports them so the
+ * executors' existing import path keeps working.
  */
-export interface ProposalFailureMeta {
-  errorClass?: FailureErrorClass;
-  providerRef?: string;
-}
-
-const FAILURE_META_KEY = "__synapFailureMeta";
-
-/** Attach structured failure scalars to an error so the catch site can read them. */
-export function attachFailureMeta<E extends object>(
-  err: E,
-  meta: ProposalFailureMeta
-): E {
-  if (meta.errorClass !== undefined || meta.providerRef !== undefined) {
-    (err as Record<string, unknown>)[FAILURE_META_KEY] = meta;
-  }
-  return err;
-}
-
-/** Read failure scalars off a caught error (undefined when none were attached). */
-export function readFailureMeta(err: unknown): ProposalFailureMeta | undefined {
-  if (err && typeof err === "object" && FAILURE_META_KEY in err) {
-    const m = (err as Record<string, unknown>)[FAILURE_META_KEY];
-    if (m && typeof m === "object") return m as ProposalFailureMeta;
-  }
-  return undefined;
-}
+export {
+  attachFailureMeta,
+  classifyThrownFailure,
+  readAttachedFailureMeta,
+  safeFailureSentence,
+  type ProposalFailureMeta,
+} from "./failure-classification.js";
+import {
+  classifyThrownFailure,
+  safeApprovalError,
+  safeFailureSentence,
+  type ProposalFailureMeta,
+} from "./failure-classification.js";
+import { redactForStorage } from "../../utils/redact-secrets.js";
 
 type ProposalRow = {
   id: string;
@@ -391,21 +379,34 @@ export async function dispatchProposalApproval(
     return await executor.execute(args);
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
+    // CLASSIFY AT THROW-TIME. Every non-TRPCError used to collapse into one
+    // constant sentence while the real text went only to this log — so a
+    // failure was, by construction, unexplainable to the user AND to the agent
+    // they then asked. The class, the missing fields and the redacted detail
+    // are now decided here, once, and persisted alongside the safe sentence.
+    const failure = classifyThrownFailure(err);
     logger.warn(
       {
         proposalId: args.input.proposalId,
         targetType: args.proposal.targetType,
         proposalType: args.proposal.proposalType,
-        err: errorMessage,
+        errorClass: failure.errorClass,
+        // REDACTED. The raw text is what quotes a provider's `Authorization`
+        // header back at us; a log line is not a safe place for it either
+        // (logs are shipped, and this one is emitted at `warn`).
+        err: failure.detail ?? redactForStorage(errorMessage),
       },
       "proposal approval failed"
     );
-    const safe =
-      err instanceof TRPCError
-        ? err.message
-        : "Couldn't apply — an internal error occurred.";
-    await onApprovalFailed(args.input.proposalId, safe, readFailureMeta(err));
-    throw err;
+    const safe = safeFailureSentence(err, failure);
+    await onApprovalFailed(args.input.proposalId, safe, failure);
+    // NEVER `throw err`. The original message is raw upstream text and
+    // `init-trpc.ts` puts `shape.message` on the wire verbatim (and
+    // `batchApprove` copies it into `item.error`), so a raw re-throw hands the
+    // approver exactly the token the write door had just redacted out. The
+    // client gets the classified sentence; the original rides as `cause`,
+    // which only the server-side logger reads.
+    throw safeApprovalError(err, failure, safe);
   }
 }
 

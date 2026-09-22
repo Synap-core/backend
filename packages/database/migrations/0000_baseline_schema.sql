@@ -4503,6 +4503,12 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 -- session is graded against; the grade itself lives in session_evaluations.
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
+-- both seeded from the playbook and authorable afterwards; `stages` was the
+-- missing third, and without it a session running no playbook could not have
+-- phases at all. The run's gate still judges against
+-- playbook_runs.definition_snapshot.stages — this is what the SESSION is doing.
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "stages" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.

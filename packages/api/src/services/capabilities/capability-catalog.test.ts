@@ -171,6 +171,7 @@ describe("deriveConnection — provider connection health", () => {
   const CONN = "prod-nango-connection-id-abc123";
   const base = {
     providerAvailable: new Set<string>(["google"]),
+    vaultMeta: new Map(),
     vaultExists: new Set<string>(),
     reauthConnIds: new Set<string>(),
   };

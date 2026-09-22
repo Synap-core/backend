@@ -307,7 +307,21 @@ export interface CapabilityCard {
 }
 
 /** Map a template definition's declared params → the card's install-param specs. */
-function extractInstallParams(
+/**
+ * "Does this param NAME look like a credential?" — the ONE heuristic.
+ *
+ * It was inline in {@link extractInstallParams}. It is now also the FALLBACK
+ * redactor in `services/proposals/proposal-setup.ts`: when a manifest cannot be
+ * derived (unsynced slug, catalog throw, a slug an agent invented on
+ * `market.install`), that door has no `secret` flags to redact by and used to
+ * pass `data.params` through RAW. A second copy of this regex would be a fork
+ * on a security boundary, so it lives here and is imported there.
+ */
+export function isSecretParamName(name: string): boolean {
+  return /key|token|secret|password/i.test(name);
+}
+
+export function extractInstallParams(
   def: CapabilityDefinition
 ): CapabilityCardInstallParam[] {
   const params = (def as { params?: Array<Record<string, unknown>> }).params;
@@ -326,7 +340,7 @@ function extractInstallParams(
       // conventional credential param names used by vault-generic templates.
       ...(type === "password" ||
       type === "secret" ||
-      /key|token|secret|password/i.test(String(p.name))
+      isSecretParamName(String(p.name))
         ? { secret: true }
         : {}),
     };
@@ -393,7 +407,7 @@ export function verbType(
 
 // ── Credential-ref → connection requirement ───────────────────────────────────
 
-interface ConnState {
+export interface ConnState {
   /** Provider keys connected for the user → their connectionId. */
   providerConn: Map<string, string>;
   /**
@@ -410,6 +424,16 @@ interface ConnState {
   providerConnFault?: { reason: string; message: string } | null;
   /** Real `vault://<id>` secret ids that exist (not soft-deleted). */
   vaultExists: Set<string>;
+  /**
+   * LABELS for the resolvable vault ids — name + category, never a value.
+   *
+   * Same query, same own-or-pod-wide scoping as {@link ConnState.vaultExists}:
+   * an id the caller cannot resolve has no entry here either, so a label can
+   * never disclose the existence of someone else's secret. Exists because a
+   * review surface that can only say "Linked vault secret" asks the human to
+   * consent to a credential nobody named — and an agent chooses that ref.
+   */
+  vaultMeta: Map<string, { name: string; service?: string }>;
   /**
    * Nango connectionIds (`secrets.account_hint`) whose connection-health mirror
    * reads `needs_reauth` (dispatch saw ≥2 auth failures). A provider that is
@@ -547,7 +571,7 @@ export { capabilityNextAction } from "./capability-enable-link.js";
  * carried onto every unconnected provider card as `unverified`, so an unread
  * list never reads as "not connected".
  */
-async function loadConnState(
+export async function loadConnState(
   userId: string,
   vaultSecretIds: string[]
 ): Promise<ConnState> {
@@ -611,10 +635,17 @@ async function loadConnState(
   }
 
   const vaultExists = new Set<string>();
+  const vaultMeta = new Map<string, { name: string; service?: string }>();
   if (vaultSecretIds.length > 0) {
     try {
       const rows = await db
-        .select({ id: secrets.id })
+        // `name`/`category` ride on the SAME row under the SAME predicate, so
+        // the label and the existence claim can never disagree about scope.
+        .select({
+          id: secrets.id,
+          name: secrets.name,
+          category: secrets.category,
+        })
         .from(secrets)
         .where(
           and(
@@ -629,7 +660,13 @@ async function loadConnState(
             isNull(secrets.deletedAt)
           )
         );
-      for (const r of rows) vaultExists.add(r.id);
+      for (const r of rows) {
+        vaultExists.add(r.id);
+        vaultMeta.set(r.id, {
+          name: r.name,
+          ...(r.category ? { service: r.category } : {}),
+        });
+      }
     } catch {
       // Degrade: treat all as missing.
     }
@@ -640,6 +677,7 @@ async function loadConnState(
     providerAvailable,
     providerConnFault,
     vaultExists,
+    vaultMeta,
     reauthConnIds,
   };
 }

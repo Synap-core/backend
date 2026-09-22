@@ -35,6 +35,12 @@ import { opRef } from "@synap-core/types/proposals";
 import { createLogger } from "@synap-core/core";
 import type { MaterializeResult } from "../../utils/materialize-composite.js";
 import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
+import {
+  classifyThrownFailure,
+  failureRecord,
+  safeFailureSentence,
+} from "../../routers/proposals/failure-classification.js";
+import { redactForStorage } from "../../utils/redact-secrets.js";
 
 const logger = createLogger({ module: "stamp-materialized" });
 
@@ -639,14 +645,31 @@ export async function runMaterializationUnderReceipt<T>(
   } catch (err) {
     if (receipt?.id) {
       try {
+        // A failed row ALWAYS carries a safe `rejectionReason` and a
+        // `data.failure.errorClass` — whichever of the three writers made it.
+        // This one wrote NEITHER: it stamped `materializationError` (the RAW
+        // text, on a field every user-facing door projects verbatim) and left
+        // `rejectionReason` null, so a failed receipt rendered with no reason
+        // at all on every surface and no class for the AI to explain.
+        // `materializationError` is kept for the existing readers; the raw text
+        // it holds is now ALSO the redacted `detail`, and the class + safe
+        // sentence ride alongside.
+        const meta = classifyThrownFailure(err);
         await database
           .update(proposals)
           .set({
             status: ProposalStatus.APPROVAL_FAILED,
+            rejectionReason: safeFailureSentence(err, meta),
             data: {
               ...(receipt.data ?? {}),
-              materializationError:
-                err instanceof Error ? err.message : String(err),
+              // REDACTED at write. This field is projected VERBATIM by every
+              // user-facing door (`projectProposalDataForViewer` only reaches
+              // inside `data.failure`), so storing the raw message here put the
+              // exact text `detail` is redacted from on the approver's screen.
+              materializationError: redactForStorage(
+                err instanceof Error ? err.message : String(err)
+              ),
+              failure: failureRecord(meta),
             },
           })
           .where(eq(proposals.id, receipt.id));

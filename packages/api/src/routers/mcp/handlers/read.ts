@@ -268,10 +268,44 @@ export const readHandlers: McpHandlerMap = {
     // so the caller got an error instead of a list and could not enumerate
     // its own proposals at all. `detail: "full"` still returns everything,
     // so no capability is removed — only the default changes.
-    if ((args.detail as string) === "full") return ok(result);
-    const rows = Array.isArray(result)
+    const rawRows = Array.isArray(result)
       ? result
       : ((result as { proposals?: unknown[] })?.proposals ?? []);
+    // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
+    // `hub.proposals.listProposals`), so the stamping the Hub procedure does
+    // never happened here: `setup` was declared on the wire, forwarded by
+    // `toProposalBasic`, and produced by NOBODY on MCP — and `detail:"full"`
+    // echoed `data.params` raw, so a key a human typed into an install param
+    // was readable by the authoring agent. `withProposalSetup` is the ONE door
+    // that stamps the setup and redacts the secret param values as a PAIR;
+    // applied on BOTH branches, because both serialize `data`.
+    const { resolveProposalSetups, withProposalSetup } =
+      await import("../../../services/proposals/proposal-setup.js");
+    const setups = await resolveProposalSetups(
+      rawRows as Record<string, unknown>[],
+      userId
+    );
+    const rows = (rawRows as Record<string, unknown>[]).map((row) =>
+      withProposalSetup(row, setups)
+    );
+    if ((args.detail as string) === "full") {
+      // `detail:"full"` answers with the whole `data` JSONB. Strip the
+      // AGENT-ONLY failure fields — `data.failure.detail` is the redacted raw
+      // executor error and its ONE reader is the server-side prompt path
+      // (`render-for-prompt.ts`), never a tool result. See `failure-projection.ts`.
+      const { projectProposalRowForViewer } =
+        await import("../../proposals/failure-projection.js");
+      return ok(
+        Array.isArray(result)
+          ? (rows as Record<string, unknown>[]).map(projectProposalRowForViewer)
+          : {
+              ...(result as Record<string, unknown>),
+              proposals: (rows as Record<string, unknown>[]).map(
+                projectProposalRowForViewer
+              ),
+            }
+      );
+    }
     // ONE definition of BASIC. This projection is shared verbatim with the
     // Hub REST `GET /proposals?view=basic` door — a second hand-rolled
     // summarizer here is how the two drifted in the first place.

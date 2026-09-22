@@ -20,7 +20,16 @@ import {
   isFacetVisibleForLens,
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
-import { proposalClassFields } from "../../services/proposals/proposal-class.js";
+import {
+  proposalClassFields,
+  type ProposalClassFields,
+} from "../../services/proposals/proposal-class.js";
+import {
+  proposalSetupFields,
+  redactSecretParams,
+  resolveProposalSetups,
+  type ProposalSetup,
+} from "../../services/proposals/proposal-setup.js";
 import { entityFacets, profiles, documents } from "@synap/database/schema";
 import type { EventRecord } from "@synap/database";
 import type {
@@ -59,6 +68,10 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
+import {
+  projectProposalDataForViewer,
+  projectProposalRowForViewer,
+} from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
 
@@ -131,56 +144,68 @@ export function deriveProposalPrincipal(input: {
   const name = resolveName(subjectUserId);
   return name ? { kind: "delegated", name } : { kind: "delegated" };
 }
-type DisplayEnrichedProposal = ProposalRow & {
-  request: UpdateRequest;
-  /**
-   * LEGACY, and a COALESCE: `agentUserId ?? createdBy ?? sourceId`. It answers
-   * "a name to show" and deliberately cannot say WHICH role that name plays.
-   * Prefer the three below for anything that attributes an action to a person.
-   */
-  authorName?: string;
-  /** ACTOR — the agent that authored this proposal. Absent for human authors. */
-  agentActorName?: string;
-  /**
-   * @deprecated MIRROR ONLY — read `principal` instead.
-   *
-   * The human the acting agent belongs to (`users.createdByUserId` on the
-   * agent's row). That column is the ACCOUNTABILITY anchor — who CREATED this
-   * agent — and every agent has one, delegated or not. Rendering it as
-   * "on behalf of" asserted a delegation that never happened for a pod-wide
-   * agent, which is the exact claim the governance surface exists to disprove.
-   * Kept so existing consumers keep compiling while they move to `principal`.
-   */
-  onBehalfOfName?: string;
-  /**
-   * PRINCIPAL — whether a human's identity is actually behind this agent's act,
-   * discriminated rather than collapsed. Present iff there IS an agent actor.
-   *
-   * Derived from `proposals.subjectUserId`, the one column that carries the
-   * LINKAGE fact (`apiKeys.linkedUserId ?? apiKeys.userId`); see the column
-   * contract in `@synap/database` `schema/proposals.ts`. `createdByUserId`
-   * cannot answer this — it is defined for every agent, so it can only ever
-   * say "delegated".
-   *
-   * `unresolved` is a VALUE, not an absence: pre-0248 rows have a NULL column
-   * and the honest answer is "we do not know", which the surface must SAY.
-   *
-   * A LABEL, never a filter.
-   */
-  principal?: ProposalPrincipal;
-  /** APPROVER — the human who reviewed it. Absent while the proposal is pending. */
-  approverName?: string;
-  targetName?: string;
-  /**
-   * The NAME of the focus session that produced this proposal (its title, else
-   * its goal's first line — `resolveSessionTitle`), when there is one and the
-   * viewer may see it. Keyed `sessionGoal` for wire compatibility. A resolved display label exactly like
-   * `authorName` — the review spine groups by `sessionId` and had nothing but
-   * the raw uuid to head the group with.
-   */
-  sessionGoal?: string;
-  review: ProposalReviewModel;
-};
+// `ProposalClassFields` is spread onto every row below (`proposalClassFields`),
+// so it is part of the type: a spread the return type cannot see reaches
+// clients at runtime but only through a cast.
+type DisplayEnrichedProposal = ProposalRow &
+  ProposalClassFields & {
+    request: UpdateRequest;
+    /**
+     * LEGACY, and a COALESCE: `agentUserId ?? createdBy ?? sourceId`. It answers
+     * "a name to show" and deliberately cannot say WHICH role that name plays.
+     * Prefer the three below for anything that attributes an action to a person.
+     */
+    authorName?: string;
+    /** ACTOR — the agent that authored this proposal. Absent for human authors. */
+    agentActorName?: string;
+    /**
+     * @deprecated MIRROR ONLY — read `principal` instead.
+     *
+     * The human the acting agent belongs to (`users.createdByUserId` on the
+     * agent's row). That column is the ACCOUNTABILITY anchor — who CREATED this
+     * agent — and every agent has one, delegated or not. Rendering it as
+     * "on behalf of" asserted a delegation that never happened for a pod-wide
+     * agent, which is the exact claim the governance surface exists to disprove.
+     * Kept so existing consumers keep compiling while they move to `principal`.
+     */
+    onBehalfOfName?: string;
+    /**
+     * PRINCIPAL — whether a human's identity is actually behind this agent's act,
+     * discriminated rather than collapsed. Present iff there IS an agent actor.
+     *
+     * Derived from `proposals.subjectUserId`, the one column that carries the
+     * LINKAGE fact (`apiKeys.linkedUserId ?? apiKeys.userId`); see the column
+     * contract in `@synap/database` `schema/proposals.ts`. `createdByUserId`
+     * cannot answer this — it is defined for every agent, so it can only ever
+     * say "delegated".
+     *
+     * `unresolved` is a VALUE, not an absence: pre-0248 rows have a NULL column
+     * and the honest answer is "we do not know", which the surface must SAY.
+     *
+     * A LABEL, never a filter.
+     */
+    principal?: ProposalPrincipal;
+    /** APPROVER — the human who reviewed it. Absent while the proposal is pending. */
+    approverName?: string;
+    targetName?: string;
+    /**
+     * SETUP — the manifest-derived gap for a `capability.install` proposal
+     * (params still owed, connection state, `blocking`). Declared here so the
+     * tRPC-inferred wire type carries it: a spread the return type cannot see
+     * reaches clients at runtime but only through a cast. ONE door:
+     * `proposalSetupFields`.
+     */
+    setup?: ProposalSetup;
+    /**
+     * The NAME of the focus session that produced this proposal (its title, else
+     * its goal's first line — `resolveSessionTitle`), when there is one and the
+     * viewer may see it. Keyed `sessionGoal` for wire compatibility. A resolved display label exactly like
+     * `authorName` — the review spine groups by `sessionId` and had nothing but
+     * the raw uuid to head the group with.
+     */
+    sessionGoal?: string;
+    review: ProposalReviewModel;
+  };
 
 export async function enrichProposalsForDisplay(
   rows: ProposalRow[],
@@ -554,8 +579,19 @@ export async function enrichProposalsForDisplay(
     return meta.title ?? meta.preview ?? undefined;
   };
 
+  // SETUP — "what does this still need from a human", recomputed on EVERY read
+  // from the capability's own manifest + live vault/Nango state, so adding the
+  // missing key makes the gap disappear without touching the proposal. Batched
+  // once per page; a page with no `capability.install` row does no work at all.
+  // See `services/proposals/proposal-setup.ts`.
+  const setups = await resolveProposalSetups(
+    rows as unknown as Record<string, unknown>[],
+    userId
+  );
+
   return rows.map((row, idx) => {
     const request = requests[idx]!;
+    const rowSetup = setups.get(row.id);
     const payload =
       request.data && typeof request.data === "object"
         ? request.data
@@ -693,7 +729,11 @@ export async function enrichProposalsForDisplay(
     // the enriched payload. The frontend link preview prefers data.sourceLabel /
     // data.targetLabel over the raw UUID, so populating them here kills the
     // `entity <8hex>` shortId without any contract change.
-    let enrichedData = request.data;
+    // Same floor on the `request.data` copy this projection also answers with
+    // (and which feeds the review model) — `request.data` IS `row.data`, so
+    // stripping only the top-level spread would have left the detail on the
+    // wire under a second key.
+    let enrichedData = projectProposalDataForViewer(request.data);
     const srcId = stringProp(payload, "sourceEntityId");
     const tgtId = stringProp(payload, "targetEntityId");
     if (payload && (srcId || tgtId)) {
@@ -707,6 +747,12 @@ export async function enrichProposalsForDisplay(
         };
       }
     }
+    // A SECRET install param's VALUE never reaches a reviewer — not in `data`,
+    // not in `request.data`, and not in the review model built from it. An
+    // agent may have inlined a raw key into `params`; a `secret` flag arriving
+    // beside the unmasked key it marks is the severance this prevents. Applied
+    // LAST so the `{...payload}` re-spread above cannot reinstate the value.
+    if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
 
     // B4: for a facet-UPDATE proposal, the live-current before-state is the
     // role-facet's CURRENT properties (fetched batched above), not the parent
@@ -774,13 +820,26 @@ export async function enrichProposalsForDisplay(
     }
 
     return {
-      ...row,
+      // AGENT-ONLY FAILURE FIELDS are stripped here: `{...row}` spreads the
+      // whole `data` JSONB, and `data.failure.detail` is the redacted RAW
+      // executor error kept for the AI explanation path only. This spread is
+      // the tRPC `proposals.list` / `proposals.get` answer (and, through
+      // `proposals.get`, the Hub REST `GET /proposals/:id` answer).
+      // See `failure-projection.ts`.
+      ...projectProposalRowForViewer(row),
       // Decision CLASS + its lifetime, derived (never stored) from
       // proposalType × targetType. Serialized here so `proposals.list` and
       // `proposals.get` — and every surface over them — can render the
       // ephemeral countdown without a second call or a second copy of the
       // lifetime table. ONE door: `proposalClassFields`.
       ...proposalClassFields(row.proposalType, row.targetType),
+      // SETUP — the manifest-derived gap, plus the SAME row payload with every
+      // secret param value stripped. ONE door: `proposalSetupFields`. Spread
+      // AFTER `projectProposalRowForViewer(row)` so its `data` override wins.
+      // Fed the ALREADY-VIEWER-PROJECTED payload (`enrichedData`), never the raw
+      // `row.data` — passing the raw row here would quietly reinstate the
+      // agent-only failure detail that projection just stripped.
+      ...proposalSetupFields(row.id, enrichedData, setups),
       authorName,
       // The three roles, each absent when it does not apply (see above).
       ...(agentActorName ? { agentActorName } : {}),

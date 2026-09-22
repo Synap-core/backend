@@ -232,15 +232,30 @@ export function planProposalRevert(
       (plan.projectIds?.length ?? 0) === 0 &&
       (plan.linkIds?.length ?? 0) === 0;
 
-    // Fallback for branches whose created id IS the proposal target and which
-    // therefore may not have stamped `materialized` (generic `.validated` entity
+    // Fallback for LEGACY branches whose created id IS the proposal target and
+    // which never stamped `materialized` at all (generic `.validated` entity
     // create; document create where documentId === targetId).
+    //
+    // ABSENT ONLY — never present-but-empty. `materialized: {}` is not "no
+    // record", it is the executor SAYING it created nothing: `entity/create`
+    // stamps exactly that when the create DEDUPED onto a pre-existing entity
+    // ("revert can never delete a row this proposal did not create" —
+    // `executors/entity.ts`). Re-adding the pre-minted `targetId` there made
+    // `revertable` true both before AND after approval, and the real revert
+    // then deleted an id that was never created → NOT_FOUND → "Revert failed".
+    // An explicit empty record must fail LOUD (`unsupported`), which is the
+    // same stance the composite branch below already takes.
     //
     // NEVER for a composite graph: its `targetId` is a placeholder minted at
     // propose time, not a created row. Falling back to it is how an import
     // with no record reverted by deleting a random id → NOT_FOUND → "Revert
     // failed". A graph with no record says so instead.
-    if (isEmpty() && !isCompositeProposalData(data ?? null)) {
+    const stampedNothing = materialized !== undefined;
+    if (
+      isEmpty() &&
+      !stampedNothing &&
+      !isCompositeProposalData(data ?? null)
+    ) {
       if (proposal.targetType === "entity" && proposal.targetId) {
         plan.entityIds.push(proposal.targetId);
       } else if (proposal.targetType === "document" && proposal.targetId) {
@@ -251,7 +266,9 @@ export function planProposalRevert(
     if (isEmpty()) {
       return {
         kind: "unsupported",
-        reason: `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
+        reason: stampedNothing
+          ? `Revert of a '${proposal.targetType}' create proposal is not supported: it created no new rows (it matched something that already existed), so there is nothing to undo.`
+          : `Revert of a '${proposal.targetType}' create proposal is not supported: no materialized record of created rows.`,
       };
     }
 
@@ -262,6 +279,60 @@ export function planProposalRevert(
     kind: "unsupported",
     reason: `Revert of proposal type '${proposal.targetType}/${proposal.proposalType}' is not supported.`,
   };
+}
+
+/**
+ * Would `revert` succeed for this proposal ONCE IT IS APPLIED? — the answer a
+ * reviewer needs BEFORE deciding (swipe or tap? warn "can't be undone"?).
+ *
+ * `planProposalRevert` reads the record approval stamps (`data.materialized`),
+ * which a pending proposal does not have yet, so it cannot be asked as-is about
+ * a live row. It CAN be asked about everything that does not need that record:
+ * an update/edit has no before-snapshot, a non-entity delete has no recoverable
+ * target, an unmapped type is unsupported — all knowable from the type alone.
+ * The one case the planner decides from the record is a composite graph, whose
+ * created ids are minted at approval and stamped then; it is predicted
+ * reversible because approval's stamp is what makes its revert possible.
+ *
+ * The planner stays the ONE place the kind→inverse rule lives: this asks it,
+ * with the status it will have, rather than mirroring its branches. `status` is
+ * not read by the planner; `"approved"` names the hypothetical.
+ */
+export function wouldBeRevertable(
+  proposal: Omit<RevertPlannerInput, "status">
+): boolean {
+  const data =
+    proposal.data && typeof proposal.data === "object"
+      ? (proposal.data as StoredProposalData)
+      : null;
+  if (isCompositeProposalData(data)) return true;
+  return (
+    planProposalRevert({ ...proposal, status: "approved" }).kind !==
+    "unsupported"
+  );
+}
+
+/**
+ * The list's per-row `revertable` — the ONE status matrix, called by
+ * `proposals.list` so a test can drive exactly the code the wire uses.
+ *
+ *   - applied (approved / auto_approved): would `revert` succeed NOW — the
+ *     planner over the stamped record;
+ *   - live (pending / approval_failed): would it succeed ONCE APPLIED —
+ *     {@link wouldBeRevertable}. This is the population a reviewer decides on;
+ *     answering `false` for it made every pending card read as irreversible and
+ *     left swipe-to-approve permanently off;
+ *   - every other status (rejected, withdrawn, expired, reverted): `false` —
+ *     nothing was applied, or it was already undone.
+ */
+export function revertableForRow(row: RevertPlannerInput): boolean {
+  if (row.status === "approved" || row.status === "auto_approved") {
+    return planProposalRevert(row).kind !== "unsupported";
+  }
+  if (row.status === "pending" || row.status === "approval_failed") {
+    return wouldBeRevertable(row);
+  }
+  return false;
 }
 
 /**

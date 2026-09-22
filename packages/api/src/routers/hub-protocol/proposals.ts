@@ -18,6 +18,10 @@ import {
   withProposalClass,
   type ProposalStatusFilter,
 } from "./rest/_codecs/proposal.js";
+import {
+  resolveProposalSetups,
+  withProposalSetup,
+} from "../../services/proposals/proposal-setup.js";
 
 /** Filter string → the stored `proposals.status` value ("all" = no filter). */
 export const PROPOSAL_STATUS_BY_FILTER = {
@@ -111,11 +115,37 @@ export const proposalsRouter = router({
 
       const total = Number(counted[0]?.total ?? 0);
 
+      // SETUP — derived per page from the capability manifest + live
+      // vault/Nango state. This procedure is the source of the two Hub REST
+      // read doors (`view=full`, and `view=basic` via `toProposalBasic`).
+      //
+      // ⚠️ It is NOT the source of the MCP `synap_list_proposals` tool. That
+      // handler calls `listCreatedProposals` DIRECTLY (see
+      // `routers/mcp/handlers/read.ts`) and therefore has to stamp the setup
+      // itself — an earlier version of this comment claimed MCP "calls this
+      // same caller", which was false, and the consequence was a `setup` field
+      // that MCP declared, forwarded and never produced, plus a `detail:"full"`
+      // result that echoed raw secret params. The shared thing is the DOOR
+      // (`resolveProposalSetups` + `withProposalSetup`), not this call site.
+      //
+      // `withProposalSetup` also strips every SECRET install param value from
+      // `data` — the agent-facing doors are exactly where an inlined key must
+      // not be echoed back.
+      const setups = await resolveProposalSetups(
+        items as unknown as Record<string, unknown>[],
+        input.userId
+      );
+
       return {
         // Class + lifetime stamped through the SAME door the REST/MCP codecs
         // use, so a `view=full` row and a `view=basic` row can never disagree
         // about what class a proposal is.
-        proposals: items.map((row) => withProposalClass(row)),
+        proposals: items.map((row) =>
+          withProposalSetup(
+            withProposalClass(row) as unknown as Record<string, unknown>,
+            setups
+          )
+        ),
         total,
         limit: input.limit,
         offset: input.offset,

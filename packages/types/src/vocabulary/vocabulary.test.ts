@@ -128,6 +128,32 @@ describe("resolveActionLabel — two moods", () => {
     expect(resolveActionLabel("revert", "past")).toBe("Reverted");
   });
 
+  it("`undo` and `reopen` are their own verbs with both moods — never `revert`, never the humanize fallback", () => {
+    expect(resolveActionLabel("undo", "imperative")).toBe("Undo");
+    expect(resolveActionLabel("undo", "past")).toBe("Undone");
+    expect(resolveActionLabel("reopen", "imperative")).toBe("Reopen");
+    expect(resolveActionLabel("reopen", "past")).toBe("Reopened");
+    // `undo` (back to the queue) must never collapse into `revert` (into `reverted`).
+    expect(resolveActionLabel("undo", "imperative")).not.toBe(
+      resolveActionLabel("revert", "imperative")
+    );
+    // Both are REAL rows: the fallback ignores mood, so its past would equal its
+    // imperative — the defect this row exists to prevent.
+    expect(ACTION_VERBS.undo).toBeDefined();
+    expect(ACTION_VERBS.reopen).toBeDefined();
+  });
+
+  it("`retry` is a real verb with both moods (a failed approval is retried, not approved again)", () => {
+    expect(resolveActionLabel("retry", "imperative")).toBe("Retry");
+    expect(resolveActionLabel("retry", "past")).toBe("Retried");
+    expect(ACTION_VERBS.retry).toBeDefined();
+  });
+
+  it("`reverted` has one status label", () => {
+    expect(resolveStatusLabel("reverted")).toBe("Reverted");
+    expect(STATUS_LABELS.reverted).toBe("Reverted");
+  });
+
   it("carries the pod hygiene verbs in both moods (retire is never a delete)", () => {
     // The cleanup pack's title and a retire receipt: the button asks, the
     // history reports. Unknown tokens humanize with NO tense, so without these

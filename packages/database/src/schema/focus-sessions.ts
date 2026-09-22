@@ -233,6 +233,22 @@ export const focusSessions = pgTable(
      */
     criteria: jsonb("criteria").notNull().default([]),
     /**
+     * PlaybookStage[] — THIS SESSION'S OWN PHASES. Seeded from the playbook at
+     * instantiate; `[]` for a session that declares none, which is the same
+     * draw a stageless playbook produces.
+     *
+     * It is the SESSION's answer, not the run's: the stage GATE still resolves
+     * against `playbook_runs.definitionSnapshot.stages` first
+     * (`services/playbooks/stage-gate.ts`), because that is what the run was
+     * started with and what it must be judged against. This column is what the
+     * session is doing, which is what a person reads — and it is why a session
+     * running NO playbook can have phases at all.
+     *
+     * Mirrors `expectedOutputs` and `criteria` above: seeded from the template,
+     * authorable afterwards, never read back off the template for display.
+     */
+    stages: jsonb("stages").notNull().default([]),
+    /**
      * Free-form session metadata bag (additive — 0160). Shallow-merged by the
      * Hub PATCH door and the automation `session_update` output subtype. Used
      * e.g. for `grantStatus` (a sub-object an automation maintains while driving

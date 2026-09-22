@@ -2587,7 +2587,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "human" | "agent" | "automation" | "playbook";
+			data: "playbook" | "automation" | "agent" | "human";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -2602,7 +2602,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "human" | "agent" | "automation" | "playbook";
+			$type: "playbook" | "automation" | "agent" | "human";
 		}>;
 		subjectEntityId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "subject_entity_id";
@@ -2708,7 +2708,7 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "focus_sessions";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "failed" | "cancelled" | "paused" | "closed" | "forming" | "scheduled" | "stale";
+			data: "active" | "paused" | "closed" | "forming" | "scheduled" | "failed" | "cancelled" | "stale";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -2925,6 +2925,23 @@ declare const focusSessions: import("drizzle-orm/pg-core").PgTableWithColumns<{
 		}, {}, {}>;
 		criteria: import("drizzle-orm/pg-core").PgColumn<{
 			name: "criteria";
+			tableName: "focus_sessions";
+			dataType: "json";
+			columnType: "PgJsonb";
+			data: unknown;
+			driverParam: unknown;
+			notNull: true;
+			hasDefault: true;
+			isPrimaryKey: false;
+			isAutoincrement: false;
+			hasRuntimeDefault: false;
+			enumValues: undefined;
+			baseColumn: never;
+			identity: undefined;
+			generated: undefined;
+		}, {}, {}>;
+		stages: import("drizzle-orm/pg-core").PgColumn<{
+			name: "stages";
 			tableName: "focus_sessions";
 			dataType: "json";
 			columnType: "PgJsonb";
@@ -5202,6 +5219,91 @@ export interface Context {
 	 */
 	revertPass?: RevertPass;
 }
+declare const SECRET_TYPES: readonly [
+	"password",
+	"api_key",
+	"credential",
+	"note",
+	"card",
+	"identity",
+	"ssh_key",
+	"certificate",
+	"env_variable",
+	"database",
+	"oauth"
+];
+export type SecretType = (typeof SECRET_TYPES)[number];
+/** Kind of thing that consumes/uses a secret. */
+export type SecretConsumerType = "capability" | "tool" | "connection" | "entity" | "automation" | "url";
+/**
+ * One "this secret is used by X" record — surfaced in the Connections face.
+ * Backed by the `secret_usages` join (falls back to `capability_id`/context).
+ */
+export interface SecretUsage {
+	id: string;
+	secretId: string;
+	consumerType: SecretConsumerType;
+	consumerId: string;
+	consumerLabel: string;
+	contextType?: string | null;
+	contextId?: string | null;
+	workspaceId?: string | null;
+}
+/**
+ * A single grant of access to a secret (which agent/workspace can use it) —
+ * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
+ * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
+ * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
+ * only populated by `listAllGrants` (which spans multiple secrets and resolves
+ * grantee identity); they are `null` from the per-secret endpoints.
+ */
+export interface SecretGrantView {
+	grantId: string;
+	grantedTo: string;
+	scope: string;
+	expiresAt?: string | null;
+	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
+	usesRemaining?: number | null;
+	workspaceId?: string | null;
+	revokedAt?: string | null;
+	/** True when not revoked, not expired, and uses remain. */
+	active: boolean;
+	/** Populated by `listAllGrants` only; null elsewhere. */
+	secretName?: string | null;
+	secretType?: SecretType | null;
+	granteeLabel?: string | null;
+	granteeType?: "user" | "agent" | "workspace" | null;
+}
+/**
+ * A single audit event for a secret (created/revealed/copied/updated/shared) —
+ * surfaced in the Activity face. Backed by `secret_audit_log`.
+ */
+export interface SecretActivityEvent {
+	id: string;
+	action: string;
+	actorType: "user" | "agent";
+	actorLabel?: string | null;
+	createdAt: string;
+}
+/**
+ * The full four-faces bundle for a secret detail view — identity metadata plus
+ * where it is used, who can access it, and its recent activity. Fetched in one
+ * call to reduce detail round-trips.
+ */
+export interface SecretDetailBundle {
+	id: string;
+	name: string;
+	type: SecretType;
+	category?: string | null;
+	url?: string | null;
+	description?: string | null;
+	isFavorite: boolean;
+	createdAt: string;
+	updatedAt: string;
+	usages: SecretUsage[];
+	grants: SecretGrantView[];
+	recentActivity: SecretActivityEvent[];
+}
 export interface PersistedCaptureResult {
 	messageId: string;
 	channelId: string;
@@ -6029,91 +6131,6 @@ declare enum MessageLinkRelationshipType {
 	QUOTES = "quotes",// Message quotes this object
 	CONTEXT = "context"
 }
-declare const SECRET_TYPES: readonly [
-	"password",
-	"api_key",
-	"credential",
-	"note",
-	"card",
-	"identity",
-	"ssh_key",
-	"certificate",
-	"env_variable",
-	"database",
-	"oauth"
-];
-export type SecretType = (typeof SECRET_TYPES)[number];
-/** Kind of thing that consumes/uses a secret. */
-export type SecretConsumerType = "capability" | "tool" | "connection" | "entity" | "automation" | "url";
-/**
- * One "this secret is used by X" record — surfaced in the Connections face.
- * Backed by the `secret_usages` join (falls back to `capability_id`/context).
- */
-export interface SecretUsage {
-	id: string;
-	secretId: string;
-	consumerType: SecretConsumerType;
-	consumerId: string;
-	consumerLabel: string;
-	contextType?: string | null;
-	contextId?: string | null;
-	workspaceId?: string | null;
-}
-/**
- * A single grant of access to a secret (which agent/workspace can use it) —
- * surfaced in the Access face. Backed by `vault_grants`. This is the ONE
- * canonical shape: `listGrants`, `listAllGrants`, and `getDetailBundle.grants`
- * all return it. `secretName`/`secretType`/`granteeLabel`/`granteeType` are
- * only populated by `listAllGrants` (which spans multiple secrets and resolves
- * grantee identity); they are `null` from the per-secret endpoints.
- */
-export interface SecretGrantView {
-	grantId: string;
-	grantedTo: string;
-	scope: string;
-	expiresAt?: string | null;
-	/** Uses remaining: null = unlimited; clamped at 0 when exhausted. */
-	usesRemaining?: number | null;
-	workspaceId?: string | null;
-	revokedAt?: string | null;
-	/** True when not revoked, not expired, and uses remain. */
-	active: boolean;
-	/** Populated by `listAllGrants` only; null elsewhere. */
-	secretName?: string | null;
-	secretType?: SecretType | null;
-	granteeLabel?: string | null;
-	granteeType?: "user" | "agent" | "workspace" | null;
-}
-/**
- * A single audit event for a secret (created/revealed/copied/updated/shared) —
- * surfaced in the Activity face. Backed by `secret_audit_log`.
- */
-export interface SecretActivityEvent {
-	id: string;
-	action: string;
-	actorType: "user" | "agent";
-	actorLabel?: string | null;
-	createdAt: string;
-}
-/**
- * The full four-faces bundle for a secret detail view — identity metadata plus
- * where it is used, who can access it, and its recent activity. Fetched in one
- * call to reduce detail round-trips.
- */
-export interface SecretDetailBundle {
-	id: string;
-	name: string;
-	type: SecretType;
-	category?: string | null;
-	url?: string | null;
-	description?: string | null;
-	isFavorite: boolean;
-	createdAt: string;
-	updatedAt: string;
-	usages: SecretUsage[];
-	grants: SecretGrantView[];
-	recentActivity: SecretActivityEvent[];
-}
 export interface ImportModelingSuggestion {
 	profileSlug: string;
 	profileLabel: string;
@@ -6683,6 +6700,628 @@ export interface SearchResponse {
 	facetCounts?: Record<string, Record<string, number>>;
 }
 export type FeedQueryPlanFailure = "relay-credential-missing" | "relay-credential-unresolved" | "credential-read-failed" | "planner-failed";
+declare const PROPOSAL_CLASSES: readonly [
+	"ephemeral",
+	"curatorial",
+	"objectWork",
+	"governance",
+	"access"
+];
+export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
+/**
+ * @synap/playbooks — Playbooks & Capability Substrate contracts
+ *
+ * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
+ * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
+ *
+ * Contains NO database / event / proposal side effects — ONLY types + the
+ * Executor interface. Persistence ROW types live in @synap/database/schema
+ * (tools / playbooks / links); the interfaces here describe the behavioral
+ * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
+ * boundary. Small string-unions are intentionally re-declared here (rather than
+ * imported from @synap/database) so this package stays dependency-free — they
+ * must stay in lock-step with the `.$type<>()` unions in the schema files.
+ *
+ * Design doc: team/platform/playbooks-capability-substrate.mdx
+ */
+/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * The verb axis of a Tool — the structured, enumerable capability matrix. A
+ * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
+ * verb is one concrete operation the AI can invoke. This is the catalog the
+ * connector-capability-matrix is built over: one row per (connection × verb).
+ *
+ * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
+ * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
+ * the catalog can never drift from the skills actually created. Persisted as the
+ * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
+ * the schema's `capabilities` column).
+ */
+export type ToolVerbKind = "read" | "write" | "action";
+type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
+export interface ToolVerb {
+	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
+	id: string;
+	/** Human-facing label. */
+	label: string;
+	/**
+	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
+	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
+	 */
+	kind: ToolVerbKind;
+	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
+	argsSchema?: Record<string, unknown>;
+	/**
+	 * The governance default for this verb — aligns to the exec-mode the seeded
+	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
+	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
+	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
+	 */
+	govDefault: ExecMode;
+	/**
+	 * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
+	 * can ask for "send a message" without knowing whether the pod has Gmail or
+	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
+	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
+	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
+	 * fits none of the closed values leaves this unset rather than inventing one.
+	 */
+	intent?: AbstractVerb$1;
+}
+/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
+export interface CredentialRequirement {
+	/** Logical name the tool/skill references (e.g. "apiKey"). */
+	name: string;
+	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
+	/** Human-facing reason, surfaced in the vault approval proposal. */
+	purpose?: string;
+}
+/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
+export type GrantableKind = "tool" | "skill" | "command";
+/**
+ * What happens when a grant is exercised — the governance / execMode axis. The
+ * same axis as `Capability.governance`; kept in lock-step with the
+ * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ *   - `auto`    — run the capability directly.
+ *   - `propose` — route the exercise through a reviewable proposal.
+ *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
+ */
+export type ExecMode = "auto" | "propose" | "dry-run";
+declare const BLOCKED_REASONS: readonly [
+	"credential",
+	"permission",
+	"capability",
+	"policy",
+	"decision",
+	"physical"
+];
+export type BlockedReason = (typeof BLOCKED_REASONS)[number];
+declare const OUTPUT_RETIRED_REASONS: readonly [
+	"session_cancelled"
+];
+export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
+declare const OUTPUT_REF_KINDS: readonly [
+	"view",
+	"cell",
+	"document",
+	"entity",
+	"automation",
+	"playbook"
+];
+export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
+/**
+ * WHERE the person should go for this deliverable — ONE union, two arms.
+ *
+ * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
+ * free text already has a home in `why`, and a third arm would be a second
+ * answer to "what does this card open".
+ *
+ * AUTHORED by the agent or the human, never stamped by the server — it is a
+ * pointer the declarer supplies, not a receipt of anything that happened. It
+ * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
+ * and survives a wholesale patch that is silent about it.
+ *
+ * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
+ * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
+ * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
+ * legitimate; the pod never fetches it.
+ */
+export type OutputRef = {
+	kind: OutputRefKind;
+	id: string;
+} | {
+	url: string;
+};
+export interface ExpectedOutput {
+	kind: string;
+	label: string;
+	icon?: string;
+	/**
+	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
+	 * field existed is semantically unchanged, so there is no backfill and no DB
+	 * default. Do not add one: a stored `agent` and an absent value must stay
+	 * indistinguishable, or "the agent never said" becomes unreadable.
+	 *
+	 * `human` is the agent DECLARING a slot it cannot take — not a delegation
+	 * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
+	 * `pending` either way; ownership says who the board is waiting on, and
+	 * `status: 'done'` is still stamped by the one door on approval.
+	 */
+	owner?: "human" | "agent";
+	/**
+	 * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
+	 * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
+	 * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
+	 * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
+	 */
+	blockedReason?: BlockedReason;
+	/**
+	 * One line of prose: the resumption cue a human reads to know what to do.
+	 * The taxonomy above says what class of thing is missing; this says WHICH —
+	 * "the Stripe restricted key for the live account", not "a credential".
+	 * Only meaningful alongside `owner: 'human'`.
+	 */
+	why?: string;
+	/**
+	 * WHEN the slot became the human's — stamped the moment `owner` becomes
+	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
+	 * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
+	 * writes the timestamp, never the declaring agent.
+	 *
+	 * It exists because a "needs you" feed has to order and age its rows, and
+	 * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
+	 * — a progress bump, a sibling slot's rename — would resurface an owed slot
+	 * to the top of the list forever. The invariant is exact: `owedSince` is
+	 * present IFF `owner === 'human'`.
+	 */
+	owedSince?: string;
+	/**
+	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
+	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
+	 * called after a session-scoped proposal is APPROVED. Nothing else may write it:
+	 * the agent grading its own homework is exactly the failure this field exists
+	 * to stop. Absent ⇒ treat as `pending`.
+	 */
+	status?: "pending" | "done";
+	/**
+	 * The AGENT's claim that it produced this output. Free for the agent to set
+	 * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
+	 * same field as `status` — a claim is evidence to show the human, never proof.
+	 */
+	claimedDone?: boolean;
+	/** Lineage: the approved proposal whose apply satisfied this output. */
+	satisfiedByProposalId?: string;
+	/**
+	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
+	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
+	 * delivery: it says who was asked, and the slot stays `pending` until an
+	 * approval stamps it through `satisfyExpectedOutputs`.
+	 *
+	 * It is also the SLOT CLAIM key for the delegate's own writes: governance
+	 * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
+	 * to this slot even when the change's name does not match the label — the
+	 * delegation IS the naming, made ahead of time by a human.
+	 */
+	delegatedTo?: string;
+	/** ISO timestamp of the delegation above. */
+	delegatedAt?: string;
+	/**
+	 * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
+	 * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
+	 * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
+	 * an explicit new delegation). No new status value: the slot was, and remains,
+	 * `pending`.
+	 */
+	returnedReason?: string;
+	/** ISO timestamp of the return above. */
+	returnedAt?: string;
+	/**
+	 * ATTESTATION receipt — the human who owned this slot saying "I did this".
+	 *
+	 * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
+	 * field rather than a fake proposal id: the two stamps are different KINDS of
+	 * evidence and a reader must be able to tell them apart. An approval is a
+	 * human accepting an artefact an agent produced; an attestation is a human
+	 * reporting work only they could do (minting the key, signing the contract),
+	 * for which no artefact and no proposal exists.
+	 *
+	 * Written ONLY by `attestExpectedOutput` (the one `done` door,
+	 * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
+	 * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
+	 * deliberately KEPT alongside it: the record of who owed the slot and since
+	 * when is the receipt's point, and the owed read drops the slot on `status`.
+	 */
+	attestedBy?: string;
+	/** ISO timestamp of the attestation above. */
+	attestedAt?: string;
+	/**
+	 * RETIREMENT receipt — this slot stopped being owed because the session that
+	 * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
+	 * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
+	 * `returnedAt`. Clearing these two fields puts the slot back on the board, so
+	 * the stamp is reversible in the way a delete never is.
+	 *
+	 * Only `cancelled` retires slots. A session that is `closed`, `failed` or
+	 * `stale` leaves them owed — the work was declared, the session ended, and
+	 * somebody still has to do it.
+	 */
+	retiredAt?: string;
+	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
+	retiredReason?: OutputRetiredReason;
+	/**
+	 * WHERE to go for this deliverable — see {@link OutputRef}.
+	 *
+	 * The reason it exists: an agent that declares an owed slot, or blocks one on
+	 * the person, could previously only hand over PROSE. "The Stripe restricted
+	 * key for the live account" tells you what is missing and leaves you to find
+	 * the page yourself. A `ref` makes the card's title a DOOR.
+	 *
+	 * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
+	 * patch means KEEP (the field is server-owned for erasure purposes), so
+	 * "remove this pointer" needs a way to say itself — that is the explicit
+	 * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
+	 * so a STORED slot never carries `ref: null` and every reader may test it for
+	 * truthiness alone.
+	 */
+	ref?: OutputRef | null;
+	/**
+	 * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
+	 * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
+	 * written once at the escalation that files the slot
+	 * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
+	 *
+	 * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
+	 * clipped at 120 chars) and a surface asked to open the scorecard on the right
+	 * criterion could otherwise only match that string back — which forks the
+	 * backend's label format into every UI and breaks the moment a statement is
+	 * reworded or the clip lands differently. The key is the machine identity the
+	 * evaluation rows are already keyed by, so the pointer is exact.
+	 *
+	 * ABSENT on every slot filed before this field existed, and on every
+	 * non-criterion slot. A reader MUST treat absence as "no criterion to
+	 * highlight" — never as an error, and never as a reason to fall back to
+	 * matching the label.
+	 */
+	criterionKey?: string;
+}
+/**
+ * The CLOSED rollup category a stage declares membership in. Copied verbatim
+ * from Linear's `ProjectStatusType` — the convergent answer across eight
+ * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
+ * Productive.io, Odoo, ERPNext).
+ *
+ * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
+ * sets are disjoint by construction, and no product has ever shipped a
+ * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
+ * vocabularies exactly like ours — makes the category a MANDATORY field.
+ */
+export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
+declare const CRITERION_CHECK_KINDS: readonly [
+	"evidence",
+	"capability",
+	"judge",
+	"human"
+];
+export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
+/**
+ * One BINARY, observable acceptance criterion ("Typecheck passes with 0
+ * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
+ * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
+ */
+export interface SessionCriterion {
+	/** Stable slug, unique within the session. */
+	key: string;
+	statement: string;
+	/** Absent = true. */
+	required?: boolean;
+	check: {
+		kind: CriterionCheckKind;
+		/** kind=capability: the capability verb run via executeCapability. */
+		capability?: string;
+		/** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
+		evidenceKey?: string;
+		/** kind=judge: what the judge should look at. */
+		hint?: string;
+	};
+	/** Set when copied from a stage. */
+	stageKey?: string;
+}
+/**
+ * The normalized shape the Phase-1 adapters produce from builtin IS tools,
+ * code/instruction skills, intelligence_commands, and source providers — so a
+ * Playbook can grant capabilities uniformly and the AI can discover them.
+ */
+/** The full read-model kind set: grantables + the discoverable source systems. */
+export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
+/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
+ *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
+ *  don't have to special-case it to avoid offering it as an action. */
+ | "teaching-doc";
+export interface Capability {
+	kind: CapabilityKind;
+	id: string;
+	name: string;
+	description?: string | null;
+	inputSchema: Record<string, unknown>;
+	credentials?: CredentialRequirement[];
+	executor: ExecutorRef;
+	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
+	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
+	governance: "auto" | "propose" | "none";
+	/**
+	 * The connection's structured verb catalog WITH each verb's resolved
+	 * grant-state — the capability-matrix axis. Present for tools that carry a
+	 * `tools.capabilities` catalog; the grant-state is joined from the active
+	 * `vault_grants` row for the tool (one connection × verb × grant row each).
+	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
+	 * verb-less provider tools).
+	 */
+	verbs?: CapabilityVerbState[];
+	/**
+	 * True for a capability that is discoverable but NOT invokable through the
+	 * capability-execution door (e.g. an IS-native tool with no run_capability
+	 * bridge yet). Consumers building a "runnable" projection must exclude these.
+	 */
+	catalogOnly?: boolean;
+	/**
+	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
+	 * external connection is required and whether one is currently known for the
+	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
+	 * — a distinction the read-model previously omitted, leaving agents to infer it
+	 * from `governance`, which is an approval fact, not a connection fact.
+	 *
+	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
+	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
+	 * authoritative live state and the connect/disconnect actions live behind the
+	 * connectors door. Absent for capabilities that need no external connection
+	 * (builtins, skills, commands, verb-less non-provider tools).
+	 */
+	connection?: {
+		required: boolean;
+		connected: boolean;
+		provider: string;
+	};
+}
+/**
+ * One row of the connection × verb × grant matrix: a Tool's verb annotated with
+ * the live grant-state derived from `vault_grants`. The read-model joins each
+ * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
+ * the AI can see, per verb, whether it is granted and at what exec-mode.
+ */
+export interface CapabilityVerbState extends ToolVerb {
+	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
+	granted: boolean;
+	/**
+	 * The effective exec-mode for this verb: the active grant's exec-mode when
+	 * granted, else the verb's `govDefault`. This is what the gate would apply.
+	 */
+	effectiveExecMode: ExecMode;
+	/**
+	 * Honest, derivable parameter requirements for this verb — builtin verbs from
+	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
+	 * declarative skill's `providerSpec` template params. Undefined when nothing
+	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
+	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
+	 */
+	paramsSchema?: Record<string, {
+		required: boolean;
+		description?: string;
+	}>;
+}
+/**
+ * Where the link opens. Only `"desktop"` today, and it is not decoration: the
+ * `/open/capability/<id>` route bounces to `synap://`, so a human without the
+ * desktop app cannot follow it. A future pod-admin capability route would add a
+ * `"web"` value here — until then, claiming one would be a lie.
+ */
+export type CapabilityActionSurface = "desktop";
+export interface CapabilityNextAction {
+	kind: "add" | "connect" | "enable" | "run" | "none";
+	hint: string;
+	/**
+	 * Deep link to the capability's own card — where `kind` is performed.
+	 * Absent for a brick in NO container (`containerId` null): there is no card
+	 * to open, and a link to a route that resolves to nothing is worse than none.
+	 */
+	url?: string;
+	/** Present exactly when `url` is. See `CapabilityActionSurface`. */
+	opensIn?: CapabilityActionSurface;
+}
+export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial" | "unavailable";
+export interface CapabilityCardConnection {
+	required: boolean;
+	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */
+	kind: "provider" | "vault" | null;
+	/** providerConfigKey, e.g. "google" — present for provider connections. */
+	provider?: string;
+	/**
+	 * `missing` = connectable, the user just hasn't. `unavailable` = this POD
+	 * cannot offer it at all (Nango answered and doesn't declare the provider), so
+	 * "Connect" would dead-end — only claimed when availability is actually KNOWN.
+	 */
+	state: "connected" | "missing" | "expired" | "unavailable";
+	/**
+	 * Present when the connection could NOT be checked — the broker faulted or its
+	 * list failed — so `state` is only the connectable default, not a verdict.
+	 * Surfaces must render "couldn't check" with a retry, never "not connected".
+	 */
+	unverified?: {
+		reason: string;
+		message: string;
+	};
+	/** connectionId (or display account) when connected. */
+	account?: string;
+	/**
+	 * True for a pod-internal credential (a `vault://<id>` secret the operator
+	 * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
+	 * distinguish "internal key" from "external account" without re-parsing refs.
+	 */
+	internal?: boolean;
+}
+/** A single declared parameter of a verb (richer than `params: string[]`). */
+export interface CapabilityCardVerbParam {
+	name: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+}
+export interface CapabilityCardVerb {
+	/** Backing skill NAME — the verbId the execute door resolves. */
+	verbId: string;
+	/** Backing skill UUID (installed verbs only; null for an available template). */
+	skillId: string | null;
+	label: string;
+	/** One-line description from the backing skill (`skill.description`). */
+	description?: string | null;
+	/**
+	 * read / write / action — derived (read-ish name → read; mutating-action name
+	 * → action; else write), honoring an explicit `metadata.verbType` override.
+	 * `action` is additive: a mutating verb that is an action (reply/send/…) rather
+	 * than a create/update. TODO: promote fully to explicit skill metadata.
+	 */
+	type: "read" | "write" | "action";
+	/** Backing skill `approved === true`. */
+	enabled: boolean;
+	/**
+	 * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
+	 * files a review. Under a lens it honours the grant, exactly as
+	 * `GET /capabilities/actions` does. Not the approval gate — that is `enabled`.
+	 */
+	governance: "auto" | "propose";
+	/** enabled AND (no connection required OR connection connected). */
+	runnable: boolean;
+	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
+	params: string[];
+	/**
+	 * Typed parameter schema (name + type + required + description) derived from the
+	 * skill's `parameters` JSON-schema — for the run form + inspector, which need
+	 * types, not just names. Empty when the skill declares no parameters.
+	 */
+	paramsSchema: CapabilityCardVerbParam[];
+	/**
+	 * Free-form functional tag from the backing skill (`skills.category`, e.g.
+	 * "enrichment") — lets a surface find "the enrichment verbs for this entity"
+	 * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
+	 * its template definition) declares no category.
+	 */
+	category?: string;
+	/**
+	 * ROUTING intent (`ABSTRACT_VERBS`) — what this verb MEANS independent of its
+	 * vendor, so a surface can ask "what can send a message?" without knowing
+	 * `gmail_send`. Read off the OWNING TOOL's `capabilities[]` verb-catalog entry
+	 * (installed cards) or the template's own skill def (available cards) — the
+	 * two places the applier writes it. `skills` has no `intent` column, so a card
+	 * verb can only carry it by that join.
+	 *
+	 * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
+	 * declares no intent must stay out of every intent bucket (same rule as
+	 * `foldVerbsByIntent`).
+	 */
+	intent?: AbstractVerb$1;
+}
+/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
+export interface CapabilityCardInstallParam {
+	name: string;
+	label?: string;
+	type?: string;
+	required?: boolean;
+	description?: string;
+	secret?: boolean;
+}
+export interface CapabilityCard {
+	/** Container id; null for an available-only template. */
+	id: string | null;
+	/** Stable identity: template key if known, else container id/slug. */
+	key: string;
+	/** Pack display name, e.g. "Nango — Google Workspace". */
+	name: string;
+	description?: string | null;
+	source: "installed" | "available";
+	status: CapabilityCardStatus;
+	connection?: CapabilityCardConnection;
+	verbs: CapabilityCardVerb[];
+	/**
+	 * The pack's composition — the names of its member tools + skills and the
+	 * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
+	 * inside" without re-deriving from verbs/connection. Derived from the same
+	 * container members (or template def) the card folds in.
+	 */
+	anatomy: {
+		tools: string[];
+		skills: string[];
+		credential?: string;
+	};
+	/**
+	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
+	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
+	 * apply WITH params (which wires the credential into the tool), instead of a
+	 * disconnected post-hoc vault write. Empty when the template declares none.
+	 */
+	installParams: CapabilityCardInstallParam[];
+	/**
+	 * True for the pod-wide "Synap Core" pack — Synap's own first-party verbs,
+	 * not a connector. Additive and optional (absent on every other card, and on
+	 * older pods): agent-facing listings summarise such a pack as ONE line and
+	 * expand it only when asked for by `key`.
+	 */
+	builtIn?: true;
+	/**
+	 * The ONE thing to do next, and WHERE. `url` is a deep link to this card
+	 * (absent for an available-only template, which has no installed container);
+	 * `opensIn` says which client can follow it — see `CapabilityNextAction`.
+	 */
+	nextAction: CapabilityNextAction;
+}
+/** One manifest-declared install param, as a review surface sees it. */
+export interface ProposalSetupParam {
+	name: string;
+	label?: string;
+	type?: string;
+	required: boolean;
+	description?: string;
+	/** Prompt masked and NEVER echo. Derived by `extractInstallParams`. */
+	secret: boolean;
+	/** A non-blank value is present, OR a resolvable `vault://` ref is. */
+	satisfied: boolean;
+	/** `vault://<id>` when this param points at a vault secret. Never a value. */
+	ref?: string;
+	/**
+	 * The LABEL of the secret behind {@link ref} — its vault name, never a value.
+	 *
+	 * Why it exists: a ref projected alone renders as "Linked vault secret" on
+	 * every review surface, so approving a `capability.install` whose `apiKey` an
+	 * AGENT set to `vault://<some other secret of yours>` was BLIND consent — the
+	 * human could not tell which credential they were handing over. A name is the
+	 * minimum that makes the consent informed.
+	 *
+	 * Resolved under the SAME own-or-pod-wide, not-deleted predicate that decides
+	 * `satisfied`, so it can never disclose that someone else's secret exists.
+	 */
+	refName?: string;
+	/** The secret's category ("Stripe", "Google"), when it has one. Never a value. */
+	refService?: string;
+	/**
+	 * The ref does NOT resolve for this caller (deleted, or never theirs). The
+	 * surface must say "secret not found" rather than pre-filling the field as
+	 * satisfied — `satisfied` is already false in this case, and this says WHY.
+	 */
+	refUnresolved?: boolean;
+}
+export interface ProposalSetup {
+	params: ProposalSetupParam[];
+	/** Absent when the manifest declares no credentialed tool and no `vault[]`. */
+	connection?: CapabilityCardConnection;
+	/** Any REQUIRED param unsatisfied, or a REQUIRED connection not `connected`. */
+	blocking: boolean;
+	/**
+	 * The ONE action that unblocks it, from `resolveCapabilityBlock`. Present only
+	 * for a CONNECTION block: a missing param's affordance is the form itself, and
+	 * minting a second hint vocabulary ("fill in API Key") beside the catalog's is
+	 * exactly the fork this codebase keeps paying for.
+	 */
+	nextAction?: CapabilityNextAction;
+}
 /**
  * The three states of "is a human's identity behind this agent's act?", read
  * off `proposals.subjectUserId` (RFC 8693 delegation).
@@ -6729,14 +7368,6 @@ export type ProposalPrincipal = {
 	kind: "delegated";
 	name?: string;
 };
-declare const PROPOSAL_CLASSES: readonly [
-	"ephemeral",
-	"curatorial",
-	"objectWork",
-	"governance",
-	"access"
-];
-export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
 /** One distinct origin behind a cluster's proposals. */
 export interface ProposalClusterSource {
 	agentLabel?: string;
@@ -6923,61 +7554,26 @@ export interface ApprovalPatternScan {
 	patterns: ApprovalPattern[];
 	funnel: ApprovalPatternFunnel;
 }
-export interface SyncConnectorConnection {
-	connectionId: string;
-	provider: string;
-	userId: string;
-	/** Null when the broker did not report it — unknown, never "now". */
-	createdAt: Date | null;
-	lastSyncAt?: Date;
-	/**
-	 * The broker reports this connection as errored (e.g. its refresh token died,
-	 * "refresh limit reached"). LIVE-VERIFIED: self-hosted Nango's `GET /connection`
-	 * returns a per-connection `errors[]` array. This is the PROACTIVE health
-	 * signal — without it a dead connection only reveals itself when a dispatch
-	 * happens to pick it, so the registry keeps reporting it "healthy".
-	 */
-	hasError?: boolean;
+export interface AskAiAboutProposalResult {
+	channelId: string;
+	/** false ⇒ an unanswered seed was already waiting; nothing new was posted. */
+	seeded: boolean;
+	/** Whether the agent turn was actually enqueued (see triggerAutoRespond). */
+	triggered: boolean;
 }
-/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
-export interface CapabilityRef {
-	kind?: "skill" | "tool";
-	id: string;
-	name: string;
-}
-/**
- * What the caller hands back. `originalActionRan: false` is a literal on BOTH
- * arms: the refused action did not run, whether or not the request was filed.
- */
-export type CapabilityEnableOffer = {
-	status: "proposed";
-	proposalId: string;
-	reviewUrl: string;
-	title: string;
-	skills: CapabilityRef[];
-	originalActionRan: false;
-	message: string;
-} | {
-	status: "failed";
-	error: string;
-	originalActionRan: false;
-	message: string;
-};
-/**
- * P1 "every failure carries a next action" — the machine-readable failure class a
- * dispatch failure is stamped with (alongside the human `error` string), so the
- * browser can derive a one-click action ("Reconnect Google", "Retry", "Connect X")
- * without re-parsing prose. Persisted on a failed proposal at
- * `proposal.data.failure = { errorClass, providerRef }`.
- *
- *   auth           — credential/token failure (expired, invalid_grant, 401) → RECONNECT
- *   no_connection  — enabled but never connected (no connection found)       → CONNECT
- *   transient      — timeout / rate-limit / upstream 5xx                     → RETRY
- *   permission     — an explicit grant/approval denial (vault grant, MCP approve)
- *   target_missing — a NOT_FOUND that is not a connection issue (tool/secret/endpoint)
- *   provider       — a genuine provider-side failure (business 4xx, malformed request)
- */
-export type FailureErrorClass = "auth" | "no_connection" | "transient" | "permission" | "target_missing" | "provider";
+declare const FAILURE_ERROR_CLASSES: readonly [
+	"auth",
+	"no_connection",
+	"transient",
+	"permission",
+	"target_missing",
+	"provider",
+	"missing_field",
+	"validation",
+	"conflict",
+	"unknown"
+];
+export type FailureErrorClass = (typeof FAILURE_ERROR_CLASSES)[number];
 /**
  * THE EFFECT RECEIPT — what the approval ACTUALLY did to storage.
  *
@@ -7928,407 +8524,6 @@ export interface SynthesisTruncation {
 	total: number;
 	omittedSources: SynthesisSource[];
 }
-/**
- * @synap/playbooks — Playbooks & Capability Substrate contracts
- *
- * The pure, I/O-free DOMAIN contracts for the autonomous-capability spine:
- * Tool · Skill(ref) · Playbook · Link · Executor · PlaybookRun.
- *
- * Contains NO database / event / proposal side effects — ONLY types + the
- * Executor interface. Persistence ROW types live in @synap/database/schema
- * (tools / playbooks / links); the interfaces here describe the behavioral
- * shapes the loosely-typed JSONB columns conform to, applied at the domain/API
- * boundary. Small string-unions are intentionally re-declared here (rather than
- * imported from @synap/database) so this package stays dependency-free — they
- * must stay in lock-step with the `.$type<>()` unions in the schema files.
- *
- * Design doc: team/platform/playbooks-capability-substrate.mdx
- */
-/** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
-/**
- * The verb axis of a Tool — the structured, enumerable capability matrix. A
- * Tool (an integration like Gmail or LinkedIn) exposes a SET of named verbs; each
- * verb is one concrete operation the AI can invoke. This is the catalog the
- * connector-capability-matrix is built over: one row per (connection × verb).
- *
- * Verbs are DERIVED, not hand-authored: each verb mirrors a skill that
- * `requires` the tool inside a `CapabilityDefinition` (the source of truth) — so
- * the catalog can never drift from the skills actually created. Persisted as the
- * `tools.capabilities` jsonb column (kept in lock-step with the `.$type<>()` on
- * the schema's `capabilities` column).
- */
-export type ToolVerbKind = "read" | "write" | "action";
-type AbstractVerb$1 = "search_external" | "find_people" | "enrich_entity" | "fetch_record" | "list_records" | "send_message" | "request_connection" | "schedule_event" | "manage_file" | "generate_media" | "capture_into_pod" | "run_external_job" | "connect_account";
-export interface ToolVerb {
-	/** Stable identifier — the requiring skill's name (callable via callProvider/dispatcher). */
-	id: string;
-	/** Human-facing label. */
-	label: string;
-	/**
-	 * Verb axis: `read` = pull (no external mutation); `write`/`action` = push (a
-	 * mutation/send). Maps the verb onto the read/push capability matrix axis.
-	 */
-	kind: ToolVerbKind;
-	/** JSON-schema-ish arg shape for the verb (the requiring skill's parameters). */
-	argsSchema?: Record<string, unknown>;
-	/**
-	 * The governance default for this verb — aligns to the exec-mode the seeded
-	 * `vault_grants` row carries (so a verb never bypasses the approved+grant
-	 * model). `auto` runs directly, `propose` routes through review, `dry-run`
-	 * previews. The per-grant exec-mode at the gate still narrows this at run time.
-	 */
-	govDefault: ExecMode;
-	/**
-	 * ROUTING axis: what this verb MEANS, independent of its vendor — so an agent
-	 * can ask for "send a message" without knowing whether the pod has Gmail or
-	 * Unipile. OPTIONAL and purely additive: `id` is untouched (it is persisted in
-	 * `capability_run_receipts.verb_id` and inside stored automation flows), and a
-	 * legacy catalog entry with no `intent` reads exactly as before. A verb that
-	 * fits none of the closed values leaves this unset rather than inventing one.
-	 */
-	intent?: AbstractVerb$1;
-}
-/** A credential a Tool/Skill needs at run time — mirrors the vault taxonomy. */
-export interface CredentialRequirement {
-	/** Logical name the tool/skill references (e.g. "apiKey"). */
-	name: string;
-	secretType: "api-key" | "credential" | "ssh-key" | "oauth-token" | "env-variable" | "connection-string";
-	/** Human-facing reason, surfaced in the vault approval proposal. */
-	purpose?: string;
-}
-/** What a Playbook can GRANT / a run uses. (Tools and Skills are linked, not merged.) */
-export type GrantableKind = "tool" | "skill" | "command";
-/**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
- *   - `auto`    — run the capability directly.
- *   - `propose` — route the exercise through a reviewable proposal.
- *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
- */
-export type ExecMode = "auto" | "propose" | "dry-run";
-declare const BLOCKED_REASONS: readonly [
-	"credential",
-	"permission",
-	"capability",
-	"policy",
-	"decision",
-	"physical"
-];
-export type BlockedReason = (typeof BLOCKED_REASONS)[number];
-declare const OUTPUT_RETIRED_REASONS: readonly [
-	"session_cancelled"
-];
-export type OutputRetiredReason = (typeof OUTPUT_RETIRED_REASONS)[number];
-declare const OUTPUT_REF_KINDS: readonly [
-	"view",
-	"cell",
-	"document",
-	"entity",
-	"automation",
-	"playbook"
-];
-export type OutputRefKind = (typeof OUTPUT_REF_KINDS)[number];
-/**
- * WHERE the person should go for this deliverable — ONE union, two arms.
- *
- * An in-pod object (`{kind, id}`) or an external link (`{url}`). Nothing else:
- * free text already has a home in `why`, and a third arm would be a second
- * answer to "what does this card open".
- *
- * AUTHORED by the agent or the human, never stamped by the server — it is a
- * pointer the declarer supplies, not a receipt of anything that happened. It
- * therefore lives in `CLIENT_DECLARABLE_OUTPUT_FIELDS` (api `update-session.ts`)
- * and survives a wholesale patch that is silent about it.
- *
- * `{kind, id}` is floored: the door refuses a ref the caller cannot already see,
- * through the SAME `isOutputRefVisible` a produced artifact goes through. `{url}`
- * is scheme-gated by `isHttpUrl` (http/https) — display-only, so loopback is
- * legitimate; the pod never fetches it.
- */
-export type OutputRef = {
-	kind: OutputRefKind;
-	id: string;
-} | {
-	url: string;
-};
-export interface ExpectedOutput {
-	kind: string;
-	label: string;
-	icon?: string;
-	/**
-	 * WHO owns this slot. ABSENT MEANS `agent` — every slot stored before this
-	 * field existed is semantically unchanged, so there is no backfill and no DB
-	 * default. Do not add one: a stored `agent` and an absent value must stay
-	 * indistinguishable, or "the agent never said" becomes unreadable.
-	 *
-	 * `human` is the agent DECLARING a slot it cannot take — not a delegation
-	 * (`delegatedTo` is agent→agent) and not a claim of delivery. The slot stays
-	 * `pending` either way; ownership says who the board is waiting on, and
-	 * `status: 'done'` is still stamped by the one door on approval.
-	 */
-	owner?: "human" | "agent";
-	/**
-	 * WHY the agent could not take it — one of {@link BLOCKED_REASONS}. Only
-	 * meaningful alongside `owner: 'human'`; CONVENTIONAL, not enforced at the
-	 * parse (see `expectedOutputWireSchema`'s note — a cross-field refinement
-	 * would reject the partial patches `mergeExpectedOutputs` exists to tolerate).
-	 */
-	blockedReason?: BlockedReason;
-	/**
-	 * One line of prose: the resumption cue a human reads to know what to do.
-	 * The taxonomy above says what class of thing is missing; this says WHICH —
-	 * "the Stripe restricted key for the live account", not "a credential".
-	 * Only meaningful alongside `owner: 'human'`.
-	 */
-	why?: string;
-	/**
-	 * WHEN the slot became the human's — stamped the moment `owner` becomes
-	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
-	 * `delegatedTo` and `returnedAt` accompanying `returnedReason`: the server
-	 * writes the timestamp, never the declaring agent.
-	 *
-	 * It exists because a "needs you" feed has to order and age its rows, and
-	 * `focus_sessions.updatedAt` cannot serve: any unrelated write to the session
-	 * — a progress bump, a sibling slot's rename — would resurface an owed slot
-	 * to the top of the list forever. The invariant is exact: `owedSince` is
-	 * present IFF `owner === 'human'`.
-	 */
-	owedSince?: string;
-	/**
-	 * Whether the deliverable actually landed. `done` is stamped by ONE door —
-	 * `satisfyExpectedOutputs` (api `services/focus-sessions/satisfy-expected-output.ts`),
-	 * called after a session-scoped proposal is APPROVED. Nothing else may write it:
-	 * the agent grading its own homework is exactly the failure this field exists
-	 * to stop. Absent ⇒ treat as `pending`.
-	 */
-	status?: "pending" | "done";
-	/**
-	 * The AGENT's claim that it produced this output. Free for the agent to set
-	 * (via `focusSessions.update`'s `completeOutput`), and deliberately NOT the
-	 * same field as `status` — a claim is evidence to show the human, never proof.
-	 */
-	claimedDone?: boolean;
-	/** Lineage: the approved proposal whose apply satisfied this output. */
-	satisfiedByProposalId?: string;
-	/**
-	 * The agent TYPE this slot was handed to (`focusSessions.delegateOutput` /
-	 * `POST /focus-sessions/:id/outputs/delegate`). A DELEGATION, never a claim of
-	 * delivery: it says who was asked, and the slot stays `pending` until an
-	 * approval stamps it through `satisfyExpectedOutputs`.
-	 *
-	 * It is also the SLOT CLAIM key for the delegate's own writes: governance
-	 * (`resolveSessionSlotClaim`) matches a session write by an agent of this type
-	 * to this slot even when the change's name does not match the label — the
-	 * delegation IS the naming, made ahead of time by a human.
-	 */
-	delegatedTo?: string;
-	/** ISO timestamp of the delegation above. */
-	delegatedAt?: string;
-	/**
-	 * Set when a proposal CLAIMING this slot was REJECTED: the slot comes back to
-	 * the board with the reviewer's reason, and `delegatedTo`/`delegatedAt` are
-	 * cleared (the ask is over — a returned slot is un-delegated, and re-asking is
-	 * an explicit new delegation). No new status value: the slot was, and remains,
-	 * `pending`.
-	 */
-	returnedReason?: string;
-	/** ISO timestamp of the return above. */
-	returnedAt?: string;
-	/**
-	 * ATTESTATION receipt — the human who owned this slot saying "I did this".
-	 *
-	 * The other half of `satisfiedByProposalId`, and deliberately a SEPARATE
-	 * field rather than a fake proposal id: the two stamps are different KINDS of
-	 * evidence and a reader must be able to tell them apart. An approval is a
-	 * human accepting an artefact an agent produced; an attestation is a human
-	 * reporting work only they could do (minting the key, signing the contract),
-	 * for which no artefact and no proposal exists.
-	 *
-	 * Written ONLY by `attestExpectedOutput` (the one `done` door,
-	 * api `services/focus-sessions/satisfy-expected-output.ts`), and only on a
-	 * slot whose `owner` is `human`, by that owner. `owner`/`owedSince` are
-	 * deliberately KEPT alongside it: the record of who owed the slot and since
-	 * when is the receipt's point, and the owed read drops the slot on `status`.
-	 */
-	attestedBy?: string;
-	/** ISO timestamp of the attestation above. */
-	attestedAt?: string;
-	/**
-	 * RETIREMENT receipt — this slot stopped being owed because the session that
-	 * declared it was CANCELLED. NEVER a deletion: the slot, its blocker, its
-	 * `why` and its `owedSince` all stay readable, exactly like `delegatedAt` and
-	 * `returnedAt`. Clearing these two fields puts the slot back on the board, so
-	 * the stamp is reversible in the way a delete never is.
-	 *
-	 * Only `cancelled` retires slots. A session that is `closed`, `failed` or
-	 * `stale` leaves them owed — the work was declared, the session ended, and
-	 * somebody still has to do it.
-	 */
-	retiredAt?: string;
-	/** WHY it was retired — one of {@link OUTPUT_RETIRED_REASONS}. */
-	retiredReason?: OutputRetiredReason;
-	/**
-	 * WHERE to go for this deliverable — see {@link OutputRef}.
-	 *
-	 * The reason it exists: an agent that declares an owed slot, or blocks one on
-	 * the person, could previously only hand over PROSE. "The Stripe restricted
-	 * key for the live account" tells you what is missing and leaves you to find
-	 * the page yourself. A `ref` makes the card's title a DOOR.
-	 *
-	 * `null` IS A WIRE VALUE ONLY, and it means CLEAR. Silence on a wholesale
-	 * patch means KEEP (the field is server-owned for erasure purposes), so
-	 * "remove this pointer" needs a way to say itself — that is the explicit
-	 * `null`. `mergeExpectedOutputs` deletes the key rather than storing the null,
-	 * so a STORED slot never carries `ref: null` and every reader may test it for
-	 * truthiness alone.
-	 */
-	ref?: OutputRef | null;
-	/**
-	 * The `SessionCriterion.key` this slot STANDS FOR. Set only on a slot whose
-	 * `kind` is the criterion-slot kind (`CRITERION_SLOT_KIND`, `@synap-core/types`),
-	 * written once at the escalation that files the slot
-	 * (api `services/focus-sessions/evaluations/record.ts`) and never by a client.
-	 *
-	 * It exists because the slot's own `label` is PROSE (`Check: <statement>`,
-	 * clipped at 120 chars) and a surface asked to open the scorecard on the right
-	 * criterion could otherwise only match that string back — which forks the
-	 * backend's label format into every UI and breaks the moment a statement is
-	 * reworded or the clip lands differently. The key is the machine identity the
-	 * evaluation rows are already keyed by, so the pointer is exact.
-	 *
-	 * ABSENT on every slot filed before this field existed, and on every
-	 * non-criterion slot. A reader MUST treat absence as "no criterion to
-	 * highlight" — never as an error, and never as a reason to fall back to
-	 * matching the label.
-	 */
-	criterionKey?: string;
-}
-/**
- * The CLOSED rollup category a stage declares membership in. Copied verbatim
- * from Linear's `ProjectStatusType` — the convergent answer across eight
- * independent implementations (Jira, Linear, Digital.ai, Accelo, Kantata,
- * Productive.io, Odoo, ERPNext).
- *
- * A cross-playbook board groups on THIS, never on `key`: two playbooks' key
- * sets are disjoint by construction, and no product has ever shipped a
- * vocabulary-reconciliation UI. Accelo — whose architecture is per-type stage
- * vocabularies exactly like ours — makes the category a MANDATORY field.
- */
-export type PlaybookStageCategory = "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
-declare const CRITERION_CHECK_KINDS: readonly [
-	"evidence",
-	"capability",
-	"judge",
-	"human"
-];
-export type CriterionCheckKind = (typeof CRITERION_CHECK_KINDS)[number];
-/**
- * One BINARY, observable acceptance criterion ("Typecheck passes with 0
- * errors"). Stored on `playbooks.criteria`, `PlaybookStage.criteria` and
- * `focus_sessions.criteria`; graded by rows in `session_evaluations`.
- */
-export interface SessionCriterion {
-	/** Stable slug, unique within the session. */
-	key: string;
-	statement: string;
-	/** Absent = true. */
-	required?: boolean;
-	check: {
-		kind: CriterionCheckKind;
-		/** kind=capability: the capability verb run via executeCapability. */
-		capability?: string;
-		/** kind=evidence: the key the agent posts evidence under (e.g. "typecheck"). */
-		evidenceKey?: string;
-		/** kind=judge: what the judge should look at. */
-		hint?: string;
-	};
-	/** Set when copied from a stage. */
-	stageKey?: string;
-}
-/**
- * The normalized shape the Phase-1 adapters produce from builtin IS tools,
- * code/instruction skills, intelligence_commands, and source providers — so a
- * Playbook can grant capabilities uniformly and the AI can discover them.
- */
-/** The full read-model kind set: grantables + the discoverable source systems. */
-export type CapabilityKind = GrantableKind | "source-provider" | "builtin-tool"
-/** A `skills` row with `kind='instruction'` — teaching prose, not an executable
- *  capability. Kept OUT of the "skill" (runnable) bucket so flat-list consumers
- *  don't have to special-case it to avoid offering it as an action. */
- | "teaching-doc";
-export interface Capability {
-	kind: CapabilityKind;
-	id: string;
-	name: string;
-	description?: string | null;
-	inputSchema: Record<string, unknown>;
-	credentials?: CredentialRequirement[];
-	executor: ExecutorRef;
-	/** Whether AI use is auto-approved or routed through a proposal. "none" = not
-	 *  executable (e.g. a `teaching-doc` — governance doesn't apply to reading prose). */
-	governance: "auto" | "propose" | "none";
-	/**
-	 * The connection's structured verb catalog WITH each verb's resolved
-	 * grant-state — the capability-matrix axis. Present for tools that carry a
-	 * `tools.capabilities` catalog; the grant-state is joined from the active
-	 * `vault_grants` row for the tool (one connection × verb × grant row each).
-	 * Empty/undefined for capabilities with no verb catalog (skills, commands,
-	 * verb-less provider tools).
-	 */
-	verbs?: CapabilityVerbState[];
-	/**
-	 * True for a capability that is discoverable but NOT invokable through the
-	 * capability-execution door (e.g. an IS-native tool with no run_capability
-	 * bridge yet). Consumers building a "runnable" projection must exclude these.
-	 */
-	catalogOnly?: boolean;
-	/**
-	 * For a provider-backed capability (a Nango `source-provider` tool): whether an
-	 * external connection is required and whether one is currently known for the
-	 * caller. This exists so an AGENT can tell "connected" from "needs connection"
-	 * — a distinction the read-model previously omitted, leaving agents to infer it
-	 * from `governance`, which is an approval fact, not a connection fact.
-	 *
-	 * `connected` is the LAST-KNOWN state from the connection registry (kept fresh
-	 * by the disconnect self-heal + lazy reconciler), NOT a live Nango probe — the
-	 * authoritative live state and the connect/disconnect actions live behind the
-	 * connectors door. Absent for capabilities that need no external connection
-	 * (builtins, skills, commands, verb-less non-provider tools).
-	 */
-	connection?: {
-		required: boolean;
-		connected: boolean;
-		provider: string;
-	};
-}
-/**
- * One row of the connection × verb × grant matrix: a Tool's verb annotated with
- * the live grant-state derived from `vault_grants`. The read-model joins each
- * `ToolVerb` (from `tools.capabilities`) with the tool's active grant so a UI /
- * the AI can see, per verb, whether it is granted and at what exec-mode.
- */
-export interface CapabilityVerbState extends ToolVerb {
-	/** True when an active (non-revoked, non-expired) grant exists for the tool. */
-	granted: boolean;
-	/**
-	 * The effective exec-mode for this verb: the active grant's exec-mode when
-	 * granted, else the verb's `govDefault`. This is what the gate would apply.
-	 */
-	effectiveExecMode: ExecMode;
-	/**
-	 * Honest, derivable parameter requirements for this verb — builtin verbs from
-	 * their Zod validator (`BUILTIN_VERB_PARAM_SCHEMAS`), provider verbs from the
-	 * declarative skill's `providerSpec` template params. Undefined when nothing
-	 * is derivable (e.g. a verb-less/legacy tool). Distinct from `argsSchema`
-	 * (a hand-authored JSON-schema-ish doc): this is read off the real contract.
-	 */
-	paramsSchema?: Record<string, {
-		required: boolean;
-		description?: string;
-	}>;
-}
 export type RunPosture = "auto" | "propose";
 /**
  * Why a candidate matched, for an agent choosing between results: the query
@@ -8337,170 +8532,6 @@ export type RunPosture = "auto" | "propose";
 export interface TermMatch {
 	terms: string[];
 	fields: string[];
-}
-export type CapabilityCardStatus = "available" | "needs_connection" | "connected" | "draft" | "ready" | "partial" | "unavailable";
-export interface CapabilityCardConnection {
-	required: boolean;
-	/** nango:// => "provider", vault:// => "vault". null when none/unknown. */
-	kind: "provider" | "vault" | null;
-	/** providerConfigKey, e.g. "google" — present for provider connections. */
-	provider?: string;
-	/**
-	 * `missing` = connectable, the user just hasn't. `unavailable` = this POD
-	 * cannot offer it at all (Nango answered and doesn't declare the provider), so
-	 * "Connect" would dead-end — only claimed when availability is actually KNOWN.
-	 */
-	state: "connected" | "missing" | "expired" | "unavailable";
-	/**
-	 * Present when the connection could NOT be checked — the broker faulted or its
-	 * list failed — so `state` is only the connectable default, not a verdict.
-	 * Surfaces must render "couldn't check" with a retry, never "not connected".
-	 */
-	unverified?: {
-		reason: string;
-		message: string;
-	};
-	/** connectionId (or display account) when connected. */
-	account?: string;
-	/**
-	 * True for a pod-internal credential (a `vault://<id>` secret the operator
-	 * holds) rather than a third-party OAuth (nango://) connection. Lets surfaces
-	 * distinguish "internal key" from "external account" without re-parsing refs.
-	 */
-	internal?: boolean;
-}
-/** A single declared parameter of a verb (richer than `params: string[]`). */
-export interface CapabilityCardVerbParam {
-	name: string;
-	type?: string;
-	required?: boolean;
-	description?: string;
-}
-export interface CapabilityCardVerb {
-	/** Backing skill NAME — the verbId the execute door resolves. */
-	verbId: string;
-	/** Backing skill UUID (installed verbs only; null for an available template). */
-	skillId: string | null;
-	label: string;
-	/** One-line description from the backing skill (`skill.description`). */
-	description?: string | null;
-	/**
-	 * read / write / action — derived (read-ish name → read; mutating-action name
-	 * → action; else write), honoring an explicit `metadata.verbType` override.
-	 * `action` is additive: a mutating verb that is an action (reply/send/…) rather
-	 * than a create/update. TODO: promote fully to explicit skill metadata.
-	 */
-	type: "read" | "write" | "action";
-	/** Backing skill `approved === true`. */
-	enabled: boolean;
-	/**
-	 * Run posture for an agent (`catalogVerbPosture`): `auto` runs now, `propose`
-	 * files a review. Under a lens it honours the grant, exactly as
-	 * `GET /capabilities/actions` does. Not the approval gate — that is `enabled`.
-	 */
-	governance: "auto" | "propose";
-	/** enabled AND (no connection required OR connection connected). */
-	runnable: boolean;
-	/** Parameter names the verb accepts — for `cap run <verb> --<param> …` hints. */
-	params: string[];
-	/**
-	 * Typed parameter schema (name + type + required + description) derived from the
-	 * skill's `parameters` JSON-schema — for the run form + inspector, which need
-	 * types, not just names. Empty when the skill declares no parameters.
-	 */
-	paramsSchema: CapabilityCardVerbParam[];
-	/**
-	 * Free-form functional tag from the backing skill (`skills.category`, e.g.
-	 * "enrichment") — lets a surface find "the enrichment verbs for this entity"
-	 * by CONFIGURATION instead of hardcoding verb ids. Absent when the skill (or
-	 * its template definition) declares no category.
-	 */
-	category?: string;
-	/**
-	 * ROUTING intent (`ABSTRACT_VERBS`) — what this verb MEANS independent of its
-	 * vendor, so a surface can ask "what can send a message?" without knowing
-	 * `gmail_send`. Read off the OWNING TOOL's `capabilities[]` verb-catalog entry
-	 * (installed cards) or the template's own skill def (available cards) — the
-	 * two places the applier writes it. `skills` has no `intent` column, so a card
-	 * verb can only carry it by that join.
-	 *
-	 * ABSENT, never guessed: the vocabulary is closed and a legacy verb that
-	 * declares no intent must stay out of every intent bucket (same rule as
-	 * `foldVerbsByIntent`).
-	 */
-	intent?: AbstractVerb$1;
-}
-/** A template's INSTALL parameter — what the caller supplies to `apply` it. */
-export interface CapabilityCardInstallParam {
-	name: string;
-	label?: string;
-	type?: string;
-	required?: boolean;
-	description?: string;
-	secret?: boolean;
-}
-export interface CapabilityCard {
-	/** Container id; null for an available-only template. */
-	id: string | null;
-	/** Stable identity: template key if known, else container id/slug. */
-	key: string;
-	/** Pack display name, e.g. "Nango — Google Workspace". */
-	name: string;
-	description?: string | null;
-	source: "installed" | "available";
-	status: CapabilityCardStatus;
-	connection?: CapabilityCardConnection;
-	verbs: CapabilityCardVerb[];
-	/**
-	 * The pack's composition — the names of its member tools + skills and the
-	 * backing credential ref/kind (provider/vault). Lets the hero UI render "what's
-	 * inside" without re-deriving from verbs/connection. Derived from the same
-	 * container members (or template def) the card folds in.
-	 */
-	anatomy: {
-		tools: string[];
-		skills: string[];
-		credential?: string;
-	};
-	/**
-	 * The template's INSTALL params — what the caller must supply to apply it (e.g.
-	 * a vault credential, a baseUrl). Surfaced so the CLI can prompt for them and
-	 * apply WITH params (which wires the credential into the tool), instead of a
-	 * disconnected post-hoc vault write. Empty when the template declares none.
-	 */
-	installParams: CapabilityCardInstallParam[];
-	/**
-	 * True for the pod-wide "Synap Core" pack — Synap's own first-party verbs,
-	 * not a connector. Additive and optional (absent on every other card, and on
-	 * older pods): agent-facing listings summarise such a pack as ONE line and
-	 * expand it only when asked for by `key`.
-	 */
-	builtIn?: true;
-	/**
-	 * The ONE thing to do next, and WHERE. `url` is a deep link to this card
-	 * (absent for an available-only template, which has no installed container);
-	 * `opensIn` says which client can follow it — see `CapabilityNextAction`.
-	 */
-	nextAction: CapabilityNextAction;
-}
-/**
- * Where the link opens. Only `"desktop"` today, and it is not decoration: the
- * `/open/capability/<id>` route bounces to `synap://`, so a human without the
- * desktop app cannot follow it. A future pod-admin capability route would add a
- * `"web"` value here — until then, claiming one would be a lie.
- */
-export type CapabilityActionSurface = "desktop";
-export interface CapabilityNextAction {
-	kind: "add" | "connect" | "enable" | "run" | "none";
-	hint: string;
-	/**
-	 * Deep link to the capability's own card — where `kind` is performed.
-	 * Absent for a brick in NO container (`containerId` null): there is no card
-	 * to open, and a link to a route that resolves to nothing is worse than none.
-	 */
-	url?: string;
-	/** Present exactly when `url` is. See `CapabilityActionSurface`. */
-	opensIn?: CapabilityActionSurface;
 }
 /**
  * A verb read-model row PLUS the declarative subset's `responseShape` — the
@@ -9526,6 +9557,46 @@ export interface CapabilityReconcileReport {
 	 *  param the reconcile has no value for) — reported, never forced. */
 	conflicts: CapabilityReconcileEntry[];
 }
+export interface SyncConnectorConnection {
+	connectionId: string;
+	provider: string;
+	userId: string;
+	/** Null when the broker did not report it — unknown, never "now". */
+	createdAt: Date | null;
+	lastSyncAt?: Date;
+	/**
+	 * The broker reports this connection as errored (e.g. its refresh token died,
+	 * "refresh limit reached"). LIVE-VERIFIED: self-hosted Nango's `GET /connection`
+	 * returns a per-connection `errors[]` array. This is the PROACTIVE health
+	 * signal — without it a dead connection only reveals itself when a dispatch
+	 * happens to pick it, so the registry keeps reporting it "healthy".
+	 */
+	hasError?: boolean;
+}
+/** A skill or tool row. `kind` absent = skill (the execute door's shape). */
+export interface CapabilityRef {
+	kind?: "skill" | "tool";
+	id: string;
+	name: string;
+}
+/**
+ * What the caller hands back. `originalActionRan: false` is a literal on BOTH
+ * arms: the refused action did not run, whether or not the request was filed.
+ */
+export type CapabilityEnableOffer = {
+	status: "proposed";
+	proposalId: string;
+	reviewUrl: string;
+	title: string;
+	skills: CapabilityRef[];
+	originalActionRan: false;
+	message: string;
+} | {
+	status: "failed";
+	error: string;
+	originalActionRan: false;
+	message: string;
+};
 /**
  * ARGUMENT VALIDATION AT THE PROPOSE MOMENT — check the call against the verb's
  * DECLARED schema before a human is asked to approve it.
@@ -15958,7 +16029,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentUserId?: string | undefined;
 				agentOnly?: boolean | undefined;
 				automationId?: string | undefined;
-				status?: "pending" | "rejected" | "all" | "validated" | undefined;
+				status?: "reverted" | "pending" | "rejected" | "all" | "validated" | undefined;
 				cursor?: string | undefined;
 			};
 			output: {
@@ -15998,6 +16069,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceReason: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
+					class: ProposalClass;
+					lifetimeHours: number | null;
 					request: UpdateRequest;
 					authorName?: string;
 					agentActorName?: string;
@@ -16005,6 +16078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
+					setup?: ProposalSetup;
 					sessionGoal?: string;
 					review: ProposalReviewModel;
 				}[];
@@ -16051,6 +16125,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceReason: string | null;
 					comments: unknown;
 					revisionHistory: ProposalRevision[];
+					class: ProposalClass;
+					lifetimeHours: number | null;
 					request: UpdateRequest;
 					authorName?: string;
 					agentActorName?: string;
@@ -16058,6 +16134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					principal?: ProposalPrincipal;
 					approverName?: string;
 					targetName?: string;
+					setup?: ProposalSetup;
 					sessionGoal?: string;
 					review: ProposalReviewModel;
 				}[];
@@ -16122,6 +16199,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 		}>;
+		askAi: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				proposalId: string;
+				workspaceId?: string | null | undefined;
+				note?: string | undefined;
+			};
+			output: AskAiAboutProposalResult;
+			meta: object;
+		}>;
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				proposalId: string;
@@ -16159,6 +16245,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				governanceReason: string | null;
 				comments: unknown;
 				revisionHistory: ProposalRevision[];
+				class: ProposalClass;
+				lifetimeHours: number | null;
 				request: UpdateRequest;
 				authorName?: string;
 				agentActorName?: string;
@@ -16166,6 +16254,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				principal?: ProposalPrincipal;
 				approverName?: string;
 				targetName?: string;
+				setup?: ProposalSetup;
 				sessionGoal?: string;
 				review: ProposalReviewModel;
 			};
@@ -21041,7 +21130,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds: never[];
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "unchanged" | "reconciled";
+				outcome: "reconciled" | "unchanged";
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
@@ -21052,7 +21141,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "unchanged" | "reconciled";
+				outcome: "reconciled" | "unchanged";
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
@@ -21864,7 +21953,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds: never[];
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "unchanged" | "reconciled";
+				outcome: "reconciled" | "unchanged";
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
@@ -21875,7 +21964,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId: string;
 				reconciled: ReconcileReport | undefined;
 				layers: InstallLayerReport[] | undefined;
-				outcome: "unchanged" | "reconciled";
+				outcome: "reconciled" | "unchanged";
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
@@ -29604,6 +29693,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				name: string;
 				type: "identity" | "password" | "api_key" | "credential" | "note" | "card" | "ssh_key" | "certificate" | "env_variable" | "database" | "oauth";
 				createdAt: Date;
+				vaultRef: string;
 			};
 			meta: object;
 		}>;
@@ -30205,6 +30295,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30256,6 +30347,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30325,6 +30417,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30366,6 +30459,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30442,6 +30536,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30539,6 +30634,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
 				goal: string;
@@ -30655,6 +30751,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30727,6 +30824,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30756,6 +30854,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30833,6 +30932,45 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					required?: boolean | undefined;
 					stageKey?: string | undefined;
 				}[] | undefined;
+				stages?: {
+					[x: string]: unknown;
+					key: string;
+					name: string;
+					category: "paused" | "completed" | "planned" | "backlog" | "started" | "canceled";
+					description?: string | undefined;
+					goal?: string | undefined;
+					grants?: {
+						[x: string]: unknown;
+						kind: "skill" | "tool" | "command";
+						id: string;
+					}[] | undefined;
+					expectedOutputs?: {
+						[x: string]: unknown;
+						kind: string;
+						label: string;
+						icon?: string | undefined;
+					}[] | undefined;
+					suggestedTasks?: string[] | undefined;
+					position?: number | undefined;
+					indefinite?: boolean | undefined;
+					gate?: {
+						kind: "human" | "check";
+						proposalType?: "playbook.stage_gate" | undefined;
+					} | undefined;
+					criteria?: {
+						key: string;
+						statement: string;
+						check: {
+							kind: "human" | "capability" | "evidence" | "judge";
+							capability?: string | undefined;
+							evidenceKey?: string | undefined;
+							hint?: string | undefined;
+						};
+						required?: boolean | undefined;
+						stageKey?: string | undefined;
+					}[] | undefined;
+					lessons?: string[] | undefined;
+				}[] | undefined;
 				followPlaybookId?: string | null | undefined;
 				followStageKey?: string | null | undefined;
 				params?: Record<string, unknown> | undefined;
@@ -30851,6 +30989,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -30886,6 +31025,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				startedAt: Date;
 				playbookId: string | null;
 				expectedOutputs: unknown;
+				stages: unknown;
 				criteria: unknown;
 				projectId: string | null;
 				origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -31714,6 +31854,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;
@@ -31840,6 +31981,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					startedAt: Date;
 					playbookId: string | null;
 					expectedOutputs: unknown;
+					stages: unknown;
 					criteria: unknown;
 					projectId: string | null;
 					origin: "automation" | "playbook" | "human" | "agent" | null;

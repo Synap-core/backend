@@ -33,6 +33,7 @@ import {
   CAPTURE_PART_LIMITS,
   CaptureQuestionPartSchema,
   readCapturePart,
+  redactSecretValues,
   type CaptureAnswer,
   type CaptureAnswerPart,
   type CaptureFollowUpChip,
@@ -93,7 +94,7 @@ export function answerContextWithQuestion(
 }
 
 export function formValuesToContext(values: Record<string, unknown>): string {
-  return Object.entries(values)
+  return Object.entries(redactSecretValues(values))
     .filter(([, v]) => v !== null && v !== undefined && v !== "")
     .map(
       ([k, v]) =>

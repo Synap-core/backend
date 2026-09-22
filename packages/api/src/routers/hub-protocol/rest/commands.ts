@@ -28,6 +28,11 @@ import {
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+// THE scrubber for free text about to be stored or shown. Lifted out of this
+// file when a second caller arrived (a failed proposal persisting its redacted
+// executor error), so the two cannot drift. Widened there with the
+// vendor-prefixed key and JWT shapes this copy never had.
+import { redactSecrets } from "../../../utils/redact-secrets.js";
 
 // ─── Rate limiter for terminal commands ─────────────────────────────────────
 const _commandRateLimiter = new Map<
@@ -197,31 +202,6 @@ function validateWorkingDir(requestedDir: string | undefined): {
   }
 
   return { dir: realPath };
-}
-
-/**
- * Redact potential secrets from command output.
- */
-function redactSecrets(output: string): string {
-  return (
-    output
-      // Generic key=value secrets (KEY=sk-..., TOKEN=abc123...)
-      .replace(
-        /\b(api[_-]?key|secret[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|credentials?)\s*[=:]\s*\S+/gi,
-        "$1=***REDACTED***"
-      )
-      // Bearer tokens
-      .replace(/Bearer\s+[A-Za-z0-9_\-.~+/]+=*/gi, "Bearer ***REDACTED***")
-      // Connection strings with passwords
-      .replace(/:\/\/[^:]+:[^@]+@/g, "://***:***@")
-      // AWS-style keys
-      .replace(/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, "***REDACTED_AWS_KEY***")
-      // Private keys
-      .replace(
-        /-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----/g,
-        "***REDACTED_PRIVATE_KEY***"
-      )
-  );
 }
 
 export function registerCommandsRoutes(app: HubHono): void {

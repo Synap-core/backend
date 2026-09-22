@@ -402,17 +402,29 @@ describe("(c/d) partial failure is isolated and visible", () => {
         reason: "Couldn't apply — an internal error occurred.",
       },
     ]);
-    // …and in the payload the client renders. The error is RE-THROWN unchanged
-    // (dispatchProposalApproval does `throw err`), so the per-item batch error
-    // still carries the original throw — only the persisted reason is scrubbed.
+    // …and in the payload the client renders.
+    //
+    // CORRECTED (approval-error-redaction wave). This assertion used to read
+    // `error: "automation was deleted"` and explain that the throw is re-thrown
+    // UNCHANGED so "only the persisted reason is scrubbed". That pinned the
+    // leak as correct: `init-trpc.ts` puts `shape.message` on the wire verbatim
+    // and `batchApprove` copies `error.message` into `item.error`, so a raw
+    // provider body — which routinely echoes the Authorization header that
+    // produced it — reached the approver's screen on exactly the path that had
+    // just decided it was too dangerous to STORE. The per-item error is now the
+    // SAME safe classified sentence as the stored reason: one derivation, so
+    // the screen and the row can never disagree.
     expect(results[2]).toEqual({
       proposalId: "p3",
       success: false,
-      error: "automation was deleted",
-      // A plain `Error` carries no tRPC code of its own — the one explicit
-      // fallback, and the honest reading of "this was not a governance refusal".
+      error: "Couldn't apply — an internal error occurred.",
+      // A plain `Error` carries no tRPC code of its own; the CLASS supplies one
+      // (`unknown` → INTERNAL_SERVER_ERROR), which is the same honest reading
+      // of "this was not a governance refusal".
       errorCode: "INTERNAL_SERVER_ERROR",
     });
+    // And the raw text is not reachable from what the client got.
+    expect(JSON.stringify(results)).not.toContain("automation was deleted");
   });
 
   it("batchApprove's loop really is per-item try/catch (no early abort)", () => {
@@ -519,7 +531,19 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
 
     const onApprovalFailed = vi.fn(async () => {});
 
-    await expect(dispatchProposalApproval(a, onApprovalFailed)).rejects.toThrow(
+    // CORRECTED (approval-error-redaction wave): it still THROWS — a silently
+    // failing item is the bug this dispatch exists to prevent — but with the
+    // SAFE classified sentence, not the raw executor text. The original rides
+    // as `cause`, which only the server-side logger reads.
+    const thrown = await dispatchProposalApproval(a, onApprovalFailed).then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect(thrown).toBeInstanceOf(TRPCError);
+    expect((thrown as TRPCError).message).toBe(
+      "Couldn't apply — an internal error occurred."
+    );
+    expect(((thrown as TRPCError).cause as Error).message).toBe(
       "automation was deleted"
     );
 
@@ -527,17 +551,28 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     // APPROVAL_FAILED + rejectionReason) is driven by exactly these args.
     // E1 error-scrub: a NON-TRPCError throw is a raw internal error that may
     // carry pg-constraint text / provider payloads / PII, so the persisted
-    // rejectionReason is scrubbed to a fixed generic message. The raw error is
-    // still logged server-side and re-thrown to the caller unchanged (asserted
-    // by the rejects.toThrow above).
+    // rejectionReason is scrubbed to a fixed generic message — and so is what
+    // is thrown at the caller (asserted above).
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
-    // P1: onApprovalFailed now takes a 3rd `failure` arg (structured scalars). A
-    // non-provider throw carries none, so it is `undefined` here.
+    // UPDATED (failure-explainability wave): the 3rd `failure` arg used to be
+    // `undefined` for any throw that classified as nothing — which is exactly
+    // the defect. An unclassified failure is now `errorClass: "unknown"` plus
+    // the REDACTED raw text, so the agent can explain what the user's scrubbed
+    // sentence deliberately withholds. The scrubbed sentence itself is
+    // UNCHANGED, which is the half this test was really guarding.
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
       "Couldn't apply — an internal error occurred.",
-      undefined
+      { errorClass: "unknown", detail: "automation was deleted" }
     );
+    // …and the raw text reaches the PERSISTED payload only through `detail`,
+    // never through the user-facing sentence. (`onApprovalFailed` is a
+    // zero-arg `vi.fn`, so its recorded call tuple is typed `[]` — read it
+    // through `unknown[]` rather than destructuring a length-0 tuple.)
+    const sentence = (
+      onApprovalFailed.mock.calls[0] as unknown as unknown[]
+    )[1];
+    expect(String(sentence)).not.toContain("automation was deleted");
     expect(reportProposalOutcome).not.toHaveBeenCalled();
   });
 
@@ -563,11 +598,15 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
     );
 
     expect(onApprovalFailed).toHaveBeenCalledTimes(1);
-    // P1: 3rd `failure` arg is undefined for a plain (non-provider) TRPCError.
+    // UPDATED (failure-explainability wave): the author-written TRPCError
+    // message still survives VERBATIM — that is what this test guards. The 3rd
+    // arg is no longer `undefined`: the error CODE now classifies the failure
+    // (NOT_FOUND → target_missing), which is what gives the row its recovery
+    // affordance instead of leaving it blank.
     expect(onApprovalFailed).toHaveBeenCalledWith(
       "p1",
       "Couldn't apply — target no longer exists",
-      undefined
+      expect.objectContaining({ errorClass: "target_missing" })
     );
   });
 });

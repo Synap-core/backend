@@ -11,6 +11,7 @@ import {
   PROPOSAL_CLASSES,
   proposalClassFields,
 } from "../../../../services/proposals/proposal-class.js";
+import { projectProposalRowForViewer } from "../../../proposals/failure-projection.js";
 
 /**
  * The selectable `status` filters for a proposal listing — the SSOT every
@@ -101,6 +102,103 @@ const proposalClassShape = {
 } as const;
 
 /**
+ * SETUP — what a `capability.install` proposal still needs from a human before
+ * it can be applied, DERIVED on read from the capability's manifest plus live
+ * vault/Nango state (`services/proposals/proposal-setup.ts`). Never stored, so
+ * adding the missing key clears the gap without touching the proposal.
+ *
+ * `.optional()` and it must stay optional: an ABSENT `setup` means "this
+ * proposal has no manifest to derive one from" (any non-install proposal, or an
+ * install whose template this pod never cached) — which is a different fact
+ * from `{blocking:false}`, "we looked and nothing is needed". Defaulting one to
+ * the other is how a surface starts rendering "ready to install" over a package
+ * it knows nothing about.
+ *
+ * A param's VALUE is structurally absent: the schema carries `name`, `label`,
+ * `secret`, `satisfied` and a `vault://` REF, and no value field exists to put
+ * a credential in.
+ */
+const ProposalSetupParamSchema = z
+  .object({
+    name: z.string(),
+    label: z.string().optional(),
+    type: z.string().optional(),
+    required: z.boolean(),
+    description: z.string().optional(),
+    secret: z
+      .boolean()
+      .describe("Prompt masked. The VALUE is never on the wire."),
+    satisfied: z
+      .boolean()
+      .describe(
+        "A non-blank value is present, or a resolvable `vault://` ref is."
+      ),
+    ref: z
+      .string()
+      .optional()
+      .describe("`vault://<id>` when this param points at a vault secret."),
+    // LABELS for that ref — a name and a category, never a value. Without them
+    // every surface renders a linked secret as the generic "Linked vault
+    // secret", so approving an install whose credential an AGENT chose was
+    // blind consent. Resolved under the same own-or-pod-wide predicate as
+    // `satisfied`, so a label can never disclose a secret the caller cannot see.
+    refName: z
+      .string()
+      .optional()
+      .describe("The linked secret's vault NAME. A label, never a value."),
+    refService: z
+      .string()
+      .optional()
+      .describe("The linked secret's category, e.g. `Stripe`. Never a value."),
+    refUnresolved: z
+      .boolean()
+      .optional()
+      .describe(
+        "The ref does not resolve for this caller (deleted, or not theirs). " +
+          "Distinct from 'not filled in yet' — the surface must say so."
+      ),
+  })
+  .openapi("ProposalSetupParam");
+
+export const ProposalSetupSchema = z
+  .object({
+    params: z.array(ProposalSetupParamSchema),
+    connection: z
+      .object({
+        required: z.boolean(),
+        kind: z.string().nullable(),
+        provider: z.string().optional(),
+        state: z.string(),
+      })
+      .passthrough()
+      .optional()
+      .describe(
+        "PROVIDER (OAuth) connection only — a vault-kind requirement is already " +
+          "expressed by the params that feed it, and surfacing it twice makes a " +
+          "filled form still read 'needs a connection'."
+      ),
+    blocking: z
+      .boolean()
+      .describe(
+        "Any REQUIRED param unsatisfied, or a REQUIRED provider connection not `connected`."
+      ),
+    nextAction: z
+      .object({
+        kind: z.string(),
+        hint: z.string(),
+        url: z.string().optional(),
+        opensIn: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .openapi("ProposalSetup");
+
+const proposalSetupShape = {
+  setup: ProposalSetupSchema.optional(),
+} as const;
+
+/**
  * Stamp the class fields onto a raw proposal row. THE producer behind
  * `WireProposalSchema`'s `class` — a declared field with no producer is the
  * exact shape of the T4 finding ("a DECLARED zod schema IS the contract"), so
@@ -111,7 +209,11 @@ export function withProposalClass<T extends Record<string, unknown>>(
   row: T
 ): T & { class: string; lifetimeHours: number | null } {
   return {
-    ...row,
+    // AGENT-ONLY FAILURE FIELDS are stripped HERE, at the producer every
+    // `view=full` door passes its rows through — `data.failure.detail` is the
+    // redacted raw executor error, written for the AI explanation path, and
+    // this projection is a client answer. See `failure-projection.ts`.
+    ...projectProposalRowForViewer(row),
     ...proposalClassFields(
       String(row.proposalType ?? ""),
       String(row.targetType ?? "")
@@ -140,6 +242,7 @@ export const WireProposalSchema = z
     updatedAt: z.union([z.string(), z.date()]).optional(),
     sessionId: z.string().nullable().optional(),
     ...proposalClassShape,
+    ...proposalSetupShape,
   })
   .openapi("Proposal");
 
@@ -218,6 +321,11 @@ export const ProposalBasicSchema = z
           "Omitted entirely when the proposal carries none — never generated."
       ),
     ...proposalClassShape,
+    // On the BASIC row too, and for the same reason `class` is: "this one needs
+    // an API key before it can be approved" is a TRIAGE fact. A caller that can
+    // only learn it after fetching the full payload cannot triage a queue — and
+    // the MCP list is exactly the door that cannot afford the full payload.
+    ...proposalSetupShape,
   })
   .openapi("ProposalBasic");
 
@@ -307,6 +415,14 @@ export function toProposalBasic(row: Record<string, unknown>): ProposalBasic {
       row.proposalType as string,
       row.targetType as string
     ),
+    // FORWARDED, not derived. `setup` needs the template cache, the vault and
+    // Nango — this projection is pure and cannot reach any of them. Its
+    // PRODUCER is `resolveProposalSetups`, stamped by the list procedure that
+    // feeds this door (`hub-protocol/proposals.ts`). A declared field with no
+    // producer is the T4 defect; a declared field whose producer sits upstream
+    // is fine, provided the door actually forwards it — which is what the
+    // `proposal-setup-reaches-read-doors` tripwire drives end to end.
+    ...(row.setup ? { setup: row.setup as ProposalBasic["setup"] } : {}),
   };
 }
 

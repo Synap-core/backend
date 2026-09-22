@@ -36,6 +36,7 @@ import {
   sessionCriteriaSchema,
   sessionEvidenceSchema,
 } from "../schemas/session-criteria.js";
+import { playbookStagesSchema } from "../schemas/playbook-stage.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -1363,6 +1364,31 @@ export const focusSessionsRouter = router({
         /** WHOLESALE replace of the session's binary acceptance criteria. */
         criteria: sessionCriteriaSchema.optional(),
         /**
+         * WHOLESALE replace of the session's OWN phases (`focus_sessions.
+         * stages`, migration 0270 — the session's snapshot, not the playbook's
+         * live list).
+         *
+         * The column shipped with a reader that PREFERS it over the playbook
+         * (`session-continuation`'s `stagesFromPlaybookRead`, so a session
+         * running NO playbook can have phases at all) and a writer that only
+         * ran at birth (`create-session.ts`). Nothing could fill it afterwards,
+         * so the "start work from a capture" door — which seeds a playbook's
+         * phases onto a live session WITHOUT binding it as a run — had no way
+         * to write what the UI was already built to render.
+         *
+         * Validated by the same `playbookStagesSchema` the playbook write doors
+         * use, so a session's snapshot can never hold a shape a playbook could
+         * not: `category` required, stage `key` unique (a bare key is what
+         * `currentStage` stores, so a duplicate makes the active stage
+         * ambiguous), `gate` strict.
+         *
+         * Deliberately NOT paired with a `currentStage` seed. Seeding stage 1
+         * onto work already in flight is the unmapped-status failure
+         * `follow-playbook.ts` documents; the caller names the stage or the
+         * session stays at NULL.
+         */
+        stages: playbookStagesSchema.optional(),
+        /**
          * FOLLOW a playbook with this live session; `null` RELEASES it.
          * The session BECOMES A RUN of that playbook — it joins the playbook's
          * runs and leaves the work lens. Applied by the ONE implementation
@@ -1447,6 +1473,12 @@ export const focusSessionsRouter = router({
       if (patch.subjectEntityId !== undefined)
         set.subjectEntityId = patch.subjectEntityId;
       if (patch.criteria !== undefined) set.criteria = patch.criteria;
+      // The session's own phase snapshot. Assigned, not merged: unlike
+      // `expectedOutputs` (whose slots carry server-owned delegation and owed
+      // clocks a naive echo would erase), a stage list is inert display
+      // structure with no per-stage server state, so there is nothing a
+      // wholesale write can destroy.
+      if (patch.stages !== undefined) set.stages = patch.stages;
 
       // Any terminal status via update funnels through completeFocusSession —
       // the ONE close door (pack + run close + ephemeral expiry + close event).

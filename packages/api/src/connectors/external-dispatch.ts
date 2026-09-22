@@ -135,26 +135,17 @@ async function mirrorConnectionAuthOutcome(
 }
 
 /**
- * P1 "every failure carries a next action" — the machine-readable failure class a
- * dispatch failure is stamped with (alongside the human `error` string), so the
- * browser can derive a one-click action ("Reconnect Google", "Retry", "Connect X")
- * without re-parsing prose. Persisted on a failed proposal at
- * `proposal.data.failure = { errorClass, providerRef }`.
+ * The failure class a dispatch or a proposal-apply carries.
  *
- *   auth           — credential/token failure (expired, invalid_grant, 401) → RECONNECT
- *   no_connection  — enabled but never connected (no connection found)       → CONNECT
- *   transient      — timeout / rate-limit / upstream 5xx                     → RETRY
- *   permission     — an explicit grant/approval denial (vault grant, MCP approve)
- *   target_missing — a NOT_FOUND that is not a connection issue (tool/secret/endpoint)
- *   provider       — a genuine provider-side failure (business 4xx, malformed request)
+ * Re-exported, never re-declared: the ONE list lives in
+ * `@synap-core/types/failures`, which the api, the clients and relay all read,
+ * so a class cannot exist on one side and not the other. Kept exported from
+ * here because ~8 api modules already import it by this path.
+ * `classifyDispatchFailure` below returns only the DISPATCH members; the four
+ * apply-only classes reach `errorClass` through `failure-classification.ts`.
  */
-export type FailureErrorClass =
-  | "auth"
-  | "no_connection"
-  | "transient"
-  | "permission"
-  | "target_missing"
-  | "provider";
+export type { FailureErrorClass } from "@synap-core/types/failures";
+import type { FailureErrorClass } from "@synap-core/types/failures";
 
 /**
  * SINGLE CLASSIFIER — map an already-known dispatch failure ({status, message,

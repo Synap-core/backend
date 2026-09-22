@@ -56,6 +56,15 @@ import type {
   ToolVerbKind,
 } from "@synap/playbooks";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
+import {
+  SetupRequiredError,
+  isBlankParamValue,
+} from "../proposals/setup-required-error.js";
+import {
+  makeVaultReference,
+  parseVaultReference,
+  vaultSecretIdOf,
+} from "@synap-core/types/vault";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { mergeVerbCatalog } from "./verb-catalog.js";
 import { findContainerByAddress } from "./container-address.js";
@@ -477,9 +486,19 @@ export async function createCapabilityFromDefinition(
   // established (same userId + name + scope createVaultSecret keys by), SKIP the
   // param and let the tool/skill upserts proceed. A genuinely fresh install (the
   // secret does not exist yet) still throws exactly as before.
+  //
+  // BLANK IS MISSING. The guard used to read `=== undefined`, so `""` — the
+  // value an empty form field, a dropped interpolation, or an agent's
+  // `params: {apiKey: ""}` all produce — sailed straight through, interpolated
+  // into `vault[].value`, and installed a capability with a BLANK credential
+  // that then read as a satisfied connection. `isBlankParamValue` is SHARED
+  // with the read-side `setup.satisfied` computation, so the form and the
+  // installer can never disagree about what "filled in" means.
+  const missingRequired: string[] = [];
+  const missingLabels: string[] = [];
   for (const p of rawDef.params ?? []) {
     const required = (p as { required?: boolean }).required;
-    if (required && effectiveParams[p.name] === undefined) {
+    if (required && isBlankParamValue(effectiveParams[p.name])) {
       const established = await requiredParamSecretsExist(
         p.name,
         rawDef,
@@ -488,11 +507,57 @@ export async function createCapabilityFromDefinition(
         connWorkspaceId
       );
       if (established) continue;
-      throw new Error(
-        `Capability "${rawDef.key}" requires parameter "${p.name}" — pass it in \`params\`.`
+      missingRequired.push(p.name);
+      missingLabels.push((p as { label?: string }).label ?? p.name);
+    }
+  }
+
+  // An UNRESOLVED `{{token}}` on a CREDENTIAL-carrying field is a silent ""
+  // waiting to happen: `interpolateString` maps an unknown token to the empty
+  // string with no signal at all (`_shared/interpolate.ts`), so a typo'd or
+  // renamed token in `vault[].value` used to install a blank key. Only the
+  // credential surface is scanned — a `{{token}}` in a description degrading to
+  // "" is cosmetic; one in a secret's value is a dead capability nobody can
+  // diagnose. Skill `providerSpec` is deliberately NOT scanned: its
+  // placeholders are RUNTIME verb arguments and are restored raw below.
+  const credentialTemplates = [
+    ...(rawDef.vault ?? []).map((v) => v.value),
+    ...(rawDef.tools ?? []).map((t) => t.credentialRef),
+  ];
+  for (const template of credentialTemplates) {
+    if (typeof template !== "string") continue;
+    for (const m of template.matchAll(/\{\{(\w+)\}\}/g)) {
+      const token = m[1]!;
+      if (!isBlankParamValue(effectiveParams[token])) continue;
+      if (missingRequired.includes(token)) continue;
+      const established = await requiredParamSecretsExist(
+        token,
+        rawDef,
+        effectiveParams,
+        userId,
+        connWorkspaceId
+      );
+      if (established) continue;
+      missingRequired.push(token);
+      missingLabels.push(
+        (rawDef.params ?? []).find((p) => p.name === token)?.label ?? token
       );
     }
   }
+
+  if (missingRequired.length > 0) {
+    throw new SetupRequiredError({
+      failureClass: "missing_field",
+      missingFields: missingRequired,
+      labels: missingLabels,
+    });
+  }
+
+  // A required PROVIDER connection that is not connected. Installing anyway
+  // produced a capability whose every verb 401s, filed as a raw sentence nobody
+  // could act on. Derived through the SAME `deriveConnection` the catalog card
+  // and the read-side `setup` use — three readers, one rule.
+  await assertProviderConnected(rawDef, userId);
 
   const def = interpolateDeep(rawDef, effectiveParams);
 
@@ -1514,6 +1579,53 @@ export async function issueCapabilityGrant(
   });
 }
 
+/**
+ * A required PROVIDER (OAuth) connection must actually be connected before the
+ * template is applied.
+ *
+ * ── WHY THIS IS NOT A SECOND DERIVATION ────────────────────────────────────
+ * `deriveConnection` + `loadConnState` are the SAME pair the catalog card and
+ * the read-side `setup` call. So "the review screen says Connect Google" and
+ * "the approval refuses with no_connection" are one rule seen twice, not two
+ * rules that will drift.
+ *
+ * ── IT ONLY BLOCKS ON A PROVIDER ───────────────────────────────────────────
+ * A `vault` connection is the params' business and is already guarded above:
+ * the template's `vault[].value` is `{{param}}`, so a satisfied param IS a
+ * satisfied vault connection. Failing here on `kind:"vault"` would refuse every
+ * fresh install, because the secret is created two dozen lines later.
+ *
+ * ── AND IT NEVER BLOCKS ON AN UNREAD BROKER ────────────────────────────────
+ * `deriveConnection` stamps `unverified` when the Nango list FAILED rather than
+ * answered. An unread list is not "not connected", and refusing an install
+ * because the broker was briefly down would be the "empty ≠ failed" defect in
+ * its most expensive form. Unverified ⇒ proceed.
+ */
+async function assertProviderConnected(
+  rawDef: CapabilityDefinitionWithPlaybooks,
+  userId: string
+): Promise<void> {
+  const refs = (rawDef.tools ?? []).map((t) => t.credentialRef ?? null);
+  if (!refs.some((r) => typeof r === "string" && r.startsWith("nango://"))) {
+    return;
+  }
+  const { deriveConnection, loadConnState } =
+    await import("./capability-catalog.js");
+  const conn = await loadConnState(userId, []);
+  const connection = deriveConnection(refs, false, conn);
+  if (connection.kind !== "provider" || !connection.required) return;
+  if (connection.state === "connected") return;
+  if ("unverified" in connection && connection.unverified) return;
+  throw new SetupRequiredError({
+    failureClass: "no_connection",
+    missingFields: [],
+    connection: {
+      ...(connection.provider ? { provider: connection.provider } : {}),
+      state: connection.state,
+    },
+  });
+}
+
 // ── Re-apply guard helper — is a required param's secret already established? ──
 //
 // A credentialed template declares a `required` param whose ONLY job is to feed a
@@ -1565,7 +1677,14 @@ async function requiredParamSecretsExist(
 
 // ── Vault helper — mirrors POST /vault/secrets server-encryption path ─────────
 
-async function createVaultSecret(
+/**
+ * EXPORTED for the real-door test (`create-from-definition.vault-ref-link
+ * .pglite.test.ts`), which drives the ACTUAL writer against real Postgres —
+ * the only way to prove that a `vault://<id>` param links the existing secret
+ * instead of encrypting the pointer's text as a new one. Not a public API:
+ * every production caller is inside this module.
+ */
+export async function createVaultSecret(
   v: CapabilityVaultDef,
   userId: string,
   workspaceId: string | null
@@ -1575,6 +1694,67 @@ async function createVaultSecret(
   // For a pod-wide secret (workspaceId null) the acting user is the owner, so
   // pass ownerId:userId to satisfy the pod-wide owner branch.
   await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
+
+  // ── LINK, don't re-encrypt ────────────────────────────────────────────────
+  // The review form lets a human EITHER type a new key OR pick one already in
+  // the vault. Picking one sends `params[apiKey] = "vault://<id>"`, which
+  // interpolates into this `v.value`. Encrypting that would store the literal
+  // string "vault://<id>" AS the credential — a capability that authenticates
+  // with the text of a pointer, failing at the provider with no clue why.
+  //
+  // So a `vault://<id>` value means LINK: resolve the existing secret and
+  // return its ref. The caller pushes it onto `createdVault`, which is what
+  // stamps `capability_id`/`isDefault` — so a linked secret becomes this
+  // capability's connection exactly like a freshly created one, with no second
+  // code path and no duplicate row.
+  //
+  // Scoped to secrets the CALLER can actually resolve (own, or pod-wide), which
+  // is the same floor `loadConnState` uses for `vaultExists` — so a ref the
+  // form showed as `satisfied` is exactly a ref that links here. A ref that
+  // resolves to nothing is a missing field, NOT a silent new secret.
+  const linkedId = parseVaultReference(v.value);
+  if (linkedId) {
+    // A pointer whose id is not a uuid can never resolve — refuse it here, with
+    // the same typed error as any other unusable ref. Left to the query below
+    // it would throw a raw Postgres cast error instead.
+    if (!vaultSecretIdOf(v.value)) {
+      throw new SetupRequiredError({
+        failureClass: "missing_field",
+        missingFields: [v.ref],
+        labels: [v.name],
+        message: `Needs setup: ${v.name} points at a vault reference that is not valid.`,
+      });
+    }
+    const [existingLinked] = await db
+      .select({ id: secrets.id })
+      .from(secrets)
+      .where(
+        and(
+          eq(secrets.id, linkedId),
+          drizzleSql`(${secrets.userId} = ${userId} OR ${secrets.isPodWide} = true)`,
+          isNull(secrets.deletedAt)
+        )
+      )
+      .limit(1);
+    if (!existingLinked) {
+      throw new SetupRequiredError({
+        failureClass: "missing_field",
+        missingFields: [v.ref],
+        labels: [v.name],
+        message: `Needs setup: ${v.name} points at a vault secret you cannot use (or that no longer exists).`,
+      });
+    }
+    await db.insert(secretAuditLog).values({
+      secretId: existingLinked.id,
+      userId,
+      action: "linked",
+      metadata: { via: "capability-template", service: v.service ?? null },
+    });
+    return {
+      vaultRef: makeVaultReference(existingLinked.id),
+      secretId: existingLinked.id,
+    };
+  }
 
   const blob = encryptServerSide(v.value);
 
@@ -1602,7 +1782,10 @@ async function createVaultSecret(
     // existing credential untouched. (Bug-1's guard already prevents the common
     // path; this is the defensive floor.)
     if (typeof v.value !== "string" || v.value.trim() === "") {
-      return { vaultRef: `vault://${existing.id}`, secretId: existing.id };
+      return {
+        vaultRef: makeVaultReference(existing.id),
+        secretId: existing.id,
+      };
     }
     await db
       .update(secrets)
@@ -1618,7 +1801,7 @@ async function createVaultSecret(
         updatedAt: new Date(),
       })
       .where(eq(secrets.id, existing.id));
-    return { vaultRef: `vault://${existing.id}`, secretId: existing.id };
+    return { vaultRef: makeVaultReference(existing.id), secretId: existing.id };
   }
 
   const [secret] = await db
@@ -1649,5 +1832,5 @@ async function createVaultSecret(
     metadata: { via: "capability-template", service: v.service ?? null },
   });
 
-  return { vaultRef: `vault://${secret.id}`, secretId: secret.id };
+  return { vaultRef: makeVaultReference(secret.id), secretId: secret.id };
 }

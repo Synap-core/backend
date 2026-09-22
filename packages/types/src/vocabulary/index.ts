@@ -160,6 +160,20 @@ export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> = {
   discard: { imperative: "Discard", past: "Discarded" },
   // Undo of a conversion — the inverse verb, not a delete.
   revert: { imperative: "Revert", past: "Reverted" },
+  // TWO distinct acts, two verbs. `revert` takes an APPLIED proposal's effect
+  // back (the history row: it lands in `reverted`). `undo` is the seconds-later
+  // "I did not mean to decide that yet" on a verdict just given — it puts the
+  // proposal back in the queue. Sharing one word made the same button mean two
+  // things on adjacent surfaces.
+  undo: { imperative: "Undo", past: "Undone" },
+  // Re-running an approval that already failed (`approval_failed`). The write
+  // was approved once, so "Approve" is the wrong word on that button — and for a
+  // transient provider outage it is the reviewer's ONLY recovery.
+  retry: { imperative: "Retry", past: "Retried" },
+  // Put a REJECTED proposal back in the queue — the inverse of reject. Without
+  // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
+  // which has no tense and only spelled "Reopen" by luck.
+  reopen: { imperative: "Reopen", past: "Reopened" },
   // Pod hygiene (`profile/retire`, the cleanup pack). `retire` is a SOFT,
   // reversible hide of a kind — not a delete, so it never reads "Deleted".
   // `close` ends an idle session through the close door; `expire` takes a
@@ -428,6 +442,9 @@ export const STATUS_LABELS: Readonly<Record<string, string>> = {
   rejected: "Rejected",
   denied: "Rejected",
   approval_failed: "Approval failed",
+  // The proposal's effect was taken back after approval. One word for the row's
+  // status chip on every surface (the workbench and the phone both name it).
+  reverted: "Reverted",
   // NOT a `proposals.status` enum value, and deliberately so: partial approval
   // ships as per-item dispositions, the row keeps storing `approved`, and the
   // reviewer's per-item denials live in `data.dispositions`. It IS a real

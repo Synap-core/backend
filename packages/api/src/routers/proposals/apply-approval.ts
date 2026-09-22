@@ -56,6 +56,14 @@ import {
   type ProposalExecutorDeps,
   type ProposalExecutorResult,
 } from "./execution-registry.js";
+import {
+  classifyThrownFailure,
+  failureRecord,
+} from "./failure-classification.js";
+import {
+  redactDeepForStorage,
+  redactForStorage,
+} from "../../utils/redact-secrets.js";
 import { registerApproveExecutors } from "./approve-executors.js";
 import {
   applyGovConfigChange,
@@ -876,18 +884,36 @@ async function applyProposalApprovalInner(
       // proposal is recorded APPROVAL_FAILED (the actionable queue — a retry is
       // allowed) with the per-step reasons and what compensation did, so the
       // reviewer and the agent revising the plan can both see WHY.
+      // A failed row ALWAYS carries the same two things, whichever writer made
+      // it: a safe `rejectionReason` sentence and a `data.failure.errorClass`.
+      // This writer used to record `planFailure` only, so the class-driven
+      // recovery affordance and the AI explanation were blind to every plan
+      // failure — the one failure shape that is hardest to read unaided.
+      const planMeta = classifyThrownFailure(err);
+      // REDACTED at write. `CompositePlanApplyError.message` is built FROM the
+      // per-step reasons, and a step's reason is whatever the step threw —
+      // including a provider body that echoes the Authorization header that
+      // produced it. `rejectionReason` and `planFailure` are both projected
+      // verbatim by every user-facing door (the projection floor only reaches
+      // inside `data.failure`), so redaction has to happen here.
+      const safePlanMessage = redactForStorage(err.message);
       await db
         .update(proposals)
         .set({
           status: ProposalStatus.APPROVAL_FAILED,
-          rejectionReason: err.message,
+          rejectionReason: safePlanMessage,
           data: {
             ...((proposal.data as Record<string, unknown> | null) ?? {}),
+            failure: failureRecord(planMeta),
             planFailure: {
               at: new Date().toISOString(),
               by: userId,
-              steps: err.steps,
-              compensation: err.compensation,
+              // Deep-redacted: `steps[].reason` and
+              // `compensation.notCompensated[].reason` are raw thrown text.
+              // The WHOLE payload goes through one call so a new nested
+              // reason-carrying field cannot be missed by a per-field list.
+              steps: redactDeepForStorage(err.steps),
+              compensation: redactDeepForStorage(err.compensation),
             },
           } as never,
           reviewedBy: userId,
@@ -900,7 +926,10 @@ async function applyProposalApprovalInner(
             ne(proposals.status, ProposalStatus.APPROVED)
           )
         );
-      throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+      // Same redacted sentence the row stores — one derivation, so the
+      // approver's screen and the queue row can never disagree, and neither
+      // carries the raw text.
+      throw new TRPCError({ code: "BAD_REQUEST", message: safePlanMessage });
     }
     const {
       created: createdCount,
@@ -2056,26 +2085,24 @@ async function applyProposalApprovalInner(
       // flipped this proposal to APPROVED (a confirmed external dispatch), do NOT
       // clobber it back to APPROVAL_FAILED. Only non-approved rows record failure.
       //
-      // P1 "every failure carries a next action": stash the structured failure
-      // scalars (errorClass/providerRef) into the proposal's existing `data` JSONB
-      // under a `failure` key so the browser can derive a one-click action
-      // ("Reconnect Google"). `rejectionReason` (the human string) is UNCHANGED —
-      // this rides ALONGSIDE it. Free-form JSONB, no migration. Only written when a
-      // scalar was actually classified (a governance/config failure carries none).
-      const hasFailureMeta =
-        !!failure &&
-        (failure.errorClass !== undefined || failure.providerRef !== undefined);
-      const nextData = hasFailureMeta
+      // "Every failure carries a next action": stash the structured failure
+      // scalars into the proposal's existing `data` JSONB under a `failure` key
+      // so the client can derive a one-click action ("Reconnect Google", "Fill
+      // in what's missing") and the AI can EXPLAIN it. `rejectionReason` (the
+      // safe, classified human sentence) is written alongside, never replaced.
+      // Free-form JSONB, no migration.
+      //
+      // `detail` is the redacted RAW error text and is AGENT-ONLY: it is read
+      // by `render-for-prompt.ts` on the server-side prompt path and stripped
+      // from every user-facing read door by `projectProposalDataForViewer`.
+      //
+      // The classifier ALWAYS returns an errorClass now (`unknown` at worst),
+      // so a failed row can no longer be written with no class at all — that
+      // absence is what made a whole population of failures unexplainable.
+      const nextData = failure
         ? {
             ...((proposal.data as Record<string, unknown> | null) ?? {}),
-            failure: {
-              ...(failure!.errorClass !== undefined
-                ? { errorClass: failure!.errorClass }
-                : {}),
-              ...(failure!.providerRef !== undefined
-                ? { providerRef: failure!.providerRef }
-                : {}),
-            },
+            failure: failureRecord(failure),
           }
         : undefined;
       await db

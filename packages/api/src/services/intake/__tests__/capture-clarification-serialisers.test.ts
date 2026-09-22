@@ -21,6 +21,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { REDACTED_SECRET } from "@synap-core/types/capture";
 import {
   answerContextWithQuestion,
   answerToContext,
@@ -78,6 +79,14 @@ const FORMS: Array<Record<string, unknown>> = [
   { dueDate: "2026-09-20", empty: "", nothing: null, missing: undefined },
   { tags: ["q3", "sales"], owner: { id: "u1" }, count: 0, done: false },
   {},
+  // A typed key must never reach the model's context.
+  { name: "Acme", apiKey: { kind: "new", value: "sk-live-abc123" } },
+  // An `existing` ref is a pointer, not a credential — passes through. This row
+  // separates "redact any object" from "redact only a NEW secret".
+  { apiKey: { kind: "existing", ref: "vault://abc" } },
+  // `kind:"new"` with a non-string value is not the secret shape (the predicate
+  // requires a string) — passes through, exactly as the client mirror does.
+  { odd: { kind: "new", value: 5 } },
 ];
 
 const QUESTION_ROWS: Array<[string | undefined | null, string]> = [
@@ -114,7 +123,16 @@ describe("pinned outputs", () => {
       "dueDate: 2026-09-20",
       'tags: ["q3","sales"]; owner: {"id":"u1"}; count: 0; done: false',
       "",
+      'name: Acme; apiKey: {"kind":"new","value":"[redacted]"}',
+      'apiKey: {"kind":"existing","ref":"vault://abc"}',
+      'odd: {"kind":"new","value":5}',
     ]);
+  });
+
+  it("formValuesToContext never carries a typed secret (and the redaction constant matches the client)", () => {
+    const out = FORMS.map((f) => formValuesToContext(f)).join("\n");
+    expect(out).not.toContain("sk-live-abc123");
+    expect(REDACTED_SECRET).toBe("[redacted]");
   });
 
   it("answerContextWithQuestion prefixes only a non-blank question, verbatim", () => {

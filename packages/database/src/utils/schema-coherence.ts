@@ -593,6 +593,14 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0267_session_criteria_and_evaluations.sql",
   },
 
+  // A session's OWN phases (0270). Every session read selects `stages`, so a
+  // missing column 500s every session door exactly as `criteria` would.
+  {
+    table: "focus_sessions",
+    column: "stages",
+    addedBy: "0270_focus_session_stages.sql",
+  },
+
   // The Process Plane — typed tier discriminators (0240)
   {
     table: "focus_sessions",

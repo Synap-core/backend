@@ -968,6 +968,8 @@ export interface HubFocusSession {
   channelId?: string | null;
   progress?: number | null;
   currentStage?: string | null;
+  /** PlaybookStage[] — the session's OWN phases (0270). `[]` when it declares none. */
+  stages?: unknown;
   agentIds?: string[];
   closedAt?: string | null;
   verificationReport?: unknown;

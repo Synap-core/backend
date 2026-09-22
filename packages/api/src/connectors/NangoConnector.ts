@@ -133,6 +133,19 @@ export type NangoConnectionsResult =
       error: string;
     };
 
+/**
+ * Bounded wait for every Nango LIST call on a read path.
+ *
+ * `loadConnState` runs on `proposals.list` for any page carrying a
+ * `capability.install` row, and these fetches had NO timeout at all — so a hung
+ * Nango stalled the whole proposal queue behind a connector nobody was using in
+ * that request. An abort lands in the existing `catch` and returns
+ * `{ ok:false, reason:"unreachable" }`, which the catalog already treats as
+ * UNVERIFIED (never as "not connected") — so failing fast here degrades
+ * honestly rather than inventing a disconnected state.
+ */
+const NANGO_LIST_TIMEOUT_MS = 8_000;
+
 export class NangoConnector implements SyncConnector, ConnectionBroker {
   readonly name = "nango";
   /** The self-hosted broker: this pod's own Nango key. See `resolveBroker`. */
@@ -355,6 +368,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
     try {
       res = await fetch(`${this.host}/connection?${params}`, {
         headers: this.authHeaders(),
+        signal: AbortSignal.timeout(NANGO_LIST_TIMEOUT_MS),
       });
     } catch (err) {
       return {
@@ -446,6 +460,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
     try {
       res = await fetch(`${this.host}/connection?${params}`, {
         headers: this.authHeaders(),
+        signal: AbortSignal.timeout(NANGO_LIST_TIMEOUT_MS),
       });
     } catch (err) {
       return {
@@ -547,6 +562,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
     try {
       res = await fetch(`${this.host}/connection?${params}`, {
         headers: this.authHeaders(),
+        signal: AbortSignal.timeout(NANGO_LIST_TIMEOUT_MS),
       });
     } catch {
       return null;
@@ -633,6 +649,7 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
     try {
       res = await fetch(`${this.host}/integrations`, {
         headers: this.authHeaders(),
+        signal: AbortSignal.timeout(NANGO_LIST_TIMEOUT_MS),
       });
     } catch (err) {
       return {

@@ -105,9 +105,17 @@
       "types": "./dist/proposals/index.d.ts",
       "import": "./dist/proposals/index.js"
     },
+    "./proposals/intent": {
+      "types": "./dist/proposals/intent.d.ts",
+      "import": "./dist/proposals/intent.js"
+    },
     "./text": {
       "types": "./dist/text/index.d.ts",
       "import": "./dist/text/index.js"
+    },
+    "./failures": {
+      "types": "./dist/failures/index.d.ts",
+      "import": "./dist/failures/index.js"
     },
     "./vault": {
       "types": "./dist/vault/index.d.ts",

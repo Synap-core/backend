@@ -15,6 +15,12 @@
  */
 
 import { z } from "zod";
+import {
+  cleanFieldKey,
+  isSensitiveField,
+  redactSecretValues,
+  SECRET_TYPE_FIELDS,
+} from "../vault/index.js";
 
 /** Bounds shared by every door that writes or reads a part. */
 export const CAPTURE_PART_LIMITS = {
@@ -79,12 +85,120 @@ export const DynamicFormFieldSchema = z.object({
   help: z.string().optional(),
 });
 
+/**
+ * The secret-form-value rule (the tagged `{kind:"new"|"existing"}` shape and
+ * its redaction) lives in ONE zero-import home, `@synap-core/types/vault`, so
+ * the pod, the property renderer, the capture pipeline and relay all apply the
+ * same rule. Re-exported here because the answer schema below applies it at
+ * parse time and callers of this leaf expect it beside the schema.
+ */
+export {
+  REDACTED_SECRET,
+  redactSecretValues,
+  isSecretFieldValue,
+  isSecretValueEmpty,
+} from "../vault/index.js";
+export type { SecretFieldValue } from "../vault/index.js";
+
+/**
+ * Field types an AI may NOT author on the capture wire.
+ *
+ * Credential prompts come from a capability MANIFEST
+ * (`installParamsToFormSpec`, client-side), never from a model, and a value
+ * typed into a room message is persisted into `messages.metadata.capturePart`
+ * and fed back as refine context. `type` is a FREE STRING here, which is the
+ * whole reason a dropped-set exists — but the set held only `"secret"`, so an
+ * AI that wrote `type: "password"` got a masked credential prompt anyway, with
+ * the same consequence. The other spellings a model reaches for are here too.
+ *
+ * Deliberately a DROPPED-SET and not a strict enum: `type` stays open so a new
+ * NON-credential type (`"date"`, `"slider"`, whatever a future spec adds) keeps
+ * working without a release. Only credential-ish types are refused.
+ *
+ * Matched case-insensitively, `-`/`_`/space-insensitively, so `"API_KEY"`,
+ * `"api-key"` and `"apiKey"` are one entry, not three.
+ *
+ * ## DERIVED, not hand-written (round-2 review)
+ *
+ * The hand list missed `secret-key`, `apisecret`, `sshkey`, `totp`/`otp`,
+ * `pin`, `cvv`, `cardnumber` and `connectionstring` — and there was nothing to
+ * stop the next spelling being missed too. `@synap-core/types/vault` already
+ * owns the sensitivity table: every `!`-prefixed key in `SECRET_TYPE_FIELDS`
+ * is, by that module's own definition, a credential. So a field name the vault
+ * calls sensitive joins this set BY EXISTING.
+ */
+
+/** Lowercase, `-`/`_`/space-insensitive. The ONE normalisation for this set. */
+function normaliseFieldType(type: string): string {
+  return type.toLowerCase().replace(/[-_\s]+/g, "");
+}
+
+/**
+ * The two `!`-fields that are too GENERIC to refuse as a form `type`.
+ *
+ * `env_variable: ["key", "!value", …]` makes `value` sensitive as a vault FIELD
+ * (it is the variable's content) — but a capture field of type `"value"` is
+ * ordinary, and refusing it would silently drop legitimate forms. Same for
+ * `note`'s `content`. Sensitivity is contextual in the vault; the context does
+ * not survive the move to a form-field type, so these two are named and
+ * excluded rather than quietly inherited.
+ */
+const NOT_A_CREDENTIAL_TYPE = new Set(["value", "content"]);
+
+/**
+ * Spellings a MODEL reaches for that are not vault field names: form-only
+ * synonyms and the bare stems of compound `!`-fields (`cardCvv` → `cvv`).
+ * Small, explicit, and the only hand-maintained part.
+ */
+const CAPTURE_EXTRA_REFUSED_TYPES = [
+  "secret",
+  "secretkey",
+  "token",
+  "authtoken",
+  "bearertoken",
+  "sessiontoken",
+  "apikey",
+  "apisecret",
+  "sshkey",
+  "passwd",
+  "credential",
+  "credentials",
+  "otp",
+  "pin",
+  "cvv",
+] as const;
+
+/** Every `!`-prefixed key in the vault's sensitivity table, normalised. */
+const VAULT_SENSITIVE_TYPES = Object.values(SECRET_TYPE_FIELDS)
+  .flat()
+  .filter(isSensitiveField)
+  .map((f) => normaliseFieldType(cleanFieldKey(f)))
+  .filter((f) => !NOT_A_CREDENTIAL_TYPE.has(f));
+
+export const CAPTURE_REFUSED_FIELD_TYPES: readonly string[] = [
+  ...new Set([...VAULT_SENSITIVE_TYPES, ...CAPTURE_EXTRA_REFUSED_TYPES]),
+];
+
+const refusedTypes = new Set<string>(CAPTURE_REFUSED_FIELD_TYPES);
+
+/** Is this authored `type` a credential prompt? (normalised, never exact-match) */
+export function isRefusedCaptureFieldType(type: unknown): boolean {
+  if (typeof type !== "string") return false;
+  return refusedTypes.has(normaliseFieldType(type));
+}
+
 export const DynamicFormSpecSchema = z.object({
   title: z.string().optional(),
   note: z.string().optional(),
+  // Credential-ish fields are DROPPED, never persisted. See
+  // `CAPTURE_REFUSED_FIELD_TYPES` for why the set is a set and not just
+  // `"secret"`, and why `type` stays an open string.
   fields: z
     .array(DynamicFormFieldSchema)
-    .max(CAPTURE_PART_LIMITS.formFieldsMax),
+    .max(CAPTURE_PART_LIMITS.formFieldsMax)
+    .transform((fields) =>
+      fields.filter((f) => !isRefusedCaptureFieldType(f.type))
+    ),
 });
 
 export const CAPTURE_QUESTION_STATUSES = [
@@ -115,7 +229,12 @@ export const CaptureAnswerSchema = z.discriminatedUnion("type", [
           utf8Bytes(JSON.stringify(v)) <=
           CAPTURE_PART_LIMITS.formValuesMaxBytes,
         { message: "form values exceed 8KB serialized" }
-      ),
+      )
+      // AFTER the size bound (measured on the original, so an oversized payload
+      // cannot become acceptable by being redacted) and BEFORE it is persisted
+      // into `messages.metadata.capturePart`, where a plaintext key would sit
+      // in a JSONB column, readable by every agent, for the life of the row.
+      .transform((v) => redactSecretValues(v)),
   }),
   z.object({ type: z.literal("skip") }),
 ]);

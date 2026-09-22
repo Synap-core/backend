@@ -37,6 +37,7 @@ import {
   fingerprintPassword,
   isServerVaultAvailable,
   assertGrantScoped,
+  getActingAgentUserId,
 } from "@synap/database";
 import {
   proposals,
@@ -55,6 +56,7 @@ import type {
   SecretDetailBundle,
   SecretConsumerType,
 } from "@synap-core/types";
+import { makeVaultReference } from "@synap-core/types/vault";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 
@@ -380,8 +382,7 @@ export const secretsVaultRouter = router({
         salt: input.salt,
         keyDerivationAlgorithm: input.keyDerivationAlgorithm,
         keyDerivationParams: input.keyDerivationParams as
-          | Record<string, unknown>
-          | undefined,
+          Record<string, unknown> | undefined,
         verificationCipher: input.verificationCipher,
         verificationIv: input.verificationIv,
         verificationTag: input.verificationTag,
@@ -530,6 +531,33 @@ export const secretsVaultRouter = router({
   create: protectedProcedure
     .input(createSecretSchema)
     .mutation(async ({ ctx, input }) => {
+      // ── THIS DOOR IS FOR A HUMAN, AND ONLY A HUMAN ────────────────────────
+      // It is the door a reviewer uses on a `capability.install` review screen
+      // to type a NEW key and get back a `vault://<id>` to put in `params`.
+      // Minting a credential out of free text is the one vault write that is
+      // not "store what you already hold" — an agent that could call it could
+      // plant a credential of its own choosing and then propose the install
+      // that uses it, with the human reviewing only the REF.
+      //
+      // Structurally, tRPC is Kratos-session-authenticated, so an agent key
+      // cannot reach this procedure at all today. This is the floor for when
+      // that stops being true — the ambient acting-agent marker is the only
+      // actor channel an agent cannot forge (a request-supplied id can be
+      // omitted; the ALS marker is set by the key-auth middleware itself).
+      // Agents keep the Hub REST `POST /vault/secrets` door, which is scoped,
+      // audited as `actor: "agent"`, and is what "store the key I already
+      // have" means.
+      const actingAgentUserId = getActingAgentUserId();
+      if (actingAgentUserId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Creating a vault secret from a free-text value is a human action. " +
+            "An agent stores a credential it already holds via the Hub Protocol " +
+            "`POST /vault/secrets` door.",
+        });
+      }
+
       const repo = getRepository();
 
       // Server-only consolidation: encrypt the plaintext value with VAULT_SERVER_KEY.
@@ -566,6 +594,11 @@ export const secretsVaultRouter = router({
         name: secret.name,
         type: secret.type,
         createdAt: secret.createdAt,
+        // The REF, not the id-with-assembly-required. The review form's next
+        // move is `proposals.revise` with `params[name] = <this>`; making each
+        // caller concatenate `vault://` + id is how a second spelling of the
+        // ref format gets written. Metadata only — never the value.
+        vaultRef: makeVaultReference(secret.id),
       };
     }),
 
@@ -1003,7 +1036,7 @@ export const secretsVaultRouter = router({
       assertGrantScoped({ grantedTo, workspaceId: grantWorkspaceId });
 
       // 5. Build the vault:// reference
-      const vaultRef = `vault://${secret.id}`;
+      const vaultRef = makeVaultReference(secret.id);
 
       // 6. Insert the grant row (the enforcement record consulted at redemption).
       //    A vault secret is just one grantable KIND — write the generalized

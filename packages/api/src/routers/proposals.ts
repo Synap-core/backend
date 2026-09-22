@@ -102,6 +102,7 @@ export { buildProposalChanges } from "./proposals/changes.js";
 import {
   planProposalRevert,
   planProposalOpRevert,
+  revertableForRow,
 } from "./proposals/revert.js";
 import {
   revertProposalCreations,
@@ -129,6 +130,7 @@ export {
   type GovernanceTightenLaneProposalData,
 } from "./proposals/apply-approval.js";
 import type { ProposalExecutorResult } from "./proposals/execution-registry.js";
+import { askAiAboutProposal } from "./proposals/ask-ai.js";
 
 const logger = createLogger({ module: "proposals" });
 
@@ -335,7 +337,7 @@ export const proposalsRouter = router({
          */
         automationId: z.string().uuid().optional(),
         status: z
-          .enum(["pending", "validated", "rejected", "all"])
+          .enum(["pending", "validated", "rejected", "reverted", "all"])
           .default("pending"),
         /** Cursor-based pagination: ISO timestamp of the last item's createdAt */
         cursor: z.string().optional(),
@@ -395,6 +397,12 @@ export const proposalsRouter = router({
         );
       } else if (input.status === "rejected") {
         conditions.push(eq(proposals.status, ProposalStatus.REJECTED));
+      } else if (input.status === "reverted") {
+        // REVERTED only. `validated` folds approved + auto_approved because a
+        // revert is available from both, but once a proposal HAS been reverted
+        // it is no longer "applied" and a history surface needs to say so — it
+        // was reachable only through `all`, mixed in with everything else.
+        conditions.push(eq(proposals.status, ProposalStatus.REVERTED));
       }
 
       // NOTE: proposals no longer carry a functional expiry (C2 lifecycle-hygiene
@@ -505,31 +513,25 @@ export const proposalsRouter = router({
         viewerCanReviewReasonById.set(r.id, reason);
         reviewPolicyById.set(r.id, facts.policy);
       }
-      // revertable — per proposal, "would `revert` succeed for this row?"
-      // computed from the SAME planner the revert mutation uses (:1903), so the
-      // UI can stop hand-mirroring the backend's revert logic (SSOT). Purely a
-      // function of the proposal's own stored data (status/target/type/data) —
-      // no extra DB round-trip. Only applied proposals (approved/auto_approved)
-      // are candidates, mirroring the revert mutation's status gate; every other
-      // status is non-revertable, and a plan of `kind: "unsupported"` (e.g. an
-      // update/edit with no before-snapshot) → false.
+      // revertable — per proposal, "is this proposal's effect undoable?" —
+      // computed by `revertableForRow` from the SAME planner the revert mutation
+      // uses (:1903), so the UI never hand-mirrors the backend's revert logic
+      // (SSOT). Purely a function of the proposal's own stored data — no extra
+      // DB round-trip. For a LIVE row (pending / approval_failed) it means
+      // "would revert succeed once applied": the answer a reviewer needs before
+      // deciding. See `revertableForRow` for the status matrix.
       const revertableById = new Map<string, boolean>();
       for (const r of rows) {
-        const isApplied =
-          r.status === ProposalStatus.APPROVED ||
-          r.status === ProposalStatus.AUTO_APPROVED;
-        if (!isApplied) {
-          revertableById.set(r.id, false);
-          continue;
-        }
-        const plan = planProposalRevert({
-          status: r.status,
-          targetType: r.targetType,
-          targetId: r.targetId,
-          proposalType: r.proposalType,
-          data: r.data,
-        });
-        revertableById.set(r.id, plan.kind !== "unsupported");
+        revertableById.set(
+          r.id,
+          revertableForRow({
+            status: r.status,
+            targetType: r.targetType,
+            targetId: r.targetId,
+            proposalType: r.proposalType,
+            data: r.data,
+          })
+        );
       }
       const itemsWithPermission = items.map((it) => {
         const viewerCanReview = viewerCanReviewById.get(it.id) ?? false;
@@ -869,6 +871,38 @@ export const proposalsRouter = router({
       .orderBy(desc(proposalClusterMutes.createdAt));
     return { mutes: rows };
   }),
+
+  /**
+   * "Ask AI to resolve this" — the ONE server door behind the affordance both
+   * Relay and the workbench offer on a failed (or merely confusing) proposal.
+   *
+   * Opens the proposal-bound thread, posts the user's ask, and starts the agent
+   * turn through `triggerAutoRespond`. It does NOT revise, retry or repair the
+   * proposal: a fix, if one exists, arrives as a NEW proposal the user reviews.
+   * Returns the channel so the client can deep-link straight into the chat.
+   *
+   * Authorization, idempotency and the one-door rule all live in the leaf
+   * (`proposals/ask-ai.ts`) so the REST/MCP doors can reuse it verbatim.
+   */
+  askAi: protectedProcedure
+    .input(
+      z.object({
+        proposalId: z.string().uuid(),
+        /** The caller's active workspace — used only if the proposal has none. */
+        workspaceId: z.string().nullish(),
+        /** An optional extra sentence from the user. */
+        note: z.string().max(2000).optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) => {
+      const userId = requireUserId(ctx.userId);
+      return await askAiAboutProposal({
+        proposalId: input.proposalId,
+        userId,
+        fallbackWorkspaceId: input.workspaceId ?? null,
+        note: input.note,
+      });
+    }),
 
   /**
    * Fetch a single proposal by ID.

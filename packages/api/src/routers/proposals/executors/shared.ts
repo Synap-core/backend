@@ -13,6 +13,21 @@ import {
   type ProposalRow,
 } from "../execution-registry.js";
 import type { FailureErrorClass } from "../../../connectors/external-dispatch.js";
+import { redactForStorage } from "../../../utils/redact-secrets.js";
+
+/**
+ * Bound on the PROVIDER-authored fragment interpolated into the sentence below.
+ *
+ * `result.reason` is NOT author-written. It originates in
+ * `extractProviderErrorMessage` (`connectors/external-dispatch.ts`), which
+ * returns the far side's own `error.message` — unbounded, unredacted, and
+ * routinely echoing the `Authorization` header that produced it. Interpolating
+ * it into a `TRPCError` message made it "author-written" by construction, and
+ * every downstream reader (`safeFailureSentence` → `rejectionReason` →
+ * `render-for-prompt`'s trusted `- What the user is shown:` line) trusted that
+ * label. Redact and clamp at the SOURCE; the sink redacts again.
+ */
+const PROVIDER_REASON_MAX = 200;
 
 /**
  * Fire the "approved" IS-telemetry outcome (fire-and-forget — never blocks).
@@ -104,7 +119,11 @@ export async function dispatchExternalOnce(
     throw attachFailureMeta(
       new TRPCError({
         code: "INTERNAL_SERVER_ERROR",
-        message: `Couldn't apply — ${result.reason ?? "the external action was not dispatched"}.`,
+        message: `Couldn't apply — ${
+          result.reason
+            ? redactForStorage(result.reason, PROVIDER_REASON_MAX)
+            : "the external action was not dispatched"
+        }.`,
       }),
       { errorClass: result.errorClass, providerRef: result.providerRef }
     );

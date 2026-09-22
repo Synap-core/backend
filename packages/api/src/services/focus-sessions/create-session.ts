@@ -80,6 +80,15 @@ const UUID_RE =
  * Stages are stored as JSONB, so this stays defensive about shape rather than
  * trusting the row to be well-formed.
  */
+/**
+ * The stage list to COPY onto a new session. Anything that is not an array is
+ * no stages — a jsonb column can hold whatever was last written to it, and a
+ * session is not the place to discover that.
+ */
+export function readStages(stages: unknown): unknown[] {
+  return Array.isArray(stages) ? stages : [];
+}
+
 export function firstStageKey(stages: unknown): string | null {
   if (!Array.isArray(stages) || stages.length === 0) return null;
   const first = stages[0] as { key?: unknown } | null;
@@ -607,6 +616,12 @@ export async function createFocusSession(
       // Seed it here so the column matches its contract from birth; stageless
       // playbooks (stages: []) correctly stay NULL.
       currentStage: firstStageKey(playbook?.stages),
+      // The session's OWN copy of the phases (0270). SNAPSHOTTED at birth, for
+      // the same reason `criteria` and `expectedOutputs` are: editing the
+      // playbook afterwards must not silently rewrite what an in-flight
+      // session says it is doing. A session with no playbook gets `[]` and is
+      // free to declare its own.
+      stages: readStages(playbook?.stages),
       // `owedSince` is present IFF `owner === 'human'`, and that invariant has
       // to hold from BIRTH: a session created with an already-blocked slot
       // would otherwise carry the human's ownership with no clock, and the
