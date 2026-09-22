@@ -26,7 +26,8 @@ import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 const { resolveProfile } = vi.hoisted(() => ({
   resolveProfile: vi.fn(
-    async (_slug: string) => null as { profileKind: string } | null
+    async (_slug: string, _userId?: string, _workspaceId?: string | null) =>
+      null as { profileKind: string } | null
   ),
 }));
 vi.mock("@synap/database", async (importOriginal) => ({
@@ -106,6 +107,42 @@ describe("validateCaptureRelationTypes", () => {
     expect(out).toHaveLength(1);
     expect(out[0].message).toMatch(/is a ROLE, not a relation/);
     expect(out[0].message).toMatch(/facets\[\]/);
+  });
+
+  it("falls back to the caller's floor when the LENS cannot see the role", async () => {
+    // The production failure, twice: a SHARED role needs a grant row for the
+    // lens, and a WORKSPACE-scoped role is invisible pod-wide. The lensed
+    // lookup returns null; the workspace-less one is the caller's real floor.
+    resolveProfile.mockClear();
+    resolveProfile.mockImplementation(
+      async (_slug: string, _u?: string, ws?: string | null) =>
+        ws === null ? ({ profileKind: "role" } as never) : null
+    );
+    const out = await validateCaptureRelationTypes(
+      {
+        query: { relationDefs: { findMany: async () => relationDefs } },
+      } as never,
+      "ws-1",
+      [edge("client")],
+      "u1"
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].message).toMatch(/is a ROLE, not a relation/);
+    expect(resolveProfile).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not double-look-up when there is no lens to fall back from", async () => {
+    resolveProfile.mockClear();
+    resolveProfile.mockImplementation(async () => null);
+    await validateCaptureRelationTypes(
+      {
+        query: { relationDefs: { findMany: async () => relationDefs } },
+      } as never,
+      null,
+      [edge("client")],
+      "u1"
+    );
+    expect(resolveProfile).toHaveBeenCalledTimes(1);
   });
 
   it("says the role check DID NOT RUN when the lookup throws (failed != empty)", async () => {

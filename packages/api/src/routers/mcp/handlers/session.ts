@@ -605,6 +605,35 @@ export const sessionHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    /**
+     * REFUSE LOUDLY rather than accept and drop.
+     *
+     * `updateFocusSession` does not take `stages`; `focus_sessions.stages`
+     * (migration 0270) is written by the tRPC `focusSessions.update` door,
+     * which builds its own `set`. This handler forwards a fixed list of fields
+     * and ignores everything else — so a caller passing `stages` got
+     * `status: "updated"`, a moved `updatedAt`, and an unchanged column.
+     * Verified live on the pod 2026-09-22: the call returned "updated" with
+     * `stages: []` still on the row.
+     *
+     * That is the same silent-drop shape `unsupportedUpdateFieldError` exists
+     * for on the Hub REST door — which names `stages` already. This door had
+     * the identical lie and nobody had looked. A receipt that reports success
+     * for work it did not do is a blocker whatever it cost, because the next
+     * agent believes it too.
+     *
+     * ⚠️ Like the Hub REST list, this is HAND-MAINTAINED and that is the known
+     * weakness (see that function's own docblock). The real fix is to DERIVE
+     * the refused set from the fields this handler actually forwards. Until
+     * then, a field added to the tRPC door and not to this one repeats exactly
+     * this bug.
+     */
+    if (args && typeof args === "object" && "stages" in args) {
+      return ok({
+        error:
+          "stages is not supported by synap_update_session — NOTHING WAS CHANGED. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door, which the browser and relay use. Seeding from a playbook happens automatically at instantiate.",
+      });
+    }
     const {
       updateFocusSession,
       expectedOutputWireSchema,

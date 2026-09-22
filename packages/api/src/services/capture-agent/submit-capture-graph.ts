@@ -786,7 +786,24 @@ export async function validateCaptureRelationTypes(
     const resolver = new ProfileResolutionService(database);
     const found = new Set<string>();
     for (const slug of badSlugs) {
-      const profile = await resolver.resolveProfile(slug, userId, workspaceId);
+      // The capture's lens FIRST, then the caller's own workspace-less floor.
+      // The fallback is what makes the hint fire at all: `getBySlugForWorkspace`
+      // resolves a SHARED profile only when a `profile_workspace_access` grant
+      // row exists for that lens, and a WORKSPACE-scoped one only under that
+      // exact lens — so `client` (shared, no grant) and `grp-interrogation`
+      // (workspace-scoped, captured pod-wide) both resolved to nothing and the
+      // hint stayed silent in production, twice (measured 2026-09-22).
+      //
+      // Widening is safe HERE and nowhere else: this reads a slug the caller
+      // already typed, to append one sentence of advice. It grants nothing,
+      // and the workspace-less branch is still the caller's REAL floor
+      // (SYSTEM + SHARED + their USER profiles + their member workspaces),
+      // never another user's private profile.
+      const profile =
+        (await resolver.resolveProfile(slug, userId, workspaceId)) ??
+        (workspaceId
+          ? await resolver.resolveProfile(slug, userId, null)
+          : null);
       if (profile?.profileKind === "role") found.add(slug);
     }
     roleSlugs = found;
