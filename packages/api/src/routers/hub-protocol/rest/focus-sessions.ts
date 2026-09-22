@@ -223,8 +223,37 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if ("completeOutput" in raw) {
     return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
   }
+  if ("stages" in raw) {
+    return "stages is not supported on PATCH /focus-sessions/:id — nothing was changed. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door.";
+  }
   return null;
 }
+
+/**
+ * ⚠️ THE LIST ABOVE IS HAND-MAINTAINED, AND THAT IS THE KNOWN WEAKNESS.
+ *
+ * `UpdateBodySchema` is a plain `z.object`, so Zod STRIPS any key it does not
+ * declare. A PATCH carrying an undeclared field therefore lands, returns 200
+ * with the full session body, and changes nothing — which an agent parses as
+ * success. That is the exact defect `focus-sessions.unsupported-field.test.ts`
+ * was written about, and it is why this function exists at all.
+ *
+ * But the function only catches fields somebody REMEMBERED to add here. It held
+ * one key (`completeOutput`) while `stages` shipped on the tRPC door and walked
+ * straight past it — found by review, not by a gate. `stages` is now named, so
+ * the lie is closed for it, but the SHAPE of the guard is still the
+ * hand-maintained-set anti-pattern this repo has been bitten by repeatedly (a
+ * `DOORS` array holding the one door that was already correct while four others
+ * were broken).
+ *
+ * The real fix is to DERIVE the rejected set rather than list it: compare the
+ * incoming keys against `UpdateBodySchema`'s own `.shape` and refuse anything
+ * unknown, so a new field joins the guard BY EXISTING. That is a behaviour
+ * change for every caller of this door (a body with a stray key starts failing
+ * where it used to be silently ignored), so it is deliberately NOT done in this
+ * wave alongside unrelated work — it needs its own change with its own
+ * compatibility check across the CLI and IS callers.
+ */
 
 // workspaceId is accepted for back-compat with CLI callers that still send it,
 // but the authoritative workspace comes from the LOADED ROW (write-gate rule:

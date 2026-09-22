@@ -243,13 +243,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   {
     object: "proposal",
     verb: "get",
-    door: "mcp",
-    reason:
-      "Covered by `synap_list_proposals` detail:'full' (full `data` payload) and `synap_diagnose { id }` (state + why) — a third single-row reader would be a fourth door onto the same row.",
-  },
-  {
-    object: "proposal",
-    verb: "get",
     door: "cli",
     reason:
       "Annoyance tier — `synap proposals list` prints the row and `synap open proposal <id>` opens the human review surface; no `proposals show <id>` for terminal-only inspection.",

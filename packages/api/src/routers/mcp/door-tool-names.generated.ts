@@ -150,6 +150,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__get_project",
     raycast: "get-project",
   },
+  synap_get_proposal: {
+    "pod-mcp": "synap_get_proposal",
+    "cp-connector": "pod__get_proposal",
+    raycast: "get-proposal",
+  },
   synap_get_relations: {
     "pod-mcp": "synap_get_relations",
     "cp-connector": "pod__get_relations",

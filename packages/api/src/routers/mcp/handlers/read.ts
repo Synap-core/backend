@@ -242,6 +242,43 @@ export const readHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * ONE proposal, in full — the "why did my write not land?" door.
+   *
+   * Why it exists: an agent whose write came back `proposed` had NO way to read
+   * that row back. `synap_list_proposals` defaults to a summary projection and
+   * a failed proposal's `rejectionReason` / `data.failure` — the fields naming
+   * what to fix — were reachable from no agent door at all, so the agent could
+   * only guess or re-file. Routed through the tRPC `proposals.get` procedure so
+   * the visibility gate (`assertProposalVisibleTo`) and the agent-only failure
+   * projection (`projectProposalRowForViewer`) are the SAME ones every other
+   * read door runs; this handler adds no predicate of its own.
+   */
+  synap_get_proposal: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const raw =
+      typeof args.proposalId === "string" ? args.proposalId.trim() : "";
+    if (!raw) return ok({ error: "proposalId is required." });
+    // Short-id parity with `synap_reject_proposal` / `synap_revise_proposal`:
+    // a bare prefix in a `WHERE id = $1` uuid lookup throws.
+    const { resolveProposalId } =
+      await import("../../hub-protocol/rest/_shared.js");
+    const proposalId = await resolveProposalId(userId, raw);
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    const { proposalsRouter } = await import("../../proposals.js");
+    const caller = proposalsRouter.createCaller(
+      callerCtx as Parameters<typeof proposalsRouter.createCaller>[0]
+    );
+    return ok(await caller.get({ proposalId }));
+  },
   synap_list_proposals: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {

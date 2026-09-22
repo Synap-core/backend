@@ -1322,6 +1322,23 @@ export class HubRestClient {
    * this row as its audit receipt), "reverted", "approval_failed",
    * "withdrawn", "expired", or "all". Mirrors the server-side `PROPOSAL_STATUS_FILTERS`.
    */
+  /**
+   * ONE proposal, in full — the "why did my write not land?" read.
+   *
+   * `listProposals` is a queue; this is the row. It carries the whole `data`
+   * payload plus, for a proposal whose approve FAILED, `rejectionReason` (the
+   * classified sentence) and `data.failure` { errorClass, providerRef,
+   * missingFields }. The raw upstream error text is stripped server-side.
+   *
+   * Accepts the short id the queue prints as well as a full uuid.
+   */
+  async getProposal(proposalId: string): Promise<HubProposal> {
+    return this.request<HubProposal>(
+      "GET",
+      `/api/hub/proposals/${encodeURIComponent(proposalId)}`
+    );
+  }
+
   async listProposals(options?: {
     status?:
       | "pending"

@@ -32,6 +32,28 @@ describe("PATCH /focus-sessions/:id — unsupported fields are refused", () => {
     ).toBeTruthy();
   });
 
+  it("refuses `stages` — it shipped on tRPC and walked straight past this guard", () => {
+    // FOUND BY REVIEW, NOT BY A GATE. `focus_sessions.stages` gained a writer on
+    // the tRPC door (migration 0270). This door's `UpdateBodySchema` never
+    // declared it, and Zod STRIPS undeclared keys — so an agent PATCHing
+    // `stages` got a 200 with the full session body back and the column stayed
+    // `[]`. A confident, parseable, wrong success: the very defect this file
+    // was written about, reproduced by a field added months later.
+    const err = unsupportedUpdateFieldError({
+      stages: [{ key: "a", name: "A" }],
+    });
+    expect(err).toBeTruthy();
+    expect(err).toContain("nothing was changed");
+    // Actionable: name where the capability actually lives.
+    expect(err).toContain("focusSessions.update");
+  });
+
+  it("refuses `stages` alongside legal fields too", () => {
+    expect(
+      unsupportedUpdateFieldError({ progress: 50, stages: [] })
+    ).toBeTruthy();
+  });
+
   it("passes a clean body, and anything that is not an object", () => {
     expect(unsupportedUpdateFieldError({ progress: 50 })).toBeNull();
     expect(unsupportedUpdateFieldError({})).toBeNull();

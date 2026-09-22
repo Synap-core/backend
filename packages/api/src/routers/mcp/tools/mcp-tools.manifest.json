@@ -169,6 +169,25 @@
       }
     },
     {
+      "name": "synap_get_proposal",
+      "annotations": {
+        "title": "Get proposal",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR the same proposal with synap_revise_proposal (never file a second one pointing at the first), or withdraw it with synap_reject_proposal. A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "proposalId": {
+            "type": "string",
+            "description": "Proposal UUID, as returned verbatim by synap_list_proposals or by the `proposalId` of a `proposed` write. A leading fragment of one also resolves, but pass the full id you were given."
+          }
+        },
+        "required": ["proposalId"]
+      }
+    },
+    {
       "name": "synap_template_health",
       "annotations": {
         "title": "Template health",
@@ -856,7 +875,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Define a NEW entity KIND only after list_profiles + extend-first (load_skill system/synap-schema/extend-first). A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. Slug-idempotent for fields. POD-WIDE default. Governed: 'proposed' is success.",
+      "description": "Define a new entity KIND — AND the door for ADDING A FIELD to a kind that already exists. It is SLUG-IDEMPOTENT: re-call it with an EXISTING slug and it returns that profile and adds only the `properties[]` that are not there yet (an existing field reports status 'unchanged' and is never rewritten). So to add `wedge_stage` to `question`, call this with slug 'question' and just that one field — there is NO separate add-property tool, and schema editing is NOT browser-only. A field takes `valueType`, `constraints` (an enum of allowed values lives here), `defaultValue`, `required`, and `overlay: true` to add it as a WORKSPACE OVERLAY instead of a base field on the kind — which is what you want for a field that only one domain should see, on a pod-wide kind like note/task/question. Call list_profiles + extend-first (load_skill system/synap-schema/extend-first) BEFORE minting a new slug. A hat on an existing kind — including item, task, deal — is a ROLE (synap_define_role / attach_facet), never a sibling kind. Prefer parentProfileSlug of the closest parent over a disconnected slug. A relationship-with-its-own-life (buyer×seller×price×stage) is its own kind (deal *precedent*), not a twin of CRM deal. POD-WIDE default. Governed: 'proposed' is success.",
       "inputSchema": {
         "type": "object",
         "properties": {

@@ -38,6 +38,7 @@ import {
   and,
   or,
   isNull,
+  inArray,
   entities,
   projects,
   getWorkspaceMembership,
@@ -46,6 +47,7 @@ import {
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   deriveProposalProjectId,
+  profiles,
 } from "@synap/database";
 import { getAgentFocusProjectId } from "../agent-identity-service.js";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
@@ -156,7 +158,9 @@ export class CaptureGraphValidationError extends Error {
     const n = invalidEntities.length;
     const planLines = planProblems.map(
       (p) =>
-        `• plan step ${p.op}${p.ref ? ` "${p.ref}"` : ""} (#${p.opIndex}): ${p.message}`
+        `• ${p.op === "create_relation" ? "relation" : "plan step"} ${p.op}${
+          p.ref ? ` "${p.ref}"` : ""
+        } (#${p.opIndex}): ${p.message}`
     );
     const lines = invalidEntities.map((e) => {
       const needsArtifact = e.errors.some((m) =>
@@ -701,6 +705,101 @@ export async function preflightCaptureGraphOperations(
  * vocabulary validator. Every problem at once, as sentences; `operations` is
  * the version to store (plan project steps carry the pod's evidence verdict).
  */
+/**
+ * Relation slugs of a built op set, through the ONE relation vocabulary
+ * validator — shared by the `validate` door AND the filing door, so a slug
+ * that fails the dry run can never be FILED by submit.
+ *
+ * Why it exists: `submitCaptureGraph` preflighted `create_entity` ops but not
+ * `create_relation` ones, so a graph whose edges named a non-existent relation
+ * def filed a PENDING proposal that then FAILED at approve — the exact class
+ * the entity preflight above was written to kill, one op type over. Observed:
+ * an agent used a ROLE slug (`grp-interrogation`) as a relation type; the
+ * proposal was unapprovable and sat in the queue.
+ *
+ * A role slug gets a named hint, because that was the actual mistake and the
+ * bare "unknown relation type" list does not point at the fix (`facets[]`).
+ */
+export interface CaptureRelationProblem extends CapturePlanProblem {
+  op: "create_relation";
+  sourceRef: string;
+  targetRef: string;
+  type: string;
+  /** The validator's own sentence, without the op prefix. */
+  reason: string;
+}
+
+export async function validateCaptureRelationTypes(
+  database: CaptureGraphDb,
+  workspaceId: string | null,
+  operations: CompositeProposalOperation[]
+): Promise<CaptureRelationProblem[]> {
+  const relationOps = operations
+    .map((op, opIndex) => ({ op, opIndex }))
+    .filter(
+      (
+        e
+      ): e is {
+        op: Extract<CompositeProposalOperation, { op: "create_relation" }>;
+        opIndex: number;
+      } => e.op.op === "create_relation"
+    );
+  if (relationOps.length === 0) return [];
+
+  const validateRelationType = await loadRelationTypeValidator(
+    database,
+    workspaceId
+  );
+  const problems: CaptureRelationProblem[] = [];
+  const badSlugs = new Set<string>();
+  for (const { op, opIndex } of relationOps) {
+    try {
+      validateRelationType(op.type);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      badSlugs.add(op.type);
+      problems.push({
+        opIndex,
+        op: "create_relation",
+        sourceRef: op.sourceRef,
+        targetRef: op.targetRef,
+        type: op.type,
+        reason,
+        message: `${op.sourceRef} -> ${op.targetRef}: ${reason}`,
+      });
+    }
+  }
+  if (problems.length === 0) return problems;
+
+  // Name the role mistake instead of only listing valid relation slugs.
+  let roleSlugs = new Set<string>();
+  try {
+    const rows = await database
+      .select({ slug: profiles.slug })
+      .from(profiles)
+      .where(
+        and(
+          eq(profiles.profileKind, "role"),
+          inArray(profiles.slug, [...badSlugs])
+        )
+      );
+    roleSlugs = new Set(rows.map((r) => r.slug));
+  } catch (err) {
+    // Advisory only — never fail the validation on the hint lookup.
+    logger.warn({ err }, "capture/graph: role-slug hint lookup failed");
+  }
+  if (roleSlugs.size === 0) return problems;
+  return problems.map((p) => {
+    if (!roleSlugs.has(p.type)) return p;
+    const hint = ` — "${p.type}" is a ROLE, not a relation: attach it with \`facets[]\` on the entity op, not as an edge.`;
+    return {
+      ...p,
+      reason: `${p.reason}${hint}`,
+      message: `${p.message}${hint}`,
+    };
+  });
+}
+
 export async function validateCompositeOperations(
   database: CaptureGraphDb,
   input: {
@@ -725,20 +824,14 @@ export async function validateCompositeOperations(
         `${p.op}${p.ref ? ` "${p.ref}"` : ""} (#${p.opIndex}): ${p.message}`
     ),
   ];
-  const validateRelationType = await loadRelationTypeValidator(
+  const relationProblems = await validateCaptureRelationTypes(
     database,
-    input.workspaceId
+    input.workspaceId,
+    operations
   );
-  operations.forEach((op, index) => {
-    if (op.op !== "create_relation") return;
-    try {
-      validateRelationType(op.type);
-    } catch (err) {
-      problems.push(
-        `create_relation (#${index}) ${op.sourceRef} -> ${op.targetRef}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  });
+  problems.push(
+    ...relationProblems.map((p) => `${p.op} (#${p.opIndex}) ${p.message}`)
+  );
   return { problems, operations };
 }
 
@@ -797,23 +890,16 @@ export async function dryRunCaptureGraph(
     input.userId,
     input.workspaceId
   );
-  const validateRelationType = await loadRelationTypeValidator(
-    database,
-    input.workspaceId
-  );
-  const relationsFailed: MaterializeRelationFailure[] = [];
-  for (const r of collapsed.relations) {
-    try {
-      validateRelationType(r.type);
-    } catch (err) {
-      relationsFailed.push({
-        sourceRef: r.sourceRef,
-        targetRef: r.targetRef,
-        type: r.type,
-        reason: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
+  // The SAME helper submit runs — so a slug the dry run reports is exactly the
+  // slug that would block filing, and neither door can drift from the other.
+  const relationsFailed: MaterializeRelationFailure[] = (
+    await validateCaptureRelationTypes(database, input.workspaceId, operations)
+  ).map(({ sourceRef, targetRef, type, reason }) => ({
+    sourceRef,
+    targetRef,
+    type,
+    reason,
+  }));
   return {
     invalidEntities,
     unmodeledProperties,
@@ -1124,9 +1210,18 @@ export async function submitCaptureGraph(
       userId,
       workspaceId
     );
-  if (invalidEntities.length > 0 || planProblems.length > 0) {
+  // Relation slugs go through the SAME validator the `validate` door runs, and
+  // land in the SAME rejection: an edge naming a non-existent relation def is
+  // un-materializable, so filing it would queue an unapprovable proposal.
+  const relationProblems = await validateCaptureRelationTypes(
+    db,
+    workspaceId,
+    operations
+  );
+  const submitProblems = [...planProblems, ...relationProblems];
+  if (invalidEntities.length > 0 || submitProblems.length > 0) {
     // Rejected BEFORE any proposal is filed — pending-proposal-one-door untouched.
-    throw new CaptureGraphValidationError(invalidEntities, planProblems);
+    throw new CaptureGraphValidationError(invalidEntities, submitProblems);
   }
   const homes = computeImportHomes(operations);
   const isPlan = hasComposedSteps(operations);
