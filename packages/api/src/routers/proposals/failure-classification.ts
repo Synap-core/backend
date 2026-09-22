@@ -101,6 +101,32 @@ const REQUIRES_PARAMETER =
   /requires (?:the )?parameters?\s+(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.\-]+))/gi;
 
 /**
+ * The IN-HOUSE phrasing: `scopeProfileIds is required for structured views`,
+ * `'storageKey' is required`, `workspaceId is required`.
+ *
+ * `REQUIRES_PARAMETER` above only knows the PROVIDER phrasing
+ * (`requires parameter "cron"`), so every missing-field failure thrown by our
+ * OWN validators produced `errorClass` and nothing else. Measured live
+ * 2026-09-22: proposal b919206e failed with "scopeProfileIds is required for
+ * structured views" and carried no `missingFields` — the agent got a sentence
+ * it cannot act on programmatically, which is the whole point of the field.
+ *
+ * WHAT IT DELIBERATELY DOES NOT MATCH: a bare lowercase word before
+ * "is required". `At least one state field is required` would otherwise yield
+ * the field name "field", and `authentication is required` would yield
+ * "authentication" — each of which lands in `rejectionReason` as
+ * "Couldn't apply — missing field." A wrong name is worse than no name, so an
+ * UNQUOTED token must look like an identifier (an inner capital, `_` or `.`).
+ * The cost is stated, not implied: `shape is required` and `file is required`
+ * are real fields this cannot see. Quote them at the throw site to be seen.
+ */
+const IS_REQUIRED =
+  /(?:["'`]([^"'`]+)["'`]|([A-Za-z0-9_.\-]+))\s+(?:is|are)\s+required/gi;
+
+/** An unquoted token is a field name only if it is not an English word. */
+const LOOKS_LIKE_IDENTIFIER = /[A-Z]|[_.]/;
+
+/**
  * A parameter NAME is an identifier. Anything else came from somewhere else.
  *
  * `REQUIRES_PARAMETER` runs over the RAW provider message, so whatever sits
@@ -131,16 +157,27 @@ function messageOf(err: unknown): string {
 /** Every `requires parameter "X"` name in the message, deduped and bounded. */
 export function missingFieldsFromMessage(message: string): string[] {
   const out: string[] = [];
-  REQUIRES_PARAMETER.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = REQUIRES_PARAMETER.exec(message)) !== null) {
-    for (const part of (m[1] ?? m[2] ?? "").split(",")) {
+  const push = (raw: string, wasQuoted: boolean) => {
+    for (const part of raw.split(",")) {
       const name = part.trim();
       if (!SAFE_PARAM_NAME.test(name)) continue; // untrusted text, not a name
+      // An unquoted token from the in-house phrasing must look like an
+      // identifier; a quoted one was named deliberately at the throw site.
+      if (!wasQuoted && !LOOKS_LIKE_IDENTIFIER.test(name)) continue;
       if (!out.includes(name) && out.length < MAX_PARSED_MISSING_FIELDS) {
         out.push(name);
       }
     }
+  };
+  REQUIRES_PARAMETER.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = REQUIRES_PARAMETER.exec(message)) !== null) {
+    // The provider phrasing names a parameter explicitly either way.
+    push(m[1] ?? m[2] ?? "", true);
+  }
+  IS_REQUIRED.lastIndex = 0;
+  while ((m = IS_REQUIRED.exec(message)) !== null) {
+    push(m[1] ?? m[2] ?? "", m[1] !== undefined);
   }
   return out;
 }
