@@ -16086,6 +16086,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetName?: string;
 					setup?: ProposalSetup;
 					sessionGoal?: string;
+					playbookName?: string;
+					projectName?: string;
+					automationName?: string;
+					capabilityCallLabel?: string;
+					workspaceName?: string;
+					channelName?: string;
+					agentName?: string;
 					review: ProposalReviewModel;
 				}[];
 				pagination: {
@@ -16142,6 +16149,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					targetName?: string;
 					setup?: ProposalSetup;
 					sessionGoal?: string;
+					playbookName?: string;
+					projectName?: string;
+					automationName?: string;
+					capabilityCallLabel?: string;
+					workspaceName?: string;
+					channelName?: string;
+					agentName?: string;
 					review: ProposalReviewModel;
 				}[];
 			};
@@ -16262,6 +16276,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				targetName?: string;
 				setup?: ProposalSetup;
 				sessionGoal?: string;
+				playbookName?: string;
+				projectName?: string;
+				automationName?: string;
+				capabilityCallLabel?: string;
+				workspaceName?: string;
+				channelName?: string;
+				agentName?: string;
 				review: ProposalReviewModel;
 			};
 			meta: object;
@@ -21129,6 +21150,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds?: undefined;
 				reconciled?: undefined;
 				layers?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
@@ -21140,6 +21162,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
@@ -21151,11 +21174,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
 				status: "composed";
 				workspaceId: string;
+				composeTargetWorkspaceIds: string[];
 				composed: true;
 				dependencies: ResolvedPackageDependency[];
 				layers: InstallLayerReport[] | undefined;
@@ -21174,6 +21199,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				dependencies: ResolvedPackageDependency[];
 				layers: InstallLayerReport[] | undefined;
 				reconciled?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 			};
 			meta: object;
@@ -21952,6 +21978,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				entityIds?: undefined;
 				reconciled?: undefined;
 				layers?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
@@ -21963,6 +21990,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				status?: undefined;
 				profileIds?: undefined;
 				viewIds?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
@@ -21974,11 +22002,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				profileIds?: undefined;
 				viewIds?: undefined;
 				entityIds?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 				dependencies?: undefined;
 			} | {
 				status: "composed";
 				workspaceId: string;
+				composeTargetWorkspaceIds: string[];
 				composed: true;
 				dependencies: ResolvedPackageDependency[];
 				layers: InstallLayerReport[] | undefined;
@@ -21997,6 +22027,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				dependencies: ResolvedPackageDependency[];
 				layers: InstallLayerReport[] | undefined;
 				reconciled?: undefined;
+				composeTargetWorkspaceIds?: undefined;
 				composed?: undefined;
 			};
 			meta: object;

@@ -100,8 +100,10 @@ export type MaterializeCoreResult =
       status: "composed";
       workspaceId: string;
       composeTargetWorkspaceId: string;
+      composeTargetWorkspaceIds: string[];
       dependencies: ResolvedPackageDependency[];
       reconcile: ReconcileReport;
+      reconciles: ReconcileReport[];
     }
   | {
       /**
@@ -192,49 +194,62 @@ export async function materializeWorkspaceCore(
   // A caller-supplied `targetWorkspaceId` (Phase 3: install-onto-existing)
   // OVERRIDES the resolved `compose` dependency base — an explicit target
   // always wins over whatever the package itself declared.
-  const composeTargetWorkspaceId =
-    input.targetWorkspaceId ?? resolveResult.composeTargetWorkspaceId;
+  const composeTargetWorkspaceIds =
+    resolveResult.composeTargetWorkspaceIds ?? [];
+  const explicitTarget = input.targetWorkspaceId;
+
+  // Determine all target workspace IDs: explicit target takes precedence,
+  // otherwise use all resolved compose targets.
+  const targetWorkspaceIds = explicitTarget
+    ? [explicitTarget]
+    : composeTargetWorkspaceIds;
 
   // A compose was requested but its base could not be resolved, and no
   // explicit target was supplied to fall back onto. Do NOT fall back to
   // creating a rogue overlay workspace — surface the reason.
   if (
     resolveResult.composeRequested &&
-    !resolveResult.composeTargetWorkspaceId &&
+    targetWorkspaceIds.length === 0 &&
     !input.targetWorkspaceId
   ) {
     throw new ComposeBaseUnavailableError(dependencies);
   }
 
   // ── COMPOSE / INSTALL-ONTO-EXISTING: layer this package ADDITIVELY onto
-  // the resolved (or caller-supplied) target workspace ─────────────────────
-  if (composeTargetWorkspaceId) {
-    // The ONE compose door (shared with the resolver's transitive compose):
-    // loads + write-gates the base, then reconciles ADDITIVELY onto it.
-    const reconcile: ReconcileReport = await composeOntoBaseWorkspace({
-      composeTargetWorkspaceId,
-      userId,
-      definition,
-      // Stamp package provenance ONLY for an explicit install-onto-existing
-      // (`market attach --onto <ws>`): the user deliberately bound THIS package
-      // to THIS workspace, so `market update` must be able to track it (the
-      // fix for the "version unknown — reinstall to enable update checks"
-      // escape hatch). A NATURAL declared compose (`input.targetWorkspaceId`
-      // absent → base resolved from the package's own `compose:` dep) must NOT
-      // stamp: it would clobber the shared base's own package identity.
-      ...(input.targetWorkspaceId
-        ? {
-            packageSlug: input.packageSlug,
-            packageVersion: input.packageVersion,
-          }
-        : {}),
-    });
+  // the resolved (or caller-supplied) target workspace(s) ──────────────────
+  if (targetWorkspaceIds.length > 0) {
+    const reconciles: ReconcileReport[] = [];
+    for (const composeTargetWorkspaceId of targetWorkspaceIds) {
+      // The compose door (shared with the resolver's transitive compose):
+      // loads + write-gates the base, then reconciles ADDITIVELY onto it.
+      const reconcile: ReconcileReport = await composeOntoBaseWorkspace({
+        composeTargetWorkspaceId,
+        userId,
+        definition,
+        // Stamp package provenance ONLY for an explicit install-onto-existing
+        // (`market attach --onto <ws>`): the user deliberately bound THIS package
+        // to THIS workspace, so `market update` must be able to track it (the
+        // fix for the "version unknown — reinstall to enable update checks"
+        // escape hatch). A NATURAL declared compose (`input.targetWorkspaceId`
+        // absent → base resolved from the package's own `compose:` dep) must NOT
+        // stamp: it would clobber the shared base's own package identity.
+        ...(input.targetWorkspaceId
+          ? {
+              packageSlug: input.packageSlug,
+              packageVersion: input.packageVersion,
+            }
+          : {}),
+      });
+      reconciles.push(reconcile);
+    }
     return {
       status: "composed",
-      workspaceId: composeTargetWorkspaceId,
-      composeTargetWorkspaceId,
+      workspaceId: targetWorkspaceIds[0],
+      composeTargetWorkspaceId: targetWorkspaceIds[0], // backward compat
+      composeTargetWorkspaceIds: targetWorkspaceIds,
       dependencies,
-      reconcile,
+      reconcile: reconciles[0], // legacy compat: return first
+      reconciles, // new: all reconcile reports
     };
   }
 

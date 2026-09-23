@@ -45,7 +45,7 @@ import { join } from "path";
 
 const SOURCE = join(
   process.cwd(),
-  "src/services/capabilities/marketplace-install.ts"
+  "packages/api/src/services/capabilities/marketplace-install.ts"
 );
 
 /**

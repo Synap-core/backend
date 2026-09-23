@@ -18,6 +18,13 @@ import {
   focusSessions,
   EventRepository,
   isFacetVisibleForLens,
+  playbooks,
+  projects,
+  automations,
+  workspaces,
+  channels,
+  skills,
+  tools,
 } from "@synap/database";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import {
@@ -74,8 +81,12 @@ import {
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
+import { createNameResolvers } from "./helper-functions.js";
 
 type ProposalRow = typeof proposals.$inferSelect;
+
+// Request with proposalType attached for filtering
+type RequestWithProposalType = UpdateRequest & { proposalType: string };
 
 /**
  * The three states of "is a human's identity behind this agent's act?", read
@@ -204,6 +215,14 @@ type DisplayEnrichedProposal = ProposalRow &
      * the raw uuid to head the group with.
      */
     sessionGoal?: string;
+    // NEW: Resolved names for commonly referenced IDs across proposal kinds
+    playbookName?: string;
+    projectName?: string;
+    automationName?: string;
+    capabilityCallLabel?: string;
+    workspaceName?: string;
+    channelName?: string;
+    agentName?: string;
     review: ProposalReviewModel;
   };
 
@@ -211,7 +230,13 @@ export async function enrichProposalsForDisplay(
   rows: ProposalRow[],
   userId: string
 ): Promise<DisplayEnrichedProposal[]> {
-  const requests = rows.map((row) => buildRequestFromProposal(row));
+  const requests = rows.map((row) => {
+    const req = buildRequestFromProposal(row);
+    return {
+      ...req,
+      proposalType: row.proposalType,
+    } as RequestWithProposalType;
+  });
 
   // B2: entity ids referenced as RELATION ENDPOINTS — for standalone relation
   // proposals (`data.sourceEntityId`/`targetEntityId`) and for composite
@@ -324,6 +349,13 @@ export async function enrichProposalsForDisplay(
     viewerIsPodMember,
     sessionRows,
     documentRows,
+    playbookRows,
+    projectRows,
+    automationRows,
+    skillRows,
+    toolRows,
+    workspaceRows,
+    channelRows,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -483,6 +515,159 @@ export async function enrichProposalsForDisplay(
             )
           )
       : Promise.resolve([] as Array<{ id: string; title: string }>),
+    // Playbooks — for playbookId in session, project, playbook proposals
+    (() => {
+      const playbookIds = uniqueStrings(
+        requests
+          .filter((r) =>
+            ["session", "project", "playbook"].some((t) =>
+              r.proposalType.startsWith(t + "/")
+            )
+          )
+          .flatMap((r) =>
+            [
+              r.data?.playbookId as string | null | undefined,
+              r.data?.templateId as string | null | undefined,
+              r.data?.playbookId as string | null | undefined,
+            ].filter(Boolean)
+          )
+      );
+      return playbookIds.length > 0
+        ? db
+            .select({
+              id: playbooks.id,
+              name: playbooks.name,
+              goalTemplate: playbooks.goalTemplate,
+            })
+            .from(playbooks)
+            .where(inArray(playbooks.id, playbookIds))
+        : Promise.resolve(
+            [] as Array<{ id: string; name: string; goalTemplate: string }>
+          );
+    })(),
+    // Projects — for projectId in session, project proposals
+    (() => {
+      const projectIds = uniqueStrings(
+        requests
+          .filter((r) =>
+            ["session", "project"].some((t) =>
+              r.proposalType.startsWith(t + "/")
+            )
+          )
+          .map((r) => r.data?.projectId as string | null | undefined)
+          .filter(Boolean)
+      );
+      return projectIds.length > 0
+        ? db
+            .select({
+              id: projects.id,
+              name: projects.name,
+              description: projects.description,
+            })
+            .from(projects)
+            .where(inArray(projects.id, projectIds))
+        : Promise.resolve(
+            [] as Array<{ id: string; name: string; description: string }>
+          );
+    })(),
+    // Automations — for automationId in automation/execute, automation/activate
+    (() => {
+      const automationIds = uniqueStrings(
+        requests
+          .filter((r) => r.proposalType.startsWith("automation/"))
+          .map((r) => r.data?.automationId as string | null | undefined)
+          .filter(Boolean)
+      );
+      return automationIds.length > 0
+        ? db
+            .select({
+              id: automations.id,
+              name: automations.name,
+            })
+            .from(automations)
+            .where(inArray(automations.id, automationIds))
+        : Promise.resolve([] as Array<{ id: string; name: string }>);
+    })(),
+    // Capabilities/Skills — for capabilityId/skillId in capability_run
+    (() => {
+      const capabilityIds = uniqueStrings(
+        requests
+          .filter((r) => r.proposalType === "capability.run")
+          .flatMap((r) =>
+            [
+              r.data?.capabilityId as string | null | undefined,
+              r.data?.skillId as string | null | undefined,
+              r.data?.toolId as string | null | undefined,
+            ].filter(Boolean)
+          )
+      );
+      return capabilityIds.length > 0
+        ? db
+            .select({
+              id: skills.id,
+              name: skills.name,
+              slug: skills.slug,
+            })
+            .from(skills)
+            .where(inArray(skills.id, capabilityIds))
+        : Promise.resolve(
+            [] as Array<{ id: string; name: string; slug: string }>
+          );
+    })(),
+    // Tools — for toolId in capability_run (built-in tool calls)
+    (() => {
+      const toolIds = uniqueStrings(
+        requests
+          .filter((r) => r.proposalType === "capability.run")
+          .map((r) => r.data?.toolId as string | null | undefined)
+          .filter(Boolean)
+      );
+      return toolIds.length > 0
+        ? db
+            .select({
+              id: tools.id,
+              name: tools.name,
+            })
+            .from(tools)
+            .where(inArray(tools.id, toolIds))
+        : Promise.resolve([] as Array<{ id: string; name: string }>);
+    })(),
+    // Workspaces — for workspaceId in workspace proposals
+    (() => {
+      const workspaceIds = uniqueStrings(
+        requests
+          .filter((r) => r.proposalType.startsWith("workspace/"))
+          .map((r) => r.data?.workspaceId as string | null | undefined)
+          .filter(Boolean)
+      );
+      return workspaceIds.length > 0
+        ? db
+            .select({
+              id: workspaces.id,
+              name: workspaces.name,
+            })
+            .from(workspaces)
+            .where(inArray(workspaces.id, workspaceIds))
+        : Promise.resolve([] as Array<{ id: string; name: string }>);
+    })(),
+    // Channels — for channelId in governance_tighten_posture
+    (() => {
+      const channelIds = uniqueStrings(
+        requests
+          .filter((r) => r.proposalType === "governance.tighten_posture")
+          .map((r) => r.data?.channelId as string | null | undefined)
+          .filter(Boolean)
+      );
+      return channelIds.length > 0
+        ? db
+            .select({
+              id: channels.id,
+              title: channels.title,
+            })
+            .from(channels)
+            .where(inArray(channels.id, channelIds))
+        : Promise.resolve([] as Array<{ id: string; title: string }>);
+    })(),
   ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
@@ -543,6 +728,61 @@ export async function enrichProposalsForDisplay(
   const documentTitleById = new Map(
     documentRows.map((row) => [row.id, row.title])
   );
+  // NEW: Populate batch-joined lookup maps
+  const playbookById = new Map<
+    string,
+    { name: string; goalTemplate: string }
+  >();
+  const projectById = new Map<
+    string,
+    { name: string; description: string | undefined }
+  >();
+  const automationById = new Map<string, { name: string }>();
+  const skillById = new Map<string, { name: string; slug: string }>();
+  const toolById = new Map<string, { name: string }>();
+  const workspaceById = new Map<string, { name: string }>();
+  const channelById = new Map<string, { title: string | undefined }>();
+
+  for (const row of playbookRows) {
+    playbookById.set(row.id, {
+      name: row.name!,
+      goalTemplate: row.goalTemplate!,
+    });
+  }
+  for (const row of projectRows) {
+    projectById.set(row.id, {
+      name: row.name!,
+      description: row.description ?? undefined,
+    });
+  }
+  for (const row of automationRows) {
+    automationById.set(row.id, { name: row.name! });
+  }
+  for (const row of skillRows) {
+    skillById.set(row.id, { name: row.name!, slug: row.slug! });
+  }
+  for (const row of toolRows) {
+    toolById.set(row.id, { name: row.name! });
+  }
+  for (const row of workspaceRows) {
+    workspaceById.set(row.id, { name: row.name! });
+  }
+  for (const row of channelRows) {
+    channelById.set(row.id, { title: row.title ?? undefined });
+  }
+
+  // NEW: Create name resolver functions with all batch-joined maps
+  const nameResolvers = createNameResolvers({
+    playbookById,
+    projectById,
+    automationById,
+    skillById,
+    toolById,
+    workspaceById,
+    channelById,
+    userById,
+  });
+
   // Roles v2: group live role-facets by their entity id (unfiltered — the
   // workspace lens is applied per-proposal below via `rolesForLens`).
   const roleFacetsByEntityId = new Map<
@@ -849,6 +1089,33 @@ export async function enrichProposalsForDisplay(
       targetName,
       ...(row.sessionId && sessionGoalById.has(row.sessionId)
         ? { sessionGoal: sessionGoalById.get(row.sessionId)! }
+        : {}),
+      // NEW: Resolved names for commonly referenced IDs across proposal kinds
+      ...(nameResolvers.resolvePlaybookName(row, payload)
+        ? { playbookName: nameResolvers.resolvePlaybookName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveProjectName(row, payload)
+        ? { projectName: nameResolvers.resolveProjectName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveAutomationName(row, payload)
+        ? { automationName: nameResolvers.resolveAutomationName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
+        ? {
+            capabilityCallLabel: nameResolvers.resolveCapabilityCallLabel(
+              row,
+              payload
+            )!,
+          }
+        : {}),
+      ...(nameResolvers.resolveWorkspaceName(row, payload)
+        ? { workspaceName: nameResolvers.resolveWorkspaceName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveChannelName(row, payload)
+        ? { channelName: nameResolvers.resolveChannelName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveAgentName(row, payload)
+        ? { agentName: nameResolvers.resolveAgentName(row, payload)! }
         : {}),
       request: {
         ...request,

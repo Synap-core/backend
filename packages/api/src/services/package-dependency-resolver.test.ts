@@ -271,18 +271,39 @@ describe("resolvePackageDependencies", () => {
     ).rejects.toThrow(/Cyclic/);
   });
 
-  it("5. >1 compose dep throws 'at most one'", async () => {
-    await expect(
-      resolvePackageDependencies({
-        definition: {
-          dependencies: [
-            { slug: "x", kind: "workspace", relation: "compose" },
-            { slug: "y", kind: "workspace", relation: "compose" },
-          ],
-        },
-        userId: USER,
-      })
-    ).rejects.toThrow(/at most one 'compose'/);
+  it("5. >1 compose dep is ALLOWED (multiple compose targets)", async () => {
+    selectQueue = [
+      [{ id: "ws-x", ownerId: USER, createdAt: new Date(), role: "editor" }],
+      [{ id: "ws-y", ownerId: USER, createdAt: new Date(), role: "editor" }],
+    ];
+    mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+
+    const result = await resolvePackageDependencies({
+      definition: {
+        dependencies: [
+          { slug: "x", kind: "workspace", relation: "compose" },
+          { slug: "y", kind: "workspace", relation: "compose" },
+        ],
+      },
+      userId: USER,
+    });
+
+    expect(result.composeRequested).toBe(true);
+    expect(result.composeTargetWorkspaceIds).toEqual(["ws-x", "ws-y"]);
+    // Backward compat
+    expect(result.composeTargetWorkspaceId).toBe("ws-x");
+    expect(result.installed).toEqual([
+      expect.objectContaining({
+        slug: "x",
+        action: "found",
+        workspaceId: "ws-x",
+      }),
+      expect.objectContaining({
+        slug: "y",
+        action: "found",
+        workspaceId: "ws-y",
+      }),
+    ]);
   });
 
   it("6. wrong-kind compose dep throws \"must be kind:'workspace'\"", async () => {
@@ -973,6 +994,202 @@ describe("resolvePackageDependencies", () => {
           action: "required-absent",
         }),
       ]);
+    });
+  });
+
+  // ── Multiple compose deps ──
+  describe("Multiple compose dependencies", () => {
+    it("D1. two compose deps onto different workspaces both resolve", async () => {
+      // selectQueue provides different workspace rows for different slug lookups
+      selectQueue = [
+        [
+          {
+            id: "ws-base1",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ], // base1
+        [
+          {
+            id: "ws-base2",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ], // base2
+      ];
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "base1", kind: "workspace", relation: "compose" },
+            { slug: "base2", kind: "workspace", relation: "compose" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(result.composeRequested).toBe(true);
+      expect(result.composeTargetWorkspaceIds).toEqual([
+        "ws-base1",
+        "ws-base2",
+      ]);
+      expect(result.composeTargetWorkspaceId).toBe("ws-base1"); // first for compat
+      expect(result.installed).toHaveLength(2);
+      expect(result.installed.map((d) => d.slug)).toEqual(["base1", "base2"]);
+      expect(result.installed.map((d) => d.action)).toEqual(["found", "found"]);
+    });
+
+    it("D2. two compose deps where one base is missing → required-absent for missing, other resolves", async () => {
+      selectQueue = [
+        [
+          {
+            id: "ws-base1",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ], // base1 found
+        [], // base2 not found
+      ];
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "base1") return { dependencies: [] };
+        return undefined; // base2 has no built-in
+      });
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "base1", kind: "workspace", relation: "compose" },
+            { slug: "base2", kind: "workspace", relation: "compose" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(result.composeRequested).toBe(true);
+      expect(result.composeTargetWorkspaceIds).toEqual(["ws-base1"]);
+      expect(result.composeTargetWorkspaceId).toBe("ws-base1");
+      const base1Entry = result.installed.find((d) => d.slug === "base1");
+      const base2Entry = result.installed.find((d) => d.slug === "base2");
+      expect(base1Entry?.action).toBe("found");
+      expect(base2Entry?.action).toBe("required-absent");
+    });
+
+    it("D3. multiple compose deps + require deps all resolved in declaration order", async () => {
+      selectQueue = [
+        [
+          {
+            id: "ws-base1",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ], // base1
+        [
+          {
+            id: "ws-require1",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "viewer",
+          },
+        ], // require1
+        [
+          {
+            id: "ws-base2",
+            ownerId: USER,
+            createdAt: new Date(),
+            role: "editor",
+          },
+        ], // base2
+      ];
+      mockGetWorkspaceTemplate.mockReturnValue({ dependencies: [] });
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "base1", kind: "workspace", relation: "compose" },
+            { slug: "require1", kind: "workspace", relation: "require" },
+            { slug: "base2", kind: "workspace", relation: "compose" },
+          ],
+        },
+        userId: USER,
+      });
+
+      expect(result.composeRequested).toBe(true);
+      expect(result.composeTargetWorkspaceIds).toEqual([
+        "ws-base1",
+        "ws-base2",
+      ]);
+      expect(result.installed.map((d) => d.slug)).toEqual([
+        "base1",
+        "require1",
+        "base2",
+      ]);
+      expect(result.installed.map((d) => d.action)).toEqual([
+        "found",
+        "found",
+        "found",
+      ]);
+      expect(result.installed.map((d) => d.relation)).toEqual([
+        "compose",
+        "require",
+        "compose",
+      ]);
+    });
+
+    it("D4. diamond dedup works across multiple compose deps sharing a transitive base", async () => {
+      // Both base1 and base2 depend on "shared-base" via compose
+      mockGetWorkspaceTemplate.mockImplementation((slug: string) => {
+        if (slug === "base1") {
+          return {
+            dependencies: [
+              { slug: "shared-base", kind: "workspace", relation: "compose" },
+            ],
+          };
+        }
+        if (slug === "base2") {
+          return {
+            dependencies: [
+              { slug: "shared-base", kind: "workspace", relation: "compose" },
+            ],
+          };
+        }
+        if (slug === "shared-base") return { dependencies: [] };
+        return undefined;
+      });
+      mockToWorkspaceDefinition.mockImplementation((slug: string) => ({
+        definition: { slug },
+      }));
+      mockCreateWorkspace.mockImplementation(
+        async (input: { templateId: string }) => ({
+          workspaceId: `ws-${input.templateId}`,
+          created: true,
+        })
+      );
+      selectRows = [];
+
+      const result = await resolvePackageDependencies({
+        definition: {
+          dependencies: [
+            { slug: "base1", kind: "workspace", relation: "compose" },
+            { slug: "base2", kind: "workspace", relation: "compose" },
+          ],
+        },
+        userId: USER,
+      });
+
+      // shared-base should be created ONCE despite two paths into it
+      const createCalls = mockCreateWorkspace.mock.calls.map(
+        (c) => (c[0] as { templateId: string }).templateId
+      );
+      expect(createCalls.filter((s) => s === "shared-base")).toHaveLength(1);
+      // Both base1 and base2 compose onto shared-base
+      expect(result.installed).toContainEqual(
+        expect.objectContaining({ slug: "shared-base", action: "installed" })
+      );
     });
   });
 });

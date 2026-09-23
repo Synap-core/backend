@@ -208,3 +208,68 @@ describe("applyPackagePostWorkspace — uses-edge source shape", () => {
     expect(block).toContain("linkProjectToWorkspace");
   });
 });
+
+describe("applyPackagePostWorkspace — project linking flow", () => {
+  it("install with projectId links correctly and shows linked status", async () => {
+    entityRows.current = [{ id: "e1" }, { id: "e2" }];
+    linkProjectToWorkspaceMock.mockResolvedValue({ linked: true });
+    linkEntityToProjectMock.mockResolvedValue({ linked: true });
+
+    const res = await applyPackagePostWorkspace({
+      workspaceId: WORKSPACE_ID,
+      userId: USER_ID,
+      body: { projectId: PROJECT_ID },
+    });
+
+    expect(linkProjectToWorkspaceMock).toHaveBeenCalledTimes(1);
+    expect(linkProjectToWorkspaceMock).toHaveBeenCalledWith(expect.anything(), {
+      projectId: PROJECT_ID,
+      workspaceId: WORKSPACE_ID,
+      userId: USER_ID,
+    });
+    expect(linkEntityToProjectMock).toHaveBeenCalledTimes(2);
+    expect(linkEntityToProjectMock).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      {
+        entityId: "e1",
+        projectId: PROJECT_ID,
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+      }
+    );
+    expect(linkEntityToProjectMock).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      {
+        entityId: "e2",
+        projectId: PROJECT_ID,
+        userId: USER_ID,
+        workspaceId: WORKSPACE_ID,
+      }
+    );
+    expect(res.projectLink).toEqual({
+      status: "linked",
+      projectId: PROJECT_ID,
+      entities: 2,
+    });
+  });
+
+  it("install with projectId correctly links entities to project", async () => {
+    entityRows.current = [{ id: "e1" }, { id: "e2" }];
+    linkProjectToWorkspaceMock.mockResolvedValue({ linked: true });
+    linkEntityToProjectMock.mockResolvedValue({ linked: true });
+
+    const res = await applyPackagePostWorkspace({
+      workspaceId: WORKSPACE_ID,
+      userId: USER_ID,
+      body: { projectId: PROJECT_ID },
+    });
+
+    expect(res.projectLink).toEqual({
+      status: "linked",
+      projectId: PROJECT_ID,
+      entities: 2,
+    });
+  });
+});

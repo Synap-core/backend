@@ -25,7 +25,7 @@
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * Compiles JSX/TSX widget source into an IIFE bundle with shared externals.
- * Platform packages (React, Tamagui, tRPC, etc.) are resolved from
+ * Platform packages (React, tRPC, etc.) are resolved from
  * `window.__SYNAP_MODULES__` at runtime — not bundled into the output.
  *
  * This is the server-side counterpart of the browser's NativeWidgetLoader:
@@ -44,7 +44,6 @@ const SHARED_EXTERNALS = [
   "react",
   "react-dom",
   "react/jsx-runtime",
-  "@synap-core/ui-system",
   "@synap/cell-runtime",
   "@synap/client",
   "zustand",
@@ -54,8 +53,8 @@ const SHARED_EXTERNALS = [
 /**
  * esbuild plugin that resolves shared externals to `window.__SYNAP_MODULES__[name]`.
  *
- * For each import like `import { YStack } from '@synap-core/ui-system'`,
- * the output becomes `const { YStack } = window.__SYNAP_MODULES__['@synap-core/ui-system']`.
+ * For each import like `import { Check } from 'lucide-react'`,
+ * the output becomes `const { Check } = window.__SYNAP_MODULES__['lucide-react']`.
  */
 const synapExternalsPlugin: esbuild.Plugin = {
   name: "synap-externals",

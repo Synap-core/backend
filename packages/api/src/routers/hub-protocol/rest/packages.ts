@@ -634,16 +634,21 @@ export function registerPackagesRoutes(app: HubHono): void {
       }
       if (core.status === "composed") {
         workspaceId = core.workspaceId;
+        const composeTargetWorkspaceIds =
+          core.composeTargetWorkspaceIds ??
+          (core.composeTargetWorkspaceId
+            ? [core.composeTargetWorkspaceId]
+            : []);
         result.workspace = {
           status: "composed",
           workspaceId,
-          onto: core.composeTargetWorkspaceId,
+          onto: composeTargetWorkspaceIds,
           reconcile: {
-            profilesAdded: core.reconcile.profiles.added,
-            propertiesAdded: core.reconcile.properties.added.length,
-            viewsAdded: core.reconcile.views.added,
-            entityLinksAdded: core.reconcile.entityLinks.added,
-            propertyConflicts: core.reconcile.properties.conflicts,
+            profilesAdded: core.reconcile?.profiles?.added ?? 0,
+            propertiesAdded: core.reconcile?.properties?.added?.length ?? 0,
+            viewsAdded: core.reconcile?.views?.added ?? 0,
+            entityLinksAdded: core.reconcile?.entityLinks?.added ?? 0,
+            propertyConflicts: core.reconcile?.properties?.conflicts ?? 0,
           },
         };
         auditLog({

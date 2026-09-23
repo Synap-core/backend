@@ -24,6 +24,12 @@ standalone **view / skill / automation stamp no source-link**, so they don't sel
 via reconcile the way workspace/capability do. (Subscription-`tier` gating is a
 separate axis — see `governance-and-catalog.md`.)
 
+**A seventh kind — `project` — is a lens, not a standalone install.** A project
+pack installs workspaces + automations + playbooks and links them to a project;
+the project itself is created through the existing `projects.create` door
+(proposal-gated for agents). The install only **links** — it never mints a
+project. See "How to set up a pack by type" in `SKILL.md`.
+
 It lives in the Control Plane (CP) catalog and is discoverable and installable from
 any door: the `synap` CLI, MCP (`market_search` / `run_capability`), or the Hub REST
 API. **Everything that is config, not code, can be a template** — workspaces, entity

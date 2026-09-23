@@ -339,6 +339,8 @@ export interface PackagePostWorkspaceBody {
    */
   actionPlacements?: ActionPlacement[];
   projectId?: string;
+  /** Optional project name for human-driven installs that mint a project. Not used by agents. */
+  projectName?: string;
 }
 
 export interface ApplyPackagePostWorkspaceInput {
