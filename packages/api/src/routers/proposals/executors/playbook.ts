@@ -625,6 +625,12 @@ export function registerPlaybookExecutors(): void {
           ...(Array.isArray(inner.agentIds) && inner.agentIds.length > 0
             ? { agentIds: inner.agentIds as string[] }
             : {}),
+          // Lineage: the session the run was proposed FROM. Replayed so an
+          // approved run lands on the map spawned from the work that asked for
+          // it, exactly as a direct run does.
+          ...(typeof inner.parentSessionId === "string"
+            ? { parentSessionId: inner.parentSessionId }
+            : {}),
           // Attribution is the ONE dropped field the proposal can restore, so
           // the session/run/channel are owned by the agent that asked, exactly
           // as on the direct path (`actorId = agentUserId ?? userId`).

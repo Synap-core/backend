@@ -32,6 +32,7 @@ import {
   playbooks,
   playbookRuns,
   playbookEnrollments,
+  recordSessionSpawn,
 } from "@synap/database";
 import type {
   FocusSession,
@@ -156,6 +157,14 @@ export interface RunPlaybookInput {
   goalTemplateOverride?: string;
   /** Automation chain context — stamped onto the session (F2 depth floor). */
   chainContext?: RunChainContext;
+  /**
+   * The session this run was started FROM — an agent working in session A that
+   * runs a playbook. Recorded as `run session --spawned_from--> A` through the
+   * one producer (`recordSessionSpawn`), so the work map and the resume packet
+   * can say what the run was spawned to do. Absent ⇒ no edge (every
+   * pre-existing caller is unchanged).
+   */
+  parentSessionId?: string;
   /** The entity this run is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
   subjectId?: string;
@@ -199,6 +208,14 @@ export interface RunPlaybookResult {
   session: FocusSession;
   /** True when idempotency-by-subject reused an existing active session. */
   reused?: boolean;
+  /**
+   * Whether the `spawned_from` edge to `parentSessionId` landed. Present only
+   * when a parent was asked for. Best-effort by contract (the run already
+   * exists), but never silent — the same shape `createFocusSession` reports.
+   */
+  parentLink?:
+    | { status: "linked"; parentSessionId: string }
+    | { status: "failed"; parentSessionId: string; reason: string };
 }
 
 /**
@@ -598,6 +615,40 @@ async function executeSingleRun(
     metadata: sessionMetadata,
   });
 
+  // Lineage: the session this run was started FROM. AFTER the row exists and
+  // outside any transaction — a bad parent handle must never cost the run. The
+  // owner floor is the HUMAN principal (`input.userId`), not `actorId`: an
+  // agent-started run's session is owned by the agent user, while the session
+  // the agent was working in belongs to the person.
+  let parentLink: RunPlaybookResult["parentLink"];
+  if (input.parentSessionId && session) {
+    try {
+      const spawn = await recordSessionSpawn({
+        childSessionId: session.id,
+        parentSessionId: input.parentSessionId,
+        userId: input.userId,
+        workspaceId: session.workspaceId,
+      });
+      parentLink = spawn.linked
+        ? { status: "linked", parentSessionId: input.parentSessionId }
+        : {
+            status: "failed",
+            parentSessionId: input.parentSessionId,
+            reason: spawn.reason,
+          };
+    } catch (err) {
+      logger.warn(
+        { err, sessionId: session.id, parentSessionId: input.parentSessionId },
+        "recordSessionSpawn failed — run kept, spawned_from edge not written"
+      );
+      parentLink = {
+        status: "failed",
+        parentSessionId: input.parentSessionId,
+        reason: "error",
+      };
+    }
+  }
+
   // 2. Create the run channel per channelSpec, OR reuse an existing channel when
   // the caller specifies targetChannelId (e.g. to route output to a client entity's
   // team channel instead of a throwaway playbook channel).
@@ -773,5 +824,9 @@ async function executeSingleRun(
     where: eq(focusSessions.id, session.id),
   })) as FocusSession;
 
-  return { run: updated as PlaybookRun, session: refreshed };
+  return {
+    run: updated as PlaybookRun,
+    session: refreshed,
+    ...(parentLink ? { parentLink } : {}),
+  };
 }

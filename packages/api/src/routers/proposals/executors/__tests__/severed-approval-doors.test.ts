@@ -407,9 +407,14 @@ describe("(6b) playbook/run is at-most-once — runPlaybook is NOT idempotent", 
       join(process.cwd(), "src/routers/playbooks.ts"),
       "utf8"
     );
-    const start = runDoor.indexOf(
-      "const { run, session } = await runPlaybook({"
-    );
+    // Anchored on the CALL, not on the destructure — the result shape grows
+    // (`parentLink`, 2026-09-24) and an exact `const { run, session } =`
+    // anchor went red for a change that did not touch the arguments. The
+    // count pin keeps the anchor unambiguous: a SECOND call would need its own
+    // scan, not to be silently skipped by indexOf.
+    const anchor = "= await runPlaybook({";
+    expect(runDoor.split(anchor).length - 1).toBe(1);
+    const start = runDoor.indexOf(anchor);
     expect(start).toBeGreaterThan(-1);
     const call = runDoor.slice(start, runDoor.indexOf("});", start));
     expect(call).not.toContain("idempotentBySubject");

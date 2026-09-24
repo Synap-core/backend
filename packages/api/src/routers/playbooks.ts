@@ -2433,6 +2433,13 @@ export const playbooksRouter = router({
         agentUserId: z.string().uuid().optional(),
         /** Subject entity to bind this run to (polymorphic — any entity). */
         subjectId: z.string().uuid().optional(),
+        /**
+         * The session this run is started FROM (an agent working in session A
+         * runs a playbook). Becomes `run --spawned_from--> A` via
+         * `recordSessionSpawn` (owner-floored there). Carried on the proposal
+         * `data` so an approved run keeps its lineage too.
+         */
+        parentSessionId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
         /**
@@ -2576,6 +2583,9 @@ export const playbooksRouter = router({
           ...(input.params ? { params: input.params } : {}),
           ...(input.subjectId ? { subjectId: input.subjectId } : {}),
           ...(input.agentIds?.length ? { agentIds: input.agentIds } : {}),
+          ...(input.parentSessionId
+            ? { parentSessionId: input.parentSessionId }
+            : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2597,10 +2607,10 @@ export const playbooksRouter = router({
       // Declared params that were not satisfied are a REFUSAL the caller can
       // act on (fill the form), never a 500 — the same reason `PromoteResult`
       // carries a typed refusal. Handled with `.catch` rather than a
-      // `try`/`let` pair so the call keeps the exact `const { run, session } =
-      // await runPlaybook({` shape that `severed-approval-doors.test.ts` (6b)
-      // scans for when it proves this door passes no `idempotentBySubject`.
-      const { run, session } = await runPlaybook({
+      // `try`/`let` pair so this stays the ONE assigned runPlaybook call in
+      // this file, which `severed-approval-doors.test.ts` (6b) anchors on (and
+      // counts) when it proves this door passes no `idempotentBySubject`.
+      const { run, session, parentLink } = await runPlaybook({
         playbookId: input.playbookId,
         workspaceId: runWorkspaceId,
         userId: ctx.userId,
@@ -2608,6 +2618,9 @@ export const playbooksRouter = router({
         agentIds: input.agentIds,
         agentUserId: input.agentUserId,
         subjectId,
+        ...(input.parentSessionId
+          ? { parentSessionId: input.parentSessionId }
+          : {}),
         ...(input.onMissingRequired
           ? { onMissingRequired: input.onMissingRequired }
           : {}),
@@ -2624,6 +2637,7 @@ export const playbooksRouter = router({
         status: "running" as const,
         message: "Playbook run started",
         proposalId: null as string | null,
+        ...(parentLink ? { parentLink } : {}),
       };
     }),
 

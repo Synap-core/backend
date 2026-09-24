@@ -509,11 +509,6 @@ export const devplaneRouter = router({
         ],
         // App core
         [
-          "@synap-core/ui-system",
-          "1.0.0",
-          "Tamagui design system — tokens, primitives (Button, Input, Card), dark/light themes, Fraunces + DM Sans",
-        ],
-        [
           "@synap-core/cell-runtime",
           "1.0.0",
           "Cell registry singleton + CellRenderer dispatcher — BentoCellHost, PanelCellHost, PageCellHost",
@@ -592,7 +587,7 @@ export const devplaneRouter = router({
         [
           "@synap-core/intelligence",
           "1.0.0",
-          "Intelligence app — agent detail, usage stats, skills list, proposals badge, recent chats",
+          "Intelligence dashboard cells — service status, usage, agents, proposals, recent chats, skills, tasks",
         ],
         [
           "@synap/extension",

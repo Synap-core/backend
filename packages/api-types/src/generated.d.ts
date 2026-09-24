@@ -10959,6 +10959,25 @@ export interface PacketEvaluationItem {
 	rationale: string | null;
 	createdAt: string;
 }
+export type SessionInteractionType = "triggered" | "updated";
+export interface SessionInteraction {
+	type: SessionInteractionType;
+	/** triggered: the session whose write fired the run. updated: the producer. */
+	fromSessionId: string;
+	/** triggered: the run it fired. updated: the session that wrote to the output. */
+	toSessionId: string;
+	/** How many events back this relation (updated can be many writes). */
+	count: number;
+	/** The latest of them, ISO. */
+	lastAt: string | null;
+}
+export type SessionInteractionsSection = {
+	status: "ok";
+	items: SessionInteraction[];
+} | {
+	status: "unavailable";
+	reason: string;
+};
 /** The kinds a session can be converted INTO. */
 export type ConversionKind = "playbook" | "project";
 /** The receipt every conversion verb returns. Frontend renders it verbatim. */
@@ -30314,6 +30333,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				limit?: number | undefined;
 				edges?: boolean | undefined;
 				nextMove?: boolean | undefined;
+				interactions?: boolean | undefined;
 				lens?: "default" | "all" | "triage" | undefined;
 				kind?: "run" | "all" | "receipt" | "work" | undefined;
 				playbookId?: string | undefined;
@@ -30354,6 +30374,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				verdict?: SessionVerdict;
 			} & Partial<SessionEdges> & Partial<SessionOutputDependencies> & {
 				nextMove?: ContinuationNextMove;
+				interactions?: SessionInteractionsSection;
 			})[];
 			meta: object;
 		}>;
@@ -31970,6 +31991,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentIds?: string[] | undefined;
 				agentUserId?: string | undefined;
 				subjectId?: string | undefined;
+				parentSessionId?: string | undefined;
 				source?: string | undefined;
 				reasoning?: string | undefined;
 				onMissingRequired?: "refuse" | "owe" | undefined;
@@ -31991,6 +32013,14 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				unenabledSkills?: undefined;
 				enableProposals?: undefined;
 			} | {
+				parentLink?: {
+					status: "linked";
+					parentSessionId: string;
+				} | {
+					status: "failed";
+					parentSessionId: string;
+					reason: string;
+				} | undefined;
 				run: {
 					id: string;
 					workspaceId: string | null;

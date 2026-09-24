@@ -261,6 +261,10 @@ export async function runPlaybookDoor(
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
+    // LINEAGE: the session the caller is working in. The run is spawned FROM
+    // it, so the work map and the resume packet can say why the run exists.
+    // Absent (no bound session) ⇒ no edge, never a guess.
+    ...(identity.sessionId ? { parentSessionId: identity.sessionId } : {}),
     // HEADLESS DOOR — MCP, Raycast, the Hub REST run endpoint. There is no
     // form to put in front of anybody, so an unanswered required param files
     // an OWED SLOT on the run rather than refusing it (or, as before this

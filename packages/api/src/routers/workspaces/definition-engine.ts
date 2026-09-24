@@ -2438,7 +2438,7 @@ export const definitionEngineProcedures = {
           throw err;
         }
         if (core.status === "composed") {
-          composedTarget = core.composeTargetWorkspaceId;
+          composedTarget = core.composeTargetWorkspaceIds?.[0] ?? undefined;
         }
       }
 

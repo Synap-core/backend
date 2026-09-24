@@ -1342,19 +1342,21 @@ export const inviteProcedures = {
             throw err;
           }
           if (core.status === "composed") {
-            // A compose overlay layered onto its existing base — no new
+            // A compose overlay layered onto its existing base(s) — no new
             // workspace, so no workspace-init enqueue (the base already has its
-            // defaults). Return the base's id.
+            // defaults). Return the first base's id.
+            const composeTargetWorkspaceIds =
+              core.composeTargetWorkspaceIds ?? [];
             logger.info(
               {
-                workspaceId: core.composeTargetWorkspaceId,
+                workspaceId: composeTargetWorkspaceIds[0],
                 pluginId: input.pluginId,
               },
               "Plugin workspace composed onto base (provisioning)"
             );
             return {
               status: "created" as const,
-              workspaceId: core.composeTargetWorkspaceId,
+              workspaceId: composeTargetWorkspaceIds[0],
             };
           }
           // status "resolved" — deps installed, no compose base. Fall through to

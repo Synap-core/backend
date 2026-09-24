@@ -113,6 +113,10 @@ import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import { attachNextMove } from "../services/focus-sessions/session-path-sections.js";
+import {
+  attachSessionInteractions,
+  type SessionInteractionsSection,
+} from "../services/focus-sessions/session-interactions.js";
 import type { ContinuationNextMove } from "../services/focus-sessions/continuation-packet.js";
 import { aiRateLimitMiddleware } from "../middleware/ai-rate-limit.js";
 import {
@@ -383,7 +387,10 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
   triage: TriageProjection;
   kind: SessionKind;
 } & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
-  Partial<SessionOutputDependencies> & { nextMove?: ContinuationNextMove };
+  Partial<SessionOutputDependencies> & {
+    nextMove?: ContinuationNextMove;
+    interactions?: SessionInteractionsSection;
+  };
 
 /**
  * Merge `metadata.titleSource` into the row — never assign over metadata. A
@@ -446,6 +453,15 @@ export const focusSessionsRouter = router({
          * The work map needs it to mark who owns each session's next move.
          */
         nextMove: z.boolean().optional(),
+        /**
+         * Also project the DERIVED session→session interactions among the
+         * page's rows — `triggered` (a run fired by an event another session
+         * wrote) and `updated` (a session wrote to another's output). See
+         * `session-interactions.ts`. Both ends are on the page by
+         * construction. A failed read is `{ status: "unavailable" }` on every
+         * row, never an empty list. The work map draws them.
+         */
+        interactions: z.boolean().optional(),
         /** Which sessions — see `sessionLensSchema`. Default EXCLUDES triage. */
         lens: sessionLensSchema,
         /** Which population — see `sessionKindFilterSchema`. Default `work`. */
@@ -496,9 +512,12 @@ export const focusSessionsRouter = router({
             logContext: { door: "focusSessions.list" },
           })
         : withParticipants;
-      if (!input.edges) return withMove;
+      const withInteractions: SessionListRow[] = input.interactions
+        ? await attachSessionInteractions(withMove)
+        : withMove;
+      if (!input.edges) return withInteractions;
       // Second batch projection, ONE more links query for the whole page.
-      const withEdges = await attachSessionEdges(withMove);
+      const withEdges = await attachSessionEdges(withInteractions);
       // Third: the DERIVED output dependencies. Owner-floored explicitly —
       // unlike `blocked_by`, these edges have no single producer that floors
       // both ends, so the counterparty can belong to another user.
