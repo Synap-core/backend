@@ -81,7 +81,17 @@ import {
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
-import { createNameResolvers } from "./helper-functions.js";
+import {
+  createNameResolvers,
+  stringProp,
+  displayNameForUser,
+} from "./helper-functions.js";
+
+// Re-exported so existing external import sites (`routers/proposals.ts`,
+// `services/focus-sessions/participants.ts`) are unaffected by moving the
+// canonical implementations into `helper-functions.js` (done to let that
+// module use them without importing back into this one, which imports it).
+export { stringProp, displayNameForUser };
 
 type ProposalRow = typeof proposals.$inferSelect;
 
@@ -216,6 +226,10 @@ type DisplayEnrichedProposal = ProposalRow &
      */
     sessionGoal?: string;
     // NEW: Resolved names for commonly referenced IDs across proposal kinds
+    /** The focus_session proposal's subject entity — "Start {playbook} for
+     * {subjectName}". Falls back to `projectName` when a session has no
+     * subject (the renderer's choice, not derived here). */
+    subjectName?: string;
     playbookName?: string;
     projectName?: string;
     automationName?: string;
@@ -261,6 +275,14 @@ export async function enrichProposalsForDisplay(
     const tgt = stringProp(payload, "targetEntityId");
     if (src && isLikelyUUID(src)) relationEndpointIds.push(src);
     if (tgt && isLikelyUUID(tgt)) relationEndpointIds.push(tgt);
+    // A focus_session/create (or /update) proposal's subject — "Start
+    // {playbook} for {subject}" — batched into the same entity join as the
+    // relation endpoints above so its title is resolved the same way.
+    if (row.targetType === "focus_session") {
+      const subjectId = stringProp(payload, "subjectEntityId");
+      if (subjectId && isLikelyUUID(subjectId))
+        relationEndpointIds.push(subjectId);
+    }
     const raw = row.data as StoredProposalData | null | undefined;
     if (isCompositeProposalData(raw)) {
       for (const op of raw.operations) {
@@ -987,6 +1009,17 @@ export async function enrichProposalsForDisplay(
         };
       }
     }
+    // "Start {playbook} for {subject}" — the focus_session's subject entity,
+    // batch-joined above alongside the relation endpoints. `projectName`
+    // (resolved separately, below) is the caller's fallback when a session
+    // has no subject.
+    const subjectName =
+      row.targetType === "focus_session"
+        ? (() => {
+            const subjectId = stringProp(payload, "subjectEntityId");
+            return subjectId ? resolveEntityTitleScoped(subjectId) : undefined;
+          })()
+        : undefined;
     // A SECRET install param's VALUE never reaches a reviewer — not in `data`,
     // not in `request.data`, and not in the review model built from it. An
     // agent may have inlined a raw key into `params`; a `secret` flag arriving
@@ -1091,11 +1124,12 @@ export async function enrichProposalsForDisplay(
         ? { sessionGoal: sessionGoalById.get(row.sessionId)! }
         : {}),
       // NEW: Resolved names for commonly referenced IDs across proposal kinds
+      ...(subjectName ? { subjectName } : {}),
       ...(nameResolvers.resolvePlaybookName(row, payload)
         ? { playbookName: nameResolvers.resolvePlaybookName(row, payload)! }
         : {}),
-      ...(nameResolvers.resolveProjectName(row, payload)
-        ? { projectName: nameResolvers.resolveProjectName(row, payload)! }
+      ...(nameResolvers.resolveProjectName(row)
+        ? { projectName: nameResolvers.resolveProjectName(row)! }
         : {}),
       ...(nameResolvers.resolveAutomationName(row, payload)
         ? { automationName: nameResolvers.resolveAutomationName(row, payload)! }
@@ -1752,14 +1786,6 @@ export function uniqueStrings(
   );
 }
 
-export function stringProp(
-  record: Record<string, unknown> | undefined,
-  key: string
-): string | undefined {
-  const value = record?.[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
-
 export function displayLabelFromRecord(
   record: Record<string, unknown> | undefined
 ): string | undefined {
@@ -1769,19 +1795,6 @@ export function displayLabelFromRecord(
     stringProp(record, "displayName") ??
     stringProp(record, "label")
   );
-}
-
-export function displayNameForUser(row: {
-  name: string | null;
-  email: string;
-  userType: string;
-  agentMetadata: { agentType?: string; description?: string } | null;
-}): string | undefined {
-  if (row.name) return row.name;
-  if (row.userType === "agent") {
-    return row.agentMetadata?.agentType ?? row.agentMetadata?.description;
-  }
-  return row.email || undefined;
 }
 
 /**

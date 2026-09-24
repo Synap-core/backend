@@ -1230,7 +1230,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that.",
+      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1304,6 +1304,10 @@
           "subjectEntityId": {
             "type": ["string", "null"],
             "description": "Re-point WHAT this session is about — the entity UUID of the person/company/deal the work concerns. Pass null to CLEAR it; omit to leave it alone. REFUSED if the entity is not one you can already see (the same floor an output ref goes through)."
+          },
+          "projectId": {
+            "type": ["string", "null"],
+            "description": "FILE this session into a project (its UUID from synap_list_projects), or pass null to UNFILE it; omit to leave it alone. Always filed as a PROPOSAL the person approves — which project work belongs to is their call, so suggest it, never assume it. REFUSED if the project is not one you can see."
           },
           "expectedOutputs": {
             "type": "array",

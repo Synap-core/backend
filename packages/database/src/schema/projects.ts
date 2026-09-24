@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
   jsonb,
+  smallint,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
@@ -75,6 +76,14 @@ export const projects = pgTable(
      * number nobody recomputes.
      */
     targetDate: timestamp("target_date", { mode: "date", withTimezone: true }),
+
+    /**
+     * The project's colour, as a SLOT 1–12 in the identity palette
+     * (`--synap-identity-N`), never a hex — the palette has a light and a dark
+     * value per slot, so a slot is right on both themes (0271). NULL = the
+     * person has not chosen one; surfaces then derive a slot from the id.
+     */
+    colorSlot: smallint("color_slot"),
 
     // Settings (agent preferences, defaults, etc.)
     settings: jsonb("settings"),

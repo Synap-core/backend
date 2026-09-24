@@ -31,6 +31,52 @@ export interface WorkspaceDecisionRecord {
   candidates?: Array<{ id: string; name: string }>;
 }
 
+/**
+ * WHAT HAPPENED on the project axis of a `capture.structure` run.
+ *
+ * The project fields are the structurer's raw output — unlike the workspace
+ * axis there is no deterministic pod-side backfill, so a `null`
+ * `targetProjectId` with a `null` reason used to mean two OPPOSITE things and
+ * be byte-identical on the wire:
+ *
+ *   - `not_offered`  the candidate set was EMPTY — there was no project to
+ *                    file under, so a null pick is the only possible answer
+ *                    and carries no information about the data.
+ *   - `unstated`     candidates WERE sent and the model recorded no judgement
+ *                    at all. Four projects existed and the run is silent about
+ *                    them.
+ *
+ * `declined` (asked, answered, no project) and `selected` (asked, answered,
+ * picked one) are the two cases that were already legible.
+ *
+ * This is a STATE, deliberately not prose: a reader renders honest words from
+ * it. Backfilling a reason sentence for `unstated` would assert a judgement
+ * that never happened — the "stamp you did not earn" defect.
+ */
+export type CaptureProjectOutcome =
+  "not_offered" | "selected" | "declined" | "unstated";
+
+/**
+ * Derive {@link CaptureProjectOutcome} from facts the capture door already
+ * holds. The ONE derivation — never re-implement it at a call site.
+ *
+ * `availableProjectCount` is the candidate set the door actually SENT, so
+ * `not_offered` is decided by what was asked, never by what came back.
+ */
+export function deriveCaptureProjectOutcome(input: {
+  availableProjectCount: number;
+  targetProjectId?: string | null;
+  targetProjectReason?: string | null;
+}): CaptureProjectOutcome {
+  if (input.availableProjectCount <= 0) return "not_offered";
+  if (typeof input.targetProjectId === "string" && input.targetProjectId)
+    return "selected";
+  return typeof input.targetProjectReason === "string" &&
+    input.targetProjectReason.trim().length > 0
+    ? "declined"
+    : "unstated";
+}
+
 /** The placement advice a `capture.structure` result carries (a subset). */
 export interface CaptureStructureRouting {
   targetWorkspaceId?: string | null;
@@ -40,6 +86,13 @@ export interface CaptureStructureRouting {
   targetProjectId?: string | null;
   targetProjectReason?: string | null;
   targetProjectConfidence?: number | null;
+  /**
+   * Which of the four project outcomes this run had. Additive; absent on an
+   * older pod and on a degraded run (which carries `degraded`/`degradedReason`
+   * instead — no structuring happened, so there is no project judgement to
+   * report).
+   */
+  targetProjectOutcome?: CaptureProjectOutcome | null;
 }
 
 /** The advisory routing fields `capture.execute` accepts. */

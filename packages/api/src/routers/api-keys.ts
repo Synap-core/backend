@@ -212,7 +212,22 @@ export const apiKeysRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "apiKey",
         action: "create",
-        data: { id, keyName: input.keyName },
+        // The approval half (`executors/workspace.ts`, key `apiKey/create`)
+        // re-runs THIS mutation as the approver, so the gate must carry every
+        // argument that shapes the minted key. Storing only `{ id, keyName }`
+        // was the "approved create materializes an empty shell" defect in its
+        // sharpest form: `scope` is REQUIRED by the input schema, so the
+        // executor could not even call the door. `workspaceId` is not stored —
+        // it is already the proposal row's own `workspace_id`.
+        data: {
+          id,
+          keyName: input.keyName,
+          scope: input.scope,
+          ...(input.hubId ? { hubId: input.hubId } : {}),
+          ...(input.expiresInDays !== undefined
+            ? { expiresInDays: input.expiresInDays }
+            : {}),
+        },
       });
 
       if ("denied" in perm && perm.denied) {

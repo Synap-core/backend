@@ -151,3 +151,46 @@ describe("the Hub REST list door does not hand-write its own copy again", () => 
     expect(src).not.toMatch(/conditions\.push\(sessionKindWhere\(/);
   });
 });
+
+describe("unfiled — Home's sessions with no project", () => {
+  const IS_NULL = /"focus_sessions"\."project_id" is null/;
+
+  it("narrows to projectId IS NULL when asked", () => {
+    const q = sqlOf(
+      sessionListConditions({
+        userId: USER,
+        scope: { workspaceLens: undefined, projectLens: undefined },
+        status: "all",
+        unfiled: true,
+      })
+    );
+    expect(q.sql).toMatch(IS_NULL);
+  });
+
+  it("a null project lens still means NO narrow, not unfiled", () => {
+    // Rules out the tempting fix of re-reading `projectId: null` as "none",
+    // which would change every other door that shares the scope filter.
+    const q = sqlOf(
+      sessionListConditions({
+        userId: USER,
+        scope: { workspaceLens: undefined, projectLens: null },
+        status: "all",
+      })
+    );
+    expect(q.sql).not.toMatch(IS_NULL);
+    expect(q.sql).not.toMatch(/"project_id"/);
+  });
+
+  it("composes with a workspace lens", () => {
+    const q = sqlOf(
+      sessionListConditions({
+        userId: USER,
+        scope: { workspaceLens: WS, projectLens: undefined },
+        status: "all",
+        unfiled: true,
+      })
+    );
+    expect(q.sql).toMatch(IS_NULL);
+    expect(q.params).toContain(WS);
+  });
+});

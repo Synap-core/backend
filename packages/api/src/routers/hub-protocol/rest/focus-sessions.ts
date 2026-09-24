@@ -226,6 +226,9 @@ export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if ("stages" in raw) {
     return "stages is not supported on PATCH /focus-sessions/:id — nothing was changed. A session's own phase snapshot (focus_sessions.stages) is written through the tRPC focusSessions.update door.";
   }
+  if ("projectId" in raw) {
+    return "projectId is not supported on PATCH /focus-sessions/:id — nothing was changed. Filing a session into a project is always reviewed: use the synap_update_session tool (MCP) with projectId, which files it as a proposal the person approves.";
+  }
   return null;
 }
 

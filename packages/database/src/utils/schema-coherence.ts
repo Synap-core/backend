@@ -1502,6 +1502,12 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "target_date",
     addedBy: "0252_projects_target_date.sql",
   },
+  // The project's identity-palette slot (0271) — same baseline exemption.
+  {
+    table: "projects",
+    column: "color_slot",
+    addedBy: "0271_projects_color_slot.sql",
+  },
   // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
   // policy. New table; checking one column confirms the migration ran.
   {

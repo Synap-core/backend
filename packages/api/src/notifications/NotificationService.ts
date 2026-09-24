@@ -75,7 +75,8 @@ export interface CreateNotificationInput {
     | "system"
     | "inbox_item"
     | "proactive_message"
-    | "session";
+    | "session"
+    | "automation";
   sourceId?: string;
   workspaceUrl?: string;
 

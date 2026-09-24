@@ -38,6 +38,7 @@ import {
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
 import { findOpenSessionTwin } from "../../../services/focus-sessions/find-open-session-twin.js";
+import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -611,6 +612,26 @@ export function registerFocusSessionExecutors(): void {
           typeof innerData.subjectEntityId === "string"
         ) {
           set.subjectEntityId = innerData.subjectEntityId;
+        }
+        // FILING. Carried by `updateFocusSession`'s gate payload in the same
+        // hunk as this arm. The target is re-floored at approval: the project
+        // could have been removed or unshared since the proposal was filed, and
+        // approving must not write a session into a project nobody can see.
+        if (innerData.projectId === null) {
+          set.projectId = null;
+        } else if (typeof innerData.projectId === "string") {
+          const project = await loadVisibleProject(
+            db,
+            innerData.projectId,
+            userId
+          );
+          if (!project) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Cannot file this session into project ${innerData.projectId}: it no longer exists or is not visible to you.`,
+            });
+          }
+          set.projectId = innerData.projectId;
         }
 
         // DELIVERABLES. Carried into the gate payload by both proposing doors

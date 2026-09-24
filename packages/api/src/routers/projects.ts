@@ -49,6 +49,7 @@ import {
   setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
+import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -83,50 +84,6 @@ async function countVisibleEntities(
     );
   return new Set(rows.map((r) => r.id)).size;
 }
-/**
- * Load a project ONLY if the caller may see it — the ONE visibility floor for
- * single-project reads and for any write that must gate on the project itself.
- *
- * Pod-personal projects (NULL workspace) are owner-only; workspace-scoped ones
- * are visible to every member. Extracted from `get`'s inline predicate so a
- * second caller cannot drift from it — the `automations` read and the
- * membership write both need exactly this floor, and re-typing it is how the
- * two would silently diverge.
- */
-async function loadVisibleProject(
-  db: Awaited<ReturnType<typeof getDb>>,
-  projectId: string,
-  userId: string
-): Promise<
-  | {
-      id: string;
-      workspaceId: string | null;
-      userId: string;
-      phase: string | null;
-      settings: unknown;
-    }
-  | undefined
-> {
-  // `userId` / `phase` / `settings` are additive to the original
-  // `{ id, workspaceId }`: `instantiateFromPlaybook` needs the CURRENT settings
-  // to merge into (a wholesale `.set()` on the jsonb would clobber every other
-  // key) and the current phase to decide whether it may seed one. Existing
-  // callers destructure only what they used before.
-  return db.query.projects.findFirst({
-    columns: {
-      id: true,
-      workspaceId: true,
-      userId: true,
-      phase: true,
-      settings: true,
-    },
-    where: and(
-      eq(projects.id, projectId),
-      ownerPrivateVisibleWhere(projects.workspaceId, projects.userId, userId)!
-    ),
-  });
-}
-
 // ─── Project ↔ playbook stage binding (pure) ──────────────────────────────────
 
 /**
@@ -719,6 +676,11 @@ export const projectsRouter = router({
          */
         targetDate: z.coerce.date().nullable().optional(),
         /**
+         * The project's colour as an identity-palette SLOT (1–12), never a
+         * hex — see `projects.color_slot` (0271). `null` clears the choice.
+         */
+        colorSlot: z.number().int().min(1).max(12).nullable().optional(),
+        /**
          * Rebind the container's subject entity. `null` unbinds it (the project
          * falls back to its plain typed name). Omitted = untouched.
          */
@@ -767,6 +729,9 @@ export const projectsRouter = router({
           ...(input.phase !== undefined ? { phase: input.phase } : {}),
           ...(input.targetDate !== undefined
             ? { targetDate: input.targetDate }
+            : {}),
+          ...(input.colorSlot !== undefined
+            ? { colorSlot: input.colorSlot }
             : {}),
           ...(input.subjectEntityId !== undefined
             ? { subjectEntityId: input.subjectEntityId }

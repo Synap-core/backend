@@ -133,6 +133,12 @@ vi.mock("@synap/database", async () => {
     isNotNull: vi.fn((a) => ({ isNotNull: a })),
     drizzleSql: vi.fn(() => ({})),
     verifyPermission: mockVerifyPermission,
+    // The gate reads the ambient acting agent before the supplied option (the
+    // D12 attribution floor). This suite supplies `agentUserId` explicitly, so
+    // "no ambient scope" is the correct stub and preserves its existing cases.
+    getActingAgentUserId: () => undefined,
+    runWithActingAgent: <T>(_agentUserId: string | undefined, fn: () => T) =>
+      fn(),
     ProposalStatus: { PENDING: "pending", AUTO_APPROVED: "auto_approved" },
     ProfileResolutionService: class {
       resolveProfile = mockResolveProfile;

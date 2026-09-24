@@ -270,6 +270,10 @@ export function registerProjectExecutors(): void {
             ...("targetDate" in innerData
               ? { targetDate: innerData.targetDate as Date | null }
               : {}),
+            // `in`, for the same reason: `null` clears the chosen colour.
+            ...("colorSlot" in innerData
+              ? { colorSlot: innerData.colorSlot as number | null }
+              : {}),
             ...("subjectEntityId" in innerData
               ? { subjectEntityId: innerData.subjectEntityId as string | null }
               : {}),

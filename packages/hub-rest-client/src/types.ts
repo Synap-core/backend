@@ -447,6 +447,15 @@ export interface CaptureStructureResponse {
   };
   targetProjectId?: string | null;
   /**
+   * What happened on the project axis (`CaptureProjectOutcome`,
+   * `@synap-core/types`): `not_offered` (no candidates were sent) is a
+   * different fact from `unstated` (candidates were sent, the model recorded
+   * no judgement), and a `null` `targetProjectId` cannot tell them apart.
+   * Additive — absent on an older pod and on a degraded run.
+   */
+  targetProjectOutcome?:
+    "not_offered" | "selected" | "declined" | "unstated" | null;
+  /**
    * Soft meta-structure suggestions (display-only chips). Never materialize.
    * Additive — absent when the model has nothing to suggest.
    */

@@ -68,6 +68,8 @@ export interface UpdateProjectInput {
   phase?: string | null;
   /** See `CreateProjectInput.targetDate`. `null` clears the deadline. */
   targetDate?: Date | null;
+  /** Identity-palette slot 1–12 (0271). `null` clears the person's choice. */
+  colorSlot?: number | null;
   settings?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
@@ -209,6 +211,8 @@ export class ProjectRepository extends BaseRepository<
         // Same two-state contract as `phase` above: `undefined` is skipped by
         // Drizzle (deadline untouched), an explicit `null` CLEARS it.
         targetDate: data.targetDate,
+        // Same two-state contract: `undefined` untouched, `null` clears.
+        colorSlot: data.colorSlot,
         settings: data.settings,
         metadata: data.metadata,
         updatedAt: new Date(),

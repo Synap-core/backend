@@ -680,6 +680,14 @@ export const sessionHandlers: McpHandlerMap = {
         : typeof args.subjectEntityId === "string"
           ? { subjectEntityId: args.subjectEntityId }
           : {}),
+      // NARROWED like the subject: `null` unfiles, a string files, anything
+      // else leaves it. The floor and the always-propose rule for an agent live
+      // in `updateFocusSession`.
+      ...(args.projectId === null
+        ? { projectId: null }
+        : typeof args.projectId === "string"
+          ? { projectId: args.projectId }
+          : {}),
       // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
       // re-typed inline shape: an inline copy silently narrows what this door
       // believes a slot is, which is how the per-door shapes drifted in the

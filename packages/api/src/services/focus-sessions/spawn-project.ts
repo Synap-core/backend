@@ -16,6 +16,8 @@
  *                               subject door (`setProjectSubject`)
  *   session.expectedOutputs   → project.metadata.spawnedFrom.expectedOutputs
  *   session                   → `session --promoted_to--> project` (lineage)
+ *   session.projectId         → the new project (the session is FILED into
+ *                               what it spawned; undo unfiles it)
  *
  * `expectedOutputs` is the lossy one AND IT IS SAID OUT LOUD: the `projects`
  * table has no tasks/outputs notion at all (read `schema/projects.ts` — name,
@@ -151,6 +153,16 @@ export async function spawnProjectFromSession(
     },
     input.userId
   );
+
+  // FILE the session into the project it spawned: the session that started a
+  // project is that project's first piece of work (founder decision, 2026-09-24).
+  // Before this the session stayed unfiled, so the new project opened empty
+  // while the work that created it sat in Home's "Unfiled". The refusal above
+  // guarantees `projectId` was null; `revertConversion` sets it back.
+  await database
+    .update(focusSessions)
+    .set({ projectId: created.id, updatedAt: new Date() })
+    .where(eq(focusSessions.id, session.id));
 
   // Lineage edge — see the header for why `promoted_to` and not `targets`.
   // `createLinks` is onConflict-safe, so a re-run is idempotent.

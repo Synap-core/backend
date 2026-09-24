@@ -142,6 +142,7 @@ import {
   type WorkspaceRuleOffer,
 } from "../lib/workspace-decision.js";
 import type { CapturePlacement } from "@synap-core/types";
+import { deriveCaptureProjectOutcome } from "@synap-core/types";
 import { reconcileWorkspaceByName } from "../lib/workspace-name-reconcile.js";
 import { isDomainHomeWorkspace } from "../lib/routing-candidates.js";
 import { searchService } from "@synap/search";
@@ -2089,6 +2090,16 @@ const captureBaseRouter = router({
             targetProjectReason: structureResult.targetProjectReason ?? null,
             targetProjectConfidence:
               structureResult.targetProjectConfidence ?? null,
+            // WHAT HAPPENED on the project axis. Without it a `null` project
+            // with a `null` reason is byte-identical whether nobody was asked
+            // (`not_offered`) or candidates were sent and the model recorded
+            // nothing (`unstated`) — opposite facts. Derived from what this
+            // door SENT, never backfilled into a prose reason.
+            targetProjectOutcome: deriveCaptureProjectOutcome({
+              availableProjectCount: availableProjects.length,
+              targetProjectId: structureResult.targetProjectId,
+              targetProjectReason: structureResult.targetProjectReason,
+            }),
             formSpec: structureResult.formSpec ?? null,
             // Soft meta-structure chips only — never materialize; omit when empty.
             ...(structureResult.architectureSuggestions?.length
@@ -2303,6 +2314,14 @@ const captureBaseRouter = router({
           targetProjectReason: structureResult.targetProjectReason ?? null,
           targetProjectConfidence:
             structureResult.targetProjectConfidence ?? null,
+          // See the follow-up exit above: the project axis reports its STATE,
+          // because `null`/`null` cannot tell "nobody was asked" from "asked,
+          // and the model said nothing".
+          targetProjectOutcome: deriveCaptureProjectOutcome({
+            availableProjectCount: availableProjects.length,
+            targetProjectId: structureResult.targetProjectId,
+            targetProjectReason: structureResult.targetProjectReason,
+          }),
           formSpec: structureResult.formSpec ?? null,
           // Soft meta-structure chips only — never materialize; omit when empty.
           ...(structureResult.architectureSuggestions?.length

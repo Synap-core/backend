@@ -331,6 +331,7 @@ describe("getProjectPath", () => {
     });
     expect(out).toHaveLength(rows.length);
     const kinds = new Set<string>();
+    let pendingSeen = 0;
     for (const item of out) {
       const packet = await projectContinuationPacket(
         rows.find((x) => x.id === item.id)!,
@@ -339,9 +340,19 @@ describe("getProjectPath", () => {
       expect(item.nextMove, `nextMove for ${item.goal}`).toEqual(
         packet.nextMove
       );
+      // The state mark's counts come from the SAME reads as the packet.
+      const { owedSlots, pendingProposals } = packet.userMustDecide;
+      expect(item.unitFacts, `unitFacts for ${item.goal}`).toEqual({
+        owedFromYou: owedSlots.status === "ok" ? owedSlots.total : "unread",
+        pendingDecisions:
+          pendingProposals.status === "ok" ? pendingProposals.total : null,
+      });
       expect(item.blockedBy).toEqual(["list-shape"]);
       kinds.add(item.nextMove.kind);
+      pendingSeen += item.unitFacts.pendingDecisions ?? 0;
     }
+    // Non-vacuity for the counts: at least one row carries a pending decision.
+    expect(pendingSeen).toBeGreaterThan(0);
     // Non-vacuity: a blocked session and a pending proposal are both on the page.
     expect(kinds).toContain("waiting_on_session");
     expect(kinds).toContain("pending_proposal");

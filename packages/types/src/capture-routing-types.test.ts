@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  deriveCaptureProjectOutcome,
   deriveWorkspacePlacementView,
   type CapturePlacement,
 } from "./capture-routing-types.js";
@@ -124,5 +125,51 @@ describe("deriveWorkspacePlacementView", () => {
     const v = deriveWorkspacePlacementView(undefined, { kind: "default" }, I);
     expect(v.destination.workspaceId).toBeNull();
     expect(v.execute).toEqual({});
+  });
+});
+
+/**
+ * The project-outcome rule. Each row rules out a plausible WRONG rule:
+ * - zero candidates ⇒ `not_offered` EVEN IF the model volunteered a reason
+ *   (rules out "reason present ⇒ declined", which would report a judgement
+ *   about a candidate set that did not exist);
+ * - candidates + silence ⇒ `unstated` (rules out "null ⇒ not_offered", the
+ *   collapse the discriminator exists to undo);
+ * - a picked id ⇒ `selected`, never `declined` (rules out "reason ⇒ declined");
+ * - a whitespace-only reason is silence (rules out a truthy-string test).
+ *
+ * The SEAM — that the capture door passes the right arguments here — is pinned
+ * separately in `api/src/routers/__tests__/capture.project-outcome.test.ts`;
+ * this file cannot see a wrong argument.
+ */
+describe("deriveCaptureProjectOutcome", () => {
+  it.each([
+    ["no candidates, silence", 0, null, null, "not_offered"],
+    [
+      "no candidates, but a reason anyway",
+      0,
+      null,
+      "nothing to match",
+      "not_offered",
+    ],
+    ["candidates, silence", 4, null, null, "unstated"],
+    ["candidates, whitespace-only reason", 4, null, "   ", "unstated"],
+    ["candidates, a real reason", 4, null, "no initiative fits", "declined"],
+    [
+      "candidates, a pick with a reason",
+      4,
+      "p1",
+      "it is about the launch",
+      "selected",
+    ],
+    ["candidates, a pick with no reason", 4, "p1", null, "selected"],
+  ] as const)("%s ⇒ %s", (_label, count, id, reason, expected) => {
+    expect(
+      deriveCaptureProjectOutcome({
+        availableProjectCount: count,
+        targetProjectId: id,
+        targetProjectReason: reason,
+      })
+    ).toBe(expected);
   });
 });

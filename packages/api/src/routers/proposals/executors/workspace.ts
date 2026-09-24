@@ -1068,6 +1068,238 @@ export function registerWorkspaceExecutors(): void {
     },
   });
 
+  // ── apiKey / create ──────────────────────────────────────────────────────
+  // Same home as `apiKey/delete` above (no `executors/api-key.ts`, and the
+  // aggregator is off-limits). Severed since it was seeded — an approved
+  // `apiKey/create` hit the `*​/*` catch-all, which flips the row APPROVED and
+  // returns success while NO KEY IS MINTED. The reviewer reads "granted" and
+  // the app that asked holds nothing.
+  //
+  // WHY IT PROPOSES: `apiKey.create` is in the credential-shaped class that no
+  // governance rung widens, so an agent-authored mint ALWAYS proposes.
+  //
+  // PAYLOAD: `data: { id, keyName, scope, hubId?, expiresInDays? }` — nested by
+  // the request-shaped envelope as `data.data.*`. The gate used to store only
+  // `{ id, keyName }`; `scope` is REQUIRED by `apiKeys.create`, so the replay
+  // was not merely lossy, it was impossible. Widened at the gate
+  // (routers/api-keys.ts) rather than guessed here: a mint whose scope the
+  // executor invented would grant authority the reviewer never saw.
+  //
+  // ⚠️ `proposal.targetId` is a PHANTOM here and is deliberately NOT read: the
+  // router mints `const id = randomUUID()` for the gate, then
+  // `ApiKeyRepository.create` generates the row's OWN id. The two are never the
+  // same, so passing targetId anywhere would name a key that does not exist.
+  // (Same shape as `playbook/run`'s `readsTargetId: false`.)
+  //
+  // ⚠️ FIDELITY LOSS (stated, not hidden): `apiKeys.create` returns the
+  // plaintext key ONCE, to its caller. On this path the caller is the approval
+  // dispatcher and `ProposalExecutorResult` has no field for a secret — so the
+  // key material is discarded. The key EXISTS and is listed/revocable; nobody
+  // ever sees its bearer string. Delivering it is a separate design question
+  // (it must not land in `proposals.data`, which is readable), so it is named
+  // here rather than solved with a storage shortcut.
+  //
+  // SECOND EFFECT: replayed through `apiKeysRouter.create`, which owns the
+  // bcrypt hashing + `auditLog` + `emitSideEffects` — never a hand-written
+  // insert, which would drop the last two.
+  //
+  // IDENTITY: acts as the APPROVER, so the key belongs to the reviewer who
+  // granted it — the same rule `apiKey/delete` states, and the only one that
+  // cannot mint a credential into someone else's account.
+  registerProposalExecutor({
+    key: "apiKey/create",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const keyName =
+        (inner.keyName as string | undefined) ??
+        (raw.keyName as string | undefined);
+      const scopeRaw = inner.scope ?? raw.scope;
+      const scope = Array.isArray(scopeRaw)
+        ? scopeRaw.filter((s): s is string => typeof s === "string")
+        : [];
+      if (!keyName) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "API key create proposal is missing the key name",
+        });
+      }
+      if (scope.length === 0) {
+        // A proposal filed BEFORE the gate carried `scope` (or by a door that
+        // still does not). Refusing is the only honest answer — minting with a
+        // guessed scope grants authority nobody reviewed.
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "API key create proposal carries no scope, so the key it asked for cannot be minted. File the request again.",
+        });
+      }
+
+      // Idempotency: approve is not status-guarded before dispatch, and create
+      // is NOT idempotent — a double-click would mint a second live credential.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const keyWorkspaceId = proposal.workspaceId ?? undefined;
+      const membership = keyWorkspaceId
+        ? await getWorkspaceMembership(db, keyWorkspaceId, userId)
+        : null;
+      if (keyWorkspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { apiKeysRouter } = await import("../../api-keys.js");
+      const apiKeyCaller = apiKeysRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: keyWorkspaceId,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      const hubId = (inner.hubId ?? raw.hubId) as string | undefined;
+      const expiresInDays = (inner.expiresInDays ?? raw.expiresInDays) as
+        number | undefined;
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      const minted = await apiKeyCaller.create({
+        keyName,
+        scope,
+        ...(hubId ? { hubId } : {}),
+        ...(typeof expiresInDays === "number" ? { expiresInDays } : {}),
+        ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),
+      });
+      assertApplied(minted);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: minted.id };
+    },
+  });
+
+  // ── apiKey / update ──────────────────────────────────────────────────────
+  // ⚠️ The GATE is inside `apiKeys.rotate` (routers/api-keys.ts) but it
+  // declares `action: "update"`, so the stored key is `apiKey/update` while the
+  // door to replay is `rotate` — the same gate-says-X/door-is-Y shape as
+  // `apiKey/delete` above. Severed since it was seeded: approving flipped the
+  // row APPROVED while the compromised key STAYED LIVE and no replacement was
+  // ever minted, which is the same false-green as an unapplied revoke.
+  //
+  // PAYLOAD: FLAT `data: { id }` — the gate stamps `id: input.keyId` (nested as
+  // `data.data.id`); `proposal.targetId` holds the same id. Rotate needs
+  // nothing else, so unlike `create` this door lost nothing at the gate.
+  //
+  // ⚠️ FIDELITY LOSS: as with `create`, the new plaintext key is returned ONCE
+  // to the caller and the caller here is the dispatcher, so the bearer string
+  // is discarded. The OLD key is revoked either way — the security half of
+  // rotate is complete.
+  //
+  // SECOND EFFECT: `ApiKeyRepository.rotate` (mint + revoke old, one door) plus
+  // `auditLog` and `emitSideEffects`, all replayed through `apiKeysRouter`.
+  //
+  // IDENTITY: acts as the APPROVER. `rotate` answers NOT_FOUND when
+  // `oldKey.userId !== ctx.userId`, so a non-owner approver gets a loud refusal
+  // instead of silently rotating someone else's credential — the rule
+  // `apiKey/delete` states, for the same reason.
+  registerProposalExecutor({
+    key: "apiKey/update",
+    async execute({ proposal, userId, input, deps }) {
+      const raw = (proposal.data ?? {}) as Record<string, unknown>;
+      const inner = (raw.data ?? {}) as Record<string, unknown>;
+      const keyId =
+        (inner.id as string | undefined) ??
+        (raw.id as string | undefined) ??
+        proposal.targetId;
+      if (!keyId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "API key rotate proposal is missing the key id",
+        });
+      }
+
+      // Idempotency: rotate is NOT idempotent — re-running it revokes the key
+      // the first approval just minted and issues a third.
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const keyWorkspaceId = proposal.workspaceId ?? undefined;
+      const membership = keyWorkspaceId
+        ? await getWorkspaceMembership(db, keyWorkspaceId, userId)
+        : null;
+      if (keyWorkspaceId && !membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "No workspace access",
+        });
+      }
+
+      const { apiKeysRouter } = await import("../../api-keys.js");
+      const apiKeyCaller = apiKeysRouter.createCaller({
+        db,
+        authenticated: true as const,
+        userId,
+        workspaceId: keyWorkspaceId,
+        workspaceRole: membership?.role,
+      } as unknown as Context);
+
+      // The replay must APPLY, never re-propose — see `assertApplied`.
+      const rotated = await apiKeyCaller.rotate({
+        keyId,
+        ...(keyWorkspaceId ? { workspaceId: keyWorkspaceId } : {}),
+      });
+      assertApplied(rotated);
+
+      await db
+        .update(proposals)
+        .set({
+          status: ProposalStatus.APPROVED,
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(proposals.id, input.proposalId));
+
+      reportApproved(deps, proposal, input.proposalId);
+
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true, primaryId: rotated.id };
+    },
+  });
+
   // ── workspaceMember / add · remove · updateRole ───────────────────────────
   // The THREE membership doors. They live in this file for the same reason
   // `role/delete` and `apiKey/delete` do: there is no `executors/workspace-

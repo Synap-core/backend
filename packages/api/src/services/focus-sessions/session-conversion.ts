@@ -237,6 +237,13 @@ export async function revertConversion(params: {
           metadata: mergeSessionMetadata({
             conversion: { ...conversion, revertedAt: revertedAt.toISOString() },
           }),
+          // A project spawn FILED the session into the project it created;
+          // undoing the spawn unfiles it. Only when it still points there — a
+          // person who re-filed it since keeps their choice.
+          ...(conversion.kind === "project" &&
+          session.projectId === conversion.id
+            ? { projectId: null }
+            : {}),
           updatedAt: revertedAt,
         })
         .where(eq(focusSessions.id, session.id));

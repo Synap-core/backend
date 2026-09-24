@@ -112,7 +112,11 @@ import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { emitSideEffects } from "@synap/events";
 import { ScopeFilterShape, resolveScope } from "../utils/scope-filter.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import { attachNextMove } from "../services/focus-sessions/session-path-sections.js";
+import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import {
+  attachNextMove,
+  type SessionUnitCounts,
+} from "../services/focus-sessions/session-path-sections.js";
 import {
   attachSessionInteractions,
   type SessionInteractionsSection,
@@ -389,6 +393,8 @@ type SessionListRow = FocusSession & { parentSessionId: string | null } & {
 } & SessionParticipants & { verdict?: SessionVerdict } & Partial<SessionEdges> &
   Partial<SessionOutputDependencies> & {
     nextMove?: ContinuationNextMove;
+    /** Present with `nextMove: true` — the counts a state mark reads. */
+    unitFacts?: SessionUnitCounts;
     interactions?: SessionInteractionsSection;
   };
 
@@ -451,6 +457,8 @@ export const focusSessionsRouter = router({
          * `attachNextMove` (`session-path-sections.ts`), the same batch the
          * project path reads. Opt-in: four more indexed reads for the page.
          * The work map needs it to mark who owns each session's next move.
+         * Also projects `unitFacts` (owed-by-you and pending-decision counts)
+         * from the same reads, so a state mark needs no second request.
          */
         nextMove: z.boolean().optional(),
         /**
@@ -466,6 +474,8 @@ export const focusSessionsRouter = router({
         lens: sessionLensSchema,
         /** Which population — see `sessionKindFilterSchema`. Default `work`. */
         kind: sessionKindFilterSchema,
+        /** Only sessions filed in no project — see `SessionListQuery.unfiled`. */
+        unfiled: z.boolean().optional(),
         /**
          * Only sessions run FROM this playbook definition (the session's own
          * `playbookId` column). Pair with `kind: "run"` or `kind: "all"` — the
@@ -502,6 +512,7 @@ export const focusSessionsRouter = router({
             automationId: input.automationId,
           },
           statusSince: input.statusSince,
+          unfiled: input.unfiled,
         },
         input.limit
       );
@@ -554,6 +565,8 @@ export const focusSessionsRouter = router({
         lens: sessionLensSchema,
         kind: sessionKindFilterSchema,
         q: z.string().trim().max(200).optional(),
+        /** Only sessions filed in no project — see `SessionListQuery.unfiled`. */
+        unfiled: z.boolean().optional(),
         limit: z.number().int().min(1).max(100).default(30),
       })
     )
@@ -572,6 +585,7 @@ export const focusSessionsRouter = router({
               kind: input.kind,
               statusSince: input.statusSince,
               q: input.q,
+              unfiled: input.unfiled,
             })
           )
         )
@@ -1396,6 +1410,12 @@ export const focusSessionsRouter = router({
          * is about. Omitted leaves the anchor alone; `null` is the un-set.
          */
         subjectEntityId: z.string().uuid().nullable().optional(),
+        /**
+         * FILE the session into a project (Home's "Unfiled" → File), or
+         * UNFILE it with an explicit `null`. Floored through
+         * `loadVisibleProject`, the same check the agent door applies.
+         */
+        projectId: z.string().uuid().nullable().optional(),
         /** WHOLESALE replace of the session's binary acceptance criteria. */
         criteria: sessionCriteriaSchema.optional(),
         /**
@@ -1457,6 +1477,21 @@ export const focusSessionsRouter = router({
         }
       }
 
+      // Same floor for a filing target; `null` unfiles and names nothing.
+      if (input.projectId) {
+        const project = await loadVisibleProject(
+          db,
+          input.projectId,
+          ctx.userId
+        );
+        if (!project) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `No project ${input.projectId} you can access`,
+          });
+        }
+      }
+
       // Load first to verify ownership
       const existing = await db.query.focusSessions.findFirst({
         where: and(
@@ -1507,6 +1542,8 @@ export const focusSessionsRouter = router({
       // than `?? existing` so "no subject" is expressible at all.
       if (patch.subjectEntityId !== undefined)
         set.subjectEntityId = patch.subjectEntityId;
+      // `undefined` leaves the filing; `null` unfiles.
+      if (patch.projectId !== undefined) set.projectId = patch.projectId;
       if (patch.criteria !== undefined) set.criteria = patch.criteria;
       // The session's own phase snapshot. Assigned, not merged: unlike
       // `expectedOutputs` (whose slots carry server-owned delegation and owed
@@ -1550,6 +1587,7 @@ export const focusSessionsRouter = router({
           }
           if (patch.subjectEntityId !== undefined)
             extra.subjectEntityId = patch.subjectEntityId;
+          if (patch.projectId !== undefined) extra.projectId = patch.projectId;
           if (patch.expectedOutputs !== undefined)
             extra.expectedOutputs = mergeExpectedOutputs(
               (existing.expectedOutputs as typeof patch.expectedOutputs) ?? [],

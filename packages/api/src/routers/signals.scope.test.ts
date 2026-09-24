@@ -204,3 +204,31 @@ describe("signals.count — same scope, same proposals-only rule", () => {
     );
   });
 });
+
+describe("signals.countByProject — the rail's badges, one round-trip", () => {
+  const P1 = "44444444-4444-4444-8444-444444444444";
+  const P2 = "55555555-5555-4555-8555-555555555555";
+
+  it("is `count` per project: each call carries its own projectId, none is pod-wide", async () => {
+    const out = await caller().countByProject({ projectIds: [P1, P2, P1] });
+    expect(out.map((r) => r.projectId)).toEqual([P1, P2]);
+    const forwarded = groupsSpy.mock.calls.map(([a]) => a.projectId);
+    expect(forwarded.sort()).toEqual([P1, P2].sort());
+    // Container-scoped ⇒ proposals + owed only, never every unread notification.
+    expect(notifListSpy).not.toHaveBeenCalled();
+    expect(out.every((r) => r.status === "ok")).toBe(true);
+  });
+
+  it("reports a project whose count failed as unavailable, never as zero", async () => {
+    groupsSpy.mockImplementation(async (a: { projectId?: string }) => {
+      if (a.projectId === P2) throw new Error("boom");
+      return { groups: [], distinct: 0, scanTruncated: false };
+    });
+    const out = await caller().countByProject({ projectIds: [P1, P2] });
+    expect(out.find((r) => r.projectId === P1)?.status).toBe("ok");
+    expect(out.find((r) => r.projectId === P2)).toEqual({
+      projectId: P2,
+      status: "unavailable",
+    });
+  });
+});

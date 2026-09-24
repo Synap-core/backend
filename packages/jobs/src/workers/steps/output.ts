@@ -17,7 +17,6 @@ import {
   entities,
   users,
   channels,
-  notifications,
   focusSessions,
   playbookEnrollments,
   relations,
@@ -52,6 +51,7 @@ import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 import { deepResolveTemplates } from "../template-resolve.js";
 import { resolveSingleReferenceParam } from "./reference-param.js";
 import { dispatchOutputVerb } from "../capability-dispatch.js";
+import { createNotificationViaService } from "../../utils/notification-creator.js";
 import { logger } from "../automation-executor-logger.js";
 import type {
   StepContext,
@@ -608,19 +608,32 @@ export async function executeOutputStep(
     case "notification": {
       // Accepts: config.title + config.body (or config.message as body fallback)
       // Optional: config.entityId (person/entity to link to — stored as sourceId)
-      //           config.category ('governance'|'data'|'ai'|'system'|'inbox') — default 'ai'
-      //           config.priority ('low'|'normal'|'high'|'urgent') — default 'normal'
       //           config.groupKey — for collapsing similar notifications in the bell panel
+      //
+      // Routed through the ONE notification write door (`createNotificationViaService`,
+      // `utils/notification-creator.ts`) — this used to be the last of three
+      // jobs-side `db.insert(notifications)` bypasses, which meant mute/quiet-hours/
+      // push preferences never applied to it. `category`/`priority` used to be
+      // per-call config (default 'ai'/'normal'); the "automation.notification"
+      // registry entry (`packages/api/src/notifications/registry.ts`) now fixes
+      // both at those same defaults — the type IS the category+priority pairing,
+      // same as every other producer already migrated onto this door.
       const body = (config.body ?? config.message) as string | undefined;
       const title = (config.title ?? "Automation notification") as string;
-      const category = (config.category ?? "ai") as string;
-      const priority = (config.priority ?? "normal") as string;
       const entityId = config.entityId as string | undefined;
       const groupKey =
         (config.groupKey as string | undefined) ??
         (entityId
           ? `automation.${automationContext.automationId}.${entityId}`
           : undefined);
+
+      if (config.category !== undefined || config.priority !== undefined) {
+        logger.warn(
+          { workspaceId, category: config.category, priority: config.priority },
+          "notification output config.category/config.priority are no longer honored — " +
+            "the 'automation.notification' registry type fixes both (ai/normal)"
+        );
+      }
 
       if (!body) {
         logger.warn(
@@ -630,26 +643,16 @@ export async function executeOutputStep(
         return { status: "skipped" };
       }
 
-      // Deterministic id (Wave 4.R) so a crash-redelivered run re-inserts the
-      // same notification and conflicts on the PK instead of duplicating it.
-      await db
-        .insert(notifications)
-        .values({
-          id: outputIdemId("notification") ?? randomUUID(),
-          workspaceId,
-          userId: ownerId,
-          type: "automation.notification",
-          title,
-          body,
-          category: category as any,
-          priority: priority as any,
-          status: "unread",
-          sourceType: "automation",
-          // entityId takes priority as sourceId so frontend can deep-link to the entity
-          sourceId: entityId ?? automationContext.automationId,
-          ...(groupKey ? { groupKey } : {}),
-        })
-        .onConflictDoNothing({ target: notifications.id });
+      await createNotificationViaService({
+        type: "automation.notification",
+        userId: ownerId,
+        workspaceId,
+        sourceType: "automation",
+        // entityId takes priority as sourceId so frontend can deep-link to the entity
+        sourceId: entityId ?? automationContext.automationId,
+        data: { title, body },
+        ...(groupKey ? { groupKey } : {}),
+      });
 
       return { status: "sent", title, body };
     }

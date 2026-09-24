@@ -89,6 +89,18 @@ export interface SessionPathSections {
   childrenCount: PathCount;
   hasOutputs: { status: "ok"; value: boolean } | Unavailable;
   nextMove: ContinuationNextMove;
+  /**
+   * The two COUNTS a state mark needs, shaped exactly as `SessionUnitFacts`
+   * (`@synap-core/types/units`) reads them, from the SAME reads as `nextMove`
+   * so the mark and the next move cannot disagree. `pendingDecisions: null`
+   * means the proposals read FAILED — not zero.
+   */
+  unitFacts: SessionUnitCounts;
+}
+
+export interface SessionUnitCounts {
+  owedFromYou: number;
+  pendingDecisions: number | null;
 }
 
 /**
@@ -371,20 +383,19 @@ export async function attachPathSections<R extends PathSourceRow>(
 
   return rows.map((row) => {
     const all = slotsOf(row);
-    const owedSlots = section(
-      projectOwedSlots({
-        id: row.id,
-        goal: row.goal,
-        status: row.status,
-        workspaceId: row.workspaceId,
-        projectId: row.projectId,
-        expectedOutputs: all,
-      })
-        .sort((a, b) =>
-          a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
-        )
-        .map(owedItem)
-    );
+    const owedList = projectOwedSlots({
+      id: row.id,
+      goal: row.goal,
+      status: row.status,
+      workspaceId: row.workspaceId,
+      projectId: row.projectId,
+      expectedOutputs: all,
+    })
+      .sort((a, b) =>
+        a.owedSince < b.owedSince ? -1 : a.owedSince > b.owedSince ? 1 : 0
+      )
+      .map(owedItem);
+    const owedSlots = section(owedList);
     const aiCanDo = section(
       all.filter(isOpenAgentSlot).map((s) => ({
         label: s.label,
@@ -426,12 +437,18 @@ export async function attachPathSections<R extends PathSourceRow>(
         outputs,
         children,
       }),
+      unitFacts: {
+        // Projected from the row itself — there is no read here to fail.
+        owedFromYou: owedList.length,
+        pendingDecisions:
+          pendingProposals.status === "ok" ? pendingProposals.total : null,
+      },
     };
   });
 }
 
 /**
- * Only the `nextMove` of each row — for a door whose rows already carry their
+ * Only the `nextMove` (and its `unitFacts`) of each row — for a door whose rows already carry their
  * own edge projection under the same field names (`focusSessions.list`'s
  * `blockedBy` is an id list, not a section), so spreading every section would
  * overwrite it. Same reads, same rule; order is preserved.
@@ -439,7 +456,13 @@ export async function attachPathSections<R extends PathSourceRow>(
 export async function attachNextMove<R extends PathSourceRow>(
   rows: readonly R[],
   opts: Parameters<typeof attachPathSections>[1]
-): Promise<Array<R & { nextMove: ContinuationNextMove }>> {
+): Promise<
+  Array<R & { nextMove: ContinuationNextMove; unitFacts: SessionUnitCounts }>
+> {
   const sectioned = await attachPathSections(rows, opts);
-  return rows.map((row, i) => ({ ...row, nextMove: sectioned[i]!.nextMove }));
+  return rows.map((row, i) => ({
+    ...row,
+    nextMove: sectioned[i]!.nextMove,
+    unitFacts: sectioned[i]!.unitFacts,
+  }));
 }

@@ -54,6 +54,15 @@ describe("PATCH /focus-sessions/:id — unsupported fields are refused", () => {
     ).toBeTruthy();
   });
 
+  it("refuses `projectId` — filing is reviewed, and this door would strip it silently", () => {
+    // `focusSessions.update` (tRPC) and `synap_update_session` gained filing;
+    // this door's schema does not declare it, so without the refusal an agent
+    // got a 200 and an unfiled session.
+    const msg = unsupportedUpdateFieldError({ projectId: null, progress: 10 });
+    expect(msg).toMatch(/projectId is not supported/);
+    expect(msg).toMatch(/synap_update_session/);
+  });
+
   it("passes a clean body, and anything that is not an object", () => {
     expect(unsupportedUpdateFieldError({ progress: 50 })).toBeNull();
     expect(unsupportedUpdateFieldError({})).toBeNull();

@@ -43,7 +43,8 @@ export interface JobsNotificationInput {
     | "system"
     | "inbox_item"
     | "proactive_message"
-    | "session";
+    | "session"
+    | "automation";
   sourceId?: string;
   data: Record<string, unknown>;
   groupKey?: string;

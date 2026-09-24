@@ -451,6 +451,25 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     ttl: 0,
   },
   {
+    // The generic `notification` automation output node (see `case "notification"`
+    // in `packages/jobs/src/workers/steps/output.ts`) — an automation AUTHOR wrote
+    // this title/body, so it is templated verbatim rather than composed from a
+    // fixed sentence. `category`/`priority` used to be per-call config (default
+    // 'ai'/'normal'); the service resolves both from the TYPE, not the call, same
+    // as every other producer migrated onto this door (`ai.proactive.*`,
+    // `agent.task_failed`) — so this entry fixes them at their prior defaults
+    // rather than special-casing a per-call override.
+    type: "automation.notification",
+    category: "ai",
+    label: "Automation Notification",
+    icon: "bell",
+    priority: "normal",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{body}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+  },
+  {
     // An automation the system flipped to status='error' has silently stopped
     // running — surface it so the user can fix/re-enable it (absence-is-invisible
     // otherwise). High (a dead automation means work isn't happening). Deduped per

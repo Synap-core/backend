@@ -145,6 +145,55 @@ function isOwedNarrowable(input: {
   return !input.sessionId && !input.automationId;
 }
 
+/**
+ * The body of `signals.count` — one function so `count` and `countByProject`
+ * answer over the SAME population by construction (a rail badge must equal the
+ * number its project's own page shows).
+ */
+async function countSignals(
+  ctx: Parameters<typeof proposalsRouter.createCaller>[0],
+  input: z.infer<z.ZodObject<typeof SignalScope>>
+) {
+  const scoped = isContainerScoped(input);
+  const [groups, notifs, owed] = await Promise.all([
+    proposalsRouter.createCaller(ctx).groups({
+      workspaceId: input.workspaceId,
+      sessionId: input.sessionId,
+      projectId: input.projectId,
+      automationId: input.automationId,
+      status: "pending",
+    }),
+    scoped
+      ? Promise.resolve({ notifications: [] })
+      : notifCenterRouter.createCaller(ctx).list({
+          workspaceId: floorLens(input.workspaceId),
+          status: "unread",
+          limit: NOTIFICATION_SCAN_LIMIT,
+        }),
+    // Same door, same lens, same suppression rule as `list` — the count and
+    // the list must answer over ONE population or the badge disagrees with
+    // the rows under it.
+    isOwedNarrowable(input)
+      ? focusSessionsRouter.createCaller(ctx).owed({
+          workspaceId: floorLens(input.workspaceId),
+          ...(input.projectId ? { projectId: input.projectId } : {}),
+          limit: OWED_SCAN_LIMIT,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  return countNeedsYou({
+    distinctClusters: groups.distinct,
+    clustersTruncated: groups.scanTruncated,
+    clusters: groups.groups,
+    notifications: notifs.notifications as NotificationSignalInput[],
+    notificationsTruncated:
+      notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
+    owedSlots: owed as OwedSlotSignalInput[],
+    owedTruncated: owed.length >= OWED_SCAN_LIMIT,
+  });
+}
+
 export const signalsRouter = router({
   /**
    * The one read behind the decisions tray (`needs-you`) and the activity feed
@@ -281,44 +330,34 @@ export const signalsRouter = router({
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))
-    .query(async ({ ctx, input }) => {
-      const scoped = isContainerScoped(input);
-      const [groups, notifs, owed] = await Promise.all([
-        proposalsRouter.createCaller(ctx).groups({
-          workspaceId: input.workspaceId,
-          sessionId: input.sessionId,
-          projectId: input.projectId,
-          automationId: input.automationId,
-          status: "pending",
-        }),
-        scoped
-          ? Promise.resolve({ notifications: [] })
-          : notifCenterRouter.createCaller(ctx).list({
-              workspaceId: floorLens(input.workspaceId),
-              status: "unread",
-              limit: NOTIFICATION_SCAN_LIMIT,
-            }),
-        // Same door, same lens, same suppression rule as `list` — the count and
-        // the list must answer over ONE population or the badge disagrees with
-        // the rows under it.
-        isOwedNarrowable(input)
-          ? focusSessionsRouter.createCaller(ctx).owed({
-              workspaceId: floorLens(input.workspaceId),
-              ...(input.projectId ? { projectId: input.projectId } : {}),
-              limit: OWED_SCAN_LIMIT,
-            })
-          : Promise.resolve([]),
-      ]);
+    .query(({ ctx, input }) => countSignals(ctx, input)),
 
-      return countNeedsYou({
-        distinctClusters: groups.distinct,
-        clustersTruncated: groups.scanTruncated,
-        clusters: groups.groups,
-        notifications: notifs.notifications as NotificationSignalInput[],
-        notificationsTruncated:
-          notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
-        owedSlots: owed as OwedSlotSignalInput[],
-        owedTruncated: owed.length >= OWED_SCAN_LIMIT,
+  /**
+   * `count` for SEVERAL projects in one round-trip — the desktop project rail
+   * badges every project it shows at once.
+   *
+   * Deliberately `count` itself, called once per project: the badge on a rail
+   * plate must equal the needs-you number that project's own page shows, and a
+   * second, grouped predicate would be a fork of the one this router exists to
+   * hold. Projects are few (the rail caps them), so the fan-out is bounded.
+   * A project whose count FAILS is reported as such, never as zero.
+   */
+  countByProject: protectedProcedure
+    .input(
+      z.object({
+        projectIds: z.array(z.string().uuid()).max(50),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const ids = [...new Set(input.projectIds)];
+      const settled = await Promise.allSettled(
+        ids.map((projectId) => countSignals(ctx, { projectId }))
+      );
+      return ids.map((projectId, i) => {
+        const r = settled[i]!;
+        return r.status === "fulfilled"
+          ? { projectId, status: "ok" as const, count: r.value }
+          : { projectId, status: "unavailable" as const };
       });
     }),
 });

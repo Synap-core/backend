@@ -1,7 +1,15 @@
-// ─── NEW: Helper functions to resolve commonly referenced names ───
+// ─── Helper functions to resolve commonly referenced names ───
+//
+// `stringProp` / `displayNameForUser` are the CANONICAL implementations —
+// moved here (from `display.ts`, which used to define its own local copies)
+// so this module can use them without a circular import back to `display.ts`
+// (`display.ts` imports `createNameResolvers` from here). `display.ts`
+// re-exports both from this file so every existing external import site
+// (`routers/proposals.ts`, `services/focus-sessions/participants.ts`) is
+// unaffected.
+import { isLikelyUUID } from "@synap-core/types/proposals";
 
-// Local utility functions to avoid circular dependencies
-function stringProp(
+export function stringProp(
   record: Record<string, unknown> | undefined,
   key: string
 ): string | undefined {
@@ -9,27 +17,45 @@ function stringProp(
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function isLikelyUUID(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    s
-  );
+export function displayNameForUser(row: {
+  name: string | null;
+  email: string;
+  userType: string;
+  agentMetadata: { agentType?: string; description?: string } | null;
+}): string | undefined {
+  if (row.name) return row.name;
+  if (row.userType === "agent") {
+    return row.agentMetadata?.agentType ?? row.agentMetadata?.description;
+  }
+  return row.email || undefined;
 }
 
-// Local copy of displayNameForUser to avoid circular dependency
-function displayNameForUser(row: {
-  name?: string | null;
-  email?: string | null;
-}): string {
-  return row.name ?? row.email ?? "Unknown";
-}
-
-// ProposalRow type - minimal shape needed by resolvers
+// ProposalRow type - minimal shape needed by resolvers.
+//
+// `targetType` (the `proposals.target_type` column, e.g. "focus_session",
+// "playbook", "project", "automation", "workspace") is the discriminator a
+// resolver must gate on — NOT `proposalType`. `checkPermissionOrPropose`
+// stores the BARE ACTION VERB ("create" / "update" / "run" / …) in the
+// `proposal_type` column (`permission-check.ts` `createPendingProposalRow`:
+// `proposalType: action`); the `${subjectType}.${action}` dotted string is
+// only the shape returned in the CALL RESULT for logging/display, never what
+// lands in the row. So `row.proposalType.startsWith("session/")` (the old
+// guard here) matches NOTHING a real session/playbook/project/automation/
+// workspace proposal ever carries — those filters were dead code. The two
+// exceptions are `capability.run` (`CAPABILITY_RUN_PROPOSAL_TYPE`) and every
+// `governance.*` type, which ARE written as literal dotted strings directly
+// (not through the subjectType/action door), so those two gates are correct
+// as `proposalType` checks.
 type ProposalRow = {
   proposalType: string;
+  targetType: string;
   agentUserId?: string | null;
   targetId?: string;
   workspaceId?: string | null;
   subjectUserId?: string | null;
+  /** The `proposals.project_id` column — set directly by `checkPermissionOrPropose`
+   * (`projectId` arg), never carried in `data`. */
+  projectId?: string | null;
 };
 
 export interface NameResolutionContext {
@@ -59,12 +85,7 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      const pt = row.proposalType;
-      if (
-        pt.startsWith("session/") ||
-        pt.startsWith("project/") ||
-        pt.startsWith("playbook/")
-      ) {
+      if (row.targetType === "focus_session") {
         const playbookId =
           stringProp(payload, "playbookId") ??
           stringProp(payload, "templateId");
@@ -75,16 +96,12 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       return undefined;
     },
 
-    resolveProjectName(
-      row: ProposalRow,
-      payload: Record<string, unknown> | undefined
-    ): string | undefined {
-      const pt = row.proposalType;
-      if (pt.startsWith("session/") || pt.startsWith("project/")) {
-        const projectId = stringProp(payload, "projectId");
-        if (projectId && isLikelyUUID(projectId)) {
-          return ctx.projectById.get(projectId)?.name;
-        }
+    resolveProjectName(row: ProposalRow): string | undefined {
+      // `projectId` is a real column on `proposals` (the producing session's
+      // project), set for any proposal kind — not something to derive from a
+      // payload field or a proposalType prefix.
+      if (row.projectId && isLikelyUUID(row.projectId)) {
+        return ctx.projectById.get(row.projectId)?.name;
       }
       return undefined;
     },
@@ -93,8 +110,7 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      const pt = row.proposalType;
-      if (pt.startsWith("automation/")) {
+      if (row.targetType === "automation") {
         const automationId = stringProp(payload, "automationId");
         if (automationId && isLikelyUUID(automationId)) {
           return ctx.automationById.get(automationId)?.name;
@@ -107,6 +123,10 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
+      // Literal, written directly by every producer via
+      // `CAPABILITY_RUN_PROPOSAL_TYPE` — not the `${subjectType}.${action}`
+      // shape, so this IS the correct discriminator (confirmed in
+      // `services/proposals/proposal-class.ts`).
       const pt = row.proposalType;
       if (pt === "capability.run") {
         const capabilityId =
@@ -146,8 +166,7 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      const pt = row.proposalType;
-      if (pt.startsWith("workspace/")) {
+      if (row.targetType === "workspace") {
         const workspaceId = stringProp(payload, "workspaceId") ?? row.targetId;
         if (workspaceId && isLikelyUUID(workspaceId)) {
           return ctx.workspaceById.get(workspaceId)?.name;
@@ -160,6 +179,8 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
+      // Literal, same as `capability.run` above — `governance.*` proposal
+      // types are written directly, not through the subjectType/action door.
       const pt = row.proposalType;
       if (pt === "governance.tighten_posture") {
         const channelId = stringProp(payload, "channelId");
@@ -182,7 +203,13 @@ export function createNameResolvers(ctx: NameResolutionContext) {
           // The agent row is already in userById (we joined all users)
           const agentRow = ctx.userById.get(agentId);
           if (agentRow) {
-            return displayNameForUser(agentRow);
+            // `NameResolutionContext.userById` types `agentMetadata` as
+            // `unknown` (it is whatever shape the caller's batch-joined user
+            // rows carry); `displayNameForUser`'s canonical signature narrows
+            // it to the agent-metadata shape it actually reads.
+            return displayNameForUser(
+              agentRow as unknown as Parameters<typeof displayNameForUser>[0]
+            );
           }
         }
       }
@@ -190,6 +217,3 @@ export function createNameResolvers(ctx: NameResolutionContext) {
     },
   };
 }
-
-// Re-export types and utilities needed
-export { stringProp, isLikelyUUID, displayNameForUser };

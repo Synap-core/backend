@@ -299,6 +299,18 @@ export const CaptureStructureResponseSchema = z
     targetProjectReason: z.string().nullish(),
     targetProjectConfidence: z.number().nullish(),
     /**
+     * WHICH of the four project outcomes this run had
+     * (`CaptureProjectOutcome`, `@synap-core/types`). Pinned here for the same
+     * reason as the honesty triple above: `targetProjectId`/`Reason`/
+     * `Confidence` all `null` means "no candidates were ever sent"
+     * (`not_offered`) OR "candidates were sent and the model recorded no
+     * judgement" (`unstated`) — opposite facts that were byte-identical on the
+     * wire. Absent on a degraded run (no structuring happened).
+     */
+    targetProjectOutcome: z
+      .enum(["not_offered", "selected", "declined", "unstated"])
+      .nullish(),
+    /**
      * WHERE the capture will land — the SOURCE OF TRUTH (`CapturePlacement`,
      * `@synap-core/types`); derive the destination with
      * `deriveWorkspacePlacementView`. `targetWorkspace*` above mixes the AI's

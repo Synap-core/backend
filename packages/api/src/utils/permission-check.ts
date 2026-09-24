@@ -29,6 +29,7 @@ import {
   deriveAgentProposalSessionGoal,
   resolveAgentProposalSessionOnce,
   deriveProposalProjectId,
+  getActingAgentUserId,
   type InsertPendingProposalResult,
   type ResolveOrCreateAgentProposalSessionInput,
 } from "@synap/database";
@@ -1155,7 +1156,7 @@ async function evaluatePermission(
 ): Promise<PermissionResult | DryRunPropose> {
   const {
     userId,
-    agentUserId,
+    agentUserId: suppliedAgentUserId,
     workspaceId,
     subjectType,
     action,
@@ -1173,6 +1174,27 @@ async function evaluatePermission(
     nodeId,
     channelCapabilities,
   } = opts;
+
+  // ATTRIBUTION FLOOR. `agentUserId` arrives as a CALLER-SUPPLIED option, so a door
+  // that simply omits it skips the whole AI-policy block below (`if (agentUserId)`)
+  // — governance-by-kind, instruction provenance, the entire ladder — and the write
+  // runs the HUMAN path. For a DEFAULT_AUTO_APPROVE verb that means execute, no
+  // proposal. Unattributed is not "less governed", it is UNGOVERNED, and four verbs
+  // (`cell.update`, `view.update`, `automation.update`, `profile.propose_retire`)
+  // shipped exactly that way while every guard stayed green, because the tripwire
+  // asserts this gate is CALLED, not that attribution REACHES it.
+  //
+  // The ambient value is the one channel a door cannot drop by omission:
+  // `runWithActingAgent` is entered server-side at the three key-auth entry points
+  // (api-key-auth, hub-protocol auth, mcp http-handler), so it is present for every
+  // agent-authenticated request whatever the handler remembers to forward. It also
+  // cannot be forged by a caller, which `opts.agentUserId` can.
+  //
+  // Ambient WINS over the supplied value on purpose: a caller must not be able to
+  // downgrade or re-point attribution. The supplied value remains the fallback for
+  // in-process callers that legitimately have no request scope — proposal approval
+  // replaying an agent's write, and job workers.
+  const agentUserId = getActingAgentUserId() ?? suppliedAgentUserId;
 
   // ATTRIBUTION + PROVENANCE stamped ONCE into a frozen, boundary-minted
   // envelope, then threaded read-only into createProposal. This replaces the

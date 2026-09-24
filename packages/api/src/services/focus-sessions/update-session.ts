@@ -27,6 +27,7 @@ import {
 import { sessionCriteriaSchema } from "../../schemas/session-criteria.js";
 import { isHttpUrl } from "@synap/shared-utils";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
+import { loadVisibleProject } from "../projects/load-visible-project.js";
 // STATIC, like `block-output.ts` beside it. These three call sites used
 // `await import()` with no stated reason, which reads as circular-dependency
 // avoidance and is not: the static import graph rooted at
@@ -100,6 +101,14 @@ export interface UpdateFocusSessionParams {
    * the same `isOutputRefVisible` predicate an output's ref goes through.
    */
   subjectEntityId?: string | null;
+  /**
+   * FILE the session into a project, or UNFILE it with an explicit `null`.
+   * Omitted leaves it alone. The target is floored through
+   * `loadVisibleProject` before governance, and an AGENT's filing is always a
+   * proposal (`forcePropose`): which project a piece of work belongs to is the
+   * person's call — an agent may suggest one, never apply it silently.
+   */
+  projectId?: string | null;
   /**
    * WHOLESALE replace of the session's binary acceptance criteria (an ad-hoc
    * session declaring its contract, or retuning it). Validated against
@@ -930,6 +939,19 @@ export async function updateFocusSession(
     }
   }
 
+  // THE SAME FLOOR for a filing target: a project the caller cannot see is
+  // refused here, not laundered into a proposal. `null` unfiles and names
+  // nothing, so it skips.
+  if (params.projectId) {
+    const project = await loadVisibleProject(db, params.projectId, userId);
+    if (!project) {
+      return {
+        status: "denied",
+        reason: `Cannot file into a project you cannot see: ${params.projectId}`,
+      };
+    }
+  }
+
   // Governance membrane — AI callers route through proposals (same gate the
   // Hub PATCH /focus-sessions/:id and synap_complete_session use). Always carry
   // goal (for proposal summary / targetName) plus every intended mutation so
@@ -943,6 +965,9 @@ export async function updateFocusSession(
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
+    // Filing is always reviewed when an agent does it (honoured on the AI
+    // paths only — a person filing their own session is never forced).
+    ...(params.projectId !== undefined ? { forcePropose: true } : {}),
     data: {
       id: sessionId,
       // Always include goal so summaries resolve even when goal is not changing.
@@ -975,6 +1000,11 @@ export async function updateFocusSession(
         ? { subjectEntityId: params.subjectEntityId }
         : {}),
       ...(params.criteria !== undefined ? { criteria: params.criteria } : {}),
+      // Carried so the approved filing is applied, not a silent no-op; `null`
+      // (unfile) must survive, hence `!== undefined`.
+      ...(params.projectId !== undefined
+        ? { projectId: params.projectId }
+        : {}),
       // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
       // `focus_session/update` executor re-applies it on approval, so the
       // PROPOSED path is not a silent no-op. `null` is the RELEASE and must
@@ -1030,6 +1060,8 @@ export async function updateFocusSession(
   // `undefined` leaves the anchor; `null` is the CLEAR.
   if (params.subjectEntityId !== undefined)
     set.subjectEntityId = params.subjectEntityId;
+  // `undefined` leaves the filing; `null` unfiles.
+  if (params.projectId !== undefined) set.projectId = params.projectId;
   if (params.criteria !== undefined) set.criteria = params.criteria;
 
   // Roster append goes through the ONE append door, which owns its own row lock

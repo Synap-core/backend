@@ -22,7 +22,7 @@
  * a fetched page is the defect this table has shipped twice.
  */
 
-import { eq, ilike, or, focusSessions } from "@synap/database";
+import { eq, ilike, isNull, or, focusSessions } from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { requireUserId } from "../../utils/user-scoped.js";
@@ -56,6 +56,14 @@ export interface SessionListQuery {
   statusSince?: StatusSinceWindows;
   /** Case-insensitive substring match on the session goal. */
   q?: string;
+  /**
+   * Only sessions filed in NO project (`projectId IS NULL`) — Home's "Unfiled".
+   * A separate flag, not a project-lens value: in the shared scope filter a
+   * `null` project lens means "no narrow", and every other list door reads it
+   * that way. Combined with a project lens it matches nothing, which is the
+   * honest answer to a contradictory question.
+   */
+  unfiled?: boolean;
 }
 
 export function sessionListConditions({
@@ -67,6 +75,7 @@ export function sessionListConditions({
   flow = {},
   statusSince,
   q,
+  unfiled,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [eq(focusSessions.userId, requireUserId(userId))];
 
@@ -74,6 +83,9 @@ export function sessionListConditions({
   // The APPLICATION lives in `sessionScopeConditions`, shared with the owed-slot
   // read, so the doors cannot drift into two answers about what a lens means.
   conditions.push(...sessionScopeConditions({ workspaceLens, projectLens }));
+  if (unfiled) {
+    conditions.push(isNull(focusSessions.projectId));
+  }
 
   // STATUS and its recency windows. See `session-status-filter.ts` for why a
   // time window is a WHERE clause too.
