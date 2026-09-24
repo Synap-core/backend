@@ -266,6 +266,11 @@ export const DOMAIN_SUBJECT_TYPES = [
   "messaging_account",
   "notification",
   "tool",
+  // A method running inside a project (`project_tracks`, 0272). Emits
+  // `track.create` / `track.update` / `track.stage_changed` (services/tracks),
+  // the same shape `focus_session.stage_changed` has, so "when a track enters a
+  // stage" is authorable as a trigger.
+  "track",
 ] as const;
 
 export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];

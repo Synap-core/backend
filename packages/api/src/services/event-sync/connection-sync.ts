@@ -80,6 +80,8 @@ import {
   type KindSyncState,
 } from "./sync-state-store.js";
 import { scopeSyncStatusToUser } from "../../connectors/sync-status-scope.js";
+import { resolveBroker } from "../../connectors/index.js";
+import { FAILURE_ERROR_CLASSES } from "@synap-core/types/failures";
 import { makeExternalLinkIdempotency } from "../../utils/entity-link-idempotency.js";
 import {
   isConnectionAuthError,
@@ -105,6 +107,8 @@ import {
   type SyncKindHandler,
   type SyncPhase,
   type SyncProfileCounts,
+  SyncReadError,
+  type SyncFailure,
 } from "./sync-kind-registry.js";
 import "./google-sync-kinds.js";
 
@@ -209,6 +213,7 @@ class KindRun {
   counts: SyncCounts;
   proposalId: string | undefined;
   error: string | undefined;
+  failure: SyncFailure | undefined;
   /** The read stopped at `itemLimit` with records still unread. */
   truncated = false;
 
@@ -244,7 +249,17 @@ class KindRun {
 
   async fail(err: unknown): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
+    // A read failure carries its class from the capability layer; anything
+    // else thrown inside a kind (a mapper bug, a DB fault) is classified only
+    // as far as the message honestly allows.
+    const failure: SyncFailure =
+      err instanceof SyncReadError
+        ? err.failure
+        : {
+            errorClass: isConnectionAuthError(message) ? "auth" : "unknown",
+          };
     this.error = message;
+    this.failure = failure;
     logger.warn(
       {
         err,
@@ -255,8 +270,13 @@ class KindRun {
       "connection sync: kind run failed"
     );
     // pageToken + cursor are left as they were, so the next run resumes.
-    await this.finish("failed", { error: message });
-    if (isConnectionAuthError(message)) {
+    await this.finish("failed", { error: message, failure });
+    await reportSyncFailure(this.ctx, failure, message, this.state);
+    if (
+      failure.errorClass === "auth" ||
+      failure.errorClass === "no_connection" ||
+      isConnectionAuthError(message)
+    ) {
       await notifyConnectorUnhealthy({
         connectorKey: this.ctx.provider,
         connectorName: humanizeToken(this.ctx.provider),
@@ -281,7 +301,57 @@ class KindRun {
       counts: this.counts,
       ...(this.proposalId ? { proposalId: this.proposalId } : {}),
       ...(this.error ? { error: this.error } : {}),
+      ...(this.failure ? { failure: this.failure } : {}),
     };
+  }
+}
+
+/**
+ * Tell the broker's operator (the Control Plane, on a managed pod) that a kind
+ * failed — only when the failure CHANGED since this kind's last run. A cron
+ * tick re-running into the same wall every 15 minutes is one incident, not
+ * ninety-six a day. `prior` is the state read at lease time, before this run
+ * advanced it; a manual "sync now" clears the prior error first, so a retry the
+ * user asked for that fails again IS reported — a new data point.
+ *
+ * Best-effort by design: the failure is already persisted on the pod's own
+ * sync status (what the user sees). An undelivered report is LOGGED at error,
+ * never silently dropped, and never turns the run itself into a crash.
+ */
+async function reportSyncFailure(
+  ctx: SyncKindContext,
+  failure: SyncFailure,
+  message: string,
+  prior: KindSyncState
+): Promise<void> {
+  if (
+    prior.phase === "failed" &&
+    prior.error === message &&
+    prior.failure?.errorClass === failure.errorClass
+  ) {
+    return;
+  }
+  try {
+    const resolved = await resolveBroker("nango");
+    if (!resolved.ok) {
+      logger.error(
+        { reason: resolved.reason, provider: ctx.provider, kind: ctx.kind },
+        "connection sync: failure not reported — no broker resolved"
+      );
+      return;
+    }
+    await resolved.broker.reportSyncFailure({
+      provider: ctx.provider,
+      kind: ctx.kind,
+      connectionId: ctx.connectionId,
+      errorClass: failure.errorClass,
+      message: message.slice(0, 2000),
+    });
+  } catch (err) {
+    logger.error(
+      { err, provider: ctx.provider, kind: ctx.kind },
+      "connection sync: failure report was not delivered"
+    );
   }
 }
 
@@ -299,6 +369,7 @@ async function emitProgress(run: KindRun): Promise<void> {
       counts: run.counts,
       ...(run.proposalId ? { proposalId: run.proposalId } : {}),
       ...(run.error ? { error: run.error } : {}),
+      ...(run.failure ? { failure: run.failure } : {}),
     },
     origin: "sync",
   });
@@ -957,6 +1028,7 @@ export type KindSyncResult =
       counts: SyncCounts;
       proposalId?: string;
       error?: string;
+      failure?: SyncFailure;
     };
 
 export interface RunConnectionSyncResult {
@@ -1147,6 +1219,24 @@ async function recordRunCompleted(
       kinds: Object.fromEntries(
         runs.map((r) => [r.ctx.kind, r.phase ?? "failed"])
       ),
+      // WHY each failed kind failed. Without it this fact said only
+      // `syncStatus: "error"`, and an automation reacting to it had nothing to
+      // act on — the message lived solely in the tool row's metadata.
+      ...(runs.some((r) => r.error)
+        ? {
+            failures: Object.fromEntries(
+              runs
+                .filter((r) => r.error)
+                .map((r) => [
+                  r.ctx.kind,
+                  {
+                    error: r.error,
+                    errorClass: r.failure?.errorClass ?? "unknown",
+                  },
+                ])
+            ),
+          }
+        : {}),
       counts: {
         fetched: sum("fetched"),
         created: sum("created"),
@@ -1268,6 +1358,7 @@ interface QueuedMark {
   key: KindStateKey;
   phase: SyncPhase | null;
   error: string | null;
+  failure: SyncFailure | null;
   lastRunAt: string | null;
 }
 
@@ -1297,7 +1388,11 @@ async function restoreQueued(
       ) {
         continue;
       }
-      await patchKindState(m.key, { phase: m.phase, error: m.error });
+      await patchKindState(m.key, {
+        phase: m.phase,
+        error: m.error,
+        failure: m.failure,
+      });
     }
   } catch (err) {
     logger.error(
@@ -1350,6 +1445,7 @@ async function markQueued(
         key,
         phase: state.phase ?? null,
         error: state.error ?? null,
+        failure: state.failure ?? null,
         lastRunAt: state.lastRunAt ?? null,
       });
       await patchKindState(key, { phase: "fetching", error: null });
@@ -1411,6 +1507,24 @@ export const ConnectionSyncStatusSchema = z.object({
     available: z.boolean(),
   }),
   error: z.string().optional(),
+  /**
+   * The CLASS of `error` (`@synap-core/types/failures`) and, when known, where
+   * its fix is performed — so a client can say "Turn on Google" or
+   * "Reconnect" instead of "Try again" for a failure no retry clears. Present
+   * only alongside `error`; absent on state written before it existed.
+   */
+  failure: z
+    .object({
+      errorClass: z.enum(FAILURE_ERROR_CLASSES),
+      next: z
+        .object({
+          kind: z.enum(["add", "connect", "enable", "run", "none"]),
+          hint: z.string(),
+          url: z.string().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type ConnectionSyncStatus = z.infer<
@@ -1509,6 +1623,24 @@ export async function getConnectionSyncStatus(input: {
           ...(state.counts ? { counts: state.counts } : {}),
           ...(state.proposalId ? { proposalId: state.proposalId } : {}),
           ...(state.error ? { error: state.error } : {}),
+          ...(state.error && state.failure
+            ? {
+                failure: {
+                  errorClass: state.failure.errorClass,
+                  ...(state.failure.next
+                    ? {
+                        next: {
+                          kind: state.failure.next.kind,
+                          hint: state.failure.next.hint,
+                          ...(state.failure.next.url
+                            ? { url: state.failure.next.url }
+                            : {}),
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
         });
       }
     }

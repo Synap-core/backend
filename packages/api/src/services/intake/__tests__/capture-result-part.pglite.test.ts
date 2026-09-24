@@ -41,7 +41,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { TRPCError } from "@trpc/server";
-import { focusSessions, channels, messages } from "@synap/database";
+import {
+  focusSessions,
+  channels,
+  channelMembers,
+  messages,
+  users,
+} from "@synap/database";
 import {
   CAPTURE_RESULT_LIMITS,
   readCapturePart,
@@ -88,11 +94,16 @@ const q = async <T>(sql: string, params?: unknown[]) =>
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [focusSessions, channels, messages]) {
+  // channel_members + users: the session room is a GROUP whose roster is
+  // seeded at mint (owner, agents, the owner's "@ai" orchestrator).
+  for (const t of [focusSessions, channels, messages, channelMembers, users]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
+  await client.exec(
+    `create unique index on channel_members (channel_id, member_id);`
+  );
   holder.db = drizzle(client, {
-    schema: { focusSessions, channels, messages },
+    schema: { focusSessions, channels, messages, channelMembers, users },
   });
   holder.emitted.length = 0;
 });

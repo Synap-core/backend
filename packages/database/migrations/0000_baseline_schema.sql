@@ -4509,6 +4509,10 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL 
 -- phases at all. The run's gate still judges against
 -- playbook_runs.definition_snapshot.stages — this is what the SESSION is doing.
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "stages" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0272: the TRACK a session was born inside (project_tracks). Plain nullable
+-- column here: `project_tracks` references `projects`, which the baseline does
+-- not create (0151 does), so the FK is added by 0272 only.
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "track_id" uuid;
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.

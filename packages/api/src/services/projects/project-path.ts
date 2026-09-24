@@ -47,7 +47,18 @@ import {
   ProposalStatus,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
+  projectTracks,
+  asc,
+  ne,
+  or,
+  isNotNull,
 } from "@synap/database";
+import {
+  deriveTrackStages,
+  trackPausedBy,
+  type TrackPausedBy,
+  type TrackStage,
+} from "@synap-core/types/units";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import type {
@@ -71,6 +82,7 @@ import {
 } from "../focus-sessions/triage.js";
 import {
   attachSessionKind,
+  sessionKindWhere,
   type SessionKind,
 } from "../focus-sessions/session-kind.js";
 import {
@@ -107,6 +119,8 @@ export interface ProjectPathRow {
   status: string;
   statusLabel: string;
   kind: SessionKind;
+  /** The TRACK (method, 0272) this session was born inside; `null` for most. */
+  trackId: string | null;
   triage: TriageProjection;
   /**
    * `null` for a session filed in no workspace. `name` is `null` when the
@@ -134,6 +148,13 @@ export interface ProjectPathResult {
     status: string;
     statusLabel: string;
   };
+  /**
+   * The METHODS this project is running (`project_tracks`, 0272), oldest
+   * first, archived omitted. `stages` are the ones each track PINNED at start,
+   * positioned against its `currentStage`. A failed read is `unavailable`,
+   * never `[]` — "no tracks" and "could not read them" are different facts.
+   */
+  tracks: { status: "ok"; items: ProjectPathTrack[] } | Unavailable;
   /** Across the WHOLE path under the same filter, not just this page. */
   summary: {
     openSessions: PathCount;
@@ -142,6 +163,19 @@ export interface ProjectPathResult {
   };
   items: ProjectPathRow[];
   pagination: { hasMore: boolean; limit: number; offset: number };
+}
+
+export interface ProjectPathTrack {
+  id: string;
+  name: string;
+  playbookId: string | null;
+  methodVersion: string;
+  currentStage: string | null;
+  status: string;
+  statusLabel: string;
+  /** Why it is paused (`check` gate vs a person) — `null` unless paused. */
+  pausedBy: TrackPausedBy;
+  stages: TrackStage[];
 }
 
 const iso = (d: Date | string | null | undefined): string | null =>
@@ -173,7 +207,15 @@ export async function getProjectPath(
   if (!project) return null;
 
   // ONE WHERE for every session list door. Kind is `work`: a path is the
-  // project's work, never its automation runs or agent write containers.
+  // project's work, never its automation runs or agent write containers —
+  // with ONE widening. A `run`-kind session that carries a `track_id` was
+  // started INSIDE one of this project's methods (a playbook run filed into a
+  // track): it IS the project's work, it is simply executed by a playbook. The
+  // kind derivation (session-kind.ts) is deliberately untouched — the row still
+  // reads `kind: "run"` — only the path's population widens, and only for rows
+  // that carry a track. An untracked run (an automation's scheduled pass, a
+  // one-off playbook run) stays off the path exactly as before. Receipts never
+  // carry a track and are not widened.
   const conditions = and(
     ...sessionListConditions({
       userId,
@@ -185,8 +227,12 @@ export async function getProjectPath(
       },
       status: "all",
       lens: query.lens,
-      kind: "work",
-    })
+      kind: "all",
+    }),
+    or(
+      sessionKindWhere("work"),
+      and(isNotNull(focusSessions.trackId), sessionKindWhere("run"))
+    )
   );
 
   const pageRows = await database
@@ -203,7 +249,7 @@ export async function getProjectPath(
   const wsIds = [
     ...new Set(page.map((r) => r.workspaceId).filter((w): w is string => !!w)),
   ];
-  const [sectioned, wsNames, open, owed, pending] = await Promise.all([
+  const [sectioned, wsNames, open, owed, pending, tracks] = await Promise.all([
     attachPathSections(attachSessionKind(attachTriage(page)), {
       userId,
       database,
@@ -271,6 +317,21 @@ export async function getProjectPath(
           .where(and(conditions, eq(proposals.status, ProposalStatus.PENDING)))
           .then(([r]) => Number(r?.n ?? 0))
     ),
+    // The project's tracks. Visibility is the project's own — established by
+    // the project read above with the same predicate the `project_tracks`
+    // VisibilityRule applies — so this read narrows by project id only.
+    settle({ projectId }, "tracks", "Tracks could not be read.", () =>
+      database
+        .select()
+        .from(projectTracks)
+        .where(
+          and(
+            eq(projectTracks.projectId, projectId),
+            ne(projectTracks.status, "archived")
+          )
+        )
+        .orderBy(asc(projectTracks.createdAt), asc(projectTracks.id))
+    ),
   ]);
 
   const toCount = (s: Settled<number>): PathCount =>
@@ -290,6 +351,7 @@ export async function getProjectPath(
     status: row.status,
     statusLabel: resolveStatusLabel(row.status),
     kind: row.kind,
+    trackId: row.trackId ?? null,
     triage: row.triage,
     workspace: row.workspaceId
       ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
@@ -313,6 +375,26 @@ export async function getProjectPath(
       status: project.status,
       statusLabel: resolveStatusLabel(project.status),
     },
+    tracks:
+      tracks.status === "ok"
+        ? {
+            status: "ok",
+            items: tracks.value.map((t): ProjectPathTrack => ({
+              id: t.id,
+              name: t.name,
+              playbookId: t.playbookId,
+              methodVersion: t.methodVersion,
+              currentStage: t.currentStage,
+              status: t.status,
+              statusLabel: resolveStatusLabel(t.status),
+              pausedBy: trackPausedBy(t),
+              stages: deriveTrackStages(
+                (t.definitionSnapshot as { stages?: unknown } | null)?.stages,
+                t.currentStage
+              ),
+            })),
+          }
+        : tracks,
     summary: { openSessions: toCount(open), userMustDecide },
     items,
     pagination,

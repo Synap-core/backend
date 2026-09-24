@@ -150,7 +150,7 @@ Before proposing structure:
 2. `synap_list_profiles` — kinds **and** roles (`profileKind`, `applicableKinds`, `parentProfileId`, `entityScope`).
 3. `synap_ask` — does this intent already live as a project or a cluster of entities?
 
-If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it.
+If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **track** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
 
 **Pending review first.** If `startHere.pendingReview.count > 0`, offer to walk the queue before any new structure. Unreviewed work looks missing and gets duplicated.
 
@@ -167,7 +167,8 @@ Do not install templates, define kinds, or create a project until you can answer
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **kinds of work** does it need (sell, build, write, buy, hire…)?               | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
+| Which **methods** will it run (business model, content pipeline, build…)?           | **Tracks** — one project-scoped playbook each, started with `synap_start_track`.       |
+| Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
 
@@ -223,6 +224,20 @@ Walk this ladder instead. Every rung is a door that exists; do not invent one.
 
 A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
+### 2c. A new kind of work inside a project → a TRACK
+
+A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
+
+| The user needs…                                             | Do this                                                                                                                                  |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| a **method** in an existing project                         | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
+| no method fits                                              | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved |
+| one bounded piece of work in that method                    | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`   |
+| new **kinds of things** no workspace owns                   | a workspace (four-test, `workspace-design`) — never to represent a method                                                                 |
+| a new long-lived intent with its own gravity                | a project — never a twin project for a method of an existing one                                                                         |
+
+Pause, resume (a check gate holds a track until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
+
 ### 3. Which skill to load next
 
 | Need                                         | Skill                                                      |
@@ -244,7 +259,7 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested projects. Phases = sessions.
+- Nested or twin projects, or a workspace, to represent a **method** of an existing project. A method is a track; one bounded piece of work inside it is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.
@@ -404,7 +419,8 @@ Tool names below are stems; your door may prefix them.
 - A **project spans workspaces**: one engagement has a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
 - A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- **User-speech "sub-project" = session, never a child project.** Phases, blockers, and work streams are `start_session` with `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
+- **A method inside a project = a TRACK, never a child project or a workspace.** "The business-model side", "our content pipeline", "the build" are tracks: a project-scoped playbook started on the project with `start_track` (`list_tracks` shows what runs). A project runs several.
+- **User-speech "sub-project" / a bounded piece of work = session.** Start it inside its track (`trackId`) when it belongs to one; blockers and detours are `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
 - Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
@@ -421,13 +437,14 @@ Tool names below are stems; your door may prefix them.
 
 **Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.
 
-### Notice a missing domain — and offer it
+### Notice a missing method or domain — and offer it
 
-Because workspaces are how a company separates its operations, a project is sometimes **missing an operational domain it clearly needs**. If the conversation is squarely about an area — sales, content, finance, hiring, ops — and the active project has **no workspace for it**, say so **once, at the end, in one line**, and offer to set it up:
+A project sometimes clearly needs something it lacks. Tell the two apart first:
 
-> _"This project doesn't have a Marketing workspace yet — want me to spin one up and capture the essentials?"_
+- **A method is missing** (the talk is about how to run sales, content, the business model… and `list_tracks` shows no track for it) → offer a **track**: _"This project isn't running a Content track yet — want me to start one?"_ Find a project-scoped playbook (`list_playbooks` / `match_playbooks`) and `start_track`.
+- **A domain is missing** (new kinds of things must be recorded that no workspace owns — e.g. you are logging deals and there is no CRM) → offer a **workspace**, provisioned with the project lens active (see the `agent-os` skill). Never a workspace to stand for a method.
 
-If they say yes, provision that **one** domain and run its onboarding interview **with the project lens active** (so its entities file into the project) (see the `agent-os` skill — it handles both the whole-company setup and adding a single domain to an existing project). **Offer, don't auto-build.** One nudge per response, and only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined a domain (this session or before), drop it — don't re-offer.**
+Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge per response, only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined it (this session or before), drop it — don't re-offer.**
 
 ---
 
@@ -2089,7 +2106,7 @@ The point of the flywheel is that mistakes are **visible and fixable**, not sile
 
 ## Workspace design — is this concern a WORKSPACE, or something smaller?
 
-Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create.
+Before you create a workspace, run the decision rule. A workspace (an operational **domain**) is the heaviest structure in the pod — it owns kinds, confers roles, carries its own team and automations. Most new concerns are NOT domains; they are a **hat**, an **initiative**, a **method** (track), or a **stage**. Creating a workspace for one of those is the anti-pattern that fragments the graph. Decide first, then create.
 
 ## The decision rule — a concern earns a workspace ONLY if ALL FOUR hold
 
@@ -2104,6 +2121,7 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 | ----------------------------------------------------------- | -------------- | -------------------------------------- | ------------------------------------------- |
 | a **role/hat** an existing entity wears in a domain         | **Facet**      | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
 | a **cross-cutting, time-bound initiative** spanning domains | **Project**    | `create_project` (a lens)              | a campaign, an engagement, a launch         |
+| a **method** a project runs (its way of working, in stages) | **Track**      | `start_track` (project-scoped playbook) | business model, content pipeline, build     |
 | a **stage/filter WITHIN a domain**                          | **State/View** | a `status` property def + a view       | pipeline stage, "active"/"archived"         |
 
 ## The decision procedure (follow in order)
@@ -2112,8 +2130,9 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 2. **Test all four conditions.** Owns kinds AND own team AND native automations AND stable. Any one fails → fork below.
 3. **If it's a hat** (a status/role on an entity that already exists elsewhere) → resolve the entity, `attach_facet`. Never a workspace, never a second entity.
 4. **If it's time-bound work across domains** → `create_project` and set it as the lens; the work files into it from whatever workspace holds the data. **A project is a COMMITMENT WITH GRAVITY** — a real initiative that ties work together (a campaign, an engagement, a client, a launch). Tasks, plans, repos, themes, and topics are **entities**, never projects. Before you create one: (a) **search existing projects first** (`synap orient` / `GET /api/hub/projects`) and prefer **linking into an existing project** via `belongs_to_project` — near-duplicate names are rejected with the existing candidates; (b) an agent-created project must cite **≥5 existing entities** that would belong to it as `evidenceEntityIds` — the backend rejects a project with no gravity and tells you to store it as an entity or reuse an existing project instead; (c) **never create a project for the pod owner's own company** — the company _is_ the pod, not a project inside it.
-5. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
-6. **Only if all four held** → **template first** (escalation ladder L3):
+5. **If it's a method a project runs** ("the content side of the launch") → a **track**: `list_tracks`, then a project-scoped playbook (`list_playbooks` / `match_playbooks`) → `start_track`. Never a workspace, never a twin project.
+6. **If it's a stage inside a domain** → add a `status` property def (`create_property_def`) and a view; don't split the stage into its own space.
+7. **Only if all four held** → **template first** (escalation ladder L3):
    `market.search({query, kind: "template"})` and propose install of a matching
    template before freehand `create_workspace`. Freehand create is last resort
    and always proposed — a deliberate move, offer it to the user (see

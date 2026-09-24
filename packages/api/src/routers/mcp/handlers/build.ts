@@ -362,6 +362,12 @@ export const buildHandlers: McpHandlerMap = {
       // The overlap refusal's escape hatch. Without it an agent whose playbook
       // legitimately overlaps an existing one is stuck on CONFLICT.
       ...(args.forceCreate === true ? { forceCreate: true } : {}),
+      // `project` = a METHOD a project runs as a track. Any other value is
+      // passed through for `playbooks.create`'s own enum to refuse — never
+      // silently dropped into a session playbook.
+      ...(typeof args.scope === "string"
+        ? { scope: args.scope as "session" | "project" }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -595,6 +601,8 @@ export const buildHandlers: McpHandlerMap = {
       params: args.params as Record<string, unknown> | undefined,
       agentIds: args.agentIds as string[] | undefined,
       reasoning: args.reasoning as string | undefined,
+      projectId: trimmed(args.projectId),
+      trackId: trimmed(args.trackId),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);

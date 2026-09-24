@@ -106,6 +106,13 @@ export interface ProposalIntentInput {
   governanceReason?: string | null;
   /** The backend revert planner's answer. `null`/absent is NOT `true`. */
   revertable?: boolean | null;
+  /**
+   * The proposal's change type (`create` / `update` / `delete` / …). Read for
+   * `link` only: a link proposal CREATES or REMOVES a relation, and its mark
+   * must say which (`resolveLinkOperation`). Absent on a link is not "create"
+   * for the swipe gate — it fails closed.
+   */
+  changeType?: string | null;
   /** kind === "facet": a detach removes a role, an attach does not. */
   facetAction?: "attach" | "update" | "detach" | null;
   /** kind === "create": a document body has to be READ, so it is not a glance. */
@@ -149,8 +156,12 @@ export const KIND_INTENT: Readonly<Record<string, ProposalIntent>> = {
 
   update: "change",
   document: "change",
-  link: "change",
   facet: "change",
+
+  // The DEFAULT for a link — its change type refines it (`LINK_INTENT`): an
+  // unlink is a `remove`, so the header mark agrees with the red ✕ the visual
+  // draws. Kept in this table so the kind-coverage guard still sees `link`.
+  link: "create",
 
   delete: "remove",
   merge: "remove",
@@ -223,6 +234,29 @@ const NOTABLE_KINDS: ReadonlySet<string> = new Set([
 /** `class` values that are an access / policy decision whatever the kind says. */
 const HIGH_CLASSES: ReadonlySet<string> = new Set(["governance", "access"]);
 
+export type LinkOperation = "create" | "update" | "remove";
+
+/**
+ * THE change-type → link operation rule. One derivation read by the intent
+ * mark (below), the link title (`formatLinkTitle`, proposal-types) and the
+ * renderer's link visual, so a card can never title a link "Unlink" while its
+ * header mark says "create". Absent / unknown reads as `create`: link
+ * proposals are create-only unless the payload says otherwise.
+ */
+export function resolveLinkOperation(
+  changeType: string | null | undefined
+): LinkOperation {
+  if (changeType === "delete" || changeType === "remove") return "remove";
+  if (changeType === "update") return "update";
+  return "create";
+}
+
+const LINK_INTENT: Readonly<Record<LinkOperation, ProposalIntent>> = {
+  create: "create",
+  update: "change",
+  remove: "remove",
+};
+
 /** Unknown kinds fall to `change`: the honest "it edits something" answer, and
  *  the one that carries no swipe privilege (see `SWIPE_SAFE_KINDS`). */
 export function resolveProposalIntentKind(
@@ -231,6 +265,9 @@ export function resolveProposalIntentKind(
   const cls = input.class ?? undefined;
   if (cls && HIGH_CLASSES.has(cls)) {
     return cls === "access" ? "access" : "governance";
+  }
+  if (input.kind === "link") {
+    return LINK_INTENT[resolveLinkOperation(input.changeType)];
   }
   return KIND_INTENT[input.kind] ?? "change";
 }
@@ -307,7 +344,9 @@ export function resolveProposalSeverity(
 
 /**
  * Kinds a reviewer may decide from the card alone — update, link, facet, simple
- * create.
+ * create. A link qualifies only with a KNOWN, non-removing change type (see
+ * `isSwipeSafe`): an unlink is a removal, and a link whose change type was
+ * never passed cannot be told apart from one.
  *
  * THIS LEAF IS THE AUTHORITY. Relay's `swipe-gate.ts` reads it; it does not
  * define a second list. (The comment here used to say it MIRRORED relay while
@@ -358,6 +397,10 @@ export function isSwipeSafe(input: ProposalIntentInput): boolean {
   if (input.isComposite === true) return false;
   if (input.connectionSync === true) return false;
   if (input.revertable !== true) return false;
+  // An unlink is refused below by its `remove` intent (impact "high"). A link
+  // whose change type was never passed cannot be told apart from one, so it
+  // fails closed here rather than reading as the create it defaults to.
+  if (input.kind === "link" && !input.changeType) return false;
   if (resolveProposalImpact(input) !== "routine") return false;
   // A create carrying a document body is a thing to READ, not to glance at.
   if (input.kind === "create" && input.hasDocument === true) return false;

@@ -70,44 +70,52 @@ const refVisible = vi.fn();
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    db: {
-      insert: (table: unknown) => {
-        const chain: Record<string, unknown> = {
-          values: (v: Record<string, unknown>) => {
-            inserts.push({ table, values: v });
-            return chain;
-          },
-          onConflictDoNothing: () => chain,
-          onConflictDoUpdate: () => chain,
-          returning: async () => [{ id: CHANNEL }],
-          then: (resolve: (v: unknown) => void) => resolve([]),
-        };
-        return chain;
-      },
-      update: () => ({
-        set: (patch: Record<string, unknown>) => {
-          sets.push(patch);
-          return {
-            where: () => {
-              const r = {
-                returning: async () => [{ id: SESSION, ...patch }],
-                then: (resolve: (v: unknown) => void) => resolve([]),
-              };
-              return r;
-            },
-          };
-        },
-      }),
-      query: new Proxy({} as Record<string, unknown>, {
-        get: (_t, table) => {
-          if (table === "focusSessions") return { findFirst: findFirstSpy };
-          return { findFirst: async () => undefined };
-        },
-      }),
+  const db: Record<string, unknown> = {
+    // The mint runs in one transaction; the handle IS this mock.
+    transaction: async (cb: (tx: unknown) => unknown) => cb(db),
+    // The owner's personal orchestrator ("@ai") already exists.
+    select: () => {
+      const b: Record<string, unknown> = {};
+      for (const k of ["from", "where", "limit"]) b[k] = () => b;
+      b.then = (resolve: (v: unknown) => void) =>
+        resolve([{ id: "orchestrator-1" }]);
+      return b;
     },
+    insert: (table: unknown) => {
+      const chain: Record<string, unknown> = {
+        values: (v: Record<string, unknown>) => {
+          inserts.push({ table, values: v });
+          return chain;
+        },
+        onConflictDoNothing: () => chain,
+        onConflictDoUpdate: () => chain,
+        returning: async () => [{ id: CHANNEL }],
+        then: (resolve: (v: unknown) => void) => resolve([]),
+      };
+      return chain;
+    },
+    update: () => ({
+      set: (patch: Record<string, unknown>) => {
+        sets.push(patch);
+        return {
+          where: () => {
+            const r = {
+              returning: async () => [{ id: SESSION, ...patch }],
+              then: (resolve: (v: unknown) => void) => resolve([]),
+            };
+            return r;
+          },
+        };
+      },
+    }),
+    query: new Proxy({} as Record<string, unknown>, {
+      get: (_t, table) => {
+        if (table === "focusSessions") return { findFirst: findFirstSpy };
+        return { findFirst: async () => undefined };
+      },
+    }),
   };
+  return { ...actual, db };
 });
 
 vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
@@ -231,7 +239,18 @@ describe("focusSessions.ensureChannel — one room, never two", () => {
     expect(channelInsert?.values).toMatchObject({
       contextObjectId: SESSION,
       workspaceId: WS,
+      // A GROUP session room where an AI answers only when @-mentioned.
+      channelType: "group",
+      aiReactionMode: "only_mentioned",
     });
+    // …with its roster seeded at mint: the owner, and the owner's "@ai".
+    const roster = inserts
+      .filter((i) => "memberKind" in i.values)
+      .map((i) => [i.values.memberId, i.values.memberKind, i.values.role]);
+    expect(roster).toEqual([
+      ["user-1", "human", "owner"],
+      ["orchestrator-1", "ai_agent", "member"],
+    ]);
   });
 
   it("is IDEMPOTENT — a session that already has a room mints nothing", async () => {

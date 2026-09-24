@@ -229,6 +229,10 @@ export const sessionHandlers: McpHandlerMap = {
       userId,
       workspaceId: args.workspaceId as string | undefined,
       projectId: args.projectId as string | undefined,
+      trackId:
+        typeof args.trackId === "string" && args.trackId.trim()
+          ? args.trackId.trim()
+          : undefined,
       subjectEntityId: args.subjectEntityId as string | undefined,
       title: typeof args.title === "string" ? args.title : null,
       goal: args.goal as string,

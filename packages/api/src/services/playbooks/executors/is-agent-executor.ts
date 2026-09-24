@@ -219,9 +219,11 @@ export class IsAgentExecutor implements Executor {
       userMessageId: messageId,
       content: kickoff,
       sourceUserId: ctx.userId,
-      // null ⇒ the door's own "meta" default (unchanged behaviour); a resolved
-      // slug ⇒ the IS runs the turn as that named persona.
-      agentType,
+      // A resolved slug ⇒ the IS runs the turn as that named persona; else the
+      // orchestrator ("meta", the door's own default) — named EXPLICITLY, because
+      // this step SUMMONS the agent: a GROUP run room (channelSpec.type GROUP)
+      // only wakes for a named agent, and an unnamed kickoff failed the step.
+      agentType: agentType ?? "meta",
     });
     if (!triggered) {
       return {

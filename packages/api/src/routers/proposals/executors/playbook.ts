@@ -631,6 +631,15 @@ export function registerPlaybookExecutors(): void {
           ...(typeof inner.parentSessionId === "string"
             ? { parentSessionId: inner.parentSessionId }
             : {}),
+          // Filing: the project/track the run was proposed INTO. Re-validated
+          // by the replay (`resolveTrackFiling` inside `runPlaybook`), so a
+          // track archived since the proposal refuses rather than files.
+          ...(typeof inner.projectId === "string"
+            ? { projectId: inner.projectId }
+            : {}),
+          ...(typeof inner.trackId === "string"
+            ? { trackId: inner.trackId }
+            : {}),
           // Attribution is the ONE dropped field the proposal can restore, so
           // the session/run/channel are owned by the agent that asked, exactly
           // as on the direct path (`actorId = agentUserId ?? userId`).

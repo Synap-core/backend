@@ -9,6 +9,7 @@ import type { ReadRequest, ReadResult } from "./ConnectorRegistry.js";
 import type {
   BrokerConnectionResult,
   ConnectionBroker,
+  SyncFailureReportResult,
 } from "./ConnectionBroker.js";
 
 const NangoRecordSchema = z
@@ -590,6 +591,14 @@ export class NangoConnector implements SyncConnector, ConnectionBroker {
    *
    * Returns the connectionIds it revoked.
    */
+  /**
+   * A self-hosted pod brokers its own Nango: there is no control plane to
+   * report to, and the failure is already on the pod's own sync status.
+   */
+  async reportSyncFailure(): Promise<SyncFailureReportResult> {
+    return { sent: false, reason: "no-operator" };
+  }
+
   async dedupeConnections(userId: string, provider: string): Promise<string[]> {
     const res = await fetch(`${this.host}/connection`, {
       headers: this.authHeaders(),

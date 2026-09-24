@@ -2,9 +2,11 @@
 name: agent-os
 description: >
   Use this skill to PROVISION operational domains (workspaces) from templates —
-  Company OS / "add a CRM" / "this project needs Marketing". Triggers: "set up
+  Company OS / "add a CRM" / "we need somewhere to record deals". Triggers: "set up
   my company", "launch agent OS", "build my company OS", "onboard my company",
-  "add a Marketing workspace", "this project doesn't have a CRM". Find existing
+  "add a Marketing workspace", "this project doesn't have a CRM". NOT for a
+  method a project runs (business model, content pipeline, build) — that is a
+  track (synap_start_track), not a workspace. Find existing
   workspace → marketplace template → confirm → packages/apply. NOT the skill
   for "the user stated an intent, what graph should exist" — that conductor is
   system/synap/from-intent (orient, questions, extend-first, then load THIS
@@ -175,7 +177,8 @@ For each domain slug, apply the template's `PackageDefinition`. If you have a
 stamps `project --uses--> workspace` as an INDEX** of domains this engagement
 runs through — not an ACL, and not a nested project. Seed entities still file
 via `belongs_to_project`. **Do not invent a child/nested project** for "the
-Marketing half" — that index edge is enough; work streams are sessions (below).
+Marketing half" — that index edge is enough; a method is a track, a unit of
+work is a session (below).
 
 Templates come from `@synap-core/workspace-templates` (shared by CLI, CP
 registry, browser) — not from repo files. Simplest path:
@@ -257,24 +260,31 @@ skill for the exact sequence.)
 the **<project>** project when one exists, otherwise pod-wide. Then: "I've
 onboarded CRM (pipeline + 4 accounts). Want to onboard the others now, or later?"
 
-## "Sub-project", phases, blockers → sessions (never nested projects)
+## Methods → tracks; "sub-project", blockers → sessions (never nested projects)
 
-User speech like "sub-project", "phase 2", "blocked on X", or "spawn a work
-stream" is a **session**, not a child project. There are **no nested projects**.
+There are **no nested projects**, and a workspace never stands for a method.
 
-- `synap_start_session` with `projectId` (same project lens) and a clear `goal`
-- Decompose with `parentSessionId` (parent work room) and/or
-  `blockedBySessionIds` (waits on those sessions)
-- Edges are `spawned_from` / `blocked_by` — session↔session links
+- **A method the project runs** ("the business-model side", "a content
+  pipeline", "the build") is a **track**: `synap_list_tracks` → a
+  project-scoped playbook (`synap_list_playbooks` / `synap_match_playbooks`) →
+  `synap_start_track`. Move it with `synap_advance_track`. Installing a pack
+  does not start its tracks yet — start each one.
+- **"Sub-project", "blocked on X", one bounded piece of work** is a
+  **session**: `synap_start_session` with `projectId` and a clear `goal`, plus
+  `trackId` when it belongs to a track. Decompose with `parentSessionId` and/or
+  `blockedBySessionIds` (edges `spawned_from` / `blocked_by`).
 
-Keep the project as the engagement commitment; sessions are the short work.
+Keep the project as the long-lived commitment; tracks are its methods; sessions
+are the short work.
 
 ## Adding ONE domain to an existing project (the common in-conversation case)
 
 You don't only run this for whole-company setup. The frequent case: you're
 working inside a project and notice it's **missing an operational domain it
-needs** (see the "notice a missing domain" reflex in the core `synap` skill) —
-you're talking sales but there's no CRM, or content but no Content OS. Offer it
+needs** — new kinds of things must be recorded that no workspace owns (see the
+"notice a missing method or domain" reflex in the core `synap` skill; a missing
+_method_ is a track, not this loop) —
+you're logging leads but there's no CRM, or drafting posts with no Content OS to hold them. Offer it
 in one line; if the user says yes, run a **trimmed Loop 1** for that single
 domain:
 

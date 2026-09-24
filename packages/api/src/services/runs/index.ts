@@ -82,19 +82,18 @@ import {
 import { validateFlowDefinition } from "../automations/validate-flow.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import {
+  CAPABILITY_RUN_EVENT_KIND,
+  capabilityRunEventWhere,
+  capabilityRunProposalWhere,
+} from "./capability-run-where.js";
 
 const CAPTURE_PROPOSAL_TYPE = "capture.graph";
 /* `CAPABILITY_RUN_PROPOSAL_TYPE` (the agnostic-capability last-mile executor's
  * `proposals.proposalType`) is imported from `../proposals/proposal-class.js` —
  * the module that classifies on it. A private copy here was one of four. */
-/**
- * `events.data.kind` (and `action`) for a capability run's ai_decision event —
- * the literal BOTH the `capability.run` approve-executor AND the direct-run door
- * (`executeCapability`) emit. A DIRECT run (owner-bypass / read-only builtin /
- * governance-auto-granted agent) has this event but NO proposal, so the run read
- * layer must synthesise it from the event to make direct runs observable too.
- */
-const CAPABILITY_RUN_EVENT_KIND = "capability_run";
+/* `CAPABILITY_RUN_EVENT_KIND` and the two capability-run WHERE builders live in
+ * `./capability-run-where.ts`, shared with `focusSessions.usage`. */
 
 /**
  * Newest-first comparator for the unified feed — TOLERANT OF A MISSING DATE.
@@ -678,27 +677,14 @@ async function listCapabilityRuns(
     })
     .from(proposals)
     .where(
-      and(
-        eq(proposals.proposalType, CAPABILITY_RUN_PROPOSAL_TYPE),
-        userVisibleWhere(proposals.workspaceId, userId),
-        // Mirror listCaptureRuns: the executor stamps `correlationId` on approval
-        // and that is the id diagnose/getRun pass in. Match BOTH so a run is
-        // resolvable by its correlationId, not just the proposal row id.
-        exactRunId
-          ? or(
-              eq(proposals.correlationId, exactRunId),
-              eq(proposals.id, exactRunId)
-            )
-          : undefined,
-        scope.workspaceId
-          ? eq(proposals.workspaceId, scope.workspaceId)
-          : undefined,
-        scope.projectId ? eq(proposals.projectId, scope.projectId) : undefined,
-        // SESSION lens (proposed path). `proposals.session_id` is stamped by
-        // every capability door that forwards a session; `proposals_session_id_idx`
-        // is the index it was created for.
-        scope.sessionId ? eq(proposals.sessionId, scope.sessionId) : undefined
-      )
+      // The ONE predicate `focusSessions.usage` also reads — see
+      // `./capability-run-where.ts`.
+      capabilityRunProposalWhere(userId, {
+        exactRunId,
+        workspaceId: scope.workspaceId,
+        projectId: scope.projectId,
+        sessionId: scope.sessionId,
+      })
     )
     .orderBy(desc(proposals.createdAt))
     .limit(limit);
@@ -759,26 +745,11 @@ async function listCapabilityRuns(
           })
           .from(events)
           .where(
-            and(
-              eq(events.subjectType, AI_DECISION),
-              drizzleSql`${events.data}->>'kind' = ${CAPABILITY_RUN_EVENT_KIND}`,
-              // A direct run's identity IS its correlationId — required so it is
-              // listable + diagnosable by that key.
-              drizzleSql`${events.correlationId} IS NOT NULL`,
-              eq(events.userId, userId),
-              exactRunId ? eq(events.correlationId, exactRunId) : undefined,
-              scope.workspaceId
-                ? drizzleSql`${events.data}->>'workspaceId' = ${scope.workspaceId}`
-                : undefined,
-              // SESSION lens (direct path). `recordDirectCapabilityRun` rides
-              // the `events.session_id` COLUMN (0241) — never a `data` field —
-              // which is exactly what `idx_events_session_id` keys on. This is
-              // the only way a direct run is attributable to a session at all:
-              // it has no proposal row to carry one.
-              scope.sessionId
-                ? eq(events.sessionId, scope.sessionId)
-                : undefined
-            )
+            capabilityRunEventWhere(userId, {
+              exactRunId,
+              workspaceId: scope.workspaceId,
+              sessionId: scope.sessionId,
+            })
           )
           .orderBy(desc(events.timestamp))
           .limit(limit);

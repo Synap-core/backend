@@ -747,6 +747,28 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       'INTERNAL ONLY — same rule; the caller is a language model, and a model-chosen "mirror" would erase its own recall trace. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.',
   },
+  // ── `toolId`: provenance pin for an internal caller that holds a tool row ──
+  {
+    service: "execute-capability",
+    param: "toolId",
+    door: "routers/capabilities.ts:execute",
+    reason:
+      "INTERNAL ONLY. `toolId` narrows verb-name resolution to skills whose `requires` edge points at one tool row; it exists for connection sync (`readVerbPage`), which acts THROUGH a known tool row and must never be answered by a stale same-named skill tied to an older tool. A client names a verb and is resolved under the visibility contract; it holds no tool-row id and has no reason to pin one. CHECKABLE: it is one of `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`, and the schema-freshness test fails if it ever appears in the published client contract.",
+  },
+  {
+    service: "execute-capability",
+    param: "toolId",
+    door: "routers/hub-protocol/rest/capabilities-execute.ts:/capabilities/execute",
+    reason:
+      "INTERNAL ONLY — same rule as the tRPC door. It can only NARROW (the row must still pass `visibleSkillsWhere`), so withholding it is about keeping the published contract to what a caller can meaningfully say, not about a privilege. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
+  {
+    service: "execute-capability",
+    param: "toolId",
+    door: "routers/mcp/handlers/capability.ts:synap_run_capability",
+    reason:
+      "INTERNAL ONLY — same rule; a model has no tool-row id to give, and verb ids are the MCP surface. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
   // ── Identity: derived from the transport, never from the body ─────────────
   {
     service: "execute-capability",

@@ -72,20 +72,20 @@ POST /api/hub/relations
 
 String-typed, case-insensitive by convention. Use these first before inventing new ones — workspace UI often renders known types specially.
 
-| Type           | Direction       | When                                                                                                                                                |
-| -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relates_to`   | bidirectional   | Generic association, no stronger label fits                                                                                                         |
-| `parent_of`    | source → target | Entity hierarchy (a kind instance of another). Not nested projects — those do not exist. Work streams are sessions (`spawned_from` / `blocked_by`). |
-| `child_of`     | source → target | Inverse of `parent_of` (entity hierarchy only)                                                                                                      |
-| `belongs_to`   | source → target | Membership                                                                                                                                          |
-| `authored_by`  | source → target | Note/document authored by a person                                                                                                                  |
-| `depends_on`   | source → target | Task blocked by another task, project needs input                                                                                                   |
-| `references`   | source → target | Task references a document, note cites an article                                                                                                   |
-| `mentions`     | source → target | Entity mentioned within another entity                                                                                                              |
-| `works_with`   | bidirectional   | People who collaborate                                                                                                                              |
-| `part_of`      | source → target | Component relationship                                                                                                                              |
-| `from_meeting` | source → target | Any entity extracted from a meeting/event                                                                                                           |
-| `anchored_in`  | source → target | Anchor (pinned chat message) in a channel                                                                                                           |
+| Type           | Direction       | When                                                                                                                                                                                    |
+| -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relates_to`   | bidirectional   | Generic association, no stronger label fits                                                                                                                                             |
+| `parent_of`    | source → target | Entity hierarchy (a kind instance of another). Not nested projects — those do not exist. A method in a project is a track; a unit of work is a session (`spawned_from` / `blocked_by`). |
+| `child_of`     | source → target | Inverse of `parent_of` (entity hierarchy only)                                                                                                                                          |
+| `belongs_to`   | source → target | Membership                                                                                                                                                                              |
+| `authored_by`  | source → target | Note/document authored by a person                                                                                                                                                      |
+| `depends_on`   | source → target | Task blocked by another task, project needs input                                                                                                                                       |
+| `references`   | source → target | Task references a document, note cites an article                                                                                                                                       |
+| `mentions`     | source → target | Entity mentioned within another entity                                                                                                                                                  |
+| `works_with`   | bidirectional   | People who collaborate                                                                                                                                                                  |
+| `part_of`      | source → target | Component relationship                                                                                                                                                                  |
+| `from_meeting` | source → target | Any entity extracted from a meeting/event                                                                                                                                               |
+| `anchored_in`  | source → target | Anchor (pinned chat message) in a channel                                                                                                                                               |
 
 If none fits, invent a snake_case verb. Keep it short and symmetric with existing verbs. Don't create `related-to-this-specific-thing` — prefer a generic `relates_to` plus a more specific property or document.
 

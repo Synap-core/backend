@@ -200,6 +200,9 @@ export * from "./playbook-automations.js";
 // Playbook enrollments (RUNTIME) — entity ↔ playbook, many entities per playbook,
 // promotes the single focus_sessions.subject_entity_id fake (0180).
 export * from "./playbook-enrollments.js";
+// Project tracks (RUNTIME) — a METHOD (project-scoped playbook) running inside
+// one project; sessions are born inside a track (focus_sessions.track_id, 0272).
+export * from "./project-tracks.js";
 
 // Entity centrality (Horizon Phase 3) — batch-computed global PageRank score per
 // entity. Side table, recomputed by the pagerank-centrality job; read by Horizon.

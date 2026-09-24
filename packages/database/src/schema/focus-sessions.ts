@@ -102,6 +102,16 @@ export const focusSessions = pgTable(
      */
     projectId: uuid("project_id"),
     /**
+     * The TRACK this session was born inside (`project_tracks`, 0272) — the
+     * method, within the project, that this piece of work advances. NULL for
+     * almost every session. FK ON DELETE SET NULL (declared in 0272, not here:
+     * `project-tracks.ts` imports `projects`, and a reference from this file
+     * would make every session read depend on that module's load order).
+     * When set, `projectId` is the track's project — validated at the doors
+     * (`services/tracks`).
+     */
+    trackId: uuid("track_id"),
+    /**
      * How this session came to exist — the TYPED replacement for sniffing
      * `metadata.automationId` / `metadata.source` (migration 0240).
      *
@@ -277,6 +287,7 @@ export const focusSessions = pgTable(
     statusIdx: index("idx_focus_sessions_status").on(table.status),
     playbookIdIdx: index("idx_focus_sessions_playbook_id").on(table.playbookId),
     projectIdIdx: index("idx_focus_sessions_project_id").on(table.projectId),
+    trackIdIdx: index("idx_focus_sessions_track_id").on(table.trackId),
     subjectEntityIdIdx: index("idx_focus_sessions_subject_entity_id").on(
       table.subjectEntityId
     ),

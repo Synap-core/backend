@@ -64,6 +64,47 @@ export function extractMentionAgentType(content: string): string | null {
 }
 
 /**
+ * Every distinct `@handle` in the content, lower-cased, in the order written.
+ * A multi-actor room reads ALL of them — "@bob can you and @ai look at this"
+ * summons the AI even though the FIRST handle names a person, which
+ * `extractMentionAgentType` (first handle only) cannot see.
+ */
+export function extractMentionHandles(content: string): string[] {
+  const matches = content.match(/@([\w-]+)/g);
+  if (!matches) return [];
+  const seen = new Set<string>();
+  for (const raw of matches) {
+    const handle = raw.replace(/^@/, "").trim().toLowerCase();
+    if (handle) seen.add(handle);
+  }
+  return [...seen];
+}
+
+/**
+ * Route a room message's mentions against the room's AI roster: the FIRST
+ * handle (in writing order) naming an AI member wins. A handle names a member
+ * when it IS the member's `agentType` or maps to it through `AGENT_HANDLE_MAP`
+ * (`@ai` → the `orchestrator` agent user). A handle naming no member — a
+ * person, a typo, an agent NOT on this room's roster — routes nowhere: the
+ * caller stays silent, it never falls through to a default responder.
+ */
+export function resolveMentionedMember<M extends { agentType: string | null }>(
+  handles: readonly string[],
+  members: readonly M[]
+): M | null {
+  for (const raw of handles) {
+    const handle = raw.replace(/^@/, "").trim().toLowerCase();
+    if (!handle) continue;
+    const wanted = new Set([handle, AGENT_HANDLE_MAP[handle]].filter(Boolean));
+    const hit = members.find(
+      (m) => !!m.agentType && wanted.has(m.agentType.toLowerCase())
+    );
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
  * Extract HUMAN @mention handles from message content — the mentions that should
  * NOTIFY people, as opposed to the agent handles (`AGENT_HANDLE_MAP`) that ROUTE
  * to an AI. Returns every distinct `@handle` in the content that is NOT a known

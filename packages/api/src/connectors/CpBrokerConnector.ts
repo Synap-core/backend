@@ -12,6 +12,8 @@ import type {
   BrokerProxyParams,
   BrokerProxyResult,
   ConnectionBroker,
+  SyncFailureReport,
+  SyncFailureReportResult,
 } from "./ConnectionBroker.js";
 
 /**
@@ -361,6 +363,16 @@ export class CpBrokerConnector implements ConnectionBroker {
       authenticated: sent.json?.authenticated === true,
       error: typeof sent.json?.error === "string" ? sent.json.error : null,
     };
+  }
+
+  async reportSyncFailure(
+    report: SyncFailureReport
+  ): Promise<SyncFailureReportResult> {
+    const sent = await this.send("POST", "/sync-failures", report);
+    if (sent.ok && sent.status === 202) return { sent: true };
+    throw new Error(
+      `Sync failure report was not recorded: ${this.failure(sent).error}`
+    );
   }
 
   async dedupeConnections(userId: string, provider: string): Promise<string[]> {

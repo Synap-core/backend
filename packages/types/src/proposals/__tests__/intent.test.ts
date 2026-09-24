@@ -3,6 +3,7 @@ import {
   KIND_INTENT,
   PROPOSAL_INTENTS,
   isSwipeSafe,
+  resolveLinkOperation,
   resolveProposalImpact,
   resolveProposalIntent,
   resolveProposalSeverity,
@@ -149,9 +150,12 @@ describe("resolveProposalImpact", () => {
 
 describe("isSwipeSafe — fails closed on every absence", () => {
   it("allows exactly relay's allow-list when revertable and routine", () => {
-    for (const kind of ["update", "link", "facet"]) {
+    for (const kind of ["update", "facet"]) {
       expect(isSwipeSafe(safe({ kind }))).toBe(true);
     }
+    expect(isSwipeSafe(safe({ kind: "link", changeType: "create" }))).toBe(
+      true
+    );
     expect(isSwipeSafe(safe({ kind: "create", hasDocument: false }))).toBe(
       true
     );
@@ -218,7 +222,9 @@ describe("rollupComposite", () => {
     const members: ProposalIntentInput[] = [
       { kind: "create" },
       { kind: "create" },
-      { kind: "link" },
+      // Was `{ kind: "link" }` — a link is no longer a blanket `change`; its
+      // intent follows its change type (see the link describe block).
+      { kind: "update" },
       { kind: "delete" },
       { kind: "session" },
     ];
@@ -304,5 +310,65 @@ describe("IRREVERSIBLE_MARK_LABEL — one mark, not one per surface", () => {
     expect(IRREVERSIBLE_MARK_LABEL).toBe("Can't be undone");
     expect(IRREVERSIBLE_MARK_LABEL.length).toBeLessThan(24);
     expect(IRREVERSIBLE_MARK_LABEL).not.toContain(".");
+  });
+});
+
+describe("link — the mark follows the change type, like the visual", () => {
+  it("a link CREATE reads as create (success / plus), not a generic change", () => {
+    const view = resolveProposalIntent({ kind: "link", changeType: "create" });
+    expect(view).toMatchObject({
+      intent: "create",
+      tone: "success",
+      glyph: "plus",
+    });
+  });
+
+  it("an UNLINK reads as remove (error / trash) — the same red the visual draws", () => {
+    for (const changeType of ["delete", "remove"]) {
+      const view = resolveProposalIntent({ kind: "link", changeType });
+      expect(view).toMatchObject({
+        intent: "remove",
+        tone: "error",
+        glyph: "trash",
+      });
+      expect(resolveProposalSeverity({ kind: "link", changeType })).toBe(
+        "destructive"
+      );
+    }
+  });
+
+  it("a link UPDATE reads as a change", () => {
+    expect(
+      resolveProposalIntent({ kind: "link", changeType: "update" }).intent
+    ).toBe("change");
+  });
+
+  it("is ONE rule: resolveLinkOperation decides every link intent", () => {
+    for (const changeType of [
+      undefined,
+      "create",
+      "update",
+      "delete",
+      "remove",
+    ]) {
+      const op = resolveLinkOperation(changeType);
+      const intent = resolveProposalIntent({ kind: "link", changeType }).intent;
+      expect(intent).toBe(
+        op === "create" ? "create" : op === "remove" ? "remove" : "change"
+      );
+    }
+  });
+
+  it("never swipes an unlink, and fails closed when the change type is absent", () => {
+    expect(isSwipeSafe(safe({ kind: "link", changeType: "delete" }))).toBe(
+      false
+    );
+    expect(isSwipeSafe(safe({ kind: "link", changeType: "remove" }))).toBe(
+      false
+    );
+    expect(isSwipeSafe(safe({ kind: "link" }))).toBe(false);
+    expect(isSwipeSafe(safe({ kind: "link", changeType: "update" }))).toBe(
+      true
+    );
   });
 });

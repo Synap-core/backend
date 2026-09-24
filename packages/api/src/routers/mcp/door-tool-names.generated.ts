@@ -5,6 +5,11 @@
 import type { DoorToolNameRow } from "./door-tool-names.build.js";
 
 export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
+  synap_advance_track: {
+    "pod-mcp": "synap_advance_track",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_ask: {
     "pod-mcp": "synap_ask",
     "cp-connector": "pod__ask",
@@ -215,6 +220,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__list_sessions",
     raycast: "list-sessions",
   },
+  synap_list_tracks: {
+    "pod-mcp": "synap_list_tracks",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_list_views: {
     "pod-mcp": "synap_list_views",
     "cp-connector": "pod__list_views",
@@ -310,6 +320,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__set_project_focus",
     raycast: null,
   },
+  synap_set_track_status: {
+    "pod-mcp": "synap_set_track_status",
+    "cp-connector": null,
+    raycast: null,
+  },
   synap_set_workspace_focus: {
     "pod-mcp": "synap_set_workspace_focus",
     "cp-connector": "pod__set_workspace_focus",
@@ -319,6 +334,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_start_session",
     "cp-connector": "pod__start_session",
     raycast: "start-session",
+  },
+  synap_start_track: {
+    "pod-mcp": "synap_start_track",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_store_file: {
     "pod-mcp": "synap_store_file",

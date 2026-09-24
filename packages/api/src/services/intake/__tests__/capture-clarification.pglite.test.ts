@@ -41,7 +41,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { TRPCError } from "@trpc/server";
-import { focusSessions, channels, messages } from "@synap/database";
+import {
+  focusSessions,
+  channels,
+  channelMembers,
+  messages,
+  users,
+} from "@synap/database";
 import {
   SKIP_FOLLOW_UP_INSTRUCTION,
   captureAnswerMessageId,
@@ -176,11 +182,16 @@ const q = async <T>(sql: string, params?: unknown[]) =>
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [focusSessions, channels, messages]) {
+  // channel_members + users: the session room is a GROUP whose roster is
+  // seeded at mint (owner, agents, the owner's "@ai" orchestrator).
+  for (const t of [focusSessions, channels, messages, channelMembers, users]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
+  await client.exec(
+    `create unique index on channel_members (channel_id, member_id);`
+  );
   holder.db = drizzle(client, {
-    schema: { focusSessions, channels, messages },
+    schema: { focusSessions, channels, messages, channelMembers, users },
   });
   holder.emitted.length = 0;
 });
@@ -229,7 +240,7 @@ async function ask(sessionId: string, question = "Which Alice?") {
 }
 
 describe("capture.structure persists the question", () => {
-  it("in the session's THREAD room, with its deterministic id, round and open status", async () => {
+  it("in the session's GROUP room, with its deterministic id, round and open status", async () => {
     const sessionId = await seedSession();
     const res = await ask(sessionId);
 
@@ -238,12 +249,18 @@ describe("capture.structure persists the question", () => {
 
     const [channel] = await q<{
       channel_type: string;
+      ai_reaction_mode: string;
       context_object_type: string;
       id: string;
-    }>(`select id, channel_type, context_object_type from channels`);
+    }>(
+      `select id, channel_type, ai_reaction_mode, context_object_type from channels`
+    );
+    // A GROUP session room (2026-09-24) — mention-only, so the question
+    // never wakes an agent on its own.
     expect(channel).toMatchObject({
       id: res.channelId,
-      channel_type: "thread",
+      channel_type: "group",
+      ai_reaction_mode: "only_mentioned",
       context_object_type: "focus_session",
     });
 

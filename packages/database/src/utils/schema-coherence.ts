@@ -1508,6 +1508,20 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "color_slot",
     addedBy: "0271_projects_color_slot.sql",
   },
+  // Tracks (0272) — a METHOD running inside a project. `project_tracks` is NOT
+  // in the baseline (it references `projects`, which 0151 creates), so this is
+  // the table's ONLY startup guard. `focus_sessions.track_id` is selected by
+  // every session read, so a missing column 500s every session door.
+  {
+    table: "project_tracks",
+    column: "definition_snapshot",
+    addedBy: "0272_project_tracks.sql",
+  },
+  {
+    table: "focus_sessions",
+    column: "track_id",
+    addedBy: "0272_project_tracks.sql",
+  },
   // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
   // policy. New table; checking one column confirms the migration ran.
   {

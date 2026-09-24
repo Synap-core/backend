@@ -8,7 +8,8 @@
  * the playbook executor (P3) — uses the SAME path, never a side-channel
  * reimplementation (a bare websocket broadcast does NOT enqueue the IS).
  *
- * IS-eligible channels: THREAD / AGENT_COLLAB / PERSONAL / RUN. PERSONAL channels
+ * IS-eligible channels: THREAD / AGENT_COLLAB / PERSONAL / RUN, and GROUP only
+ * when the caller names the agent (`agentType`). PERSONAL channels
  * are pod-scoped (no workspaceId) — the IS resolves the user's default chat
  * service and runs the turn in personal context (workspaceId omitted, exactly
  * like the interactive `channels.sendMessage` path does for personal channels).
@@ -54,11 +55,20 @@ export async function triggerAutoRespond(params: {
   const channel = await db.query.channels.findFirst({
     where: eq(channels.id, params.channelId),
   });
+  // A GROUP room (a session room — several humans + agents) is restraint-
+  // first: an agent speaks only when SUMMONED. The caller summons by naming the
+  // agent (`agentType`) — an @mention the routing engine resolved, an anchored
+  // comment, a playbook is-agent step, a delegated output. An un-named trigger
+  // (an agent's own post, a generic `triggerAI`) must never wake the room, so
+  // the summon check lives HERE, in the one door, not at each caller.
+  const summoned =
+    typeof params.agentType === "string" && params.agentType.trim() !== "";
   const isEligibleType =
     channel?.channelType === ChannelType.THREAD ||
     channel?.channelType === ChannelType.AGENT_COLLAB ||
     channel?.channelType === ChannelType.PERSONAL ||
-    channel?.channelType === ChannelType.RUN;
+    channel?.channelType === ChannelType.RUN ||
+    (channel?.channelType === ChannelType.GROUP && summoned);
   if (!channel || !isEligibleType) {
     // LOUD ON PURPOSE. This returned a bare `false` with no log at all, and
     // only 2 of the 6 call sites read the return value — so a user message
@@ -75,7 +85,11 @@ export async function triggerAutoRespond(params: {
         channelId: params.channelId,
         userMessageId: params.userMessageId,
         channelType: channel?.channelType ?? null,
-        reason: !channel ? "channel_not_found" : "channel_type_not_is_eligible",
+        reason: !channel
+          ? "channel_not_found"
+          : channel.channelType === ChannelType.GROUP
+            ? "group_room_not_summoned"
+            : "channel_type_not_is_eligible",
       },
       "triggerAutoRespond skipped — user message will never produce an agent turn"
     );

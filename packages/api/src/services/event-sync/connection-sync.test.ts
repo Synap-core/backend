@@ -37,6 +37,16 @@ const h = vi.hoisted(() => ({
   findRejected: vi.fn(),
   relationExists: vi.fn(),
   renewLease: vi.fn(),
+  report: vi.fn(),
+}));
+
+// The broker seam: the pod's report of a failed sync to its operator (the CP).
+vi.mock("../../connectors/index.js", () => ({
+  resolveBroker: vi.fn(async () => ({
+    ok: true,
+    source: "control-plane",
+    broker: { reportSyncFailure: h.report },
+  })),
 }));
 
 vi.mock("../../utils/pending-capture-dedup.js", async (importOriginal) => {
@@ -101,7 +111,10 @@ vi.mock("./sync-state-store.js", async (importOriginal) => {
     }),
     patchKindState: vi.fn(
       async (key: { kind: string }, patch: Record<string, unknown>) => {
-        h.state[key.kind] = { ...(h.state[key.kind] ?? {}), ...patch };
+        h.state[key.kind] = {
+          ...(h.state[key.kind] ?? {}),
+          ...actual.normalizeKindStatePatch(patch),
+        };
       }
     ),
     proposalStatus: h.proposalStatus,
@@ -323,6 +336,7 @@ beforeEach(() => {
   h.findRejected.mockResolvedValue(null);
   h.relationExists.mockResolvedValue(false);
   h.send.mockResolvedValue(undefined);
+  h.report.mockResolvedValue({ sent: true });
   h.renewLease.mockImplementation(async (key: { kind: string }) => {
     h.state[key.kind] = {
       ...(h.state[key.kind] ?? {}),
@@ -724,6 +738,11 @@ describe("first run of a connection → ONE grouped import proposal", () => {
     const first = h.executeCapability.mock.calls[0]![0];
     expect(first.userId).toBe("u1");
     expect(first.connectionSelector).toEqual({ connectionId: "conn-1" });
+    // Resolved through THIS connection's tool, never by bare verb name: a
+    // stale same-named skill on another tool must not be able to answer.
+    for (const [call] of h.executeCapability.mock.calls) {
+      expect((call as { toolId?: string }).toolId).toBe("tool-1");
+    }
   });
 
   it("every page read is a MIRROR read — no recall fact per page", async () => {
@@ -1029,6 +1048,176 @@ describe("steady run under an auto rule", () => {
     expect(h.notify).toHaveBeenCalledWith(
       expect.objectContaining({ connectorKey: "google", userId: "u1" })
     );
+  });
+});
+
+describe("a failed kind carries its CLASS, and the operator hears of it once", () => {
+  const ENABLE = {
+    kind: "enable",
+    hint: "Turn on Nango — Google Workspace",
+    url: "https://pod.test/open/capability/cap-1",
+  };
+  const onlyEvents = () => {
+    h.sync.kinds = {
+      "email.thread": { enabled: false },
+      contact: { enabled: false },
+    };
+  };
+
+  it("a gate refusal is `permission` with the enable link — persisted, returned, and on the completion fact", async () => {
+    onlyEvents();
+    scriptVerbs({
+      calendar_list: () => ({
+        kind: "deny",
+        reason: "This capability is installed but not yet enabled.",
+        enable: ENABLE,
+      }),
+    });
+    const res = await runConnectionSync({ provider: "google" });
+    const failure = { errorClass: "permission", next: ENABLE };
+    expect(res.connections?.[0]?.kinds.event).toMatchObject({
+      phase: "failed",
+      failure,
+    });
+    expect(h.state.event).toMatchObject({ phase: "failed", failure });
+    const done = h.record.mock.calls
+      .map((c) => c[0] as { subjectType: string; data: unknown })
+      .find((r) => r.subjectType === "connector_sync");
+    expect(done!.data).toMatchObject({
+      syncStatus: "error",
+      failures: {
+        event: {
+          error: "This capability is installed but not yet enabled.",
+          errorClass: "permission",
+        },
+      },
+    });
+    // Not an account problem: no reconnect nudge.
+    expect(h.notify).not.toHaveBeenCalled();
+  });
+
+  it("the executor's own errorClass wins; an unclassified auth-shaped message falls to `auth`", async () => {
+    onlyEvents();
+    scriptVerbs({
+      calendar_list: () => ({
+        kind: "error",
+        message: "boom",
+        errorClass: "transient",
+      }),
+    });
+    await runConnectionSync({ provider: "google" });
+    expect(h.state.event).toMatchObject({
+      failure: { errorClass: "transient" },
+    });
+
+    h.state = {};
+    scriptVerbs({
+      calendar_list: () => ({
+        kind: "error",
+        message: "invalid_grant: Token has been expired or revoked.",
+      }),
+    });
+    await runConnectionSync({ provider: "google" });
+    expect(h.state.event).toMatchObject({ failure: { errorClass: "auth" } });
+  });
+
+  it("a later success clears the class with the error — a failure never outlives its error", async () => {
+    onlyEvents();
+    h.state.event = {
+      phase: "failed",
+      error: "old",
+      failure: { errorClass: "permission", next: ENABLE },
+    };
+    await runConnectionSync({ provider: "google" });
+    expect(h.state.event).toMatchObject({ error: null, failure: null });
+  });
+
+  it("reports a NEW failure to the operator once — not again when the next tick hits the same wall", async () => {
+    onlyEvents();
+    const deny = () => ({
+      kind: "deny",
+      reason: "This capability is installed but not yet enabled.",
+      enable: ENABLE,
+    });
+    scriptVerbs({ calendar_list: deny });
+    await runConnectionSync({ provider: "google" });
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith({
+      provider: "google",
+      kind: "event",
+      connectionId: "conn-1",
+      errorClass: "permission",
+      message: "This capability is installed but not yet enabled.",
+    });
+
+    // Next cron tick, same failure: one incident, not two.
+    await runConnectionSync({ provider: "google" });
+    expect(h.report).toHaveBeenCalledTimes(1);
+
+    // The failure changes: that IS news.
+    scriptVerbs({
+      calendar_list: () => ({
+        kind: "error",
+        message: "quota",
+        errorClass: "provider",
+      }),
+    });
+    await runConnectionSync({ provider: "google" });
+    expect(h.report).toHaveBeenCalledTimes(2);
+    expect(h.report.mock.calls[1]![0]).toMatchObject({
+      errorClass: "provider",
+    });
+  });
+
+  it("an undelivered report never turns the run into a crash", async () => {
+    onlyEvents();
+    h.report.mockRejectedValue(new Error("CP down"));
+    scriptVerbs({ calendar_list: () => ({ kind: "error", message: "boom" }) });
+    const res = await runConnectionSync({ provider: "google" });
+    expect(res.connections?.[0]?.kinds.event).toMatchObject({
+      phase: "failed",
+    });
+  });
+
+  it("status exposes the class and fix link on a failed row, and nothing on a healthy one", async () => {
+    h.toolRows = [
+      {
+        name: "google",
+        workspaceId: null,
+        metadata: {
+          sync: {
+            enabled: true,
+            kinds: {
+              event: {
+                connections: {
+                  "conn-1": {
+                    phase: "failed",
+                    error: "not enabled",
+                    failure: { errorClass: "permission", next: ENABLE },
+                  },
+                },
+              },
+              contact: {
+                connections: {
+                  // A stale class with no error must never be shown.
+                  "conn-1": {
+                    phase: "synced",
+                    failure: { errorClass: "auth" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    ];
+    const rows = await getConnectionSyncStatus({ provider: "google" });
+    const byKind = new Map(rows.map((r) => [r.kind, r]));
+    expect(byKind.get("event")!.failure).toEqual({
+      errorClass: "permission",
+      next: ENABLE,
+    });
+    expect(byKind.get("contact")!.failure).toBeUndefined();
   });
 });
 

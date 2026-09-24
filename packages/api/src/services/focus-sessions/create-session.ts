@@ -4,6 +4,7 @@
  * Creates a focus session (goal-bound work session) with governance gating.
  * Idempotent by correlationId. Emits realtime events for browser mirroring.
  */
+import { resolveTrackFiling } from "../tracks/tracks-service.js";
 import {
   db,
   focusSessions,
@@ -105,6 +106,14 @@ export interface CreateFocusSessionParams {
    */
   workspaceId?: string | null;
   projectId?: string | null;
+  /**
+   * The TRACK (`project_tracks`, 0272) this session is born inside — the
+   * method, within a project, that this work advances. Validated before
+   * anything else (`resolveTrackFiling`: visible, not archived) and it NAMES
+   * the project: `projectId` becomes the track's project, and a different
+   * explicit `projectId` is refused rather than silently corrected.
+   */
+  trackId?: string | null;
   /**
    * The entity this session is "about" — the subject-spine anchor. Written on
    * the ad-hoc start path so a session can be tied to a person/company/deal.
@@ -275,6 +284,7 @@ export async function createFocusSession(
     userId,
     workspaceId = null,
     projectId: explicitProjectId = null,
+    trackId: requestedTrackId = null,
     subjectEntityId = null,
     title: rawTitle = null,
     goal,
@@ -290,6 +300,21 @@ export async function createFocusSession(
     clientKey = null,
   } = params;
   let templateId = requestedTemplateId;
+
+  // TRACK FILING — first, so a bad handle refuses before any read or write.
+  // A track names its project; the project ladder below then treats it as the
+  // caller's own explicit pin (rung 1), so nothing downstream re-derives it.
+  const trackFiling = requestedTrackId
+    ? await resolveTrackFiling({
+        trackId: requestedTrackId,
+        projectId: explicitProjectId,
+        actor: { userId },
+      })
+    : null;
+  const trackId = trackFiling?.trackId ?? null;
+  // The pin rung 1 receives: the track's project when filed into a track
+  // (equal to any explicit projectId — a mismatch was refused above).
+  const pinnedProjectId = trackFiling?.projectId ?? explicitProjectId;
 
   // Refused, never truncated: a clipped name is a claim the caller did not make.
   const title = normalizeSessionTitle(rawTitle);
@@ -348,7 +373,7 @@ export async function createFocusSession(
   const projectId = (
     await resolveSessionProjectPlacement(db, {
       userId,
-      explicitProjectId,
+      explicitProjectId: pinnedProjectId,
       parentSessionId,
       channelId,
       subjectEntityId,
@@ -507,6 +532,9 @@ export async function createFocusSession(
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
       ...(criteria.length > 0 ? { criteria } : {}),
+      // The track rides the proposal so the approved row is born inside it
+      // too; `proposal.projectId` already carries the track's project.
+      ...(trackId ? { trackId } : {}),
     },
   });
 
@@ -604,6 +632,8 @@ export async function createFocusSession(
     const fields = {
       workspaceId,
       projectId,
+      // Only ever set together with the track's own project (see above).
+      ...(trackId ? { trackId } : {}),
       subjectEntityId,
       title,
       goal,

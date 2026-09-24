@@ -56,7 +56,70 @@ type ProposalRow = {
   /** The `proposals.project_id` column — set directly by `checkPermissionOrPropose`
    * (`projectId` arg), never carried in `data`. */
   projectId?: string | null;
+  /** The `proposals.thread_id` column — the channel the proposal was filed
+   * from. The frontend reads it as `originChannelId`. */
+  threadId?: string | null;
 };
+
+/**
+ * The ids a proposal row references BY NAME, one per name-bearing table —
+ * the ONE derivation both the batch collection in `enrichProposalsForDisplay`
+ * and the resolvers below read. Before this existed the collection filtered on
+ * `proposalType.startsWith("session/")`-style prefixes while the resolvers
+ * gated on `targetType`, so an id the resolver asked for was never fetched.
+ * Only uuid-shaped ids are returned (the batch reads bind `uuid` columns).
+ */
+export interface ReferencedNameIds {
+  playbook?: string;
+  project?: string;
+  automation?: string;
+  workspace?: string;
+  channel?: string;
+  originChannel?: string;
+  skill?: string;
+  tool?: string;
+}
+
+const uuidOrUndefined = (value: string | null | undefined) =>
+  value && isLikelyUUID(value) ? value : undefined;
+
+export function referencedNameIds(
+  row: ProposalRow,
+  payload: Record<string, unknown> | undefined
+): ReferencedNameIds {
+  const ids: ReferencedNameIds = {};
+  if (row.targetType === "focus_session") {
+    ids.playbook = uuidOrUndefined(
+      stringProp(payload, "playbookId") ?? stringProp(payload, "templateId")
+    );
+  }
+  ids.project = uuidOrUndefined(row.projectId);
+  if (row.targetType === "automation") {
+    ids.automation = uuidOrUndefined(stringProp(payload, "automationId"));
+  }
+  // Literal, written directly by every producer via
+  // `CAPABILITY_RUN_PROPOSAL_TYPE` — not the `${subjectType}.${action}`
+  // shape, so this IS the correct discriminator (confirmed in
+  // `services/proposals/proposal-class.ts`).
+  if (row.proposalType === "capability.run") {
+    ids.skill = uuidOrUndefined(
+      stringProp(payload, "capabilityId") ?? stringProp(payload, "skillId")
+    );
+    ids.tool = uuidOrUndefined(stringProp(payload, "toolId"));
+  }
+  if (row.targetType === "workspace") {
+    ids.workspace = uuidOrUndefined(
+      stringProp(payload, "workspaceId") ?? row.targetId
+    );
+  }
+  // Literal, same as `capability.run` above — `governance.*` proposal types
+  // are written directly, not through the subjectType/action door.
+  if (row.proposalType === "governance.tighten_posture") {
+    ids.channel = uuidOrUndefined(stringProp(payload, "channelId"));
+  }
+  ids.originChannel = uuidOrUndefined(row.threadId);
+  return ids;
+}
 
 export interface NameResolutionContext {
   playbookById: Map<string, { name: string; goalTemplate: string }>;
@@ -79,44 +142,136 @@ export interface NameResolutionContext {
   >;
 }
 
+/**
+ * A `/links`-door proposal's endpoint pair — `POST /links` (rest/links.ts) and
+ * MCP `synap_project_use_workspace` both file `checkPermissionOrPropose({
+ * subjectType: "link", data: { title, fromType, fromId, toType, toId,
+ * linkType } })`, and `createPendingProposalRow` stamps `targetType: "link"`
+ * for that subjectType — never a `proposalType` prefix (see the file-level
+ * comment above: `proposalType` stores the bare verb). Detected by PAYLOAD
+ * SHAPE, matching that convention.
+ */
+export interface LinkEndpointPair {
+  fromType: string;
+  fromId: string;
+  toType: string;
+  toId: string;
+}
+
+export function linkEndpointsFromPayload(
+  row: { targetType: string },
+  payload: Record<string, unknown> | undefined
+): LinkEndpointPair | undefined {
+  if (row.targetType !== "link") return undefined;
+  const fromType = stringProp(payload, "fromType");
+  const fromId = stringProp(payload, "fromId");
+  const toType = stringProp(payload, "toType");
+  const toId = stringProp(payload, "toId");
+  if (!fromType || !fromId || !toType || !toId) return undefined;
+  return { fromType, fromId, toType, toId };
+}
+
+/**
+ * Batch-joined lookups a `/links`-door endpoint's display name can come from,
+ * one per `LINK_ENDPOINT_TYPES` member this door can currently resolve.
+ * `resolveEntityTitle` is passed in rather than a raw map because entity
+ * endpoints must go through the SAME workspace-lens-scoped resolver the
+ * relation-endpoint path uses (`resolveEntityTitleScoped` in display.ts) —
+ * never an unscoped read, since a link can point at an entity outside the
+ * proposal's own workspace.
+ */
+export interface LinkEndpointNameContext {
+  resolveEntityTitle: (entityId: string) => string | undefined;
+  /** Session TITLES, already floored by `ownerPrivateVisibleWhere` at the
+   * batch query that built this map (see `sessionGoalById` in display.ts). */
+  sessionTitleById: Map<string, string>;
+  playbookById: Map<string, { name: string }>;
+  projectById: Map<string, { name: string }>;
+  automationById: Map<string, { name: string }>;
+  workspaceById: Map<string, { name: string }>;
+  channelById: Map<string, { title: string | undefined }>;
+  toolById: Map<string, { name: string }>;
+  skillById: Map<string, { name: string }>;
+  /** Document titles, already floored by `ownerPrivateVisibleWhere`. */
+  documentTitleById: Map<string, string>;
+  userById: NameResolutionContext["userById"];
+}
+
+/**
+ * Resolve one `/links`-door endpoint (type + id) to a display name.
+ *
+ * `command` / `source` / `participant` / `secret` have no name-bearing table
+ * wired here — they return `undefined`, never a fabricated label from the id.
+ * `capability` tries `skillById` then `toolById`, mirroring
+ * `resolveCapabilityCallLabel`'s own skill-first-then-tool fallback above.
+ */
+export function resolveLinkEndpointName(
+  type: string,
+  id: string,
+  ctx: LinkEndpointNameContext
+): string | undefined {
+  switch (type) {
+    case "entity":
+      return ctx.resolveEntityTitle(id);
+    case "session":
+      return ctx.sessionTitleById.get(id);
+    case "playbook":
+      return ctx.playbookById.get(id)?.name;
+    case "project":
+      return ctx.projectById.get(id)?.name;
+    case "automation":
+      return ctx.automationById.get(id)?.name;
+    case "workspace":
+      return ctx.workspaceById.get(id)?.name;
+    case "channel":
+      return ctx.channelById.get(id)?.title;
+    case "tool":
+      return ctx.toolById.get(id)?.name;
+    case "skill":
+      return ctx.skillById.get(id)?.name;
+    case "capability":
+      return ctx.skillById.get(id)?.name ?? ctx.toolById.get(id)?.name;
+    case "document":
+      return ctx.documentTitleById.get(id);
+    case "agent": {
+      const agentRow = ctx.userById.get(id);
+      return agentRow
+        ? displayNameForUser(
+            agentRow as unknown as Parameters<typeof displayNameForUser>[0]
+          )
+        : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
 export function createNameResolvers(ctx: NameResolutionContext) {
   return {
     resolvePlaybookName(
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      if (row.targetType === "focus_session") {
-        const playbookId =
-          stringProp(payload, "playbookId") ??
-          stringProp(payload, "templateId");
-        if (playbookId && isLikelyUUID(playbookId)) {
-          return ctx.playbookById.get(playbookId)?.name;
-        }
-      }
-      return undefined;
+      const playbookId = referencedNameIds(row, payload).playbook;
+      return playbookId ? ctx.playbookById.get(playbookId)?.name : undefined;
     },
 
     resolveProjectName(row: ProposalRow): string | undefined {
       // `projectId` is a real column on `proposals` (the producing session's
       // project), set for any proposal kind — not something to derive from a
       // payload field or a proposalType prefix.
-      if (row.projectId && isLikelyUUID(row.projectId)) {
-        return ctx.projectById.get(row.projectId)?.name;
-      }
-      return undefined;
+      const projectId = referencedNameIds(row, undefined).project;
+      return projectId ? ctx.projectById.get(projectId)?.name : undefined;
     },
 
     resolveAutomationName(
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      if (row.targetType === "automation") {
-        const automationId = stringProp(payload, "automationId");
-        if (automationId && isLikelyUUID(automationId)) {
-          return ctx.automationById.get(automationId)?.name;
-        }
-      }
-      return undefined;
+      const automationId = referencedNameIds(row, payload).automation;
+      return automationId
+        ? ctx.automationById.get(automationId)?.name
+        : undefined;
     },
 
     resolveCapabilityCallLabel(
@@ -129,9 +284,10 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       // `services/proposals/proposal-class.ts`).
       const pt = row.proposalType;
       if (pt === "capability.run") {
-        const capabilityId =
-          stringProp(payload, "capabilityId") ?? stringProp(payload, "skillId");
-        const toolId = stringProp(payload, "toolId");
+        const { skill: capabilityId, tool: toolId } = referencedNameIds(
+          row,
+          payload
+        );
         const provider = stringProp(payload, "provider");
         const verb =
           stringProp(payload, "verb") ??
@@ -140,14 +296,14 @@ export function createNameResolvers(ctx: NameResolutionContext) {
         const path = stringProp(payload, "path");
 
         // Try skills first
-        if (capabilityId && isLikelyUUID(capabilityId)) {
+        if (capabilityId) {
           const skill = ctx.skillById.get(capabilityId);
           if (skill) {
             return `${skill.name}${verb ? ` · ${verb}` : ""}`;
           }
         }
         // Try tools
-        if (toolId && isLikelyUUID(toolId)) {
+        if (toolId) {
           const tool = ctx.toolById.get(toolId);
           if (tool) {
             return `${tool.name}${path ? ` ${path}` : ""}${verb ? ` · ${verb}` : ""}`;
@@ -166,29 +322,23 @@ export function createNameResolvers(ctx: NameResolutionContext) {
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      if (row.targetType === "workspace") {
-        const workspaceId = stringProp(payload, "workspaceId") ?? row.targetId;
-        if (workspaceId && isLikelyUUID(workspaceId)) {
-          return ctx.workspaceById.get(workspaceId)?.name;
-        }
-      }
-      return undefined;
+      const workspaceId = referencedNameIds(row, payload).workspace;
+      return workspaceId ? ctx.workspaceById.get(workspaceId)?.name : undefined;
     },
 
     resolveChannelName(
       row: ProposalRow,
       payload: Record<string, unknown> | undefined
     ): string | undefined {
-      // Literal, same as `capability.run` above — `governance.*` proposal
-      // types are written directly, not through the subjectType/action door.
-      const pt = row.proposalType;
-      if (pt === "governance.tighten_posture") {
-        const channelId = stringProp(payload, "channelId");
-        if (channelId && isLikelyUUID(channelId)) {
-          return ctx.channelById.get(channelId)?.title;
-        }
-      }
-      return undefined;
+      const channelId = referencedNameIds(row, payload).channel;
+      return channelId ? ctx.channelById.get(channelId)?.title : undefined;
+    },
+
+    /** The channel the proposal was filed from (`proposals.thread_id`),
+     * exposed as `originChannelName` beside the frontend's `originChannelId`. */
+    resolveOriginChannelName(row: ProposalRow): string | undefined {
+      const channelId = referencedNameIds(row, undefined).originChannel;
+      return channelId ? ctx.channelById.get(channelId)?.title : undefined;
     },
 
     resolveAgentName(

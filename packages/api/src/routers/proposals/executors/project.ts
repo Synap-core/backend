@@ -367,15 +367,17 @@ export function registerProjectExecutors(): void {
         });
       }
 
-      // Act as the project's OWNER, not the approver — the same choice
-      // `project/update` and `project/archive` make, and for the same reason:
-      // the write goes through `ProjectRepository.update`, whose
-      // `.where(eq(projects.userId, userId))` is an OWNERSHIP predicate. Running
-      // as the approver would match no row and throw a raw
-      // `Error("Project not found")` → 500, BEFORE the status update below, so
-      // the proposal would stay PENDING forever. The approver's authority was
-      // already established by `computeCanReviewApproval` upstream plus the
-      // membership check above; `reviewedBy` still records who approved.
+      // Act as the project's OWNER, not the approver. HISTORY: the proto-track
+      // wrote `settings.stages` through `ProjectRepository.update`, whose
+      // `.where(eq(projects.userId, userId))` is an OWNERSHIP predicate, so the
+      // approver would have matched no row. Since 0272 `instantiateFromPlaybook`
+      // is a thin wrapper over `startTrack`, which is NOT owner-floored (it
+      // gates on `assertWorkspaceWrite`) — acting as the owner is kept because
+      // the owner always passes that floor and the track's `userId`
+      // attribution then names the project's owner, as the proto-track did.
+      // The approver's authority was established by `computeCanReviewApproval`
+      // upstream plus the membership check above; `reviewedBy` still records
+      // who approved.
       const projectCaller = projectsRouter.createCaller({
         db,
         authenticated: true as const,

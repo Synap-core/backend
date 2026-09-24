@@ -177,6 +177,7 @@ export const SERVER_DERIVED_PARAMS = [
   "agentUserId",
   "suppressProposal",
   "observability",
+  "toolId",
 ] as const;
 
 /**

@@ -942,6 +942,7 @@ export async function updateFocusSession(
   // THE SAME FLOOR for a filing target: a project the caller cannot see is
   // refused here, not laundered into a proposal. `null` unfiles and names
   // nothing, so it skips.
+  let filingProjectName: string | undefined;
   if (params.projectId) {
     const project = await loadVisibleProject(db, params.projectId, userId);
     if (!project) {
@@ -950,6 +951,7 @@ export async function updateFocusSession(
         reason: `Cannot file into a project you cannot see: ${params.projectId}`,
       };
     }
+    filingProjectName = project.name;
   }
 
   // Governance membrane — AI callers route through proposals (same gate the
@@ -1005,6 +1007,9 @@ export async function updateFocusSession(
       ...(params.projectId !== undefined
         ? { projectId: params.projectId }
         : {}),
+      // Display only — the proposal title names WHICH project (the executor
+      // applies `projectId` and ignores this).
+      ...(filingProjectName ? { projectName: filingProjectName } : {}),
       // Carried for the same reason as `addAgentId` and `subjectEntityId`: the
       // `focus_session/update` executor re-applies it on approval, so the
       // PROPOSED path is not a silent no-op. `null` is the RELEASE and must

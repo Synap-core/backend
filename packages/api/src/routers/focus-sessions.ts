@@ -49,6 +49,7 @@ import {
   UPDATABLE_SESSION_STATUSES,
 } from "../services/focus-sessions/session-statuses.js";
 import { listSessionOutputs } from "../services/focus-sessions/session-outputs.js";
+import { readSessionUsage } from "../services/focus-sessions/session-usage.js";
 import {
   recordSessionArtifact,
   SESSION_ARTIFACT_KINDS,
@@ -1264,6 +1265,11 @@ export const focusSessionsRouter = router({
         // independent from this persisted association.
         projectId: z.string().uuid().nullish(),
         /**
+         * The TRACK (a method running in a project, 0272) this session is born
+         * inside. Names its project; a different `projectId` is refused.
+         */
+        trackId: z.string().uuid().nullish(),
+        /**
          * The entity this session is ABOUT — the subject-spine anchor. The
          * service has always accepted it; this door did not declare it, so
          * every browser-started session landed subject-less and the room's
@@ -1306,6 +1312,7 @@ export const focusSessionsRouter = router({
         userId: ctx.userId,
         workspaceId: input.workspaceId ?? null,
         projectId: input.projectId ?? null,
+        trackId: input.trackId ?? null,
         subjectEntityId: input.subjectEntityId ?? null,
         title: input.title ?? null,
         goal: input.goal,
@@ -2270,6 +2277,29 @@ export const focusSessionsRouter = router({
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Focus session ${input.sessionId} not found`,
+        });
+      }
+      return result;
+    }),
+
+  /**
+   * THE one door for "what did this session USE?" — the capability runs it
+   * made (counted per skill), the connectors those runs are INFERRED to have
+   * gone through (`via` says how), the `used` provenance edges, what it was
+   * GRANTED (kept apart — a grant is not usage), its playbook and its agents.
+   * All derivation lives in `readSessionUsage`; a failed read throws.
+   */
+  usage: protectedProcedure
+    .input(z.object({ id: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const result = await readSessionUsage({
+        userId: requireUserId(ctx.userId),
+        sessionId: input.id,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Focus session ${input.id} not found`,
         });
       }
       return result;

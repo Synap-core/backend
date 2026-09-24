@@ -1004,3 +1004,24 @@ describe("resolveNotificationRoutingRuleLabel", () => {
     expect(resolveNotificationRoutingRuleLabel(undefined)).toBe("");
   });
 });
+
+describe("track — a method running inside a project (0272)", () => {
+  it("is a registry kind with its own identity, not a humanized token", () => {
+    expect(OBJECT_KINDS.track?.label).toBe("Track");
+    expect(OBJECT_KINDS.track?.icon).not.toBe(FALLBACK_ICON);
+    expect(resolveObjectNounPlural("track")).toBe("Tracks");
+  });
+  it("the table name resolves to the same noun (not 'Project track')", () => {
+    // Discriminating: without the alias rows `humanizeToken` renders
+    // "Project track" / "Project tracks".
+    expect(resolveObjectNoun("project_track")).toBe("Track");
+    expect(resolveObjectNoun("project_tracks")).toBe("Track");
+    expect(
+      buildObjectActionTitle({
+        action: "create",
+        objectKind: "project_track",
+        objectName: "Content",
+      })
+    ).toBe('Create Track "Content"');
+  });
+});

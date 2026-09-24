@@ -147,6 +147,12 @@ const CreateBodySchema = z
     // workspaceId OR projectId — a session may be scoped to either (or both).
     workspaceId: z.string().min(1).optional(),
     projectId: z.string().min(1).optional(),
+    /**
+     * The TRACK (a method running in a project) this session is born inside.
+     * Names its own project — satisfies the scope requirement below on its
+     * own; a different `projectId` is refused.
+     */
+    trackId: z.string().uuid().optional(),
     userId: z.string().min(1),
     /** Short one-line NAME; `goal` is the outcome. Blank ⇒ untitled. */
     title: z.string().max(SESSION_TITLE_MAX).optional(),
@@ -198,8 +204,8 @@ const CreateBodySchema = z
      */
     forceCreate: z.boolean().optional(),
   })
-  .refine((b) => !!b.workspaceId || !!b.projectId, {
-    message: "Provide a workspaceId or a projectId",
+  .refine((b) => !!b.workspaceId || !!b.projectId || !!b.trackId, {
+    message: "Provide a workspaceId, a projectId or a trackId",
     path: ["workspaceId"],
   });
 
@@ -879,6 +885,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         workspaceId,
         projectId: body.projectId ?? null,
+        trackId: body.trackId ?? null,
         title: body.title ?? null,
         goal: body.goal,
         agentUserId,

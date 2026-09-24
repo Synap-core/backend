@@ -24,6 +24,22 @@
  * Personal / thread / sub_thread / feed channels are deliberately NOT
  * workspace-broadcast — they stay owner-or-member only.
  *
+ * SESSION ROOMS ARE ROSTER-ONLY, whatever their type. A focus session's room
+ * (`contextObjectType = 'focus_session'`, stamped at insert by the one mint,
+ * `ensureSessionChannel`) is a GROUP room since 2026-09-24 so several humans
+ * and agents can work in it — but GROUP is a SHARED type, so without this
+ * carve-out branches 3/4 would hand every session room to the whole workspace,
+ * and a pod-scoped (NULL-workspace) one to the WHOLE POD. A session room is
+ * visible to its owner (1) and its roster (2, `channel_members`) only.
+ *
+ * Why the context stamp and not `focus_sessions.channel_id`: a session may
+ * BORROW an existing channel (`createSession({ channelId })`, a playbook run's
+ * `targetChannelId`) — a client's team channel, the chat a session started in.
+ * Keying on the FK would silently narrow those shared channels to the owner.
+ * The stamp is written only by the mint, atomically with the row, so it is
+ * true for every minted session room from its first instant and for nothing
+ * else. Migration 0273 converts exactly the rows carrying it.
+ *
  * Why this is a `custom` access rule and not the flat `workspace` rule: for the
  * non-shared channel types a channel's `workspace_id = NULL` means "personal"
  * (owner-private), but the generic `workspace` VisibilityRule treats a NULL
@@ -44,7 +60,7 @@ import {
   inArray,
   drizzleSql,
 } from "@synap/database";
-import { isNotNull, isNull } from "drizzle-orm";
+import { isNotNull, isNull, ne } from "drizzle-orm";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /** Shared-type channels that are visible to all members of their workspace. */
@@ -53,6 +69,20 @@ const SHARED_CHANNEL_TYPES = [
   ChannelType.AGENT_COLLAB,
   ChannelType.GROUP,
 ] as const;
+
+/** The `contextObjectType` the session-room mint stamps — the roster-only key. */
+export const SESSION_ROOM_CONTEXT_TYPE = "focus_session";
+
+/**
+ * NOT a session room. Gates the two broadcast branches (3, 4) so a session room
+ * is reachable only through ownership or the roster.
+ */
+function notSessionRoom() {
+  return or(
+    isNull(channels.contextObjectType),
+    ne(channels.contextObjectType, SESSION_ROOM_CONTEXT_TYPE)
+  );
+}
 
 export function channelVisibilityWhere(userId: string) {
   // Workspace membership subquery — reused by branch 3.
@@ -95,6 +125,7 @@ export function channelVisibilityWhere(userId: string) {
     and(
       inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
       isNotNull(channels.workspaceId),
+      notSessionRoom(),
       or(exists(memberOfWs), exists(ownerOfWs))
     ),
     // 4. Pod-wide-shared: a SHARED-type channel with a NULL workspace. Wave-3
@@ -106,7 +137,8 @@ export function channelVisibilityWhere(userId: string) {
     //    owner-only, so no personal thread leaks.
     and(
       isNull(channels.workspaceId),
-      inArray(channels.channelType, [...SHARED_CHANNEL_TYPES])
+      inArray(channels.channelType, [...SHARED_CHANNEL_TYPES]),
+      notSessionRoom()
     )
   )!;
 }

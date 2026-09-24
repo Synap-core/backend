@@ -13,8 +13,19 @@
  * without an import cycle through the runner.
  */
 
-import { executeCapability } from "../capabilities/execute-capability.js";
-import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
+import {
+  executeCapability,
+  type ExecuteCapabilityResult,
+} from "../capabilities/execute-capability.js";
+import type { CapabilityNextAction } from "../capabilities/capability-enable-link.js";
+import {
+  capErrorMessage,
+  isConnectionAuthError,
+} from "../connection-health/notify-connector-unhealthy.js";
+import {
+  isFailureErrorClass,
+  type FailureErrorClass,
+} from "@synap-core/types/failures";
 import type { SyncGraph, SyncGraphEntity } from "./sync-graph.js";
 
 export type SyncPhase =
@@ -143,15 +154,64 @@ export function getSyncProviders(): string[] {
   return [...new Set(REGISTRY.map((h) => h.provider))];
 }
 
+/**
+ * WHY a sync kind failed, in the pod's ONE failure vocabulary
+ * (`@synap-core/types/failures`) — plus, when the capability layer knew it, the
+ * place the fix is performed. This is what lets a client say "Turn on Google"
+ * instead of "Try again" for a failure no retry can clear: the executor already
+ * returns both, and the sync used to flatten them into a bare string.
+ */
+export interface SyncFailure {
+  errorClass: FailureErrorClass;
+  next?: CapabilityNextAction;
+}
+
 /** A provider read that did not produce data — carries the verb for the report. */
 export class SyncReadError extends Error {
   constructor(
     message: string,
-    readonly verbId: string
+    readonly verbId: string,
+    readonly failure: SyncFailure = { errorClass: "unknown" }
   ) {
     super(message);
     this.name = "SyncReadError";
   }
+}
+
+/**
+ * Classify a capability outcome that did not produce data. Structure first —
+ * the executor's own `errorClass` and next-action — and the message regex only
+ * where the executor had nothing to say.
+ *
+ *   deny      → `permission`: the gate refused the verb (today: its pack is
+ *               installed but not approved). Carries the `enable` link.
+ *   not_found → `target_missing`: no such verb on THIS connection's tool.
+ *   error     → the executor's `errorClass`, with its `connect` block.
+ *   run with a failed envelope → the envelope's class, else `provider`.
+ */
+export function classifySyncRead(cap: ExecuteCapabilityResult): SyncFailure {
+  if (cap.kind === "deny") {
+    return {
+      errorClass: "permission",
+      ...(cap.enable ? { next: cap.enable } : {}),
+    };
+  }
+  if (cap.kind === "not_found") return { errorClass: "target_missing" };
+  if (cap.kind === "error") {
+    return {
+      errorClass:
+        cap.errorClass ??
+        (isConnectionAuthError(cap.message) ? "auth" : "unknown"),
+      ...(cap.enable ? { next: cap.enable } : {}),
+    };
+  }
+  const env = (cap.kind === "run" ? cap.result : undefined) as
+    { errorClass?: unknown; error?: unknown } | undefined;
+  if (env && isFailureErrorClass(env.errorClass)) {
+    return { errorClass: env.errorClass };
+  }
+  const message = typeof env?.error === "string" ? env.error : undefined;
+  return { errorClass: isConnectionAuthError(message) ? "auth" : "provider" };
 }
 
 /**
@@ -171,6 +231,10 @@ export async function readVerbPage(
     userId: ctx.owner,
     workspaceId: ctx.workspaceId,
     connectionSelector: { connectionId: ctx.connectionId },
+    // Resolve the verb through THIS connection's tool, never by bare name: a
+    // stale same-named skill tied to an older tool (a pre-consolidation code
+    // skill) would otherwise win the name lookup and refuse the selector above.
+    toolId: ctx.toolId,
     // A scheduled mirror has no review surface: an unapproved verb must come
     // back as a refusal, never as a new proposal row per tick.
     suppressProposal: true,
@@ -179,13 +243,19 @@ export async function readVerbPage(
     observability: "mirror",
   });
   const err = capErrorMessage(cap);
-  if (err) throw new SyncReadError(err, verbId);
+  if (err) throw new SyncReadError(err, verbId, classifySyncRead(cap));
   if (cap.kind !== "run") {
-    throw new SyncReadError(`${verbId} did not run (${cap.kind})`, verbId);
+    // `dry-run` / `proposed`: suppressProposal should make these impossible;
+    // if one arrives the verb is governed in a way a mirror cannot satisfy.
+    throw new SyncReadError(`${verbId} did not run (${cap.kind})`, verbId, {
+      errorClass: "permission",
+    });
   }
   const result = cap.result;
   if (!result || typeof result !== "object") {
-    throw new SyncReadError(`${verbId} returned no result`, verbId);
+    throw new SyncReadError(`${verbId} returned no result`, verbId, {
+      errorClass: "provider",
+    });
   }
   return result as Record<string, unknown>;
 }

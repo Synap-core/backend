@@ -30,7 +30,10 @@
 import { describe, it, expect } from "vitest";
 import {
   createNameResolvers,
+  linkEndpointsFromPayload,
+  resolveLinkEndpointName,
   type NameResolutionContext,
+  type LinkEndpointNameContext,
 } from "./helper-functions.js";
 
 const UUID_PLAYBOOK = "11111111-1111-4111-8111-111111111111";
@@ -162,5 +165,143 @@ describe("createNameResolvers — real proposal shapes", () => {
     const result = resolvers.resolvePlaybookName(row, payload);
     expect(result).toBeUndefined();
     if (result !== undefined) expect(uuidPattern.test(result)).toBe(false);
+  });
+});
+
+// ─── `/links`-door endpoint labels ──────────────────────────────────────
+//
+// `POST /links` and MCP `synap_project_use_workspace` both file
+// `checkPermissionOrPropose({ subjectType: "link", data: { title, fromType,
+// fromId, toType, toId, linkType } })`, landing as `targetType: "link"` with
+// no `sourceEntityId`/`targetEntityId` (the relation-endpoint shape).
+// `linkEndpointsFromPayload` + `resolveLinkEndpointName` are the seam
+// `enrichProposalsForDisplay` calls to turn that pair into the SAME
+// `sourceLabel`/`targetLabel` fields the entity-relation path populates.
+describe("linkEndpointsFromPayload + resolveLinkEndpointName — real /links-door shapes", () => {
+  const UUID_ENTITY = "88888888-8888-4888-8888-888888888888";
+  const UUID_SOURCE_ID = "99999999-9999-4999-8999-999999999999"; // "source" endpoint type — unresolvable
+
+  function linkCtx(
+    overrides: Partial<LinkEndpointNameContext> = {}
+  ): LinkEndpointNameContext {
+    return {
+      resolveEntityTitle: (id) =>
+        id === UUID_ENTITY ? "Fashion Pre-Sale Launch" : undefined,
+      sessionTitleById: new Map(),
+      playbookById: new Map([[UUID_PLAYBOOK, { name: "Weekly Review" }]]),
+      projectById: new Map([[UUID_PROJECT, { name: "Ethical Fashion" }]]),
+      automationById: new Map([[UUID_AUTOMATION, { name: "Nightly Sync" }]]),
+      workspaceById: new Map([[UUID_WORKSPACE, { name: "Builder" }]]),
+      channelById: new Map([[UUID_CHANNEL, { title: "#general" }]]),
+      toolById: new Map(),
+      skillById: new Map([[UUID_SKILL, { name: "Send Email" }]]),
+      documentTitleById: new Map(),
+      userById: new Map(),
+      ...overrides,
+    };
+  }
+
+  it("detects a /links-door proposal by payload SHAPE — real synap_project_use_workspace body", () => {
+    const row = { targetType: "link" };
+    const payload = {
+      title: "project --uses--> workspace",
+      fromType: "project",
+      fromId: UUID_PROJECT,
+      toType: "workspace",
+      toId: UUID_WORKSPACE,
+      linkType: "uses",
+    };
+    expect(linkEndpointsFromPayload(row, payload)).toEqual({
+      fromType: "project",
+      fromId: UUID_PROJECT,
+      toType: "workspace",
+      toId: UUID_WORKSPACE,
+    });
+  });
+
+  it("resolves project --uses--> workspace to real names on both ends", () => {
+    const endpoint = linkEndpointsFromPayload(
+      { targetType: "link" },
+      {
+        fromType: "project",
+        fromId: UUID_PROJECT,
+        toType: "workspace",
+        toId: UUID_WORKSPACE,
+      }
+    )!;
+    const c = linkCtx();
+    expect(resolveLinkEndpointName(endpoint.fromType, endpoint.fromId, c)).toBe(
+      "Ethical Fashion"
+    );
+    expect(resolveLinkEndpointName(endpoint.toType, endpoint.toId, c)).toBe(
+      "Builder"
+    );
+  });
+
+  it("resolves an entity endpoint through the workspace-lens-scoped resolver, not an unscoped map", () => {
+    const endpoint = linkEndpointsFromPayload(
+      { targetType: "link" },
+      {
+        fromType: "entity",
+        fromId: UUID_ENTITY,
+        toType: "project",
+        toId: UUID_PROJECT,
+      }
+    )!;
+    // A resolver that denies every id proves the label came from THIS
+    // function, not from a coincidental fallback.
+    const deniedScope = linkCtx({ resolveEntityTitle: () => undefined });
+    expect(
+      resolveLinkEndpointName(endpoint.fromType, endpoint.fromId, deniedScope)
+    ).toBeUndefined();
+    const allowedScope = linkCtx();
+    expect(
+      resolveLinkEndpointName(endpoint.fromType, endpoint.fromId, allowedScope)
+    ).toBe("Fashion Pre-Sale Launch");
+  });
+
+  it("leaves an unresolvable endpoint type (e.g. 'source') undefined — never an id or id prefix", () => {
+    const endpoint = linkEndpointsFromPayload(
+      { targetType: "link" },
+      {
+        fromType: "source",
+        fromId: UUID_SOURCE_ID,
+        toType: "project",
+        toId: UUID_PROJECT,
+      }
+    )!;
+    const result = resolveLinkEndpointName(
+      endpoint.fromType,
+      endpoint.fromId,
+      linkCtx()
+    );
+    expect(result).toBeUndefined();
+    if (result !== undefined) {
+      expect(uuidPattern.test(result)).toBe(false);
+      expect(result).not.toContain(UUID_SOURCE_ID.slice(0, 8));
+    }
+  });
+
+  it("is NOT detected for a standalone relation proposal (sourceEntityId/targetEntityId shape) even with targetType 'link'", () => {
+    // Guards against the two shapes being conflated: a payload missing any
+    // of fromType/fromId/toType/toId must not be treated as a links-door
+    // proposal just because targetType happens to be "link".
+    const row = { targetType: "link" };
+    const payload = {
+      sourceEntityId: UUID_ENTITY,
+      targetEntityId: UUID_PROJECT,
+    };
+    expect(linkEndpointsFromPayload(row, payload)).toBeUndefined();
+  });
+
+  it("is NOT detected when targetType is not 'link', even with the full fromType/fromId/toType/toId shape", () => {
+    const row = { targetType: "entity" };
+    const payload = {
+      fromType: "project",
+      fromId: UUID_PROJECT,
+      toType: "workspace",
+      toId: UUID_WORKSPACE,
+    };
+    expect(linkEndpointsFromPayload(row, payload)).toBeUndefined();
   });
 });

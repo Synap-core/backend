@@ -51,6 +51,7 @@ import {
   automations,
   playbooks,
   projects,
+  projectTracks,
   eq,
 } from "@synap/database";
 import { getProjectPath } from "./project-path.js";
@@ -85,6 +86,7 @@ const W_BUILDER = randomUUID();
 const W_MARKETING = randomUUID();
 const W_HIDDEN = randomUUID();
 const PROJECT = randomUUID();
+const TRACK_LIVE = randomUUID();
 const STRANGERS_PROJECT = randomUUID();
 
 const S = {
@@ -159,6 +161,7 @@ beforeAll(async () => {
     automations,
     playbooks,
     projects,
+    projectTracks,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
@@ -182,6 +185,27 @@ beforeAll(async () => {
   await q(
     `insert into projects (id, user_id, workspace_id, name, description, status) values ($1, $2, null, 'Atlas', 'Ship the atlas', 'active'), ($3, $4, null, 'Theirs', null, 'active')`,
     [PROJECT, USER, STRANGERS_PROJECT, STRANGER]
+  );
+  // Two tracks: one a CHECK gate holds paused (its marker set), one archived
+  // (the path omits it). Without `project_tracks` in the fixture every path
+  // read answered `tracks: unavailable` and nothing below could see a track.
+  await q(
+    `insert into project_tracks (id, project_id, user_id, name, definition_snapshot, method_version, current_stage, status, metadata, created_at, updated_at) values
+      ($1, $3, $4, 'Business model', $5::jsonb, '1', 'build', 'paused', $6::jsonb, now() - interval '2 days', now()),
+      ($2, $3, $4, 'Old method', '{}'::jsonb, '1', null, 'archived', '{}'::jsonb, now() - interval '1 day', now())`,
+    [
+      TRACK_LIVE,
+      randomUUID(),
+      PROJECT,
+      USER,
+      JSON.stringify({
+        stages: [
+          { key: "discover", name: "Discover" },
+          { key: "build", name: "Build" },
+        ],
+      }),
+      JSON.stringify({ checkGate: { stageKey: "build", failing: ["x"] } }),
+    ]
   );
 
   await session(S.a, {
@@ -248,6 +272,22 @@ beforeAll(async () => {
 });
 
 describe("getProjectPath", () => {
+  it("returns the project's live tracks, READ OK, with why a paused one is held", async () => {
+    const r = (await path())!;
+    expect(r.tracks.status).toBe("ok");
+    if (r.tracks.status !== "ok") return;
+    expect(r.tracks.items.map((t) => t.id)).toEqual([TRACK_LIVE]);
+    expect(r.tracks.items[0]).toMatchObject({
+      status: "paused",
+      pausedBy: "check",
+      currentStage: "build",
+    });
+    expect(r.tracks.items[0]!.stages.map((s) => s.position)).toEqual([
+      "done",
+      "active",
+    ]);
+  });
+
   it("lists the user's project sessions across workspaces, newest started first, with workspace names", async () => {
     const r = (await path())!;
     expect(r.project).toMatchObject({

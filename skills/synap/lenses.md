@@ -25,7 +25,8 @@ Tool names below are stems; your door may prefix them.
 - A **project spans workspaces**: one engagement has a CRM, a Marketing, a Finance… each a different operational lens on the _same_ project.
 - A **workspace spans projects**: the Marketing workspace can hold work for several clients/projects at once.
 - **Membership is per-entity, filed on write.** An entity belongs to a project because it was written **under that project lens** (`belongs_to_project`) — that is the data ACL/filing edge. Separately, provisioning with a `projectId` also stamps **`project --uses--> workspace`**: an INDEX of domains the engagement runs through. That index is **not** an ACL and does **not** replace entity filing — set the project lens before writing work so entities compose into the project from any workspace.
-- **User-speech "sub-project" = session, never a child project.** Phases, blockers, and work streams are `start_session` with `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
+- **A method inside a project = a TRACK, never a child project or a workspace.** "The business-model side", "our content pipeline", "the build" are tracks: a project-scoped playbook started on the project with `start_track` (`list_tracks` shows what runs). A project runs several.
+- **User-speech "sub-project" / a bounded piece of work = session.** Start it inside its track (`trackId`) when it belongs to one; blockers and detours are `parentSessionId` / `blockedBySessionIds` under the same project lens. There are no nested projects.
 - Compose either way, or both. That's why they're lenses, not folders: **workspaces exist so that development, finance, marketing, and operations don't pile into one undifferentiated place** — they're the separation that makes the work legible.
 
 - **The connection is pod-wide by design.** Your MCP/CLI link is _not_ welded to a workspace — reads default pod-wide, writes default to a sensible workspace. Pass a lens to narrow a single call; the lens is a focus, not a fence.
@@ -42,10 +43,11 @@ Tool names below are stems; your door may prefix them.
 
 **Don't re-orient mid-flow.** Once you've oriented and you're in a run of related writes, keep going — re-check only when you **start a new piece of work** or switch domains. The reflex guards the _start_ of work, not every call.
 
-### Notice a missing domain — and offer it
+### Notice a missing method or domain — and offer it
 
-Because workspaces are how a company separates its operations, a project is sometimes **missing an operational domain it clearly needs**. If the conversation is squarely about an area — sales, content, finance, hiring, ops — and the active project has **no workspace for it**, say so **once, at the end, in one line**, and offer to set it up:
+A project sometimes clearly needs something it lacks. Tell the two apart first:
 
-> _"This project doesn't have a Marketing workspace yet — want me to spin one up and capture the essentials?"_
+- **A method is missing** (the talk is about how to run sales, content, the business model… and `list_tracks` shows no track for it) → offer a **track**: _"This project isn't running a Content track yet — want me to start one?"_ Find a project-scoped playbook (`list_playbooks` / `match_playbooks`) and `start_track`.
+- **A domain is missing** (new kinds of things must be recorded that no workspace owns — e.g. you are logging deals and there is no CRM) → offer a **workspace**, provisioned with the project lens active (see the `agent-os` skill). Never a workspace to stand for a method.
 
-If they say yes, provision that **one** domain and run its onboarding interview **with the project lens active** (so its entities file into the project) (see the `agent-os` skill — it handles both the whole-company setup and adding a single domain to an existing project). **Offer, don't auto-build.** One nudge per response, and only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined a domain (this session or before), drop it — don't re-offer.**
+Say it **once, at the end, in one line**. **Offer, don't auto-build.** One nudge per response, only when the gap is real — never a checklist of everything the project "could" have. **If the user has already declined it (this session or before), drop it — don't re-offer.**

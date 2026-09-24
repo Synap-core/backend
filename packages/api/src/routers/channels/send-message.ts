@@ -30,7 +30,9 @@ import {
 import {
   resolveAgentHandle,
   extractMentionAgentType,
+  extractMentionHandles,
   extractHumanMentionHandles,
+  resolveMentionedMember,
 } from "../../utils/agent-handles.js";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { TRPCError } from "@trpc/server";
@@ -38,6 +40,7 @@ import {
   db,
   eq,
   and,
+  asc,
   drizzleSql,
   persistAssistantReply,
 } from "@synap/database";
@@ -752,24 +755,33 @@ export const sendMessageProcedure = protectedProcedure
       // Hard off — never route to any teammate.
       if (reactionMode !== AiReactionMode.OFF) {
         // 1. Explicit @mention resolution — highest priority.
-        //    Validate the mentioned handle resolves to a real AI_AGENT channel member.
-        if (mentionedAgentType) {
-          const mentionedMember = await db
+        //    EVERY handle is read (not just the first — "@bob and @ai" in a
+        //    multi-human room must still summon the AI), and each is validated
+        //    against the room's AI_AGENT roster: the first handle naming a
+        //    member wins; a handle naming no member routes nowhere.
+        const mentionHandles = [
+          ...(resolvedHandle ? [resolvedHandle.agentSlug] : []),
+          ...extractMentionHandles(content),
+        ];
+        if (mentionHandles.length > 0) {
+          const roster = await db
             .select({
               memberId: channelMembers.memberId,
-              memberKind: channelMembers.memberKind,
+              agentType: users.agentType,
             })
             .from(channelMembers)
             .innerJoin(users, eq(users.id, channelMembers.memberId))
             .where(
               and(
                 eq(channelMembers.channelId, channelId),
-                eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT),
-                eq(users.agentType, mentionedAgentType)
+                eq(channelMembers.memberKind, ChannelMemberKind.AI_AGENT)
               )
             )
-            .limit(1)
-            .then((rows) => rows[0] ?? null);
+            .orderBy(asc(channelMembers.createdAt));
+          const mentionedMember = resolveMentionedMember(
+            mentionHandles,
+            roster
+          );
 
           if (mentionedMember) {
             routingDecision = makeRoutedTeammateContext(
@@ -870,20 +882,21 @@ export const sendMessageProcedure = protectedProcedure
       },
     });
 
-    // For multiplayer rooms, the routing engine determines AI activity.
-    // For single-responder channels, fall through to the existing isAiChannel gate.
-    if (isMultiplayerRoom && !routingDecision) {
-      // Routing engine decided: silence.
-      return { messageId: userMessageId, channelId };
-    }
-
-    if (!isMultiplayerRoom && !isAiChannel) {
+    // For multiplayer rooms, the routing engine determines AI activity (no
+    // routing decision ⇒ silence). For single-responder channels, the
+    // isAiChannel gate does.
+    const staysSilent = isMultiplayerRoom ? !routingDecision : !isAiChannel;
+    if (staysSilent) {
       // An anchored HUMAN comment on an intake run (or on a pending proposal of
       // this session) wakes the run's agent even with none assigned — through
-      // the ONE auto-respond door, carrying the resolved anchor. This door is
-      // human-only (Kratos session principal), so an agent's anchored message
-      // can never reach here and loop. Assigned/mentioned channels took the
-      // interactive path above and already carry the same anchor context.
+      // the ONE auto-respond door, carrying the resolved anchor. It runs for a
+      // silent GROUP session room too: an anchored comment IS a summons, so the
+      // restraint default must not swallow it. The agent is named explicitly
+      // (orchestrator "meta" when the plan records none) because the door only
+      // wakes a GROUP room for a named agent. This door is human-only (Kratos
+      // session principal), so an agent's anchored message can never reach
+      // here and loop. Assigned/mentioned channels took the interactive path
+      // below and already carry the same anchor context.
       if (anchoredComment?.decision.trigger) {
         await triggerAutoRespond({
           channelId,
@@ -891,7 +904,7 @@ export const sendMessageProcedure = protectedProcedure
           content,
           sourceUserId: userId,
           focusSessionId: activeFocusSessionId,
-          agentType: anchoredComment.decision.agentType,
+          agentType: anchoredComment.decision.agentType ?? "meta",
           turnContext: outgoingTurnContext,
         });
       }

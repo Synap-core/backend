@@ -275,6 +275,12 @@ export interface InstantiateInput {
    */
   projectId?: string | null;
   /**
+   * The TRACK (`project_tracks`, 0272) this session is born inside. The caller
+   * has already validated it (`resolveTrackFiling`) and set `projectId` to the
+   * track's project — this funnel only persists it.
+   */
+  trackId?: string | null;
+  /**
    * The entity this session is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId — threads RunContext.subjectId
    * through from the playbook run input.
@@ -555,6 +561,7 @@ export async function instantiateSessionRow(
     // inspecting metadata.
     origin: input.origin ?? "playbook",
     projectId: input.projectId ?? null,
+    trackId: input.trackId ?? null,
     subjectEntityId: input.subjectId ?? null,
     expectedOutputs,
     // Playbook-level + every stage's criteria, stageKey stamped — the one

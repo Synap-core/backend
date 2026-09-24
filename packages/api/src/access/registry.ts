@@ -44,10 +44,12 @@ import {
   sessionEvaluations,
   rendererBindings,
   projects,
+  projectTracks,
   views,
 } from "@synap/database/schema";
-import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, or } from "drizzle-orm";
 import { registerVisibility } from "./visibility.js";
+import { projectVisibleWhere } from "./project-visibility.js";
 import { channelVisibilityWhere } from "../utils/channel-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import {
@@ -584,17 +586,27 @@ registerVisibility({
   query: () => db.query.projects,
   rule: {
     kind: "custom",
+    predicate: (access) => projectVisibleWhere(access),
+    nullWorkspaceMeans: "ownerPrivate",
+  },
+});
+// A TRACK (0272) is exactly as visible as its PARENT PROJECT — never more,
+// never less. It carries no workspace of its own (it would be a second,
+// driftable copy of the project's), so the rule is the project predicate
+// applied through the FK. `user_id` on a track is attribution (who started
+// it), NOT a floor: a teammate who can see a shared project sees its tracks.
+registerVisibility({
+  table: projectTracks,
+  query: () => db.query.projectTracks,
+  rule: {
+    kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(projects.workspaceId),
-          workspaceLensWhere(
-            projects.workspaceId,
-            access.userId,
-            access.workspaceLens
-          )
-        ),
-        and(isNull(projects.workspaceId), eq(projects.userId, access.userId))
+      inArray(
+        projectTracks.projectId,
+        db
+          .select({ id: projects.id })
+          .from(projects)
+          .where(projectVisibleWhere(access))
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },

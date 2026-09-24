@@ -318,6 +318,16 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     labelPlural: "Projects",
     glyph: "◈",
   },
+  // A METHOD running inside one project (`project_tracks`, 0272). Same hue as
+  // its project: a track is read as a lane OF the project, never beside it.
+  track: {
+    kind: "track",
+    category: "project",
+    icon: "Route",
+    color: ID(5),
+    label: "Track",
+    labelPlural: "Tracks",
+  },
   session: {
     kind: "session",
     category: "session",
@@ -643,6 +653,9 @@ export const OBJECT_KIND_ALIASES: Record<string, string> = {
   relations: "link",
   property_def: "property",
   property_defs: "property",
+  // The table name (`project_tracks`) reaches titles as a target type.
+  project_track: "track",
+  project_tracks: "track",
   /**
    * Operational EVENT domains are table names, not object kinds — they arrive
    * pluralized/underscored (`entities`, `api_keys`, `focus_sessions`) straight

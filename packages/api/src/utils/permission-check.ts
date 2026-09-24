@@ -2342,6 +2342,24 @@ export function buildProposalSummary(
         : undefined);
     return goal ? `Complete session "${goal}"` : "Complete focus session";
   }
+  // focus_session FILING — which project a session belongs to is the person's
+  // call, so the title must say it is a move and name WHERE, not the generic
+  // "Update session" (review-theatre: approving what you cannot read).
+  if (
+    subjectType === "focus_session" &&
+    action === "update" &&
+    "projectId" in data
+  ) {
+    const goal =
+      typeof data.goal === "string" && data.goal.trim() ? data.goal : null;
+    const what = goal ? `session "${goal}"` : "session";
+    if (data.projectId === null) return `Unfile ${what}`;
+    const where =
+      typeof data.projectName === "string" && data.projectName.trim()
+        ? ` into "${data.projectName}"`
+        : " into a project";
+    return `File ${what}${where}`;
+  }
   // focus_session create — "Start session …" when a goal is present
   if (subjectType === "focus_session" && action === "create") {
     const goal =

@@ -35,10 +35,12 @@
 import {
   db,
   skills,
+  links,
   eq,
   and,
   isNull,
   desc,
+  drizzleSql,
   knowledgeRepository,
   capabilityRunReceipts,
   getWorkspaceMembership,
@@ -356,6 +358,23 @@ async function recordRefusedCapabilityRun(opts: {
   });
 }
 
+/**
+ * WHERE-fragment: the skill's `requires` edge points at `toolId` — verb
+ * resolution by PROVENANCE (see `executeCapability`'s `toolId`). Exported so a
+ * real-Postgres test runs THIS fragment rather than a copy of it: `links.fromId`
+ * is text and `skills.id` uuid, so the cast is load-bearing — without it
+ * Postgres raises 42883 at runtime, and no typecheck can see that.
+ */
+export function skillRequiresTool(toolId: string) {
+  return drizzleSql`${skills.id}::text IN (
+    SELECT ${links.fromId} FROM ${links}
+    WHERE ${links.fromType} = 'skill'
+      AND ${links.toType} = 'tool'
+      AND ${links.linkType} = 'requires'
+      AND ${links.toId} = ${toolId}
+  )`;
+}
+
 export async function executeCapability(input: {
   /** Capability verb = backing skill NAME. One of verbId/skillId required. */
   verbId?: string;
@@ -380,6 +399,17 @@ export async function executeCapability(input: {
   agentUserId?: string | null;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
+  /**
+   * Resolve `verbId` by PROVENANCE: only a skill whose `requires` edge points at
+   * this tool row can answer. A verb NAME is not an identity — a pod that went
+   * through a pack re-install can hold two skills called `calendar_list` (a
+   * stale code skill tied to the old tool, and the current declarative one tied
+   * to the live tool), and the name-only lookup below prefers the APPROVED one,
+   * i.e. the stale shadow. A caller that already knows which tool it is acting
+   * through (connection sync) pins it here so a shadow can never answer.
+   * Ignored with `skillId`, which is already an identity.
+   */
+  toolId?: string;
   /**
    * Callers with NO interactive review surface (e.g. the automation executor)
    * set this so a `propose` verdict returns a plain `deny` INSTEAD of persisting
@@ -471,7 +501,8 @@ export async function executeCapability(input: {
       and(
         visibleSkillsWhere(userId, workspaceId ?? undefined),
         eq(skills.status, "active"),
-        skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!)
+        skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!),
+        !skillId && input.toolId ? skillRequiresTool(input.toolId) : undefined
       )
     )
     // Deterministic resolution when a verb NAME has duplicates (e.g. a stale
@@ -486,7 +517,11 @@ export async function executeCapability(input: {
       kind: "not_found",
       message: `Capability ${
         skillId ? `skill "${skillId}"` : `verb "${verbId}"`
-      } not found in this workspace. Search what's available with list_capabilities({query: "…"}); if nothing matches, tell the user exactly what's missing — never fabricate a result.`,
+      } not found ${
+        !skillId && input.toolId
+          ? `on tool ${input.toolId} (a skill of that name may exist, but none requires this tool)`
+          : "in this workspace"
+      }. Search what's available with list_capabilities({query: "…"}); if nothing matches, tell the user exactly what's missing — never fabricate a result.`,
     };
   }
 

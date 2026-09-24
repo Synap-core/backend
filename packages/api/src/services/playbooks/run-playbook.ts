@@ -43,8 +43,11 @@ import {
   ChannelType,
   ChannelScope,
   ChannelStatus,
+  ChannelMemberKind,
+  ChannelMemberRole,
   FocusSessionStatus,
 } from "@synap/database/schema";
+import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 import type {
   ChannelSpec,
   RunResult,
@@ -65,6 +68,7 @@ import { resolveExecutor } from "./executors/registry.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
+import { TRPCError } from "@trpc/server";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -165,6 +169,19 @@ export interface RunPlaybookInput {
    * pre-existing caller is unchanged).
    */
   parentSessionId?: string;
+  /**
+   * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
+   * visible to `userId`; refused otherwise.
+   */
+  projectId?: string | null;
+  /**
+   * The TRACK (`project_tracks`, 0272) this run is born inside — work that
+   * advances one method of a project. Validated here, on every door, by
+   * `resolveTrackFiling`: the track must be visible and not archived, and
+   * `projectId` (when given) must be the track's project. Absent `projectId`
+   * is DERIVED from the track, never guessed.
+   */
+  trackId?: string | null;
   /** The entity this run is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
   subjectId?: string;
@@ -452,6 +469,46 @@ async function resolveInputItems(
   }
 }
 
+interface RunFiling {
+  projectId: string | null;
+  trackId: string | null;
+}
+
+/**
+ * Where a run is FILED. A track wins and names its own project (a mismatching
+ * `projectId` is refused by `resolveTrackFiling`); a bare project must be one
+ * the principal can see. Floored on the HUMAN (`input.userId`) — an agent's
+ * run is filed on the person's behalf.
+ */
+async function resolveRunFiling(input: RunPlaybookInput): Promise<RunFiling> {
+  if (input.trackId) {
+    const { resolveTrackFiling } = await import("../tracks/tracks-service.js");
+    const filed = await resolveTrackFiling({
+      trackId: input.trackId,
+      projectId: input.projectId ?? null,
+      actor: { userId: input.userId },
+    });
+    return { projectId: filed.projectId, trackId: filed.trackId };
+  }
+  if (input.projectId) {
+    const { loadVisibleProject } =
+      await import("../projects/load-visible-project.js");
+    const project = await loadVisibleProject(
+      await getDb(),
+      input.projectId,
+      input.userId
+    );
+    if (!project) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Project ${input.projectId} not found`,
+      });
+    }
+    return { projectId: project.id, trackId: null };
+  }
+  return { projectId: null, trackId: null };
+}
+
 /**
  * Run a playbook end-to-end. Caller MUST gate (checkPermissionOrPropose) first.
  *
@@ -473,6 +530,11 @@ export async function runPlaybook(
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+
+  // FILING — the project/track this run lands in, resolved ONCE for every
+  // fan-out item. Before any session, channel or run row exists, so a bad
+  // handle refuses cleanly instead of leaving a half-filed run.
+  const filing = await resolveRunFiling(input);
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
@@ -510,13 +572,13 @@ export async function runPlaybook(
     (input.params ?? {}) as Record<string, unknown>
   );
 
-  const primary = await executeSingleRun(playbook, input, runItems[0]);
+  const primary = await executeSingleRun(playbook, input, runItems[0], filing);
 
   // Fan-out: additional items each get their own session/channel/run. Failures
   // are logged but never abort the primary result.
   for (let i = 1; i < runItems.length; i++) {
     try {
-      await executeSingleRun(playbook, input, runItems[i]);
+      await executeSingleRun(playbook, input, runItems[i], filing);
     } catch (err) {
       logger.error(
         { err, playbookId: playbook.id, itemIndex: i },
@@ -536,7 +598,8 @@ export async function runPlaybook(
 async function executeSingleRun(
   playbook: Playbook,
   input: RunPlaybookInput,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  filing: RunFiling
 ): Promise<RunPlaybookResult> {
   const db = await getDb();
 
@@ -596,6 +659,8 @@ async function executeSingleRun(
       : {}),
     agentIds: input.agentIds,
     subjectId: input.subjectId ?? null,
+    projectId: filing.projectId,
+    trackId: filing.trackId,
     // Two grammars, one resolution. `goalResolver` handles {{mustache}} against
     // the caller's own context; when it declines (a pure `@{arg:}` template) the
     // caller's override template is substituted here with `resolveGoal` — the
@@ -684,6 +749,31 @@ async function executeSingleRun(
       })
       .returning();
     channel = created;
+    // A multiplayer run room (spec GROUP / AGENT_COLLAB) routes @mentions
+    // against its roster, so the run's owner and staffed agents are enrolled —
+    // otherwise no agent on the run could ever be summoned in its own room.
+    // Spec-declared `members` + per-member caps remain the TODO above.
+    if (
+      channelType === ChannelType.GROUP ||
+      channelType === ChannelType.AGENT_COLLAB
+    ) {
+      await enrollRoomMember(db, {
+        channelId: created.id,
+        userId: actorId,
+        memberType: ChannelMemberKind.HUMAN,
+        role: ChannelMemberRole.OWNER,
+        addedBy: actorId,
+      });
+      for (const agentId of new Set(input.agentIds ?? [])) {
+        if (!agentId || agentId === actorId) continue;
+        await enrollRoomMember(db, {
+          channelId: created.id,
+          userId: agentId,
+          memberType: ChannelMemberKind.AI_AGENT,
+          addedBy: actorId,
+        });
+      }
+    }
   }
 
   // 3. Wire focus_sessions.channelId = the new channel.

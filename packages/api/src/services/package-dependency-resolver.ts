@@ -250,20 +250,13 @@ export interface ResolvePackageDependenciesResult {
   /**
    * If a `compose` dependency resolved to a base workspace, its id — the caller
    * layers the package additively onto it (instead of creating a new workspace).
-   * @deprecated Use `composeTargetWorkspaceIds` for multiple compose dependencies.
-   * This returns the first resolved compose target for backward compatibility.
    */
   composeTargetWorkspaceId?: string;
   /**
-   * All resolved compose target workspace IDs — one per `compose` dependency
-   * that successfully resolved to a base workspace.
-   */
-  composeTargetWorkspaceIds?: string[];
-  /**
    * True iff a `compose` dependency was DECLARED. When true but
-   * `composeTargetWorkspaceIds` is empty/unset, the base(s) could not be resolved
-   * and the caller must NOT fall back to creating a rogue overlay workspace — it
-   * should surface the `required-absent` entries instead.
+   * `composeTargetWorkspaceId` is unset, the base could not be resolved and the
+   * caller must NOT fall back to creating a rogue overlay workspace — it should
+   * surface the `required-absent` entry instead.
    */
   composeRequested: boolean;
   /** The resolved dependency graph, in declaration order — for the UX. */
@@ -341,10 +334,6 @@ async function findWorkspaceBySubtype(
  * the top-level package AND each dependency template — so an overlay's own
  * declaration is validated identically no matter how it is reached.
  *
- * SEMANTICS (nested templates): At most ONE `compose` dependency per template.
- * A nested template that itself declares `compose` is an OVERLAY and must have
- * exactly one base to compose onto. This prevents the rogue-workspace bug.
- *
  * `label` names the declaring template in the error (the package itself at the
  * top level, the dependency's slug when nested).
  */
@@ -370,37 +359,6 @@ function assertSingleComposeDep(
     );
   }
   return composeDep;
-}
-
-/**
- * Enforce the compose constraints on a TOP-LEVEL package's `dependencies[]`
- * and return ALL `compose` deps. Unlike nested templates, the TOP-LEVEL package
- * may declare MULTIPLE `compose` dependencies (each onto a workspace base).
- *
- * Semantics:
- *   - A package may declare MULTIPLE `compose` dependencies (each onto a workspace base)
- *   - Each `compose` dependency MUST be `kind:'workspace'`
- *   - Cycle detection and diamond dedup still apply per-dependency
- *
- * `label` names the declaring template in the error (the package itself at the
- * top level).
- */
-function assertTopLevelComposeDeps(
-  deps: TemplateDependency[],
-  label?: string
-): TemplateDependency[] {
-  const composeDeps = deps.filter(
-    (d) => (d.relation ?? "require") === "compose"
-  );
-  const where = label ? ` (declared by "${label}")` : "";
-  for (const composeDep of composeDeps) {
-    if ((composeDep.kind ?? "workspace") !== "workspace") {
-      throw new Error(
-        `compose dependency "${composeDep.slug}" must be kind:'workspace' (got '${composeDep.kind}')${where}`
-      );
-    }
-  }
-  return composeDeps;
 }
 
 /**
@@ -848,12 +806,10 @@ export async function resolvePackageDependencies(
   const resolved = new Map<string, ResolveResult>();
 
   // ── Compose-cardinality + kind constraints (same rule at every level) ────
-  // Top-level package may declare MULTIPLE compose deps (each onto a workspace base).
-  // Nested templates still enforce single-compose (via assertSingleComposeDep in ensureWorkspaceDependencyPresent).
-  const composeDeps = assertTopLevelComposeDeps(deps);
+  const composeDep = assertSingleComposeDep(deps);
 
-  const composeRequested = composeDeps.length > 0;
-  const composeTargetWorkspaceIds: string[] = [];
+  const composeRequested = !!composeDep;
+  let composeTargetWorkspaceId: string | undefined;
 
   for (const dep of deps) {
     const kind: PackageDependencyKind = dep.kind ?? "workspace";
@@ -903,17 +859,9 @@ export async function resolvePackageDependencies(
     );
 
     if (relation === "compose" && res.workspaceId) {
-      composeTargetWorkspaceIds.push(res.workspaceId);
+      composeTargetWorkspaceId = res.workspaceId;
     }
   }
 
-  // Backward compatibility: first compose target for single-compose callers.
-  const composeTargetWorkspaceId = composeTargetWorkspaceIds[0];
-
-  return {
-    composeTargetWorkspaceId,
-    composeTargetWorkspaceIds,
-    composeRequested,
-    installed,
-  };
+  return { composeTargetWorkspaceId, composeRequested, installed };
 }

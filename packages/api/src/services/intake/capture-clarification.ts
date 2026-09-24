@@ -6,9 +6,12 @@
  * ANSWER (`claimCaptureQuestion`), then re-runs structure through the same
  * procedure. The contract is `@synap-core/types/capture`.
  *
- * Why the session THREAD room (`ensureSessionChannel`) and not a RUN channel:
- * it is the session's one room, it has no assigned agent (free text never
- * wakes the orchestrator), and its visibility is the session owner's.
+ * Why the session room (`ensureSessionChannel`) and not a RUN channel: it is
+ * the session's one room, a GROUP with `aiReactionMode = only_mentioned` (free
+ * text never wakes an agent unless it @-mentions one on the roster), and its
+ * visibility is roster-only (`channelVisibilityWhere`). A question/answer part
+ * never wakes an agent at all — `triggerAutoRespond` refuses `capturePart`
+ * whatever the room type, pinned in `trigger-auto-respond.capture-part.pglite`.
  *
  * Status moves only by COMPARE-AND-SET on `capturePart.status = 'open'`, so two
  * answers can never both win and an answer never resolves a superseded

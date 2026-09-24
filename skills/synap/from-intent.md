@@ -14,7 +14,7 @@ Before proposing structure:
 2. `synap_list_profiles` — kinds **and** roles (`profileKind`, `applicableKinds`, `parentProfileId`, `entityScope`).
 3. `synap_ask` — does this intent already live as a project or a cluster of entities?
 
-If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it.
+If a close project exists, **reuse it**. Do not mint a twin. Name-match is enough: if orient already lists a project whose description is this company or this commitment, that **is** the project. Ask "reuse «Launch The Architech»?" — do not invent «Architech Business Model» next to it: a business-model method on that project is a **track** on it (`synap_list_tracks` / `synap_start_track`), not a twin project.
 
 **Pending review first.** If `startHere.pendingReview.count > 0`, offer to walk the queue before any new structure. Unreviewed work looks missing and gets duplicated.
 
@@ -31,7 +31,8 @@ Do not install templates, define kinds, or create a project until you can answer
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **kinds of work** does it need (sell, build, write, buy, hire…)?               | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
+| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one project-scoped playbook each, started with `synap_start_track`.        |
+| Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
 
@@ -87,6 +88,20 @@ Walk this ladder instead. Every rung is a door that exists; do not invent one.
 
 A skill your plan creates IS resolvable in the same batch: the automation door looks a verb up by **skill name**, and skills materialize before automations. That is why a fact + a behaviour can ride in one proposal.
 
+### 2c. A new kind of work inside a project → a TRACK
+
+A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
+
+| The user needs…                              | Do this                                                                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| a **method** in an existing project          | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
+| no method fits                               | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                     |
+| one bounded piece of work in that method     | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`     |
+| new **kinds of things** no workspace owns    | a workspace (four-test, `workspace-design`) — never to represent a method                                                                   |
+| a new long-lived intent with its own gravity | a project — never a twin project for a method of an existing one                                                                            |
+
+Pause, resume (a check gate holds a track until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
+
 ### 3. Which skill to load next
 
 | Need                                         | Skill                                                      |
@@ -108,7 +123,7 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 - Grading yourself. "85% complete" against no criteria and no declared outputs is an opinion, not a status — propose criteria (§0.4) and expected outputs (§2) so the person can check the claim.
 - Onboard or fill an empty workspace "because it is empty."
 - Invent a workspace that fails the four-test.
-- Nested projects. Phases = sessions.
+- Nested or twin projects, or a workspace, to represent a **method** of an existing project. A method is a track; one bounded piece of work inside it is a session (`trackId`).
 - Invent CLI flags or tools this door does not list.
 - A second entity for a hat (`kind_mismatch` → **widen** the role’s `applicableKinds`, then `attach_facet`).
 - Company/person-only facets. If the hat belongs on `item` (or any kind), the role’s `applicableKinds` must include that kind.

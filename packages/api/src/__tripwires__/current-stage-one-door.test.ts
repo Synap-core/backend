@@ -122,6 +122,15 @@ const ACKNOWLEDGED: Record<string, string> = {
   "api:services/focus-sessions/follow-playbook.ts":
     "declaration: currentStage = the caller-NAMED followStageKey, never derived",
 
+  // A DIFFERENT COLUMN — `project_tracks.current_stage` (0272), never
+  // `focus_sessions`. The TRACK has its own single stage writer
+  // (`applyTrackStageAdvance`, same file) plus the birth seed
+  // (`currentStage: firstStageKey(snapshot.stages)` in `startTrack`), and its
+  // gate goes through the SAME core as this door (`applyStageGate` in
+  // services/playbooks/stage-gate.ts) — grep `trackGateSubject`.
+  "api:services/tracks/tracks-service.ts":
+    "project_tracks.current_stage (the track door), not focus_sessions — gate via applyStageGate",
+
   // THE DOOR'S OWN single-column UPDATE lives in the door; listed for completeness
   // by THE_DOOR above, not here.
 };

@@ -20,21 +20,17 @@ import {
   EventRepository,
   sql,
   ProjectRepository,
-  playbooks,
   findProjectDedupCandidates,
   assessEvidenceGravity,
   buildNearMatchMessage,
   buildProjectProvenance,
 } from "@synap/database";
-import type { Playbook } from "@synap/database/schema";
 import {
   resolveStageCategory,
   type PlaybookStage,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
 import { TRPCError } from "@trpc/server";
-import { AccessContext, scopedDb } from "../access/index.js";
-import { createLinks } from "../services/links/links-service.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { auditLog } from "../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
@@ -50,6 +46,8 @@ import {
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import { startTrack } from "../services/tracks/tracks-service.js";
+import { deriveTrackStages } from "@synap-core/types/units";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -84,64 +82,17 @@ async function countVisibleEntities(
     );
   return new Set(rows.map((r) => r.id)).size;
 }
-// ─── Project ↔ playbook stage binding (pure) ──────────────────────────────────
+// ─── Legacy project stages (READ-ONLY until the next wave) ─────────────────────
 
 /**
- * The keys `instantiateFromPlaybook` writes into `projects.settings` (jsonb).
- *
- * There is NO column and NO migration for any of this: `projects.settings`
- * already exists, and `links` already accepts `fromType: "project"` +
- * `linkType: "instantiated_from"` (both are `$type<>` annotations on plain
- * `text`, with no DB check constraint).
+ * The key the proto-track (`instantiateFromPlaybook` before tracks, 0272) wrote
+ * into `projects.settings`. NOTHING WRITES IT ANY MORE: a method on a project is
+ * a TRACK (`project_tracks`, services/tracks). Migration 0272 backfilled every
+ * project that carried it into one track; the key and `projects.phase` are kept
+ * only because `list`/`get` (`phaseCategory`), the browser board and the MCP
+ * project tools still read them — they move to tracks in a later wave.
  */
 export const PROJECT_STAGES_KEY = "stages";
-export const PROJECT_SOURCE_PLAYBOOK_KEY = "sourcePlaybookId";
-export const PROJECT_SOURCE_PLAYBOOK_VERSION_KEY = "sourcePlaybookVersion";
-
-/**
- * Build the project's new `settings` when it is bound to a project playbook.
- *
- * TWO invariants live here, and both are the point of the function:
- *
- *  1. MERGE, never replace. `ProjectRepository.update` passes `settings`
- *     straight into `.set()`, so returning a bare `{ stages }` would DROP every
- *     other key the project already carried.
- *
- *  2. DEEP copy the stages. `structuredClone`, not a spread — a spread
- *     (`[...playbook.stages]`) copies the ARRAY but shares every stage OBJECT
- *     with the playbook, so editing the project's copy would silently edit the
- *     template (and vice versa). That is a documented, shipped bug in Odoo's
- *     "duplicate project from template", and it is exactly what this door would
- *     reproduce. `settings` is jsonb, so the values are plain JSON and
- *     `structuredClone` is total over them.
- *
- * The copy is a SNAPSHOT: a later edit to the playbook does NOT propagate. The
- * lineage keys (+ the `project --instantiated_from--> playbook` edge the caller
- * writes) are what make the snapshot traceable back to its source.
- */
-export function buildProjectStageSettings(
-  currentSettings: unknown,
-  playbook: { id: string; version: number; stages: unknown },
-  now: Date = new Date()
-): Record<string, unknown> {
-  const base =
-    currentSettings &&
-    typeof currentSettings === "object" &&
-    !Array.isArray(currentSettings)
-      ? (currentSettings as Record<string, unknown>)
-      : {};
-  const source = Array.isArray(playbook.stages)
-    ? (playbook.stages as PlaybookStage[])
-    : [];
-
-  return {
-    ...base,
-    [PROJECT_STAGES_KEY]: structuredClone(source),
-    [PROJECT_SOURCE_PLAYBOOK_KEY]: playbook.id,
-    [PROJECT_SOURCE_PLAYBOOK_VERSION_KEY]: playbook.version,
-    stagesBoundAt: now.toISOString(),
-  };
-}
 
 /** The stages a project has copied, or `[]` when it was never bound to one. */
 export function readProjectStages(settings: unknown): PlaybookStage[] {
@@ -814,22 +765,23 @@ export const projectsRouter = router({
     }),
 
   /**
-   * Bind a project to a PROJECT-SCOPED playbook — the door that turns a
-   * project's free-text `phase` into a DECLARED stage.
+   * Start a PROJECT-SCOPED playbook on a project — the proto-track door. No
+   * client calls it any more (browser/Relay start methods through
+   * `tracks.start`); it survives ONLY so a still-pending
+   * `project/instantiate_from_playbook` proposal can be approved (its executor
+   * replays through here). It is a THIN WRAPPER over `startTrack` (services/tracks), the one door a
+   * track is born through. It no longer writes `settings.stages` or seeds
+   * `phase`: the method's stages are pinned on the TRACK, and a project may run
+   * N methods, not one.
    *
-   * The playbook's `stages` are DEEP-COPIED onto the project
-   * (`settings.stages`) rather than referenced: a project is a months-long
-   * container, and a template edited after the fact must not silently rewrite
-   * the vocabulary a live engagement is already sitting in. See
-   * `buildProjectStageSettings` for why the copy is `structuredClone` and not a
-   * spread. Lineage (source playbook id + its `version`, plus a
-   * `project --instantiated_from--> playbook` edge) is what keeps the snapshot
-   * traceable.
+   * Governance, both visibility floors, the scope refusal and the write floor
+   * all live in `startTrack` — this procedure adds none, so the two doors can
+   * never disagree. An agent call lands as a `track/create` proposal.
    *
-   * podProcedure + gate on the LOADED project's workspace — the same floor
-   * `update` and `setAutomationMembership` apply, and for the same reasons (a
-   * pod-personal project has no workspace at all; the caller's active lens is
-   * never the gate's subject).
+   * The result keeps the old keys (`playbookId`, `playbookVersion`,
+   * `stageCount`, `phase`, `phaseSeeded`, `phaseKept`) so a caller written
+   * against the proto-track still reads it; `phaseSeeded` is now always false
+   * because no phase is written.
    */
   instantiateFromPlaybook: podProcedure
     .input(
@@ -840,7 +792,6 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const db = await getDb();
-
       const project = await loadVisibleProject(db, input.projectId, ctx.userId);
       if (!project) {
         throw new TRPCError({
@@ -849,122 +800,35 @@ export const projectsRouter = router({
         });
       }
 
-      // The playbook's own visibility floor — `scopedDb` + the `playbooks`
-      // VisibilityRule, exactly as `playbooks.get` reads it. `AccessContext.from`
-      // carries no workspace lens, so this works pod-wide.
-      const playbook = await scopedDb(
-        AccessContext.from(ctx)
-      ).findFirst<Playbook>(playbooks, {
-        where: eq(playbooks.id, input.playbookId),
-      });
-      if (!playbook) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Playbook ${input.playbookId} not found`,
-        });
-      }
-
-      // A SESSION playbook is a template for a focus_session — a bounded run
-      // with a goal, granted capabilities and a channel. Copying its stages onto
-      // a project would give the container a vocabulary describing a work
-      // session, not an engagement. Only `scope: "project"` may bind here.
-      if (playbook.scope !== "project") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            `Playbook "${playbook.name}" is ${playbook.scope ?? "session"}-scoped. ` +
-            "Only a project-scoped playbook can be bound to a project — a session " +
-            "playbook is instantiated as a focus session instead.",
-        });
-      }
-
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        agentUserId: ctx.agentUserId ?? undefined,
-        workspaceId: project.workspaceId ?? undefined,
-        subjectType: "project",
-        action: "instantiate_from_playbook",
-        // EVERYTHING the executor needs, not just `{ id }` — a gate that stored
-        // only the id is why an earlier approved update applied nothing. Both
-        // ids are re-resolved (and re-gated) by the replay, so nothing derived
-        // from them is stored here.
-        data: { id: input.projectId, playbookId: input.playbookId },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      const settings = buildProjectStageSettings(project.settings, playbook);
-      const stages = readProjectStages(settings);
-
-      // Seed the phase ONLY when the project has none. An existing phase is a
-      // human's statement about where the work is; silently rewriting it to the
-      // template's first stage would move a live engagement backwards. The
-      // result says which happened rather than leaving the caller to guess.
-      const seedPhase =
-        !project.phase && stages.length > 0 ? stages[0].key : undefined;
-
-      const eventRepo = new EventRepository(sql);
-      const projectRepo = new ProjectRepository(db, eventRepo);
-      await projectRepo.update(
-        input.projectId,
-        {
-          settings,
-          ...(seedPhase !== undefined ? { phase: seedPhase } : {}),
+      const result = await startTrack({
+        projectId: input.projectId,
+        playbookId: input.playbookId,
+        actor: {
+          userId: ctx.userId,
+          agentUserId: ctx.agentUserId ?? null,
+          isHubProtocol: ctx.isHubProtocol,
         },
-        ctx.userId
-      );
-
-      // Provenance edge — the same `createLinks` door and the same
-      // `instantiated_from` shape `playbook-lifecycle.ts` writes for a session.
-      // Idempotent on the unique edge, so re-binding never duplicates it.
-      await createLinks([
-        {
-          workspaceId: project.workspaceId,
-          fromType: "project",
-          fromId: input.projectId,
-          toType: "playbook",
-          toId: playbook.id,
-          linkType: "instantiated_from",
-        },
-      ]);
-
-      auditLog({
-        subjectType: "project",
-        action: "instantiate_from_playbook",
-        phase: "completed",
-        subjectId: input.projectId,
-        userId: ctx.userId,
-        workspaceId: project.workspaceId ?? undefined,
       });
+      if (result.status === "proposed") {
+        return { status: "proposed" as const, proposalId: result.proposalId };
+      }
 
-      // Emitted as a project UPDATE, not as the specific verb: the project row
-      // genuinely changed (settings, possibly phase), and every existing
-      // downstream consumer — feeds, detectors, cache invalidation — is
-      // subscribed to `project.update`. A new event name would be invisible to
-      // all of them, which is the "fired into a provably empty receiver set"
-      // defect this codebase has already hit.
-      emitSideEffects({
-        subjectType: "project",
-        action: "update",
-        subjectId: input.projectId,
-        userId: ctx.userId,
-        workspaceId: project.workspaceId ?? undefined,
-      });
-
+      // The SAME stage list every track read draws (malformed jsonb entries
+      // skipped), so this count never disagrees with the track's strip.
+      const stages = deriveTrackStages(
+        result.track.definitionSnapshot?.stages,
+        result.track.currentStage
+      ).length;
       return {
         status: "instantiated" as const,
-        playbookId: playbook.id,
-        playbookVersion: playbook.version,
-        stageCount: stages.length,
-        phase: seedPhase ?? project.phase,
-        /** The project had no phase and one was seeded from `stages[0]`. */
-        phaseSeeded: seedPhase !== undefined,
-        /** The project already had a phase and it was LEFT ALONE. */
+        trackId: result.track.id,
+        /** `started` — a new track; `exists` — this method already runs here. */
+        trackStatus: result.status,
+        playbookId: result.playbook.id,
+        playbookVersion: result.playbook.version,
+        stageCount: stages,
+        phase: project.phase,
+        phaseSeeded: false,
         phaseKept: !!project.phase,
       };
     }),

@@ -105,7 +105,11 @@ describe("playbooks.list — pod-wide", () => {
 
     const rows = await playbooksRouter.createCaller(noWorkspaceCtx()).list({});
 
-    expect(rows).toEqual([{ id: "pb-1", name: "Pod-wide playbook" }]);
+    // `projectsUsingCount` is additive (tracks, 0272): a playbook that is not
+    // a project-scoped method is used by 0 projects, read with no query.
+    expect(rows).toEqual([
+      { id: "pb-1", name: "Pod-wide playbook", projectsUsingCount: 0 },
+    ]);
     expect(mockAccessFrom).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1" })
     );

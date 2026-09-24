@@ -9,6 +9,7 @@ import {
   db,
   eq,
   and,
+  or,
   inArray,
   isNull,
   sql,
@@ -26,7 +27,12 @@ import {
   skills,
   tools,
 } from "@synap/database";
-import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
+import {
+  ownerPrivateVisibleWhere,
+  userVisibleWhere,
+} from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import {
   proposalClassFields,
   type ProposalClassFields,
@@ -85,6 +91,11 @@ import {
   createNameResolvers,
   stringProp,
   displayNameForUser,
+  linkEndpointsFromPayload,
+  resolveLinkEndpointName,
+  referencedNameIds,
+  type LinkEndpointNameContext,
+  type ReferencedNameIds,
 } from "./helper-functions.js";
 
 // Re-exported so existing external import sites (`routers/proposals.ts`,
@@ -237,6 +248,9 @@ type DisplayEnrichedProposal = ProposalRow &
     workspaceName?: string;
     channelName?: string;
     agentName?: string;
+    /** Name of the channel the proposal was filed from (`thread_id`, read by
+     * the frontend as `originChannelId`), when the viewer may see it. */
+    originChannelName?: string;
     review: ProposalReviewModel;
   };
 
@@ -265,12 +279,31 @@ export async function enrichProposalsForDisplay(
   // (isNew:false) — composite create_entity ops that link a PRE-EXISTING entity
   // (`existingEntityId`) rather than minting a new one. Batch-joined below.
   const existingRoleEntityIds: string[] = [];
+  // `/links`-door proposals (POST /links, synap_project_use_workspace) carry
+  // `data.fromType`/`fromId`/`toType`/`toId` — the polymorphic endpoint pair
+  // the frontend's `sourceLabel`/`targetLabel` (same fields the relation path
+  // above already populates) resolve names onto. Collected here, by endpoint
+  // TYPE, so each type's id list can ride the SAME batched join that type
+  // already has below (entity/session/playbook/project/automation/workspace/
+  // channel/tool/skill/agent) — never a second, ungated read.
+  const linkEndpointIdsByType = new Map<string, string[]>();
+  const collectLinkEndpointId = (type: string, id: string): void => {
+    if (!isLikelyUUID(id)) return;
+    const bucket = linkEndpointIdsByType.get(type);
+    if (bucket) bucket.push(id);
+    else linkEndpointIdsByType.set(type, [id]);
+  };
   rows.forEach((row, idx) => {
     const request = requests[idx]!;
     const payload =
       request.data && typeof request.data === "object"
         ? (request.data as Record<string, unknown>)
         : undefined;
+    const linkEndpoint = linkEndpointsFromPayload(row, payload);
+    if (linkEndpoint) {
+      collectLinkEndpointId(linkEndpoint.fromType, linkEndpoint.fromId);
+      collectLinkEndpointId(linkEndpoint.toType, linkEndpoint.toId);
+    }
     const src = stringProp(payload, "sourceEntityId");
     const tgt = stringProp(payload, "targetEntityId");
     if (src && isLikelyUUID(src)) relationEndpointIds.push(src);
@@ -312,6 +345,7 @@ export async function enrichProposalsForDisplay(
       .map((request) => request.targetId)
       .filter(isLikelyUUID),
     ...relationEndpointIds,
+    ...(linkEndpointIdsByType.get("entity") ?? []),
   ]);
   /**
    * DOCUMENT titles — the target type with no path to a name at all.
@@ -330,16 +364,17 @@ export async function enrichProposalsForDisplay(
    * document title to every reviewer. A document the viewer may not see simply
    * resolves to no name and the fallback title is kept — never fabricated.
    */
-  const documentIds = uniqueStrings(
-    requests
+  const documentIds = uniqueStrings([
+    ...requests
       .filter((request) => request.targetType === "document")
       .map((request) => request.targetId)
-      .filter(isLikelyUUID)
-  );
+      .filter(isLikelyUUID),
+    ...(linkEndpointIdsByType.get("document") ?? []),
+  ]);
   const uniqueFacetIds = uniqueStrings(facetIds);
   const uniqueRoleEntityIds = uniqueStrings(existingRoleEntityIds);
-  const userIds = uniqueStrings(
-    rows.flatMap((row, idx) => [
+  const userIds = uniqueStrings([
+    ...rows.flatMap((row, idx) => [
       row.agentUserId ?? undefined,
       row.createdBy ?? undefined,
       requests[idx]?.sourceId || undefined,
@@ -347,8 +382,9 @@ export async function enrichProposalsForDisplay(
       // shipped but was never resolved to a name here, so every surface over
       // this projection could say WHO PROPOSED and never WHO APPROVED.
       row.reviewedBy ?? undefined,
-    ])
-  );
+    ]),
+    ...(linkEndpointIdsByType.get("agent") ?? []),
+  ]);
   // correlation_id is a uuid column — clamp to valid uuids so the batch query's
   // ::uuid[] cast can't throw on a legacy non-uuid value.
   const correlationIds = uniqueStrings(
@@ -357,9 +393,43 @@ export async function enrichProposalsForDisplay(
   // Session GOALS for the `sessionId` FK — one batched query for the whole page
   // (never per row). Most proposals carry no session, so the common case pays
   // nothing.
-  const sessionIds = uniqueStrings(
-    rows.map((row) => row.sessionId ?? undefined)
-  ).filter(isLikelyUUID);
+  /**
+   * NAME BATCHES — every id a row names (playbook / project / automation /
+   * skill / tool / workspace / channel, incl. `thread_id` → originChannelName)
+   * comes from ONE derivation, `referencedNameIds`, the same one the resolvers
+   * read, plus the `/links`-door endpoints collected above. Bounded by the page.
+   *
+   * VISIBILITY FLOOR — each batch below is AND-ed with the viewer's canonical
+   * read predicate, so a name resolves only when the viewer could read the row
+   * itself. Without it the page was a NAME ORACLE: `POST /links` (and any
+   * payload an agent authors) can reference an id the agent cannot see, and
+   * listing its own proposals read the name back. An id the viewer may not see
+   * resolves to no name; the surface falls back to the object noun.
+   *   - playbooks / projects / automations / tools / channels → the table's
+   *     registered `VisibilityRule` via `scopedDb(access).predicate(table)`;
+   *   - workspaces → `userVisibleWhere(workspaces.id)` (member / owner /
+   *     pod-visible — the workspace-accessibility floor itself);
+   *   - skills → `visibleSkillsWhere` (skills have no registry entry; this is
+   *     their canonical read predicate), per proposal workspace.
+   * The access context is user-wide (no lens): visibility, not focus.
+   */
+  const nameIdsByRow: ReferencedNameIds[] = rows.map((row, idx) => {
+    const data = requests[idx]!.data;
+    return referencedNameIds(
+      row,
+      data && typeof data === "object"
+        ? (data as Record<string, unknown>)
+        : undefined
+    );
+  });
+  const namedIds = (key: keyof ReferencedNameIds): string[] =>
+    nameIdsByRow.map((ids) => ids[key]).filter((id): id is string => !!id);
+  const nameAccess = scopedDb(AccessContext.operator({ userId }));
+
+  const sessionIds = uniqueStrings([
+    ...rows.map((row) => row.sessionId ?? undefined),
+    ...(linkEndpointIdsByType.get("session") ?? []),
+  ]).filter(isLikelyUUID);
 
   const eventRepo = new EventRepository(sql);
   const [
@@ -539,21 +609,10 @@ export async function enrichProposalsForDisplay(
       : Promise.resolve([] as Array<{ id: string; title: string }>),
     // Playbooks — for playbookId in session, project, playbook proposals
     (() => {
-      const playbookIds = uniqueStrings(
-        requests
-          .filter((r) =>
-            ["session", "project", "playbook"].some((t) =>
-              r.proposalType.startsWith(t + "/")
-            )
-          )
-          .flatMap((r) =>
-            [
-              r.data?.playbookId as string | null | undefined,
-              r.data?.templateId as string | null | undefined,
-              r.data?.playbookId as string | null | undefined,
-            ].filter(Boolean)
-          )
-      );
+      const playbookIds = uniqueStrings([
+        ...namedIds("playbook"),
+        ...(linkEndpointIdsByType.get("playbook") ?? []),
+      ]);
       return playbookIds.length > 0
         ? db
             .select({
@@ -562,23 +621,22 @@ export async function enrichProposalsForDisplay(
               goalTemplate: playbooks.goalTemplate,
             })
             .from(playbooks)
-            .where(inArray(playbooks.id, playbookIds))
+            .where(
+              and(
+                inArray(playbooks.id, playbookIds),
+                nameAccess.predicate(playbooks)
+              )
+            )
         : Promise.resolve(
             [] as Array<{ id: string; name: string; goalTemplate: string }>
           );
     })(),
     // Projects — for projectId in session, project proposals
     (() => {
-      const projectIds = uniqueStrings(
-        requests
-          .filter((r) =>
-            ["session", "project"].some((t) =>
-              r.proposalType.startsWith(t + "/")
-            )
-          )
-          .map((r) => r.data?.projectId as string | null | undefined)
-          .filter(Boolean)
-      );
+      const projectIds = uniqueStrings([
+        ...namedIds("project"),
+        ...(linkEndpointIdsByType.get("project") ?? []),
+      ]);
       return projectIds.length > 0
         ? db
             .select({
@@ -587,19 +645,22 @@ export async function enrichProposalsForDisplay(
               description: projects.description,
             })
             .from(projects)
-            .where(inArray(projects.id, projectIds))
+            .where(
+              and(
+                inArray(projects.id, projectIds),
+                nameAccess.predicate(projects)
+              )
+            )
         : Promise.resolve(
             [] as Array<{ id: string; name: string; description: string }>
           );
     })(),
     // Automations — for automationId in automation/execute, automation/activate
     (() => {
-      const automationIds = uniqueStrings(
-        requests
-          .filter((r) => r.proposalType.startsWith("automation/"))
-          .map((r) => r.data?.automationId as string | null | undefined)
-          .filter(Boolean)
-      );
+      const automationIds = uniqueStrings([
+        ...namedIds("automation"),
+        ...(linkEndpointIdsByType.get("automation") ?? []),
+      ]);
       return automationIds.length > 0
         ? db
             .select({
@@ -607,21 +668,37 @@ export async function enrichProposalsForDisplay(
               name: automations.name,
             })
             .from(automations)
-            .where(inArray(automations.id, automationIds))
+            .where(
+              and(
+                inArray(automations.id, automationIds),
+                nameAccess.predicate(automations)
+              )
+            )
         : Promise.resolve([] as Array<{ id: string; name: string }>);
     })(),
     // Capabilities/Skills — for capabilityId/skillId in capability_run
     (() => {
-      const capabilityIds = uniqueStrings(
-        requests
-          .filter((r) => r.proposalType === "capability.run")
-          .flatMap((r) =>
-            [
-              r.data?.capabilityId as string | null | undefined,
-              r.data?.skillId as string | null | undefined,
-              r.data?.toolId as string | null | undefined,
-            ].filter(Boolean)
-          )
+      const capabilityIds = uniqueStrings([
+        ...namedIds("skill"),
+        // `/links`-door "skill" and "capability" endpoints both resolve
+        // through `skills` — mirrors `resolveLinkEndpointName`'s skill-first
+        // fallback for type "capability".
+        ...(linkEndpointIdsByType.get("skill") ?? []),
+        ...(linkEndpointIdsByType.get("capability") ?? []),
+      ]);
+      // Workspace-scoped skills are visible only under a named workspace, so
+      // the floor is the union of `visibleSkillsWhere` over the page's
+      // proposal workspaces (plus the no-workspace tiers: pod + own user).
+      // `includeExpired`: this is a display NAME, not enforcement — an expired
+      // rule must stay nameable, exactly as the owner-facing rule doors do.
+      const skillWorkspaceIds = uniqueStrings(
+        rows.map((row) => row.workspaceId)
+      ).filter(isLikelyUUID);
+      const skillFloor = or(
+        visibleSkillsWhere(userId, undefined, { includeExpired: true }),
+        ...skillWorkspaceIds.map((ws) =>
+          visibleSkillsWhere(userId, ws, { includeExpired: true })
+        )
       );
       return capabilityIds.length > 0
         ? db
@@ -631,19 +708,18 @@ export async function enrichProposalsForDisplay(
               slug: skills.slug,
             })
             .from(skills)
-            .where(inArray(skills.id, capabilityIds))
+            .where(and(inArray(skills.id, capabilityIds), skillFloor))
         : Promise.resolve(
             [] as Array<{ id: string; name: string; slug: string }>
           );
     })(),
     // Tools — for toolId in capability_run (built-in tool calls)
     (() => {
-      const toolIds = uniqueStrings(
-        requests
-          .filter((r) => r.proposalType === "capability.run")
-          .map((r) => r.data?.toolId as string | null | undefined)
-          .filter(Boolean)
-      );
+      const toolIds = uniqueStrings([
+        ...namedIds("tool"),
+        ...(linkEndpointIdsByType.get("tool") ?? []),
+        ...(linkEndpointIdsByType.get("capability") ?? []),
+      ]);
       return toolIds.length > 0
         ? db
             .select({
@@ -651,17 +727,15 @@ export async function enrichProposalsForDisplay(
               name: tools.name,
             })
             .from(tools)
-            .where(inArray(tools.id, toolIds))
+            .where(and(inArray(tools.id, toolIds), nameAccess.predicate(tools)))
         : Promise.resolve([] as Array<{ id: string; name: string }>);
     })(),
     // Workspaces — for workspaceId in workspace proposals
     (() => {
-      const workspaceIds = uniqueStrings(
-        requests
-          .filter((r) => r.proposalType.startsWith("workspace/"))
-          .map((r) => r.data?.workspaceId as string | null | undefined)
-          .filter(Boolean)
-      );
+      const workspaceIds = uniqueStrings([
+        ...namedIds("workspace"),
+        ...(linkEndpointIdsByType.get("workspace") ?? []),
+      ]);
       return workspaceIds.length > 0
         ? db
             .select({
@@ -669,17 +743,22 @@ export async function enrichProposalsForDisplay(
               name: workspaces.name,
             })
             .from(workspaces)
-            .where(inArray(workspaces.id, workspaceIds))
+            .where(
+              and(
+                inArray(workspaces.id, workspaceIds),
+                userVisibleWhere(workspaces.id, userId)
+              )
+            )
         : Promise.resolve([] as Array<{ id: string; name: string }>);
     })(),
-    // Channels — for channelId in governance_tighten_posture
+    // Channels — channelId in governance.tighten_posture, every row's
+    // originating thread (`thread_id` → originChannelName), `/links` endpoints
     (() => {
-      const channelIds = uniqueStrings(
-        requests
-          .filter((r) => r.proposalType === "governance.tighten_posture")
-          .map((r) => r.data?.channelId as string | null | undefined)
-          .filter(Boolean)
-      );
+      const channelIds = uniqueStrings([
+        ...namedIds("channel"),
+        ...namedIds("originChannel"),
+        ...(linkEndpointIdsByType.get("channel") ?? []),
+      ]);
       return channelIds.length > 0
         ? db
             .select({
@@ -687,7 +766,12 @@ export async function enrichProposalsForDisplay(
               title: channels.title,
             })
             .from(channels)
-            .where(inArray(channels.id, channelIds))
+            .where(
+              and(
+                inArray(channels.id, channelIds),
+                nameAccess.predicate(channels)
+              )
+            )
         : Promise.resolve([] as Array<{ id: string; title: string }>);
     })(),
   ]);
@@ -1009,6 +1093,50 @@ export async function enrichProposalsForDisplay(
         };
       }
     }
+    // `/links`-door proposals (POST /links, synap_project_use_workspace) carry
+    // `data.fromType`/`fromId`/`toType`/`toId` instead of `sourceEntityId`/
+    // `targetEntityId` — resolved onto the SAME `sourceLabel`/`targetLabel`
+    // fields the relation-endpoint block above populates, so the frontend
+    // reads one pair of keys regardless of which door filed the proposal.
+    // Entity endpoints go through the workspace-lens-scoped
+    // `resolveEntityTitleScoped`, same as every other entity title on this
+    // row; every other type resolves through the SAME batched maps that
+    // type's own resolver above already reads (never a second, ungated read).
+    // An unresolvable or unknown-type endpoint leaves its label undefined —
+    // the frontend falls back to the object noun, never a raw id.
+    const linkEndpoint = linkEndpointsFromPayload(row, payload);
+    if (linkEndpoint) {
+      const linkNameCtx: LinkEndpointNameContext = {
+        resolveEntityTitle: resolveEntityTitleScoped,
+        sessionTitleById: sessionGoalById,
+        playbookById,
+        projectById,
+        automationById,
+        workspaceById,
+        channelById,
+        toolById,
+        skillById,
+        documentTitleById,
+        userById,
+      };
+      const srcLabel = resolveLinkEndpointName(
+        linkEndpoint.fromType,
+        linkEndpoint.fromId,
+        linkNameCtx
+      );
+      const tgtLabel = resolveLinkEndpointName(
+        linkEndpoint.toType,
+        linkEndpoint.toId,
+        linkNameCtx
+      );
+      if (srcLabel || tgtLabel) {
+        enrichedData = {
+          ...enrichedData,
+          ...(srcLabel ? { sourceLabel: srcLabel } : {}),
+          ...(tgtLabel ? { targetLabel: tgtLabel } : {}),
+        };
+      }
+    }
     // "Start {playbook} for {subject}" — the focus_session's subject entity,
     // batch-joined above alongside the relation endpoints. `projectName`
     // (resolved separately, below) is the caller's fallback when a session
@@ -1150,6 +1278,9 @@ export async function enrichProposalsForDisplay(
         : {}),
       ...(nameResolvers.resolveAgentName(row, payload)
         ? { agentName: nameResolvers.resolveAgentName(row, payload)! }
+        : {}),
+      ...(nameResolvers.resolveOriginChannelName(row)
+        ? { originChannelName: nameResolvers.resolveOriginChannelName(row)! }
         : {}),
       request: {
         ...request,

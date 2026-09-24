@@ -40,6 +40,7 @@ import { registerRuleExecutors } from "./executors/rule.js";
 import { registerAutomationExecutors } from "./executors/automation.js";
 import { registerPlaybookExecutors } from "./executors/playbook.js";
 import { registerPlaybookStageGateExecutors } from "./executors/playbook-stage-gate.js";
+import { registerTrackExecutors } from "./executors/track.js";
 import { registerCellExecutors } from "./executors/cell.js";
 import { registerWorkspaceExecutors } from "./executors/workspace.js";
 import { registerMessagingExecutors } from "./executors/messaging.js";
@@ -80,6 +81,7 @@ export function registerApproveExecutors(): void {
   registerAutomationExecutors();
   registerPlaybookExecutors();
   registerPlaybookStageGateExecutors();
+  registerTrackExecutors();
   registerCellExecutors();
   registerWorkspaceExecutors();
   registerMessagingExecutors();

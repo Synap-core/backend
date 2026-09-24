@@ -264,6 +264,8 @@ describe("an agent can only PROPOSE a filing", () => {
     expect(call.forcePropose).toBe(true);
     const gate = call.data as Record<string, unknown>;
     expect(gate.projectId).toBe(projectId);
+    // Display-only name so the proposal title can say WHERE (never applied).
+    expect(gate.projectName).toBe("Synap");
     expect(await projectOf(sessionId)).toBeNull();
 
     await approve(sessionId, gate);

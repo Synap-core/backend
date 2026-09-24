@@ -74,6 +74,12 @@ const CreatePlaybookBodySchema = z.object({
     .describe(
       "Only after a CONFLICT naming an overlapping playbook. Creates anyway."
     ),
+  scope: z
+    .enum(["session", "project"])
+    .optional()
+    .describe(
+      "session (default) = a template for one focus session; project = a METHOD a project runs as a track."
+    ),
   agentUserId: z.string().optional(),
 });
 
@@ -90,6 +96,18 @@ const RunPlaybookBodySchema = z.object({
   agentIds: z.array(z.string()).optional(),
   reasoning: z.string().optional(),
   agentUserId: z.string().optional(),
+  projectId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe("File the run into this project (must be visible to you)."),
+  trackId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe(
+      "File the run inside this track (a method running in a project). Implies its project."
+    ),
 });
 
 const PlaybookResultSchema = z.record(z.string(), z.unknown());
@@ -278,7 +296,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
   /**
    * POST /playbooks
    * Body: { workspaceId, name, goalTemplate, description?, stages?, status?,
-   *         subjectProfile?, forceCreate?, agentUserId? }
+   *         subjectProfile?, forceCreate?, scope?, agentUserId? }
    */
   app.post("/playbooks", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -308,6 +326,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
             ? { subjectProfile: body.subjectProfile }
             : {}),
           ...(body.forceCreate ? { forceCreate: true } : {}),
+          ...(body.scope ? { scope: body.scope } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -426,7 +445,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
 
   /**
    * POST /playbooks/:id/run
-   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId? }
+   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId? }
    */
   app.post("/playbooks/:id/run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -455,6 +474,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           params: body.params,
           agentIds: body.agentIds,
           reasoning: body.reasoning,
+          projectId: body.projectId,
+          trackId: body.trackId,
           source: "hub-rest",
         }
       );

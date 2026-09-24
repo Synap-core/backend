@@ -24,7 +24,11 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { resolveTool } from "../tools/resolve-tool.js";
-import type { SyncCounts, SyncPhase } from "./sync-kind-registry.js";
+import type {
+  SyncCounts,
+  SyncFailure,
+  SyncPhase,
+} from "./sync-kind-registry.js";
 
 const LEASE_MS = 15 * 60_000;
 
@@ -41,6 +45,11 @@ export interface KindSyncState {
   counts?: SyncCounts;
   proposalId?: string | null;
   error?: string | null;
+  /**
+   * The CLASS of `error` and where its fix lives. Never outlives `error`:
+   * `patchKindState` clears it whenever a patch clears `error`.
+   */
+  failure?: SyncFailure | null;
   leaseUntil?: string | null;
 }
 
@@ -95,13 +104,26 @@ function withKindState(
     true)`;
 }
 
+/**
+ * A failure class describes an error; it must never survive the error it
+ * describes. Applied at the one write door (`patchKindState`) rather than at
+ * each of the runner's `error: null` sites, so a new clear site cannot forget
+ * it. Exported so a test that stubs the store can keep the same rule.
+ */
+export function normalizeKindStatePatch(patch: KindSyncState): KindSyncState {
+  return patch.error === null && !("failure" in patch)
+    ? { ...patch, failure: null }
+    : patch;
+}
+
 export async function patchKindState(
   key: KindStateKey,
   patch: KindSyncState
 ): Promise<void> {
+  const normalized = normalizeKindStatePatch(patch);
   await db
     .update(tools)
-    .set({ metadata: withKindState(key.kind, key.connectionId, patch) })
+    .set({ metadata: withKindState(key.kind, key.connectionId, normalized) })
     .where(eq(tools.id, key.toolId));
 }
 

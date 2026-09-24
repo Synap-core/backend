@@ -42,7 +42,6 @@ import {
   FeedScope,
   ChannelStatus,
   MessageRole,
-  users,
   workspaceMembers,
   workspaces,
   projects,
@@ -51,6 +50,7 @@ import {
   agents,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
+import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 
 import { validateExternalUrl, safeExternalFetch } from "@synap/shared-utils";
 
@@ -513,66 +513,8 @@ export async function ensureAgentUser(
   userId: string,
   workspaceId: string
 ): Promise<string> {
-  // 1. Find existing pod-wide personal agent (no workspace filter)
-  const [existing] = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(
-      and(
-        eq(users.userType, "agent"),
-        eq(users.createdByUserId, userId),
-        eq(users.isPersonalAgent, true)
-      )
-    )
-    .limit(1);
-
-  let resolvedAgentId: string;
-
-  if (!existing) {
-    // 2a. Create the pod-wide personal agent user
-    const newId = randomUUID();
-    const shortId = newId.slice(0, 8);
-    try {
-      const [agentUser] = await db
-        .insert(users)
-        .values({
-          id: newId,
-          email: `agent-orchestrator-${shortId}@synap.agent`,
-          userType: "agent",
-          kratosIdentityId: null,
-          createdByUserId: userId,
-          agentType: "orchestrator",
-          isPersonalAgent: true,
-          createdVia: "system",
-          agentMetadata: {
-            createdByUserId: userId,
-            agentType: "orchestrator",
-            isPersonalAgent: true,
-          },
-        })
-        .returning({ id: users.id });
-      resolvedAgentId = agentUser.id;
-    } catch (err) {
-      // DB firewall: a partial unique index on (createdByUserId, agentType) for
-      // personal agents rejects a concurrent insert. Reuse the winner; if nothing
-      // matches, the error wasn't a dedup race — re-throw.
-      const [raced] = await db
-        .select({ id: users.id })
-        .from(users)
-        .where(
-          and(
-            eq(users.userType, "agent"),
-            eq(users.createdByUserId, userId),
-            eq(users.isPersonalAgent, true)
-          )
-        )
-        .limit(1);
-      if (!raced) throw err;
-      resolvedAgentId = raced.id;
-    }
-  } else {
-    resolvedAgentId = existing.id;
-  }
+  // 1–2a. Find or create the pod-wide personal agent (no workspace filter).
+  const resolvedAgentId = await ensurePersonalAgentUser(userId);
 
   // 2b. Ensure workspace membership (idempotent)
   const [existingMembership] = await db

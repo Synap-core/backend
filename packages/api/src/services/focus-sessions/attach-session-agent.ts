@@ -31,6 +31,14 @@
  *     ask about a row only its owner can see). A session that is missing and a
  *     session that is not yours are indistinguishable on purpose.
  *
+ * ROOM ROSTER. When the session has a room, the agent is also enrolled on its
+ * roster (`enrollRoomMember`, idempotent) inside the SAME locked transaction:
+ * session rooms are GROUP rooms where an agent answers only when @-mentioned,
+ * and a mention routes only to a roster member — staffing a session with an
+ * agent the room cannot summon would be the same severance one level down.
+ * Enrolled even when the agent was already on the list (`added: false`), so a
+ * room minted before its roster existed heals on the next attach.
+ *
  * NOT A GOVERNANCE GATE. This door writes; deciding whether an agent MAY write
  * is the caller's job, exactly as it is for `recordSessionSpawn` and the
  * blocked-by producer. The MCP and Hub REST doors run `checkPermissionOrPropose`
@@ -38,7 +46,8 @@
  * session.
  */
 
-import { db, focusSessions, and, eq } from "@synap/database";
+import { db, focusSessions, and, eq, ChannelMemberKind } from "@synap/database";
+import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 
 export interface AttachSessionAgentParams {
   /** The session to staff. */
@@ -69,13 +78,25 @@ export async function attachSessionAgent(
 
   return await db.transaction(async (tx) => {
     const [locked] = await tx
-      .select({ agentIds: focusSessions.agentIds })
+      .select({
+        agentIds: focusSessions.agentIds,
+        channelId: focusSessions.channelId,
+      })
       .from(focusSessions)
       .where(
         and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
       )
       .for("update");
     if (!locked) return { status: "not_found" };
+
+    if (locked.channelId) {
+      await enrollRoomMember(tx, {
+        channelId: locked.channelId,
+        userId: trimmed,
+        memberType: ChannelMemberKind.AI_AGENT,
+        addedBy: userId,
+      });
+    }
 
     const current = Array.isArray(locked.agentIds) ? locked.agentIds : [];
     if (current.includes(trimmed)) {

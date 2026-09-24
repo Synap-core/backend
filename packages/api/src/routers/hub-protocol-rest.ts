@@ -52,6 +52,7 @@ import {
   registerProactiveRoutes,
   registerProfilesRoutes,
   registerProjectsRoutes,
+  registerTracksRoutes,
   registerPackagesRoutes,
   registerProposalsRoutes,
   registerRelationsRoutes,
@@ -294,6 +295,7 @@ registerAgentConfigsRoutes(app); // /agent-configs
 registerViewsRoutes(app); // /views*
 registerProfilesRoutes(app); // /profiles*, /property-defs*
 registerProjectsRoutes(app); // /projects*
+registerTracksRoutes(app); // /tracks*
 registerPackagesRoutes(app); // /packages*
 registerRelationsRoutes(app); // /relations*
 registerLinksRoutes(app); // /links (config/runtime graph; knowledge↔config bridge)

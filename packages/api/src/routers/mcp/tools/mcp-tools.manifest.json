@@ -1027,7 +1027,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. Scope it to a project (projectId) OR a workspace (workspaceId), at least one; project-scoped needs no workspace membership. Work that advances one of a project's METHODS is born inside its track: pass trackId (synap_list_tracks) — it implies the project. Give it a short `title` (the name) and a `goal` (the outcome). To decompose work, start a root session, then start each sub-session with parentSessionId = the root; declare ordering with blockedBySessionIds instead of writing the dependency chain into the goal. The result reports `parentLink` and `blockerLinks` — a failed edge is reported there, never silently dropped. If an open session with the same goal already exists in this scope, the existing one is returned with status 'deduped' — continue it instead of starting another. DEFAULTS: your writes are grouped into a session automatically even if you never call this; calling it when you begin a unit of work names that session (if one was auto-opened for you it is ADOPTED — `adopted: true`, same id, never a duplicate). FETCH THE POD'S PROCESSES FIRST: with no templateId, the result's `playbooks` block hands you the pod's existing playbooks ranked against your title+goal, each with the `reason` it matched — suggestions only, NOTHING is applied. If one fits, start again with that `templateId` (the only way a playbook binds); if none does, carry on ad-hoc deliberately. Pass templateId: null to skip matching entirely. PROPOSE `criteria` — two to five binary, observable statements — and let the person validate or rewrite them; declaring none leaves you nothing to report progress against but your own opinion. Declare `expectedOutputs` for what the session will produce, so 'done' is derivable from unfilled slots rather than announced as a percentage. A detour that has to happen first is a CHILD session: `parentSessionId` plus `suspendedIntent`, one line naming what you were about to do, so popping back restates the goal.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1051,6 +1051,10 @@
           "projectId": {
             "type": "string",
             "description": "Project ID the session belongs to. Optional — provide this OR workspaceId (at least one is required). A project-scoped session needs no workspace membership."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Optional track UUID (synap_list_tracks) — the method, inside a project, this session advances. Implies its project; a different projectId is refused."
           },
           "subjectEntityId": {
             "type": "string",
@@ -1902,7 +1906,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
+      "description": "Create a reusable playbook (staged process/session template) for a repeatable workflow — discoverable via synap_list_playbooks, launched via synap_run_playbook. goalTemplate may contain {{param}} placeholders. Pass scope: \"project\" to create a METHOD — a long-running staged process a project runs as a TRACK (start it with synap_start_track); the default \"session\" is a template for one focus session. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1982,6 +1986,11 @@
           "forceCreate": {
             "type": "boolean",
             "description": "Only after a CONFLICT naming an overlapping playbook. The pod refuses a near-twin name so processes don't silently fork. Read the candidates it named; set this ONLY if a separate playbook is genuinely right."
+          },
+          "scope": {
+            "type": "string",
+            "enum": ["session", "project"],
+            "description": "What the playbook instantiates. 'session' (default): a template for ONE bounded focus session. 'project': a METHOD a project runs as a track (synap_start_track) — its stages are the project's long-running phases."
           }
         },
         "required": ["name", "goalTemplate"]
@@ -2597,7 +2606,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List the projects (cross-cutting initiatives) you can see, pod-wide, newest first — call this to find a project id before reading, updating or linking it. Each row: id, name, description, status, phase, phaseCategory, targetDate, homeWorkspaceId, usedWorkspaceIds (domains it runs through) and its subject. Paginated: { items, pagination: { hasMore, limit, offset } }. Full read: synap_get_project.",
+      "description": "List the projects (cross-cutting initiatives) you can see, pod-wide, newest first — call this to find a project id before reading, updating or linking it. Each row: id, name, description, status, phase, phaseCategory (legacy label; method position lives on tracks: synap_list_tracks), targetDate, homeWorkspaceId, usedWorkspaceIds (domains it runs through) and its subject. Paginated: { items, pagination: { hasMore, limit, offset } }. Full read: synap_get_project.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2643,6 +2652,118 @@
       }
     },
     {
+      "name": "synap_list_tracks",
+      "annotations": {
+        "title": "List tracks",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "List a project's TRACKS — the methods it is running (e.g. 'Business model', 'Content', 'Build' inside one project). Each track follows one project-scoped playbook (its method), pinned at the version it started with. Each row: id, name, playbookId, methodVersion, status (active|paused|completed|archived), pausedBy (check|human|null — why a paused track is held), currentStage and stages [{ key, name, position: done|active|not_started }]. Archived tracks are omitted unless includeArchived. Find the project id with synap_list_projects.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "Project UUID"
+          },
+          "includeArchived": {
+            "type": "boolean",
+            "description": "Also list archived tracks. Default false."
+          }
+        },
+        "required": ["projectId"]
+      }
+    },
+    {
+      "name": "synap_start_track",
+      "annotations": {
+        "title": "Start track",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Start a METHOD on a project as a new track. The method is a playbook with scope 'project' (find one with synap_list_playbooks); a session-scoped playbook is REFUSED — start it as a session instead. Idempotent: if that method already runs on the project, the existing track comes back with status='exists'. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "projectId": {
+            "type": "string",
+            "description": "Project UUID"
+          },
+          "playbookId": {
+            "type": "string",
+            "description": "UUID of a project-scoped playbook (the method)."
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional display name; defaults to the method's name."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are starting it, in the person's words — shown to the reviewer. One line."
+          }
+        },
+        "required": ["projectId", "playbookId"]
+      }
+    },
+    {
+      "name": "synap_advance_track",
+      "annotations": {
+        "title": "Advance track",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a completed/archived track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply), a check gate holds the track paused (pausedBy='check') until resumed with synap_set_track_status status='active'. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "toStage": {
+            "type": "string",
+            "description": "The stage KEY to move to (not its display name)."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why the work moves to this stage — shown to the reviewer. One line."
+          }
+        },
+        "required": ["trackId", "toStage"]
+      }
+    },
+    {
+      "name": "synap_set_track_status",
+      "annotations": {
+        "title": "Set track status",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Pause, resume, complete, reopen or archive a track. Allowed moves: active → paused|completed|archived; paused → active|completed|archived; completed → active|archived; archived is FINAL (start the method again with synap_start_track). Resuming (status='active') releases a track a check gate held (pausedBy='check'). A move the table does not allow is refused with the reason. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "status": {
+            "type": "string",
+            "enum": ["active", "paused", "completed", "archived"],
+            "description": "The status to move the track to."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why the track changes status — shown to the reviewer. One line."
+          }
+        },
+        "required": ["trackId", "status"]
+      }
+    },
+    {
       "name": "synap_update_project",
       "annotations": {
         "title": "Update project",
@@ -2670,7 +2791,7 @@
           },
           "phase": {
             "type": ["string", "null"],
-            "description": "Lifecycle position (free text, ≤120 chars, e.g. 'wedge A' or a playbook stage key). null clears it; omit to leave it."
+            "description": "Legacy lifecycle label (free text, ≤120 chars). Superseded by tracks for method position: use synap_list_tracks / synap_advance_track. null clears it; omit to leave it."
           },
           "targetDate": {
             "type": ["string", "null"],
@@ -3741,6 +3862,14 @@
           "workspaceId": {
             "type": "string",
             "description": "Write workspace for the run. Optional when the playbook is already workspace-scoped; required for pod-wide playbooks unless subject/session supplies a home. Never falls back to an arbitrary membership."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Optional project UUID to file the run into. Must be a project you can see."
+          },
+          "trackId": {
+            "type": "string",
+            "description": "Optional track UUID (synap_list_tracks) — the method, inside a project, this run advances. Implies its project; a different projectId is refused."
           }
         },
         "required": []

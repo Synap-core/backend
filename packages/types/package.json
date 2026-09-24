@@ -40,6 +40,10 @@
       "types": "./dist/units/index.d.ts",
       "import": "./dist/units/index.js"
     },
+    "./projects": {
+      "types": "./dist/projects/index.d.ts",
+      "import": "./dist/projects/index.js"
+    },
     "./vocabulary": {
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"

@@ -102,6 +102,12 @@ export async function createPlaybookDoor(
      * CONFLICT forever.
      */
     forceCreate?: boolean;
+    /**
+     * What the playbook instantiates (`playbooks.create` `scope`, 0240):
+     * `session` (default) or `project` — a METHOD a project runs as a TRACK
+     * (0272). Without this, no agent door could create the thing a track runs.
+     */
+    scope?: "session" | "project";
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -135,6 +141,7 @@ export async function createPlaybookDoor(
     agentUserId: identity.agentUserId,
     ...(input.subjectProfile ? { subjectProfile: input.subjectProfile } : {}),
     ...(input.forceCreate ? { forceCreate: true } : {}),
+    ...(input.scope ? { scope: input.scope } : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }
@@ -150,6 +157,9 @@ export async function runPlaybookDoor(
     params?: Record<string, unknown>;
     agentIds?: string[];
     reasoning?: string;
+    /** File the run into this project / track (validated by `playbooks.run`). */
+    projectId?: string;
+    trackId?: string;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -258,6 +268,8 @@ export async function runPlaybookDoor(
     params: input.params,
     subjectId: input.subjectId,
     agentIds: input.agentIds,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.trackId ? { trackId: input.trackId } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,

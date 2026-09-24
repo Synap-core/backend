@@ -60,6 +60,24 @@ export type BrokerConnectionResult =
       error: string;
     };
 
+/**
+ * A pod-side sync failure, reported to whoever operates the broker. Carries the
+ * CLASS and the message — never record content — and the pod's own opaque
+ * connection row id, so an operator can find it without a user ticket.
+ */
+export interface SyncFailureReport {
+  provider: string;
+  kind: string;
+  connectionId: string;
+  /** A `FailureErrorClass` token (`@synap-core/types/failures`). */
+  errorClass: string;
+  message: string;
+}
+
+/** `sent: false` = this broker has no operator to tell (self-hosted). */
+export type SyncFailureReportResult =
+  { sent: true } | { sent: false; reason: "no-operator" };
+
 export interface ConnectionBroker {
   readonly mode: BrokerMode;
   /** The user's live connections — a failed read is `ok:false`, never `[]`. */
@@ -92,4 +110,11 @@ export interface ConnectionBroker {
   dedupeConnections(userId: string, provider: string): Promise<string[]>;
   /** Public Connect URL for browser use, when the broker exposes one. */
   getConnectUrl(): string | null;
+  /**
+   * Tell the broker's operator a sync failed. Throws when a report that should
+   * have been delivered was not; `sent:false` only when there is no operator.
+   */
+  reportSyncFailure(
+    report: SyncFailureReport
+  ): Promise<SyncFailureReportResult>;
 }

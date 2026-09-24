@@ -27,6 +27,12 @@ import {
   assertWorkspaceUsable,
 } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
+import { loadVisibleProject } from "../services/projects/load-visible-project.js";
+import {
+  countProjectsUsingMethod,
+  countProjectsUsingMethods,
+  resolveTrackFiling,
+} from "../services/tracks/tracks-service.js";
 import {
   getDb,
   eq,
@@ -1250,7 +1256,7 @@ export const playbooksRouter = router({
       const database = await getDb();
       const visibility = scopedDb(AccessContext.from(ctx)).predicate(playbooks);
 
-      return database
+      const rows = await database
         .select()
         .from(playbooks)
         .where(
@@ -1263,6 +1269,21 @@ export const playbooksRouter = router({
         )
         .orderBy(desc(playbooks.createdAt), asc(playbooks.id))
         .limit(input?.limit ?? 50);
+      // How many (visible) projects run each METHOD as a track — ONE grouped
+      // query for the whole page, never one per row. 0 for a playbook no
+      // project runs, which includes every session-scoped playbook.
+      const usage = await countProjectsUsingMethods(
+        rows.filter((r) => r.scope === "project").map((r) => r.id),
+        {
+          userId: ctx.userId,
+          agentUserId: ctx.agentUserId,
+          isHubProtocol: ctx.isHubProtocol,
+        }
+      );
+      return rows.map((r) => ({
+        ...r,
+        projectsUsingCount: usage.get(r.id) ?? 0,
+      }));
     }),
 
   /**
@@ -1557,7 +1578,18 @@ export const playbooksRouter = router({
         });
       }
 
-      return row;
+      return {
+        ...row,
+        /** Visible projects running this method as a track (0 unless project-scoped). */
+        projectsUsingCount:
+          row.scope === "project"
+            ? await countProjectsUsingMethod(row.id, {
+                userId: ctx.userId,
+                agentUserId: ctx.agentUserId,
+                isHubProtocol: ctx.isHubProtocol,
+              })
+            : 0,
+      };
     }),
 
   /**
@@ -2440,6 +2472,14 @@ export const playbooksRouter = router({
          * `data` so an approved run keeps its lineage too.
          */
         parentSessionId: z.string().uuid().optional(),
+        /**
+         * File the run into a PROJECT and, optionally, a TRACK (a method
+         * running in that project, 0272). A track names its own project; a
+         * mismatch is refused. Validated before anything is proposed or run
+         * (`resolveTrackFiling`), and again inside `runPlaybook` on replay.
+         */
+        projectId: z.string().uuid().optional(),
+        trackId: z.string().uuid().optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
         /**
@@ -2551,12 +2591,38 @@ export const playbooksRouter = router({
         };
       }
 
+      // FILING — refuse a bad project/track BEFORE a proposal is filed for a
+      // run that could never land where it says. A track names its project.
+      let filedProjectId = input.projectId;
+      if (input.trackId) {
+        filedProjectId = (
+          await resolveTrackFiling({
+            trackId: input.trackId,
+            projectId: input.projectId ?? null,
+            actor: { userId: ctx.userId },
+          })
+        ).projectId;
+      } else if (input.projectId) {
+        const visible = await loadVisibleProject(
+          database,
+          input.projectId,
+          ctx.userId
+        );
+        if (!visible) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Project not found",
+          });
+        }
+      }
+
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
         workspaceId: runWorkspaceId,
         subjectType: "playbook",
         action: "run",
+        ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,
         /**
@@ -2586,6 +2652,8 @@ export const playbooksRouter = router({
           ...(input.parentSessionId
             ? { parentSessionId: input.parentSessionId }
             : {}),
+          ...(filedProjectId ? { projectId: filedProjectId } : {}),
+          ...(input.trackId ? { trackId: input.trackId } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2621,6 +2689,8 @@ export const playbooksRouter = router({
         ...(input.parentSessionId
           ? { parentSessionId: input.parentSessionId }
           : {}),
+        ...(filedProjectId ? { projectId: filedProjectId } : {}),
+        ...(input.trackId ? { trackId: input.trackId } : {}),
         ...(input.onMissingRequired
           ? { onMissingRequired: input.onMissingRequired }
           : {}),

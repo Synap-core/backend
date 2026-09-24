@@ -6,7 +6,7 @@
 synap market install crm                        # install as a new workspace
 synap market install crm --dry-run               # preview: would-create / reuse / conflicts, writes nothing
 synap market install crm --onto <workspaceId>     # reconcile ONTO an existing workspace (additive)
-synap market install crm --project <id>           # tag seeded entities to a project (install stays pod-wide)
+synap market install crm --project <id>           # link the installed workspace(s) to an EXISTING project (id only)
 ```
 
 Installs are **workspace-first**: a `workspace`/`template` package spins up
@@ -37,40 +37,54 @@ never treat a non-"installed" response as failure:
 they can approve it — don't retry, don't report it as a failure. See
 `governance-and-catalog.md`.
 
-## Project packs — install a workspace pack onto a project
+## Project packs — a suite of workspaces, linked to a project
 
-A **project** is a cross-cutting lens over workspaces. A project pack is a
-workspace/template package that installs its workspaces and links them to a
-project. The project is **not** created by the install — create it first, then
-install and link.
+A **project** is a cross-cutting lens over workspaces, not a package kind. A
+"project pack" is a **suite**: an ordinary `workspace`-category package tagged
+`suite`, whose `dependencies[]` **`require`** each constituent workspace package
+(never `compose` — re-applying must not duplicate workspaces). Installing a
+suite installs every constituent workspace (idempotent: reused if present).
 
-```bash
-# 1. Create the project (human: direct; agent: proposes)
-synap_create_project { name: "Acme", description: "…" }
-
-# 2. Install the pack onto it
-synap market install acme-workspace --project <projectId>
-```
-
-Or, for a human driving the CLI, pass `projectName` and the install mints the
-project and links in one pass:
+**Author one from a live project** — never hand-write the suite:
 
 ```bash
-synap market install acme-workspace --projectName "Acme"
+synap market publish --from-project <projectId>   # publishes the constituents first, then the thin suite
 ```
 
-**Agent installs may only pass an already-existing `projectId`.** An agent
-cannot mint a project from a name alone — that's a gravity-gated write, and it
-routes through `checkPermissionOrPropose` like every other agent mutation.
-The backend install is project-agnostic: it installs the package and links;
-it never needs to understand why the project exists.
+(Agent door: `export_project_pack` returns `{ definition, constituents }` —
+publish the constituents before the suite so every `require` resolves.)
 
-**After install, if the project is empty, start the onboarding.** The pack
-declares `settings.onboarding` (`goal`/`framing`/`collect`/`openingQuestions`/
-`doneWhen`/`expertise`). The `onboard` skill reads it reactively when the lens
-is empty and runs the GRP interview. It auto-completes when data arrives — no
-dead weight. Surface it from the project page via `useContextualOnboarding`
-(`startJourney` for an empty project, `Continue setup` for a resumable one).
+**Install onto a project.** The install never needs to know why the project
+exists — it installs the workspaces and LINKS them (a `project --uses-->
+workspace` edge per workspace, plus seeded entities filed into the project):
+
+```bash
+synap market install <suite-slug> --project <projectId>   # EXISTING project id only; errors if not found
+```
+
+The CLI has no flag that creates a project. Create the project first:
+
+- **A human**: in the app, or by passing `projectName` on the Hub door
+  `POST /api/hub/packages/apply` (mints or reuses by exact name).
+- **An agent**: `create_project` requires `evidenceEntityIds` — at least 5
+  existing entities that belong to it — or it is REJECTED (not proposed).
+  Without that evidence, ask the human to create the project, then install with
+  its id.
+- **An agent calling `market.install` with `projectName`**: the install becomes
+  a proposal that carries the name, and when a human approves it the project is
+  minted. The approval is the consent — say so when you propose it.
+
+Two packs on one project = install each with the same `--project <id>`. Each
+lands its own workspaces; both link to the project. Only ONE `compose`
+dependency is allowed per package, at every level.
+
+**Onboarding comes with the workspaces.** A workspace package's `onboarding`
+(`goal`, `framing`, `collect`, `openingQuestions`, `doneWhen`, `expertise`) is
+stored on that workspace's `settings.onboarding`. The `onboard` skill runs the
+interview when a lens is empty; for a project spanning several workspaces it
+sets up one workspace's slice at a time, each entity filed into the project.
+There is no project-level recipe — the recipe always lives on a workspace. A
+journey completes by itself once the lens holds real data.
 
 ## Idempotency by kind
 

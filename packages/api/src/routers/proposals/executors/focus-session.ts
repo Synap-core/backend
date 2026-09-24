@@ -16,7 +16,9 @@ import {
   and,
   or,
   isNull,
+  ne,
   playbooks,
+  projectTracks,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -194,6 +196,35 @@ export function registerFocusSessionExecutors(): void {
         criteriaRefusals
       );
 
+      // TRACK — re-checked at approval: the proposal sat in the queue, and the
+      // track may since have been archived or deleted. A track that no longer
+      // takes work is dropped and REPORTED on `refusals`; the session itself
+      // still lands in the project (the reviewer approved the work, not the
+      // lane). The FK would otherwise turn a deleted track into a failed
+      // approval.
+      let approvedTrackId: string | null = null;
+      if (typeof innerData.trackId === "string") {
+        const [track] = await db
+          .select({ id: projectTracks.id })
+          .from(projectTracks)
+          .where(
+            and(
+              eq(projectTracks.id, innerData.trackId),
+              ...(proposal.projectId
+                ? [eq(projectTracks.projectId, proposal.projectId)]
+                : []),
+              ne(projectTracks.status, "archived")
+            )
+          )
+          .limit(1);
+        if (track) approvedTrackId = track.id;
+        else {
+          criteriaRefusals.push(
+            `Track ${innerData.trackId} was not applied: it no longer takes work in this project (archived, moved or deleted).`
+          );
+        }
+      }
+
       const insertProposedSession = async () => {
         const title = storedTitle(innerData.title);
         const criteria = mergeCriteria(
@@ -228,6 +259,7 @@ export function registerFocusSessionExecutors(): void {
             correlationId: correlationHolder ? null : correlationId,
             workspaceId: proposal.workspaceId,
             projectId: proposal.projectId,
+            trackId: approvedTrackId,
             subjectEntityId:
               (innerData.subjectEntityId as string | undefined) ?? null,
             // userId = the operator/approver so update/list/complete (scoped by
@@ -286,6 +318,7 @@ export function registerFocusSessionExecutors(): void {
               correlationId: correlationHolder ? null : correlationId,
               workspaceId: proposal.workspaceId,
               projectId: proposal.projectId,
+              trackId: approvedTrackId,
               userId,
               innerData,
               ownCriteria,
@@ -841,6 +874,7 @@ async function instantiateApprovedPlaybook(args: {
   correlationId: string | null;
   workspaceId: string | null;
   projectId: string | null;
+  trackId: string | null;
   userId: string;
   innerData: Record<string, unknown>;
   /** The proposer's own criteria (already parsed); the playbook's join after. */
@@ -867,6 +901,7 @@ async function instantiateApprovedPlaybook(args: {
     playbookId: playbook.id,
     workspaceId: args.workspaceId,
     projectId: args.projectId,
+    trackId: args.trackId,
     userId: args.userId,
     subjectId:
       typeof innerData.subjectEntityId === "string"

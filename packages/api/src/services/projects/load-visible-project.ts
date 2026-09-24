@@ -18,6 +18,8 @@ export async function loadVisibleProject(
 ): Promise<
   | {
       id: string;
+      /** For display (e.g. a filing proposal's title) — never an identifier. */
+      name: string;
       workspaceId: string | null;
       userId: string;
       phase: string | null;
@@ -26,13 +28,17 @@ export async function loadVisibleProject(
   | undefined
 > {
   // `userId` / `phase` / `settings` are additive to the original
-  // `{ id, workspaceId }`: `instantiateFromPlaybook` needs the CURRENT settings
-  // to merge into (a wholesale `.set()` on the jsonb would clobber every other
-  // key) and the current phase to decide whether it may seed one. Existing
-  // callers destructure only what they used before.
+  // `{ id, workspaceId }`. `userId` is the owner floor a pod-personal
+  // project's writes gate on (`assertWorkspaceWrite`, e.g. the tracks
+  // service). `phase` feeds `instantiateFromPlaybook`'s legacy `phaseKept`
+  // key. `settings` was read by the proto-track to merge `settings.stages`
+  // into — nothing writes that any more (tracks pin stages, 0272); it stays
+  // selected so no caller silently loses a field. Existing callers
+  // destructure only what they use.
   return db.query.projects.findFirst({
     columns: {
       id: true,
+      name: true,
       workspaceId: true,
       userId: true,
       phase: true,

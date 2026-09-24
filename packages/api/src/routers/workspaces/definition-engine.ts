@@ -1272,59 +1272,64 @@ export const definitionEngineProcedures = {
             if (core.status === "composed") {
               // A compose overlay does not create a second workspace, but it
               // still owns post-workspace layers such as playbooks. Apply them
-              // to the resolved base(s) before returning; the shared applier is
+              // to the resolved base before returning; the shared applier is
               // idempotent, so retries and already-installed overlays are safe.
-              const composeTargetWorkspaceIds =
-                core.composeTargetWorkspaceIds ??
-                (core.composeTargetWorkspaceId
-                  ? [core.composeTargetWorkspaceId]
-                  : []);
+              // Build the body via the SAME converter the normal-create branch
+              // uses — the previous `as unknown as PackagePostWorkspaceBody` cast
+              // fed loop-style `definition.automations` into the graph-automation
+              // applier step, where each threw on an undefined `triggerType` and
+              // was silently swallowed (install-path parity bug, Phase 4 4.T1).
+              // A1: the compose-overlay branch swallows layer 2 exactly like
+              // `reconcileExisting` does, and returned an equally clean payload.
+              // Same shape, same non-fatal posture, now reported.
               const composeLayers: InstallLayerReport[] = [];
-              for (const composeTargetWorkspaceId of composeTargetWorkspaceIds) {
-                try {
-                  const composePost = await applyPackagePostWorkspace({
-                    workspaceId: composeTargetWorkspaceId,
-                    body: buildPostWorkspaceBodyFromDefinition(
-                      input.definition as CreateDefinitionPostWorkspaceSlice,
-                      composeTargetWorkspaceId
-                    ),
-                    userId: ctx.userId,
-                    agentUserId: (ctx as { agentUserId?: string }).agentUserId,
-                    scopes: [],
-                  });
-                  composeLayers.push(
-                    ...summarizePostWorkspaceLayers(composePost)
-                  );
-                } catch (err) {
-                  composeLayers.push({
-                    layer: "post-workspace",
-                    status: "failed",
-                    message: err instanceof Error ? err.message : String(err),
-                  });
-                  logger.warn(
-                    {
-                      err,
-                      workspaceId: composeTargetWorkspaceId,
-                      packageSlug: input.packageSlug,
-                    },
-                    "compose overlay post-workspace layers failed (non-fatal)"
-                  );
-                }
-                auditLog({
-                  subjectType: "workspaces",
-                  subjectId: composeTargetWorkspaceId,
-                  action: "update",
-                  phase: "completed",
+              try {
+                const composePost = await applyPackagePostWorkspace({
+                  workspaceId: core.composeTargetWorkspaceId,
+                  body: buildPostWorkspaceBodyFromDefinition(
+                    input.definition as CreateDefinitionPostWorkspaceSlice,
+                    core.composeTargetWorkspaceId
+                  ),
                   userId: ctx.userId,
-                  data: { templateSlug: input.packageSlug, composed: true },
+                  agentUserId: (ctx as { agentUserId?: string }).agentUserId,
+                  scopes: [],
                 });
+                composeLayers.push(
+                  ...summarizePostWorkspaceLayers(composePost)
+                );
+              } catch (err) {
+                composeLayers.push({
+                  layer: "post-workspace",
+                  status: "failed",
+                  message: err instanceof Error ? err.message : String(err),
+                });
+                logger.warn(
+                  {
+                    err,
+                    workspaceId: core.composeTargetWorkspaceId,
+                    packageSlug: input.packageSlug,
+                  },
+                  "compose overlay post-workspace layers failed (non-fatal)"
+                );
               }
+              auditLog({
+                subjectType: "workspaces",
+                subjectId: core.composeTargetWorkspaceId,
+                action: "update",
+                phase: "completed",
+                userId: ctx.userId,
+                data: { templateSlug: input.packageSlug, composed: true },
+              });
               return {
                 status: "composed" as const,
-                workspaceId: composeTargetWorkspaceIds[0],
-                composeTargetWorkspaceIds,
+                workspaceId: core.composeTargetWorkspaceId,
                 composed: true as const,
                 dependencies: core.dependencies,
+                // Uniform key, never a conditional spread — see the sibling
+                // branches. A spread is not a fresh object literal, so it
+                // defeats TypeScript's `prop?: undefined` normalization across
+                // the returned union, which is what made `composed` unreadable
+                // on the union for every consumer.
                 layers: composeLayers.length > 0 ? composeLayers : undefined,
               };
             }
@@ -2438,7 +2443,7 @@ export const definitionEngineProcedures = {
           throw err;
         }
         if (core.status === "composed") {
-          composedTarget = core.composeTargetWorkspaceIds?.[0] ?? undefined;
+          composedTarget = core.composeTargetWorkspaceId;
         }
       }
 

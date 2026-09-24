@@ -1715,6 +1715,13 @@ export const GATE_WRITE_DOORS = {
   "tool/create": "gate",
   "tool/delete": "gate",
   "tool/update": "gate",
+  // TRACKS (0272) — a method running inside a project. `create` starts one
+  // (the door `projects.instantiateFromPlaybook` now wraps); `update` is the
+  // status (pause/resume/complete/archive) and stage-advance door. Both are
+  // replayed by `routers/proposals/executors/track.ts` through the SAME
+  // service (`services/tracks`).
+  "track/create": "gate",
+  "track/update": "gate",
   "view/create": "gate",
   "view/update": "gate",
   "whiteboard/place": "gate",
@@ -1759,6 +1766,12 @@ export const DIRECT_PROPOSAL_DOORS = {
   // paused session back to active. The SUBJECT is the session — same reasoning
   // as the two dev gates above.
   "focus_session/playbook.stage_gate": "direct",
+  // The same stage gate, on a TRACK (0272). Filed by the subject-agnostic gate
+  // core (`services/playbooks/stage-gate.ts`, track adapter) when a track
+  // advances into a human-gated stage; approved by
+  // `routers/proposals/executors/track.ts`, which only flips the paused track
+  // back to active — APPROVAL RESUMES, IT NEVER RUNS.
+  "track/playbook.stage_gate": "direct",
   "focus_session/dev.plan_approval": "direct",
   // The automation-health WARDEN's finding (`services/proposals/automation-health.ts`).
   // Filed under `governance` — same targetType as its three recommender siblings,

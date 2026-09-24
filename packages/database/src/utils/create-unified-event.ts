@@ -13,11 +13,7 @@ import type { EnhancedEventMetadata } from "@synap-core/core";
 
 export type EventPhase = "requested" | "validated" | "completed" | "denied";
 export type EventAction =
-  | "create"
-  | "update"
-  | "delete"
-  | "archive"
-  | "restore";
+  "create" | "update" | "delete" | "archive" | "restore";
 export type SubjectType =
   | "entity"
   | "document"
@@ -38,7 +34,9 @@ export type SubjectType =
   | "inboxItem"
   | "sharing"
   | "workspaceMember"
-  | "projectMember";
+  | "projectMember"
+  // A method running inside a project (project_tracks, 0272).
+  | "track";
 
 export type GenericEventType<
   TSubjectType extends string,
