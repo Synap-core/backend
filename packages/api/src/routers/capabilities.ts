@@ -92,6 +92,10 @@ import { setCapabilityRenderer } from "../services/capabilities/set-capability-r
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
+import {
+  findCapabilityShadows,
+  retireCapabilityShadows,
+} from "../services/capabilities/capability-shadows.js";
 import { reconcileCapabilitiesToTemplates } from "../services/capabilities/reconcile-capabilities-to-templates.js";
 import { CAPABILITY_UPDATE_GROUP_KEY } from "../services/capabilities/notify-capability-updates.js";
 import {
@@ -1108,6 +1112,43 @@ export const capabilitiesRouter = router({
       }
 
       return uninstallCapability(input.capabilityId, ctx);
+    }),
+
+  /**
+   * Stale copies of a pack's skills/tools that live in NO pack yet still answer
+   * by name (see `capability-shadows.ts`). The same list `diagnose` reports.
+   */
+  shadows: protectedProcedure.query(async ({ ctx }) => {
+    const userId = requireUserId(ctx.userId);
+    return { shadows: await findCapabilityShadows(userId) };
+  }),
+
+  /**
+   * Remove stale copies. Destructive, so a PERSON's door: the service
+   * re-derives the shadow set and refuses any id not in it, and each row is
+   * held to the same floor as `uninstall` — workspace-scoped → that workspace's
+   * owner, pod-wide → pod admin. Refusals come back per id, never dropped.
+   */
+  retireShadows: protectedProcedure
+    .input(z.object({ ids: z.array(z.string().uuid()).min(1).max(200) }))
+    .mutation(async ({ ctx, input }) => {
+      const userId = requireUserId(ctx.userId);
+      return retireCapabilityShadows({
+        userId,
+        ids: input.ids,
+        authorize: async (workspaceId) => {
+          if (workspaceId === null) {
+            await requirePodAdmin(userId);
+            return;
+          }
+          const role = await getWorkspaceRole(userId, workspaceId);
+          if (role !== "owner") {
+            throw new Error(
+              "Only the workspace owner can remove this workspace's capability parts."
+            );
+          }
+        },
+      });
     }),
 
   /**

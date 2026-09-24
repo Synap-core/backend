@@ -60,6 +60,10 @@ import {
 import { resolveLineageEdgeLabel } from "@synap-core/types/vocabulary";
 import { agentScorecard } from "./agent-scorecard.js";
 import { diagnoseGlobal } from "./global.js";
+import {
+  findCapabilityShadows,
+  type CapabilityShadow,
+} from "../capabilities/capability-shadows.js";
 import { buildCapabilityComposition } from "./capability-composition.js";
 import { isFullUuid, resolveObjectKind } from "./resolve-object-kind.js";
 import {
@@ -864,16 +868,33 @@ async function diagnoseClass(
         );
       const approved = rows.filter((r) => r.approved);
       const awaiting = rows.filter((r) => !r.approved);
+      // Stale same-named copies outside every pack. A failed read is reported
+      // as such — never as "no shadows", which would read as all-clear.
+      let shadows: CapabilityShadow[] | null = null;
+      let shadowsError: string | undefined;
+      try {
+        shadows = await findCapabilityShadows(userId);
+      } catch (err) {
+        shadowsError = err instanceof Error ? err.message : String(err);
+      }
+      const shadowLine =
+        shadows === null
+          ? " Stale-copy check could not run."
+          : shadows.length > 0
+            ? ` ${shadows.length} stale cop${shadows.length === 1 ? "y" : "ies"} outside any pack shadow a pack's parts (${[...new Set(shadows.map((s) => s.name))].join(", ")}) — a verb can resolve to the stale one. A person removes them with capabilities.retireShadows.`
+            : "";
       return {
         mode: "class",
         type,
         summary:
-          rows.length === 0
+          (rows.length === 0
             ? "No capabilities configured."
-            : `${approved.length} approved, ${awaiting.length} awaiting approval.`,
+            : `${approved.length} approved, ${awaiting.length} awaiting approval.`) +
+          shadowLine,
         detail: {
           approved: approved.map((r) => ({ id: r.id, name: r.name })),
           awaiting: awaiting.map((r) => ({ id: r.id, name: r.name })),
+          ...(shadows !== null ? { shadows } : { shadowsError }),
         },
       };
     }

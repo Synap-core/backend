@@ -167,7 +167,7 @@ Do not install templates, define kinds, or create a project until you can answer
 | Question                                                                             | You are distinguishing                                                                  |
 | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
 | What is the **commitment** (the thing we are driving toward over weeks)?             | **Project** (optional; gravity). Not a folder.                                          |
-| Which **methods** will it run (business model, content pipeline, build…)?           | **Tracks** — one project-scoped playbook each, started with `synap_start_track`.       |
+| Which **methods** will it run (business model, content pipeline, build…)?            | **Tracks** — one project-scoped playbook each, started with `synap_start_track`.        |
 | Which **new kinds of things** must be recorded that no workspace owns yet?           | **Workspaces** (domains). Four-test + template-first. Missing domain → load `agent-os`. |
 | What is the **thing** vs a **hat** vs a **relationship-with-a-life** vs a **stage**? | Kind vs **facet on any kind** vs deal-pattern kind vs status/view.                      |
 | What already exists that we can **extend**?                                          | `extend-first` — never a twin slug.                                                     |
@@ -228,13 +228,13 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
 
-| The user needs…                                             | Do this                                                                                                                                  |
-| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| a **method** in an existing project                         | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
-| no method fits                                              | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved |
-| one bounded piece of work in that method                    | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`   |
-| new **kinds of things** no workspace owns                   | a workspace (four-test, `workspace-design`) — never to represent a method                                                                 |
-| a new long-lived intent with its own gravity                | a project — never a twin project for a method of an existing one                                                                         |
+| The user needs…                              | Do this                                                                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| a **method** in an existing project          | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
+| no method fits                               | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                     |
+| one bounded piece of work in that method     | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`     |
+| new **kinds of things** no workspace owns    | a workspace (four-test, `workspace-design`) — never to represent a method                                                                   |
+| a new long-lived intent with its own gravity | a project — never a twin project for a method of an existing one                                                                            |
 
 Pause, resume (a check gate holds a track until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
 
@@ -2117,12 +2117,12 @@ Before you create a workspace, run the decision rule. A workspace (an operationa
 
 **All four, or it is not a workspace.** Then fork it to the right lighter structure:
 
-| If the concern is…                                          | It is a…       | Substrate                              | Example                                     |
-| ----------------------------------------------------------- | -------------- | -------------------------------------- | ------------------------------------------- |
-| a **role/hat** an existing entity wears in a domain         | **Facet**      | `attach_facet` (`profileKind: "role"`) | `client`, `sponsor`, `prospect`, `investor` |
-| a **cross-cutting, time-bound initiative** spanning domains | **Project**    | `create_project` (a lens)              | a campaign, an engagement, a launch         |
+| If the concern is…                                          | It is a…       | Substrate                               | Example                                     |
+| ----------------------------------------------------------- | -------------- | --------------------------------------- | ------------------------------------------- |
+| a **role/hat** an existing entity wears in a domain         | **Facet**      | `attach_facet` (`profileKind: "role"`)  | `client`, `sponsor`, `prospect`, `investor` |
+| a **cross-cutting, time-bound initiative** spanning domains | **Project**    | `create_project` (a lens)               | a campaign, an engagement, a launch         |
 | a **method** a project runs (its way of working, in stages) | **Track**      | `start_track` (project-scoped playbook) | business model, content pipeline, build     |
-| a **stage/filter WITHIN a domain**                          | **State/View** | a `status` property def + a view       | pipeline stage, "active"/"archived"         |
+| a **stage/filter WITHIN a domain**                          | **State/View** | a `status` property def + a view        | pipeline stage, "active"/"archived"         |
 
 ## The decision procedure (follow in order)
 

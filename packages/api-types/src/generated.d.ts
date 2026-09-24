@@ -9553,6 +9553,34 @@ export interface CreateCapabilityResult {
 	};
 	proposals: string[];
 }
+export interface CapabilityShadow {
+	type: "skill" | "tool";
+	id: string;
+	name: string;
+	workspaceId: string | null;
+	/** Skill only: `code` / `declarative` / … */
+	skillKind?: string;
+	/** Skill only: an approved shadow is the dangerous kind — it can WIN. */
+	approved?: boolean;
+	/** The pack member(s) it shadows — what should answer instead. */
+	shadows: Array<{
+		id: string;
+		containerId: string;
+		containerName: string;
+	}>;
+}
+export interface RetireShadowsResult {
+	retired: Array<{
+		type: "skill" | "tool";
+		id: string;
+		name: string;
+	}>;
+	/** Requested ids that were NOT removed, and why. Never silently dropped. */
+	refused: Array<{
+		id: string;
+		reason: string;
+	}>;
+}
 /**
  * reconcileCapabilitiesToTemplates
  * =================================
@@ -20475,6 +20503,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					skills: number;
 				};
 			};
+			meta: object;
+		}>;
+		shadows: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			output: {
+				shadows: CapabilityShadow[];
+			};
+			meta: object;
+		}>;
+		retireShadows: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				ids: string[];
+			};
+			output: RetireShadowsResult;
 			meta: object;
 		}>;
 		applyUpdates: import("@trpc/server").TRPCMutationProcedure<{
