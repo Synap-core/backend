@@ -411,6 +411,17 @@ export async function executeCapability(input: {
    */
   toolId?: string;
   /**
+   * An UNATTENDED caller running as the owner (connection sync) asks the
+   * refusal door to file the pack's enable request ON THE OWNER'S BEHALF — the
+   * same D3 path a scheduled playbook takes. Without it a sync that hits a
+   * not-enabled pack fails every tick and leaves nothing to approve: the owner
+   * is told to "turn it on" with no request in their review queue. The enable
+   * door dedupes to one open request per pack, so a cron can pass it every
+   * tick. Independent of `suppressProposal`, which is about the RUN proposal.
+   * INTERNAL ONLY (see `SERVER_DERIVED_PARAMS`).
+   */
+  requestEnableForOwner?: boolean;
+  /**
    * Callers with NO interactive review surface (e.g. the automation executor)
    * set this so a `propose` verdict returns a plain `deny` INSTEAD of persisting
    * a proposal row — otherwise a recurring automation with an unapproved verb
@@ -593,20 +604,24 @@ export async function executeCapability(input: {
     // (its other deny is a policy verdict, which enabling would not fix).
     // Humans keep the Settings pointer in `enable`; an unattended run has no
     // review surface to file into.
-    const enableProposal =
-      input.agentUserId &&
-      !input.suppressProposal &&
-      skillRow.approved === false
-        ? (
-            await proposeCapabilityEnable({
-              refused: [{ id: skillRow.id, name: skillRow.name }],
-              userId,
-              workspaceId,
-              agentUserId: input.agentUserId,
-              sessionId: input.sessionId ?? null,
-            })
-          )[0]
-        : undefined;
+    // An unattended owner run (`requestEnableForOwner`) files the same request,
+    // attributed to the owner, one open per pack.
+    const fileEnable =
+      skillRow.approved === false &&
+      (input.agentUserId
+        ? !input.suppressProposal
+        : input.requestEnableForOwner === true);
+    const enableProposal = fileEnable
+      ? (
+          await proposeCapabilityEnable({
+            refused: [{ id: skillRow.id, name: skillRow.name }],
+            userId,
+            workspaceId,
+            agentUserId: input.agentUserId ?? null,
+            sessionId: input.sessionId ?? null,
+          })
+        )[0]
+      : undefined;
     return {
       kind: "deny",
       reason: decision.reason,

@@ -1522,6 +1522,37 @@ const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "track_id",
     addedBy: "0272_project_tracks.sql",
   },
+  // 0274 — the track stage a session was filed at (selected by every session
+  // read), and a track's params + stage history (`project_tracks` is not in
+  // the baseline, so these are its only startup guards).
+  {
+    table: "focus_sessions",
+    column: "track_stage",
+    addedBy: "0274_track_stage_and_params.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "params",
+    addedBy: "0274_track_stage_and_params.sql",
+  },
+  {
+    table: "project_tracks",
+    column: "stage_history",
+    addedBy: "0274_track_stage_and_params.sql",
+  },
+  // 0275 — the document content revision (the ONE content-write door's CAS)
+  // and the revision the Yjs cache is known to equal. Every document content
+  // write names `content_revision`, so without it every save 500s.
+  {
+    table: "documents",
+    column: "content_revision",
+    addedBy: "0275_document_content_revision.sql",
+  },
+  {
+    table: "documents",
+    column: "working_state_revision",
+    addedBy: "0275_document_content_revision.sql",
+  },
   // Governance Rules (Phase A) — the ONE store for agent/pod auto-approve
   // policy. New table; checking one column confirms the migration ran.
   {

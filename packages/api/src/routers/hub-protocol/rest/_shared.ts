@@ -468,7 +468,9 @@ export async function resolveActingContext(
  * <domain error>}` — the meaningful `.code` can sit one or two levels down
  * (mirrors the entities.ts `facetErrorStatus` this helper generalizes).
  */
-export function httpStatusForTrpcError(err: unknown): 400 | 403 | 404 | 500 {
+export function httpStatusForTrpcError(
+  err: unknown
+): 400 | 403 | 404 | 409 | 412 | 500 {
   let cursor: unknown = err;
   for (
     let depth = 0;
@@ -479,6 +481,13 @@ export function httpStatusForTrpcError(err: unknown): 400 | 403 | 404 | 500 {
     if (code === "BAD_REQUEST") return 400;
     if (code === "FORBIDDEN" || code === "UNAUTHORIZED") return 403;
     if (code === "NOT_FOUND") return 404;
+    // A refusal the caller can act on (a near-twin, a stale base version, a
+    // row that moved under a compare-and-set) — never a server fault. Five
+    // routes used to patch this locally; the ones that didn't answered 500
+    // with the actionable message redacted (dogfood 2026-09-25: an agent's
+    // playbook create got an opaque 500 for "extend the existing one").
+    if (code === "CONFLICT") return 409;
+    if (code === "PRECONDITION_FAILED") return 412;
     cursor = (cursor as { cause?: unknown }).cause;
   }
   return 500;

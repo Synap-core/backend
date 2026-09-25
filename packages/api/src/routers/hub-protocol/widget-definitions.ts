@@ -14,7 +14,7 @@
 import { z } from "zod";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
-import { getDb, and, eq, or, isNull } from "@synap/database";
+import { getDb } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import {
   checkPermissionOrPropose,
@@ -24,7 +24,11 @@ import { TRPCError } from "@trpc/server";
 // SECURITY: `compileWidgetSource` is UN-ROUTED from this door — its only caller
 // was the `native` branch below. Kept on disk at utils/widget-compiler.ts.
 import { assertMayActAs } from "./guard.js";
-import { composeCatalogAsDefinitionRows } from "../../services/cells/compose-widget-catalog.js";
+import { listRenderables } from "../../services/cells/renderables.js";
+import {
+  assertMayWriteNamespacedTypeKey,
+  NamespacedTypeKeyError,
+} from "../../services/cells/namespaced-type-key.js";
 
 /**
  * SECURITY — rejection message for `rendererType: "native"`. DO-NOT-REVIVE-AS-IS.
@@ -50,8 +54,9 @@ const NATIVE_RENDERER_REJECTED =
 
 export const hubWidgetDefinitionsRouter = router({
   /**
-   * List active widget definitions for a workspace.
-   * Returns system-wide builtins + workspace-specific widgets.
+   * List everything renderable in a workspace: the built-in catalog plus
+   * system-wide and workspace-specific widget_definitions rows, each carrying
+   * the catalog fields (placements, requiredConfig, aiPlaceable, aiHint, …).
    * Requires: hub-protocol.read scope
    */
   listWidgetDefs: scopedProcedure(["hub-protocol.read"])
@@ -60,30 +65,9 @@ export const hubWidgetDefinitionsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
       })
     )
-    .query(async ({ input }) => {
-      const db = await getDb();
-      const rows = await db.query.widgetDefinitions.findMany({
-        where: and(
-          or(
-            isNull(widgetDefinitions.workspaceId),
-            input.workspaceId
-              ? eq(widgetDefinitions.workspaceId, input.workspaceId)
-              : undefined
-          ),
-          eq(widgetDefinitions.isActive, true)
-        ),
-        orderBy: (t, { asc }) => [asc(t.workspaceId), asc(t.name)],
-      });
-      // Builtins live in the Browser cellRegistry, not necessarily in this
-      // table (the seeder is best-effort and often missing on a live pod).
-      // Agents were told this endpoint is the compose registry — without the
-      // catalog merge they only see generated:* rows and invent keys.
-      const existing = new Set(rows.map((r) => r.typeKey));
-      const catalog = composeCatalogAsDefinitionRows().filter(
-        (row) => !existing.has(row.typeKey as string)
-      );
-      return [...catalog, ...rows];
-    }),
+    // The one read door: the built-in catalog (in-process) ∪ this pod's
+    // installed / AI-defined rows. See services/cells/renderables.ts.
+    .query(async ({ input }) => listRenderables(input.workspaceId ?? null)),
 
   /**
    * Create or update a workspace-specific widget definition.
@@ -146,6 +130,19 @@ export const hubWidgetDefinitionsRouter = router({
       // Identity floor: `input.userId` is the acting identity fed to
       // checkPermissionOrPropose — a hub PAT may act only as its own owner.
       assertMayActAs(ctx, input.userId);
+      // Built-in renderable keys are reserved (the catalog always wins on
+      // read) — refuse before filing a proposal nobody could apply.
+      try {
+        await assertMayWriteNamespacedTypeKey(
+          input.typeKey,
+          input.workspaceId ?? null
+        );
+      } catch (err) {
+        if (err instanceof NamespacedTypeKeyError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
       // Governance check — widget.register is NOT auto-approved
       const perm = await checkPermissionOrPropose({
         userId: input.userId,

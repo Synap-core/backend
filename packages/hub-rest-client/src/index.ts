@@ -51,7 +51,7 @@ export type {
   // Core entity types
   HubEntity,
   HubDocument,
-  HubDocumentChange,
+  HubDocumentPatchOp,
   HubDocumentProposalResult,
   HubChannel,
   HubWorkspace,
@@ -125,6 +125,7 @@ export type {
   CreateDocumentInput,
   UpdateDocumentInput,
   CreateDocumentProposalInput,
+  PatchDocumentInput,
   // Input types — Memory
   StoreMemoryInput,
   // Input types — Channels

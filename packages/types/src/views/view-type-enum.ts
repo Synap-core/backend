@@ -1,34 +1,19 @@
 /**
  * View Type Enum Helper
  *
- * Utility to generate Zod enum from ViewType for runtime validation.
- * This ensures API validation stays in sync with the ViewType definition.
+ * Runtime view-type list + validator. The list is the renderables catalog's
+ * `VIEW_TYPE_KEYS` — the same tuple the browser's view picker, the MCP
+ * `create_view` enum and the REST manifest derive from — never a local copy.
  */
 
 import { z } from "zod";
+import { VIEW_TYPE_KEYS } from "../renderables/index.js";
 import type { ViewType } from "./index.js";
 
 /**
  * Array of all view types (for iteration, validation, etc.)
  */
-export const VIEW_TYPES: ViewType[] = [
-  "whiteboard",
-  "table",
-  "kanban",
-  "matrix",
-  "masonry",
-  "list",
-  "grid",
-  "gallery",
-  "calendar",
-  "gantt",
-  "timeline",
-  "mindmap",
-  "graph",
-  "flow",
-  "bento",
-  "branch_tree",
-];
+export const VIEW_TYPES: readonly ViewType[] = VIEW_TYPE_KEYS;
 
 /**
  * Zod validator for view types (open string — accepts any non-empty type)
@@ -40,5 +25,5 @@ export const ViewTypeEnum = z.string().min(1);
  * Type guard: Check if a string is a valid ViewType
  */
 export function isViewType(value: string): value is ViewType {
-  return VIEW_TYPES.includes(value as ViewType);
+  return (VIEW_TYPES as readonly string[]).includes(value);
 }

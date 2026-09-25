@@ -150,6 +150,37 @@ vi.mock(
   }
 );
 
+// The endpoint floor's SQL is exercised for real in
+// `link-endpoint-visibility.pglite.test.ts`; here it is driven by the same
+// maps the rest of this file uses, so these tests pin that the HANDLER
+// consults it before governance and returns its refusal verbatim.
+vi.mock("./link-endpoint-visibility.js", () => ({
+  checkLinkEndpointsVisible: vi.fn(
+    async (e: {
+      fromType: string;
+      fromId: string;
+      toType: string;
+      toId: string;
+    }) => {
+      for (const [type, id] of [
+        [e.fromType, e.fromId],
+        [e.toType, e.toId],
+      ]) {
+        if (
+          type === "workspace" &&
+          !(workspaceRowsById.get(id!) && membershipByWsId.get(id!))
+        ) {
+          return { status: 403, error: `Access denied to workspace ${id}` };
+        }
+        if (type === "project" && !visibleProjectIds.has(id!)) {
+          return { status: 404, error: "Project not found" };
+        }
+      }
+      return null;
+    }
+  ),
+}));
+
 const resolveActingContextMock = vi.fn();
 
 vi.mock("./_shared.js", () => ({

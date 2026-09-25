@@ -1,6 +1,6 @@
 /**
  * orient's `startHere`, in action order: pending review, open work sessions,
- * most-used kinds, runnable actions, one skill pointer. Each section reads an
+ * sessions owing a grade, most-used kinds, runnable actions, one skill pointer. Each section reads an
  * existing door; one that cannot be read is `{ status: "unavailable" }`, never
  * an empty list or a zero.
  */
@@ -51,6 +51,18 @@ async function readOpenSessions(
           }
         : {}),
     };
+  } catch {
+    return UNAVAILABLE;
+  }
+}
+
+async function readSessionsOwingGrade(
+  userId: string
+): Promise<StartHere["sessionsOwingGrade"]> {
+  try {
+    const { listSessionsOwingGrade } =
+      await import("../focus-sessions/session-nudges.js");
+    return await listSessionsOwingGrade(userId);
   } catch {
     return UNAVAILABLE;
   }
@@ -188,12 +200,14 @@ export async function buildStartHere(p: {
   pending: PendingReviewState;
   learnMoreSkill: string;
 }): Promise<StartHere> {
-  const [openSessions, topKinds, actions, openFindings] = await Promise.all([
-    readOpenSessions(p.userId),
-    readTopKinds(p),
-    readActions(p),
-    readOpenFindings(p.userId),
-  ]);
+  const [openSessions, sessionsOwingGrade, topKinds, actions, openFindings] =
+    await Promise.all([
+      readOpenSessions(p.userId),
+      readSessionsOwingGrade(p.userId),
+      readTopKinds(p),
+      readActions(p),
+      readOpenFindings(p.userId),
+    ]);
   const pendingReview: StartHere["pendingReview"] =
     p.pending.status === "unavailable"
       ? UNAVAILABLE
@@ -213,6 +227,7 @@ export async function buildStartHere(p: {
     pendingReview,
     openFindings,
     openSessions,
+    sessionsOwingGrade,
     topKinds,
     actions,
     learnMore: { skill: p.learnMoreSkill },

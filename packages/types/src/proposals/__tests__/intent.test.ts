@@ -372,3 +372,24 @@ describe("link — the mark follows the change type, like the visual", () => {
     );
   });
 });
+
+describe("isDocumentEditProposal", () => {
+  it("every patch-door type and the legacy ai_edit, on a document only", async () => {
+    const { isDocumentEditProposal, DOCUMENT_PATCH_PROPOSAL_TYPES } =
+      await import("../intent.js");
+    for (const proposalType of [...DOCUMENT_PATCH_PROPOSAL_TYPES, "ai_edit"]) {
+      expect(
+        isDocumentEditProposal({ targetType: "document", proposalType })
+      ).toBe(true);
+    }
+    expect(
+      isDocumentEditProposal({ targetType: "entity", proposalType: "update" })
+    ).toBe(false);
+    expect(
+      isDocumentEditProposal({ targetType: "document", proposalType: "create" })
+    ).toBe(false);
+    expect(
+      isDocumentEditProposal({ targetType: "document", proposalType: null })
+    ).toBe(false);
+  });
+});

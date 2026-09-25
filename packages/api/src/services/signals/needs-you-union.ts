@@ -32,6 +32,7 @@
  */
 
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { needsYouTotal } from "@synap-core/types/units";
 import {
   isObjectNavView,
   type ObjectNavView,
@@ -579,9 +580,11 @@ export function pageNeedsYou(signals: Signal[], limit: number): Signal[] {
  * query; nothing has to run a second count, and the counting rule is not forked
  * to produce the second number.
  *
- * `decisions` / `notifications` / `blocked` are the THREE PARTS the badge is
- * made of, and `needsYou === decisions + notifications + blocked` by
- * construction (asserted in `signals.union.test.ts`). They exist so a surface
+ * `decisions` / `notifications` / `blocked` / `review` are the PARTS the badge
+ * is made of, and `needsYou === decisions + notifications + blocked + review`
+ * by construction (asserted in `signals.union.test.ts`). `review` — sessions
+ * awaiting your review/close, THE needs-you rule's third population — is
+ * counted under a project scope only and is 0 elsewhere. They exist so a surface
  * that states the number can also state what it is made of — Governance said
  * "16 decisions pending" beside a shell badge of 89 and nothing on screen could
  * reconcile the two. A client must READ each part; deriving one by subtracting
@@ -612,6 +615,14 @@ export function countNeedsYou(args: {
   owedSlots: OwedSlotSignalInput[];
   /** The owed page hit its limit, so its count is a floor too. */
   owedTruncated: boolean;
+  /**
+   * Sessions finished and awaiting the person's review/close — THE needs-you
+   * rule's third population (`needsYouReason === "review"`,
+   * `@synap-core/types/units`). Absent ⇒ the scope does not count it (0).
+   */
+  reviewSessions?: number;
+  /** The review scan hit its cap, so its count is a floor. */
+  reviewTruncated?: boolean;
 }): {
   needsYou: number;
   distinct: number;
@@ -621,6 +632,8 @@ export function countNeedsYou(args: {
   decisions: number;
   /** Unread notifications that survive the dedupe. */
   notifications: number;
+  /** Sessions awaiting your review / close (project scope only; else 0). */
+  review: number;
 } {
   const decisions = args.distinctClusters;
   const notifications = dedupeNotifications(
@@ -628,15 +641,21 @@ export function countNeedsYou(args: {
     args.clusters
   ).length;
   const blocked = args.owedSlots.length;
+  const review = args.reviewSessions ?? 0;
   return {
-    needsYou: decisions + notifications + blocked,
+    // THE item sum (`needsYouTotal`) over the rule's three populations, plus
+    // the notification half, which exists only at the pod/workspace floor.
+    needsYou:
+      needsYouTotal({ owed: blocked, decisions, review }) + notifications,
     distinct: decisions,
     decisions,
     notifications,
     truncated:
       args.clustersTruncated ||
       args.notificationsTruncated ||
-      args.owedTruncated,
+      args.owedTruncated ||
+      (args.reviewTruncated ?? false),
     blocked,
+    review,
   };
 }

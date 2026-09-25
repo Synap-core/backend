@@ -97,6 +97,14 @@ vi.mock("../services/playbooks/run-playbook.js", () => ({
   runPlaybook: mockRunPlaybook,
 }));
 
+const mockResolveTrackFiling = vi.hoisted(() =>
+  vi.fn(async () => ({ projectId: "00000000-0000-4000-8000-0000000000f1" }))
+);
+vi.mock("../services/tracks/tracks-service.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveTrackFiling: mockResolveTrackFiling,
+}));
+
 vi.mock("../services/playbooks/playbook-skill-preflight.js", () => ({
   findUnenabledPlaybookSkills: mockFindUnenabled,
 }));
@@ -266,5 +274,50 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
       "user-1",
       { workspaceId: WS_B }
     );
+  });
+
+  describe("track STAGE filing (0274)", () => {
+    const TRACK = "00000000-0000-4000-8000-0000000000e1";
+
+    it("the PROPOSAL payload carries trackStage, validated at the door first", async () => {
+      mockCheckPermission.mockResolvedValue({
+        proposalId: "prop-1",
+        proposalType: "playbook.run",
+      } as never);
+      const caller = playbooksRouter.createCaller(ctxWith(WS_A));
+      const r = await caller.run({
+        playbookId: PB_ID,
+        trackId: TRACK,
+        trackStage: "pricing",
+      });
+      expect(r.status).toBe("proposed");
+      expect(mockResolveTrackFiling).toHaveBeenCalledWith(
+        expect.objectContaining({ trackId: TRACK, trackStage: "pricing" })
+      );
+      expect(mockCheckPermission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            trackId: TRACK,
+            trackStage: "pricing",
+          }),
+        })
+      );
+      expect(mockRunPlaybook).not.toHaveBeenCalled();
+    });
+
+    it("a direct run files at the stage; a stage without a track is refused", async () => {
+      const caller = playbooksRouter.createCaller(ctxWith(WS_A));
+      await caller.run({
+        playbookId: PB_ID,
+        trackId: TRACK,
+        trackStage: "pricing",
+      });
+      expect(mockRunPlaybook).toHaveBeenCalledWith(
+        expect.objectContaining({ trackId: TRACK, trackStage: "pricing" })
+      );
+      await expect(
+        caller.run({ playbookId: PB_ID, trackStage: "pricing" })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
   });
 });

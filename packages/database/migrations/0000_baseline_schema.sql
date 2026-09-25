@@ -600,6 +600,8 @@ CREATE TABLE IF NOT EXISTS "documents" (
   "last_saved_version"       integer NOT NULL DEFAULT 0,
   "working_state"            text,
   "working_state_updated_at" timestamp with time zone,
+  "content_revision"         integer NOT NULL DEFAULT 1,
+  "working_state_revision"   integer,
   "metadata"                 jsonb,
   "created_at"               timestamp with time zone NOT NULL DEFAULT now(),
   "updated_at"               timestamp with time zone NOT NULL DEFAULT now(),
@@ -619,6 +621,8 @@ ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "current_version" integer DEFAU
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "last_saved_version" integer DEFAULT 0;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state" text;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_updated_at" timestamp with time zone;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "content_revision" integer NOT NULL DEFAULT 1;
+ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "working_state_revision" integer;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "metadata" jsonb;
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "created_at" timestamp with time zone DEFAULT now();
 ALTER TABLE "documents" ADD COLUMN IF NOT EXISTS "updated_at" timestamp with time zone DEFAULT now();
@@ -4513,6 +4517,11 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "stages" jsonb NOT NULL DE
 -- column here: `project_tracks` references `projects`, which the baseline does
 -- not create (0151 does), so the FK is added by 0272 only.
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "track_id" uuid;
+-- 0274: the STAGE of its track a session was filed at (not its own playbook
+-- phase — that is `current_stage`). NULL = not filed at a stage.
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "track_stage" text;
+CREATE INDEX IF NOT EXISTS "idx_focus_sessions_track_stage"
+  ON "focus_sessions" ("track_id", "track_stage");
 -- 0250 — the "blocked on you" read. A partial index whose predicate is the only
 -- index-usable part of the owed-slot predicate (`owedSince` lives per-slot
 -- inside the JSONB array and cannot key an index). See migration 0250.

@@ -10,6 +10,9 @@ import type PgBoss from "pg-boss";
 import {
   db,
   eq,
+  claimDocumentRevision,
+  INHERIT_LAST_AUTHOR,
+  emitDocumentContentReplaced,
   readDocumentVersionBuffer,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
@@ -20,7 +23,7 @@ import {
   documentSessions,
   views,
 } from "@synap/database/schema";
-import { storage } from "@synap/storage";
+import { emitSideEffects } from "@synap/events";
 import { broadcastSuccess } from "../utils/realtime-broadcast.js";
 import { createLogger } from "@synap-core/core";
 import { randomUUID } from "crypto";
@@ -30,6 +33,10 @@ const logger = createLogger({ module: "snapshot-worker" });
 // ============================================================================
 // Document Snapshot
 // ============================================================================
+//
+// Every document write below goes through `claimDocumentRevision`, the ONE
+// content-write door (compare-and-set, author-switch checkpoints, the storage
+// upload). None of these handlers touches `documents.storage_key` itself.
 
 export async function handleDocumentSnapshot(
   job: PgBoss.Job<{
@@ -40,55 +47,32 @@ export async function handleDocumentSnapshot(
 ): Promise<void> {
   const { documentId, message, userId } = job.data;
 
-  const document = await db.query.documents.findFirst({
-    where: eq(documents.id, documentId),
-  });
-  if (!document) throw new Error(`Document ${documentId} not found`);
-
-  const buffer = await storage.downloadBuffer(document.storageKey!);
-  const content = buffer.toString("utf-8");
-
-  const newVersion = (document.currentVersion || 0) + 1;
-  const versionId = randomUUID();
-  const snapshot = await uploadDocumentVersionSnapshot({
-    userId,
-    documentId,
-    versionId,
-    documentType: document.type,
-    mimeType: document.mimeType,
-    content,
-  });
-
-  const [version] = await db
-    .insert(documentVersions)
-    .values({
-      id: versionId,
+  const claimed = await db.transaction((tx) =>
+    claimDocumentRevision(
+      tx,
       documentId,
-      version: newVersion,
-      ...storedVersionValues(snapshot),
-      message: message || `Version ${newVersion}`,
-      author: "user",
-      authorId: userId,
-    })
-    .returning();
-
-  await db
-    .update(documents)
-    .set({
-      lastSavedVersion: newVersion,
-      currentVersion: newVersion,
-      updatedAt: new Date(),
-    })
-    .where(eq(documents.id, documentId));
+      undefined,
+      { authorKind: "user", authorId: userId },
+      { checkpoint: { message: message || "Saved version" } }
+    )
+  );
+  if (!claimed.checkpointVersionId) {
+    throw new Error(
+      `Document ${documentId}: a checkpoint claim cut no row (door contract broken)`
+    );
+  }
 
   await broadcastSuccess(userId, "document.snapshot.saved", {
     documentId,
-    versionId: version.id,
-    version: newVersion,
-    message: version.message,
+    versionId: claimed.checkpointVersionId,
+    version: claimed.currentVersion,
+    message: message || "Saved version",
   });
 
-  logger.info({ documentId, version: newVersion }, "Document snapshot saved");
+  logger.info(
+    { documentId, version: claimed.currentVersion },
+    "Document snapshot saved"
+  );
 }
 
 // ============================================================================
@@ -111,34 +95,58 @@ export async function handleDocumentRestore(
   if (version.documentId !== documentId)
     throw new Error("Version does not belong to this document");
 
-  const document = await db.query.documents.findFirst({
-    where: eq(documents.id, documentId),
-  });
-  if (!document) throw new Error(`Document ${documentId} not found`);
-
   const restoredBuffer = await readDocumentVersionBuffer(version);
-  const metadata = await storage.upload(document.storageKey!, restoredBuffer, {
-    contentType: version.mimeType || document.mimeType || "text/plain",
+  // A row the realtime server once wrote holds Yjs binary state, not text
+  // (`documents.restoreVersion` refuses it up front; this is the worker's own
+  // floor, since the payload is trusted).
+  if (restoredBuffer.subarray(0, 4).toString("utf-8") === "yjs:") {
+    throw new Error(
+      `Version ${versionId} holds realtime editor state, not document text — refusing to restore it`
+    );
+  }
+
+  // Restore is a WRITE by the restoring person, checkpointed, so the rail says
+  // who brought the old text back (and the text it replaced is kept).
+  const claimed = await db.transaction((tx) =>
+    claimDocumentRevision(
+      tx,
+      documentId,
+      undefined,
+      { authorKind: "user", authorId: userId },
+      {
+        content: restoredBuffer,
+        ...(version.mimeType ? { mimeType: version.mimeType } : {}),
+        checkpoint: { message: `Restored from version ${version.version}` },
+      }
+    )
+  );
+
+  const emitted = await emitDocumentContentReplaced({
+    documentId,
+    revision: claimed.revision,
+    workspaceId: claimed.workspaceId,
+    ownerUserId: claimed.ownerUserId,
   });
-
-  const newVersion = (document.currentVersion || 0) + 1;
-
-  await db
-    .update(documents)
-    .set({
-      currentVersion: newVersion,
-      storageUrl: metadata.url,
-      storageKey: metadata.path,
-      size: metadata.size,
-      mimeType: version.mimeType || document.mimeType,
-      updatedAt: new Date(),
-    })
-    .where(eq(documents.id, documentId));
+  if (!emitted.ok) {
+    logger.warn(
+      { documentId, error: emitted.error },
+      "document:content-replaced emit failed after a restore — open editors were not told"
+    );
+  }
+  // Re-index the restored text (search reads the stored body).
+  void emitSideEffects({
+    subjectType: "document",
+    action: "update",
+    subjectId: documentId,
+    userId,
+    workspaceId: claimed.workspaceId,
+    data: { id: documentId },
+  });
 
   await broadcastSuccess(userId, "document.restored", {
     documentId,
     restoredFromVersion: version.version,
-    currentVersion: newVersion,
+    currentVersion: claimed.currentVersion,
   });
 
   logger.info(
@@ -151,6 +159,14 @@ export async function handleDocumentRestore(
 // Document Auto-Save (cron)
 // ============================================================================
 
+/**
+ * Checkpoint every document with an active editing session — but ONLY when its
+ * content moved since the last checkpoint. It used to cut a row (and bump
+ * `current_version`) every 30 minutes for every open document, unchanged or
+ * not, which flooded the rail and made pending AI proposals CONFLICT.
+ *
+ * The row is attributed to the last checkpoint's author (INHERIT_LAST_AUTHOR).
+ */
 export async function handleDocumentAutoSave(): Promise<void> {
   const activeSessions = await db.query.documentSessions.findMany({
     where: eq(documentSessions.isActive, true),
@@ -159,98 +175,36 @@ export async function handleDocumentAutoSave(): Promise<void> {
 
   if (activeSessions.length === 0) return;
 
-  await Promise.allSettled(
-    activeSessions.map(async (session) => {
-      const document = await db.query.documents.findFirst({
-        where: eq(documents.id, session.documentId),
-      });
-      if (!document) return;
-
-      const buffer = await storage.downloadBuffer(document.storageKey!);
-      const content = buffer.toString("utf-8");
-      const newVersion = (document.currentVersion || 0) + 1;
-      const versionId = randomUUID();
-      const snapshot = await uploadDocumentVersionSnapshot({
-        userId: document.userId,
-        documentId: session.documentId,
-        versionId,
-        documentType: document.type,
-        mimeType: document.mimeType,
-        content,
-      });
-
-      await db.insert(documentVersions).values({
-        id: versionId,
-        documentId: session.documentId,
-        version: newVersion,
-        ...storedVersionValues(snapshot),
-        message: "Auto-save checkpoint",
-        author: "system",
-        authorId: "auto-save",
-      });
-
-      await db
-        .update(documents)
-        .set({
-          currentVersion: newVersion,
-          lastSavedVersion: newVersion,
-          updatedAt: new Date(),
+  const documentIds = [...new Set(activeSessions.map((s) => s.documentId))];
+  const results = await Promise.allSettled(
+    documentIds.map((documentId) =>
+      db.transaction((tx) =>
+        claimDocumentRevision(tx, documentId, undefined, INHERIT_LAST_AUTHOR, {
+          checkpoint: { message: "Auto-save checkpoint" },
+          skipIfUnchanged: true,
         })
-        .where(eq(documents.id, session.documentId));
-    })
+      )
+    )
   );
 
+  const failed = results.filter((r) => r.status === "rejected");
+  for (const r of failed) {
+    logger.warn(
+      { err: (r as PromiseRejectedResult).reason },
+      "Document auto-save checkpoint failed"
+    );
+  }
+  const saved = results.filter(
+    (r) => r.status === "fulfilled" && !r.value.skipped
+  ).length;
   logger.info(
-    { sessions: activeSessions.length },
+    {
+      documents: documentIds.length,
+      checkpointed: saved,
+      unchanged: documentIds.length - saved - failed.length,
+      failed: failed.length,
+    },
     "Document auto-save complete"
-  );
-}
-
-// ============================================================================
-// Document Persistence (working state backup, cron)
-// ============================================================================
-
-export async function handleDocumentPersistence(): Promise<void> {
-  const activeSessions = await db.query.documentSessions.findMany({
-    where: eq(documentSessions.isActive, true),
-    limit: 50,
-  });
-
-  if (activeSessions.length === 0) return;
-
-  const REALTIME_URL = process.env.REALTIME_URL || "http://localhost:4001";
-
-  await Promise.allSettled(
-    activeSessions.map(async (session) => {
-      const yjsRoomId = session.documentId;
-      const response = await fetch(`${REALTIME_URL}/yjs/${yjsRoomId}/state`, {
-        headers: {
-          "X-Internal-Request": "true",
-          "Content-Type": "application/json",
-          ...(process.env.BRIDGE_SECRET
-            ? { "X-Bridge-Secret": process.env.BRIDGE_SECRET }
-            : {}),
-        },
-      });
-
-      if (!response.ok) {
-        if (response.status === 404) return; // Room not active
-        throw new Error(`Realtime server error: ${response.status}`);
-      }
-
-      const buffer = await response.arrayBuffer();
-      const base64State = Buffer.from(buffer).toString("base64");
-
-      await db
-        .update(documents)
-        .set({ workingState: base64State, workingStateUpdatedAt: new Date() })
-        .where(eq(documents.id, session.documentId));
-    })
-  );
-
-  logger.info(
-    { sessions: activeSessions.length },
-    "Document persistence complete"
   );
 }
 

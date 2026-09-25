@@ -25,6 +25,7 @@ import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
 import { TRPCError } from "@trpc/server";
 import { requireUserId } from "../utils/user-scoped.js";
+import { resolveActorNames } from "../utils/resolve-actor-names.js";
 import { startOfUtcDay } from "../utils/permission-check.js";
 import {
   db,
@@ -33,7 +34,6 @@ import {
   automationRuns,
   notifications,
   webhookDeliveries,
-  users,
   proposals,
   ProposalStatus,
   entities,
@@ -237,40 +237,6 @@ function filterReactionsByLens(
   const allowed =
     lens === "internal" ? INTERNAL_REACTION_KINDS : EXTERNAL_REACTION_KINDS;
   return reactions.filter((r) => allowed.includes(r.kind));
-}
-
-/**
- * Resolve display names for a batch of user IDs (agents + humans).
- */
-async function resolveActorNames(
-  userIds: string[]
-): Promise<Map<string, string>> {
-  const unique = Array.from(new Set(userIds.filter(Boolean)));
-  if (unique.length === 0) return new Map();
-  const rows = await db
-    .select({
-      id: users.id,
-      name: users.name,
-      email: users.email,
-      userType: users.userType,
-      agentMetadata: users.agentMetadata,
-    })
-    .from(users)
-    .where(inArray(users.id, unique));
-
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    let label: string | undefined = row.name ?? undefined;
-    if (!label && row.userType === "agent") {
-      label =
-        row.agentMetadata?.agentType ??
-        row.agentMetadata?.description ??
-        undefined;
-    }
-    if (!label) label = row.email ?? undefined;
-    if (label) map.set(row.id, label);
-  }
-  return map;
 }
 
 /** Matches a canonical v4-shaped UUID (the id form of every uuid PK column). */

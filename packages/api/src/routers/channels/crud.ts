@@ -27,7 +27,6 @@ import {
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
 } from "@synap/database";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import {
   channels,
   channelMembers,
@@ -43,7 +42,6 @@ import {
   MessageCategory,
   users,
   workspaceMembers,
-  focusSessions,
   agents,
 } from "@synap/database/schema";
 
@@ -57,8 +55,6 @@ import {
   listPersonalConversationHistory,
 } from "../../utils/personal-channel.js";
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
-
-import { createLinks } from "../../services/links/links-service.js";
 
 import { EventNames } from "@synap-core/types/events";
 import { MessageLinksRepository } from "@synap/database";
@@ -408,135 +404,6 @@ export const crudProcedures = {
         .onConflictDoNothing({
           target: [channelMembers.channelId, channelMembers.memberId],
         });
-
-      emitChatEvent({
-        event: "channel:created",
-        data: {
-          channelId,
-          userId: ctx.userId,
-          channelType: ChannelType.AGENT_COLLAB,
-        },
-        workspaceId,
-        userId: ctx.userId,
-      });
-
-      return { channelId, status: "created" as const };
-    }),
-
-  /**
-   * Create a room for a focus session and link it: an AGENT_COLLAB channel,
-   * `focus_sessions.channelId` set, plus `channel|participant --member_of-->
-   * session` graph edges so the session's room + roster live in the links graph.
-   * Backs the session room's "Start a room" affordance (participants lane).
-   * No-op-safe: if the session already has a channel, returns it.
-   */
-  createAndLinkToSession: workspaceProcedure
-    .input(
-      z.object({
-        sessionId: z.string().uuid(),
-        participants: z.array(z.string().uuid()).optional(),
-        title: z.string().max(255).optional(),
-      })
-    )
-    .mutation(async ({ input, ctx }) => {
-      const workspaceId = ctx.workspaceId;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Workspace context required",
-        });
-      }
-
-      // Load by id, then gate on the loaded row: the session must belong to the
-      // caller's workspace (member via workspaceProcedure) OR be the caller's own
-      // personal session. Without this floor, any sessionId leaked session.goal
-      // and bound an AGENT_COLLAB channel onto another user's session. NOT_FOUND
-      // (not FORBIDDEN) so the id is not an existence oracle.
-      const session = await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, input.sessionId),
-      });
-      if (
-        !session ||
-        (session.workspaceId !== workspaceId && session.userId !== ctx.userId)
-      ) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Focus session ${input.sessionId} not found`,
-        });
-      }
-      // Idempotent: a session already has at most one room.
-      if (session.channelId) {
-        return { channelId: session.channelId, status: "exists" as const };
-      }
-
-      const channelId = randomUUID();
-      await db.insert(channels).values({
-        id: channelId,
-        userId: ctx.userId,
-        workspaceId,
-        channelType: ChannelType.AGENT_COLLAB,
-        status: ChannelStatus.ACTIVE,
-        title:
-          input.title ??
-          `Session: ${resolveSessionTitle(session, { maxLength: 64 })}`,
-        metadata: { sessionId: session.id, a2aiStatus: "active" },
-      });
-
-      const agentParticipantIds = Array.from(
-        new Set(
-          (input.participants ?? session.agentIds ?? []).filter(
-            (id) => id !== ctx.userId
-          )
-        )
-      );
-      await db
-        .insert(channelMembers)
-        .values([
-          {
-            channelId,
-            memberId: ctx.userId,
-            memberKind: ChannelMemberKind.HUMAN,
-            role: ChannelMemberRole.OWNER,
-            addedBy: ctx.userId,
-          },
-          ...agentParticipantIds.map((id) => ({
-            channelId,
-            memberId: id,
-            memberKind: ChannelMemberKind.AI_AGENT,
-            role: ChannelMemberRole.MEMBER,
-            addedBy: ctx.userId,
-          })),
-        ])
-        .onConflictDoNothing({
-          target: [channelMembers.channelId, channelMembers.memberId],
-        });
-
-      // Link the channel to the session, both as the FK (messaging) and as graph edges.
-      await db
-        .update(focusSessions)
-        .set({ channelId, updatedAt: new Date() })
-        .where(eq(focusSessions.id, session.id));
-
-      await createLinks([
-        {
-          workspaceId,
-          fromType: "channel",
-          fromId: channelId,
-          toType: "session",
-          toId: session.id,
-          linkType: "member_of",
-          metadata: {},
-        },
-        ...agentParticipantIds.map((id) => ({
-          workspaceId,
-          fromType: "participant" as const,
-          fromId: id,
-          toType: "session" as const,
-          toId: session.id,
-          linkType: "member_of" as const,
-          metadata: { memberKind: "ai_agent" },
-        })),
-      ]);
 
       emitChatEvent({
         event: "channel:created",

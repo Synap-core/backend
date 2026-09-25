@@ -54,6 +54,17 @@ export const documents = pgTable(
       withTimezone: true,
     }),
 
+    // Content revision (W4a, migration 0275). Bumped by EVERY content write —
+    // only inside `claimDocumentRevision` (utils/claim-document-revision.ts),
+    // the one content-write door. It is the optimistic-concurrency signal
+    // ("did the content change since I read it?"); `currentVersion` stays the
+    // last CHECKPOINT (the history rail).
+    contentRevision: integer("content_revision").notNull().default(1),
+    // The `contentRevision` the Yjs cache in `workingState` is KNOWN to equal.
+    // A room trusts `workingState` only when this matches `contentRevision`;
+    // NULL = no trustworthy cache.
+    workingStateRevision: integer("working_state_revision"),
+
     // Metadata
     metadata: jsonb("metadata"), // Custom metadata
 

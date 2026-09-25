@@ -281,6 +281,11 @@ export interface InstantiateInput {
    */
   trackId?: string | null;
   /**
+   * The track stage the session is filed at (0274) — already resolved by the
+   * caller (`resolveTrackFiling` / `resolveFilingStage`); persisted as given.
+   */
+  trackStage?: string | null;
+  /**
    * The entity this session is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId — threads RunContext.subjectId
    * through from the playbook run input.
@@ -562,6 +567,7 @@ export async function instantiateSessionRow(
     origin: input.origin ?? "playbook",
     projectId: input.projectId ?? null,
     trackId: input.trackId ?? null,
+    trackStage: input.trackId ? (input.trackStage ?? null) : null,
     subjectEntityId: input.subjectId ?? null,
     expectedOutputs,
     // Playbook-level + every stage's criteria, stageKey stamped — the one

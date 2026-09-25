@@ -87,6 +87,24 @@ function scanInsertSites(): InsertSite[] {
   return out;
 }
 
+/** Every `claimDocumentRevision(…)` call, paren-matched, verbatim. */
+function claimCalls(src: string): string[] {
+  const out: string[] = [];
+  const re = /\bclaimDocumentRevision\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) {
+    let depth = 0;
+    for (let i = m.index + m[0].length - 1; i < src.length; i++) {
+      if (src[i] === "(") depth++;
+      else if (src[i] === ")" && --depth === 0) {
+        out.push(src.slice(m.index, i + 1));
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 /** Every `author: "…"` string literal inside one values object. */
 function authorLiterals(body: string): string[] {
   return [...body.matchAll(/\bauthor:\s*"([^"]*)"/g)].map((m) => m[1]);
@@ -133,17 +151,47 @@ describe("TRIPWIRE: document_versions.author is stamped from the declared set", 
 
   it("the AI-edit checkpoint stamps `ai`, not the accepting human", () => {
     // The specific regression: B3 must never go back to `author: "user"` with
-    // the reviewer's id for an agent-drafted edit.
-    const b3 = sites.find((s) =>
-      s.file.endsWith("routers/proposals/apply-approval.ts")
+    // the reviewer's id for an agent-drafted edit. Since W4a the row is cut by
+    // the content-write door (`claimDocumentRevision`), so the author B3 names
+    // is the one it PASSES to the door — scanned from that call.
+    const src = readFileSync(
+      join(BACKEND, "packages/api/src/routers/proposals/apply-approval.ts"),
+      "utf8"
     );
+    const call = claimCalls(src);
     expect(
-      b3,
-      "apply-approval.ts no longer inserts a document version"
-    ).toBeDefined();
+      call.length,
+      "apply-approval.ts no longer writes a document through claimDocumentRevision"
+    ).toBeGreaterThanOrEqual(1);
     expect(
-      authorLiterals(b3!.body),
-      "the accepted-AI-edit version must be able to name the drafting agent"
-    ).toContain("ai");
+      call.some((c) =>
+        /authorKind:\s*"ai",\s*authorId:\s*proposal\.agentUserId/.test(c)
+      ),
+      "the accepted-AI-edit checkpoint must name the drafting agent"
+    ).toBe(true);
+  });
+
+  it("every `authorKind` literal passed to the content-write door is in DOCUMENT_VERSION_AUTHORS", () => {
+    // The door inserts the row with the author it is given, so the literals
+    // at its call sites are what reaches `document_versions.author`.
+    const literals: string[] = [];
+    for (const pkg of SCANNED) {
+      for (const full of walk(join(BACKEND, "packages", pkg, "src"))) {
+        for (const c of claimCalls(readFileSync(full, "utf8"))) {
+          for (const m of c.matchAll(/\bauthorKind:\s*"([^"]*)"/g))
+            literals.push(`${full.slice(BACKEND.length)}: ${m[1]}`);
+        }
+      }
+    }
+    // Non-vacuity: the known callers (section, approval, update, snapshot,
+    // restore, backfill) name their author literally.
+    expect(literals.length).toBeGreaterThanOrEqual(5);
+    const offenders = literals.filter(
+      (l) =>
+        !(DOCUMENT_VERSION_AUTHORS as readonly string[]).includes(
+          l.split(": ").pop()!
+        )
+    );
+    expect(offenders).toEqual([]);
   });
 });

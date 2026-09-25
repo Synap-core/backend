@@ -55,7 +55,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         storageKey: key,
         size: String(i.content).length,
         mimeType: i.mimeType ?? "text/markdown",
-        checksum: "c",
+        checksum: `sha256:${(await import("node:crypto")).createHash("sha256").update(String(i.content)).digest("hex")}`,
         contentPreview: String(i.content).slice(0, 100),
       };
     },
@@ -75,8 +75,9 @@ vi.mock("@synap/database", async (importOriginal) => {
           [data.id, userId, data.workspaceId, data.title, data.storageKey]
         );
         await client.query(
-          `insert into document_versions (document_id, version, content, author, author_id)
-           values ($1, 1, '', 'user', $2)`,
+          // checksum = sha256('') — the empty body the document is created with.
+          `insert into document_versions (document_id, version, content, author, author_id, checksum)
+           values ($1, 1, '', 'user', $2, 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')`,
           [data.id, userId]
         );
         return { id: data.id, title: data.title };
@@ -91,8 +92,13 @@ vi.mock("@synap/storage", () => ({
       `${u}/${k}/${id}.${ext}`,
     upload: async (key: string, body: string | Buffer) => {
       if (h.failUploads) throw new Error("storage is down");
-      h.blobs.set(key, Buffer.isBuffer(body) ? body.toString("utf-8") : body);
-      return { url: key, path: key, size: 1 };
+      const text = Buffer.isBuffer(body) ? body.toString("utf-8") : body;
+      h.blobs.set(key, text);
+      // The real providers' checksum shape: the content-write door compares
+      // it against the last checkpoint to decide whether content drifted.
+      const { createHash } = await import("node:crypto");
+      const checksum = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+      return { url: key, path: key, size: 1, checksum };
     },
     downloadBuffer: async (key: string) =>
       Buffer.from(h.blobs.get(key) ?? "", "utf-8"),

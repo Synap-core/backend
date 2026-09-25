@@ -14,8 +14,9 @@
  *
  * NOT covered here: a workspace-scoped project's MEMBERSHIP floor (the
  * registry predicate is the projects predicate, shared by construction — see
- * `access/project-visibility.ts`); a track `check` gate's measurement (it is
- * fail-closed by design and asserted as such below).
+ * `access/project-visibility.ts`); a track `check` gate's measurement over
+ * filed sessions (`track-stages.pglite.test.ts` — here only the empty-stage
+ * hold is asserted).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -224,6 +225,8 @@ beforeAll(async () => {
       current_stage text,
       status text not null default 'active'
         check (status in ('active','paused','completed','archived')),
+      params jsonb not null default '{}'::jsonb,
+      stage_history jsonb not null default '[]'::jsonb,
       metadata jsonb not null default '{}'::jsonb,
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
@@ -543,7 +546,7 @@ describe("advanceTrackStage — through the SHARED gate core", () => {
     expect((await getTrack(trackId, human))!.currentStage).toBe("review");
   });
 
-  it("a CHECK gate on a track holds it paused (fail-closed: a track has no criteria to measure)", async () => {
+  it("a CHECK gate on a track holds it paused when no session was filed at the stage being left", async () => {
     const trackId = await gatedTrackId();
     const result = await advanceTrackStage({
       trackId,

@@ -120,7 +120,7 @@ synap doc create --title "Q2 Report" --file ./report.md
 synap doc update <docId> --file ./updated-report.md
 
 # Arrange widgets on an existing bento view
-synap view arrange <viewId> --blocks '[{"id":"b1","kind":"widget","widgetKind":"generated:my-chart","layout":{"x":0,"y":0,"w":8,"h":6}}]'
+echo '[{"key":"generated:my-chart","x":0,"y":0,"w":8,"h":6}]' | synap view arrange <viewId>
 ```
 
 ### The SynapWidget Bridge (inside the iframe)

@@ -233,6 +233,10 @@ export const sessionHandlers: McpHandlerMap = {
         typeof args.trackId === "string" && args.trackId.trim()
           ? args.trackId.trim()
           : undefined,
+      trackStage:
+        typeof args.trackStage === "string" && args.trackStage.trim()
+          ? args.trackStage.trim()
+          : undefined,
       subjectEntityId: args.subjectEntityId as string | undefined,
       title: typeof args.title === "string" ? args.title : null,
       goal: args.goal as string,
@@ -284,6 +288,17 @@ export const sessionHandlers: McpHandlerMap = {
         candidates: result.candidates,
       });
     }
+    // This start already handed back the ranked playbooks — record the offer so
+    // `update_session`'s nudge does not repeat it. Best-effort: a failed stamp
+    // only means the offer may come once more.
+    if (
+      result.status === "created" &&
+      (result.playbooks?.candidates.length ?? 0) > 0
+    ) {
+      const { claimPlaybookOffer } =
+        await import("../../../services/focus-sessions/session-nudges.js");
+      await claimPlaybookOffer(result.session.id, userId).catch(() => false);
+    }
     return ok(result);
   },
   synap_complete_session: async (
@@ -310,6 +325,16 @@ export const sessionHandlers: McpHandlerMap = {
     if (!result) {
       return ok({ error: `Focus session ${args.sessionId} not found` });
     }
+    // Never blocks the close (it already happened): what closed still owed —
+    // ungraded criteria, a stage never advanced, outputs owed by the person.
+    const { loadSessionNudges } =
+      await import("../../../services/focus-sessions/session-nudges.js");
+    const nudges = await loadSessionNudges({
+      session: result.session,
+      phase: "complete",
+      userId,
+      agentUserId,
+    });
     // Gate 2: proposal pack on complete — one review unit for the session.
     return ok({
       // The status the ROW now holds — not a hardcoded "closed". With
@@ -326,6 +351,7 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
+      ...(nudges ? { nudges } : {}),
       note:
         result.counts.pending > 0
           ? `Review pack: ${result.counts.pending} pending proposal(s) for this session — use synap_list_proposals with sessionId, or open the session room.`
@@ -737,7 +763,18 @@ export const sessionHandlers: McpHandlerMap = {
           reviewUrl: result.reviewUrl,
           session: null,
         });
-      case "updated":
+      case "updated": {
+        // What the session still owes (ungraded criteria, stage never set,
+        // outputs owed by the person, a playbook offer once) — read-only,
+        // computed by the ONE door-shared loader. Omitted when nothing is owed.
+        const { loadSessionNudges } =
+          await import("../../../services/focus-sessions/session-nudges.js");
+        const nudges = await loadSessionNudges({
+          session: result.session,
+          phase: "update",
+          userId,
+          agentUserId,
+        });
         // `completeOutput` rides the SUCCESS response, not an error: the rest
         // of the patch landed. Without it a refused mark is indistinguishable
         // from a completed one — the row simply comes back unchanged and the
@@ -761,7 +798,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.followRefusal
             ? { followRefusal: result.followRefusal }
             : {}),
+          ...(nudges ? { nudges } : {}),
         });
+      }
     }
     // Defensive: an unhandled decision must NOT fall through — every
     // FocusSessionUpdateResult status is handled above (exhaustive switch).

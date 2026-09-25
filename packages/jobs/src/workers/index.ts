@@ -22,7 +22,6 @@ import {
   handleDocumentSnapshot,
   handleDocumentRestore,
   handleDocumentAutoSave,
-  handleDocumentPersistence,
   handleWhiteboardSnapshot,
   handleWhiteboardRestore,
   handleWhiteboardAutoSave,
@@ -238,7 +237,6 @@ const ALL_QUEUES = [
   "document-snapshot",
   "document-restore",
   "doc-autosave",
-  "doc-persistence",
   "whiteboard-snapshot",
   "whiteboard-restore",
   "whiteboard-autosave",
@@ -348,6 +346,11 @@ const RETIRED_QUEUES: string[] = [
   // produced nothing in two weeks on the live pod. Its replacement mines the
   // human approval log instead of guessing, and files a normal proposal.
   "automation-pattern-detect",
+  // Removed 2026-09-25 (documents-centerpiece W4a): copied the live Yjs state
+  // into `documents.working_state` every 10 min, which nothing read. The
+  // realtime server now persists that cache itself, stamped with the content
+  // revision it equals (`working_state_revision`).
+  "doc-persistence",
 ];
 
 /**
@@ -544,9 +547,8 @@ export async function registerAllWorkers(): Promise<void> {
     handleDocumentRestore(job)
   );
   await boss.work("doc-autosave", async () => handleDocumentAutoSave());
-  await boss.work("doc-persistence", async () => handleDocumentPersistence());
   logger.info(
-    "Registered workers: document-snapshot, document-restore, doc-autosave, doc-persistence"
+    "Registered workers: document-snapshot, document-restore, doc-autosave"
   );
 
   // Whiteboard snapshots

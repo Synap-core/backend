@@ -432,39 +432,30 @@ export const buildHandlers: McpHandlerMap = {
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const { COMPOSE_WIDGET_CATALOG } =
-      await import("../../../services/cells/compose-widget-catalog.js");
+    const { discoverRenderables } =
+      await import("../../../services/cells/renderables.js");
     const workspaceId =
       confinedWorkspaceId ??
       (typeof args.workspaceId === "string" ? args.workspaceId : null);
-    const rows = (await caller.widgetDefinitions.listWidgetDefs({
-      workspaceId,
-    })) as Array<Record<string, unknown>>;
-    const generated = rows
-      .filter(
-        (row) =>
-          row.source !== "compose-catalog" &&
-          typeof row.typeKey === "string" &&
-          (String(row.typeKey).startsWith("generated:") ||
-            row.rendererType === "frame")
-      )
-      .map((row) => ({
-        key: row.typeKey,
-        name: row.name,
-        description: row.description ?? "",
-        rendererType: row.rendererType,
-        workspaceId: row.workspaceId ?? null,
-      }));
+    const surface = args.surface === "document" ? "document" : "bento";
+    // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
+    // pod's installed / AI-defined cells (services/cells/renderables.ts).
+    const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
     return ok({
-      builtins: COMPOSE_WIDGET_CATALOG.filter((w) => !w.aliasOf),
-      aliases: COMPOSE_WIDGET_CATALOG.filter((w) => w.aliasOf),
-      generated,
-      notes: [
-        "Never guess a widget key — use this list.",
-        "view / view-table / view-* require config.viewId (a saved view UUID). profileSlug is not enough.",
-        "Counts: stat-card + profileSlug. entity-count is a legacy alias.",
-        "Profile-scoped collections without a saved view: entity-list + profileSlug.",
-      ],
+      surface,
+      widgets: discoverRenderables(rows, surface),
+      notes:
+        surface === "document"
+          ? [
+              "Never guess a key — use this list.",
+              "exampleDirective is the document embed grammar being rolled out: attributes carry ONLY the cellKey, props go in a ```json block, and the paragraph after it is the fallback shown where the live cell cannot render. Until your skill (document-embeds) teaches that form, write embeds the way the skill says.",
+              "binding.default says how the data travels: query = live from the pod.",
+            ]
+          : [
+              "Never guess a widget key — use this list.",
+              "view requires config.viewId (a saved view UUID). A profileSlug is not enough — use entity-list for that.",
+              "Counts: stat-card + profileSlug. Legacy aliases (view-*, entity-count) still render but are not listed — never write them.",
+            ],
     });
   },
   synap_post_message: async (ctx: McpToolContext): Promise<CallToolResult> => {

@@ -82,10 +82,16 @@ vi.mock(
   }
 );
 
+// The generic endpoint floor runs before the blocker floor; it has its own
+// PGlite suite (`link-endpoint-visibility.pglite.test.ts`). Passed through here
+// so this file keeps pinning WHICH principal the blocker floor runs as.
+vi.mock("./link-endpoint-visibility.js", () => ({
+  checkLinkEndpointsVisible: vi.fn(async () => null),
+}));
+
 const { registerLinksRoutes } = await import("./links.js");
-const { validateSessionBlocker, addSessionBlocker } = await import(
-  "../../../services/focus-sessions/session-blocked-by.js"
-);
+const { validateSessionBlocker, addSessionBlocker } =
+  await import("../../../services/focus-sessions/session-blocked-by.js");
 
 const agentKey = {
   userId: HUMAN,

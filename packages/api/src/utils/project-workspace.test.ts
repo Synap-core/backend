@@ -20,11 +20,13 @@ type LinkNeighbour = {
 
 const {
   ownerPrivateVisibleWhereMock,
+  userVisibleWhereMock,
   createLinkMock,
   getLinksForMock,
   getDbMock,
 } = vi.hoisted(() => ({
   ownerPrivateVisibleWhereMock: vi.fn(() => ({ __wsFloor: true })),
+  userVisibleWhereMock: vi.fn(() => ({ __userVisibleFloor: true })),
   createLinkMock: vi.fn(
     async (_input?: unknown): Promise<{ id: string } | undefined> => ({
       id: "edge-1",
@@ -42,6 +44,7 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     ownerPrivateVisibleWhere: ownerPrivateVisibleWhereMock,
+    userVisibleWhere: userVisibleWhereMock,
     getDb: getDbMock,
   };
 });
@@ -105,6 +108,7 @@ const HELPER_SRC = readFileSync(
 
 beforeEach(() => {
   ownerPrivateVisibleWhereMock.mockClear();
+  userVisibleWhereMock.mockClear();
   createLinkMock.mockClear();
   getLinksForMock.mockClear();
   getDbMock.mockReset();
@@ -231,13 +235,17 @@ describe("readers — same links graph, typed uses-edge", () => {
       { fromId: "other-project", toId: ARGS.workspaceId },
     ]);
 
-    const map = await listWorkspacesUsedByProjects(db as never, [
-      ARGS.projectId,
-      "other-project",
-    ]);
+    const map = await listWorkspacesUsedByProjects(
+      db as never,
+      [ARGS.projectId, "other-project"],
+      ARGS.userId
+    );
 
     expect(map.get(ARGS.projectId)).toEqual([ARGS.workspaceId, otherWs]);
     expect(map.get("other-project")).toEqual([ARGS.workspaceId]);
+    // Visibility floor must run — without it a used workspace's name would
+    // leak to a project viewer who isn't a member/owner of it.
+    expect(userVisibleWhereMock).toHaveBeenCalled();
   });
 
   it("listProjectsUsingWorkspace is the reverse of the same edge, floored", async () => {

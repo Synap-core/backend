@@ -314,12 +314,20 @@ describe("two-user floor — role-as-lens (facet) share grant on entities", () =
     expect(q.params).not.toContain(B);
   });
 
-  it("documents do NOT get the facet branch (they have no facets)", () => {
+  it("documents get NO facet branch of their own — only the pod share of the entity they are the body of", () => {
     const qDocs = compile(scopedDb(accessA).predicate(documents)!);
-    // The opt-in is `entities`-only: documents keep the owner/workspace floor with
-    // NO entity_facets join (querying entity_facets by documents.id is meaningless).
-    expect(qDocs.sql).not.toContain("entity_facets");
-    // …and their own private floor is intact.
+    // Documents have no facets: `entity_facets` is never keyed by a document id.
+    // The one facet reference is the pod-shared test on the ENTITY whose body
+    // the document is (a document follows its entity, 2026-09-25), reached
+    // through `entities.document_id`.
+    expect(qDocs.sql).toContain(
+      '"documents"."id" in (select "document_id" from "entities"'
+    );
+    expect(qDocs.sql).not.toContain(
+      '"documents"."id" in (select "entity_id" from "entity_facets"'
+    );
+    // …and binds only A, with its own private floor intact.
+    expect(qDocs.params).not.toContain(B);
     expect(qDocs.sql).toContain('"documents"."user_id"');
   });
 });

@@ -28,6 +28,11 @@ vi.mock("../../../utils/intelligence-routing.js", () => ({
   getDefaultActiveService,
 }));
 vi.mock("../ask.js", () => ({ ask: askMock }));
+// The lens/catalog resolution reads the DB; it is not what this file tests
+// (covered by __tripwires__/knowledge-lens-door-parity.test.ts).
+vi.mock("../resolve-lens.js", () => ({
+  resolveKnowledgeLens: async () => ({ workspaceId: null, catalog: [] }),
+}));
 
 import { buildSynthesisContext, synthesizeAnswer } from "../synthesize.js";
 import type { AskAnswer } from "../ask.js";

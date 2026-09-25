@@ -155,10 +155,6 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "whiteboard-autosave", "*/30 * * * *", {});
   logger.info("Registered cron: whiteboard-autosave (every 30min)");
 
-  // Document persistence (every 10 minutes)
-  await scheduleSafe(boss, "doc-persistence", "*/10 * * * *", {});
-  logger.info("Registered cron: doc-persistence (every 10min)");
-
   // Search bulk-index catch-up (every 5 minutes).
   // Individual items are indexed immediately via indexNow(); this cron only flushes
   // items that were queued as fallback when Typesense was temporarily unavailable.

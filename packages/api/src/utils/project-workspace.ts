@@ -23,6 +23,7 @@ import {
   projects,
   workspaces,
   ownerPrivateVisibleWhere,
+  userVisibleWhere,
   drizzleSql,
 } from "@synap/database";
 
@@ -35,11 +36,17 @@ export type UsedWorkspaceRef = {
 
 /**
  * Hydrate uses-edge ids to {id, name, domain}. Order of `ids` is preserved.
- * Missing rows are omitted (deleted workspace) — never invented.
+ * Missing rows are omitted — a deleted workspace, same as a workspace the
+ * viewer is not a member/owner of and that isn't pod-visible (floored with
+ * `userVisibleWhere(workspaces.id, userId)`, the same predicate
+ * `workspaces.list` / `diagnose` use). The `uses` edge is an INDEX, not an
+ * ACL, but the workspace's NAME/DOMAIN are still that workspace's own data —
+ * a project viewer who isn't in the used workspace must not see them.
  */
 export async function hydrateUsedWorkspaces(
   db: Awaited<ReturnType<typeof getDb>>,
-  ids: readonly string[]
+  ids: readonly string[],
+  userId: string
 ): Promise<UsedWorkspaceRef[]> {
   if (ids.length === 0) return [];
   const rows = await db
@@ -49,7 +56,12 @@ export async function hydrateUsedWorkspaces(
       domain: workspaces.domain,
     })
     .from(workspaces)
-    .where(inArray(workspaces.id, [...ids]));
+    .where(
+      and(
+        inArray(workspaces.id, [...ids]),
+        userVisibleWhere(workspaces.id, userId)
+      )
+    );
   const byId = new Map(rows.map((r) => [r.id, r]));
   const out: UsedWorkspaceRef[] = [];
   for (const id of ids) {
@@ -126,21 +138,29 @@ export async function linkProjectToWorkspace(
  * that already authenticated a project read don't have to change signature.
  */
 export async function listWorkspacesUsedByProject(
-  _userId: string,
+  userId: string,
   projectId: string
 ): Promise<string[]> {
   const db = await getDb();
-  const map = await listWorkspacesUsedByProjects(db, [projectId]);
+  const map = await listWorkspacesUsedByProjects(db, [projectId], userId);
   return map.get(projectId) ?? [];
 }
 
 /**
  * Batch: workspace ids each project uses. Typed `eq(links.linkType, "uses")`
  * so `projects.list` is one query, not N `getLinksFor` calls.
+ *
+ * Floored to workspaces `userId` can see (`userVisibleWhere(workspaces.id,
+ * userId)`, the same predicate `workspaces.list` / `diagnose` use) via a JOIN
+ * — a used workspace the viewer isn't a member/owner of, and that isn't
+ * pod-visible, is omitted, not exposed. The `uses` edge is an INDEX, not an
+ * ACL; this floor is about what NAME/rows the viewer is shown, not about
+ * granting or denying access to the edge itself.
  */
 export async function listWorkspacesUsedByProjects(
   db: Awaited<ReturnType<typeof getDb>>,
-  projectIds: string[]
+  projectIds: string[],
+  userId: string
 ): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   if (projectIds.length === 0) return result;
@@ -148,12 +168,16 @@ export async function listWorkspacesUsedByProjects(
   const rows = await db
     .select({ fromId: links.fromId, toId: links.toId })
     .from(links)
+    // `workspaces.id` is uuid, `links.to_id` is text (polymorphic): cast the
+    // uuid side, same pattern as `listProjectsUsingWorkspace`'s join below.
+    .innerJoin(workspaces, eq(drizzleSql`${workspaces.id}::text`, links.toId))
     .where(
       and(
         eq(links.fromType, "project"),
         inArray(links.fromId, projectIds),
         eq(links.toType, "workspace"),
-        eq(links.linkType, "uses")
+        eq(links.linkType, "uses"),
+        userVisibleWhere(workspaces.id, userId)
       )
     );
 

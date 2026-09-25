@@ -196,7 +196,7 @@ describe("linkEndpointsFromPayload + resolveLinkEndpointName — real /links-doo
       toolById: new Map(),
       skillById: new Map([[UUID_SKILL, { name: "Send Email" }]]),
       documentTitleById: new Map(),
-      userById: new Map(),
+      agentById: new Map(),
       ...overrides,
     };
   }

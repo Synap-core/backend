@@ -359,6 +359,9 @@ registerVisibility({
         workspaceLens: access.workspaceLens,
         projectLens: access.projectLens,
         exposureRelationTypes: access.exposureRelationTypes,
+        // A document follows its entity: the body of a pod-shared entity is
+        // pod-shared too (`podSharedDocumentWhere`).
+        documentFollowsEntity: true,
       }),
     nullWorkspaceMeans: "ownerPrivate",
   },

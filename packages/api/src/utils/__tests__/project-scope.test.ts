@@ -60,7 +60,12 @@ vi.mock("@synap/database", async (importOriginal) => ({
 }));
 
 // ── Mock pg-core column stubs ────────────────────────────────────────────────
-vi.mock("@synap/database/schema", () => ({
+// PARTIAL (`importOriginal` + spread): the fake column shapes below override
+// the real tables this file compiles against; every OTHER schema export
+// `project-scope.ts` imports (e.g. `entities`, for the document-follows-entity
+// branch) stays real, so a new import never kills collection.
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   projectMembers: {
     projectId: { _colName: "project_id" },
     userId: { _colName: "user_id" },

@@ -16,20 +16,25 @@ import {
   db,
   eq,
   and,
-  readDocumentVersionContent,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
+  claimDocumentRevision,
+  INHERIT_LAST_AUTHOR,
 } from "@synap/database";
 import {
   documents,
-  documentVersions,
   documentSessions,
   views,
   workspaceMembers,
 } from "@synap/database/schema";
 import { storage } from "@synap/storage";
 import { recordYjsPersist, recordYjsPersistFailure } from "./bridge.js";
-import { randomUUID } from "crypto";
+import {
+  applyDocumentRoomPlan,
+  markDocumentRoomLoadFailed,
+  planDocumentRoomLoad,
+  roomMeta,
+  ROOM_META_KEYS,
+  trustedCacheRevision,
+} from "./document-room.js";
 
 export interface YjsServerConfig {
   io: SocketIOServer;
@@ -120,11 +125,14 @@ export async function authorizeRoomAccess(
 type TldrawStoreSnapshot = Record<string, unknown>;
 
 /**
- * Custom persistence adapter: MinIO for whiteboards (canonical), document_versions for others.
+ * Custom persistence adapter: MinIO for whiteboards (canonical); for text
+ * documents the Yjs state is a CACHE in `documents.working_state` (see
+ * `document-room.ts`) — never a `document_versions` row.
  */
 class DatabasePersistence {
   /**
-   * Load Y.Doc: whiteboard rooms from MinIO (Tldraw JSON), others from document_versions.
+   * Load Y.Doc: whiteboard rooms from MinIO (Tldraw JSON); document rooms from
+   * the trusted Yjs cache, or empty with a one-time seed request.
    */
   async bindState(roomName: string, ydoc: Y.Doc): Promise<void> {
     try {
@@ -204,40 +212,53 @@ class DatabasePersistence {
         return;
       }
 
-      // Non-whiteboard: load from document_versions (legacy)
-      const workingVersion = await db.query.documentVersions.findFirst({
-        where: and(
-          eq(documentVersions.documentId, documentId),
-          eq(documentVersions.version, doc.currentVersion)
-        ),
-      });
-
-      const workingContent = workingVersion
-        ? await readDocumentVersionContent(workingVersion)
-        : null;
-      if (workingContent?.startsWith("yjs:")) {
-        const base64State = workingContent.substring(4);
-        const state = Buffer.from(base64State, "base64");
-        Y.applyUpdate(ydoc, state);
+      // Document room: the trusted cache, or an empty room that asks ONE
+      // client to seed the markdown of this revision.
+      const plan = planDocumentRoomLoad(doc);
+      if (plan.kind === "cache") {
+        applyDocumentRoomPlan(ydoc, plan);
         console.log(
-          `[Yjs] Loaded working version ${doc.currentVersion} for ${roomName}`
+          `[Yjs] Loaded cached state (revision ${plan.revision}) for ${roomName}`
         );
-      } else if (doc.storageKey) {
-        // Fallback: try MinIO for markdown/text
-        try {
-          const contentBuffer = await storage.downloadBuffer(doc.storageKey);
-          const content = contentBuffer.toString("utf-8");
-          // Raw Y.Doc state (base64) – future: support MinIO for markdown
-          if (content.startsWith("yjs:")) {
-            const state = Buffer.from(content.substring(4), "base64");
-            Y.applyUpdate(ydoc, state);
-          }
-        } catch {
-          // Ignore – will initialize fresh
-        }
+        return;
       }
+      if (!doc.storageKey) {
+        applyDocumentRoomPlan(ydoc, plan);
+        return;
+      }
+      // Legacy recovery: a body that an old restore overwrote with `yjs:` state
+      // holds no markdown to seed from — load it so a client writes markdown
+      // back. A FAILED read is surfaced on the room, never an empty room.
+      let body: Buffer;
+      try {
+        body = await storage.downloadBuffer(doc.storageKey);
+      } catch (error) {
+        console.error(
+          `[Yjs] Failed to read the stored body of ${roomName}:`,
+          error
+        );
+        markDocumentRoomLoadFailed(
+          ydoc,
+          "The document's stored content could not be read."
+        );
+        return;
+      }
+      if (body.subarray(0, 4).toString("utf-8") === "yjs:") {
+        Y.applyUpdate(
+          ydoc,
+          Buffer.from(body.subarray(4).toString("utf-8"), "base64")
+        );
+        roomMeta(ydoc).set(ROOM_META_KEYS.revision, doc.contentRevision);
+        console.warn(
+          `[Yjs] ${roomName} stored body is legacy Yjs state — loaded for markdown write-back`
+        );
+        return;
+      }
+      applyDocumentRoomPlan(ydoc, plan);
     } catch (error) {
       console.error(`[Yjs] Failed to load document ${roomName}:`, error);
+      // A room that failed to load must not look like an empty document.
+      markDocumentRoomLoadFailed(ydoc, "The document could not be loaded.");
     }
   }
 
@@ -397,67 +418,32 @@ class DatabasePersistence {
         return;
       }
 
-      // Non-whiteboard: save to document_versions (legacy)
+      // Document room: persist the Yjs CACHE only — never a version row.
+      // Trusted (stamped with the revision) only when the room claims exactly
+      // the document's current content revision.
       const state = Y.encodeStateAsUpdate(ydoc);
-      const base64State = Buffer.from(state).toString("base64");
-      const yjsContent = `yjs:${base64State}`;
-      const workingVersion = doc.currentVersion;
-
-      const existingWorkingVersion = await db.query.documentVersions.findFirst({
-        where: and(
-          eq(documentVersions.documentId, documentId),
-          eq(documentVersions.version, workingVersion)
-        ),
-      });
-
-      if (existingWorkingVersion) {
-        const snapshot = await uploadDocumentVersionSnapshot({
-          userId: doc.userId,
-          documentId,
-          versionId: existingWorkingVersion.id,
-          documentType: doc.type,
-          mimeType: doc.mimeType || "application/octet-stream",
-          content: yjsContent,
-        });
-        await db
-          .update(documentVersions)
-          .set(storedVersionValues(snapshot))
-          .where(
-            and(
-              eq(documentVersions.documentId, documentId),
-              eq(documentVersions.version, workingVersion)
-            )
-          );
-      } else {
-        const versionId = randomUUID();
-        const snapshot = await uploadDocumentVersionSnapshot({
-          userId: doc.userId,
-          documentId,
-          versionId,
-          documentType: doc.type,
-          mimeType: doc.mimeType || "application/octet-stream",
-          content: yjsContent,
-        });
-        await db.insert(documentVersions).values({
-          id: versionId,
-          documentId,
-          version: workingVersion,
-          ...storedVersionValues(snapshot),
-          author: "system",
-          authorId: "yjs-server",
-          message: "Working version created (Yjs sync)",
-        });
-      }
-
+      if (state.byteLength <= 2) return;
       await db
         .update(documents)
-        .set({ updatedAt: new Date() })
+        .set({
+          workingState: Buffer.from(state).toString("base64"),
+          workingStateUpdatedAt: new Date(),
+        })
         .where(eq(documents.id, documentId));
+      const trusted = trustedCacheRevision(ydoc, doc.contentRevision);
+      if (trusted !== null) {
+        await db
+          .update(documents)
+          .set({ workingStateRevision: trusted })
+          .where(
+            and(
+              eq(documents.id, documentId),
+              eq(documents.contentRevision, trusted)
+            )
+          );
+      }
 
       recordYjsPersist();
-      console.log(
-        `[Yjs] Updated working version ${workingVersion} for ${roomName}`
-      );
     } catch (error) {
       console.error(`[Yjs] Failed to save document ${roomName}:`, error);
     }
@@ -519,46 +505,27 @@ class DatabasePersistence {
           `[Yjs] Final save for whiteboard ${roomName} (session closed)`
         );
       } else {
-        // Documents: create an immutable version snapshot
-        const state = Y.encodeStateAsUpdate(ydoc);
-        const content = `yjs:${Buffer.from(state).toString("base64")}`;
-
-        // Skip empty snapshots
-        if (state.byteLength <= 2) return;
-
-        const newVersion = (doc.currentVersion || 0) + 1;
-        const versionId = randomUUID();
-        const snapshot = await uploadDocumentVersionSnapshot({
-          userId: doc.userId,
-          documentId,
-          versionId,
-          documentType: doc.type,
-          mimeType: doc.mimeType || "application/octet-stream",
-          content,
-        });
-
-        await db.insert(documentVersions).values({
-          id: versionId,
-          documentId,
-          version: newVersion,
-          ...storedVersionValues(snapshot),
-          author: "system",
-          authorId: "session-close",
-          message: "Auto-saved on session close",
-        });
-
-        await db
-          .update(documents)
-          .set({
-            currentVersion: newVersion,
-            lastSavedVersion: newVersion,
-            updatedAt: new Date(),
-          })
-          .where(eq(documents.id, documentId));
-
-        console.log(
-          `[Yjs] Created version snapshot v${newVersion} for ${roomName} (session closed)`
-        );
+        // Documents: persist the cache, then checkpoint the MARKDOWN (the
+        // leader wrote it back while the room was open) through the one
+        // content-write door — only when it moved since the last checkpoint.
+        await this.writeState(roomName, ydoc);
+        if (doc.storageKey) {
+          const claimed = await db.transaction((tx) =>
+            claimDocumentRevision(
+              tx,
+              documentId,
+              undefined,
+              INHERIT_LAST_AUTHOR,
+              {
+                checkpoint: { message: "Saved when editing ended" },
+                skipIfUnchanged: true,
+              }
+            )
+          );
+          console.log(
+            `[Yjs] Session closed for ${roomName}: ${claimed.skipped ? "unchanged, no checkpoint" : `checkpoint v${claimed.currentVersion}`}`
+          );
+        }
       }
 
       // Mark all active sessions for this document as ended

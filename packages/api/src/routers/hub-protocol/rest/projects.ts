@@ -36,12 +36,18 @@ import {
   buildDigestSummary,
   hasScope,
   httpStatusForTrpcError,
+  errCode,
   logger,
   type HubHono,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { getProjectPath } from "../../../services/projects/project-path.js";
+import {
+  listProjectOutputs,
+  PROJECT_OUTPUTS_MAX_LIMIT,
+} from "../../../services/projects/project-outputs.js";
+import { AccessContext } from "../../../access/index.js";
 import {
   hydrateUsedWorkspaces,
   listWorkspacesUsedByProjects,
@@ -135,7 +141,8 @@ export function registerProjectsRoutes(app: HubHono): void {
     // the workspaces each project runs through. One batch query. Not an ACL.
     const usedByProject = await listWorkspacesUsedByProjects(
       db,
-      rows.map((r) => r.id)
+      rows.map((r) => r.id),
+      userId
     );
     return c.json(
       rows.map((r) => ({
@@ -330,6 +337,68 @@ export function registerProjectsRoutes(app: HubHono): void {
       logger.error({ err, projectId }, "project path failed");
       return c.json(
         { error: "Failed to read project path" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // GET /projects/:projectId/outputs — what the project's sessions PRODUCED,
+  // newest first (`services/projects/project-outputs.ts`, the same read as
+  // tRPC `projects.outputs`). Registered BEFORE /projects/:id. A
+  // workspace-bound service key is pinned to its workspace, as on /path.
+  app.get("/projects/:projectId/outputs", async (c) => {
+    const parsed = z
+      .object({
+        projectId: z.string().uuid(),
+        trackId: z.string().uuid().optional(),
+        trackStage: z.string().min(1).max(200).optional(),
+        cursor: z.string().min(1).optional(),
+        limit: z.coerce
+          .number()
+          .int()
+          .min(1)
+          .max(PROJECT_OUTPUTS_MAX_LIMIT)
+          .default(30),
+      })
+      .safeParse({
+        projectId: c.req.param("projectId"),
+        trackId: c.req.query("trackId") ?? undefined,
+        trackStage: c.req.query("trackStage") ?? undefined,
+        cursor: c.req.query("cursor") ?? undefined,
+        limit: c.req.query("limit") ?? undefined,
+      });
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request", details: parsed.error.issues },
+        400
+      );
+    }
+    const { projectId, trackId, trackStage, cursor, limit } = parsed.data;
+    try {
+      const pinned = getConfinedWorkspace(c, undefined);
+      const result = await listProjectOutputs({
+        access: AccessContext.agent({
+          userId: c.get("userId"),
+          agentUserId: c.get("agentUserId") as string | undefined,
+        }),
+        projectId,
+        trackId,
+        trackStage,
+        cursor,
+        limit,
+        workspaceIds: pinned ? [pinned] : undefined,
+      });
+      if (!result) return c.json({ error: "Project not found" }, 404);
+      return c.json(result);
+    } catch (err) {
+      // The caller's own error (an unreadable cursor) says what it is.
+      // Invalid cursor is the only BAD_REQUEST `listProjectOutputs` throws.
+      if (errCode(err) === "BAD_REQUEST") {
+        return c.json({ error: "Invalid cursor" }, 400);
+      }
+      logger.error({ err, projectId }, "project outputs failed");
+      return c.json(
+        { error: "Failed to read project outputs" },
         httpStatusForTrpcError(err)
       );
     }
@@ -606,8 +675,13 @@ export function registerProjectsRoutes(app: HubHono): void {
 
     if (!row) return c.json({ error: "Project not found" }, 404);
     const usedWorkspaceIds =
-      (await listWorkspacesUsedByProjects(db, [row.id])).get(row.id) ?? [];
-    const usedWorkspaces = await hydrateUsedWorkspaces(db, usedWorkspaceIds);
+      (await listWorkspacesUsedByProjects(db, [row.id], userId)).get(row.id) ??
+      [];
+    const usedWorkspaces = await hydrateUsedWorkspaces(
+      db,
+      usedWorkspaceIds,
+      userId
+    );
     return c.json({
       ...row,
       // Additive INDEX: workspaces this project uses. Not an ACL.

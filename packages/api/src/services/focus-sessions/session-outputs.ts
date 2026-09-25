@@ -296,6 +296,10 @@ export function joinSessionOutputs(
  * anyway for `expectedOutputs`, so a separate `ownsFocusSession` round-trip
  * would re-ask a question this query already answers. Returns `null` when the
  * session does not exist OR is not the caller's (indistinguishable on purpose).
+ *
+ * The join itself is `listOutputsForSessions` called with ONE session — the
+ * project read (`projects.outputs`) calls the same function with many, so the
+ * per-session door and the project door cannot join differently.
  */
 export async function listSessionOutputs(
   params: ListSessionOutputsParams
@@ -303,7 +307,10 @@ export async function listSessionOutputs(
   const { db: database, userId, sessionId } = params;
 
   const [session] = await database
-    .select({ expectedOutputs: focusSessions.expectedOutputs })
+    .select({
+      id: focusSessions.id,
+      expectedOutputs: focusSessions.expectedOutputs,
+    })
     .from(focusSessions)
     .where(
       and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
@@ -311,9 +318,35 @@ export async function listSessionOutputs(
     .limit(1);
   if (!session) return null;
 
+  const joined = await listOutputsForSessions(database, [session]);
+  return joined.get(session.id) ?? { outputs: [], pendingExpected: [] };
+}
+
+/**
+ * THE three-ledger fetch + join for a SET of sessions, in a FIXED number of
+ * queries whatever the set size: one artifacts read, one produced-edge read,
+ * one satisfying-proposal read and the five batched title reads — never one
+ * per session. Each session is joined on its own by `joinSessionOutputs`
+ * (pure, unchanged), so a batch answers exactly what N single-session calls
+ * would.
+ *
+ * AUTHORIZATION IS THE CALLER'S: `sessions` must already be floored (loaded
+ * through the session visibility floor). This reads ledgers BY those ids, and
+ * the id set is the authorization — the same contract `attachPathSections`
+ * states.
+ */
+export async function listOutputsForSessions(
+  database: typeof db,
+  sessions: ReadonlyArray<{ id: string; expectedOutputs: unknown }>
+): Promise<Map<string, SessionOutputsResult>> {
+  const out = new Map<string, SessionOutputsResult>();
+  if (sessions.length === 0) return out;
+  const ids = sessions.map((s) => s.id);
+
   const [artifactRows, producedRows] = await Promise.all([
     database
       .select({
+        sessionId: artifactsTable.sessionId,
         id: artifactsTable.id,
         kind: artifactsTable.kind,
         refId: artifactsTable.refId,
@@ -325,9 +358,10 @@ export async function listSessionOutputs(
         props: artifactsTable.props,
       })
       .from(artifactsTable)
-      .where(eq(artifactsTable.sessionId, sessionId)),
+      .where(inArray(artifactsTable.sessionId, ids)),
     database
       .select({
+        sessionId: links.fromId,
         toType: links.toType,
         toId: links.toId,
         createdAt: links.createdAt,
@@ -336,21 +370,25 @@ export async function listSessionOutputs(
       .where(
         and(
           eq(links.fromType, "session"),
-          eq(links.fromId, sessionId),
+          inArray(links.fromId, ids),
           eq(links.linkType, "produced")
         )
       ),
   ]);
 
-  const expectedOutputs: ExpectedOutput[] = Array.isArray(
-    session.expectedOutputs
-  )
-    ? (session.expectedOutputs as ExpectedOutput[])
-    : [];
+  const expectedBySession = new Map<string, ExpectedOutput[]>(
+    sessions.map((s) => [
+      s.id,
+      Array.isArray(s.expectedOutputs)
+        ? (s.expectedOutputs as ExpectedOutput[])
+        : [],
+    ])
+  );
 
   const proposalIds = [
     ...new Set(
-      expectedOutputs
+      [...expectedBySession.values()]
+        .flat()
         .map((e) => e.satisfiedByProposalId)
         .filter((id): id is string => Boolean(id))
     ),
@@ -375,16 +413,41 @@ export async function listSessionOutputs(
     ...producedRows.map((p) => ({ kind: p.toType, refId: p.toId })),
   ]);
 
-  return joinSessionOutputs({
-    artifacts: artifactRows.map((a) => ({
-      ...(a as unknown as JoinArtifactRow),
-      expectedLabel: readExpectedLabel(a.props),
-    })),
-    produced: producedRows as JoinProducedRow[],
-    expectedOutputs,
-    proposals: proposalRows,
-    titles,
-  });
+  const artifactsBySession = groupBy(artifactRows, (a) => a.sessionId);
+  const producedBySession = groupBy(producedRows, (p) => p.sessionId);
+  for (const id of ids) {
+    out.set(
+      id,
+      joinSessionOutputs({
+        artifacts: (artifactsBySession.get(id) ?? []).map((a) => ({
+          ...(a as unknown as JoinArtifactRow),
+          expectedLabel: readExpectedLabel(a.props),
+        })),
+        produced: (producedBySession.get(id) ?? []) as JoinProducedRow[],
+        expectedOutputs: expectedBySession.get(id) ?? [],
+        // The whole batch's proposals: a proposal id names one satisfying
+        // proposal, so another session's rows can never match a lookup here.
+        proposals: proposalRows,
+        titles,
+      })
+    );
+  }
+  return out;
+}
+
+function groupBy<T>(
+  rows: readonly T[],
+  keyOf: (row: T) => string | null
+): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (!key) continue;
+    const list = map.get(key) ?? [];
+    list.push(row);
+    map.set(key, list);
+  }
+  return map;
 }
 
 /**

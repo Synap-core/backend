@@ -14,6 +14,14 @@
 
 import { registerOpenApi } from "./_codecs/_register.js";
 import type { HubHono } from "./_shared.js";
+import {
+  CREATABLE_VIEW_DEFINITIONS,
+  VIEW_DEFINITIONS,
+} from "@synap-core/types/renderables";
+
+const CREATABLE_VIEW_KEYS = new Set<string>(
+  CREATABLE_VIEW_DEFINITIONS.map((view) => view.key)
+);
 
 const MANIFEST = {
   version: "1",
@@ -27,7 +35,7 @@ const MANIFEST = {
     views:
       "GET /api/hub/views?workspaceId={workspaceId}     →  saved views (id, name, type, profileSlug, config)",
     widgetDefinitions:
-      "GET /api/hub/widget-definitions?workspaceId={workspaceId}  →  dashboard widget catalog (kind, configSchema)",
+      "GET /api/hub/widget-definitions?workspaceId={workspaceId}  →  renderables catalog (typeKey, configSchema, requiredConfig, placements)",
     capabilities:
       "GET /trpc/capabilities.list                      →  core features + intelligence services",
     me: "GET /api/hub/users/me                             →  current user (id, email, name)",
@@ -36,84 +44,16 @@ const MANIFEST = {
   },
 
   // ----- VIEW TYPES -------------------------------------------------------------
-  viewTypes: [
-    {
-      type: "table",
-      implemented: true,
-      when: "Dense data, many columns, sort/filter heavy",
-      configKeys: ["columns", "filters", "sort"],
-    },
-    {
-      type: "list",
-      implemented: true,
-      when: "Scan-friendly compact rows (tasks, notes)",
-      configKeys: ["columns", "filters", "sort"],
-    },
-    {
-      type: "grid",
-      implemented: true,
-      when: "Card grid, medium density",
-      configKeys: ["cardFields", "filters"],
-    },
-    {
-      type: "gallery",
-      implemented: true,
-      when: "Image-forward cards (articles, bookmarks, products)",
-      configKeys: ["imageProperty", "titleProperty", "filters"],
-    },
-    {
-      type: "kanban",
-      implemented: true,
-      when: "Status pipelines (tasks by status, deals by stage)",
-      configKeys: ["groupBy", "columns", "filters"],
-    },
-    {
-      type: "matrix",
-      implemented: true,
-      when: "2-axis grid (priority × urgency, effort × impact)",
-      configKeys: ["xAxis", "yAxis", "filters"],
-    },
-    {
-      type: "masonry",
-      implemented: true,
-      when: "Pinterest-style mixed-size cards; default for Library",
-      configKeys: ["filters", "sort"],
-    },
-    {
-      type: "calendar",
-      implemented: true,
-      when: "Date-indexed data (events, tasks by dueDate)",
-      configKeys: ["dateProperty", "titleProperty", "filters"],
-    },
-    {
-      type: "flow",
-      implemented: true,
-      when: "Node-edge diagrams (automations, mind maps)",
-      configKeys: ["nodeType", "edgeType"],
-    },
-    {
-      type: "bento",
-      implemented: true,
-      when: "Mixed composition — a dashboard-in-view",
-      configKeys: ["blocks"],
-    },
-    {
-      type: "branch_tree",
-      implemented: true,
-      when: "Hierarchical data (project → subtasks, threads → branches)",
-      configKeys: ["rootId", "childProperty"],
-    },
-    {
-      type: "whiteboard",
-      implemented: true,
-      when: "Free-form canvas",
-      configKeys: [],
-    },
-    { type: "timeline", implemented: false, when: "Defer" },
-    { type: "graph", implemented: false, when: "Defer" },
-    { type: "gantt", implemented: false, when: "Defer" },
-    { type: "mindmap", implemented: false, when: "Defer" },
-  ],
+  // Derived from the ONE renderables catalog (`VIEW_DEFINITIONS`) — the same
+  // list the browser's view picker renders — never a local copy. `creatable`
+  // is what synap_create_view accepts; `when` is the catalog's aiHint.
+  viewTypes: VIEW_DEFINITIONS.map((view) => ({
+    type: view.key,
+    implemented: view.implemented,
+    creatable: CREATABLE_VIEW_KEYS.has(view.key),
+    when: view.aiHint ?? view.description,
+    configKeys: view.configSchema.map((field) => field.key),
+  })),
 
   // ----- BENTO ------------------------------------------------------------------
   bentoBlockKinds: [
@@ -130,8 +70,8 @@ const MANIFEST = {
     {
       kind: "widget",
       description:
-        "Renders a registered widget by widgetKind with optional config. Call GET /api/hub/widget-definitions for available kinds.",
-      requiredFields: ["widgetKind"],
+        "Renders a registered widget by widgetType (a key from GET /api/hub/widget-definitions — its typeKey) with optional config.",
+      requiredFields: ["widgetType"],
     },
   ],
 
@@ -230,7 +170,7 @@ const MANIFEST = {
   // ----- KEY BEHAVIORAL RULES ---------------------------------------------------
   rules: [
     "Call GET /api/hub/profiles first — never guess profileSlug values",
-    "Call GET /api/hub/widget-definitions before referencing widgetKind in bento — never guess",
+    "Call GET /api/hub/widget-definitions before referencing a widgetType in bento — never guess",
     "Workspaces are lenses, not silos — add views to existing workspaces before proposing new ones",
     "Always propose workspace creation before committing — workspace.create is proposal-gated",
     "bento.arrange is auto-approved — safe to call without hesitation for rearranges",

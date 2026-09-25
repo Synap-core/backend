@@ -26,6 +26,7 @@
  * what makes the subtraction safe rather than lossy.
  */
 
+import type { SessionsOwingGrade } from "../focus-sessions/session-nudges.js";
 import {
   db,
   entities,
@@ -137,6 +138,12 @@ export interface StartHere {
         newest?: { id: string; goal: string | null; startedAt: string | null };
       }
     | StartHereUnavailable;
+  /**
+   * Open sessions the caller OWNS whose criteria are not all graded —
+   * "grade with evaluate_session before you say done". Bounded read; the lens
+   * is stated on the value (`owned-open`).
+   */
+  sessionsOwingGrade: SessionsOwingGrade | StartHereUnavailable;
   /** Most-used kinds (not roles), blended rank — the SAME rank discover lists by. */
   topKinds:
     | Array<{
@@ -794,10 +801,11 @@ export async function discover(
     }
     const usedByProject = await listWorkspacesUsedByProjects(
       db,
-      rows.map((p) => p.id)
+      rows.map((p) => p.id),
+      userId
     );
     const allUsedIds = [...new Set([...usedByProject.values()].flat())];
-    const usedRefs = await hydrateUsedWorkspaces(db, allUsedIds);
+    const usedRefs = await hydrateUsedWorkspaces(db, allUsedIds, userId);
     const usedRefById = new Map(usedRefs.map((r) => [r.id, r]));
     projectsOut = rows.map((p) => {
       const ids = usedByProject.get(p.id) ?? [];

@@ -9,13 +9,14 @@
  * decided in the session — so the report cannot say anything the pod does not
  * already know. No model is in the loop.
  *
- * MARKDOWN CONTRACT (the read path is `markdown-engine`, allowlisted
- * directives — `renderer/directive-registry.ts`):
+ * MARKDOWN CONTRACT (the read path is `@synap-core/markdown-core`, allowlisted
+ * directives — `DIRECTIVE_ATTRIBUTES` in its `directive-registry.ts`):
  *   - sections are top-level `synap-section` containers written by the ONE
  *     section door (`upsertSessionDocumentSection`), which sizes the fence so
  *     a `:::synap-entity` leaf can never close it early;
- *   - outputs that are entities are `synap-entity{id}` embeds — REFERENCE
- *     ONLY, the card reads the live entity; never inline JSON;
+ *   - outputs that are entities are `synap-entity{id}` embeds written by THE
+ *     embed writer (`serializeEmbed`) — REFERENCE ONLY, the card reads the
+ *     live entity;
  *   - the only extra attribute is `status` on "Definition of done", carrying
  *     the verdict state (`passing` / `failing` / `incomplete`). NEVER
  *     `failed`: the renderer reads `status="failed"` as "this round did not
@@ -50,6 +51,7 @@ import {
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, type SessionCriterion } from "@synap/playbooks";
+import { serializeEmbed } from "@synap-core/markdown-core/embeds";
 import { projectSessionKind } from "../focus-sessions/session-kind.js";
 import { loadSessionEvaluationSummary } from "../focus-sessions/evaluations/record.js";
 import { listSessionOutputs } from "../focus-sessions/session-outputs.js";
@@ -178,8 +180,11 @@ export function buildClosingReportSections(
           ...(others.length && entities.length ? [""] : []),
           ...entities.flatMap((o, i) => [
             ...(i > 0 ? [""] : []),
-            `:::synap-entity{id="${o.refId.replace(/["{}\s]/g, "")}"}`,
-            ":::",
+            // THE embed writer — never a template string (ids carry no whitespace).
+            serializeEmbed({
+              directive: "synap-entity",
+              ref: { id: o.refId.replace(/\s/g, "") },
+            }),
           ]),
         ].join("\n");
 

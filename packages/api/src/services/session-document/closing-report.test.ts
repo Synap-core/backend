@@ -2,14 +2,15 @@
  * The closing report's PURE half: the section builder, the "which sessions get
  * one" predicate, and the no-churn comparison — driven through the REAL
  * section splitter/serializer (`sections.ts`) and the real ownership refusal
- * (`renderSectionWrite`), so idempotency and "a person's section is never
+ * (`renderDocumentPatch`, the patch door's pure half), so idempotency and "a person's section is never
  * rewritten" are proven on the same code the door runs.
  *
  * The golden body (`__fixtures__/closing-report.golden.md`) is ALSO read by
- * the markdown-engine contract test in synap-app, which parses it with the
- * real remark-directive pipeline and the directive allowlist — the round-trip
- * half the backend cannot run (no remark here). Change the builder ⇒ update
- * the golden ⇒ that test re-checks it.
+ * `@synap-core/markdown-core`'s `closing-report-contract.test.ts`, which parses
+ * it with THE pipeline and the directive allowlist, and by its conformance
+ * corpus (micromark ≡ scanner). Change the builder ⇒ regenerate the golden
+ * FROM the builder (never by hand, never through prettier — `__fixtures__`
+ * is prettier-ignored) ⇒ those tests re-check it.
  */
 
 import { describe, it, expect } from "vitest";
@@ -27,7 +28,7 @@ import {
   upsertSectionInMarkdown,
   sectionOwner,
 } from "./sections.js";
-import { renderSectionWrite } from "./upsert-section.js";
+import { renderDocumentPatch } from "../document-patch/patch-ops.js";
 
 const GOLDEN = fileURLToPath(
   new URL("./__fixtures__/closing-report.golden.md", import.meta.url)
@@ -100,21 +101,25 @@ const FIXTURE: ClosingReportInput = {
 function applyAll(doc: string, input: ClosingReportInput): string {
   let out = doc;
   for (const s of buildClosingReportSections(input)) {
-    out = renderSectionWrite(
+    out = renderDocumentPatch(
       out,
-      {
-        sectionId: s.id,
-        title: s.title,
-        body: s.body,
-        attributes: {
-          owner: "ai",
-          author: "system:closing-report",
-          writtenAt: "2026-09-19T00:00:00.000Z",
-          sessionState: "closed",
+      [
+        {
+          op: "upsert_section",
+          id: s.id,
+          title: s.title,
+          body: s.body,
           ...(s.status ? { status: s.status } : {}),
         },
-      },
-      true
+      ],
+      {
+        writer: {
+          isMachine: true,
+          author: "system:closing-report",
+          sessionState: "closed",
+        },
+        now: "2026-09-19T00:00:00.000Z",
+      }
     ).markdown;
   }
   return out;

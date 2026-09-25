@@ -51,10 +51,6 @@ export { apiKeysRouter } from "./routers/api-keys.js";
 export { ensureSynapCoreCapability } from "./services/capabilities/ensure-synap-core.js";
 export { ensureSystemSkills } from "./services/capabilities/ensure-system-skills.js";
 export { backfillCapabilityEmits } from "./services/capabilities/backfill-capability-emits.js";
-// Boot-seed the widget_definitions table from the @synap/capabilities manifest
-// (idempotent upsert). Previously invoked via the now-deleted plugins/init.ts;
-// re-homed onto the canonical startup-hooks path so it survives the registry KILL.
-export { seedWidgetDefinitions } from "./lib/seed-widget-definitions.js";
 export {
   ensureCaptureAgent,
   getCaptureAgentUserId,
@@ -369,6 +365,7 @@ export { registerSessionCriteriaUnmetReactor } from "./notifications/session-cri
 // And the closing report: on the same close event the session document gains
 // its structured Outcome / Definition of done / Produced / Decisions sections.
 export { registerClosingReportReactor } from "./services/session-document/closing-report-reactor.js";
+export { registerDocumentDiagnosticsReactor } from "./services/document-patch/diagnostics-reactor.js";
 export { scanBrokenAutomations } from "./services/automations/scan-broken-automations.js";
 export {
   runEventEnd,

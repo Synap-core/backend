@@ -1,7 +1,10 @@
 import { TRPCError } from "@trpc/server";
 import {
   collectPlaybookCriteria,
+  describeParamTypeError,
   mergeCriteria,
+  readPlaybookParams,
+  validatePlaybookParams,
   type ExpectedOutput,
   type SessionCriterion,
 } from "@synap/playbooks";
@@ -49,7 +52,10 @@ import {
 import {
   instantiateSessionRow,
   resolveRunnablePlaybook,
+  RUN_PARAMS_METADATA_KEY,
 } from "../../../services/playbooks/playbook-lifecycle.js";
+import { resolveFilingStage } from "../../../services/tracks/tracks-service.js";
+import { paramOwedSlots } from "../../../services/focus-sessions/param-slots.js";
 import { z } from "zod";
 import { sessionCriteriaSchema } from "../../../schemas/session-criteria.js";
 
@@ -112,6 +118,66 @@ export function registerFocusSessionExecutors(): void {
         };
       }
 
+      // TRACK — re-checked at approval: the proposal sat in the queue, and the
+      // track may since have been archived or deleted. A track that no longer
+      // takes work is dropped and REPORTED on `refusals`; the session itself
+      // still lands in the project (the reviewer approved the work, not the
+      // lane). The FK would otherwise turn a deleted track into a failed
+      // approval. Decided BEFORE the twin question: the twin scope includes
+      // the track stage (M3).
+      const criteriaRefusals: string[] = [];
+      let approvedTrackId: string | null = null;
+      let approvedTrackStage: string | null = null;
+      let approvedTrack:
+        | Pick<
+            typeof projectTracks.$inferSelect,
+            "id" | "name" | "currentStage" | "definitionSnapshot"
+          >
+        | undefined;
+      if (typeof innerData.trackId === "string") {
+        const [track] = await db
+          .select({
+            id: projectTracks.id,
+            name: projectTracks.name,
+            currentStage: projectTracks.currentStage,
+            definitionSnapshot: projectTracks.definitionSnapshot,
+          })
+          .from(projectTracks)
+          .where(
+            and(
+              eq(projectTracks.id, innerData.trackId),
+              ...(proposal.projectId
+                ? [eq(projectTracks.projectId, proposal.projectId)]
+                : []),
+              ne(projectTracks.status, "archived")
+            )
+          )
+          .limit(1);
+        if (track) {
+          approvedTrackId = track.id;
+          approvedTrack = track;
+          // The stage (M1), re-validated against the PINNED stages by the SAME
+          // rule the direct door used. A stage the track does not declare is
+          // dropped and reported — never swapped for a guessed one.
+          try {
+            approvedTrackStage = resolveFilingStage(
+              track,
+              typeof innerData.trackStage === "string"
+                ? innerData.trackStage
+                : null
+            );
+          } catch (err) {
+            criteriaRefusals.push(
+              `Track stage "${String(innerData.trackStage)}" was not applied: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        } else {
+          criteriaRefusals.push(
+            `Track ${innerData.trackId} was not applied: it no longer takes work in this project (archived, moved or deleted).`
+          );
+        }
+      }
+
       // THE SAME TWIN QUESTION the direct door asks (`createFocusSession`),
       // before this door inserts. Live, every duplicate pair was THIS insert
       // plus a direct create of the same goal ms later: two doors, no shared
@@ -153,6 +219,14 @@ export function registerFocusSessionExecutors(): void {
               typeof innerData.templateId === "string"
                 ? innerData.templateId
                 : null,
+            ...(approvedTrackId
+              ? {
+                  track: {
+                    trackId: approvedTrackId,
+                    trackStage: approvedTrackStage,
+                  },
+                }
+              : {}),
           })
         ).exact;
       if (twin) {
@@ -189,38 +263,38 @@ export function registerFocusSessionExecutors(): void {
       // reported on `refusals`), then merged with a template's own exactly as
       // the direct create does (`mergeCriteria`: the proposer's first, a
       // template criterion only under a new key).
-      const criteriaRefusals: string[] = [];
       const ownCriteria = parseProposedCriteria(
         innerData.criteria,
         proposal.targetId,
         criteriaRefusals
       );
 
-      // TRACK — re-checked at approval: the proposal sat in the queue, and the
-      // track may since have been archived or deleted. A track that no longer
-      // takes work is dropped and REPORTED on `refusals`; the session itself
-      // still lands in the project (the reviewer approved the work, not the
-      // lane). The FK would otherwise turn a deleted track into a failed
-      // approval.
-      let approvedTrackId: string | null = null;
-      if (typeof innerData.trackId === "string") {
-        const [track] = await db
-          .select({ id: projectTracks.id })
-          .from(projectTracks)
-          .where(
-            and(
-              eq(projectTracks.id, innerData.trackId),
-              ...(proposal.projectId
-                ? [eq(projectTracks.projectId, proposal.projectId)]
-                : []),
-              ne(projectTracks.status, "archived")
-            )
-          )
-          .limit(1);
-        if (track) approvedTrackId = track.id;
-        else {
+      // TRACK PARAMS (0274) — the answers the proposer's door resolved, re-
+      // validated against the track's PINNED params at approval; a required
+      // one still missing is owed on this session, exactly as on the direct
+      // path (`paramOwedSlots`). A mistyped answer (the method moved under the
+      // proposal) is dropped and reported, never written.
+      let trackParamSlots: ExpectedOutput[] = [];
+      let trackParamValues: Record<string, unknown> | null = null;
+      if (
+        approvedTrack &&
+        innerData.trackParams &&
+        typeof innerData.trackParams === "object"
+      ) {
+        const resolution = validatePlaybookParams(
+          readPlaybookParams(approvedTrack.definitionSnapshot?.params),
+          innerData.trackParams as Record<string, unknown>
+        );
+        if (resolution.typeErrors.length > 0) {
           criteriaRefusals.push(
-            `Track ${innerData.trackId} was not applied: it no longer takes work in this project (archived, moved or deleted).`
+            `Track params were not applied: ${resolution.typeErrors.map(describeParamTypeError).join(" ")}`
+          );
+        } else {
+          trackParamValues = resolution.declaredValues;
+          trackParamSlots = paramOwedSlots(
+            resolution.missingRequired,
+            approvedTrack.name,
+            new Date().toISOString()
           );
         }
       }
@@ -247,6 +321,10 @@ export function registerFocusSessionExecutors(): void {
           ...(title
             ? { titleSource: "agent" satisfies SessionTitleSource }
             : {}),
+          // What this session was given — same key as the direct door.
+          ...(trackParamValues
+            ? { [RUN_PARAMS_METADATA_KEY]: trackParamValues }
+            : {}),
         };
         return db
           .insert(focusSessions)
@@ -260,6 +338,7 @@ export function registerFocusSessionExecutors(): void {
             workspaceId: proposal.workspaceId,
             projectId: proposal.projectId,
             trackId: approvedTrackId,
+            trackStage: approvedTrackStage,
             subjectEntityId:
               (innerData.subjectEntityId as string | undefined) ?? null,
             // userId = the operator/approver so update/list/complete (scoped by
@@ -290,9 +369,11 @@ export function registerFocusSessionExecutors(): void {
             // this is the write, and a payload can sit in the proposals table for
             // weeks between the two. `now` is approval time, which is the moment
             // the slot actually becomes owed.
+            // Track param slots are server-minted and appended AFTER the floor
+            // (see create-session.ts) — never run through it.
             expectedOutputs: sanitizeDeclaredOutputs(
               (innerData.expectedOutputs as ExpectedOutput[] | undefined) ?? []
-            ),
+            ).concat(trackParamSlots),
             channelId: (innerData.channelId as string | undefined) ?? null,
             agentIds: (innerData.agentIds as string[] | undefined) ?? [],
             status: "active",
@@ -319,6 +400,7 @@ export function registerFocusSessionExecutors(): void {
               workspaceId: proposal.workspaceId,
               projectId: proposal.projectId,
               trackId: approvedTrackId,
+              trackStage: approvedTrackStage,
               userId,
               innerData,
               ownCriteria,
@@ -875,6 +957,7 @@ async function instantiateApprovedPlaybook(args: {
   workspaceId: string | null;
   projectId: string | null;
   trackId: string | null;
+  trackStage: string | null;
   userId: string;
   innerData: Record<string, unknown>;
   /** The proposer's own criteria (already parsed); the playbook's join after. */
@@ -902,6 +985,7 @@ async function instantiateApprovedPlaybook(args: {
     workspaceId: args.workspaceId,
     projectId: args.projectId,
     trackId: args.trackId,
+    trackStage: args.trackStage,
     userId: args.userId,
     subjectId:
       typeof innerData.subjectEntityId === "string"

@@ -38,7 +38,6 @@ import {
   notifyCapabilityUpdatesAvailable,
   normalizeIssuerUrl,
   fetchFederationMetadata,
-  seedWidgetDefinitions,
 } from "@synap/api";
 import { reconcileWorkspacesToTemplates } from "./startup/reconcile-workspaces-to-templates.js";
 import { backfillAllWorkspacesTeamPersonBridge } from "./startup/backfill-team-person-bridge.js";
@@ -614,19 +613,6 @@ export async function runStartupHooks(): Promise<void> {
     logger.warn(
       { err },
       "Failed to seed team-member role profile on startup (non-fatal)"
-    );
-  }
-
-  // Seed the widget_definitions table from the @synap/capabilities manifest —
-  // the SSOT for bento widget kinds the UI reads via trpc.widgetDefinitions.list.
-  // Idempotent upsert; was previously carried by the deleted plugins/init.ts.
-  try {
-    await seedWidgetDefinitions();
-    logger.info("Widget definitions seeded on startup");
-  } catch (err) {
-    logger.warn(
-      { err },
-      "Failed to seed widget definitions on startup (non-fatal)"
     );
   }
 

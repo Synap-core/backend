@@ -41,6 +41,7 @@ import { db } from "@synap/database";
 import {
   projectMembers,
   relations,
+  entities,
   entityFacets,
   workspaceMembers,
 } from "@synap/database/schema";
@@ -245,6 +246,41 @@ export function podSharedFacetWhere(
 }
 
 /**
+ * FLOOR BRANCH — a DOCUMENT FOLLOWS ITS ENTITY (founder decision 2026-09-25).
+ * A pod-wide document attached to an entity (`entities.document_id`) that is
+ * POD-SHARED (`podSharedFacetWhere`, evaluated on the ENTITY) is shared with the
+ * pod's members too — reading the body of a note you can see is the point of
+ * seeing it. The SAME predicate as the entity branch, not a copy: the entity
+ * subquery runs `podSharedFacetWhere(entities.workspace_id, entities.id, …)`.
+ *
+ * NARROW BY CONSTRUCTION: pod-wide documents only (a workspace document is the
+ * workspace floor's business); a standalone document (no entity points at it)
+ * or one whose entity is not pod-shared matches nothing and stays owner-only
+ * under `podPersonal`. No new share flag: the entity's pod-wide facet is the
+ * signal. Non-pod-members match nothing (the EXISTS inside is false).
+ */
+export function podSharedDocumentWhere(
+  documentWorkspaceIdColumn: AnyPgColumn,
+  documentIdColumn: AnyPgColumn,
+  userId: string
+): SQL {
+  const podSharedEntityDocumentIds = db
+    .select({ id: entities.documentId })
+    .from(entities)
+    .where(
+      and(
+        // A trashed entity no longer shares its body.
+        isNull(entities.deletedAt),
+        podSharedFacetWhere(entities.workspaceId, entities.id, userId)
+      )
+    );
+  return and(
+    isNull(documentWorkspaceIdColumn),
+    inArray(documentIdColumn, podSharedEntityDocumentIds)
+  )!;
+}
+
+/**
  * NARROW COMPANION to `facetLensMemberWhere` — entity ids that carry a facet in
  * one of the lens workspace(s). Used to make the workspace LENS facet-aware for
  * entities: browsing workspace W surfaces a pod-wide entity that has a role in W
@@ -411,6 +447,14 @@ export function accessScopeWhere(args: {
    * is `undefined` (already user-wide) or `null` (globals-only).
    */
   includeGlobalsInLens?: boolean;
+  /**
+   * Opt-in (default OFF, `documents` only) — the pod-shared branch for a table
+   * whose rows are an ENTITY'S BODY: a pod-wide row is shared with pod members
+   * when the entity it is attached to is pod-shared (`podSharedDocumentWhere`).
+   * Plays the role `facetLens`'s pod branch plays for `entities`, in the floor
+   * AND the `null` (pod) lens alike. Mutually exclusive with `facetLens`.
+   */
+  documentFollowsEntity?: boolean;
 }): SQL {
   const {
     workspaceIdColumn,
@@ -422,6 +466,7 @@ export function accessScopeWhere(args: {
     exposureRelationTypes = EXPOSURE_RELATION_TYPES,
     facetLens = false,
     includeGlobalsInLens = false,
+    documentFollowsEntity = false,
   } = args;
 
   // Narrow-only guard. The type already refuses off-whitelist strings at every
@@ -468,9 +513,13 @@ export function accessScopeWhere(args: {
   // gate as `facetLens` (it reads `entity_facets.entity_id`, so it is only valid
   // where `entityIdColumn` maps to it). Widening-only, pod-wide rows only; an
   // un-faceted pod-wide entity stays owner-gated by `podPersonal`.
+  // `documents`: the same pod-shared signal, read through the entity the
+  // document is the body of (a document follows its entity).
   const podShared = facetLens
     ? podSharedFacetWhere(workspaceIdColumn, entityIdColumn, userId)
-    : undefined;
+    : documentFollowsEntity
+      ? podSharedDocumentWhere(workspaceIdColumn, entityIdColumn, userId)
+      : undefined;
   if (podShared) floorBranches.push(podShared);
   const floor = or(...floorBranches)!;
 

@@ -115,8 +115,10 @@ async function seedDocument(
   const storageKey = `${USER}/document/${documentId}.md`;
   h.blobs.set(storageKey, content);
   await q(
-    `insert into documents (id, user_id, title, type, storage_key, mime_type, current_version, last_saved_version)
-     values ($1, $2, 'Doc', 'markdown', $3, 'text/markdown', 1, 1)`,
+    // content_revision spelled out: this file's DDL helper drops column
+    // defaults (0275 gives it DEFAULT 1 in a real database).
+    `insert into documents (id, user_id, title, type, storage_key, mime_type, current_version, last_saved_version, content_revision)
+     values ($1, $2, 'Doc', 'markdown', $3, 'text/markdown', 1, 1, 1)`,
     [documentId, USER, storageKey]
   );
   await q(
@@ -162,6 +164,9 @@ describe("focusSessions.document", () => {
     expect(result).toMatchObject({
       documentId,
       version: 1,
+      // The content revision reaches the reader — it is the base a writer
+      // passes back as `baseRevision`.
+      revision: 1,
       content: SECTION,
     });
     expect(result.sections).toEqual([
@@ -181,6 +186,7 @@ describe("focusSessions.document", () => {
     expect(result).toEqual({
       documentId: null,
       version: null,
+      revision: null,
       content: null,
       sections: [],
     });
@@ -197,9 +203,8 @@ describe("focusSessions.document", () => {
   it("this door and the hub-protocol door read the identical function — mirrored, not a fork", async () => {
     const sessionId = await newSession(USER);
     await seedDocument(sessionId, SECTION);
-    const { readSessionDocument } = await import(
-      "../services/session-document/upsert-section.js"
-    );
+    const { readSessionDocument } =
+      await import("../services/session-document/upsert-section.js");
     const direct = await readSessionDocument({ sessionId, userId: USER });
     const viaRouter = await document(sessionId, USER);
     expect(viaRouter).toEqual(direct);

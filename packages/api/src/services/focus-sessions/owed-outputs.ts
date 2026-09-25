@@ -56,6 +56,7 @@ import type { SQL } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { sessionScopeConditions } from "./session-scope.js";
+import { notTriagePendingWhere } from "./triage.js";
 
 /**
  * SQL: sessions carrying at least one slot that is still owed by the human.
@@ -209,6 +210,13 @@ export interface ListOwedSlotsParams {
   scope: ResolvedScope;
   /** Cap on SLOTS returned, not on sessions scanned. */
   limit: number;
+  /**
+   * Leave out slots on an undecided agent DRAFT (`notTriagePendingWhere`, the
+   * one triage rule the project path's default lens uses). The needs-you
+   * count and tray pass it: a draft never counts as needs-you (founder
+   * decision). Applied in SQL, so drafts cannot eat the `limit`.
+   */
+  excludeDrafts?: boolean;
 }
 
 type OwedRow = {
@@ -287,6 +295,7 @@ export async function listOwedSlots(
     owedSlotPrefilter(),
     owedSlotWhere(),
   ];
+  if (params.excludeDrafts) conditions.push(notTriagePendingWhere());
 
   const rows = await db
     .select({

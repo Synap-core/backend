@@ -32,11 +32,14 @@ import {
   focusSessions,
   playbooks,
   playbookRuns,
+  sessionEvaluations,
   eq,
   and,
   desc,
+  inArray,
   drizzleSql,
 } from "@synap/database";
+import { createLogger } from "@synap-core/core";
 import {
   resolveStageGate,
   stageGateProposalType,
@@ -49,6 +52,8 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import { trackRepository } from "../tracks/track-repo.js";
+
+const logger = createLogger({ module: "stage-gate" });
 
 /** A stage gate's proposal targets the SESSION — see dev-approval's target type. */
 export const STAGE_GATE_TARGET_TYPE = "focus_session";
@@ -196,10 +201,11 @@ export interface StageGateSubject {
   pause(metadataPatch?: Record<string, unknown>): Promise<boolean>;
   /**
    * A check gate: the keys of the LEFT stage's required criteria that do not
-   * pass. An evaluation that could not run answers `[CHECK_GATE_UNEVALUATED]` —
-   * unmeasured is not passed.
+   * pass, plus — when the subject can say more than a key list — a readable
+   * `reason`. An evaluation that could not run answers
+   * `[CHECK_GATE_UNEVALUATED]` — unmeasured is not passed.
    */
-  checkFailing(fromStage: string): Promise<string[]>;
+  checkFailing(fromStage: string): Promise<CheckMeasure>;
   /** Where the human-gate proposal points. */
   proposal: {
     targetType: string;
@@ -210,6 +216,12 @@ export interface StageGateSubject {
     sessionId: string | null;
     playbookId: string | null;
   };
+}
+
+/** What a check measured: failing keys (empty = passed) and, optionally, why. */
+export interface CheckMeasure {
+  failing: string[];
+  reason?: string;
 }
 
 export interface StageGateAdvance {
@@ -238,6 +250,8 @@ export interface CheckGateResult {
   failing: string[];
   /** True only when the subject row was actually flipped to `paused`. */
   paused: boolean;
+  /** Why it held, in words — when the subject can say (a track does). */
+  reason?: string;
 }
 
 export type StageGateOutcome =
@@ -331,14 +345,26 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const failing = await subject.checkFailing(fromStage);
+  const { failing, reason } = await subject.checkFailing(fromStage);
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
   const paused = await subject.pause({
-    [CHECK_GATE_METADATA_KEY]: { stageKey, fromStage, failing },
+    [CHECK_GATE_METADATA_KEY]: {
+      stageKey,
+      fromStage,
+      failing,
+      ...(reason ? { reason } : {}),
+    },
   });
-  return { kind: "check", stageKey, passed: false, failing, paused };
+  return {
+    kind: "check",
+    stageKey,
+    passed: false,
+    failing,
+    paused,
+    ...(reason ? { reason } : {}),
+  };
 }
 
 /**
@@ -474,9 +500,12 @@ export function sessionGateSubject(
       // (a race with a close, the wrong userId) — reading that as "nothing
       // failing" would advance the run ungated on the one path the gate exists
       // to hold. Unmeasured is not passed.
-      return result.status === "evaluated"
-        ? checkGateFailing(result, fromStage)
-        : [CHECK_GATE_UNEVALUATED];
+      return {
+        failing:
+          result.status === "evaluated"
+            ? checkGateFailing(result, fromStage)
+            : [CHECK_GATE_UNEVALUATED],
+      };
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,
@@ -522,13 +551,11 @@ export interface TrackStageGateParams {
  * exactly as a run executes its snapshot; a method edit reaches a track only
  * through an explicit method update.
  *
- * Check measurement: a track carries NO criteria or evaluations of its own
- * (those belong to the sessions inside it), so a check gate on a track cannot
- * be measured here and answers `[CHECK_GATE_UNEVALUATED]` — it HOLDS, fail-
- * closed, the same verdict the session adapter returns when an evaluation
- * cannot run. Resuming is an explicit `setTrackStatus(active)`. Aggregating the
- * track's sessions' evaluations is a deliberate later decision, not a guess
- * made here.
+ * Check measurement (M6, founder decision 2026-09-25): a track has no
+ * criteria of its own — its sessions do. The gate measures the SESSIONS FILED
+ * AT THE STAGE BEING LEFT (`focus_sessions.track_stage`, 0274):
+ * {@link measureTrackStage}. Anything it cannot measure HOLDS, fail-closed.
+ * Resuming is an explicit `setTrackStatus(active)`.
  */
 export function trackGateSubject(
   params: TrackStageGateParams
@@ -552,8 +579,8 @@ export function trackGateSubject(
       );
       return flipped !== null;
     },
-    async checkFailing() {
-      return [CHECK_GATE_UNEVALUATED];
+    async checkFailing(fromStage) {
+      return measureTrackStage(params.trackId, fromStage);
     },
     proposal: {
       targetType: TRACK_STAGE_GATE_TARGET_TYPE,
@@ -564,4 +591,108 @@ export function trackGateSubject(
       playbookId: params.playbookId,
     },
   };
+}
+
+/**
+ * The track check gate's measurement (M6). PASSES iff at least one session
+ * filed at `stageKey` is `closed` AND every closed session there that declares
+ * criteria has a PASSING verdict (the shared `summarizeEvaluations` →
+ * `computeSessionVerdict`: every required criterion's current verdict is
+ * `pass`). A session with no criteria passes on being closed. Cancelled /
+ * failed sessions are not work done and do not count either way.
+ *
+ * HOLDS otherwise, with a readable `reason`:
+ *   - no closed session at the stage ⇒ `[CHECK_GATE_UNEVALUATED]` — nothing
+ *     was measured, and unmeasured is not passed;
+ *   - a closed session whose verdict is not passing ⇒ its unmet required
+ *     criterion keys;
+ *   - ANY error ⇒ `[CHECK_GATE_UNEVALUATED]` (fail-closed: a broken read must
+ *     never open the gate).
+ *
+ * Every session filed at the stage counts, whoever owns it — the track is the
+ * project's, and so is its gate. Evaluations are owner-floored per session
+ * (the same floor `attachSessionVerdicts` applies).
+ */
+export async function measureTrackStage(
+  trackId: string,
+  stageKey: string
+): Promise<CheckMeasure> {
+  try {
+    const { summarizeEvaluations } =
+      await import("../focus-sessions/evaluations/record.js");
+    // SESSION-KIND-LENS-EXEMPT: the gate measures every session filed at ONE (track, stage), not a list a consumer pages.
+    const filed = await db
+      .select({
+        id: focusSessions.id,
+        userId: focusSessions.userId,
+        status: focusSessions.status,
+        criteria: focusSessions.criteria,
+      })
+      .from(focusSessions)
+      .where(
+        and(
+          eq(focusSessions.trackId, trackId),
+          eq(focusSessions.trackStage, stageKey)
+        )
+      );
+    const closed = filed.filter((s) => s.status === "closed");
+    if (closed.length === 0) {
+      return {
+        failing: [CHECK_GATE_UNEVALUATED],
+        reason:
+          filed.length === 0
+            ? `No session was filed at stage "${stageKey}" — start and close one before moving on.`
+            : `No session filed at stage "${stageKey}" is closed yet (${filed.length} open or stopped).`,
+      };
+    }
+    const evals = await db
+      .select()
+      .from(sessionEvaluations)
+      .where(
+        inArray(
+          sessionEvaluations.sessionId,
+          closed.map((s) => s.id)
+        )
+      );
+    const failing = new Set<string>();
+    let notPassing = 0;
+    for (const s of closed) {
+      const summary = summarizeEvaluations(
+        s.criteria,
+        evals.filter((e) => e.sessionId === s.id && e.userId === s.userId)
+      );
+      if (summary.criteria.length === 0) continue;
+      if (summary.verdict.state === "passing") continue;
+      const current = new Map(
+        summary.evaluations.map((e) => [e.criterionKey, e.verdict])
+      );
+      for (const c of summary.criteria) {
+        if (c.required !== false && current.get(c.key) !== "pass") {
+          failing.add(c.key);
+        }
+      }
+      notPassing += 1;
+    }
+    if (notPassing === 0) return { failing: [] };
+    // COUNT-based, never titled: the gate counts every member's sessions, but a
+    // session's title/goal is owner-private, and this reason is persisted in
+    // the track's `metadata.checkGate` and returned to whoever advanced.
+    return {
+      failing: failing.size > 0 ? [...failing] : [CHECK_GATE_UNEVALUATED],
+      reason:
+        notPassing === 1
+          ? `1 session at stage "${stageKey}" closed without meeting its criteria.`
+          : `${notPassing} sessions at stage "${stageKey}" closed without meeting their criteria.`,
+    };
+  } catch (err) {
+    // Fail-CLOSED, and said: the hold names the failure rather than a criterion.
+    logger.warn(
+      { err, trackId, stageKey },
+      "track check gate could not measure"
+    );
+    return {
+      failing: [CHECK_GATE_UNEVALUATED],
+      reason: `The sessions at stage "${stageKey}" could not be evaluated.`,
+    };
+  }
 }

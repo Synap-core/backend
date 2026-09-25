@@ -35,6 +35,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
+    "@synap-core/markdown-core": "workspace:*",
     "@synap/events": "workspace:*",
     "@synap/shared-utils": "workspace:*",
     "@synap/intelligence-client": "workspace:*",

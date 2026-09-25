@@ -18,6 +18,7 @@ import {
   drizzleSql,
   eq,
   focusSessions,
+  inArray,
   vaultGrants,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
@@ -45,6 +46,7 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   isTerminalSessionStatus,
+  OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
   UPDATABLE_SESSION_STATUSES,
 } from "../services/focus-sessions/session-statuses.js";
@@ -323,14 +325,35 @@ const sessionLinksRouter = router({
  *     exposureLensWhere); `null`/`undefined`/`[]` → no narrow.
  * An empty array never narrows (never matches-zero); a lens can only restrict.
  */
-/** `list`: newest-started first, capped. Unchanged ordering for its consumers. */
-function queryUserSessions(query: SessionListQuery, limit: number) {
-  return db
+/**
+ * `list`: newest-started first, capped. Unchanged ordering for its consumers.
+ *
+ * `order: "open_first"` puts every OPEN session ahead of every settled one,
+ * then newest-started within each — so a long-running open session can no
+ * longer be pushed off the capped page by newer rows that have already
+ * settled. That was the work map's vanishing-bar bug: `status: "all"`,
+ * `limit: 50`, newest-started first, and a week-old blocked session was simply
+ * not on the page. Pair it with an open-status set + `statusSince` to read
+ * "everything open, plus what settled recently".
+ */
+function queryUserSessions(
+  query: SessionListQuery,
+  limit: number,
+  order: "started" | "open_first" = "started"
+) {
+  const base = db
     .select()
     .from(focusSessions)
-    .where(and(...sessionListConditions(query)))
-    .orderBy(desc(focusSessions.startedAt))
-    .limit(limit);
+    .where(and(...sessionListConditions(query)));
+  return (
+    order === "open_first"
+      ? base.orderBy(
+          desc(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
+          desc(focusSessions.startedAt),
+          desc(focusSessions.id)
+        )
+      : base.orderBy(desc(focusSessions.startedAt))
+  ).limit(limit);
 }
 
 /**
@@ -478,6 +501,22 @@ export const focusSessionsRouter = router({
         /** Only sessions filed in no project — see `SessionListQuery.unfiled`. */
         unfiled: z.boolean().optional(),
         /**
+         * Widen `kind: "work"` by the RUN sessions filed in a track — the
+         * PROJECT PATH's session set (`workAndTrackedRunsWhere`, the ONE
+         * predicate `projects.path` / `projects.outputs` use). With
+         * `projectId`, this door returns exactly the path's population, so the
+         * work map and the path cannot show different sessions. Refused with
+         * any kind other than `work`.
+         */
+        includeTrackedRuns: z.boolean().optional(),
+        /**
+         * `started` (default): newest-started first — unchanged for every
+         * existing consumer. `open_first`: every OPEN session before every
+         * settled one, so the cap can never drop a running or waiting session
+         * in favour of a recently closed one. See `queryUserSessions`.
+         */
+        order: z.enum(["started", "open_first"]).default("started"),
+        /**
          * Only sessions run FROM this playbook definition (the session's own
          * `playbookId` column). Pair with `kind: "run"` or `kind: "all"` — the
          * default `work` lens excludes playbook-linked sessions except the
@@ -500,6 +539,13 @@ export const focusSessionsRouter = router({
       // `blockedBy`/`waitsOnOutputs` were erased from the api-types snapshot
       // and no typed client could see a dependency edge. Optional here means
       // "present when `edges: true`", which is the true contract.
+      if (input.includeTrackedRuns && input.kind !== "work") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            'includeTrackedRuns widens the "work" population; it cannot combine with another kind',
+        });
+      }
       const scope = resolveScope(ctx, input);
       const sessions = await queryUserSessions(
         {
@@ -514,8 +560,10 @@ export const focusSessionsRouter = router({
           },
           statusSince: input.statusSince,
           unfiled: input.unfiled,
+          includeTrackedRuns: input.includeTrackedRuns,
         },
-        input.limit
+        input.limit,
+        input.order
       );
       const withParticipants = await projectSessionRows(sessions, ctx.userId);
       const withMove: SessionListRow[] = input.nextMove
@@ -1270,6 +1318,12 @@ export const focusSessionsRouter = router({
          */
         trackId: z.string().uuid().nullish(),
         /**
+         * The STAGE of that track the session is filed at (0274). Absent ⇒
+         * the track's current stage; a key the track does not declare is
+         * refused; refused without `trackId`. Same rule as the MCP / Hub doors.
+         */
+        trackStage: z.string().min(1).max(120).nullish(),
+        /**
          * The entity this session is ABOUT — the subject-spine anchor. The
          * service has always accepted it; this door did not declare it, so
          * every browser-started session landed subject-less and the room's
@@ -1313,6 +1367,7 @@ export const focusSessionsRouter = router({
         workspaceId: input.workspaceId ?? null,
         projectId: input.projectId ?? null,
         trackId: input.trackId ?? null,
+        trackStage: input.trackStage ?? null,
         subjectEntityId: input.subjectEntityId ?? null,
         title: input.title ?? null,
         goal: input.goal,
@@ -2249,6 +2304,8 @@ export const focusSessionsRouter = router({
         projectId: ScopeFilterShape.projectId,
         /** Cap on SLOTS, not sessions. */
         limit: z.number().int().min(1).max(200).default(50),
+        /** Leave out slots on undecided agent drafts — see `ListOwedSlotsParams`. */
+        excludeDrafts: z.boolean().optional(),
       })
     )
     .query(async ({ ctx, input }) => {
@@ -2256,6 +2313,7 @@ export const focusSessionsRouter = router({
         userId: requireUserId(ctx.userId),
         scope: resolveScope(ctx, input),
         limit: input.limit,
+        ...(input.excludeDrafts ? { excludeDrafts: true } : {}),
       });
     }),
 

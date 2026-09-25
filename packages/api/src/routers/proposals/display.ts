@@ -43,7 +43,13 @@ import {
   resolveProposalSetups,
   type ProposalSetup,
 } from "../../services/proposals/proposal-setup.js";
-import { entityFacets, profiles, documents } from "@synap/database/schema";
+import {
+  entityFacets,
+  profiles,
+  documents,
+  agents,
+} from "@synap/database/schema";
+import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalReviewEvent,
@@ -383,7 +389,6 @@ export async function enrichProposalsForDisplay(
       // this projection could say WHO PROPOSED and never WHO APPROVED.
       row.reviewedBy ?? undefined,
     ]),
-    ...(linkEndpointIdsByType.get("agent") ?? []),
   ]);
   // correlation_id is a uuid column — clamp to valid uuids so the batch query's
   // ::uuid[] cast can't throw on a legacy non-uuid value.
@@ -448,6 +453,7 @@ export async function enrichProposalsForDisplay(
     toolRows,
     workspaceRows,
     channelRows,
+    agentRows,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -460,7 +466,13 @@ export async function enrichProposalsForDisplay(
             workspaceId: entities.workspaceId,
           })
           .from(entities)
-          .where(inArray(entities.id, entityIds))
+          // The entity `VisibilityRule` (access/registry.ts: owner-gated NULL
+          // workspace + membership + exposure + facet lens). Without it a
+          // NULL-workspace entity — owner-PRIVATE, not pod-wide — reached
+          // every viewer's titles, target names and review-diff before-state.
+          .where(
+            and(inArray(entities.id, entityIds), nameAccess.predicate(entities))
+          )
       : Promise.resolve([]),
     userIds.length > 0
       ? db
@@ -774,6 +786,22 @@ export async function enrichProposalsForDisplay(
             )
         : Promise.resolve([] as Array<{ id: string; title: string }>);
     })(),
+    // Agents — `/links` "agent" endpoints are `agents` REGISTRY rows (see
+    // `LinkEndpointType`), never `users` rows: floored by the same
+    // `visibleAgentsWhere` (built-ins + the viewer's own adjuncts) the write
+    // door checks, so a stranger's agent — or a user id passed off as one —
+    // resolves to no name.
+    (() => {
+      const agentIds = uniqueStrings(linkEndpointIdsByType.get("agent") ?? []);
+      return agentIds.length > 0
+        ? db
+            .select({ id: agents.id, name: agents.name })
+            .from(agents)
+            .where(
+              and(inArray(agents.id, agentIds), visibleAgentsWhere(userId))
+            )
+        : Promise.resolve([] as Array<{ id: string; name: string }>);
+    })(),
   ]);
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
@@ -848,6 +876,9 @@ export async function enrichProposalsForDisplay(
   const toolById = new Map<string, { name: string }>();
   const workspaceById = new Map<string, { name: string }>();
   const channelById = new Map<string, { title: string | undefined }>();
+  const agentById = new Map(
+    agentRows.map((row) => [row.id, { name: row.name }])
+  );
 
   for (const row of playbookRows) {
     playbookById.set(row.id, {
@@ -907,10 +938,12 @@ export async function enrichProposalsForDisplay(
   }
   // B2 + MF2 (workspace scoping): resolve a batch-joined entity title by id, but
   // ONLY when the endpoint entity is visible under the proposal's own workspace
-  // lens — same workspace as the proposal, or pod-wide (workspaceId null, visible
-  // everywhere). A composite `create_relation` can name a pre-existing entity in a
-  // DIFFERENT workspace the viewer cannot see; resolving its title here would leak
-  // it. Cross-workspace endpoints return undefined → caller falls back to the
+  // lens — same workspace as the proposal, or NULL-workspace. A NULL-workspace
+  // entity is owner-PRIVATE, not pod-wide: it is only in `entityById` at all
+  // when the entity `VisibilityRule` admitted it for this viewer (the batch
+  // query above), so another user's personal entity never resolves here. A
+  // composite `create_relation` can name a pre-existing entity in a DIFFERENT
+  // workspace the viewer cannot see; resolving its title here would leak it. Cross-workspace endpoints return undefined → caller falls back to the
   // `entity <8hex>` shortId. The viewer is already authorized for the proposal's
   // workspace (list/get access-check it), so same-workspace + pod-wide is safe.
   const resolveEntityTitle = (
@@ -1117,7 +1150,7 @@ export async function enrichProposalsForDisplay(
         toolById,
         skillById,
         documentTitleById,
-        userById,
+        agentById,
       };
       const srcLabel = resolveLinkEndpointName(
         linkEndpoint.fromType,

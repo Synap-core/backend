@@ -14,6 +14,11 @@
  *     `spawned_from` edge — lineage is a link, never a column);
  *   - else `projectId` given ⇒ that project;
  *   - else ⇒ no project, and the same workspace (null compares as null).
+ * And, ONLY when the caller files into a track (`track` given, 0274 M3), the
+ * SAME track and track stage: one goal at two stages of a track is two pieces
+ * of work. A same-goal open session at another stage (or outside the track)
+ * is then a CANDIDATE (score 1), never the twin. Without `track` the match is
+ * exactly what it was — nothing else widens or narrows.
  *
  * Deliberately NOT twins: template/playbook sessions (`playbookId` set, or the
  * caller passing `templateId`) — a repeated run of a process is a legitimate
@@ -53,6 +58,8 @@ export interface FindOpenSessionTwinInput {
   parentSessionId: string | null;
   /** A template-started session is a run instance — never deduped. */
   templateId?: string | null;
+  /** Filing into a track at a stage (M3) — the twin must match both. */
+  track?: { trackId: string; trackStage: string | null };
   database?: typeof db;
 }
 
@@ -62,7 +69,10 @@ export interface SessionTwinCandidate {
   goal: string;
   title: string | null;
   status: string;
-  /** Token-set overlap with the requested goal ∈ [NEAR_MATCH_THRESHOLD, 1). */
+  /**
+   * Token-set overlap with the requested goal ∈ [NEAR_MATCH_THRESHOLD, 1) —
+   * or exactly 1 for a same-goal session at ANOTHER track stage (M3).
+   */
   score: number;
 }
 
@@ -130,12 +140,17 @@ export async function findOpenSessionTwin(
 
   let exact: SessionTwinMatch["exact"] = null;
   const candidates: SessionTwinCandidate[] = [];
+  const sameFiling = (row: (typeof open)[number]) =>
+    !input.track ||
+    (row.trackId === input.track.trackId &&
+      (row.trackStage ?? null) === input.track.trackStage);
   for (const row of open) {
-    if (normalizeGoal(row.goal).toLowerCase() === target) {
+    const sameGoal = normalizeGoal(row.goal).toLowerCase() === target;
+    if (sameGoal && sameFiling(row)) {
       if (!exact) exact = row;
       continue;
     }
-    const score = tokenSetOverlap(input.goal, row.goal);
+    const score = sameGoal ? 1 : tokenSetOverlap(input.goal, row.goal);
     if (score >= NEAR_MATCH_THRESHOLD) {
       candidates.push({
         id: row.id,

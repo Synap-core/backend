@@ -1,8 +1,9 @@
+import { isDocumentEditProposal } from "@synap-core/types/proposals/intent";
 import { describe, it, expect } from "vitest";
 import {
+  isSessionBoundDraft,
   selectLapsedIds,
   diesWithSession,
-  SESSION_BOUND_DRAFT_TYPES,
   type LapseCandidate,
 } from "./expire-lapsed-proposals.js";
 
@@ -133,6 +134,18 @@ describe("diesWithSession", () => {
     ).toEqual([]);
     // Closing its session does.
     expect(diesWithSession("ai_edit", "document")).toBe(true);
+    // Every edit from the document patch door — and only on a document:
+    // an entity `update` proposal outlives the session.
+    for (const t of [
+      "update",
+      "section_update",
+      "session_narrative_update",
+      "user_edit",
+    ]) {
+      expect(diesWithSession(t, "document")).toBe(true);
+    }
+    expect(diesWithSession("update", "entity")).toBe(false);
+    expect(diesWithSession("create", "document")).toBe(false);
   });
 
   it("does NOT retire a proposed entity or a merge candidate", () => {
@@ -145,9 +158,8 @@ describe("diesWithSession", () => {
     expect(diesWithSession("some_future_type", "whatever")).toBe(false);
   });
 
-  it("names its session-bound drafts as ONE list", () => {
-    // Guards the shape, not the contents: a second inline literal for a
-    // session-bound type is the drift this constant exists to prevent.
-    expect(SESSION_BOUND_DRAFT_TYPES).toContain("ai_edit");
+  it("names its session-bound drafts through ONE shared classifier", () => {
+    // The same function the browser's close moment reads — never a local list.
+    expect(isSessionBoundDraft).toBe(isDocumentEditProposal);
   });
 });

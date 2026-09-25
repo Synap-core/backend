@@ -120,11 +120,19 @@ POST /api/hub/documents
   "type": "markdown",              // "markdown" | "html" | "text" | "code"
   "entityId": "ent_event_..."      // attach to an entity for context
 }
+// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", "ackState": "applied",
+//     "attached": { "entityId": "ent_event_...", "documentId": "doc_abc", "status": "updated" } }
 ```
+
+`attached` reports the attach outcome: it is a governed entity update, so it can
+be `proposed`, and it is `skipped` (with a `reason`) while the document itself is
+awaiting review. Other optional fields: `url` (an https link — creates a reference
+document with no stored bytes), `idempotencyKey` (a retry with the same key returns
+the prior document), `expectedLabel` (the session-output slot it fulfils).
 
 `type: "html"` stores self-contained HTML. The browser renders it via the `html-doc` cell in a sandboxed iframe. Use for AI-generated reports, rich visualisations, custom charts, or anything beyond markdown.
 
-**Full HTML cell workflow** (AI → visible custom UI in any bento):
+**HTML document workflow:**
 
 ```json
 // 1. Create the HTML document
@@ -133,35 +141,50 @@ POST /api/hub/documents
   "title": "Q2 Revenue Report", "type": "html",
   "content": "<!DOCTYPE html><html>…</html>",
   "entityId": "ent_project_..." }
-// → { "document": { "id": "doc_abc" }, ... }
+// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", ... }
 
-// 2. Place the html-doc cell in any bento view
-POST /api/hub/views/{bentoViewId}/arrange
-{ "userId": "{userId}", "workspaceId": "{workspaceId}",
-  "widgets": [
-    { "id": "b1", "kind": "html-doc", "config": { "documentId": "doc_abc" },
-      "layout": { "x": 0, "y": 0, "w": 8, "h": 6 } }
-  ] }
-
-// 3. Update the HTML (cell auto-refreshes)
+// 2. Replace the HTML (read it first: GET → `revision`)
 PATCH /api/hub/documents/doc_abc
-{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>" }
+{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>", "baseRevision": 3 }
+// → a pending proposal; readers see the new HTML only once it is approved
 ```
+
+`html-doc` is **not** an agent-placeable bento widget: `arrange` rejects it. The
+document renders where it is opened (the Files app, or the entity it is attached
+to). For HTML you want to embed elsewhere, create an HTML cell instance
+(`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
 
 The iframe uses `sandbox="allow-scripts"` — scripts run but have no same-origin access to the parent app. The HTML is fully isolated.
 
-### Update a document (title and/or content)
+### Update a document's content (a patch, reviewed)
+
+Change the part you mean, not the whole body. Read it first —
+`GET /api/hub/documents/{id}?userId={userId}` → `content`, `revision`,
+`sections` (id + owner) — then:
 
 ```json
-PATCH /api/hub/documents/{documentId}
+POST /api/hub/documents/{documentId}/patch
 {
   "userId": "{userId}",
-  "title": "Updated title",          // optional
-  "content": "# Full replacement\n…" // full string — not a diff
+  "baseRevision": 3,
+  "ops": [
+    { "op": "replace_text", "old": "ships on Friday", "new": "ships on Monday" },
+    { "op": "upsert_section", "id": "risks", "title": "Risks", "body": "None yet." }
+  ]
 }
 ```
 
-Content is a **full replacement**, not a patch. Fetch the current content first if you want to append: `GET /api/hub/documents/{id}?userId={userId}` → `.content`, append, then PATCH.
+Ops: `upsert_section {id, title, body}` (one section by id), `replace_text {old,
+new}` (`old` must match **exactly once**, else 400 with the count), `append
+{body}`, `replace_all {content}`. An agent's edit is filed as a proposal (a
+governance rule may apply it directly); a person's section (`owner="human"`) is
+never changed and an embed is never dropped unless you pass
+`"allowRemovingEmbeds": true` (403 otherwise). A moved document answers 409 and
+nothing is written: read again. An applied or approved edit reaches open editors
+(`document:content-replaced`), so they reload instead of overwriting it. `PATCH /api/hub/documents/{id}` with `content` is the same door with
+one `replace_all` — it cannot rename (a `title` is refused with 400; to rename an
+entity's document, update the entity's title). MCP: `synap_update_document`;
+full syntax in `document-embeds.md`.
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
 

@@ -106,6 +106,21 @@ export const OperationalEventTypes = {
     filterKeys: ["toStage", "fromStage", "playbookId"],
   },
 
+  // ── Tracks (a method running inside a project, 0272) ──────────────────────
+  // Emitted as `track.stage_changed` (action="stage_changed") by the track's
+  // single stage writer (`applyTrackStageAdvance`, services/tracks) — the same
+  // shape as the session event above. Narrow "when a track enters stage X"
+  // with `triggerConfig.filters` on `toStage` (the matcher's top-level
+  // `toStage` field is session-only).
+  TRACK_STAGE_CHANGED: {
+    type: "track.stage_changed.completed",
+    label: "Track stage changed",
+    domain: "Tracks",
+    description:
+      "Fires when a project's track (a method it runs) moves to a different stage.",
+    filterKeys: ["toStage", "fromStage", "playbookId", "projectId", "trackId"],
+  },
+
   // ── Proposal governance ──────────────────────────────────────────────────
   PROPOSAL_CREATED: {
     type: "proposal.created.completed",

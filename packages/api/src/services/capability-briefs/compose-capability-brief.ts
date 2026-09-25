@@ -96,6 +96,13 @@ const TOOL_METADATA: Record<
     postureSlug: "document",
     isWrite: true,
   },
+  // A section-only patch files under `document.section_update`; every other
+  // patch (and the full-replace aliases) under `document.update`.
+  synap_update_document: {
+    governance: { subjectType: "document", action: "update" },
+    postureSlug: "document",
+    isWrite: true,
+  },
   synap_create_entity: {
     governance: { subjectType: "entity", action: "create" },
     postureSlug: null, // varies by the entity's own profileSlug — no single kind

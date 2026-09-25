@@ -8,7 +8,6 @@
  * before the privileged `governance_rules` insert (see the comment inline).
  */
 
-import { randomUUID } from "crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -18,8 +17,8 @@ import {
   isNull,
   channels,
   getWorkspaceMembership,
-  storedVersionValues,
-  uploadDocumentVersionSnapshot,
+  claimDocumentRevision,
+  emitDocumentContentReplaced,
   links,
   type LinkEndpointType,
   type LinkType,
@@ -70,7 +69,9 @@ import {
   type SettingsUpdateProposalData,
 } from "../../services/proposals/gov-config.js";
 import {
+  assertDocumentBaseRevision,
   assertDocumentBaseVersion,
+  readProposalBaseRevision,
   readProposalBaseVersion,
 } from "../../utils/document-base-version.js";
 import {
@@ -1201,9 +1202,7 @@ async function applyProposalApprovalInner(
     proposal.targetType === "document" &&
     isDocumentContentProposalData(payload)
   ) {
-    const { storage } = await import("@synap/storage");
-    const { documents, documentVersions } =
-      await import("@synap/database/schema");
+    const { documents } = await import("@synap/database/schema");
 
     const document = await db.query.documents.findFirst({
       where: eq(documents.id, proposal.targetId),
@@ -1216,76 +1215,72 @@ async function applyProposalApprovalInner(
       });
     }
 
-    // BASE VERSION: refuse (CONFLICT, nothing written, proposal stays pending)
-    // when the document moved past the version this edit was drafted against —
-    // otherwise a person's save made after the proposal was filed is silently
-    // overwritten. A proposal filed before base versions were recorded carries
-    // none and applies as before.
-    const baseVersion = readProposalBaseVersion(payload);
-    if (baseVersion !== undefined) {
+    // BASE: refuse (CONFLICT, nothing written, proposal stays pending) when the
+    // document moved past what this edit was drafted against — otherwise a
+    // person's save made after the proposal was filed is silently overwritten.
+    // A proposal filed with a content revision is compared on it (it sees every
+    // save); an older one on its checkpoint version; one with neither applies
+    // as before. The pre-check refuses before any write; the claim's
+    // compare-and-set below closes the race.
+    const baseRevision = readProposalBaseRevision(payload);
+    const baseVersion =
+      baseRevision === undefined ? readProposalBaseVersion(payload) : undefined;
+    if (baseRevision !== undefined) {
+      assertDocumentBaseRevision(baseRevision, document.contentRevision);
+    } else if (baseVersion !== undefined) {
       assertDocumentBaseVersion(baseVersion, document.currentVersion);
     }
 
-    const newVersion = (document.currentVersion ?? 1) + 1;
-    const content = payload.proposedContent;
+    // PROVENANCE: the agent DRAFTED this text, the human ACCEPTED it. Two
+    // different people, and the version row must be able to say so — stamping
+    // the accepting human as author erases the agent from the rail and makes
+    // the checkpoint a lie about who wrote the words. The row records the
+    // AUTHOR only; the accepting human lives on the proposal (`reviewedBy`).
+    const claimed = await db.transaction((tx) =>
+      claimDocumentRevision(
+        tx,
+        proposal.targetId,
+        baseRevision,
+        proposal.agentUserId
+          ? { authorKind: "ai", authorId: proposal.agentUserId }
+          : { authorKind: "user", authorId: userId },
+        {
+          content: payload.proposedContent,
+          ...(baseVersion !== undefined ? { baseVersion } : {}),
+          mimeType: document.mimeType || "text/plain",
+          checkpoint: {
+            message: proposal.agentUserId
+              ? "AI edit accepted"
+              : "Edit accepted",
+          },
+        }
+      )
+    );
 
-    await storage.upload(document.storageKey, Buffer.from(content, "utf-8"), {
-      contentType: document.mimeType || "text/plain",
+    // Open editors hold the pre-approval text and would autosave it over this
+    // edit; tell them (D-open: they block their autosave and offer reload).
+    const emitted = await emitDocumentContentReplaced({
+      documentId: claimed.documentId,
+      revision: claimed.revision,
+      workspaceId: claimed.workspaceId,
+      ownerUserId: claimed.ownerUserId,
     });
-    const versionId = randomUUID();
-    const snapshot = await uploadDocumentVersionSnapshot({
+    if (!emitted.ok) {
+      logger.warn(
+        { documentId: claimed.documentId, error: emitted.error },
+        "document:content-replaced emit failed after an approved edit — open editors were not told"
+      );
+    }
+    // Re-index the new text (search reads the stored body) — the same
+    // side effect a person's save emits.
+    void emitSideEffects({
+      subjectType: "document",
+      action: "update",
+      subjectId: claimed.documentId,
       userId,
-      documentId: proposal.targetId,
-      versionId,
-      documentType: document.type,
-      mimeType: document.mimeType || "text/plain",
-      content,
+      workspaceId: claimed.workspaceId,
+      data: { id: claimed.documentId, title: document.title },
     });
-
-    // EVIDENCE (storage engine): both statements RETURN their rows. `rows` is
-    // what the two write statements themselves reported — not "we reached the
-    // end of the branch". If the document row vanished between the read above
-    // and this update, `updatedDocs` is empty and the receipt says so.
-    const insertedVersions = await db
-      .insert(documentVersions)
-      .values({
-        id: versionId,
-        documentId: proposal.targetId,
-        version: newVersion,
-        ...storedVersionValues(snapshot),
-        // PROVENANCE: the agent DRAFTED this text, the human ACCEPTED it. Two
-        // different people, and the version row must be able to say so —
-        // stamping the accepting human as author erases the agent from the
-        // rail and makes the checkpoint a lie about who wrote the words.
-        //
-        // The row records the AUTHOR only. `document_versions` has no metadata
-        // column and no acceptor column, so the accepting human is NOT on this
-        // row: the acceptance actor lives on the proposal (`reviewedBy`), which
-        // is the row that decision belongs to. A uuid stuffed into `message`
-        // would surface verbatim in the version rail.
-        ...(proposal.agentUserId
-          ? {
-              author: "ai" as const,
-              authorId: proposal.agentUserId,
-              message: "AI edit accepted",
-            }
-          : {
-              author: "user" as const,
-              authorId: userId,
-              message: "Edit accepted",
-            }),
-      })
-      .returning({ id: documentVersions.id });
-
-    const updatedDocs = await db
-      .update(documents)
-      .set({
-        currentVersion: newVersion,
-        lastSavedVersion: newVersion,
-        updatedAt: new Date(),
-      })
-      .where(eq(documents.id, proposal.targetId))
-      .returning({ id: documents.id });
 
     await db
       .update(proposals)
@@ -1317,10 +1312,12 @@ async function applyProposalApprovalInner(
     );
     return {
       success: true,
+      // EVIDENCE: the claim RETURNED the document row it compare-and-set, and
+      // the checkpoint row it inserted — not "we reached the end of the branch".
       effect: {
         applied: "verified",
-        rows: insertedVersions.length + updatedDocs.length,
-        ids: insertedVersions.map((r) => r.id),
+        rows: 1 + (claimed.checkpointVersionId ? 1 : 0),
+        ids: claimed.checkpointVersionId ? [claimed.checkpointVersionId] : [],
         subject: "document_versions+documents",
       },
     };

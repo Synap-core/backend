@@ -20,6 +20,7 @@
  * keeps paying for.
  */
 
+import { isDocumentEditProposal } from "@synap-core/types/proposals/intent";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import {
   db,
@@ -50,10 +51,10 @@ const MIN_LIFETIME_MS =
 const logger = createLogger({ module: "expire-lapsed-proposals" });
 
 /**
- * Proposal types that are SESSION-BOUND DRAFTS: they die when their session
- * closes, but no clock ever sweeps them.
+ * SESSION-BOUND DRAFTS: document edits — they die when their session closes,
+ * but no clock ever sweeps them.
  *
- * Why a second list rather than a lifetime on the class: an `ai_edit` document
+ * Why a second rule rather than a lifetime on the class: a document edit
  * proposal is `objectWork` and that classification is right — a draft of a
  * document is exactly as reviewable next week as today, so the 6-hourly cron
  * must never touch it. What it is NOT is reviewable after the session that
@@ -62,11 +63,14 @@ const logger = createLogger({ module: "expire-lapsed-proposals" });
  * is queue debt, not a decision anyone still owes. Session close is a signal
  * the clock does not have, so it gets its own predicate.
  *
- * Keyed on `proposalType` alone. A `document` target is the only shape this
- * covers today and the type literal is already unique to it; pairing it with a
- * targetType would add a second thing to keep in sync for no discrimination.
+ * The rule is `isDocumentEditProposal` (`@synap-core/types/proposals/intent`):
+ * the patch door's types on a document, plus the legacy `ai_edit`. ONE
+ * classifier, also read by the browser's close moment to say which pending
+ * drafts this close PROVABLY expires — so the pod and the sentence cannot
+ * disagree. Keyed on the (targetType, proposalType) PAIR: an entity `update`
+ * outlives the session.
  */
-export const SESSION_BOUND_DRAFT_TYPES: readonly string[] = ["ai_edit"];
+export const isSessionBoundDraft = isDocumentEditProposal;
 
 /**
  * Does closing a session retire this pending proposal?
@@ -81,7 +85,7 @@ export function diesWithSession(
   targetType: string
 ): boolean {
   if (proposalLifetimeHours(proposalType, targetType) !== null) return true;
-  return SESSION_BOUND_DRAFT_TYPES.includes(proposalType);
+  return isSessionBoundDraft({ targetType, proposalType });
 }
 
 /** The minimum a row must carry for the lapse decision. */
@@ -248,7 +252,7 @@ export async function expireLapsedProposals(
  * close even if this fails, so it never throws.
  *
  * `diesWithSession` decides — classes with a lifetime (ephemeral outbound
- * calls) plus `SESSION_BOUND_DRAFT_TYPES`. Closing a session must not discard a
+ * calls) plus the session-bound drafts (`isSessionBoundDraft`). Closing a session must not discard a
  * proposed entity or a merge candidate that happened to be created during it;
  * those outlive the session by design.
  */

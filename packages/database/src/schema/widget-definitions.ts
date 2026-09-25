@@ -56,7 +56,9 @@ export type WidgetRole =
  * Content kind — the single de-conflated taxonomy for WHAT a cell renders. It
  * REPLACES `role` (which conflated content with placement). DISTINCT from
  * `rendererType` (the rendering MECHANISM: frame/builtin/iframe/native).
- * Mirrors `ContentKind` in `@synap-core/capabilities` (canonical copy).
+ * Mirrors `CONTENT_KINDS` in `@synap-core/types/renderables` (the canonical
+ * copy), pinned element-for-element by the api tripwire
+ * `content-kinds-one-taxonomy.test.ts`.
  *
  *   - "entity-detail"  → renders ONE entity (its full page)
  *   - "entity-card"    → renders ONE entity (its small, embeddable block)
@@ -96,7 +98,8 @@ export const widgetDefinitions = pgTable(
     typeKey: text("type_key").notNull(),
 
     /**
-     * NULL = system-wide (built-ins, seeded at startup).
+     * NULL = pod-wide (installed for every workspace). Built-ins are NOT rows:
+     * the pod reads them from `@synap-core/types/renderables` in-process.
      * Set = workspace-specific custom widget.
      */
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {

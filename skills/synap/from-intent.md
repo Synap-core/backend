@@ -92,15 +92,18 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
 
-| The user needs…                              | Do this                                                                                                                                     |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| a **method** in an existing project          | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
-| no method fits                               | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                     |
-| one bounded piece of work in that method     | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`     |
-| new **kinds of things** no workspace owns    | a workspace (four-test, `workspace-design`) — never to represent a method                                                                   |
-| a new long-lived intent with its own gravity | a project — never a twin project for a method of an existing one                                                                            |
+| The user needs…                               | Do this                                                                                                                                      |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| a **method** in an existing project           | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track`  |
+| no method fits                                | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                      |
+| one bounded piece of work in that method      | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`      |
+| the work of ONE stage (its goal is the brief) | `synap_start_stage_session` (`trackId`, optional `stageKey`) — idempotent, files the session at that stage with the stage's outputs/criteria |
+| new **kinds of things** no workspace owns     | a workspace (four-test, `workspace-design`) — never to represent a method                                                                    |
+| a new long-lived intent with its own gravity  | a project — never a twin project for a method of an existing one                                                                             |
 
-Pause, resume (a check gate holds a track until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
+**Offer, don't auto-start.** Advancing a track never starts work: `synap_advance_track` returns an `offer` (the entered stage's name, goal, suggested tasks). Show it — _"Build is next: build the MVP. Start a session for it?"_ — and call `synap_start_stage_session` only on a yes. A session is filed at the track's current stage unless you pass `trackStage`; the same goal at two stages is two sessions. The method's params (`params` on `synap_start_track`) are the track's onboarding: a required one nobody answered becomes a question owed to the person on the stage session, so stage 1 IS onboarding — never ask a separate questionnaire.
+
+Pause, resume (a check gate holds a track until at least one session filed at the stage being left is closed and passes its criteria, or until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
 
 ### 3. Which skill to load next
 

@@ -741,7 +741,11 @@ describe("first run of a connection → ONE grouped import proposal", () => {
     // Resolved through THIS connection's tool, never by bare verb name: a
     // stale same-named skill on another tool must not be able to answer.
     for (const [call] of h.executeCapability.mock.calls) {
-      expect((call as { toolId?: string }).toolId).toBe("tool-1");
+      const c = call as { toolId?: string; requestEnableForOwner?: boolean };
+      expect(c.toolId).toBe("tool-1");
+      // A mirror has no one to ask: a not-enabled pack must leave the owner a
+      // request to approve, not a failure with nothing in the queue.
+      expect(c.requestEnableForOwner).toBe(true);
     }
   });
 
@@ -1071,10 +1075,15 @@ describe("a failed kind carries its CLASS, and the operator hears of it once", (
         kind: "deny",
         reason: "This capability is installed but not yet enabled.",
         enable: ENABLE,
+        enableProposal: { status: "proposed", proposalId: "enable-req-1" },
       }),
     });
     const res = await runConnectionSync({ provider: "google" });
-    const failure = { errorClass: "permission", next: ENABLE };
+    const failure = {
+      errorClass: "permission",
+      next: ENABLE,
+      enableProposalId: "enable-req-1",
+    };
     expect(res.connections?.[0]?.kinds.event).toMatchObject({
       phase: "failed",
       failure,
@@ -1193,7 +1202,11 @@ describe("a failed kind carries its CLASS, and the operator hears of it once", (
                   "conn-1": {
                     phase: "failed",
                     error: "not enabled",
-                    failure: { errorClass: "permission", next: ENABLE },
+                    failure: {
+                      errorClass: "permission",
+                      next: ENABLE,
+                      enableProposalId: "enable-req-1",
+                    },
                   },
                 },
               },
@@ -1216,6 +1229,7 @@ describe("a failed kind carries its CLASS, and the operator hears of it once", (
     expect(byKind.get("event")!.failure).toEqual({
       errorClass: "permission",
       next: ENABLE,
+      enableProposalId: "enable-req-1",
     });
     expect(byKind.get("contact")!.failure).toBeUndefined();
   });

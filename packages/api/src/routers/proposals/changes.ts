@@ -5,6 +5,7 @@
  */
 
 import type { ProposalReviewChange } from "@synap-core/types";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import {
   labelFromPath,
   valueTypeOf,
@@ -141,6 +142,12 @@ export function buildProposalChanges(
   )["allowedHosts"];
   const promotesAllowedHosts = Array.isArray(allowedHosts);
 
+  // The playbook STRUCTURE keys, promoted for the same reason (see the block
+  // after the allowedHosts promotion): resolved here so the fallback can skip
+  // the raw copies it would otherwise also emit.
+  const promotedStages = readPromotedStages(data.stages);
+  const promotesScope = typeof data.scope === "string" && data.scope !== "";
+
   // Generic fallback: a non-entity proposal (e.g. a flat `property_def` payload of
   // { slug, valueType, constraints, overlay, required, … }) matches none of the
   // entity-shape keys above, so `changes` is still empty and the review card would
@@ -162,6 +169,9 @@ export function buildProposalChanges(
       // plus noise (marketSource baselines, run counters) — the exact thing the
       // promotion exists to displace.
       if (key === "metadata" && promotesAllowedHosts) continue;
+      // Promoted below as readable rows; the raw copy would be a duplicate.
+      if (key === "stages" && promotedStages) continue;
+      if (key === "scope" && promotesScope) continue;
       changes.push({
         path: key,
         label: labelFromPath(key),
@@ -208,5 +218,78 @@ export function buildProposalChanges(
     });
   }
 
+  // ── Playbook structure: `scope` and `stages` promoted to their own rows ────
+  //
+  // A playbook create/update proposal carries `description` — an entity-shape
+  // key — so the loop above emits ONE row and the generic fallback never fires:
+  // the reviewer approving a METHOD saw its description and nothing else, not
+  // whether it is a session template or a project method (`scope`), nor the
+  // stages a project will walk. Pushed AFTER the fallback for the reason the
+  // allowedHosts row is: pushing earlier would suppress the fallback.
+  //
+  // Real content only, never a hand-written label map: the scope VALUE goes
+  // through `humanizeToken` (the vocabulary door for any token); a stage row's
+  // label is the stage's OWN name (content the author wrote), and its value is
+  // the stage's own goal.
+  if (promotesScope) {
+    changes.push({
+      path: "scope",
+      label: labelFromPath("scope"),
+      operation,
+      before: undefined,
+      after: humanizeToken(data.scope as string),
+      valueType: "string",
+    });
+  }
+  if (promotedStages) {
+    promotedStages.forEach((stage, i) => {
+      const goal = stage.goal ?? stage.description ?? null;
+      changes.push({
+        path: `stages.${stage.key ?? i}`,
+        label:
+          stage.name ??
+          (stage.key
+            ? humanizeToken(stage.key)
+            : `${labelFromPath("stage")} ${i + 1}`),
+        operation,
+        before: undefined,
+        after: goal,
+        valueType: valueTypeOf(goal),
+      });
+    });
+  }
+
   return changes;
+}
+
+/** The fields of a stage the review card shows — everything else stays in `data`. */
+interface PromotedStage {
+  key?: string;
+  name?: string;
+  goal?: string;
+  description?: string;
+}
+
+/**
+ * A payload's `stages`, when it is a list of stage OBJECTS (a playbook's or a
+ * session's phases). Anything else — absent, not an array, an array of scalars —
+ * is left to the generic fallback untouched. Narrows, never trusts: `data` is
+ * the stored request payload.
+ */
+function readPromotedStages(value: unknown): PromotedStage[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+  if (!value.every((s) => s && typeof s === "object" && !Array.isArray(s))) {
+    return null;
+  }
+  const str = (v: unknown): string | undefined =>
+    typeof v === "string" && v.trim() !== "" ? v : undefined;
+  return value.map((raw) => {
+    const s = raw as Record<string, unknown>;
+    return {
+      key: str(s.key),
+      name: str(s.name),
+      goal: str(s.goal),
+      description: str(s.description),
+    };
+  });
 }

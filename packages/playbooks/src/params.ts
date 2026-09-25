@@ -31,6 +31,17 @@ export interface PlaybookParamTypeError {
   fromDefault?: boolean;
 }
 
+/**
+ * THE sentence for a param type error — one wording for every door (session
+ * create, track params, the approval replay): `"x" must be one of "a", "b" —
+ * got "c".` for a choice, `"x" must be a number — got "lots".` otherwise.
+ */
+export function describeParamTypeError(e: PlaybookParamTypeError): string {
+  return e.options
+    ? `"${e.name}" must be one of ${e.options.map((o) => `"${o}"`).join(", ")} — got "${e.received}".`
+    : `"${e.name}" must be a ${e.type} — got "${e.received}".`;
+}
+
 export interface PlaybookParamResolution {
   /**
    * What to substitute into the goal template. Declared params that resolved

@@ -74,6 +74,12 @@ import {
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
 import { triageEmails } from "../mail-feed/triage.js";
+import { freezeChartEmbeds } from "../document-charts/freeze-chart-embeds.js";
+import { liveChartReader } from "../document-charts/freeze-charts-verb.js";
+import {
+  RUN_TIME_DIAGNOSTIC_CODES,
+  stampRunDiagnostics,
+} from "../document-charts/stamp-run-diagnostics.js";
 import { generateViaIS } from "../mail-feed/generate.js";
 import { resolveTool } from "../tools/resolve-tool.js";
 import { recommendTightenForAllAgents } from "../proposals/recommend-tighten.js";
@@ -1681,6 +1687,61 @@ const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
  * fetched here (that's `documentsRouter.get`'s job); this verb stays a pure
  * access-layer read like its W6 siblings.
  */
+/**
+ * document.freeze_charts — D2: an AI-written report's charts are SNAPSHOTS. The
+ * report flow runs this between the assembler and `create-report`: every live
+ * chart embed in `markdown` gets `data` + `capturedAt` from its OWN live query
+ * (`entities.list` as the acting user in the acting workspace — the exact door
+ * the browser chart reads), shaped by the ONE shared shaper. A chart whose read
+ * fails stays live (`diagnostics: freeze_failed`); zero rows is an empty
+ * snapshot. Returns `{ markdown, frozen, diagnostics }` and writes NOTHING
+ * (create-report does), so it is read-only and auto-runs inside the flow.
+ */
+const documentFreezeChartsParams = z.object({
+  markdown: z.string().min(1),
+});
+
+const documentFreezeChartsHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = documentFreezeChartsParams.parse(params);
+  return freezeChartEmbeds(input.markdown, liveChartReader(ctx));
+};
+
+/**
+ * document.stamp_diagnostics — record RUN-TIME diagnostics (today
+ * `freeze_failed`) on a document the caller owns, in W4b's ONE store
+ * (`documents.metadata.diagnostics`, stamped for the current revision, the
+ * content diagnostics re-run beside them). The report flow runs it after
+ * `create-report` with `{{steps.freeze-charts.output.diagnostics}}`, so a chart
+ * the freeze had to leave live says so ON the report. Content codes cannot be
+ * asserted here (they are derived); only run-time codes are accepted.
+ */
+const documentStampDiagnosticsParams = z.object({
+  documentId: z.string().optional().nullable(),
+  items: z.array(
+    z.object({
+      code: z.enum(RUN_TIME_DIAGNOSTIC_CODES),
+      severity: z.enum(["error", "warning", "info"]),
+      message: z.string().min(1),
+      fix: z.string().min(1),
+      line: z.number().int().positive().optional(),
+      directive: z.string().optional(),
+      ref: z.record(z.string(), z.string()).optional(),
+    })
+  ),
+});
+
+const documentStampDiagnosticsHandler: BuiltinVerbHandler = async (
+  params,
+  ctx
+) => {
+  const input = documentStampDiagnosticsParams.parse(params);
+  return stampRunDiagnostics({
+    documentId: input.documentId,
+    items: input.items,
+    actingUserId: ctx.userId,
+  });
+};
+
 const documentReadParams = z.object({
   documentId: z.string().min(1),
 });
@@ -3654,6 +3715,10 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "document.create": documentCreateHandler,
   "document.update": documentUpdateHandler,
   "document.read": documentReadHandler,
+  // D2 — turn a report's live chart embeds into snapshots (the report flow's
+  // step between the assembler and create-report).
+  "document.freeze_charts": documentFreezeChartsHandler,
+  "document.stamp_diagnostics": documentStampDiagnosticsHandler,
   // Kind + Facets — role attach/update/detach/list over the one facet door.
   "entity_facet.attach": entityFacetAttachHandler,
   "entity_facet.update": entityFacetUpdateHandler,
@@ -3745,6 +3810,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "document.create": documentCreateParams,
   "document.update": documentUpdateParams,
   "document.read": documentReadParams,
+  "document.freeze_charts": documentFreezeChartsParams,
+  "document.stamp_diagnostics": documentStampDiagnosticsParams,
   "entity_facet.attach": entityFacetAttachParams,
   "entity_facet.update": entityFacetUpdateParams,
   "entity_facet.detach": entityFacetDetachParams,
@@ -3803,6 +3870,15 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "message.interpret",
   // document.read — pure access-layer read (see handler doc above).
   "document.read",
+  // document.freeze_charts — reads through entities.list under the caller's
+  // floor and RETURNS markdown; it writes nothing (create-report does). Must
+  // auto-run inside the report flow (a propose verdict would stall it).
+  "document.freeze_charts",
+  // document.stamp_diagnostics — writes ONLY the advisory, revision-stamped
+  // diagnostics on a document the caller OWNS (handler-enforced), never content
+  // or graph data; same "annotation, not a data write → auto-run" rationale as
+  // the review-item filers below, so the report flow is not stalled by it.
+  "document.stamp_diagnostics",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is

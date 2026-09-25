@@ -15,9 +15,12 @@ import { PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 import {
   advanceTrackStage,
   listTracks,
+  loadTrackViews,
+  loadWrittenTrackView,
+  setTrackParams,
   setTrackStatus,
+  startStageSession,
   startTrack,
-  toTrackView,
   type TrackActor,
 } from "../../../services/tracks/tracks-service.js";
 import {
@@ -50,6 +53,10 @@ function uuid(v: unknown): string | undefined {
   return s && Uuid.safeParse(s).success ? s : undefined;
 }
 
+function isParams(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
 async function run(fn: () => Promise<unknown>): Promise<CallToolResult> {
   try {
     return ok(await fn());
@@ -75,7 +82,7 @@ export const trackHandlers: McpHandlerMap = {
         includeArchived: ctx.args.includeArchived === true,
       });
       if (!rows) return { error: "Project not found" };
-      return { items: rows.map(toTrackView) };
+      return { items: await loadTrackViews(rows, ctx) };
     });
   },
 
@@ -94,10 +101,14 @@ export const trackHandlers: McpHandlerMap = {
         projectId,
         playbookId,
         ...(str(ctx.args.name) ? { name: str(ctx.args.name) } : {}),
+        ...(isParams(ctx.args.params) ? { params: ctx.args.params } : {}),
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;
-      return { status: result.status, track: toTrackView(result.track) };
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     });
   },
 
@@ -118,7 +129,10 @@ export const trackHandlers: McpHandlerMap = {
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;
-      return { ...result, track: toTrackView(result.track) };
+      return {
+        ...result,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     });
   },
 
@@ -138,7 +152,54 @@ export const trackHandlers: McpHandlerMap = {
         actor: actorOf(ctx),
       });
       if (result.status === "proposed") return result;
-      return { status: result.status, track: toTrackView(result.track) };
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     });
+  },
+
+  synap_set_track_params: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    if (!trackId || !isParams(ctx.args.params)) {
+      return ok({
+        error:
+          "trackId (uuid) and params (an object keyed by the declared param names) are required — synap_list_tracks returns each track's declaredParams.",
+      });
+    }
+    const params = ctx.args.params;
+    return run(async () => {
+      const result = await setTrackParams({
+        trackId,
+        params,
+        actor: actorOf(ctx),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    });
+  },
+
+  synap_start_stage_session: async (ctx) => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    const trackId = uuid(ctx.args.trackId);
+    if (!trackId) {
+      return ok({
+        error:
+          "trackId (uuid) is required — synap_list_tracks lists each track and its stages.",
+      });
+    }
+    return run(() =>
+      startStageSession({
+        trackId,
+        stageKey: str(ctx.args.stageKey) ?? null,
+        title: str(ctx.args.title) ?? null,
+        goal: str(ctx.args.goal) ?? null,
+        actor: actorOf(ctx),
+      })
+    );
   },
 };

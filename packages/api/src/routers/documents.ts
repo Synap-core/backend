@@ -29,19 +29,25 @@ import {
   isNull,
   documents,
   documentVersions,
-  workspaceMembers,
   documentSessions,
   normalizeDocumentType,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   readDocumentVersionContent,
+  claimDocumentRevision,
   EntityBodyService,
   eventRepository,
   resolveWorkspacePlacement,
 } from "@synap/database";
 
 import { requireUserId } from "../utils/user-scoped.js";
+import { resolveActorNames } from "../utils/resolve-actor-names.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
+import {
+  canEditDocument,
+  loadEditableDocument,
+  loadReadableDocument,
+} from "../utils/document-edit-access.js";
 import { recordSessionArtifact } from "../services/focus-sessions/record-session-artifact.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
@@ -94,7 +100,17 @@ const UpdateDocumentSchema = z.object({
       })
     )
     .optional(),
-  version: z.number().int().positive().optional(),
+  /**
+   * The `content_revision` the editor last loaded or saved. Present ⇒ the save
+   * is refused (CONFLICT) when anything else wrote the document since — an
+   * approved AI edit, a restore, another editor. Absent ⇒ unchecked.
+   */
+  baseRevision: z.number().int().positive().optional(),
+  /**
+   * The realtime room's leader writing the room's content back as markdown
+   * (D-collab). Marks the room's Yjs cache as current for the new revision.
+   */
+  collab: z.boolean().optional(),
   message: z.string().optional(),
   title: z.string().optional(),
 });
@@ -103,7 +119,6 @@ const CreateDocumentSchema = z.object({
   title: z.string().min(1),
   content: z.string().default(""),
   type: DocumentTypeSchema.default("markdown"),
-  projectId: z.string().uuid().optional(),
   /** Optional: when omitted, uses X-Workspace-Id header (workspaceLink). */
   workspaceId: z.string().uuid().optional(),
   /**
@@ -119,6 +134,13 @@ const CreateDocumentSchema = z.object({
    * close, left open on the door people actually use.
    */
   expectedLabel: z.string().min(1).max(500).optional(),
+  /**
+   * "Duplicate as new document" (D-branch: no branches, forks keep lineage).
+   * The source must be a document the caller can READ; its revision at the
+   * moment of the copy is read here, never taken from the client. Stored on
+   * `metadata.duplicatedFrom = { documentId, revision }`.
+   */
+  duplicatedFrom: z.object({ documentId: z.string().uuid() }).optional(),
 });
 
 // ============================================================================
@@ -148,6 +170,17 @@ export const documentsRouter = router({
       // write on the RESOLVED workspace (editor+ for a workspace row; the owner
       // for a pod-wide row), never a request-supplied id.
       await assertWorkspaceWrite(db, userId, { workspaceId, ownerId: userId });
+      // Lineage only to a document the caller may read (NOT_FOUND otherwise),
+      // so a copy can never point at someone else's hidden document.
+      const duplicatedFrom = input.duplicatedFrom
+        ? await loadReadableDocument(
+            userId,
+            input.duplicatedFrom.documentId
+          ).then((source) => ({
+            documentId: source.id,
+            revision: source.contentRevision,
+          }))
+        : null;
       const documentId = randomUUID();
       const docType = normalizeDocumentType(input.type, "markdown");
       const extension = docType === "markdown" ? "md" : docType;
@@ -190,6 +223,7 @@ export const documentsRouter = router({
             mimeType: resolvedMimeType,
             currentVersion: 1,
             lastSavedVersion: 1,
+            ...(duplicatedFrom ? { metadata: { duplicatedFrom } } : {}),
           })
           .returning();
 
@@ -324,40 +358,10 @@ export const documentsRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const [document] = await db
-        .select()
-        .from(documents)
-        .where(eq(documents.id, input.documentId))
-        .limit(1);
-
-      if (!document) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
-
-      // Access check: owner OR workspace member (covers agent-created docs)
-      if (document.userId !== userId) {
-        if (!document.workspaceId) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Document not found",
-          });
-        }
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, document.workspaceId),
-            eq(workspaceMembers.userId, userId)
-          ),
-        });
-        if (!membership) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Document not found",
-          });
-        }
-      }
+      // The documents read floor (owner, workspace member, exposure) — the
+      // same predicate the edit gate builds on, so a reader and an editor can
+      // never disagree about which document they are looking at.
+      const document = await loadReadableDocument(userId, input.documentId);
 
       // Read the body via the 3-state resolver (never non-null-asserts
       // `storageKey` — fixes B2, where an external-URL reference document
@@ -379,7 +383,12 @@ export const documentsRouter = router({
         content = body.content;
       }
 
-      return { document, content };
+      // Edit rights by the document's own floor — the SAME gate every write
+      // uses — so the surface never offers an edit the pod would refuse.
+      // Only FORBIDDEN reads as false; a failed membership read fails the get.
+      const canEdit = await canEditDocument(userId, document);
+
+      return { document, content, canEdit };
     }),
 
   /**
@@ -390,51 +399,33 @@ export const documentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      // 1. Verify existence & authorization ownership
-      const [document] = await db
-        .select()
-        .from(documents)
-        .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
-        )
-        .limit(1);
+      // 1. Edit rights follow the document's own floor (workspace editor+,
+      //    or the owner of a pod-wide document).
+      const document = await loadEditableDocument(userId, input.documentId);
 
-      if (!document) {
-        console.warn(
-          `[documents.update] 404 — documentId=${input.documentId} userId=${userId}`
-        );
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
-
-      // 2. Direct storage update for legacy content path
-      // NOTE: Primary content editing should go through Yjs realtime (WebSocket),
-      // not through this tRPC endpoint. This path exists for non-realtime updates only.
+      // 2. Content goes through the ONE content-write door: compare-and-set on
+      //    the content revision, author-switch checkpoint, storage upload.
+      let revision = document.contentRevision;
       if (input.delta) {
-        // An external-URL reference document has NO storage object (storageKey
-        // NULL, storageUrl points off-pod) — there is nothing to write content
-        // to. Reject rather than crash on a `storageKey!` assert (B2 class).
-        if (!document.storageKey) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              "Cannot update the content of an external reference document (no stored bytes).",
-          });
-        }
         const newContent = input.delta[0]?.content || "";
-        await storage.upload(
-          document.storageKey,
-          Buffer.from(newContent, "utf-8"),
-          { contentType: document.mimeType || "text/plain" }
+        const claimed = await db.transaction((tx) =>
+          claimDocumentRevision(
+            tx,
+            input.documentId,
+            input.baseRevision,
+            { authorKind: "user", authorId: userId },
+            {
+              content: newContent,
+              ...(input.collab ? { source: "collab-writeback" as const } : {}),
+            }
+          )
         );
+        revision = claimed.revision;
       }
 
-      // 3. Direct DB update for metadata (title)
-      // Version is NOT incremented here — versioning is handled by the snapshot system
-      // (manual save, auto-save cron, session close). This prevents version inflation
-      // from per-keystroke or frequent metadata updates.
+      // 3. Metadata (title). A same-author save cuts no checkpoint (the
+      //    door above only cuts one on an author switch), so saves do not
+      //    inflate the history rail.
       const updateFields: Record<string, unknown> = {
         updatedAt: new Date(),
       };
@@ -467,14 +458,15 @@ export const documentsRouter = router({
         action: "update",
         subjectId: input.documentId,
         userId,
+        workspaceId: document.workspaceId,
         data: {
           id: input.documentId,
           title: input.title || document.title,
         },
       });
 
-      // 6. Response
-      return { version: document.currentVersion, success: true };
+      // 6. Response — `revision` is the editor's next `baseRevision`.
+      return { version: document.currentVersion, revision, success: true };
     }),
 
   /**
@@ -561,19 +553,9 @@ export const documentsRouter = router({
     .mutation(async ({ input, ctx }) => {
       const userId = requireUserId(ctx.userId);
 
-      // Gate on document ownership BEFORE enqueuing — the worker trusts the
-      // payload userId, so the membership check must happen here.
-      const [doc] = await db
-        .select({ userId: documents.userId })
-        .from(documents)
-        .where(eq(documents.id, input.documentId))
-        .limit(1);
-      if (!doc || doc.userId !== userId) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
+      // Gate on edit rights BEFORE enqueuing — the worker trusts the payload
+      // userId, so the check must happen here.
+      await loadEditableDocument(userId, input.documentId);
 
       // Enqueue snapshot job via pg-boss
       await getBoss().send("document-snapshot", {
@@ -599,29 +581,23 @@ export const documentsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      // Gate on the parent document's owner BEFORE listing versions —
+      // Gate on the parent document's read floor BEFORE listing versions —
       // document_versions has no own user/workspace, so this is the only guard.
-      const [document] = await db
-        .select({
-          userId: documents.userId,
-          currentVersion: documents.currentVersion,
-          lastSavedVersion: documents.lastSavedVersion,
-        })
-        .from(documents)
-        .where(eq(documents.id, input.documentId))
-        .limit(1);
-      if (!document || document.userId !== ctx.userId) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
+      const document = await loadReadableDocument(
+        requireUserId(ctx.userId),
+        input.documentId
+      );
 
       const versions = await db.query.documentVersions.findMany({
         where: eq(documentVersions.documentId, input.documentId),
         orderBy: desc(documentVersions.createdAt),
         limit: input.limit,
       });
+      // The author's display name — an agent is rarely a workspace member, so
+      // the rail cannot name it from the member list alone.
+      const authorNames = await resolveActorNames(
+        versions.map((v) => v.authorId)
+      );
 
       return {
         versions: versions.map((v) => ({
@@ -632,6 +608,7 @@ export const documentsRouter = router({
           // version rail reads this to say who drafted a version.
           author: v.author,
           createdBy: v.authorId,
+          authorName: authorNames.get(v.authorId) ?? null,
           createdAt: v.createdAt,
           size: v.size,
           mimeType: v.mimeType,
@@ -639,8 +616,9 @@ export const documentsRouter = router({
           hasStoredSnapshot: !!v.storageKey,
         })),
         latest: {
-          currentVersion: document?.currentVersion || 1,
-          lastSavedVersion: document?.lastSavedVersion || 0,
+          currentVersion: document.currentVersion,
+          lastSavedVersion: document.lastSavedVersion,
+          revision: document.contentRevision,
         },
       };
     }),
@@ -669,22 +647,23 @@ export const documentsRouter = router({
         });
       }
 
-      // Gate on document ownership BEFORE enqueuing — the worker overwrites the
+      // Gate on edit rights BEFORE enqueuing — the worker overwrites the
       // document's content trusting the payload. Also confirm the version
       // actually belongs to the target document.
-      const [doc] = await db
-        .select({ userId: documents.userId })
-        .from(documents)
-        .where(eq(documents.id, input.documentId))
-        .limit(1);
-      if (
-        !doc ||
-        doc.userId !== userId ||
-        version.documentId !== input.documentId
-      ) {
+      await loadEditableDocument(userId, input.documentId);
+      if (version.documentId !== input.documentId) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Document not found",
+        });
+      }
+      // A row the realtime server once wrote holds Yjs binary state, not text.
+      // Restoring it would write base64 over the markdown body.
+      if (version.content.startsWith("yjs:")) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "This version holds realtime editor state, not the document text, so it cannot be restored. Pick another version.",
         });
       }
 
@@ -719,16 +698,9 @@ export const documentsRouter = router({
         throw new TRPCError({ code: "NOT_FOUND" });
       }
 
-      // Verify the parent document belongs to the caller before returning
+      // Verify the caller may read the parent document before returning
       // content (the version row carries no user/workspace of its own).
-      const [doc] = await db
-        .select({ userId: documents.userId })
-        .from(documents)
-        .where(eq(documents.id, version.documentId))
-        .limit(1);
-      if (!doc || doc.userId !== ctx.userId) {
-        throw new TRPCError({ code: "NOT_FOUND" });
-      }
+      await loadReadableDocument(requireUserId(ctx.userId), version.documentId);
 
       const content = await readDocumentVersionContent(version);
 
@@ -749,23 +721,8 @@ export const documentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
-      const [document] = await db
-        .select()
-        .from(documents)
-        .where(
-          and(eq(documents.id, input.documentId), eq(documents.userId, userId))
-        )
-        .limit(1);
-
-      if (!document) {
-        console.warn(
-          `[documents.startSession] 404 — documentId=${input.documentId} userId=${userId}`
-        );
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
+      // An editing session is an editing act: the same edit-rights floor.
+      await loadEditableDocument(userId, input.documentId);
 
       // Session tracking only — no version bump on start.
       // Versions are created when the editing session ends (room close)
@@ -833,7 +790,6 @@ export const documentsRouter = router({
   list: protectedProcedure
     .input(
       paginatedInput.extend({
-        projectId: z.string().optional(),
         type: DocumentTypeSchema.optional(),
       })
     )
@@ -851,6 +807,9 @@ export const documentsRouter = router({
           entityIdColumn: documents.id,
           ownerColumn: documents.userId,
           userId,
+          // Same floor as the registered `documents` rule: a document follows
+          // its pod-shared entity.
+          documentFollowsEntity: true,
         }),
       ];
       if (input.type) {

@@ -15,11 +15,9 @@ import {
   projects,
   inArray,
   and,
-  eq,
   isNull,
   drizzleSql,
   entities,
-  getWorkspaceMembership,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import {
@@ -29,6 +27,7 @@ import {
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
+import { checkLinkEndpointsVisible } from "../../hub-protocol/rest/link-endpoint-visibility.js";
 import {
   setAgentFocusWorkspace,
   setAgentFocusProject,
@@ -646,37 +645,20 @@ export const workspaceHandlers: McpHandlerMap = {
     if (!projectId || !workspaceId) {
       return ok({ error: "projectId and workspaceId are required" });
     }
-    // Same pre-governance floor as REST POST /links (linkType "uses"): the
-    // project must be visible and the caller a member of the workspace —
-    // otherwise an unreachable edge becomes a proposal approval would write.
-    const [visibleProject] = await db
-      .select({ id: projects.id })
-      .from(projects)
-      .where(
-        and(
-          eq(projects.id, projectId),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            userId
-          )
-        )
-      )
-      .limit(1);
-    if (!visibleProject) return ok({ error: "Project not found" });
-    const [liveWorkspace, membership] = await Promise.all([
-      db.query.workspaces.findFirst({
-        where: and(
-          eq(workspaces.id, workspaceId),
-          isNull(workspaces.archivedAt)
-        ),
-        columns: { id: true },
-      }),
-      getWorkspaceMembership(db, workspaceId, userId),
-    ]);
-    if (!liveWorkspace || !membership) {
-      return ok({ error: `Access denied to workspace ${workspaceId}` });
-    }
+    // The SAME pre-governance endpoint floor as REST POST /links: the project
+    // must be visible and the caller a member of the workspace — otherwise an
+    // unreachable edge becomes a proposal approval would write.
+    const endpointRefusal = await checkLinkEndpointsVisible(
+      {
+        fromType: "project",
+        fromId: projectId,
+        toType: "workspace",
+        toId: workspaceId,
+      },
+      userId,
+      workspaceId
+    );
+    if (endpointRefusal) return ok({ error: endpointRefusal.error });
     const perm = await checkPermissionOrPropose({
       userId,
       agentUserId,

@@ -42,7 +42,6 @@ export const channelsRouter = router({
   resolveOrCreateChannel: crudProcedures.resolveOrCreateChannel,
   createChannel: crudProcedures.createChannel,
   createAgentCollabChannel: crudProcedures.createAgentCollabChannel,
-  createAndLinkToSession: crudProcedures.createAndLinkToSession,
   createGroupChannel: crudProcedures.createGroupChannel,
   createDocumentComment: crudProcedures.createDocumentComment,
   createEntityComment: crudProcedures.createEntityComment,

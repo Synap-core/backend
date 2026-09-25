@@ -1,291 +1,40 @@
 # Widget catalog — reference
 
-Widgets (cells) are the universal rendering unit. A bento is composed of cells. Views embed cells. Side panels host cells.
+Widgets (cells) are the universal rendering unit. A bento is composed of cells. Views embed cells. Documents embed cells.
 
-**Never guess a widget kind.** Call `synap_list_widgets` (or `GET /api/hub/widget-definitions?workspaceId={workspaceId}`) first. That list is the compose allowlist: curated builtins the Browser actually registers, plus `generated:<slug>` cells on the pod.
+**Never guess a widget key.** Call `synap_list_widgets` (or `GET /api/hub/widget-definitions?workspaceId={workspaceId}`) first. That list IS the catalog: every built-in the pod knows (stat-card, entity-list, chart-*, view, …) plus the `cell:<pkg>:<key>` and `generated:<slug>` cells installed on the pod. Each entry carries its `requiredConfig`, `propsSchema`, `aiHint` and default size. A key it does not list is refused on arrange.
 
-Do **not** invent `entity-count` — use `stat-card` with `profileSlug`. Do **not** pass `profileSlug` to `view-table` / `view` and expect a table — those widgets need a saved `viewId`. Use `entity-list` + `profileSlug` when you have no saved view.
+- `synap_list_widgets` (default `surface: "bento"`) — what you may place in a dashboard.
+- `synap_list_widgets({ surface: "document" })` — what you may embed in a document, with an `exampleDirective` for each.
 
-This file is a categorized snapshot of what typically exists in a Synap pod. Use it for planning ("can I build X?") — but verify against the registry before committing.
+This file explains HOW widgets are referenced. It deliberately does not list the keys: the list above is generated from the catalog, and a copy here would drift.
 
 ## How widget references work in bentos
+
+You place widgets with `POST /api/hub/views/{bentoViewId}/arrange` (IS: `arrange_workspace`) as `{ key, config, x, y, w, h }`. The pod stores each as a bento block:
 
 ```json
 {
   "id": "block-123",
   "kind": "widget",
-  "widgetKind": "stat-card",
-  "config": {/* widget-specific, see configSchema in registry */},
-  "layout": { "x": 0, "y": 0, "w": 4, "h": 2 }
+  "widgetType": "stat-card",
+  "config": { "profileSlug": "task", "label": "Open tasks" },
+  "pos": { "x": 0, "y": 0, "w": 3, "h": 3 }
 }
 ```
 
-`widgetKind` is a string matching a registered cell. `config` must validate against the cell's `configSchema` (returned by `/widget-definitions`).
+`widgetType` is the catalog key (`typeKey` in the list). `config` must carry every key in that entry's `requiredConfig`; the rest of `propsSchema` is optional.
 
-## Categories
+## The rules the list cannot tell you
 
-The registry tags each widget with a category:
-
-- `core` — universal layout primitives (stat, section-header, quick-access)
-- `data` — entity-driven (entity-card, entity-gallery, view embeds)
-- `ai` — AI outputs (proactive cards, proposals, chat)
-- `entity` — entity-detail views and editors
-- `communication` — channels, threads, messages
-- `governance` — proposals, approvals
-- `content` — documents, articles, rich media
-
-## Core widgets (layout primitives — always available)
-
-### `stat-card`
-
-Single metric on a card. Best for top-of-dashboard KPIs.
-
-```json
-{
-  "widgetKind": "stat-card",
-  "config": {
-    "label": "Tasks completed this week",
-    "profileSlug": "task",
-    "aggregation": "count",
-    "icon": "Hash"
-  }
-}
-```
-
-### `section-header`
-
-Title + optional subtitle. Separator for bento rows.
-
-```json
-{
-  "widgetKind": "section-header",
-  "config": { "title": "This week", "subtitle": "Updated just now" }
-}
-```
-
-### `quick-access`
-
-Shortcut grid — a row of entity or view pins.
-
-```json
-{
-  "widgetKind": "quick-access",
-  "config": {
-    "items": [
-      { "kind": "view", "viewId": "...", "label": "Inbox" },
-      {
-        "kind": "entity",
-        "entityId": "ent_project_...",
-        "label": "Current project"
-      },
-      { "kind": "url", "url": "https://...", "label": "Calendar" }
-    ]
-  }
-}
-```
-
-### `feed`
-
-Activity feed — recent entity mutations, AI actions, proposals.
-
-```json
-{
-  "widgetKind": "feed",
-  "config": {
-    "sources": ["entity.create", "entity.update", "proposal.approved"],
-    "limit": 20,
-    "filter": { "profileSlug": ["task", "note"] } // optional
-  }
-}
-```
-
-### `inbox`
-
-Unread + actionable items. Proposals, mentions, due tasks.
-
-```json
-{
-  "widgetKind": "inbox",
-  "config": { "categories": ["proposals", "mentions", "due_today"] }
-}
-```
-
-## Data widgets
-
-### `entity-card`
-
-One entity, rich rendering.
-
-```json
-{
-  "widgetKind": "entity-card",
-  "config": {
-    "entityId": "ent_...",
-    "fields": ["title", "status", "dueDate", "assignee"],
-    "showRelations": true
-  }
-}
-```
-
-### `entity-gallery`
-
-Gallery of entities filtered by a query.
-
-```json
-{
-  "widgetKind": "entity-gallery",
-  "config": {
-    "profileSlug": "article",
-    "filters": [{ "property": "status", "op": "eq", "value": "unread" }],
-    "sort": [{ "property": "createdAt", "direction": "desc" }],
-    "limit": 12,
-    "imageProperty": "thumbnail"
-  }
-}
-```
-
-### `entity-spotlight`
-
-One featured entity, large format. Often the "current project" or "today's focus."
-
-```json
-{
-  "widgetKind": "entity-spotlight",
-  "config": { "entityId": "ent_...", "showDocument": true }
-}
-```
-
-### `view` (generic view embed)
-
-Any saved view rendered inside a bento. Usually easier than configuring widgets individually.
-
-```json
-{
-  "kind": "view",
-  "viewId": "<savedViewId>",
-  "layout": { "x": 0, "y": 0, "w": 12, "h": 6 }
-}
-```
-
-Note: `{ "kind": "view", "viewId": … }` is a bento block type, not a widget. Use it when you have a saved view and just want to embed it.
-
-### `view` / `view-table` / `view-list` / `view-kanban` / `view-calendar` / `view-grid`
-
-Embed a **saved** view. `config.viewId` is required (a view UUID from `synap_list_views`). `profileSlug` alone renders "No Table selected".
-
-```json
-{
-  "widgetKind": "view",
-  "config": {
-    "viewId": "<savedViewId>",
-    "layout": "table"
-  }
-}
-```
-
-No saved view for that profile? Use `entity-list` + `profileSlug` instead — do not invent an inline table.
-
-## Entity widgets (for entity-detail pages / side panels)
-
-- `entity-detail` — the full entity view (fields, properties, related)
-- `document-editor` — rich markdown editor for a document
-- `entity-relationships` — graph/list of connected entities
-- `entity-properties` — the properties panel (forms)
-
-Mostly used inside entity pages, not bentos.
-
-## AI widgets
-
-### `proactive-feed`
-
-AI nudges and insights the user's agents posted proactively.
-
-```json
-{
-  "widgetKind": "proactive-feed",
-  "config": { "limit": 10, "categories": ["insight", "nudge", "digest"] }
-}
-```
-
-### `morning-briefing` / `weekly-digest` / `health-check` / `insight`
-
-Proactive cards rendered individually. Usually only appear after the Proactive Intelligence Layer has posted — not manually composed by an agent.
-
-### `ai-chat`
-
-Embedded chat surface targeting a specific channel.
-
-```json
-{
-  "widgetKind": "ai-chat",
-  "config": { "channelId": "ch_...", "mode": "compact" }
-}
-```
-
-### `recent-chats`
-
-List of recent AI conversations.
-
-### `agent-activity`
-
-What the user's agents have been doing (actions, proposals, writes). Good for governance bentos.
-
-## Governance widgets
-
-- `proposals-list` — pending proposals needing review
-- `proposal-detail` — single proposal card
-- `proposal-timeline` — history of proposal approvals/rejections
-
-```json
-{
-  "widgetKind": "proposals-list",
-  "config": { "status": "pending", "limit": 10 }
-}
-```
-
-## Communication widgets
-
-- `channel` — full channel (messages + composer)
-- `channel-navigator` — sidebar-style channel list
-- `channel-view` — read-only channel embed
-- `channel-feed` — activity-style feed of messages
-
-## Intelligence widgets (Intelligence Service specific)
-
-- `service-status` — IS health
-- `usage` — token consumption, model usage
-- `agents` — registered agents list
-- `agent-detail` — one agent's config
-- `skills` — installed skills
-- `tasks` — IS-managed tasks (not entities)
-
-## Workflow widgets
-
-- `workflow-list` — all automations
-- `automation-detail` / `automation-flow` / `automation-status`
-- `command-detail` — one command config
-- `trigger-button` — a button that runs a command
-- `run-history` — past automation runs
+- **Counts:** `stat-card` + `profileSlug`. Never `entity-count` (a legacy alias).
+- **Saved views:** `view` needs `config.viewId` (a view UUID from `synap_list_views`). A `profileSlug` alone renders nothing. No saved view for that profile? Use `entity-list` + `profileSlug`.
+- **Charts:** `chart-*` read a profile (`profileSlug`) and group or aggregate it. Pick the chart from the question: share of a whole → `chart-pie`, comparison → `chart-bar`, trend over time → `chart-line`.
+- **`aiPlaceable: false` entries are not listed for a reason:** they need host context (a channel, a session) the pod cannot supply. Don't try to place one.
 
 ## Layout guidelines
 
-The bento grid is 12 columns. Typical widget sizes:
-
-| Widget             | Typical `w`, `h` |
-| ------------------ | ---------------- |
-| `stat-card`        | 3×2              |
-| `section-header`   | 12×1             |
-| `quick-access`     | 6×2 or 12×2      |
-| `view-kanban`      | 8×4 or 12×6      |
-| `view-calendar`    | 8×4 or 12×6      |
-| `entity-spotlight` | 4×4              |
-| `entity-gallery`   | 6×4 or 12×4      |
-| `feed` / `inbox`   | 4×6 or 6×6       |
-| `proactive-feed`   | 4×6              |
-| `proposals-list`   | 6×4              |
-| `agent-activity`   | 6×4              |
-
-Rules of thumb:
+The bento grid is 12 columns. Each list entry carries a `defaultSize`; start from it.
 
 - Don't make anything shorter than 2 rows (too cramped).
 - Tall narrow feeds (4×6) work better than short wide ones.
@@ -294,8 +43,7 @@ Rules of thumb:
 
 ## Common mistakes
 
-1. **Referencing a `widgetKind` that doesn't exist in the registry.** The bento will render an error block. Always fetch the registry first.
-2. **Passing a `config` that doesn't match the widget's `configSchema`.** Returns a validation error; the widget shows "invalid config" in UI.
-3. **Using a widget that depends on a missing profile.** If you use `entity-gallery` with `profileSlug: "podcast"` and `podcast` doesn't exist, the widget shows an empty state. Verify first.
-4. **Overlapping layout rectangles.** react-grid-layout will resolve it by shifting blocks, but the output won't match your intent. Double-check `x + w <= 12` and no two blocks share the same cells.
-5. **Putting an `ai-chat` widget on a dashboard.** It works but rarely what the user wants — the chat app is already one tab away. Reserve for edge cases like project-specific chat pinned to a project home.
+1. **Placing a key that is not in `synap_list_widgets`.** Arrange refuses it. Always fetch the list first.
+2. **Leaving a `requiredConfig` key empty.** Arrange refuses it and names the missing key.
+3. **Using a widget that depends on a missing profile.** `entity-gallery` with `profileSlug: "podcast"` when `podcast` doesn't exist shows an empty state. Verify with `synap_list_profiles` first.
+4. **Overlapping layout rectangles.** The grid resolves it by shifting blocks, but the output won't match your intent. Check `x + w <= 12` and that no two blocks share cells.

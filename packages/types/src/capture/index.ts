@@ -406,3 +406,7 @@ export function readCapturePart(
 }
 
 export * from "./progress.js";
+export {
+  isExplicitCapturePrefix,
+  stripCapturePrefix,
+} from "./capture-prefix.js";

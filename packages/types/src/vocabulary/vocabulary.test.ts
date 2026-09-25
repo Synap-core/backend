@@ -695,7 +695,7 @@ describe("session population lenses", () => {
  * an unknown token. `humanizeToken` has no tense and **ignores `mood`
  * entirely**, so a past-mood call for a missing verb returns a present-tense
  * word and nothing anywhere reports a problem. That is how a settled Activity
- * row rendered "Complete Capture" — present-imperative, in the emerald agent
+ * row rendered "Complete Capture" — present-imperative, in the AI-coloured agent
  * voice — making a thing that had already happened look like a thing about to
  * happen. The two moods exist precisely so that cannot occur; a token missing
  * from `ACTION_VERBS` collapses them back into one.

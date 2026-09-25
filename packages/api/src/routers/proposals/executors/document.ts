@@ -3,7 +3,8 @@ import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { materializeApprovedDocument } from "../../../services/proposals/materialize-approved-document.js";
-import { applyApprovedSectionProposal } from "../../../services/session-document/upsert-section.js";
+import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
+import { applyApprovedDocumentPatch } from "../../../services/document-patch/apply-document-patch.js";
 
 /** Register the document/* approve executors. */
 export function registerDocumentExecutors(): void {
@@ -58,16 +59,18 @@ export function registerDocumentExecutors(): void {
     },
   });
 
-  // ── document / section_update + session_narrative_update ───────────────────
-  // The approval half of the session-document section write door. Re-applies
-  // the drafted section against the document AS IT IS NOW: a base-version move,
-  // a section a person now owns, or a malformed document throws, and the
-  // shared dispatch records that as the failed approval's reason — nothing is
-  // written.
-  for (const key of [
-    "document/section_update",
-    "document/session_narrative_update",
-  ] as const) {
+  // ── document / update · section_update · session_narrative_update · user_edit ─
+  // The approval half of the document patch door (`applyDocumentPatch`). Re-
+  // renders the proposal's ops against the document AS IT IS NOW: a base move,
+  // a section a person now owns, an embed the ops would drop, or a malformed
+  // document throws, and the shared dispatch records that as the failed
+  // approval's reason — nothing is written. `user_edit` is a person's
+  // suggestion (filed direct); one filed before W4b carries `proposedContent`
+  // and is applied by the inline B3 branch before this registry is consulted.
+  // Derived from the ONE list the pod's patch door files under, which is also
+  // what review surfaces (the session room's "Accepted" stamp) key on.
+  for (const type of DOCUMENT_PATCH_PROPOSAL_TYPES) {
+    const key = `document/${type}` as const;
     registerProposalExecutor({
       key,
       async execute({ proposal, userId, input, deps }) {
@@ -79,7 +82,7 @@ export function registerDocumentExecutors(): void {
           return { success: true, alreadyApproved: true };
         }
 
-        const applied = await applyApprovedSectionProposal(proposal, userId);
+        const applied = await applyApprovedDocumentPatch(proposal, userId);
 
         await db
           .update(proposals)

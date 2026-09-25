@@ -50,6 +50,9 @@ export * from "./errors/index.js";
 // Utilities
 export * from "./utils/preferences.js";
 export * from "./utils/document-version-storage.js";
+export * from "./utils/claim-document-revision.js";
+export * from "./utils/document-content-replaced.js";
+export * from "./utils/document-body-text.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";

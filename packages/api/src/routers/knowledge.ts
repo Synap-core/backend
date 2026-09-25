@@ -17,64 +17,12 @@
 
 import { z } from "zod";
 import { router, protectedProcedure } from "../trpc.js";
-import { getDb, ProfileRepository } from "@synap/database";
 import { ask } from "../services/knowledge/index.js";
 import { synthesizeAnswer } from "../services/knowledge/synthesize.js";
-import {
-  toProfileCatalogEntry,
-  type ProfileCatalogEntry,
-} from "../services/retrieval/index.js";
-import {
-  validateWorkspaceAccess,
-  getUserWorkspaceIds,
-} from "../utils/workspace-membership.js";
-
-/**
- * Resolve the caller's LENS and the type-inference CATALOG.
- *
- * Shared by `search` and `answer` on purpose: `answer` is the same retrieval
- * with one synthesis step bolted on, so if it resolved the lens itself the two
- * doors could disagree about what a caller is allowed to see — and a divergence
- * in an ACCESS decision is the expensive kind. One resolution, two doors.
- *
- * A requested workspace the caller is not a member of degrades to pod-wide
- * (null) rather than throwing or leaking: the lens is carried, never forced.
- */
-async function resolveLensAndCatalog(
-  userId: string,
-  requestedWorkspaceId: string | null | undefined
-): Promise<{ lensWs: string | null; catalog: ProfileCatalogEntry[] }> {
-  let lensWs: string | null = null;
-  if (requestedWorkspaceId) {
-    const allowed = await validateWorkspaceAccess(userId, [
-      requestedWorkspaceId,
-    ]);
-    lensWs = allowed.includes(requestedWorkspaceId)
-      ? requestedWorkspaceId
-      : null;
-  }
-
-  // The semantic engine's CATALOG (type inference) needs a concrete workspace;
-  // when no lens is pinned, resolve the caller's first accessible one. Recall
-  // still uses the caller's lens (lensWs — null = pod-wide).
-  let catalogWs = lensWs;
-  if (!catalogWs) {
-    const wsIds = await getUserWorkspaceIds(userId);
-    catalogWs = wsIds[0] ?? null;
-  }
-
-  let catalog: ProfileCatalogEntry[] = [];
-  if (catalogWs) {
-    const profileRepo = new ProfileRepository(await getDb());
-    const rows = await profileRepo.getAccessibleProfiles(userId, catalogWs);
-    catalog = rows.flatMap((p) => {
-      const entry = toProfileCatalogEntry(p);
-      return entry ? [entry] : [];
-    });
-  }
-
-  return { lensWs, catalog };
-}
+// ONE lens + catalog resolution shared with the Hub and MCP answer doors — so
+// `search` and `answer` here, and every other door, agree on what a caller may
+// see AND on the vocabulary a pod-wide question is type-inferred against.
+import { resolveKnowledgeLens } from "../services/knowledge/resolve-lens.js";
 
 export const knowledgeRouter = router({
   /**
@@ -99,7 +47,7 @@ export const knowledgeRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const { lensWs, catalog } = await resolveLensAndCatalog(
+      const { workspaceId: lensWs, catalog } = await resolveKnowledgeLens(
         ctx.userId,
         input.workspaceId
       );
@@ -141,7 +89,7 @@ export const knowledgeRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const { lensWs, catalog } = await resolveLensAndCatalog(
+      const { workspaceId: lensWs, catalog } = await resolveKnowledgeLens(
         ctx.userId,
         input.workspaceId
       );

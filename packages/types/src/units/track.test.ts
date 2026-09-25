@@ -3,6 +3,7 @@ import {
   canTransitionTrack,
   deriveTrackStages,
   partitionSessionsByTrack,
+  readTrackStageHistory,
   trackStageTone,
   trackStatusMoves,
   trackUnitInput,
@@ -62,6 +63,69 @@ describe("deriveTrackStages", () => {
     expect(out).toEqual([
       { key: "build", name: "Build", category: "started", position: "active" },
     ]);
+  });
+});
+
+describe("deriveTrackStages — what the pinned stage declares (0274)", () => {
+  it("projects goal, description, tasks, outputs, criteria, gate and indefinite when declared", () => {
+    const [stage] = deriveTrackStages(
+      [
+        {
+          key: "audit",
+          name: "Audit",
+          goal: "Check it",
+          description: "Last look",
+          suggestedTasks: ["Read", 3, ""],
+          expectedOutputs: [{ label: "Report" }, "junk"],
+          criteria: [{ key: "ok", statement: "Fine" }, { statement: "no key" }],
+          gate: { kind: "check" },
+          indefinite: true,
+        },
+      ],
+      "audit",
+      { audit: 2 }
+    );
+    expect(stage).toEqual({
+      key: "audit",
+      name: "Audit",
+      category: null,
+      position: "active",
+      sessionCount: 2,
+      goal: "Check it",
+      description: "Last look",
+      suggestedTasks: ["Read"],
+      expectedOutputs: [{ label: "Report" }],
+      criteria: [{ key: "ok", statement: "Fine" }],
+      gate: "check",
+      indefinite: true,
+    });
+  });
+
+  it("an unknown gate kind is not projected (never guessed)", () => {
+    const [stage] = deriveTrackStages(
+      [{ key: "a", gate: { kind: "robot" } }],
+      "a"
+    );
+    expect("gate" in stage!).toBe(false);
+  });
+});
+
+describe("readTrackStageHistory", () => {
+  it("keeps well-formed entries in order, re-entries included, and skips junk", () => {
+    expect(
+      readTrackStageHistory([
+        { stageKey: "a", fromStage: null, enteredAt: "t1", actor: "u" },
+        { stageKey: "b", fromStage: "a", enteredAt: "t2", actor: "u" },
+        { stageKey: "a", fromStage: "b", enteredAt: "t3" },
+        { fromStage: "a", enteredAt: "t4" },
+        "junk",
+      ])
+    ).toEqual([
+      { stageKey: "a", fromStage: null, enteredAt: "t1", actor: "u" },
+      { stageKey: "b", fromStage: "a", enteredAt: "t2", actor: "u" },
+      { stageKey: "a", fromStage: "b", enteredAt: "t3", actor: "" },
+    ]);
+    expect(readTrackStageHistory({})).toEqual([]);
   });
 });
 

@@ -44,6 +44,13 @@ vi.mock("@synap/database", async (importOriginal) => {
       workspaces: { findFirst: vi.fn(async () => ({ archivedAt: null })) },
       entities: { findFirst: vi.fn(async () => null) },
       focusSessions: { findFirst: vi.fn(async () => null) },
+      // `playbooks.update` loads the row by id before gating (PATCH below).
+      playbooks: {
+        findFirst: vi.fn(async () => ({
+          id: "44444444-4444-4444-8444-444444444444",
+          workspaceId: "33333333-3333-4333-8333-333333333333",
+        })),
+      },
     },
     insert: vi.fn(() => {
       throw new Error("an agent write must not insert a row");
@@ -278,5 +285,24 @@ describe("POST /playbooks/:id/run — the D3 preflight reaches Hub REST", () => 
     expect(mcpBody.status).toBe("blocked");
     expect(mcpBody.enableProposals).toEqual(rest.body.enableProposals);
     expect(mcpBody.unenabledSkills).toEqual(rest.body.unenabledSkills);
+  });
+});
+
+describe("PATCH /playbooks/:id — forwards every field the governed update takes", () => {
+  it("`scope` reaches the gate (a Hub caller can make a playbook a project METHOD)", async () => {
+    const res = await appAs(AGENT).request(`/playbooks/${PB}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scope: "project", description: "Run as a track" }),
+    });
+    // PATCH answers 200 with the governed body (its existing contract).
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ status: "proposed" });
+    expect(h.gateCalls).toHaveLength(1);
+    expect(h.gateCalls[0]).toMatchObject({
+      subjectType: "playbook",
+      action: "update",
+      data: { id: PB, scope: "project", description: "Run as a track" },
+    });
   });
 });

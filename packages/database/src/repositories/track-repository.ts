@@ -17,6 +17,7 @@ import { projectTracks } from "../schema/project-tracks.js";
 import type {
   ProjectTrack,
   ProjectTrackDefinitionSnapshot,
+  ProjectTrackStageHistoryEntry,
   ProjectTrackStatus,
 } from "../schema/project-tracks.js";
 import { BaseRepository } from "./base-repository.js";
@@ -31,6 +32,8 @@ export interface CreateTrackInput {
   definitionSnapshot: ProjectTrackDefinitionSnapshot;
   methodVersion: string;
   currentStage: string | null;
+  /** The method's param answers given at start (0274). */
+  params?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
@@ -78,6 +81,19 @@ export class TrackRepository extends BaseRepository<
         definitionSnapshot: data.definitionSnapshot,
         methodVersion: data.methodVersion,
         currentStage: data.currentStage,
+        params: data.params ?? {},
+        // The birth seed of the stage history (0274): the first stage is
+        // ENTERED at birth, the same moment `current_stage` is seeded.
+        stageHistory: data.currentStage
+          ? [
+              {
+                stageKey: data.currentStage,
+                fromStage: null,
+                enteredAt: new Date().toISOString(),
+                actor: userId,
+              } satisfies ProjectTrackStageHistoryEntry,
+            ]
+          : [],
         status: "active",
         metadata: data.metadata ?? {},
       })
@@ -184,22 +200,64 @@ export class TrackRepository extends BaseRepository<
    * Compare-and-set stage write: moves to `toStage` ONLY while the row still
    * stands on `fromStage` (`IS NOT DISTINCT FROM`, so a NULL stage compares).
    * Returns `null` when another writer moved it first — the caller refuses.
+   *
+   * THE ONE APPEND of `stage_history` (0274), in the SAME UPDATE as the stage:
+   * a history entry exists iff the stage write landed, and a lost CAS appends
+   * nothing. A re-entered stage appends a new entry. `actor` defaults to
+   * `userId` (pass the agent's id when an agent drove the advance).
    */
   async advanceStage(
     id: string,
     fromStage: string | null,
     toStage: string,
-    userId: string
+    userId: string,
+    actor: string = userId
   ): Promise<ProjectTrack | null> {
+    const entry: ProjectTrackStageHistoryEntry = {
+      stageKey: toStage,
+      fromStage,
+      enteredAt: new Date().toISOString(),
+      actor,
+    };
     const [track] = await this.db
       .update(projectTracks)
-      .set({ currentStage: toStage, updatedAt: new Date() })
+      .set({
+        currentStage: toStage,
+        stageHistory: sql`(COALESCE(${projectTracks.stageHistory}, '[]'::jsonb) || ${JSON.stringify([entry])}::jsonb)`,
+        updatedAt: new Date(),
+      })
       .where(
         and(
           eq(projectTracks.id, id),
           sql`${projectTracks.currentStage} IS NOT DISTINCT FROM ${fromStage}`
         )
       )
+      .returning();
+    if (!track) return null;
+    await this.emitCompleted("update", track, userId);
+    return track as ProjectTrack;
+  }
+
+  /**
+   * PATCH the track's param answers (0274), merged IN SQL:
+   * `(params || set) - clear`. Only the keys this write names change, so two
+   * concurrent answers to different params both land — a read-modify-write of
+   * the whole bag let the later writer silently revert the earlier one.
+   * Emits `track.update.completed`. Returns `null` when the row is gone.
+   * Validation and governance are the caller's (`setTrackParams`).
+   */
+  async patchParams(
+    id: string,
+    patch: { set: Record<string, unknown>; clear: string[] },
+    userId: string
+  ): Promise<ProjectTrack | null> {
+    const [track] = await this.db
+      .update(projectTracks)
+      .set({
+        params: sql`((COALESCE(${projectTracks.params}, '{}'::jsonb) || ${JSON.stringify(patch.set)}::jsonb) - ARRAY(SELECT jsonb_array_elements_text(${JSON.stringify(patch.clear)}::jsonb)))`,
+        updatedAt: new Date(),
+      })
+      .where(eq(projectTracks.id, id))
       .returning();
     if (!track) return null;
     await this.emitCompleted("update", track, userId);

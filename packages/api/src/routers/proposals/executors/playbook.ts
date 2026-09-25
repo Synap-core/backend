@@ -640,6 +640,10 @@ export function registerPlaybookExecutors(): void {
           ...(typeof inner.trackId === "string"
             ? { trackId: inner.trackId }
             : {}),
+          ...(typeof inner.trackId === "string" &&
+          typeof inner.trackStage === "string"
+            ? { trackStage: inner.trackStage }
+            : {}),
           // Attribution is the ONE dropped field the proposal can restore, so
           // the session/run/channel are owned by the agent that asked, exactly
           // as on the direct path (`actorId = agentUserId ?? userId`).

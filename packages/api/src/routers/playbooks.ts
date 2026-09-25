@@ -2480,6 +2480,12 @@ export const playbooksRouter = router({
          */
         projectId: z.string().uuid().optional(),
         trackId: z.string().uuid().optional(),
+        /**
+         * The STAGE of that track the run is filed at (0274). Absent ⇒ the
+         * track's current stage; a key the track does not pin is refused.
+         * Needs `trackId`.
+         */
+        trackStage: z.string().min(1).max(120).optional(),
         source: z.string().optional(),
         reasoning: z.string().optional(),
         /**
@@ -2594,11 +2600,18 @@ export const playbooksRouter = router({
       // FILING — refuse a bad project/track BEFORE a proposal is filed for a
       // run that could never land where it says. A track names its project.
       let filedProjectId = input.projectId;
+      if (input.trackStage && !input.trackId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "trackStage needs trackId — a stage belongs to a track.",
+        });
+      }
       if (input.trackId) {
         filedProjectId = (
           await resolveTrackFiling({
             trackId: input.trackId,
             projectId: input.projectId ?? null,
+            trackStage: input.trackStage ?? null,
             actor: { userId: ctx.userId },
           })
         ).projectId;
@@ -2654,6 +2667,10 @@ export const playbooksRouter = router({
             : {}),
           ...(filedProjectId ? { projectId: filedProjectId } : {}),
           ...(input.trackId ? { trackId: input.trackId } : {}),
+          // The stage the run was proposed AT — re-validated by the replay.
+          ...(input.trackId && input.trackStage
+            ? { trackStage: input.trackStage }
+            : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -2691,6 +2708,9 @@ export const playbooksRouter = router({
           : {}),
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         ...(input.trackId ? { trackId: input.trackId } : {}),
+        ...(input.trackId && input.trackStage
+          ? { trackStage: input.trackStage }
+          : {}),
         ...(input.onMissingRequired
           ? { onMissingRequired: input.onMissingRequired }
           : {}),

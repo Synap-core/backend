@@ -146,7 +146,7 @@ async function gateMessageAnchor(
       userId,
     });
   } catch (err) {
-    const status = httpStatusForTrpcError(err);
+    const status = threadsStatus(err);
     return {
       ok: false,
       // An unknown proposal answers like an invisible one (403, as these doors
@@ -156,6 +156,16 @@ async function gateMessageAnchor(
     };
   }
   return { ok: true, metadata: { ...metadata, anchor: parsed.data } };
+}
+
+/**
+ * These routes' typed OpenAPI responses declare only 400/403/404/500, so an
+ * actionable refusal (CONFLICT 409 / PRECONDITION_FAILED 412 from the shared
+ * mapper) is answered as the 400 it is for this caller — never a 500.
+ */
+function threadsStatus(err: unknown): 400 | 403 | 404 | 500 {
+  const status = httpStatusForTrpcError(err);
+  return status === 409 || status === 412 ? 400 : status;
 }
 
 export function registerThreadsRoutes(app: HubHono): void {
@@ -310,7 +320,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "getThreadContext failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
+        threadsStatus(err)
       );
     }
   });
@@ -457,7 +467,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "linkEntity failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
+        threadsStatus(err)
       );
     }
   });
@@ -539,7 +549,7 @@ export function registerThreadsRoutes(app: HubHono): void {
       logger.error({ err, threadId }, "linkDocument failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        httpStatusForTrpcError(err)
+        threadsStatus(err)
       );
     }
   });

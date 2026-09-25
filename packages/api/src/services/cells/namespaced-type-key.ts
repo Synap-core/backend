@@ -28,10 +28,17 @@
  * (`widget-definitions.upsert`) while the Hub REST door (`POST /cells/define`)
  * had no guard at all — a second implementation would have been a second place
  * to drift, so both now call THIS one.
+ *
+ * BUILT-IN KEYS ARE RESERVED. A built-in renderable key (`chart-bar`,
+ * `stat-card`, … — `@synap-core/types/renderables`) is never written as a row:
+ * the pod reads built-ins from the catalog in-process and a row would only
+ * shadow it (`listRenderables` drops such rows). Every door that mints or edits
+ * a row refuses one here.
  */
 
 import { getDb, and, eq, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import { isBuiltinRenderableKey } from "@synap-core/types/renderables";
 
 /** True for the two namespaces a general-purpose door may edit but never mint. */
 export function isNamespacedTypeKey(typeKey: string): boolean {
@@ -61,6 +68,12 @@ export async function assertMayWriteNamespacedTypeKey(
   typeKey: string,
   workspaceId: string | null
 ): Promise<void> {
+  if (isBuiltinRenderableKey(typeKey)) {
+    throw new NamespacedTypeKeyError(
+      `typeKey "${typeKey}" is a built-in renderable and is reserved — the ` +
+        "catalog defines it. Pick a new kebab-case typeKey for a custom cell."
+    );
+  }
   if (!isNamespacedTypeKey(typeKey)) return;
   const db = await getDb();
   const [existing] = await db

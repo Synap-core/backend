@@ -45,6 +45,11 @@ import {
   setProjectSubject,
 } from "../utils/project-subject.js";
 import { getProjectPath } from "../services/projects/project-path.js";
+import {
+  listProjectOutputs,
+  PROJECT_OUTPUTS_MAX_LIMIT,
+} from "../services/projects/project-outputs.js";
+import { AccessContext } from "../access/index.js";
 import { loadVisibleProject } from "../services/projects/load-visible-project.js";
 import { startTrack } from "../services/tracks/tracks-service.js";
 import { deriveTrackStages } from "@synap-core/types/units";
@@ -195,7 +200,8 @@ export const projectsRouter = router({
       );
       const usedWorkspaces = await listWorkspacesUsedByProjects(
         db,
-        items.map((p) => p.id)
+        items.map((p) => p.id),
+        ctx.userId
       );
       const withSubject = items.map((p) => ({
         ...p,
@@ -247,9 +253,17 @@ export const projectsRouter = router({
       }
 
       const subjects = await loadProjectSubjects(db, [project.id], ctx.userId);
-      const usedMap = await listWorkspacesUsedByProjects(db, [project.id]);
+      const usedMap = await listWorkspacesUsedByProjects(
+        db,
+        [project.id],
+        ctx.userId
+      );
       const usedWorkspaceIds = usedMap.get(project.id) ?? [];
-      const usedWorkspaces = await hydrateUsedWorkspaces(db, usedWorkspaceIds);
+      const usedWorkspaces = await hydrateUsedWorkspaces(
+        db,
+        usedWorkspaceIds,
+        ctx.userId
+      );
       return {
         project,
         subject: subjects.get(project.id) ?? null,
@@ -265,9 +279,51 @@ export const projectsRouter = router({
     }),
 
   /**
+   * Project Outputs — what the project's sessions PRODUCED, newest first, each
+   * item naming its producing session (and track) and carrying a `ref` door.
+   * The session set is the path's; the join is `focusSessions.outputs`'s,
+   * batched. Session outputs only — entities merely filed in the project are
+   * Context, not outputs. See `services/projects/project-outputs.ts` for the
+   * visibility floors (owner-only sessions today).
+   */
+  outputs: podProcedure
+    .input(
+      z.object({
+        projectId: z.string().uuid(),
+        trackId: z.string().uuid().optional(),
+        trackStage: z.string().min(1).max(200).optional(),
+        cursor: z.string().min(1).optional(),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(PROJECT_OUTPUTS_MAX_LIMIT)
+          .default(30),
+      })
+    )
+    .query(async ({ ctx, input }) => {
+      const result = await listProjectOutputs({
+        access: AccessContext.from(ctx),
+        projectId: input.projectId,
+        trackId: input.trackId,
+        trackStage: input.trackStage,
+        cursor: input.cursor,
+        limit: input.limit,
+      });
+      if (!result) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Project not found",
+        });
+      }
+      return result;
+    }),
+
+  /**
    * Project Path — the project's work sessions as a dated list (newest
-   * started first), each row with blocked-by / unblocks / next move, plus a
-   * header of open sessions and decisions waiting across the whole path.
+   * started first), each row with blocked-by / unblocks / next move and the
+   * `unitFacts` THE needs-you rule reads, plus a header of open sessions across
+   * the whole path (the needs-you NUMBER is `signals.countByProject`).
    *
    * podProcedure for the same reason as `get`: a project spans workspaces, so
    * its path must not be gated by the active-workspace lens. `workspaceIds`

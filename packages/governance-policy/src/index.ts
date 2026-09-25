@@ -1648,6 +1648,13 @@ export const GATE_WRITE_DOORS = {
   // `section_update` is every other section write (no rule → proposal).
   "document/section_update": "gate",
   "document/session_narrative_update": "gate",
+  // The document patch door (`applyDocumentPatch`) for anything that is not a
+  // section-only patch: `replace_text` / `append` / `replace_all`, and the
+  // full-replace aliases (REST PATCH, MCP update_entity.content, IS
+  // update_document). Deliberately NOT in DEFAULT_AUTO_APPROVE: an agent's edit
+  // is a proposal unless a `governance_rules` row says otherwise (D-gov), and an
+  // agent `replace_all` is forced to a proposal by the door.
+  "document/update": "gate",
   "entity/create": "gate+automation",
   "entity/delete": "gate",
   "entity/renderer.set": "gate",

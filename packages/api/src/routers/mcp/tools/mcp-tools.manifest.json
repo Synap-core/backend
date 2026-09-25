@@ -86,13 +86,18 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Get a document by ID, returning full markdown content. Documents are long-form content (meeting notes, research, writeups) attached to entities. Get documentId from entity.documentId or search results.",
+      "description": "Get a document by ID: its markdown `content`, the `revision` to pass back as `baseRevision` when you edit it (synap_update_document), its top-level `sections` (id, owner ai|human, title — you may only rewrite `ai` ones), and `diagnostics` (embeds that will not render, each with a `fix`; null + diagnosticsError when they could not be checked). `format: \"readable\"` replaces every embed with its markdown fallback. Documents are long-form content (meeting notes, research, writeups, reports); get documentId from entity.documentId or search results.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "documentId": {
             "type": "string",
             "description": "Document UUID"
+          },
+          "format": {
+            "type": "string",
+            "enum": ["raw", "readable"],
+            "description": "raw (default) = the stored markdown, embeds as directives (what you edit). readable = embeds replaced by their fallback text (what you quote or summarise)."
           }
         },
         "required": ["documentId"]
@@ -518,7 +523,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done), property updates, and correcting the body of a document you captured earlier. `content` REPLACES the body of the entity's linked document (read it first with synap_get_document); it always goes to review. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
+      "description": "Update an entity's title, description, properties (JSONB), or long-form BODY (`content`). Requires entityId from search or synap_get_entity. May return 'proposed' if the write requires review. Use for status changes (task todo→done) and property updates. `content` REPLACES the whole body of the entity's linked document (an alias of synap_update_document with one replace_all op): it always goes to review, and it is refused if it changes a person's section or drops an embed. To change one section or one passage, use synap_update_document instead. If the entity has no body document yet the call is refused — create and attach one with synap_create_document({ entityId, title, content }).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -540,7 +545,7 @@
           },
           "content": {
             "type": "string",
-            "description": "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch. Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'."
+            "description": "Full REPLACEMENT body (markdown) for the entity's linked document — not a patch (for a patch: synap_update_document). Read the current body with synap_get_document first. Its outcome comes back under `body` and is always 'proposed'."
           },
           "reasoning": {
             "type": "string",
@@ -598,6 +603,87 @@
           }
         },
         "required": ["title"]
+      }
+    },
+    {
+      "name": "synap_update_document",
+      "annotations": {
+        "title": "Update document",
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "openWorldHint": false
+      },
+      "description": "Edit a document with ops — a section, a passage, an addition — instead of rewriting it. Read it first with synap_get_document and pass its `revision` as `baseRevision`. Ops, applied in order: `upsert_section {id, title, body}` writes ONE `::::synap-section` block by id (replaces your own `ai` section, or appends a new one); `replace_text {old, new}` — `old` must match EXACTLY once, copy it from the document and include enough context (0 or 2+ matches is refused with the count); `append {body}`; `replace_all {content}` (whole body — needs baseRevision, always goes to review). Refused: changing a section whose owner is `human` (by any op), and removing an embed unless `allow_removing_embeds: true`. Usually returns 'proposed' (the person reviews a per-section before/after); a governance rule may apply it directly. The response carries `preview` and `diagnostics` (embeds that will not render, each with a `fix` — advisory, never a refusal). A 'changed after you read it' error means re-read and redraft.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "description": "Document UUID"
+          },
+          "baseRevision": {
+            "type": "number",
+            "description": "The `revision` synap_get_document returned. The edit is refused if the document changed since."
+          },
+          "ops": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "description": "The edits, applied in order.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "upsert_section",
+                    "replace_text",
+                    "append",
+                    "replace_all"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "description": "upsert_section: the section id (lowercase letters, digits, '-' or '_', max 64)."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "upsert_section: the section heading."
+                },
+                "body": {
+                  "type": "string",
+                  "description": "upsert_section / append: markdown."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "upsert_section: optional status stamp."
+                },
+                "old": {
+                  "type": "string",
+                  "description": "replace_text: the exact text to replace — must occur exactly once."
+                },
+                "new": {
+                  "type": "string",
+                  "description": "replace_text: the replacement."
+                },
+                "content": {
+                  "type": "string",
+                  "description": "replace_all: the whole new body."
+                }
+              },
+              "required": ["op"]
+            }
+          },
+          "allow_removing_embeds": {
+            "type": "boolean",
+            "description": "Set true ONLY when removing an embed (synap-entity/view/cell) is the point of the edit; otherwise such an edit is refused."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          }
+        },
+        "required": ["documentId", "ops"]
       }
     },
     {
@@ -1056,6 +1142,10 @@
             "type": "string",
             "description": "Optional track UUID (synap_list_tracks) — the method, inside a project, this session advances. Implies its project; a different projectId is refused."
           },
+          "trackStage": {
+            "type": "string",
+            "description": "Optional stage KEY of that track the session is filed at. Omit to file it at the track's current stage; a key the track does not declare is refused. Needs trackId. To start a stage's own session (its goal, outputs and criteria), prefer synap_start_stage_session."
+          },
           "subjectEntityId": {
             "type": "string",
             "description": "Optional UUID of the entity this session is ABOUT — the subject-spine anchor (e.g. a person, company, or deal). Ties the session to that entity so it surfaces in the entity's neighborhood."
@@ -1066,7 +1156,7 @@
           },
           "channelId": {
             "type": "string",
-            "description": "Optional channel UUID to attach to the session (e.g. the personal channel from synap_get_channel)."
+            "description": "Optional channel UUID for the session to BORROW as its room (e.g. the chat it started in). Omit it and the session mints its own group room, returned as `channelId` — ask the person there."
           },
           "agentIds": {
             "type": "array",
@@ -1234,7 +1324,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that.",
+      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — always a proposal; null unfiles), deliverables (`addOutput` appends, `completeOutput` marks done by label), roster (`addAgentId` appends one agent, idempotently), and the playbook it FOLLOWS (`followPlaybookId` makes this session a run of that playbook and merges in its criteria + deliverables; null releases it). Cannot close — use synap_complete_session for that. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session); act on them.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1537,7 +1627,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
+      "description": "End a focus session — the ONE door for every lifecycle exit. `terminalStatus` says HOW it ended: 'closed' (the work finished, default), 'cancelled' (abandoned — you stopped on purpose), 'failed' (you could not complete it). Say which honestly: a cancelled or failed session recorded as 'closed' tells the user work succeeded when it did not. 'cancelled' also STOPS the session's in-flight work where a real stop exists (queued jobs, a running agent reply) and returns `cancel`: { stopped[], notStoppable[] (already running — it will finish), finished[] (proposals that already applied) }. A cancel may come back status 'proposed' — that is NOT an error: it is queued for the user's review and nothing is stopped until they approve. Also closes any running playbook_run. Returns a **review pack**: pendingProposals[], counts, and warnings (e.g. unfinished expectedOutputs — warn only), plus `nudges` for what closed still owed (ungraded criteria: grade them with synap_evaluate_session — best BEFORE closing). Use synap_list_proposals({sessionId}) to re-fetch the pack.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2698,12 +2788,48 @@
             "type": "string",
             "description": "Optional display name; defaults to the method's name."
           },
+          "params": {
+            "type": "object",
+            "description": "Optional answers to the method's declared params (its onboarding), by param name. A mistyped value or an unknown name is refused. A REQUIRED param you leave out is not refused: it becomes a question owed to the person on the stage session that needs it."
+          },
           "reasoning": {
             "type": "string",
             "description": "Why you are starting it, in the person's words — shown to the reviewer. One line."
           }
         },
         "required": ["projectId", "playbookId"]
+      }
+    },
+    {
+      "name": "synap_start_stage_session",
+      "annotations": {
+        "title": "Start stage session",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Start the work session for ONE stage of a track — the session a stage OFFERS when the track enters it (synap_advance_track returns it as `offer`). Advancing a track never starts work; call this only when the person wants that step worked on now. Defaults to the track's CURRENT stage; the stage's goal is the session's brief, its expected outputs and criteria are copied on, and the track's params are passed, so a required param nobody answered becomes a question owed to the person. Idempotent: an open session already filed at that stage comes back with status='existing'. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "stageKey": {
+            "type": "string",
+            "description": "The stage KEY to work on. Omit for the track's current stage."
+          },
+          "title": {
+            "type": "string",
+            "description": "Optional one-line session name; defaults to the stage's name."
+          },
+          "goal": {
+            "type": "string",
+            "description": "Optional outcome in the person's words; defaults to the stage's own goal."
+          }
+        },
+        "required": ["trackId"]
       }
     },
     {
@@ -2714,7 +2840,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a completed/archived track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply), a check gate holds the track paused (pausedBy='check') until resumed with synap_set_track_status status='active'. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Move a track to one of its method's stages — forward OR back (stages are re-enterable; any stage key synap_list_tracks shows). Refused for a stage the method does not declare, or a completed/archived track. A stage may carry a GATE: a human gate pauses the track and files an approval (`proposalId` on the reply); a check gate measures the sessions filed at the stage being left (at least one closed, every closed one passing its criteria) and otherwise holds the track paused (pausedBy='check', `check.reason` says why) until resumed with synap_set_track_status status='active'. Entering a stage does NOT start work: the reply's `offer` is the session that stage suggests — offer it to the person, and start it with synap_start_stage_session only if they want it. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2761,6 +2887,35 @@
           }
         },
         "required": ["trackId", "status"]
+      }
+    },
+    {
+      "name": "synap_set_track_params",
+      "annotations": {
+        "title": "Set track params",
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "openWorldHint": false
+      },
+      "description": "Answer (some of) a track's method params — the questions the method DECLARED when the track started (synap_list_tracks returns them as `declaredParams`, with each one's `type`, `required` and any `options`). MERGED onto the answers already given: only the keys you pass change, and a null value clears that answer. A key the method does not declare, or a value of the wrong type, is refused with the reason. Stage sessions started afterwards carry the answers; a required param still unanswered is a question owed to the person. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "trackId": {
+            "type": "string",
+            "description": "Track UUID"
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Answers keyed by the declared param `name`. null clears an answer."
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Why these answers — shown to the reviewer. One line."
+          }
+        },
+        "required": ["trackId", "params"]
       }
     },
     {
@@ -2857,7 +3012,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view-table needs a saved viewId, not a profileSlug). Type: table, kanban, list, gallery, calendar, bento, masonry, flow, whiteboard. profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+      "description": "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard (sheet is the table door). profileId scopes to one entity type. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2867,14 +3022,20 @@
           "type": {
             "type": "string",
             "enum": [
-              "table",
-              "kanban",
+              "sheet",
               "list",
+              "grid",
               "gallery",
-              "calendar",
-              "bento",
+              "kanban",
+              "matrix",
               "masonry",
+              "calendar",
+              "gantt",
+              "timeline",
+              "graph",
               "flow",
+              "map",
+              "bento",
               "whiteboard"
             ]
           },
@@ -2943,10 +3104,15 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Live allowlist of cells you may place in a bento. Call this BEFORE arranging or generating a dashboard — never guess a widget key. Returns builtins (stat-card, entity-list, view, …) with requiredConfig, plus generated:<slug> frame cells already on the pod. view-table / view require a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card, not entity-count.",
+      "description": "Live list of what you may place: in a bento (surface \"bento\", default) or embedded in a document (surface \"document\"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card.",
       "inputSchema": {
         "type": "object",
         "properties": {
+          "surface": {
+            "type": "string",
+            "enum": ["bento", "document"],
+            "description": "Where you will place it: bento (dashboard block, default) or document (an embed inside a document)."
+          },
           "workspaceId": {
             "type": "string",
             "description": "Optional workspace UUID. Include it so workspace-scoped generated cells appear."
@@ -3943,5 +4109,5 @@
       }
     }
   ],
-  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work, projects, people and preferences. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask`. It also prevents duplicates.\n2. **Capture after.** A durable fact, decision, person, company or task: `capture`. About the user themself (a preference, a standing constraint): `remember_fact`. No private scratchpad; what you learn goes into the graph.\n3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions. Your writes group into a session on their own; name a unit of work with `start_session` (title + goal).\n4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.\n5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.\n6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet on any kind, overlay, parent) — never a twin slug. New area of work: `load_skill` `system/synap/from-intent`.\n\nLoad depth with `load_skill`: `system/synap/lenses`, `from-intent`, `escalation-ladder`, `writes`, or `catalog`."
+  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask` (prevents duplicates).\n2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.\n3. **Orient once.** `orient` briefs you: pending review (raise it first), open sessions, kinds, actions.\n4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; ask in its room (`post_message` to `session.channelId`); `evaluate_session` before `complete_session`.\n5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: a project grants its members access.\n6. **`proposed` is success**, queued for review. Keep working; never retry.\n7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.\n\nDepth via `load_skill`: `system/synap/lenses`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`."
 }

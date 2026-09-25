@@ -28,8 +28,11 @@ import type { EntityPropertyDiff } from "../../utils/entity-property-diff.js";
  *   - "delete-creations" → the proposal CREATED rows; the inverse is to delete
  *     them (entities/relations/documents the approval produced).
  *
- * Update/edit proposals carry no recoverable before-snapshot, so reverting them
- * is `unsupported` and the mutation FAILS LOUD rather than fabricating a state.
+ * Update/edit proposals: a propose-time before-snapshot IS captured and
+ * persisted on the row (`captureEntityPreviousData`, permission-check.ts
+ * :3304 / :3648) — this planner just doesn't consume it yet (no APPLY-time
+ * snapshot exists for undo). Until that's wired up, reverting an update is
+ * `unsupported` and the mutation FAILS LOUD rather than fabricating a state.
  *
  *   - "restore-delete" → the proposal DELETED an entity; entity deletes in this
  *     codebase are SOFT deletes (`entities.deletedAt`), so the inverse is to
@@ -126,10 +129,16 @@ export function planProposalRevert(
     !isDelete &&
     (proposal.proposalType === "merge" || changeType === "merge");
 
-  // Update/edit: reverting needs the BEFORE-state, which is NOT persisted
-  // anywhere on the row (the review enrich computes a before→after diff at read
-  // time from the live entity, but the pre-approval snapshot is gone). Fail loud
-  // rather than fabricate.
+  // Update/edit: a propose-time before-snapshot IS persisted on the row —
+  // `captureEntityPreviousData` (permission-check.ts :3648) runs at propose
+  // time and is stored into `RequestShapedProposalData.previousData`
+  // (permission-check.ts :3304). What's actually missing is an APPLY-time
+  // snapshot: this planner doesn't read the persisted `previousData` for
+  // revert, and a propose-time snapshot alone can go stale if the entity was
+  // edited again between propose and approve. Wiring an apply-time snapshot
+  // into this planner is a planned change awaiting the founder — until then,
+  // fail loud rather than revert against a snapshot that may not match what
+  // the approval actually applied.
   if (isUpdate) {
     return {
       kind: "unsupported",

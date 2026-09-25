@@ -194,7 +194,11 @@ export interface LinkEndpointNameContext {
   skillById: Map<string, { name: string }>;
   /** Document titles, already floored by `ownerPrivateVisibleWhere`. */
   documentTitleById: Map<string, string>;
-  userById: NameResolutionContext["userById"];
+  /** `agents` REGISTRY names, already floored by `visibleAgentsWhere` (shared
+   * built-ins + the viewer's own adjuncts). An "agent" endpoint id is an
+   * `agents.id`, never a `users.id` — resolving it against users was an
+   * unfloored name/email oracle for any user id. */
+  agentById: Map<string, { name: string }>;
 }
 
 /**
@@ -233,14 +237,8 @@ export function resolveLinkEndpointName(
       return ctx.skillById.get(id)?.name ?? ctx.toolById.get(id)?.name;
     case "document":
       return ctx.documentTitleById.get(id);
-    case "agent": {
-      const agentRow = ctx.userById.get(id);
-      return agentRow
-        ? displayNameForUser(
-            agentRow as unknown as Parameters<typeof displayNameForUser>[0]
-          )
-        : undefined;
-    }
+    case "agent":
+      return ctx.agentById.get(id)?.name;
     default:
       return undefined;
   }

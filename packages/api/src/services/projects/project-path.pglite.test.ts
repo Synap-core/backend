@@ -386,6 +386,9 @@ describe("getProjectPath", () => {
         owedFromYou: owedSlots.status === "ok" ? owedSlots.total : "unread",
         pendingDecisions:
           pendingProposals.status === "ok" ? pendingProposals.total : null,
+        // THE needs-you rule's third population, from the SAME packet.
+        awaitingReview: packet.nextMove.kind === "ready_to_close",
+        draft: false,
       });
       expect(item.blockedBy).toEqual(["list-shape"]);
       kinds.add(item.nextMove.kind);
@@ -428,15 +431,15 @@ describe("getProjectPath", () => {
 
   it("the workspace filter narrows rows and the summary", async () => {
     const all = (await path())!;
+    // `userMustDecide` is RETIRED (the needs-you number is
+    // `signals.countByProject`); the summary carries open sessions only.
     expect(all.summary).toEqual({
       openSessions: { status: "ok", total: 4 },
-      userMustDecide: { status: "ok", total: 2 },
     });
     const marketing = (await path({ workspaceIds: [W_MARKETING] }))!;
     expect(marketing.items.map((i) => i.id)).toEqual([S.b]);
     expect(marketing.summary).toEqual({
       openSessions: { status: "ok", total: 1 },
-      userMustDecide: { status: "ok", total: 1 },
     });
   });
 

@@ -22,9 +22,13 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import { getDb, and, eq, or, isNull } from "@synap/database";
-import { views, widgetDefinitions } from "@synap/database/schema";
-import { composeWidgetError } from "../../services/cells/compose-widget-catalog.js";
+import { getDb, and, eq } from "@synap/database";
+import { views } from "@synap/database/schema";
+import {
+  listRenderables,
+  placeableInstalledKeys,
+  renderableArrangeError,
+} from "../../services/cells/renderables.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
 
 /** A single widget placement in the bento grid */
@@ -352,31 +356,18 @@ export const hubViewsRouter = router({
         };
       }
 
-      const generatedKeys = new Set(
-        (
-          await db.query.widgetDefinitions.findMany({
-            columns: { typeKey: true },
-            where: and(
-              eq(widgetDefinitions.isActive, true),
-              or(
-                isNull(widgetDefinitions.workspaceId),
-                eq(widgetDefinitions.workspaceId, input.workspaceId)
-              )
-            ),
-          })
-        )
-          .map((r) => r.typeKey)
-          .filter(
-            (k): k is string =>
-              typeof k === "string" && k.startsWith("generated:")
-          )
+      // Validate against the ONE catalog door: every agent-placeable built-in
+      // (curated requiredConfig) plus the cell:/generated: cells that exist in
+      // this workspace. See services/cells/renderables.ts.
+      const installed = placeableInstalledKeys(
+        await listRenderables(input.workspaceId)
       );
       const invalid = input.widgets
         .map((w) =>
-          composeWidgetError(
+          renderableArrangeError(
             w.key,
             { ...(w.props ?? {}), ...(w.config ?? {}) },
-            generatedKeys
+            installed
           )
         )
         .filter((msg): msg is string => !!msg);

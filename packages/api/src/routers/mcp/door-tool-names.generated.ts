@@ -7,7 +7,7 @@ import type { DoorToolNameRow } from "./door-tool-names.build.js";
 export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_advance_track: {
     "pod-mcp": "synap_advance_track",
-    "cp-connector": null,
+    "cp-connector": "pod__advance_track",
     raycast: null,
   },
   synap_ask: {
@@ -222,7 +222,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   },
   synap_list_tracks: {
     "pod-mcp": "synap_list_tracks",
-    "cp-connector": null,
+    "cp-connector": "pod__list_tracks",
     raycast: null,
   },
   synap_list_views: {
@@ -320,9 +320,14 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__set_project_focus",
     raycast: null,
   },
+  synap_set_track_params: {
+    "pod-mcp": "synap_set_track_params",
+    "cp-connector": "pod__set_track_params",
+    raycast: null,
+  },
   synap_set_track_status: {
     "pod-mcp": "synap_set_track_status",
-    "cp-connector": null,
+    "cp-connector": "pod__set_track_status",
     raycast: null,
   },
   synap_set_workspace_focus: {
@@ -335,9 +340,14 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__start_session",
     raycast: "start-session",
   },
+  synap_start_stage_session: {
+    "pod-mcp": "synap_start_stage_session",
+    "cp-connector": "pod__start_stage_session",
+    raycast: null,
+  },
   synap_start_track: {
     "pod-mcp": "synap_start_track",
-    "cp-connector": null,
+    "cp-connector": "pod__start_track",
     raycast: null,
   },
   synap_store_file: {
@@ -354,6 +364,11 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_trigger_automation",
     "cp-connector": "pod__trigger_automation",
     raycast: "trigger-automation",
+  },
+  synap_update_document: {
+    "pod-mcp": "synap_update_document",
+    "cp-connector": null,
+    raycast: null,
   },
   synap_update_entity: {
     "pod-mcp": "synap_update_entity",

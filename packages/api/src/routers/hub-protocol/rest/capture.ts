@@ -70,7 +70,6 @@ import {
   logger,
   resolveActorId,
   type HubHono,
-  errCode,
   httpStatusForTrpcError,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
@@ -1007,14 +1006,10 @@ export function registerCaptureRoutes(app: HubHono): void {
       // middleware REDACTING the body — so the caller lost the one sentence
       // that says what to do. Verified live on 2026-09-20 (errorId
       // fb9b602a-…): the pod logged the CONFLICT message, the CLI showed a
-      // redacted 500. `httpStatusForTrpcError` covers 400/403/404; CONFLICT is
-      // read separately (see its doc: never `instanceof TRPCError`, the
-      // bundled build has its own class identity).
-      const status =
-        errCode(err) === "CONFLICT" ? 409 : httpStatusForTrpcError(err);
+      // redacted 500. The shared `httpStatusForTrpcError` maps CONFLICT → 409.
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        status
+        httpStatusForTrpcError(err)
       );
     }
   });

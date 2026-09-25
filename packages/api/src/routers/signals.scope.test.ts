@@ -35,6 +35,15 @@ vi.mock("./events.js", () => ({
   eventsRouter: { createCaller: () => ({ read: eventsReadSpy }) },
 }));
 
+const owedSpy = vi.fn();
+vi.mock("../services/focus-sessions/owed-outputs.js", async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  listOwedSlots: async (...args: unknown[]) => {
+    owedSpy(...args);
+    return [];
+  },
+}));
+
 vi.mock("./proposals/scope-conditions.js", () => ({
   buildProposalScopeConditions: (...args: unknown[]) => {
     scopeConditionsSpy(...args);
@@ -217,6 +226,25 @@ describe("signals.countByProject — the rail's badges, one round-trip", () => {
     // Container-scoped ⇒ proposals + owed only, never every unread notification.
     expect(notifListSpy).not.toHaveBeenCalled();
     expect(out.every((r) => r.status === "ok")).toBe(true);
+  });
+
+  it("DRAFTS NEVER COUNT: every half is asked to leave undecided agent drafts out", async () => {
+    await caller().countByProject({ projectIds: [P1] });
+    expect(groupsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: P1, excludeDraftSessions: true })
+    );
+    expect(owedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeDrafts: true })
+    );
+    // The tray answers over the same population as the badge.
+    vi.clearAllMocks();
+    await caller().list({ lens: "needs-you", projectId: P1 });
+    expect(groupsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeDraftSessions: true })
+    );
+    expect(owedSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ excludeDrafts: true })
+    );
   });
 
   it("reports a project whose count failed as unavailable, never as zero", async () => {

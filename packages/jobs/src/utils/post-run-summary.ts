@@ -24,6 +24,10 @@
 
 import { randomUUID } from "crypto";
 import {
+  formatMarker,
+  sanitizeMarkerLabel,
+} from "@synap-core/markdown-core/markers";
+import {
   db,
   eq,
   and,
@@ -51,6 +55,7 @@ import type {
 } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { EventNames } from "@synap-core/types/events";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "post-run-summary" });
 
@@ -250,18 +255,25 @@ export async function resolveRunChannel(
   return channel.id;
 }
 
-/** Strip chip-delimiter characters so a label can never break `[[kind:id|label]]`. */
-function safeLabel(text: string): string {
-  return text.replace(/[[\]|]/g, "").trim() || "Automation";
+/**
+ * Neutralize free text (an error line) so it can never open a chip: THE one
+ * marker escape rule, `sanitizeMarkerLabel` (strips `[`/`]`, one line).
+ */
+function safeText(text: string): string {
+  return sanitizeMarkerLabel(text);
 }
 
-/** Canonical entity/automation chip (message-parser `[[kind:id|label]]` form). */
+/** Canonical entity/automation chip — THE marker writer (`[[kind:id|label]]`). */
 function chip(
   kind: "entity" | "automation",
   id: string,
   label: string
 ): string {
-  return `[[${kind}:${id}|${safeLabel(label)}]]`;
+  return formatMarker(
+    kind,
+    id,
+    sanitizeMarkerLabel(label) || resolveObjectNoun(kind)
+  );
 }
 
 /** First non-empty line of a possibly-multiline error, trimmed. */
@@ -356,7 +368,7 @@ export function buildSummaryCardMeta(input: {
       nodeId: s.nodeId ?? "step",
       status: s.status,
       ...(dMs != null ? { durationMs: dMs } : {}),
-      ...(err ? { errorMessage: safeLabel(err) } : {}),
+      ...(err && safeText(err) ? { errorMessage: safeText(err) } : {}),
     };
   });
 
@@ -384,7 +396,9 @@ export function buildSummaryCardMeta(input: {
     stepCount: steps.length || run.stepsCompleted + run.stepsFailed,
     ...(durationMs != null ? { durationMs } : {}),
     ...(failedStep?.nodeId ? { failedStepNodeId: failedStep.nodeId } : {}),
-    ...(rawError ? { errorLine: safeLabel(rawError) } : {}),
+    ...(rawError && safeText(rawError)
+      ? { errorLine: safeText(rawError) }
+      : {}),
     steps: stepMetas,
     createdEntities,
   };
@@ -398,11 +412,7 @@ export function renderSummary(input: {
   status: SummaryStatus;
 }): string {
   const { automation, run, steps, status } = input;
-  const name = chip(
-    "automation",
-    automation.id,
-    automation.name ?? "Automation"
-  );
+  const name = chip("automation", automation.id, automation.name ?? "");
 
   if (status === "timeout") {
     return `⏱️ ${name} timed out — worker died or hung, no steps recorded`;
@@ -417,7 +427,7 @@ export function renderSummary(input: {
     const rawError = firstErrorLine(
       blockedStep?.errorMessage ?? run.errorMessage
     );
-    const reason = rawError ? safeLabel(rawError) : rawError;
+    const reason = rawError ? safeText(rawError) : rawError;
     return reason ? `${header}\n${reason}` : header;
   }
 
@@ -426,12 +436,12 @@ export function renderSummary(input: {
     const total = steps.length || run.stepsCompleted + run.stepsFailed;
     const stepName = failedStep?.nodeId ? `"${failedStep.nodeId}"` : "a step";
     const header = `⚠️ ${name} failed at step ${stepName} — ${run.stepsCompleted} of ${total} steps`;
-    // safeLabel also strips chip syntax — an external error body echoing
+    // safeText strips chip syntax — an external error body echoing
     // [[kind:id|label]] text must not render as an unintended chip.
     const rawError = firstErrorLine(
       failedStep?.errorMessage ?? run.errorMessage
     );
-    const error = rawError ? safeLabel(rawError) : rawError;
+    const error = rawError ? safeText(rawError) : rawError;
     return error ? `${header}\n${error}` : header;
   }
 

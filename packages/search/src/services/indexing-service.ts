@@ -10,8 +10,8 @@ import {
   loadAllFacetSlugsBatchForTrustedIndexing,
   and,
   eq,
-  desc,
   isNull,
+  loadDocumentBodyTexts,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
 import type { IndexingQueueItem } from "../types/index.js";
@@ -174,31 +174,41 @@ export class IndexingService {
         const docIds = withFacets
           .map((e) => e.documentId as string | null)
           .filter((d): d is string => !!d);
-        const contentByDoc = await this.loadLatestVersionContent(db, docIds);
+        const bodies = await this.loadDocumentBodies(db, docIds);
+        const indexable = [];
         for (const e of withFacets) {
           const docId = e.documentId as string | null;
-          if (docId && contentByDoc.has(docId)) {
-            e.content = contentByDoc.get(docId);
+          // A body we could not read is NOT an empty body: keep the entity's
+          // previous index entry rather than overwrite its text with nothing.
+          if (docId && bodies.failed.has(docId)) continue;
+          if (docId && bodies.texts.has(docId)) {
+            e.content = bodies.texts.get(docId);
           }
+          indexable.push(e);
         }
-        return withFacets;
+        return indexable;
       }
 
       case "documents": {
         const docRows = await db.query.documents.findMany({
           where: inArray(schema.documents.id, ids),
         });
-        // The documents table has NO `content` column (body text lives in
-        // document_versions). Enrich each row with its latest version's content
-        // so DocumentIndexer indexes real body text, not undefined.
-        const contentByDoc = await this.loadLatestVersionContent(
+        // The documents table has NO `content` column. Index the stored body —
+        // the markdown as it is now (a person's saves cut no version row, so the
+        // latest row is stale), never legacy `yjs:` editor state.
+        const bodies = await this.loadDocumentBodies(
           db,
           docRows.map((d) => d.id)
         );
-        return docRows.map((d) => ({
-          ...d,
-          content: contentByDoc.get(d.id) ?? null,
-        }));
+        return (
+          docRows
+            // Unreadable body ⇒ keep the previous index entry (see above).
+            .filter((d) => !bodies.failed.has(d.id))
+            .map((d) => ({
+              ...d,
+              content: bodies.texts.get(d.id) ?? null,
+            }))
+        );
       }
 
       case "views":
@@ -515,32 +525,21 @@ export class IndexingService {
   }
 
   /**
-   * Batch-load each document's LATEST version body text (the `documents` table
-   * has no `content` column — it lives in `document_versions`). Returns a map
-   * documentId → content. `DISTINCT ON (document_id) … ORDER BY version DESC`
-   * loads only the newest version per document (not every version's blob).
+   * Batch-load each document's stored body text (`loadDocumentBodyTexts`).
+   * Unreadable bodies are logged and returned in `failed`, never as empty text.
    */
-  private async loadLatestVersionContent(
+  private async loadDocumentBodies(
     db: Awaited<ReturnType<typeof getDb>>,
     documentIds: string[]
-  ): Promise<Map<string, string>> {
-    const out = new Map<string, string>();
-    if (documentIds.length === 0) return out;
-    const rows = await db
-      .selectDistinctOn([schema.documentVersions.documentId], {
-        documentId: schema.documentVersions.documentId,
-        content: schema.documentVersions.content,
-      })
-      .from(schema.documentVersions)
-      .where(inArray(schema.documentVersions.documentId, documentIds))
-      .orderBy(
-        schema.documentVersions.documentId,
-        desc(schema.documentVersions.version)
+  ) {
+    const bodies = await loadDocumentBodyTexts(db, documentIds);
+    for (const [documentId, error] of bodies.failed) {
+      console.error(
+        `[search] could not read the body of document ${documentId}; its index entry is left as it was:`,
+        error
       );
-    for (const r of rows) {
-      if (r.content) out.set(r.documentId, r.content);
     }
-    return out;
+    return bodies;
   }
 
   /**

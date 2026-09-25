@@ -39,6 +39,7 @@ COPY packages/feed-service/package.json  ./packages/feed-service/
 COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
 COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
+COPY packages/markdown-core/package.json ./packages/markdown-core/
 COPY packages/realtime/package.json      ./packages/realtime/
 COPY packages/scripts/package.json       ./packages/scripts/
 COPY packages/search/package.json        ./packages/search/

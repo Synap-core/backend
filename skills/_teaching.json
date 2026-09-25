@@ -200,7 +200,7 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Inline chip grammar: [[entity:ID|Name]], [[view:ID]], [[open:...]].",
+    "summary": "Inline chip grammar: [[entity:ID|Name]], [[view:ID|Name]] (label optional: [[view:ID]] shows the object's own name), [[open:...]].",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -220,7 +220,7 @@
     ],
     "skillGroup": "core",
     "alwaysOn": true,
-    "summary": "Entity + document writes: create/update, deep-merge, html-doc flow.",
+    "summary": "Entity + document writes: create/update, deep-merge, attach a document to an entity; document edits are patches (update_document ops), usually proposals.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -236,7 +236,7 @@
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Document embed grammar: :::synap-entity/view/cell::: live references inside markdown.",
+    "summary": "Document grammar: :::synap-entity/view/cell embeds (settings in a ```json body block, never cellProps; charts are snapshots by default: data + capturedAt) + [[kind:id|label]] inline markers.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

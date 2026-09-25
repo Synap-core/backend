@@ -50,7 +50,24 @@ export interface ProjectTrackDefinitionSnapshot {
   goalTemplate?: string;
   expectedOutputs?: unknown;
   criteria?: unknown;
+  /** The method's declared params (0274) — what `project_tracks.params` answers. */
+  params?: unknown;
   version?: number;
+}
+
+/**
+ * One stage the track ENTERED (0274), oldest first. Appended by the track's
+ * single stage writer (`TrackRepository.advanceStage`) in the same UPDATE as
+ * `current_stage`, and seeded at birth. A re-entered stage is a NEW entry.
+ */
+export interface ProjectTrackStageHistoryEntry {
+  stageKey: string;
+  /** The stage it came from — `null` for the birth seed. */
+  fromStage: string | null;
+  /** ISO-8601. */
+  enteredAt: string;
+  /** Who moved it: the agent's user id when an agent drove it, else the human. */
+  actor: string;
 }
 
 export const projectTracks = pgTable(
@@ -78,6 +95,21 @@ export const projectTracks = pgTable(
       .$type<ProjectTrackStatus>()
       .notNull()
       .default("active"),
+    /**
+     * The answers to the method's declared params (0274) — the track's
+     * onboarding. Passed as the answers to every stage session
+     * (`startStageSession`), so a REQUIRED param still missing there becomes a
+     * human-owned deliverable on that session.
+     */
+    params: jsonb("params")
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    /** Every stage the track entered, oldest first (0274). */
+    stageHistory: jsonb("stage_history")
+      .$type<ProjectTrackStageHistoryEntry[]>()
+      .notNull()
+      .default([]),
     metadata: jsonb("metadata")
       .$type<Record<string, unknown>>()
       .notNull()

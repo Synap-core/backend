@@ -37,6 +37,7 @@ export const MCP_TOOL_TEACHING_KEYS: Record<string, string[]> = {
   synap_capture: ["propose_entity_graph", "synap_capture"],
   synap_create_document: ["document.create", "create_document"],
   synap_get_document: ["document.read", "get_document"],
+  synap_update_document: ["document.update", "update_document"],
   synap_create_view: ["create_view"],
   synap_list_views: ["list_views", "synap_list_views"],
   synap_list_widgets: ["list_widgets", "synap_list_widgets"],

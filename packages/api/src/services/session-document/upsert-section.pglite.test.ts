@@ -5,7 +5,8 @@
  * ownership refusal, the compare-and-set version write, the undo checkpoint),
  * `recordSessionArtifact`, `ensureSessionNarrativeRule` (the seeded D10 rule),
  * `resolveGovernanceRule` + `decideAgentPolicy` (rung 2.8 and every rung below
- * it), and `applyApprovedSectionProposal` (the approval half).
+ * it), and `applyApprovedDocumentPatch` (the approval half — here reading a
+ * section proposal filed BEFORE W4b, in its legacy `sectionId/title/body` shape).
  *
  * Stubbed, and why:
  *  - `checkPermissionOrPropose` — replaced by a thin gate that runs the REAL
@@ -62,7 +63,7 @@ vi.mock("@synap/database", async (importOriginal) => {
         storageKey: key,
         size: String(i.content).length,
         mimeType: i.mimeType ?? "text/markdown",
-        checksum: "c",
+        checksum: `sha256:${(await import("node:crypto")).createHash("sha256").update(String(i.content)).digest("hex")}`,
         contentPreview: String(i.content).slice(0, 100),
       };
     },
@@ -82,8 +83,9 @@ vi.mock("@synap/database", async (importOriginal) => {
           [data.id, userId, data.workspaceId, data.title, data.storageKey]
         );
         await client.query(
-          `insert into document_versions (document_id, version, content, author, author_id)
-           values ($1, 1, '', 'user', $2)`,
+          // checksum = sha256('') — the empty body the document is created with.
+          `insert into document_versions (document_id, version, content, author, author_id, checksum)
+           values ($1, 1, '', 'user', $2, 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')`,
           [data.id, userId]
         );
         return { id: data.id, title: data.title };
@@ -97,8 +99,13 @@ vi.mock("@synap/storage", () => ({
     buildPath: (u: string, k: string, id: string, ext: string) =>
       `${u}/${k}/${id}.${ext}`,
     upload: async (key: string, body: string | Buffer) => {
-      h.blobs.set(key, Buffer.isBuffer(body) ? body.toString("utf-8") : body);
-      return { url: key, path: key, size: 1 };
+      const text = Buffer.isBuffer(body) ? body.toString("utf-8") : body;
+      h.blobs.set(key, text);
+      // The real providers' checksum shape: the content-write door compares
+      // it against the last checkpoint to decide whether content drifted.
+      const { createHash } = await import("node:crypto");
+      const checksum = `sha256:${createHash("sha256").update(text).digest("hex")}`;
+      return { url: key, path: key, size: 1, checksum };
     },
     downloadBuffer: async (key: string) =>
       Buffer.from(h.blobs.get(key) ?? "", "utf-8"),
@@ -107,9 +114,8 @@ vi.mock("@synap/storage", () => ({
 
 vi.mock("../../utils/permission-check.js", async () => {
   const { db } = await import("@synap/database");
-  const { resolveGovernanceRule } = await import(
-    "@synap/database/agent-governance"
-  );
+  const { resolveGovernanceRule } =
+    await import("@synap/database/agent-governance");
   const { decideAgentPolicy } = await import("@synap/governance-policy");
   return {
     checkPermissionOrPropose: async (opts: {
@@ -158,8 +164,8 @@ import {
 import {
   upsertSessionDocumentSection,
   readSessionDocument,
-  applyApprovedSectionProposal,
 } from "./upsert-section.js";
+import { applyApprovedDocumentPatch } from "../document-patch/apply-document-patch.js";
 import { ensureSessionNarrativeRule } from "./ensure-narrative-rule.js";
 import { SESSION_DOCUMENT_LABEL } from "./session-document.js";
 
@@ -526,7 +532,7 @@ describe("approval half", () => {
       baseVersion: version,
     };
 
-    const applied = await applyApprovedSectionProposal(
+    const applied = await applyApprovedDocumentPatch(
       { targetId: documentId, agentUserId: AGENT, data: { data: draft } },
       USER
     );
@@ -534,7 +540,7 @@ describe("approval half", () => {
     expect(await storedContent(documentId)).toContain("Approved text.");
 
     await expect(
-      applyApprovedSectionProposal(
+      applyApprovedDocumentPatch(
         { targetId: documentId, agentUserId: AGENT, data: draft },
         USER
       )

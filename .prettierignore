@@ -30,3 +30,7 @@ yarn.lock
 
 # Documentation
 CHANGELOG.md
+
+# Markdown FIXTURES are byte-exact test inputs: prettier re-flows directive
+# fences and tables (it once turned a golden's closing `::::` into a table row).
+**/__fixtures__/**

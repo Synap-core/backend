@@ -16,6 +16,12 @@
  *                       birth. Gate evaluation is the subject-agnostic core in
  *                       `services/playbooks/stage-gate.ts` (`applyStageGate`),
  *                       shared with `advanceSessionStage` — never a copy.
+ *                       Entering a stage OFFERS its session (`offer`); it
+ *                       never starts one.
+ *   setTrackParams    — the method's param answers (0274), governed `track/update`.
+ *   startStageSession — the ONE door that starts a stage's session: a thin
+ *                       wrapper over `createFocusSession` (same governance),
+ *                       idempotent on an open session already filed there.
  *
  * ── ACCESS ──────────────────────────────────────────────────────────────────
  * READS go through `scopedDb` + the `project_tracks` VisibilityRule (visible iff
@@ -31,15 +37,24 @@ import { TRPCError } from "@trpc/server";
 import {
   and,
   asc,
+  desc,
   eq,
   getDb,
   inArray,
+  isNotNull,
   ne,
+  or,
+  focusSessions,
   playbooks,
   projects,
   projectTracks,
   drizzleSql,
 } from "@synap/database";
+import {
+  describeParamTypeError,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import type {
   Playbook,
   ProjectTrack,
@@ -51,16 +66,24 @@ import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   canTransitionTrack,
   deriveTrackStages,
+  readTrackStage,
+  readTrackStageHistory,
   trackPausedBy,
   type TrackPausedBy,
   type TrackStage,
+  type TrackStageHistoryEntry,
   type TrackStatus,
 } from "@synap-core/types/units";
-import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  OPEN_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
 import { trackRepository } from "./track-repo.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { loadVisibleProject } from "../projects/load-visible-project.js";
+import { projectPathConditions } from "../projects/project-path.js";
+import type { CreateFocusSessionParams } from "../focus-sessions/create-session.js";
 import { createLinks } from "../links/links-service.js";
 import {
   checkPermissionOrPropose,
@@ -124,13 +147,34 @@ export interface TrackView {
   status: ProjectTrackStatus;
   /** Why it is paused — `null` unless `status === "paused"`. */
   pausedBy: TrackPausedBy;
-  /** The PINNED stages, positioned against `currentStage`. */
+  /**
+   * The PINNED stages, positioned against `currentStage`, with what each
+   * declares (goal, gate, criteria…) and — when counted — `sessionCount`.
+   */
   stages: TrackStage[];
+  /** The method's param answers (0274). */
+  params: Record<string, unknown>;
+  /**
+   * The params the method DECLARED, as pinned at start — what `params`
+   * answers. Surfaces render the onboarding form from this, never from the
+   * live playbook, whose params may have moved on since the pin.
+   */
+  declaredParams: unknown[];
+  /** Every stage the track entered, oldest first (0274). */
+  stageHistory: TrackStageHistoryEntry[];
   createdAt: string;
   updatedAt: string;
 }
 
-export function toTrackView(track: ProjectTrack): TrackView {
+/**
+ * Project a track. `sessionsByStage` (from {@link countTrackSessionsByStage})
+ * fills each stage's `sessionCount`; without it the key is absent — "not
+ * counted", never a fabricated 0. Every read door uses {@link loadTrackViews}.
+ */
+export function toTrackView(
+  track: ProjectTrack,
+  sessionsByStage?: Readonly<Record<string, number>>
+): TrackView {
   return {
     id: track.id,
     projectId: track.projectId,
@@ -142,14 +186,158 @@ export function toTrackView(track: ProjectTrack): TrackView {
     pausedBy: trackPausedBy(track),
     stages: deriveTrackStages(
       track.definitionSnapshot?.stages,
-      track.currentStage
+      track.currentStage,
+      sessionsByStage
     ),
+    params:
+      track.params && typeof track.params === "object" ? track.params : {},
+    declaredParams: Array.isArray(track.definitionSnapshot?.params)
+      ? track.definitionSnapshot.params
+      : [],
+    stageHistory: readTrackStageHistory(track.stageHistory),
     createdAt: new Date(track.createdAt).toISOString(),
     updatedAt: new Date(track.updatedAt).toISOString(),
   };
 }
 
-/** What a track pins from its method. The same fields a run snapshots, minus params. */
+/**
+ * Sessions filed at each stage of each track — ONE grouped query for any
+ * number of tracks. The counted set is the PROJECT PATH's session set for the
+ * track's project (`projectPathConditions`, default lens: the caller's own
+ * work + tracked runs, undecided agent drafts hidden), narrowed by
+ * `track_stage` — so a stage's count is the number of sessions the project
+ * path would list at that stage, not a second population. A failed read
+ * THROWS: a count that silently became 0 would read as "nothing was done at
+ * this stage".
+ *
+ * NB this is deliberately NOT the check GATE's population. The gate
+ * (`measureTrackStage`) counts EVERY member's sessions filed at the stage, on
+ * purpose — the track is the project's, and so is its gate — while this count
+ * is what one reader's surface lists. The two may differ, and that is correct.
+ */
+export async function countTrackSessionsByStage(
+  tracks: ReadonlyArray<Pick<ProjectTrack, "id" | "projectId">>,
+  userId: string
+): Promise<Map<string, Record<string, number>>> {
+  const out = new Map<string, Record<string, number>>(
+    tracks.map((t) => [t.id, {}])
+  );
+  if (tracks.length === 0) return out;
+  const byProject = new Map<string, string[]>();
+  for (const t of tracks) {
+    const ids = byProject.get(t.projectId) ?? [];
+    if (!ids.includes(t.id)) ids.push(t.id);
+    byProject.set(t.projectId, ids);
+  }
+  const db = await getDb();
+  const rows = await db
+    .select({
+      trackId: focusSessions.trackId,
+      trackStage: focusSessions.trackStage,
+      n: drizzleSql<number>`count(*)`,
+    })
+    .from(focusSessions)
+    .where(
+      and(
+        isNotNull(focusSessions.trackStage),
+        or(
+          ...[...byProject].map(([projectId, ids]) =>
+            and(
+              inArray(focusSessions.trackId, ids),
+              ...projectPathConditions({ userId, projectId, lens: "default" })
+            )
+          )
+        )
+      )
+    )
+    .groupBy(focusSessions.trackId, focusSessions.trackStage);
+  for (const r of rows) {
+    if (!r.trackId || !r.trackStage) continue;
+    const counts = out.get(r.trackId);
+    if (counts) counts[r.trackStage] = Number(r.n);
+  }
+  return out;
+}
+
+/** Track views with per-stage session counts — what every track READ returns. */
+export async function loadTrackViews(
+  tracks: ProjectTrack[],
+  actor: Pick<TrackActor, "userId">
+): Promise<TrackView[]> {
+  const counts = await countTrackSessionsByStage(tracks, actor.userId);
+  return tracks.map((t) => toTrackView(t, counts.get(t.id) ?? {}));
+}
+
+/**
+ * The view a track WRITE returns. The write already happened, so a failed
+ * count read must not turn it into a 500: the view comes back WITHOUT counts
+ * (`sessionCount` absent — "not counted", never a fabricated 0), and the
+ * failure is logged. Reads keep throwing ({@link loadTrackViews}).
+ */
+export async function loadWrittenTrackView(
+  track: ProjectTrack,
+  actor: Pick<TrackActor, "userId">
+): Promise<TrackView> {
+  try {
+    return await loadTrackView(track, actor);
+  } catch (err) {
+    logger.warn(
+      { err, trackId: track.id },
+      "track written, but its stage counts could not be read"
+    );
+    return toTrackView(track);
+  }
+}
+
+export async function loadTrackView(
+  track: ProjectTrack,
+  actor: Pick<TrackActor, "userId">
+): Promise<TrackView> {
+  const [view] = await loadTrackViews([track], actor);
+  return view!;
+}
+
+/**
+ * Resolve param answers against the method's DECLARED params (the pinned
+ * snapshot). Refuses a mistyped value and an undeclared key — a stored,
+ * rendered bag must have a declared shape. Returns only the keys the caller
+ * actually supplied (a default stays the method's, never frozen onto the
+ * track), coerced. A REQUIRED param left unanswered is NOT refused here: it
+ * becomes an owed slot on the stage session that needs it.
+ */
+export function resolveTrackParams(
+  declaredRaw: unknown,
+  supplied: Record<string, unknown>
+): Record<string, unknown> {
+  const declared = readPlaybookParams(declaredRaw);
+  const names = new Set(declared.map((p) => p.name));
+  const undeclared = Object.keys(supplied).filter((k) => !names.has(k));
+  if (undeclared.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        declared.length === 0
+          ? `This method declares no params — cannot store ${undeclared.map((k) => `"${k}"`).join(", ")}.`
+          : `Unknown param${undeclared.length > 1 ? "s" : ""} ${undeclared.map((k) => `"${k}"`).join(", ")}. The method declares: ${[...names].join(", ")}.`,
+    });
+  }
+  const resolution = validatePlaybookParams(declared, supplied);
+  const [first] = resolution.typeErrors;
+  if (first) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: describeParamTypeError(first),
+    });
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(supplied)) {
+    if (v === undefined || v === null || v === "") continue;
+    if (k in resolution.declaredValues) out[k] = resolution.declaredValues[k];
+  }
+  return out;
+}
+
+/** What a track pins from its method. The same fields a run snapshots. */
 export function buildTrackSnapshot(playbook: Playbook) {
   return {
     // structuredClone: a spread would share every stage OBJECT with the
@@ -161,6 +349,12 @@ export function buildTrackSnapshot(playbook: Playbook) {
     goalTemplate: playbook.goalTemplate,
     expectedOutputs: structuredClone(playbook.expectedOutputs ?? []),
     criteria: structuredClone(playbook.criteria ?? []),
+    // The method's DECLARED params (0274): what `project_tracks.params`
+    // answers, pinned like the stages so a method edit never changes what a
+    // live track is asked.
+    params: structuredClone(
+      Array.isArray(playbook.params) ? playbook.params : []
+    ),
     version: playbook.version,
   };
 }
@@ -314,6 +508,13 @@ export interface StartTrackInput {
   playbookId: string;
   /** Display name. Absent ⇒ the method's name. */
   name?: string;
+  /**
+   * Initial answers to the method's declared params (0274). Validated against
+   * the method (`resolveTrackParams`): a mistyped value or an undeclared key
+   * refuses. A required param left out is NOT refused — it is owed on the
+   * stage session that needs it.
+   */
+  params?: Record<string, unknown>;
   actor: TrackActor;
   /**
    * Pre-minted id — ONLY the approval replay passes it (the id the proposal
@@ -403,6 +604,11 @@ export async function startTrack(
 
   const trackName = input.name?.trim() || playbook.name;
   const trackId = input.id ?? randomUUID();
+  // Refused BEFORE governance, so a malformed answer is told to its author
+  // rather than filed for a human to approve.
+  const trackParams = input.params
+    ? resolveTrackParams(playbook.params, input.params)
+    : {};
 
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -421,6 +627,9 @@ export async function startTrack(
       projectId: project.id,
       playbookId: playbook.id,
       name: trackName,
+      // The answers ride the proposal; the replay re-validates them against
+      // the method as it stands at approval.
+      ...(Object.keys(trackParams).length > 0 ? { params: trackParams } : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -451,6 +660,7 @@ export async function startTrack(
       // Seeded at birth, like a session's first stage: nobody "advanced into"
       // the first stage, so the gate is not consulted here.
       currentStage: firstStageKey(snapshot.stages),
+      params: trackParams,
     },
     actor.userId
   );
@@ -628,6 +838,19 @@ export async function applyTrackStatus(
 
 // ── stage advance ───────────────────────────────────────────────────────────
 
+/**
+ * The session a stage OFFERS once the track enters it (M2). Entering a stage
+ * never starts work: the offer is what a surface shows as "Start this step",
+ * and `startStageSession` is the one door that acts on it.
+ */
+export interface StageSessionOffer {
+  stageKey: string;
+  name: string;
+  /** The stage's own goal — the brief the session is started with. */
+  goal: string | null;
+  suggestedTasks: string[];
+}
+
 export interface AdvanceTrackStageResult {
   status: "advanced" | "unchanged";
   track: ProjectTrack;
@@ -637,7 +860,12 @@ export interface AdvanceTrackStageResult {
   paused: boolean;
   proposalId?: string;
   proposalType?: string;
-  check?: { passed: boolean; failing: string[] };
+  check?: { passed: boolean; failing: string[]; reason?: string };
+  /**
+   * The session the stage just entered offers — `null` when nothing moved, or
+   * when the caller already has an open session filed at that stage.
+   */
+  offer: StageSessionOffer | null;
 }
 
 /**
@@ -655,7 +883,13 @@ export async function advanceTrackStage(input: {
   );
   assertStageAdvanceable(track, input.toStage);
   if (track.currentStage === input.toStage) {
-    return { status: "unchanged", track, gated: false, paused: false };
+    return {
+      status: "unchanged",
+      track,
+      gated: false,
+      paused: false,
+      offer: null,
+    };
   }
 
   const perm = await checkPermissionOrPropose({
@@ -735,14 +969,27 @@ export async function applyTrackStageAdvance(params: {
   const { track, project, toStage, userId } = params;
   const fromStage = track.currentStage ?? null;
   if (fromStage === toStage) {
-    return { status: "unchanged", track, gated: false, paused: false };
+    return {
+      status: "unchanged",
+      track,
+      gated: false,
+      paused: false,
+      offer: null,
+    };
   }
 
   // Compare-and-set: the stage moves ONLY from the stage this advance was
   // decided on. Two concurrent advances cannot both land; the loser is told.
+  // The SAME statement appends the stage-history entry (0274).
   const updated = await (
     await repo()
-  ).advanceStage(track.id, fromStage, toStage, userId);
+  ).advanceStage(
+    track.id,
+    fromStage,
+    toStage,
+    userId,
+    params.agentUserId ?? userId
+  );
   if (!updated) {
     throw new TRPCError({
       code: "CONFLICT",
@@ -803,14 +1050,19 @@ export async function applyTrackStageAdvance(params: {
       .limit(1);
     if (row) after = row as ProjectTrack;
   }
-  const base = { status: "advanced" as const, track: after };
+  const offer = await stageSessionOffer(after, toStage, userId);
+  const base = { status: "advanced" as const, track: after, offer };
   if (!outcome) return { ...base, gated: false, paused: false };
   if (outcome.kind === "check") {
     return {
       ...base,
       gated: true,
       paused: outcome.paused,
-      check: { passed: outcome.passed, failing: outcome.failing },
+      check: {
+        passed: outcome.passed,
+        failing: outcome.failing,
+        ...(outcome.reason ? { reason: outcome.reason } : {}),
+      },
     };
   }
   return {
@@ -824,16 +1076,85 @@ export async function applyTrackStageAdvance(params: {
 
 // ── sessions filed inside a track ───────────────────────────────────────────
 
+/** The caller's newest OPEN session filed at this stage of this track, if any. */
+/**
+ * The caller's OPEN session filed at (track, stage) — the idempotency probe of
+ * `startStageSession`, re-run by `createFocusSession({ oneOpenPerStage })`
+ * under its advisory lock (hence `database`: the locking transaction).
+ */
+export async function openStageSession(
+  trackId: string,
+  stageKey: string,
+  userId: string,
+  database?: Awaited<ReturnType<typeof getDb>>
+) {
+  const db = database ?? (await getDb());
+  // SESSION-KIND-LENS-EXEMPT: an idempotency probe for ONE (track, stage), not a list door.
+  const [row] = await db
+    .select()
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.trackId, trackId),
+        eq(focusSessions.trackStage, stageKey),
+        eq(focusSessions.userId, userId),
+        inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])
+      )
+    )
+    .orderBy(desc(focusSessions.startedAt))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The offer for a stage just entered (M2) — derived purely from the PINNED
+ * stage, `null` when the caller already has an open session filed there
+ * (nothing to offer) or the stage is not declared.
+ */
+async function stageSessionOffer(
+  track: ProjectTrack,
+  stageKey: string,
+  userId: string
+): Promise<StageSessionOffer | null> {
+  const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
+  if (!stage) return null;
+  if (await openStageSession(track.id, stageKey, userId)) return null;
+  return {
+    stageKey: stage.key,
+    name: stage.name,
+    goal: stage.goal ?? null,
+    suggestedTasks: stage.suggestedTasks ?? [],
+  };
+}
+
+export interface TrackFiling {
+  trackId: string;
+  projectId: string;
+  /**
+   * The stage the session is FILED at (M1): the caller's explicit stage when
+   * given (validated against the pinned stages), else the track's current
+   * stage; `null` for a stageless method.
+   */
+  trackStage: string | null;
+  trackName: string;
+  /** The method's DECLARED params, as pinned — what `params` answers. */
+  methodParams: unknown;
+}
+
 /**
  * Validate a session/run being filed into a track. Returns the project the
  * session must carry: the TRACK's project. A `projectId` that disagrees is a
  * refusal, never a silent correction; an archived track takes no new work.
+ * An explicit `trackStage` naming a stage the method does not declare is a
+ * refusal too.
  */
 export async function resolveTrackFiling(params: {
   trackId: string;
   projectId?: string | null;
+  /** An explicit stage to file at. Absent/null ⇒ the track's current stage. */
+  trackStage?: string | null;
   actor: TrackActor;
-}): Promise<{ trackId: string; projectId: string }> {
+}): Promise<TrackFiling> {
   const track = await getTrack(params.trackId, params.actor);
   if (!track) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
@@ -850,5 +1171,258 @@ export async function resolveTrackFiling(params: {
       message: `Track "${track.name}" is archived and takes no new work.`,
     });
   }
-  return { trackId: track.id, projectId: track.projectId };
+  return {
+    trackId: track.id,
+    projectId: track.projectId,
+    trackStage: resolveFilingStage(track, params.trackStage),
+    trackName: track.name,
+    methodParams: track.definitionSnapshot?.params,
+  };
+}
+
+/**
+ * THE stage rule for filing (M1), shared by the direct doors and the
+ * `focus_session/create` approval replay: an explicit stage must be one the
+ * track PINNED; absent ⇒ the track's current stage.
+ */
+export function resolveFilingStage(
+  track: Pick<ProjectTrack, "name" | "currentStage" | "definitionSnapshot">,
+  explicit: string | null | undefined
+): string | null {
+  if (explicit === undefined || explicit === null || explicit === "") {
+    return track.currentStage ?? null;
+  }
+  const keys = stageKeys(track.definitionSnapshot?.stages);
+  if (!keys.includes(explicit)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        keys.length === 0
+          ? `Track "${track.name}" follows a method with no stages — omit trackStage.`
+          : `"${explicit}" is not a stage of "${track.name}". Stages: ${keys.join(", ")}.`,
+    });
+  }
+  return explicit;
+}
+
+// ── params ──────────────────────────────────────────────────────────────────
+
+export type SetTrackParamsResult =
+  { status: "updated" | "unchanged"; track: ProjectTrack } | ProposedOutcome;
+
+/**
+ * Answer (some of) the method's params — MERGED onto the track's current
+ * answers; a `null` value clears that answer. Governed `track/update` (the
+ * existing key; its executor replays through {@link applyTrackParams}).
+ */
+export async function setTrackParams(input: {
+  trackId: string;
+  params: Record<string, unknown>;
+  actor: TrackActor;
+}): Promise<SetTrackParamsResult> {
+  const { track, project } = await loadTrackForWrite(
+    input.trackId,
+    input.actor
+  );
+  const next = mergeTrackParams(track, input.params);
+  if (JSON.stringify(next) === JSON.stringify(track.params ?? {})) {
+    return { status: "unchanged", track };
+  }
+
+  const perm = await checkPermissionOrPropose({
+    userId: input.actor.userId,
+    agentUserId: input.actor.agentUserId ?? undefined,
+    workspaceId: project.workspaceId ?? undefined,
+    projectId: project.id,
+    subjectType: "track",
+    action: "update",
+    source: input.actor.source,
+    reasoning: input.actor.reasoning,
+    // The PATCH, not the merged result: the replay merges onto the answers as
+    // they stand at approval, so an answer given in between is not reverted.
+    data: { id: track.id, name: track.name, params: input.params },
+  });
+  if ("denied" in perm && perm.denied) {
+    throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
+  }
+  if ("proposalId" in perm) {
+    return proposed(
+      perm,
+      buildObjectActionTitle({
+        action: "update",
+        objectKind: "track",
+        objectName: track.name,
+      }) + " — proposed for review"
+    );
+  }
+  return applyTrackParams(track, input.params, input.actor.userId);
+}
+
+function mergeTrackParams(
+  track: Pick<ProjectTrack, "params" | "definitionSnapshot">,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {
+    ...((track.params as Record<string, unknown> | null) ?? {}),
+  };
+  const answers: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete merged[k];
+    else answers[k] = v;
+  }
+  return {
+    ...merged,
+    ...resolveTrackParams(track.definitionSnapshot?.params, answers),
+  };
+}
+
+/** The params write. Callers: `setTrackParams` and the `track/update` replay. */
+export async function applyTrackParams(
+  track: ProjectTrack,
+  patch: Record<string, unknown>,
+  userId: string
+): Promise<{ status: "updated"; track: ProjectTrack }> {
+  // Validated + coerced against the PINNED declaration; the write itself is a
+  // SQL merge of exactly these keys (`patchParams`), never the whole bag.
+  const clear = Object.keys(patch).filter((k) => patch[k] === null);
+  const answers = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== null)
+  );
+  const set = resolveTrackParams(track.definitionSnapshot?.params, answers);
+  const updated = await (
+    await repo()
+  ).patchParams(track.id, { set, clear }, userId);
+  if (!updated) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  return { status: "updated", track: updated };
+}
+
+// ── the stage session (M2) ──────────────────────────────────────────────────
+
+export type StartStageSessionResult =
+  | {
+      /**
+       * `created` — a new session; `existing` — the caller already had an open
+       * session filed at this stage, returned untouched; `deduped` — an open
+       * twin (same goal, track and stage) was returned by the session door.
+       */
+      status: "created" | "existing" | "deduped";
+      stageKey: string;
+      session: typeof focusSessions.$inferSelect;
+    }
+  | (Omit<ProposedOutcome, "reviewUrl"> & {
+      stageKey: string;
+      /** Present only when the governance door returned one — never invented. */
+      reviewUrl?: string;
+    });
+
+/**
+ * THE ONE DOOR that starts a stage's session (M2). Entering a stage only
+ * OFFERS this; nothing auto-starts.
+ *
+ * A thin wrapper over `createFocusSession` — the SAME governance (an agent
+ * PROPOSES a `focus_session/create`; no new proposal key), the same dedup and
+ * the same project ladder. What it adds is only what the stage declares:
+ *   - goal: the caller's, else the stage's goal (the brief), else the
+ *     method's goalTemplate, else the stage name;
+ *   - expected outputs + criteria: the stage's, as pinned;
+ *   - params: the TRACK's answers, so a REQUIRED method param still missing
+ *     becomes a human-owned slot on this session (stage 1 = onboarding);
+ *   - trackId + trackStage.
+ * IDEMPOTENT: the caller's open session already filed at that stage is
+ * returned (`existing`) and nothing is filed or written.
+ */
+export async function startStageSession(input: {
+  trackId: string;
+  /** Absent ⇒ the track's current stage. */
+  stageKey?: string | null;
+  title?: string | null;
+  goal?: string | null;
+  actor: TrackActor;
+}): Promise<StartStageSessionResult> {
+  const { actor } = input;
+  const track = await getTrack(input.trackId, actor);
+  if (!track) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+  if (track.status === "archived" || track.status === "completed") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Track "${track.name}" is ${track.status} — reopen it before starting work in it.`,
+    });
+  }
+  const stageKey = resolveFilingStage(track, input.stageKey);
+  if (!stageKey) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Track "${track.name}" stands on no stage — pass stageKey.`,
+    });
+  }
+  const stage = readTrackStage(track.definitionSnapshot?.stages, stageKey);
+
+  const open = await openStageSession(track.id, stageKey, actor.userId);
+  if (open) return { status: "existing", stageKey, session: open };
+
+  const db = await getDb();
+  const project = await loadVisibleProject(db, track.projectId, actor.userId);
+  if (!project) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
+  }
+
+  const goal =
+    input.goal?.trim() ||
+    stage?.goal?.trim() ||
+    (typeof track.definitionSnapshot?.goalTemplate === "string" &&
+      track.definitionSnapshot.goalTemplate.trim()) ||
+    `${stage?.name ?? stageKey} — ${track.name}`;
+
+  // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
+  const { createFocusSession } =
+    await import("../focus-sessions/create-session.js");
+  const result = await createFocusSession({
+    userId: actor.userId,
+    agentUserId: actor.agentUserId ?? undefined,
+    workspaceId: project.workspaceId ?? null,
+    projectId: track.projectId,
+    trackId: track.id,
+    trackStage: stageKey,
+    title: input.title?.trim() || stage?.name || null,
+    goal,
+    // A stage session is not a template run: never bind or match a playbook.
+    templateId: null,
+    // Pinned jsonb, validated by `createFocusSession`'s own floors.
+    ...(stage?.expectedOutputs?.length
+      ? {
+          expectedOutputs: stage.expectedOutputs as unknown as NonNullable<
+            CreateFocusSessionParams["expectedOutputs"]
+          >,
+        }
+      : {}),
+    ...(stage?.criteria?.length
+      ? {
+          criteria: stage.criteria as unknown as NonNullable<
+            CreateFocusSessionParams["criteria"]
+          >,
+        }
+      : {}),
+    params: (track.params as Record<string, unknown> | null) ?? {},
+    // Check-then-create under ONE lock: the probe above is only a fast path.
+    oneOpenPerStage: true,
+  });
+  if (result.status === "proposed") {
+    return {
+      status: "proposed",
+      stageKey,
+      proposalId: result.proposalId,
+      proposalType: result.proposalType ?? "focus_session.create",
+      message: result.message,
+      ...(result.reviewUrl ? { reviewUrl: result.reviewUrl } : {}),
+    };
+  }
+  return {
+    status: result.status === "deduped" ? "deduped" : "created",
+    stageKey,
+    session: result.session,
+  };
 }

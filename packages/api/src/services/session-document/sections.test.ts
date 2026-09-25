@@ -4,9 +4,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { parseMarkdown } from "@synap-core/markdown-core/processor";
 import {
   parseSections,
-  parseDirectiveAttributes,
   sectionOwner,
   serializeSection,
   upsertSectionInMarkdown,
@@ -25,11 +25,10 @@ const DOC = [
   '::::synap-section{id="approach" owner="ai" author="agent-1"}',
   "## Approach",
   "",
-  ":::synap-cell{cellKey=\"proposals\"}",
+  ':::synap-cell{cellKey="proposals"}',
   ":::",
   "",
   "```md",
-  "::::",
   '::::synap-section{id="fake"}',
   "```",
   "::::",
@@ -49,14 +48,15 @@ describe("parseSections", () => {
     const parsed = parseSections(DOC);
     expect(parsed.sections.map((s) => [s.id, s.startLine, s.endLine])).toEqual([
       ["why", 2, 6],
-      ["approach", 8, 18],
+      ["approach", 8, 17],
     ]);
     expect(parsed.duplicateIds).toEqual([]);
     expect(parsed.unterminatedId).toBeNull();
   });
 
   it("reports duplicate ids and an unterminated section", () => {
-    const dup = '::::synap-section{id="a"}\nx\n::::\n::::synap-section{id="a"}\ny\n::::';
+    const dup =
+      '::::synap-section{id="a"}\nx\n::::\n::::synap-section{id="a"}\ny\n::::';
     expect(parseSections(dup).duplicateIds).toEqual(["a"]);
     const open = '::::synap-section{id="a"}\nx\n';
     expect(parseSections(open).unterminatedId).toBe("a");
@@ -64,16 +64,34 @@ describe("parseSections", () => {
 
   it("a shorter fence inside a section does not close it", () => {
     const md = '::::synap-section{id="a"}\n:::\nstill inside\n::::\nafter';
-    expect(parseSections(md).sections[0]).toMatchObject({ startLine: 0, endLine: 3 });
+    expect(parseSections(md).sections[0]).toMatchObject({
+      startLine: 0,
+      endLine: 3,
+    });
   });
 
   it("parses quoted, unquoted and #id attributes", () => {
-    expect(parseDirectiveAttributes(`{id="x" owner='ai' round=2}`)).toEqual({
-      id: "x",
-      owner: "ai",
-      round: "2",
+    const md = `::::synap-section{id="x" owner='ai' round=2}\nx\n::::\n::::synap-section{#anchor}\ny\n::::`;
+    expect(parseSections(md).sections.map((s) => s.attributes)).toEqual([
+      { id: "x", owner: "ai", round: "2" },
+      { id: "anchor" },
+    ]);
+  });
+
+  it("agrees with the renderer: a bare closer inside a fenced block closes the section", () => {
+    // micromark checks a container's closing fence before the content it holds,
+    // so the renderer ends `a` at the fenced `::::`. The door used to skip it
+    // and splice a different extent than the one the reader sees.
+    const md = '::::synap-section{id="a"}\n```md\n::::\n```\n::::';
+    expect(parseSections(md).sections[0]).toMatchObject({
+      id: "a",
+      startLine: 0,
+      endLine: 2,
     });
-    expect(parseDirectiveAttributes("{#anchor}")).toEqual({ id: "anchor" });
+    const rendered = parseMarkdown(md).children[0] as {
+      position?: { end: { line: number } };
+    };
+    expect(rendered.position?.end.line).toBe(3); // 1-based ⇒ line index 2
   });
 });
 
@@ -108,7 +126,9 @@ describe("upsertSectionInMarkdown", () => {
       "why",
       "approach",
     ]);
-    expect(parseSections(markdown).sections[1]!.attributes).toMatchObject(stamp);
+    expect(parseSections(markdown).sections[1]!.attributes).toMatchObject(
+      stamp
+    );
   });
 
   it("appends a new section at the end when the id is absent", () => {
@@ -141,26 +161,43 @@ describe("upsertSectionInMarkdown", () => {
 
 describe("serializeSection", () => {
   it("fences longer than any container fence in the body, so the body cannot close it", () => {
-    const body = "::::synap-cell{cellKey=\"x\"}\n::::";
-    const block = serializeSection({ id: "a", title: "A", body, attributes: {} });
+    const body = '::::synap-cell{cellKey="x"}\n::::';
+    const block = serializeSection({
+      id: "a",
+      title: "A",
+      body,
+      attributes: {},
+    });
     expect(block.startsWith(":::::synap-section{")).toBe(true);
-    expect(parseSections(block).sections[0]).toMatchObject({ id: "a", startLine: 0 });
+    expect(parseSections(block).sections[0]).toMatchObject({
+      id: "a",
+      startLine: 0,
+    });
   });
 
-  it("strips characters that would break the attribute brace", () => {
+  it("writes attribute values LOSSLESSLY (escaped, not stripped) and flattens line breaks", () => {
     const block = serializeSection({
       id: "a",
       title: "Line\nbreak",
       body: "",
-      attributes: { author: 'x"}y' },
+      attributes: { author: 'x"}y', note: "two\nlines" },
     });
-    expect(block.split("\n")[0]).toBe('::::synap-section{id="a" author="xy"}');
+    expect(block.split("\n")[0]).toBe(
+      '::::synap-section{id="a" author="x&#x22;}y" note="two lines"}'
+    );
     expect(block.split("\n")[1]).toBe("## Line break");
+    // …and the value reads back exactly as written.
+    expect(parseSections(block).sections[0]!.attributes.author).toBe('x"}y');
   });
 
   it("refuses a body that would escape or nest the section", () => {
     expect(() =>
-      serializeSection({ id: "a", title: "A", body: ":::synap-cell{}\nno close", attributes: {} })
+      serializeSection({
+        id: "a",
+        title: "A",
+        body: ":::synap-cell{}\nno close",
+        attributes: {},
+      })
     ).toThrow(SectionBodyError);
     expect(() =>
       serializeSection({
@@ -171,7 +208,12 @@ describe("serializeSection", () => {
       })
     ).toThrow(SectionBodyError);
     expect(() =>
-      serializeSection({ id: "a", title: "A", body: "```\nunclosed", attributes: {} })
+      serializeSection({
+        id: "a",
+        title: "A",
+        body: "```\nunclosed",
+        attributes: {},
+      })
     ).toThrow(SectionBodyError);
   });
 });

@@ -676,7 +676,20 @@ export async function synthesizeAnswer(
       // grows with corpus size, exactly the variable that made 60s bite there.
       signal: AbortSignal.timeout(isCallBudgetMs("generation")),
     });
-    if (!res.ok) throw new Error(`IS answer HTTP ${res.status}`);
+    if (!res.ok) {
+      // Carry the IS's own classified `failure` envelope (a spend-guard
+      // refusal is 429 `quota_exhausted`, a provider outage 502 `…`) so
+      // `classifyAiFailure` reads the IS's code instead of guessing from the
+      // bare status — a budget refusal read as a 429 would say "try again
+      // shortly" about an allowance that resets at month rollover.
+      const failureBody = (await res.json().catch(() => null)) as {
+        failure?: unknown;
+      } | null;
+      throw Object.assign(
+        new Error(`IS answer HTTP ${res.status}`),
+        failureBody?.failure ? { failure: failureBody.failure } : {}
+      );
+    }
     const data = (await res.json()) as { answer?: string };
     const answer =
       typeof data.answer === "string"

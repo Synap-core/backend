@@ -617,6 +617,48 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "document.freeze_charts",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Turn every LIVE chart embed (:::synap-cell{cellKey=\"chart-*\"} with query props, no data) in `markdown` into a SNAPSHOT: runs each chart's own live query (entities.list, 500 rows, the caller's floor in the acting workspace), shapes it with the same shaper the browser chart uses, and writes `data` + `capturedAt` into its props, keeping the query keys so a reader can Make live. A chart whose read FAILS stays live and is reported in `diagnostics` (freeze_failed); zero rows is a valid empty snapshot. Returns { markdown, frozen, diagnostics }. Read-only (returns markdown, writes nothing).",
+      parameters: {
+        type: "object",
+        required: ["markdown"],
+        properties: {
+          markdown: {
+            type: "string",
+            description:
+              "The document body whose live chart embeds should be frozen.",
+          },
+        },
+      },
+    },
+    {
+      name: "document.stamp_diagnostics",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Record RUN-TIME diagnostics (code `freeze_failed`: a chart the report flow had to leave live) on a document the caller owns, in the document's diagnostics stamp for its current revision (content diagnostics are re-checked beside them). Returns { status: stamped | nothing_to_stamp | no_document | moved | not_checked }. Writes only the advisory stamp.",
+      parameters: {
+        type: "object",
+        required: ["items"],
+        properties: {
+          documentId: {
+            type: "string",
+            description:
+              "The document to annotate (e.g. create-report's output.documentId).",
+          },
+          items: {
+            type: "array",
+            description:
+              "Run-time diagnostics, e.g. document.freeze_charts output.diagnostics.",
+            items: { type: "object" },
+          },
+        },
+      },
+    },
     // ── Kind + Facets (roles) — attach/detach/list over the one facet door ──
     {
       name: "entity_facet.attach",

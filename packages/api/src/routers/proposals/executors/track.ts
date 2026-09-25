@@ -6,9 +6,11 @@
  *
  *   track/create               → `startTrack` (the SAME service the direct door
  *                                runs), with the id the proposal was filed under.
- *   track/update               → a status change (`applyTrackStatus`) or a stage
+ *   track/update               → a status change (`applyTrackStatus`), a stage
  *                                advance (`applyTrackStageAdvance`, gate OFF —
- *                                the reviewer just answered for this advance).
+ *                                the reviewer just answered for this advance) or
+ *                                a params patch (`applyTrackParams`, re-validated
+ *                                against the pinned params at approval).
  *   track/playbook.stage_gate  → flip the paused track back to active. APPROVAL
  *                                RESUMES, IT NEVER RUNS (same contract as
  *                                `focus_session/playbook.stage_gate`).
@@ -38,6 +40,7 @@ import {
   getTrack,
   applyTrackStatus,
   applyTrackStageAdvance,
+  applyTrackParams,
   assertStageAdvanceable,
   assertTrackTransition,
 } from "../../../services/tracks/tracks-service.js";
@@ -98,6 +101,10 @@ export function registerTrackExecutors(): void {
         playbookId,
         name: typeof data.name === "string" ? data.name : undefined,
         id: typeof data.id === "string" ? data.id : undefined,
+        // Re-validated by the same door against the method at approval.
+        ...(data.params && typeof data.params === "object"
+          ? { params: data.params as Record<string, unknown> }
+          : {}),
         actor: { userId },
       });
       assertApplied(result);
@@ -153,8 +160,23 @@ export function registerTrackExecutors(): void {
           project,
           toStage: data.currentStage,
           userId,
+          // The history `actor` is the PROPOSING agent, as the proposal
+          // records it — the approver is `userId`, not who drove the move.
+          agentUserId: proposal.agentUserId ?? null,
           gate: false,
         });
+      } else if (
+        data.params &&
+        typeof data.params === "object" &&
+        !Array.isArray(data.params)
+      ) {
+        // Merged onto the answers as they stand NOW and re-validated against
+        // the pinned params — a mistyped answer refuses the approval.
+        await applyTrackParams(
+          track,
+          data.params as Record<string, unknown>,
+          userId
+        );
       } else if (
         typeof data.status === "string" &&
         (PROJECT_TRACK_STATUSES as readonly string[]).includes(data.status)
@@ -175,7 +197,8 @@ export function registerTrackExecutors(): void {
       } else {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Track update proposal carries neither a stage nor a status",
+          message:
+            "Track update proposal carries neither a stage, a status nor params",
         });
       }
 

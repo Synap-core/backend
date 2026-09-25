@@ -31,6 +31,7 @@ COPY packages/hub-protocol/package.json  ./packages/hub-protocol/
 COPY packages/hub-rest-client/package.json ./packages/hub-rest-client/
 COPY packages/intelligence-client/package.json ./packages/intelligence-client/
 COPY packages/jobs/package.json          ./packages/jobs/
+COPY packages/markdown-core/package.json ./packages/markdown-core/
 COPY packages/playbooks/package.json     ./packages/playbooks/
 COPY packages/realtime/package.json      ./packages/realtime/
 COPY packages/scripts/package.json       ./packages/scripts/

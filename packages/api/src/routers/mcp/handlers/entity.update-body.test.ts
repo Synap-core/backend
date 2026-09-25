@@ -8,10 +8,11 @@
  * wrote 12 documents and then had to delete-and-recreate an entity to fix one
  * factual error in its body.
  *
- * The loop already existed on the backend: `documents.createDocumentProposal`
- * (hub protocol) files the edit, and the `targetType === "document"` branch of
- * `proposals/apply-approval.ts` applies it (upload + `document_versions` row).
- * Only the MCP wiring was missing. These tests pin the wiring:
+ * `content` is an ALIAS onto the document patch door: hub
+ * `createDocumentProposal` → `applyDocumentPatch` with one `replace_all` op
+ * (the diff a reviewer sees is computed server-side, per section; the old
+ * agent-side `changes[]` / `originalContent` were decorative and are gone).
+ * These tests pin the wiring:
  *
  *  1. `content` reaches the GOVERNED document door and comes back `proposed`
  *     (never applied silently, never a second write path).
@@ -67,7 +68,12 @@ const fakeCaller = {
     },
     createDocumentProposal: async (input: Record<string, unknown>) => {
       h.proposalCalls.push(input);
-      return { status: "proposed", proposalId: "prop-1" };
+      // The patch door's result names the document it proposed on.
+      return {
+        status: "proposed",
+        proposalId: "prop-1",
+        documentId: input.documentId,
+      };
     },
   },
 };
@@ -112,16 +118,14 @@ describe("synap_update_entity — the body is now writable", () => {
       ctx({ entityId: ENTITY_ID, content: "corrected body" })
     )) as { content: Array<{ text?: string }> };
 
-    // GOVERNANCE: the edit went through `createDocumentProposal`, carrying the
-    // prior content so the reviewer sees a diff — and came back `proposed`,
-    // never applied behind the user's back.
+    // GOVERNANCE: the edit went through `createDocumentProposal` (the patch
+    // door's full-replace alias) — and came back `proposed`, never applied
+    // behind the user's back.
     expect(h.proposalCalls).toHaveLength(1);
-    expect(h.proposalCalls[0]).toMatchObject({
+    expect(h.proposalCalls[0]).toEqual({
       documentId: DOC_ID,
       userId: USER,
-      proposalType: "ai_edit",
       proposedContent: "corrected body",
-      originalContent: "old body",
     });
     expect(payload(result).body).toMatchObject({
       documentId: DOC_ID,
@@ -129,12 +133,19 @@ describe("synap_update_entity — the body is now writable", () => {
     });
   });
 
-  it("reads the current body first so the proposal carries a real diff range", async () => {
-    await update(ctx({ entityId: ENTITY_ID, content: "corrected body" }));
-    expect(h.getDocumentCalls).toEqual([{ documentId: DOC_ID, userId: USER }]);
-    expect(h.proposalCalls[0]!.changes).toEqual([
-      { op: "replace", range: [0, "old body".length], text: "corrected body" },
-    ]);
+  it("sends no agent-side diff: the door reads the current body itself", async () => {
+    await update(
+      ctx({
+        entityId: ENTITY_ID,
+        content: "corrected body",
+        reasoning: "fix a date",
+      })
+    );
+    expect(h.getDocumentCalls).toEqual([]);
+    expect(h.proposalCalls[0]).not.toHaveProperty("changes");
+    expect(h.proposalCalls[0]).not.toHaveProperty("originalContent");
+    // The agent's own words reach the reviewer.
+    expect(h.proposalCalls[0]).toMatchObject({ reasoning: "fix a date" });
   });
 
   it("resolves the document through the access-floored entities.get, not a bare id lookup", async () => {

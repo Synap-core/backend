@@ -20,30 +20,17 @@ export * from "./config-schemas.js";
 export * from "./config-types.js";
 export * from "./view-type-enum.js";
 
+import type { ViewTypeKey } from "../renderables/index.js";
+
 // =============================================================================
 // View Type Enum
 // =============================================================================
 
 /**
- * View types - categorized by rendering approach
+ * View types — DERIVED from the one renderables catalog
+ * (`@synap-core/types/renderables` `VIEW_TYPE_KEYS`), never re-listed here.
  */
-export type ViewType =
-  | "whiteboard"
-  | "table"
-  | "kanban"
-  | "matrix"
-  | "masonry"
-  | "list"
-  | "grid"
-  | "gallery"
-  | "calendar"
-  | "gantt"
-  | "timeline"
-  | "mindmap"
-  | "graph"
-  | "flow"
-  | "bento"
-  | "branch_tree";
+export type ViewType = ViewTypeKey;
 
 // =============================================================================
 // API Input Types

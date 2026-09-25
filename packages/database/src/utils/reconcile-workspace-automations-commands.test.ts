@@ -318,3 +318,91 @@ describe("reconcile: relationDefs (create-if-missing, full metadata)", () => {
     expect(captured.inserts).toHaveLength(0);
   });
 });
+
+// ── W5d: the report flow's freeze step reaches ALREADY-INSTALLED workspaces ──
+//
+// Case (a) of the template→installed convergence rule: the marker
+// (`metadata.seedVersion`) hashes exactly `{flowDefinition, description}` —
+// the two fields the update writes — so ANY change to base's flow graph (a new
+// node) is drift and is overwritten on the next boot's base pass. Driven with
+// the REAL base template (the local generated `templates.ts`, a pure data
+// module) and a pre-W5d copy of its flow (freeze + stamp nodes removed, the
+// old `guard → create-report` edge and `assemble` body restored).
+describe("reconcile: base report flow gains the chart freeze (W5d)", () => {
+  it("an installed report flow WITHOUT freeze-charts gets it — and the stamp moves with it", async () => {
+    const { WORKSPACE_TEMPLATES } =
+      await import("../../../../../synap-app/packages/workspace-templates/src/templates.js");
+    const base = WORKSPACE_TEMPLATES.base as unknown as {
+      automations: Array<{
+        name: string;
+        description?: string;
+        flow: {
+          nodes: Array<{ id: string; data: Record<string, unknown> }>;
+          edges: Array<{ id: string; source: string; target: string }>;
+        };
+      }>;
+    };
+    const report = base.automations.find((a) => a.name === "Generate report")!;
+    const current = {
+      ...AUTO,
+      description: report.description,
+      flowDefinition: report.flow as never,
+    };
+
+    const NEW = new Set(["freeze-charts", "stamp-chart-diagnostics"]);
+    expect(report.flow.nodes.filter((n) => NEW.has(n.id))).toHaveLength(2); // non-vacuity
+    const oldFlow = JSON.parse(
+      JSON.stringify(report.flow)
+    ) as typeof report.flow;
+    oldFlow.nodes = oldFlow.nodes.filter((n) => !NEW.has(n.id));
+    oldFlow.edges = oldFlow.edges.filter(
+      (e) => !NEW.has(e.source) && !NEW.has(e.target)
+    );
+    oldFlow.edges.push({
+      id: "e-guard-create",
+      source: "guard-assembled",
+      target: "create-report",
+    });
+    const create = oldFlow.nodes.find((n) => n.id === "create-report")!;
+    (create.data.config as Record<string, unknown>).body =
+      "{{steps.assemble.output}}";
+    const installed = { ...current, flowDefinition: oldFlow as never };
+
+    existingAutomation = {
+      id: "auto-1",
+      version: 7,
+      metadata: { seedVersion: seedHashOf(installed), tags: ["keep"] },
+    };
+    const result = await runWith({ flowAutomations: [current] });
+
+    expect(result.automations.updated).toEqual(["Generate report"]);
+    const written = captured.updates[0]!;
+    const flow = written.flowDefinition as typeof report.flow;
+    expect(flow.nodes.map((n) => n.id)).toEqual(
+      expect.arrayContaining(["freeze-charts", "stamp-chart-diagnostics"])
+    );
+    expect(
+      (
+        flow.nodes.find((n) => n.id === "create-report")!.data.config as Record<
+          string,
+          unknown
+        >
+      ).body
+    ).toBe("{{steps.freeze-charts.output.markdown}}");
+    expect(written.metadata).toEqual({
+      seedVersion: seedHashOf(current),
+      tags: ["keep"],
+    });
+
+    // …and once converged, the next boot is a no-op (the stamp now describes it).
+    captured.updates = [];
+    existingAutomation = {
+      id: "auto-1",
+      version: 8,
+      metadata: written.metadata,
+    };
+    const again = await runWith({ flowAutomations: [current] });
+    expect(again.automations.skipped).toEqual(["Generate report"]);
+    expect(captured.updates).toHaveLength(0);
+  });
+});

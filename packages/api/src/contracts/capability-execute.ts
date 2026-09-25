@@ -178,6 +178,7 @@ export const SERVER_DERIVED_PARAMS = [
   "suppressProposal",
   "observability",
   "toolId",
+  "requestEnableForOwner",
 ] as const;
 
 /**

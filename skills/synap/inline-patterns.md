@@ -8,6 +8,7 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 | ---------------------------- | --------------------------- | --------------------------------- |
 | `[[entity:UUID\|Name]]`      | Purple entity chip          | Opens entity detail in side panel |
 | `[[view:UUID\|Name]]`        | Blue view chip              | Opens view                        |
+| `[[view:UUID]]`              | View chip, named for you    | Same; the label is optional       |
 | `[[open:side\|view:UUID]]`   | Amber "Open in side" button | Opens view in side panel          |
 | `[[open:main\|view:UUID]]`   | Amber "Open" button         | Opens view in main panel          |
 | `[[open:side\|entity:UUID]]` | Amber "Open in side" button | Opens entity in side panel        |
@@ -16,10 +17,11 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 
 ### Rules
 
+- **The label is optional.** `[[kind:UUID]]` is valid: in a document the chip shows the object's current name; in chat, where nothing looks it up, it reads as its kind ("View"). So in a chat reply, write the name you know: `[[view:UUID|Active Tasks]]`. A chip never shows the raw id.
 - **Always use real IDs.** Never hallucinate UUIDs. Only emit patterns for entities/views you just created or retrieved via Hub Protocol.
 - **Emit after creation.** When you create a view or entity, immediately reference it: `"Created your pipeline → [[view:abc123|Active Tasks]]"`
 - **Prefer side panel.** Use `[[open:side|view:UUID]]` so the user keeps their current context.
-- **Only in Companion replies.** These patterns are silently ignored in non-companion channels, documents, and memory. Do not use them there.
+- **Companion replies and documents.** In a document, `[[entity:…|…]]` / `[[view:…|…]]` render as chips and the editor keeps them (`document-embeds.md`); the `[[open:…]]` / `[[run:…]]` commands are chat-only. Other channels and memory ignore them.
 - **Combine with prose.** Don't lead with a chip — embed it naturally: `"Here are your open deals → [[view:xyz|Deals Pipeline]] · [[open:side|view:xyz]]"`
 
 ### Proposals

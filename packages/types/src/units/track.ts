@@ -40,17 +40,86 @@ export interface TrackStage {
   position: TrackStagePosition;
   /** Sessions filed in this track at this stage — only when counts were given. */
   sessionCount?: number;
+  // ── What the pinned stage DECLARES (0274). Each key is present only when the
+  // snapshot stage carries it — absent means "not declared", never a default.
+  /** The stage's own goal — the brief of a session started at this stage. */
+  goal?: string;
+  description?: string;
+  suggestedTasks?: string[];
+  /** Deliverables expected from this stage, as pinned (untyped jsonb objects). */
+  expectedOutputs?: Array<Record<string, unknown>>;
+  /** Acceptance criteria of this stage, as pinned (objects with a `key`). */
+  criteria?: Array<Record<string, unknown> & { key: string }>;
+  /** The entry gate's kind — a person approves (`human`) or a check measures. */
+  gate?: "human" | "check";
+  /** May the track sit in this stage indefinitely? */
+  indefinite?: boolean;
 }
 
-function readStage(
-  raw: unknown
-): { key: string; name: string; category: string | null } | null {
+type ReadStage = Omit<TrackStage, "position" | "sessionCount">;
+
+function objects(v: unknown): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(v)) return undefined;
+  return v.filter(
+    (e): e is Record<string, unknown> =>
+      !!e && typeof e === "object" && !Array.isArray(e)
+  );
+}
+
+function readStage(raw: unknown): ReadStage | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.key !== "string" || r.key.length === 0) return null;
   const name = typeof r.name === "string" && r.name.trim() ? r.name : r.key;
   const category = typeof r.category === "string" ? r.category : null;
-  return { key: r.key, name, category };
+  const out: ReadStage = { key: r.key, name, category };
+  if (typeof r.goal === "string" && r.goal.trim()) out.goal = r.goal;
+  if (typeof r.description === "string" && r.description.trim()) {
+    out.description = r.description;
+  }
+  if (Array.isArray(r.suggestedTasks)) {
+    out.suggestedTasks = r.suggestedTasks.filter(
+      (t): t is string => typeof t === "string" && t.trim().length > 0
+    );
+  }
+  const outputs = objects(r.expectedOutputs);
+  if (outputs) out.expectedOutputs = outputs;
+  const criteria = objects(r.criteria)?.filter(
+    (c): c is Record<string, unknown> & { key: string } =>
+      typeof c.key === "string" && c.key.length > 0
+  );
+  if (criteria) out.criteria = criteria;
+  const gate = r.gate as { kind?: unknown } | null | undefined;
+  if (
+    gate &&
+    typeof gate === "object" &&
+    (gate.kind === "human" || gate.kind === "check")
+  ) {
+    out.gate = gate.kind;
+  }
+  if (typeof r.indefinite === "boolean") out.indefinite = r.indefinite;
+  return out;
+}
+
+/** What one pinned stage DECLARES, read by the one rule {@link deriveTrackStages} uses. */
+export type TrackStageDeclaration = ReadStage;
+
+/**
+ * ONE pinned stage by key, read exactly as {@link deriveTrackStages} reads it
+ * (same trimming, same "absent means not declared") — for server code that
+ * needs a single stage's goal / tasks / outputs / criteria without re-reading
+ * the untyped snapshot by hand. `null` when the snapshot declares no such key.
+ */
+export function readTrackStage(
+  snapshotStages: unknown,
+  key: string
+): TrackStageDeclaration | null {
+  if (!Array.isArray(snapshotStages)) return null;
+  for (const raw of snapshotStages) {
+    const stage = readStage(raw);
+    if (stage?.key === key) return stage;
+  }
+  return null;
 }
 
 /**
@@ -78,6 +147,39 @@ export function deriveTrackStages(
       ? { sessionCount: sessionsByStage[stage.key] ?? 0 }
       : {}),
   }));
+}
+
+/**
+ * One stage a track ENTERED (`project_tracks.stage_history`, 0274), oldest
+ * first. A re-entered stage appears again — this is a timeline, not a map.
+ */
+export interface TrackStageHistoryEntry {
+  stageKey: string;
+  /** Where it came from — `null` for the entry recorded at birth/backfill. */
+  fromStage: string | null;
+  /** ISO-8601. */
+  enteredAt: string;
+  /** The user (or agent) id that moved it. */
+  actor: string;
+}
+
+/** Read the untyped jsonb history; malformed entries are skipped, never thrown on. */
+export function readTrackStageHistory(raw: unknown): TrackStageHistoryEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TrackStageHistoryEntry[] = [];
+  for (const e of raw) {
+    if (!e || typeof e !== "object" || Array.isArray(e)) continue;
+    const r = e as Record<string, unknown>;
+    if (typeof r.stageKey !== "string" || !r.stageKey) continue;
+    if (typeof r.enteredAt !== "string" || !r.enteredAt) continue;
+    out.push({
+      stageKey: r.stageKey,
+      fromStage: typeof r.fromStage === "string" ? r.fromStage : null,
+      enteredAt: r.enteredAt,
+      actor: typeof r.actor === "string" ? r.actor : "",
+    });
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -185,7 +287,7 @@ export function isTrackRetired(track: { status: string }): boolean {
 
 /**
  * A stage mark's tone. `active` is the ONE accent (`primary`) — NOT `ai`:
- * emerald is AI provenance only, and a human-run method's current stage is
+ * the AI colour (--synap-ai) is AI provenance only, and a human-run method's current stage is
  * not AI work. `done` is `success`; a stage not yet reached is `textMuted`.
  */
 export function trackStageTone(position: TrackStagePosition): UnitTone {

@@ -41,16 +41,17 @@ Your job is to turn unstructured input into a **connected** knowledge graph. Iso
 
 > Canonical source — the MCP `instructions` field is derived from this file and composed with live grounding under ONE 2 KB budget (pinned by `instructions-budget.test.ts`). Most important first. Depth belongs in a skill, never here.
 
-You are connected to the user's Synap pod, the source of truth about their life, work, projects, people and preferences. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
+You are connected to the user's Synap pod, the source of truth about their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).
 
-1. **Recall first.** Before answering about the user's world or creating anything, `ask`. It also prevents duplicates.
-2. **Capture after.** A durable fact, decision, person, company or task: `capture`. About the user themself (a preference, a standing constraint): `remember_fact`. No private scratchpad; what you learn goes into the graph.
-3. **Orient once per session.** `orient` is the briefing: pending review (raise it first), open work sessions, the kinds in use, runnable actions. Your writes group into a session on their own; name a unit of work with `start_session` (title + goal).
-4. **Declare scope; never guess a project.** Pin what the user names with `set_workspace_focus` / `set_project_focus`. Filing work into a project grants its members access, so unset is the safe answer.
-5. **`proposed` is success.** The write awaits the user's review. Keep working; never retry it.
-6. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet on any kind, overlay, parent) — never a twin slug. New area of work: `load_skill` `system/synap/from-intent`.
+1. **Recall first.** Before answering about the user's world or creating anything, `ask` (prevents duplicates).
+2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.
+3. **Orient once.** `orient` briefs you: pending review (raise it first), open sessions, kinds, actions.
+4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; ask in its room (`post_message` to `session.channelId`); `evaluate_session` before `complete_session`.
+5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: a project grants its members access.
+6. **`proposed` is success**, queued for review. Keep working; never retry.
+7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.
 
-Load depth with `load_skill`: `system/synap/lenses`, `from-intent`, `escalation-ladder`, `writes`, or `catalog`.
+Depth via `load_skill`: `system/synap/lenses`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`.
 
 ---
 
@@ -228,15 +229,18 @@ A skill your plan creates IS resolvable in the same batch: the automation door l
 
 A **track** is a method (a playbook with `scope: "project"`) running inside ONE project; a project runs several (Business model, Content, Build). It pins its method version and has re-enterable stages.
 
-| The user needs…                              | Do this                                                                                                                                     |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| a **method** in an existing project          | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track` |
-| no method fits                               | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                     |
-| one bounded piece of work in that method     | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`     |
-| new **kinds of things** no workspace owns    | a workspace (four-test, `workspace-design`) — never to represent a method                                                                   |
-| a new long-lived intent with its own gravity | a project — never a twin project for a method of an existing one                                                                            |
+| The user needs…                               | Do this                                                                                                                                      |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| a **method** in an existing project           | `synap_list_tracks` (already running?) → `synap_list_playbooks` / `synap_match_playbooks` for a project-scoped method → `synap_start_track`  |
+| no method fits                                | propose one: `synap_create_playbook` with `scope: "project"` and `stages`, then `synap_start_track` once it is approved                      |
+| one bounded piece of work in that method      | a **session** born in the track: `synap_start_session` / `synap_run_playbook` with `trackId`; move the track with `synap_advance_track`      |
+| the work of ONE stage (its goal is the brief) | `synap_start_stage_session` (`trackId`, optional `stageKey`) — idempotent, files the session at that stage with the stage's outputs/criteria |
+| new **kinds of things** no workspace owns     | a workspace (four-test, `workspace-design`) — never to represent a method                                                                    |
+| a new long-lived intent with its own gravity  | a project — never a twin project for a method of an existing one                                                                             |
 
-Pause, resume (a check gate holds a track until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
+**Offer, don't auto-start.** Advancing a track never starts work: `synap_advance_track` returns an `offer` (the entered stage's name, goal, suggested tasks). Show it — _"Build is next: build the MVP. Start a session for it?"_ — and call `synap_start_stage_session` only on a yes. A session is filed at the track's current stage unless you pass `trackStage`; the same goal at two stages is two sessions. The method's params (`params` on `synap_start_track`) are the track's onboarding: a required one nobody answered becomes a question owed to the person on the stage session, so stage 1 IS onboarding — never ask a separate questionnaire.
+
+Pause, resume (a check gate holds a track until at least one session filed at the stage being left is closed and passes its criteria, or until resumed), complete or archive it with `synap_set_track_status`. Track writes are governed: `proposed` is success. Installing a pack onto a project does **not** start its tracks yet — start each one.
 
 ### 3. Which skill to load next
 
@@ -1085,11 +1089,19 @@ POST /api/hub/documents
   "type": "markdown",              // "markdown" | "html" | "text" | "code"
   "entityId": "ent_event_..."      // attach to an entity for context
 }
+// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", "ackState": "applied",
+//     "attached": { "entityId": "ent_event_...", "documentId": "doc_abc", "status": "updated" } }
 ```
+
+`attached` reports the attach outcome: it is a governed entity update, so it can
+be `proposed`, and it is `skipped` (with a `reason`) while the document itself is
+awaiting review. Other optional fields: `url` (an https link — creates a reference
+document with no stored bytes), `idempotencyKey` (a retry with the same key returns
+the prior document), `expectedLabel` (the session-output slot it fulfils).
 
 `type: "html"` stores self-contained HTML. The browser renders it via the `html-doc` cell in a sandboxed iframe. Use for AI-generated reports, rich visualisations, custom charts, or anything beyond markdown.
 
-**Full HTML cell workflow** (AI → visible custom UI in any bento):
+**HTML document workflow:**
 
 ```json
 // 1. Create the HTML document
@@ -1098,35 +1110,50 @@ POST /api/hub/documents
   "title": "Q2 Revenue Report", "type": "html",
   "content": "<!DOCTYPE html><html>…</html>",
   "entityId": "ent_project_..." }
-// → { "document": { "id": "doc_abc" }, ... }
+// → { "id": "doc_abc", "documentId": "doc_abc", "status": "created", ... }
 
-// 2. Place the html-doc cell in any bento view
-POST /api/hub/views/{bentoViewId}/arrange
-{ "userId": "{userId}", "workspaceId": "{workspaceId}",
-  "widgets": [
-    { "id": "b1", "kind": "html-doc", "config": { "documentId": "doc_abc" },
-      "layout": { "x": 0, "y": 0, "w": 8, "h": 6 } }
-  ] }
-
-// 3. Update the HTML (cell auto-refreshes)
+// 2. Replace the HTML (read it first: GET → `revision`)
 PATCH /api/hub/documents/doc_abc
-{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>" }
+{ "userId": "{userId}", "content": "<!DOCTYPE html>…updated…</html>", "baseRevision": 3 }
+// → a pending proposal; readers see the new HTML only once it is approved
 ```
+
+`html-doc` is **not** an agent-placeable bento widget: `arrange` rejects it. The
+document renders where it is opened (the Files app, or the entity it is attached
+to). For HTML you want to embed elsewhere, create an HTML cell instance
+(`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
 
 The iframe uses `sandbox="allow-scripts"` — scripts run but have no same-origin access to the parent app. The HTML is fully isolated.
 
-### Update a document (title and/or content)
+### Update a document's content (a patch, reviewed)
+
+Change the part you mean, not the whole body. Read it first —
+`GET /api/hub/documents/{id}?userId={userId}` → `content`, `revision`,
+`sections` (id + owner) — then:
 
 ```json
-PATCH /api/hub/documents/{documentId}
+POST /api/hub/documents/{documentId}/patch
 {
   "userId": "{userId}",
-  "title": "Updated title",          // optional
-  "content": "# Full replacement\n…" // full string — not a diff
+  "baseRevision": 3,
+  "ops": [
+    { "op": "replace_text", "old": "ships on Friday", "new": "ships on Monday" },
+    { "op": "upsert_section", "id": "risks", "title": "Risks", "body": "None yet." }
+  ]
 }
 ```
 
-Content is a **full replacement**, not a patch. Fetch the current content first if you want to append: `GET /api/hub/documents/{id}?userId={userId}` → `.content`, append, then PATCH.
+Ops: `upsert_section {id, title, body}` (one section by id), `replace_text {old,
+new}` (`old` must match **exactly once**, else 400 with the count), `append
+{body}`, `replace_all {content}`. An agent's edit is filed as a proposal (a
+governance rule may apply it directly); a person's section (`owner="human"`) is
+never changed and an embed is never dropped unless you pass
+`"allowRemovingEmbeds": true` (403 otherwise). A moved document answers 409 and
+nothing is written: read again. An applied or approved edit reaches open editors
+(`document:content-replaced`), so they reload instead of overwriting it. `PATCH /api/hub/documents/{id}` with `content` is the same door with
+one `replace_all` — it cannot rename (a `title` is refused with 400; to rename an
+entity's document, update the entity's title). MCP: `synap_update_document`;
+full syntax in `document-embeds.md`.
 
 The reverse lookup is `entities WHERE documentId = ?`. Always attach the document to a meaningful entity (the meeting event, the project, the person) — a floating document is another orphan.
 
@@ -1200,61 +1227,112 @@ just links. The browser's markdown engine parses a small set of remark **contain
 directives** and swaps them for real components — an entity card, a view, or a cell
 — wherever they appear in the prose.
 
-**This is a DOCUMENTS-only mechanism.** It is unrelated to the `[[kind:id|label]]`
-inline chips described in `inline-patterns.md` — those render **only** in Companion
-chat replies. Never put a `:::synap-*` directive in a chat reply, and never put a
-`[[…]]` chip in a document's `content`. Different surface, different grammar.
+**Two grammars, one per job.** A `:::synap-*` directive EMBEDS a live object as a
+block (a card, a view, a chart). A `[[kind:id|label]]` marker (`inline-patterns.md`)
+NAMES a record inline, as a chip, inside a sentence. Documents use both; chat
+replies use only markers. Never put a `:::synap-*` directive in a chat reply.
 
 ### Syntax
 
 <!-- brief:start -->
 
 A container directive: three colons, the directive name, `{attrs}` on the opening
-line, three colons alone on the closing line.
+line, three colons alone on the closing line. **Attributes are references only**
+(ids and keys). A cell's settings go in an optional ` ```json ` block, the FIRST
+thing inside the directive; optional markdown after it is the **fallback** a
+reader shows when the object cannot be drawn (relay, exports, other agents).
 
-```
+````
 :::synap-entity{id="ent_abc123"}
 :::
+
+:::synap-cell{cellKey="chart-bar"}
+```json
+{"profileSlug":"task","groupBy":"status","label":"Tasks by status","data":[{"label":"Review","value":7},{"label":"Done","value":4}],"capturedAt":"2026-09-25T10:00:00Z"}
 ```
 
-| Directive      | Required attrs                                | Optional attrs | Renders                                           |
-| -------------- | --------------------------------------------- | -------------- | ------------------------------------------------- |
-| `synap-entity` | `id` (entity UUID)                            | —              | Compact entity card (`__entity-block` cell)       |
-| `synap-view`   | `viewId` (view UUID)                          | —              | Embedded, read-only view (`__embedded-view` cell) |
-| `synap-cell`   | `instanceId` **OR** (`cellKey` + `cellProps`) | —              | A persisted cell instance, or an inline cell ref  |
+Most open tasks sit in Review.
+:::
+````
 
-Only real IDs from prior tool results — never invent one. This is a
-DOCUMENTS-only grammar: never use it in a chat reply, and never use a
-`[[kind:id|label]]` chip inside a document's `content`.
+A chart in a document is a **snapshot by default**: `data` (the numbers you
+read) + `capturedAt`, with the query keys kept so a reader can "Make live".
+Omit `data` only for a dashboard-style live chart.
+
+| Directive      | Required attrs                    | Body                                   | Renders                                           |
+| -------------- | --------------------------------- | -------------------------------------- | ------------------------------------------------- |
+| `synap-entity` | `id` (entity UUID)                | optional fallback                      | Compact entity card (`__entity-block` cell)       |
+| `synap-view`   | `viewId` (view UUID)              | optional fallback                      | Embedded, read-only view (`__embedded-view` cell) |
+| `synap-cell`   | `instanceId` **OR** `cellKey`     | optional ` ```json ` props + fallback  | A persisted cell instance, or an inline cell      |
+
+Name a record inline with a marker: `[[entity:<id>|<label>]]`, `[[view:<id>|<label>]]`.
+Only real IDs from prior tool results — never invent one. Never use a directive
+in a chat reply.
 
 <!-- brief:end -->
 
 For `synap-cell`: an explicit `instanceId` always wins if present — it renders a
-persisted cell instance from `/api/hub/cells`. Otherwise the pair `cellKey` +
-`cellProps` builds an inline ref (`cellRefFromLegacy`). `cellProps` is a JSON string,
-e.g. `cellProps='{"profileSlug":"task"}'`.
+persisted cell instance from `/api/hub/cell-instances`. Otherwise `cellKey` names
+the cell type and the ` ```json ` block is its config.
 
-When you write a document's `content` directly (via `synap_create_document` /
-`POST /api/hub/documents`), you're writing raw markdown text — quote `cellProps`'
-JSON with single quotes (`cellProps='{"profileSlug":"task"}'`) so the inner `"`
-characters don't collide with the directive's own `key="value"` quoting; the
-markdown renderer (remark-directive) parses this directly, no escaping needed.
+The props block is plain JSON, so it needs no special quoting: apostrophes,
+quotes, braces and `:::` inside a JSON string are all safe. It must be a JSON
+OBJECT, and the directive must be CLOSED with its own `:::` line (an unclosed
+directive swallows what follows). Keep the finding itself in the prose AFTER the
+embed; the fallback is a short, qualitative description of the object, not the
+place for numbers that go stale.
 
-One caveat: if a human later opens the document in the rich-text editor, its
-Tiptap round-trip serializer re-emits every directive as `key="value"` and
-**drops any attribute value containing `"` or `}`** (it would otherwise corrupt
-the directive) — so an inline `cellProps` blob can be silently lost on the next
-editor save. For a cell you expect to survive editing, create it first
-(`synap_create_cell` / `POST /api/hub/cells`) and embed it by `instanceId`
-instead of inlining `cellProps`.
+### Charts: snapshot or live (decision D2)
+
+A `chart-*` cell draws its data one of two ways, chosen per embed:
+
+- **Snapshot (the default in a document).** `data` holds the numbers, and
+  `capturedAt` (ISO date) says when they were taken. The chart then matches
+  the sentence written about it forever, and it survives export and offline
+  reading. The reader sees "Snapshot · <date>" and can **Make live**.
+- **Live.** Leave `data` out: the chart runs its own query (`profileSlug` +
+  its settings) each time it is opened. Use it for dashboards and monitoring
+  ("what is the state now") or when the user asks for it. A live chart can be
+  **Frozen** into a snapshot.
+
+Rules for a snapshot:
+
+- **Only numbers you actually read** (a query you ran, a count a tool
+  returned). Never estimate or invent a value. If you have no measured
+  numbers, write a live chart and keep exact figures out of the sentence
+  beside it.
+- **Keep the query keys** (`profileSlug`, `groupBy`, `aggregation`, …) next to
+  `data`, so "Make live" reads the same thing.
+- **`data` has the chart's shape**, which `synap_list_widgets` (surface
+  `document`) shows per chart in its example:
+  - line / area / profit-loss: `[{"x":"2026-09-01","y":4}]` (x = an ISO date or a number)
+  - bar / pie / funnel / radar: `[{"label":"Done","value":12}]`
+  - composed: `[{"x":"Sep 1","bar":4,"line":120}]`
+  - gauge / ring: one number (a 0–100 % for the default `completion`)
+  - scatter: `[{"x":3,"y":1200,"label":"Acme"}]`
+  - sankey: `{"nodes":[{"id":"a","label":"web"},{"id":"b","label":"won"}],"links":[{"source":"a","target":"b","value":9}]}`
+  - choropleth: `{"FR":12,"US":30}`
+- A malformed `data` is shown to the reader as a broken chart with the reason,
+  never as an empty one. `chart-live-line` is live only: never give it `data`.
+- With a snapshot, the sentence MAY quote a number that is in `data`: they
+  cannot drift apart. With a live chart, it may not.
+
+**Do not write the old attribute form** (`cellProps='{…}'` on the opening line).
+Readers still accept it, but an apostrophe in its JSON turns the whole embed into
+literal text, and the editor rewrites it into the ` ```json ` form on the next save.
+
+Documents written this way open in the editor and save back byte for byte.
+`synap_create_cell` / `POST /api/hub/cells` create a cell **definition** (a new
+cell type), not an instance — never embed its id as `instanceId`.
 
 ### Rules
 
 - **Only real IDs from prior tool results.** Never invent an entity/view/instance
   ID. Create or look it up first (`synap_create_entity`, `synap_get_entities`,
-  `synap_create_view`, `synap_create_cell`), then embed the ID you got back.
-- **Embeds are for DOCUMENTS.** The `[[…]]` inline chips are for Companion chat
-  replies. Do not mix the two grammars across surfaces.
+  `synap_create_view`, `POST /api/hub/cell-instances`), then embed the ID you got
+  back.
+- **Embeds are for DOCUMENTS.** Chat replies use `[[kind:id|label]]` markers only;
+  documents use embeds for blocks and markers for inline names.
 - **Embed vs. link:** embed when the reader benefits from seeing the live
   object in place — a stat card inside a report, the linked meeting entity inside
   meeting notes, a pipeline view inside a status update. Link (`entities WHERE
@@ -1262,9 +1340,11 @@ documentId = ?` attachment, or a plain reference to the ID) when you just need
   traceability and the reader doesn't need to see it rendered inline — most
   documents should still be _attached_ to one entity (see `writes.md`) regardless
   of whether they also embed others inline.
-- A directive with a missing/invalid required attribute renders a visible error
-  block in the browser (`Error: View ID is required` / `Error: Cell type is
-required`) — always double-check the ID before writing the directive.
+- A directive with a missing attribute or an unknown/deleted ID renders the same
+  quiet placeholder in the browser ("This view is no longer available." / "This
+  cell is no longer available." / "This item is no longer available.") — the
+  reader cannot tell a typo from a deletion, so double-check the ID before
+  writing the directive.
 
 ### Worked example 1 — meeting notes embedding the meeting entity
 
@@ -1281,7 +1361,10 @@ POST /api/hub/documents
 ```
 
 The event entity renders as a live card at the top of the notes — attendees,
-time, status stay current even if the entity changes later.
+time, status stay current even if the entity changes later. `entityId` attaches
+the new document as that entity's body; the response's `attached` field reports
+the outcome (the attach is a governed entity update, so it can itself be
+`proposed`, and it is `skipped` while the document is awaiting review).
 
 ### Worked example 2 — status report embedding a pipeline view
 
@@ -1307,15 +1390,44 @@ POST /api/hub/documents
   "title": "Q2 task summary",
   "type": "markdown",
   "entityId": "ent_project_eve",
-  "content": "# Q2 summary\n\n:::synap-cell{cellKey=\"stat-card\" cellProps='{\"profileSlug\":\"task\"}'}\n:::\n\nOpen tasks are trending down."
+  "content": "# Q2 summary\n\n:::synap-cell{cellKey=\"stat-card\"}\n```json\n{\"profileSlug\":\"task\",\"label\":\"Open tasks\"}\n```\n:::\n\nOpen tasks are trending down since [[entity:ent_project_eve|Project Eve]] started."
 }
 ```
 
-Note the mixed quoting: the directive's own attribute values use double quotes
-(`cellKey="stat-card"`), so the outer `cellProps` value uses single quotes to hold
-its JSON — the JSON itself must not contain any `"` once flattened into the
-attribute string, or the serializer will drop it. When in doubt, prefer a
-persisted `instanceId` over inline `cellProps`.
+The props travel in the ` ```json ` block (escaped here only because `content` is
+itself a JSON string). The sentence about the number sits in the prose after the
+embed, and the project is named with an inline marker.
+
+### Editing a document (`update_document`)
+
+Never rewrite a whole document to change part of it. Read it, then patch it:
+
+1. `synap_get_document({ documentId })` (IS: `get_document`) → `content`,
+   `revision`, `sections` (`id`, `owner` `ai`|`human`, `title`) and
+   `diagnostics` (embeds that will not render, each with a `fix`).
+2. `synap_update_document({ documentId, baseRevision: <revision>, ops })`
+   (IS: `update_document`; REST: `POST /api/hub/documents/{id}/patch`). Ops run
+   in order:
+   - `upsert_section {id, title, body}` — one `::::synap-section` block by id:
+     rewrites YOUR section (`owner="ai"`) or appends a new one;
+   - `replace_text {old, new}` — `old` must occur **exactly once**; copy it
+     from `content` with enough context. 0 or 2+ matches is refused with the
+     count;
+   - `append {body}`;
+   - `replace_all {content}` — the whole body; needs `baseRevision` and is
+     always reviewed.
+
+Refused, whatever the op: changing a section whose `owner` is `human` (the AI
+never rewrites a person's words — write a new section), and removing an embed
+unless you pass `allow_removing_embeds: true`. A "changed after the edit was
+drafted" error (409 CONFLICT) means someone saved since you read. Nothing was
+written: read again and redraft. Once an edit is applied or approved, open
+editors are told (`document:content-replaced`) and reload rather than overwrite it.
+
+The answer is usually `proposed`: the person reviews a before/after per
+section. It also carries `diagnostics` for the result — advisory, never a
+refusal; fix what they name (the `fix` says which tool finds the right key or
+id). `synap_update_entity.content` is the same door with one `replace_all`.
 
 ---
 
@@ -1713,6 +1825,7 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 | ---------------------------- | --------------------------- | --------------------------------- |
 | `[[entity:UUID\|Name]]`      | Purple entity chip          | Opens entity detail in side panel |
 | `[[view:UUID\|Name]]`        | Blue view chip              | Opens view                        |
+| `[[view:UUID]]`              | View chip, named for you    | Same; the label is optional       |
 | `[[open:side\|view:UUID]]`   | Amber "Open in side" button | Opens view in side panel          |
 | `[[open:main\|view:UUID]]`   | Amber "Open" button         | Opens view in main panel          |
 | `[[open:side\|entity:UUID]]` | Amber "Open in side" button | Opens entity in side panel        |
@@ -1721,10 +1834,11 @@ When the user is interacting with Synap's AI Companion (the in-browser chat pane
 
 ### Rules
 
+- **The label is optional.** `[[kind:UUID]]` is valid: in a document the chip shows the object's current name; in chat, where nothing looks it up, it reads as its kind ("View"). So in a chat reply, write the name you know: `[[view:UUID|Active Tasks]]`. A chip never shows the raw id.
 - **Always use real IDs.** Never hallucinate UUIDs. Only emit patterns for entities/views you just created or retrieved via Hub Protocol.
 - **Emit after creation.** When you create a view or entity, immediately reference it: `"Created your pipeline → [[view:abc123|Active Tasks]]"`
 - **Prefer side panel.** Use `[[open:side|view:UUID]]` so the user keeps their current context.
-- **Only in Companion replies.** These patterns are silently ignored in non-companion channels, documents, and memory. Do not use them there.
+- **Companion replies and documents.** In a document, `[[entity:…|…]]` / `[[view:…|…]]` render as chips and the editor keeps them (`document-embeds.md`); the `[[open:…]]` / `[[run:…]]` commands are chat-only. Other channels and memory ignore them.
 - **Combine with prose.** Don't lead with a chip — embed it naturally: `"Here are your open deals → [[view:xyz|Deals Pipeline]] · [[open:side|view:xyz]]"`
 
 ### Proposals
@@ -1764,6 +1878,14 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Declare what the work will produce** with `expectedOutputs` — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding.
 
+**Keep the session true as you work — the person watches it, not your chat.**
+
+- **Stages.** A bound playbook seeds the session's `stages`; set `currentStage` with `synap_update_session` each time the work moves on. A hand-set `progress` says less than a stage does.
+- **Person-only steps** are an `owner: 'human'` output with a `blockedReason` and a `why` (below) — never a line buried in your reply.
+- **Ask in the session room** (below), not only in your own conversation.
+- **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then `synap_complete_session`. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.
+- **The doors remind you.** `synap_update_session` and `synap_complete_session` replies carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
+
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
 
 - `POST /api/hub/focus-sessions` — create (include `correlationId` for idempotency; `templateId`, `criteria` as above)
@@ -1793,7 +1915,7 @@ synap session close <id> --workspace <id> [--recap "what was done"]    # close +
 
 Note: all hub-protocol writes are governance-gated server-side — a start may come back `proposed`, which is normal.
 
-**MCP door**: after `synap_start_session` returns, call `synap_get_channel` to get a personal channel for the session, then `synap_post_message` with `triggerAI:true` to dispatch the IS agent for autonomous work on the goal. The agent's produced entities link back to the session via the graph.
+**The session room**: every session owns a GROUP room — `session.channelId`, minted at start and returned on the session. Talk to the person THERE, not only in your own chat: `synap_post_message` with `channelId: session.channelId` for a question, a blocker, or a result to check. The room is roster-only (the owner, invited agents, the owner's AI), and an AI answers in it only when @-mentioned. Do not fetch a personal channel for session work — `synap_get_channel` is the user's 1:1 assistant thread, not the session's room. The session's produced entities link back to it via the graph.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
 
@@ -2338,7 +2460,7 @@ synap doc create --title "Q2 Report" --file ./report.md
 synap doc update <docId> --file ./updated-report.md
 
 # Arrange widgets on an existing bento view
-synap view arrange <viewId> --blocks '[{"id":"b1","kind":"widget","widgetKind":"generated:my-chart","layout":{"x":0,"y":0,"w":8,"h":6}}]'
+echo '[{"key":"generated:my-chart","x":0,"y":0,"w":8,"h":6}]' | synap view arrange <viewId>
 ```
 
 ### The SynapWidget Bridge (inside the iframe)

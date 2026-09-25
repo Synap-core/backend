@@ -55,6 +55,7 @@ import {
   registerSessionUnblockReactor,
   registerSessionCriteriaUnmetReactor,
   registerClosingReportReactor,
+  registerDocumentDiagnosticsReactor,
   registerDevAgentSpawner,
 } from "@synap/api";
 import { dispatchDevAgentRun } from "./dev-agent-dispatch.js";
@@ -1948,6 +1949,9 @@ try {
       // Same close event: the session document gains its structured closing
       // report (outcome, definition of done, outputs, decisions).
       registerClosingReportReactor();
+      // Any content save (a person's autosave, a restore, an approval): re-check
+      // which embeds will not render, stamped with the revision it checked.
+      registerDocumentDiagnosticsReactor();
       // IoC: fill the BYOA local-spawn slot. The `external-agent` executor's
       // no-webhook branch starts the workspace's coding CLI on this host; the
       // spawn (node-pty + the DevPlane `localTerminalEnabled` gate) lives here,

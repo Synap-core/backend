@@ -85,7 +85,7 @@ export const IDENTITY_SLOT_COUNT = 12;
 type IdentitySlot = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 /** The identity-scale tokens (12 earthy categorical hues, themed dark+light). */
 const ID = (n: IdentitySlot) => `var(--synap-identity-${n})`;
-/** AI/agent is ALWAYS emerald — never a categorical identity hue. */
+/** AI/agent is ALWAYS `--synap-ai` (the logo yellow) — never a categorical identity hue. */
 const AI = "var(--synap-ai)";
 /** Neutral fallback for unknown/untyped objects. */
 export const FALLBACK_COLOR = "var(--synap-muted)";
@@ -427,7 +427,7 @@ export const OBJECT_KINDS: Record<string, ObjectKindDef> = {
     labelPlural: "Participants",
   },
 
-  // ── AI / governance (agent is ALWAYS emerald) ──
+  // ── AI / governance (agent is ALWAYS --synap-ai) ──
   agent: {
     kind: "agent",
     category: "agent",

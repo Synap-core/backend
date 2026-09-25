@@ -769,6 +769,28 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     reason:
       "INTERNAL ONLY — same rule; a model has no tool-row id to give, and verb ids are the MCP surface. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
   },
+  // ── `requestEnableForOwner`: an unattended owner run asks for the D3 request ─
+  {
+    service: "execute-capability",
+    param: "requestEnableForOwner",
+    door: "routers/capabilities.ts:execute",
+    reason:
+      "INTERNAL ONLY. It makes the refusal door file a pack-enable request ON THE OWNER'S BEHALF — the D3 path for an UNATTENDED run (connection sync), which has no caller to answer. A browser run is the owner acting in person: the refusal already hands them the Settings link, and filing a request to themselves would be noise. CHECKABLE: it is one of `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`, and the schema-freshness test fails if it ever appears in the published client contract.",
+  },
+  {
+    service: "execute-capability",
+    param: "requestEnableForOwner",
+    door: "routers/hub-protocol/rest/capabilities-execute.ts:/capabilities/execute",
+    reason:
+      "INTERNAL ONLY — the door an AGENT KEY reaches. An agent caller already files its own enable request (attributed to the agent); letting it claim owner attribution instead would launder its request into the owner's name. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
+  {
+    service: "execute-capability",
+    param: "requestEnableForOwner",
+    door: "routers/mcp/handlers/capability.ts:synap_run_capability",
+    reason:
+      "INTERNAL ONLY — same rule; a model must never file under the owner's name. CHECKABLE: `SERVER_DERIVED_PARAMS` in `contracts/capability-execute.ts`.",
+  },
   // ── Identity: derived from the transport, never from the body ─────────────
   {
     service: "execute-capability",

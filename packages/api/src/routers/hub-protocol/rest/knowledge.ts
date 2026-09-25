@@ -36,19 +36,14 @@ import {
 } from "./_codecs/knowledge.js";
 import {
   getUserAccessibleWorkspaceIds,
-  getCaller,
   hasScope,
   logger,
   type HubHono,
-  type HubProtocolCaller,
 } from "./_shared.js";
 import { ask } from "../../../services/knowledge/index.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
-import {
-  type ProfileCatalogEntry,
-  toProfileCatalogEntry,
-} from "../../../services/retrieval/index.js";
 
 const ArchiveKnowledgeResponseSchema = z
   .object({ success: z.boolean() })
@@ -726,50 +721,25 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       limit?: number;
       compare?: boolean;
       parseOnly?: boolean;
-    },
-    // `null` = pod-wide. The catalog lens must be able to be as wide as the
-    // query lens; forcing a concrete workspace here is what made a pod-wide
-    // `ask` type-infer against one arbitrary workspace's vocabulary.
-    getCatalog: (wsId: string | null) => Promise<HubProtocolCaller>
+    }
   ) {
-    // Membership-gate the caller-supplied lens (see the list/get routes above):
-    // a hub key scoped to one workspace must not recall another workspace's
-    // knowledge by passing an arbitrary id — and knowledge_keys has NO user
-    // floor, so an unchecked lens would read foreign procedural docs. A
-    // non-member id degrades to pod-wide (null), matching the tRPC knowledge
-    // router's validateWorkspaceAccess semantics; the read is never 403'd.
-    let workspaceId = body.workspaceId ?? null;
-    if (workspaceId) {
-      const accessible = await getUserAccessibleWorkspaceIds(userId);
-      if (!accessible.includes(workspaceId)) workspaceId = null;
-    }
-
-    // CATALOG LENS MUST MATCH THE QUERY LENS.
+    // Lens gate + CATALOG LENS MUST MATCH THE QUERY LENS — both resolved by the
+    // ONE helper every knowledge door shares (services/knowledge/resolve-lens.ts).
     //
-    // This used to substitute `wsIds[0]` when no workspace was pinned, on the
-    // belief that the catalog "needs a concrete workspace". It does not:
-    // `profiles.list` is a podProcedure whose workspace-LESS branch unions the
-    // caller's member + shared + pod-visible profiles in ONE query
-    // (`profile-repository.ts`, `hasWorkspace === false`). Substituting the
-    // FIRST accessible workspace made a pod-wide query type-infer against one
-    // arbitrary workspace's vocabulary — so a profile living anywhere else was
-    // unnameable, the enumerative gate never fired, and `ask` answered
-    // "you have no clients" over a pod holding 20 of them in another workspace.
+    // A hub key scoped to one workspace must not recall another workspace's
+    // knowledge by passing an arbitrary id — knowledge_keys has NO user floor —
+    // so a non-member id degrades to pod-wide (null); the read is never 403'd.
     //
-    // Passing the caller's real lens through (null = pod-wide) makes the catalog
-    // exactly as wide as the retrieval it is classifying.
-    let catalog: ProfileCatalogEntry[] = [];
-    {
-      const caller = await getCatalog(workspaceId);
-      const { profiles: profileRows } = await caller.profiles.listProfiles({
-        userId,
-        workspaceId,
-      });
-      catalog = profileRows.flatMap((p) => {
-        const entry = toProfileCatalogEntry(p);
-        return entry ? [entry] : [];
-      });
-    }
+    // The catalog used to substitute `wsIds[0]` when no workspace was pinned.
+    // Substituting the FIRST accessible workspace made a pod-wide query
+    // type-infer against one arbitrary workspace's vocabulary — so a profile
+    // living anywhere else was unnameable, the enumerative gate never fired,
+    // and `ask` answered "you have no clients" over a pod holding 20 of them in
+    // another workspace. Null = the pod-wide profile union.
+    const { workspaceId, catalog } = await resolveKnowledgeLens(
+      userId,
+      body.workspaceId
+    );
 
     return ask({
       query: body.query,
@@ -828,11 +798,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     try {
-      const result = await handleRetrieval(
-        userId,
-        c.req.valid("json"),
-        (wsId) => getCaller(c, { workspaceId: wsId })
-      );
+      const result = await handleRetrieval(userId, c.req.valid("json"));
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "POST /knowledge/search failed");
@@ -889,11 +855,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
 
     try {
-      const result = await handleRetrieval(
-        userId,
-        c.req.valid("json"),
-        (wsId) => getCaller(c, { workspaceId: wsId })
-      );
+      const result = await handleRetrieval(userId, c.req.valid("json"));
       return c.json(result, 200);
     } catch (err) {
       logger.error({ err, userId }, "POST /knowledge/ask failed");
@@ -1004,32 +966,16 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     if (!question) {
       return c.json({ error: "Missing query or question" }, 400);
     }
-    // Membership-gate the caller-supplied lens, exactly as handleRetrieval does
-    // (knowledge_keys has no user floor): a non-member id degrades to pod-wide
-    // (null) rather than leaking a foreign workspace's knowledge.
-    let workspaceId = body.workspaceId ?? null;
-    if (workspaceId) {
-      const accessible = await getUserAccessibleWorkspaceIds(userId);
-      if (!accessible.includes(workspaceId)) workspaceId = null;
-    }
-
     try {
-      // Same catalog resolution + retrieval as /knowledge/ask (the ONE read door).
-      // The catalog lens tracks the QUERY lens — see the long note on that door.
-      // A pod-wide query must type-infer against the pod-wide profile union, not
-      // against whichever workspace happened to sort first.
-      let catalog: ProfileCatalogEntry[] = [];
-      {
-        const caller = await getCaller(c, { workspaceId });
-        const { profiles: profileRows } = await caller.profiles.listProfiles({
-          userId,
-          workspaceId,
-        });
-        catalog = profileRows.flatMap((p) => {
-          const entry = toProfileCatalogEntry(p);
-          return entry ? [entry] : [];
-        });
-      }
+      // Lens gate + pod-wide-union catalog: the ONE resolution every knowledge
+      // answer door shares (services/knowledge/resolve-lens.ts). A non-member
+      // id degrades to pod-wide rather than leaking a foreign workspace's
+      // knowledge; a pod-wide query type-infers against the pod-wide profile
+      // union, not against whichever workspace happened to sort first.
+      const { workspaceId, catalog } = await resolveKnowledgeLens(
+        userId,
+        body.workspaceId
+      );
 
       const result = await ask({
         query: question,

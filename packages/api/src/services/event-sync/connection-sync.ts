@@ -1516,6 +1516,8 @@ export const ConnectionSyncStatusSchema = z.object({
   failure: z
     .object({
       errorClass: z.enum(FAILURE_ERROR_CLASSES),
+      /** The owner-approvable pack-enable request (`permission` only). */
+      enableProposalId: z.string().optional(),
       next: z
         .object({
           kind: z.enum(["add", "connect", "enable", "run", "none"]),
@@ -1627,6 +1629,9 @@ export async function getConnectionSyncStatus(input: {
             ? {
                 failure: {
                   errorClass: state.failure.errorClass,
+                  ...(state.failure.enableProposalId
+                    ? { enableProposalId: state.failure.enableProposalId }
+                    : {}),
                   ...(state.failure.next
                     ? {
                         next: {

@@ -173,6 +173,7 @@ describe("needs-you union", () => {
       blocked: 0,
       decisions: 0,
       notifications: 0,
+      review: 0,
     });
   });
 
@@ -567,5 +568,45 @@ describe("owed-slot signals carry their disclosure fields", () => {
   it("omits slotKind when the mirror carried none, rather than guessing a kind", () => {
     const signal = signalFromOwedSlot(owed());
     expect(signal).not.toHaveProperty("slotKind");
+  });
+});
+
+describe("countNeedsYou — THE needs-you rule's REVIEW population (N1)", () => {
+  it("sessions awaiting your review/close are part of the one sum, and ship as their own part", () => {
+    const counted = countNeedsYou({
+      distinctClusters: 2,
+      clustersTruncated: false,
+      clusters: [],
+      notifications: [],
+      notificationsTruncated: false,
+      owedSlots: [],
+      owedTruncated: false,
+      reviewSessions: 3,
+      reviewTruncated: false,
+    });
+    expect(counted.review).toBe(3);
+    expect(counted.needsYou).toBe(5);
+    expect(counted.needsYou).toBe(
+      counted.decisions +
+        counted.notifications +
+        counted.blocked +
+        counted.review
+    );
+  });
+
+  it("a capped review scan makes the number a floor", () => {
+    expect(
+      countNeedsYou({
+        distinctClusters: 0,
+        clustersTruncated: false,
+        clusters: [],
+        notifications: [],
+        notificationsTruncated: false,
+        owedSlots: [],
+        owedTruncated: false,
+        reviewSessions: 100,
+        reviewTruncated: true,
+      }).truncated
+    ).toBe(true);
   });
 });

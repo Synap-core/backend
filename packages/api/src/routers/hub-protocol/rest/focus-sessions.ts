@@ -153,6 +153,11 @@ const CreateBodySchema = z
      * own; a different `projectId` is refused.
      */
     trackId: z.string().uuid().optional(),
+    /**
+     * The track STAGE it is filed at (0274). Absent ⇒ the track's current
+     * stage; a stage the track does not declare is refused. Needs `trackId`.
+     */
+    trackStage: z.string().min(1).max(120).optional(),
     userId: z.string().min(1),
     /** Short one-line NAME; `goal` is the outcome. Blank ⇒ untitled. */
     title: z.string().max(SESSION_TITLE_MAX).optional(),
@@ -886,6 +891,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         workspaceId,
         projectId: body.projectId ?? null,
         trackId: body.trackId ?? null,
+        trackStage: body.trackStage ?? null,
         title: body.title ?? null,
         goal: body.goal,
         agentUserId,

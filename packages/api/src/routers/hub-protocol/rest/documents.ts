@@ -9,6 +9,7 @@ import {
   CreateDocumentProposalRequestSchema,
   CreateDocumentRequestSchema,
   GetDocumentQuerySchema,
+  PatchDocumentRequestSchema,
   WireDocumentSchema,
 } from "./_codecs/document.js";
 import { registerOpenApi } from "./_codecs/_register.js";
@@ -20,16 +21,24 @@ import {
   logger,
   resolveActorId,
   resolveActingContext,
-  verifyWorkspaceReadAccess,
   type HubHono,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
+import { attachCreatedDocument } from "../attach-created-document.js";
 
 const UpdateDocumentBodySchema = z.object({
   userId: z.string(),
+  /**
+   * Accepted by the schema ONLY so it can be refused: this route edits
+   * content and never renames. A `title` returns 400 instead of being
+   * silently dropped.
+   */
   title: z.string().optional(),
   content: z.string().optional(),
+  /** The revision you read (GET /documents/{id} → `revision`). */
+  baseRevision: z.number().int().min(0).optional(),
+  allowRemovingEmbeds: z.boolean().optional(),
   agentUserId: z.string().optional(),
   sourceMessageId: z.string().optional(),
   sessionId: z.string().optional(),
@@ -74,9 +83,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
     method: "post",
     path: "/documents/proposals",
     tags: ["Documents", "Proposals"],
-    summary: "Submit a document edit as a proposal",
+    summary: "Replace a document's content (alias of the patch door)",
     description:
-      "Persists a document-edit proposal (AI suggestion / user review comment / etc.). Approval applies the changes through the document service.",
+      "A full replacement — one `replace_all` op through the document patch door (see POST /documents/{documentId}/patch). Governed: an agent's full replacement is always a proposal, and it may not change a person's section or drop an embed.",
     request: {
       body: CreateDocumentProposalRequestSchema,
     },
@@ -114,6 +123,11 @@ export function registerDocumentsRoutes(app: HubHono): void {
       sourceMessageId?: string;
       sessionId?: string;
       expectedLabel?: string;
+      /** External https reference: creates a pointer document, no bytes. */
+      url?: string;
+      /** Attach the created document as this entity's body (governed). */
+      entityId?: string;
+      idempotencyKey?: string;
     };
     try {
       const acting = await resolveActingContext(c, {
@@ -152,8 +166,27 @@ export function registerDocumentsRoutes(app: HubHono): void {
         reasoning: body.reasoning,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
         ...(body.expectedLabel ? { expectedLabel: body.expectedLabel } : {}),
+        ...(body.url ? { url: body.url } : {}),
+        ...(body.idempotencyKey ? { idempotencyKey: body.idempotencyKey } : {}),
       });
-      return jsonGoverned(c, result);
+      if (!body.entityId) return jsonGoverned(c, result);
+      return jsonGoverned(
+        c,
+        await attachCreatedDocument({
+          created: result,
+          entityId: body.entityId,
+          userId: acting.userId,
+          scopes: c.get("scopes") as string[],
+          // The confined, acting-resolved workspace — not the raw body id.
+          workspaceId,
+          sessionId,
+          sourceMessageId: body.sourceMessageId ?? null,
+          ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+          keyType: c.get("keyType") as string | undefined,
+          keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
+          reasoning: "Attach document created via Hub REST POST /documents",
+        })
+      );
     } catch (err) {
       // Item 3 Part 3: a bound service key targeting another workspace throws
       // FORBIDDEN — surface 403, not a blanket 500. Duck-typed on `.code`.
@@ -185,22 +218,19 @@ export function registerDocumentsRoutes(app: HubHono): void {
       // verified below against the document's OWN workspace. No lens is threaded
       // in: documents.get ignores ctx.workspaceId, so the previous "first
       // accessible workspace" pick was dead and misleading.
+      // Access is `documents.get`'s read floor (owner, workspace member,
+      // project member). A second workspace-only check here would deny a
+      // project member the floor admits.
+      const format = c.req.query("format");
+      if (format !== undefined && format !== "raw" && format !== "readable") {
+        return c.json({ error: "format must be raw or readable" }, 400);
+      }
       const caller = await getCaller(c, { userId });
       const result = await caller.documents.getDocument({
         documentId,
         userId,
+        ...(format ? { format } : {}),
       });
-      const docWsId = (result as Record<string, unknown> | null)
-        ?.workspaceId as string | undefined;
-      if (docWsId) {
-        const hasAccess = await verifyWorkspaceReadAccess(userId, docWsId);
-        if (!hasAccess) {
-          return c.json(
-            { error: "Access denied to document's workspace" },
-            403
-          );
-        }
-      }
       return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err, documentId }, "getDocument failed");
@@ -275,9 +305,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
     method: "patch",
     path: "/documents/{documentId}",
     tags: ["Documents"],
-    summary: "Propose a replacement for a document's content",
+    summary: "Replace a document's content (alias of the patch door)",
     description:
-      "Proposes a replacement for a document's content. Content is the full replacement string (not a diff). This route NEVER writes the document: it always creates a pending `ai_edit` proposal for the owner to accept or reject, and returns that proposal. Accepting it mints a new document version authored by the agent; rejecting it leaves the document untouched. Title-only updates are not supported.",
+      "Replaces a document's content with `content` — one `replace_all` op through the document patch door (prefer POST /documents/{documentId}/patch for section or text edits). Governed: an agent's full replacement is always a proposal for the document's editors; a person's is applied. It may not change a person's section or drop an embed (`allowRemovingEmbeds`). Pass `baseRevision` (GET → `revision`); without it the revision at filing is pinned. `content` is required; a `title` is refused with 400 (this route never renames).",
     request: {
       params: z.object({ documentId: z.string() }),
       body: UpdateDocumentBodySchema,
@@ -292,13 +322,11 @@ export function registerDocumentsRoutes(app: HubHono): void {
   });
 
   /**
-   * PATCH /documents/:documentId
-   *
-   * Content is the full replacement string. This is a CHECKPOINT, not a write:
-   * every call creates a pending `ai_edit` proposal and returns it. There is no
-   * auto-approve lane for `document.update` — `DEFAULT_AUTO_APPROVE` grants
-   * only `document.read` and `document.create` — so the owner decides on every
-   * edit, and the accepted version carries the drafting agent as its author.
+   * PATCH /documents/:documentId — full replacement, an ALIAS onto the patch
+   * door (hub `createDocumentProposal` → `applyDocumentPatch` with one
+   * `replace_all` op). `document.update` is not in `DEFAULT_AUTO_APPROVE` and
+   * an agent's `replace_all` is forced to a proposal, so an agent's edit is
+   * always reviewed; the accepted version carries the drafting agent as author.
    */
   app.patch("/documents/:documentId", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
@@ -311,10 +339,22 @@ export function registerDocumentsRoutes(app: HubHono): void {
     }
     const {
       userId,
+      title,
       content,
       agentUserId: bodyAgentUserId,
       sourceMessageId,
     } = body.data;
+    // Refused, never dropped: an edit that silently loses half its request
+    // reads as a success it is not.
+    if (title !== undefined) {
+      return c.json(
+        {
+          error:
+            "PATCH /documents/:documentId proposes content only and cannot rename a document. Remove `title`; to rename an entity's document, update the entity's title.",
+        },
+        400
+      );
+    }
 
     try {
       const acting = await resolveActingContext(c, { userId });
@@ -330,13 +370,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         return c.json({ error: actorResolution.error }, 400);
 
       if (content === undefined) {
-        return c.json(
-          {
-            error:
-              "Document title-only updates are not supported by this Hub route yet.",
-          },
-          400
-        );
+        return c.json({ error: "`content` is required." }, 400);
       }
 
       const sessionId = body.data.sessionId ?? c.get("sessionId") ?? null;
@@ -345,25 +379,18 @@ export function registerDocumentsRoutes(app: HubHono): void {
         sourceMessageId,
         sessionId,
       });
-      const current = await caller.documents.getDocument({
-        documentId,
-        userId: acting.userId,
-      });
       const result = await caller.documents.createDocumentProposal({
         documentId,
         userId: acting.userId,
-        agentUserId: resolvedAgentUserId,
-        sourceMessageId,
-        proposalType: "ai_edit",
-        changes: [
-          {
-            op: "replace",
-            range: [0, current.document.content?.length ?? 0],
-            text: content,
-          },
-        ],
-        originalContent: current.document.content,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(sourceMessageId ? { sourceMessageId } : {}),
         proposedContent: content,
+        ...(body.data.baseRevision !== undefined
+          ? { baseRevision: body.data.baseRevision }
+          : {}),
+        ...(body.data.allowRemovingEmbeds !== undefined
+          ? { allowRemovingEmbeds: body.data.allowRemovingEmbeds }
+          : {}),
       });
       return jsonGoverned(c, result);
     } catch (err) {
@@ -376,29 +403,21 @@ export function registerDocumentsRoutes(app: HubHono): void {
   });
 
   /**
-   * POST /documents/proposals
+   * POST /documents/proposals — full replacement, an ALIAS onto the patch door
+   * (same as PATCH). Legacy `changes` / `originalContent` / `proposalType` are
+   * no longer read: the diff a reviewer sees is computed server-side.
    */
   app.post("/documents/proposals", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
-    const body = (await c.req.json()) as {
-      documentId: string;
-      userId: string;
-      agentUserId?: string;
-      threadId?: string;
-      sourceMessageId?: string;
-      sessionId?: string;
-      proposalType?: "ai_edit" | "user_suggestion" | "review_comment";
-      changes: Array<{
-        op: "insert" | "delete" | "replace";
-        position?: number;
-        range?: [number, number];
-        text?: string;
-      }>;
-      proposedContent: string;
-      originalContent?: string;
-    };
+    const parsed = CreateDocumentProposalRequestSchema.safeParse(
+      await c.req.json()
+    );
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+    const body = parsed.data;
     try {
       const acting = await resolveActingContext(c, { userId: body.userId });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
@@ -412,6 +431,7 @@ export function registerDocumentsRoutes(app: HubHono): void {
         return c.json({ error: actorResolution.error }, 400);
       const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
       const caller = await getCaller(c, {
+        userId: acting.userId,
         sourceMessageId: body.sourceMessageId,
         sessionId,
       });
@@ -419,19 +439,102 @@ export function registerDocumentsRoutes(app: HubHono): void {
         documentId: body.documentId,
         userId: acting.userId,
         ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
-        threadId: body.threadId,
-        sourceMessageId: body.sourceMessageId,
-        proposalType: body.proposalType ?? "ai_edit",
-        changes: body.changes,
+        ...(body.sourceMessageId
+          ? { sourceMessageId: body.sourceMessageId }
+          : {}),
         proposedContent: body.proposedContent,
-        originalContent: body.originalContent,
+        ...(body.baseRevision !== undefined
+          ? { baseRevision: body.baseRevision }
+          : {}),
+        ...(body.allowRemovingEmbeds !== undefined
+          ? { allowRemovingEmbeds: body.allowRemovingEmbeds }
+          : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
       });
       return jsonGoverned(c, result);
     } catch (err) {
       logger.error({ err }, "createDocumentProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
-        500
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  // ── POST /documents/:documentId/patch ─────────────────────────────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/documents/{documentId}/patch",
+    tags: ["Documents"],
+    summary: "Edit a document with ops",
+    description:
+      "THE document edit door. Ops, applied in order: `upsert_section {id,title,body}` (one `::::synap-section` block by id), `replace_text {old,new}` (`old` must match EXACTLY once — otherwise 400 with the count), `append {body}`, `replace_all {content}` (needs `baseRevision`). Pass `baseRevision` from GET /documents/{id} (`revision`); a document that moved answers 409. Refused (403): an agent changing a person's section (replace_all included); removing an embed without `allowRemovingEmbeds: true`. Governed: applies or files a proposal (202); an agent's replace_all is always a proposal. The response carries `preview` (per section, before/after) and `diagnostics` (advisory: what will not render — never a refusal; `null` + `diagnosticsError` when the check could not run).",
+    request: {
+      params: z.object({ documentId: z.string() }),
+      body: PatchDocumentRequestSchema,
+    },
+    responses: {
+      200: {
+        description: "Applied (or proposed — 202)",
+        schema: z.object({ status: z.string() }).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      409: { description: "The document moved", schema: ErrorSchema },
+      412: { description: "Sections cannot be located", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/documents/:documentId/patch", async (c) => {
+    if (!hasScope(c.get("scopes"), "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const documentId = c.req.param("documentId");
+    const parsed = PatchDocumentRequestSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      return c.json({ error: parsed.error.message }, 400);
+    }
+    const body = parsed.data;
+    try {
+      const acting = await resolveActingContext(c, { userId: body.userId });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+      const resolvedAgentUserId =
+        body.agentUserId ?? (c.get("agentUserId") as string | undefined);
+      const actorResolution = await resolveActorId(
+        resolvedAgentUserId,
+        acting.userId
+      );
+      if ("error" in actorResolution)
+        return c.json({ error: actorResolution.error }, 400);
+      const sessionId = body.sessionId ?? c.get("sessionId") ?? null;
+      const caller = await getCaller(c, {
+        userId: acting.userId,
+        sourceMessageId: body.sourceMessageId,
+        sessionId,
+      });
+      const result = await caller.documents.patchDocument({
+        documentId,
+        ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
+        ...(body.baseRevision !== undefined
+          ? { baseRevision: body.baseRevision }
+          : {}),
+        ops: body.ops,
+        ...(body.allowRemovingEmbeds !== undefined
+          ? { allowRemovingEmbeds: body.allowRemovingEmbeds }
+          : {}),
+        ...(body.reasoning ? { reasoning: body.reasoning } : {}),
+        ...(body.sourceMessageId
+          ? { sourceMessageId: body.sourceMessageId }
+          : {}),
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      logger.error({ err, documentId }, "patchDocument failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
       );
     }
   });
@@ -499,6 +602,9 @@ export function registerDocumentsRoutes(app: HubHono): void {
           title: body.data.title,
           body: body.data.body,
           baseVersion: body.data.baseVersion,
+          ...(body.data.baseRevision !== undefined
+            ? { baseRevision: body.data.baseRevision }
+            : {}),
           reasoning: body.data.reasoning,
           sourceMessageId: body.data.sourceMessageId,
         });
@@ -532,6 +638,8 @@ const UpsertSessionSectionBodySchema = z.object({
   title: z.string(),
   body: z.string(),
   baseVersion: z.number().int().min(1).nullable(),
+  /** The content revision read (GET …/document → `revision`); preferred over baseVersion. */
+  baseRevision: z.number().int().min(0).optional(),
   reasoning: z.string().optional(),
   sourceMessageId: z.string().optional(),
 });

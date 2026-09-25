@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   }>,
   sessionsThrow: false,
   capsThrow: false,
+  owingThrow: false,
 }));
 
 vi.mock("../../routers/mcp/handlers/shared.js", () => ({
@@ -86,6 +87,22 @@ vi.mock("./open-findings-door.js", () => ({
   readOpenBlockerFindings: async (_userId: string) => [],
 }));
 
+// `sessionsOwingGrade` reads through its own door; its SQL + verdict read is
+// pinned on PGlite in `focus-sessions/__tests__/session-nudges.pglite.test.ts`.
+vi.mock("../focus-sessions/session-nudges.js", () => ({
+  listSessionsOwingGrade: async (_userId: string) => {
+    if (h.owingThrow) throw new Error("pool exhausted");
+    return {
+      count: 1,
+      countIsLowerBound: false,
+      lens: "owned-open",
+      items: [
+        { id: "s-owe", title: "Ship W5", ungraded: 2, link: "/open/s-owe" },
+      ],
+    };
+  },
+}));
+
 import { buildStartHere } from "./start-here.js";
 
 const caller = {
@@ -127,6 +144,7 @@ beforeEach(() => {
   h.sessions = [];
   h.sessionsThrow = false;
   h.capsThrow = false;
+  h.owingThrow = false;
 });
 
 describe("startHere", () => {
@@ -144,6 +162,8 @@ describe("startHere", () => {
       // agent should attempt at all.
       "openFindings",
       "openSessions",
+      // Right after the agent's open work: the part of it still ungraded.
+      "sessionsOwingGrade",
       "topKinds",
       "actions",
       "learnMore",
@@ -208,6 +228,20 @@ describe("startHere", () => {
     ).toEqual({
       status: "unavailable",
     });
+  });
+
+  it("sessionsOwingGrade states its lens; a failed read is unavailable, never 0", async () => {
+    const s = await build({ status: "ok", count: 0, oldestDays: 0 });
+    expect(s.sessionsOwingGrade).toMatchObject({
+      count: 1,
+      lens: "owned-open",
+      items: [{ id: "s-owe", ungraded: 2 }],
+    });
+    h.owingThrow = true;
+    expect(
+      (await build({ status: "ok", count: 0, oldestDays: 0 }))
+        .sessionsOwingGrade
+    ).toEqual({ status: "unavailable" });
   });
 
   it("an empty queue still states its lens", async () => {

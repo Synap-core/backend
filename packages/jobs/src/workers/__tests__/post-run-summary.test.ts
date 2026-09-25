@@ -304,6 +304,31 @@ describe("renderSummary", () => {
     );
   });
 
+  it("chips go through THE marker writer: one escape rule, readable back by the one grammar", async () => {
+    const { parseInlinePatterns } =
+      await import("@synap-core/markdown-core/markers");
+    const content = renderSummary({
+      automation: {
+        ...automation,
+        name: "[DRAFT] Sync | v2",
+      } as typeof automation,
+      run: run({}),
+      steps: [
+        step({ output: { status: "created", entityId: "e1", title: "  " } }),
+      ],
+      status: "success",
+    });
+    expect(content.split("\n")[0]).toBe(
+      "✅ [[automation:auto-1|DRAFT Sync | v2]] ran — 3 steps, 2.1s"
+    );
+    // A label with nothing left names the object through the vocabulary door.
+    expect(content.split("\n")[1]).toBe("Created [[entity:e1|Entity]]");
+    expect(parseInlinePatterns(content).patterns).toEqual([
+      { kind: "automation", id: "auto-1", label: "DRAFT Sync | v2" },
+      { kind: "entity", id: "e1", label: "Entity" },
+    ]);
+  });
+
   it("success: no created line when no step created an entity", () => {
     const content = renderSummary({
       automation,

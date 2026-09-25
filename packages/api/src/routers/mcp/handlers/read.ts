@@ -18,11 +18,8 @@ import {
   ENTITIES_LEAN_NOTE,
 } from "./read-lean.js";
 import { synthesizeAnswer } from "../../../services/knowledge/synthesize.js";
+import { resolveKnowledgeLens } from "../../../services/knowledge/resolve-lens.js";
 import { describeAiFailure } from "../../../utils/ai-failure.js";
-import {
-  toProfileCatalogEntry,
-  type ProfileCatalogEntry,
-} from "../../../services/retrieval/index.js";
 import {
   getUserMemberWorkspaceIds,
   getUserAccessibleWorkspaceIds,
@@ -70,55 +67,32 @@ function isInvalidUuidInput(err: unknown): boolean {
 
 export const readHandlers: McpHandlerMap = {
   synap_ask: async (ctx: McpToolContext): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, caller } = ctx;
+    const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     if (typeof args.query !== "string" || args.query.trim() === "") {
       return ok({ error: "query is required" });
     }
-    let workspaceId = args.workspaceId as string | undefined;
-    // ACCESS PARITY (security, not just honesty): the `mcp.read` scope proves
-    // "may call recall", NEVER "may see THIS workspace". `ask()` forwards this
-    // value as the PROCEDURAL namespace, and `knowledge_keys` has no user
-    // column (`services/knowledge/ask.ts:227` — its own comment warns that an
-    // unfiltered value "would read UNFILTERED across every user/workspace on
-    // the pod"). So an unchecked, caller-supplied workspaceId lets an
-    // authenticated agent read a workspace's runbooks without being a member —
-    // and workspace UUIDs are freely disclosed elsewhere (the get_relations
-    // honesty note prints one), so the id is not a secret.
-    //
-    // Degrade a non-accessible id to pod-wide rather than honouring it, exactly
-    // as the hub `/knowledge/answer` door already does
-    // (`hub-protocol/rest/knowledge.ts:987-990`, "rather than leaking a foreign
-    // workspace's knowledge"). This door never received that check.
-    if (workspaceId) {
-      const accessible = await getUserAccessibleWorkspaceIds(userId);
-      if (!accessible.includes(workspaceId)) workspaceId = undefined;
-    }
-    // DOOR PARITY: the catalog lens must track the QUERY lens, exactly as the
-    // hub `/knowledge/answer` door does — both read the same `workspaceId`,
-    // no separate resolution. This USED to fall back to the caller's first
-    // membership workspace (`wsIds[0]`, an unordered SELECT) whenever no
-    // workspaceId was passed, so the same `ask` call could type-infer against
-    // a DIFFERENT workspace than the one it retrieved from, depending on
-    // which door answered it. Unscoped now means pod-wide for both, honestly:
-    // no catalog (empty), same as the hub door's `workspaceId: null` case.
-    let catalog: ProfileCatalogEntry[] = [];
-    if (workspaceId) {
-      const { profiles: profileRows } = await caller.profiles.listProfiles({
-        userId,
-        workspaceId,
-      });
-      catalog = profileRows.flatMap((p) => {
-        const entry = toProfileCatalogEntry(p);
-        return entry ? [entry] : [];
-      });
-    }
+    // ACCESS + DOOR PARITY, via the ONE helper every knowledge door shares
+    // (services/knowledge/resolve-lens.ts):
+    //  - the `mcp.read` scope proves "may call recall", NEVER "may see THIS
+    //    workspace". `ask()` forwards the lens as the PROCEDURAL namespace and
+    //    `knowledge_keys` has no user column, so a caller-supplied id the user
+    //    cannot see degrades to pod-wide rather than being honoured;
+    //  - the type-inference catalog tracks the query lens, and unscoped means
+    //    the pod-wide profile UNION. This door used to pass NO catalog when
+    //    unscoped (and before that, the first-membership workspace), so the
+    //    same pod-wide question type-inferred differently here than on the
+    //    Hub and tRPC doors.
+    const { workspaceId, catalog } = await resolveKnowledgeLens(
+      userId,
+      args.workspaceId as string | undefined
+    );
     const compare = args.compare === true;
     // Retrieve across all substrates (same call as /knowledge/search).
     const retrieved = await ask({
       query: args.query as string,
       userId,
-      workspaceId: workspaceId ?? null,
+      workspaceId,
       projectId: (args.projectId as string | undefined) ?? null,
       limit: (args.limit as number) || undefined,
       catalog,
@@ -155,7 +129,7 @@ export const readHandlers: McpHandlerMap = {
       retrieved.answers,
       args.query as string,
       retrieved.routedTo,
-      workspaceId ?? null,
+      workspaceId,
       retrieved.pending?.matches?.length ?? 0,
       // The degradation signal must reach the SENTENCE, not just the envelope.
       // `degraded` was already returned alongside this answer and correct; the
@@ -248,6 +222,7 @@ export const readHandlers: McpHandlerMap = {
     const result = await caller.documents.getDocument({
       userId,
       documentId: args.documentId as string,
+      ...(args.format === "readable" ? { format: "readable" as const } : {}),
     });
     return ok(result);
   },

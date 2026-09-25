@@ -59,6 +59,16 @@ const SKILL_SEEN = id();
 const SKILL_HIDDEN = id();
 const TOOL_SEEN = id();
 const TOOL_HIDDEN = id();
+// Agents are `agents` REGISTRY rows; an adjunct's owner is its actor-user's
+// `created_by_user_id`.
+const AGENT_MINE = id();
+const AGENT_STRANGER = id();
+const MY_AGENT_USER = "my-agent-user";
+const STRANGER_AGENT_USER = "stranger-agent-user";
+// NULL-workspace entities are owner-PRIVATE.
+const ENTITY_MINE = id();
+const ENTITY_PRIVATE_OTHER = id();
+const PRIVATE_TITLE = "Other's private diary";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -150,6 +160,21 @@ beforeAll(async () => {
   await q(
     `insert into tools (id, name, workspace_id) values ($1,'Seen tool',$2),($3,'Hidden tool',$4)`,
     [TOOL_SEEN, WS_SEEN, TOOL_HIDDEN, WS_HIDDEN]
+  );
+  await q(
+    `insert into users (id, name, email, user_type, created_by_user_id) values
+      ($1,'My agent user','a@x','agent',$2),
+      ($3,'Stranger agent user','b@x','agent',$4),
+      ($4,'Other Human','other@x','human',null)`,
+    [MY_AGENT_USER, VIEWER, STRANGER_AGENT_USER, OTHER]
+  );
+  await q(
+    `insert into agents (id, name, owner_type, user_id) values ($1,'My agent','user',$2),($3,'Stranger agent','user',$4)`,
+    [AGENT_MINE, MY_AGENT_USER, AGENT_STRANGER, STRANGER_AGENT_USER]
+  );
+  await q(
+    `insert into entities (id, title, type, user_id, workspace_id) values ($1,'My private note','note',$2,null),($3,$4,'note',$5,null)`,
+    [ENTITY_MINE, VIEWER, ENTITY_PRIVATE_OTHER, PRIVATE_TITLE, OTHER]
   );
 });
 
@@ -282,5 +307,73 @@ describe("enrichProposalsForDisplay — names are floored to what the viewer may
       const hidden = await enrichOne(swap(c.over) as Record<string, unknown>);
       expect([c.field, hidden[c.field]]).toEqual([c.field, undefined]);
     }
+  });
+
+  it("/links agent endpoints: the viewer's own agent is named; a stranger's agent, or a user id posed as an agent, is not", async () => {
+    const out = await enrichOne({
+      targetType: "link",
+      data: {
+        fromType: "agent",
+        fromId: AGENT_MINE,
+        toType: "agent",
+        toId: AGENT_STRANGER,
+        linkType: "about",
+      },
+    });
+    expect(out.request.data.sourceLabel).toBe("My agent");
+    expect(out.request.data.targetLabel).toBeUndefined();
+
+    // A users-table id is not an agent endpoint: it must not resolve to that
+    // user's name or email (the old userById lookup did, for ANY user id).
+    const posed = await enrichOne({
+      targetType: "link",
+      data: {
+        fromType: "agent",
+        fromId: OTHER,
+        toType: "agent",
+        toId: MY_AGENT_USER,
+        linkType: "about",
+      },
+    });
+    expect(posed.request.data.sourceLabel).toBeUndefined();
+    expect(posed.request.data.targetLabel).toBeUndefined();
+    expect(JSON.stringify(posed)).not.toContain("other@x");
+  });
+
+  it("a NULL-workspace (private) entity's title resolves for its owner only — on /links, relation endpoints, the target name and the review diff", async () => {
+    const shapes = (entityId: string) => [
+      {
+        targetType: "link",
+        data: {
+          fromType: "entity",
+          fromId: entityId,
+          toType: "tool",
+          toId: TOOL_SEEN,
+          linkType: "about",
+        },
+      },
+      {
+        targetType: "relation",
+        data: { sourceEntityId: entityId, targetEntityId: entityId },
+      },
+      { targetType: "entity", proposalType: "update", targetId: entityId },
+    ];
+
+    for (const over of shapes(ENTITY_MINE)) {
+      const mine = await enrichOne(over);
+      expect([
+        over.targetType,
+        JSON.stringify(mine).includes("My private note"),
+      ]).toEqual([over.targetType, true]);
+    }
+    for (const over of shapes(ENTITY_PRIVATE_OTHER)) {
+      const theirs = await enrichOne(over);
+      expect([
+        over.targetType,
+        JSON.stringify(theirs).includes(PRIVATE_TITLE),
+      ]).toEqual([over.targetType, false]);
+    }
+    const link = await enrichOne(shapes(ENTITY_PRIVATE_OTHER)[0]!);
+    expect(link.request.data.sourceLabel).toBeUndefined();
   });
 });

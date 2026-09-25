@@ -48,6 +48,10 @@
       "types": "./dist/vocabulary/index.d.ts",
       "import": "./dist/vocabulary/index.js"
     },
+    "./renderables": {
+      "types": "./dist/renderables/index.d.ts",
+      "import": "./dist/renderables/index.js"
+    },
     "./service-marks": {
       "types": "./dist/service-marks/index.d.ts",
       "import": "./dist/service-marks/index.js"

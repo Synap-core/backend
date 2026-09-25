@@ -21,10 +21,15 @@ vi.mock("@synap/database", async (importOriginal) => {
     db: mockDb,
     eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
     and: vi.fn((...c: unknown[]) => ({ and: c })),
-    drizzleSql: vi.fn((s: TemplateStringsArray, ...v: unknown[]) => ({
-      sql: s.join("?"),
-      v,
-    })),
+    // Keep `.raw` (and any other static member): modules reachable from
+    // `_shared` build module-level SQL with `drizzleSql.raw` at import time.
+    drizzleSql: Object.assign(
+      vi.fn((s: TemplateStringsArray, ...v: unknown[]) => ({
+        sql: s.join("?"),
+        v,
+      })),
+      actual.drizzleSql
+    ),
   };
 });
 

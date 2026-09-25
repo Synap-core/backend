@@ -21,7 +21,6 @@ import {
   db,
   proposals,
   proposalClusterMutes,
-  documents,
   eq,
   and,
   desc,
@@ -47,7 +46,6 @@ import {
   buildFallbackTitle,
   PROPOSAL_REJECTION_REASONS,
 } from "@synap-core/types/proposals";
-import { storage } from "@synap/storage";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { assertProposalVisibleTo } from "../utils/proposal-visibility.js";
@@ -61,6 +59,12 @@ import { returnDelegatedSlot } from "../services/focus-sessions/return-delegated
 import { readProposalExpectedLabel } from "../services/focus-sessions/satisfy-expected-output.js";
 import { AI_KIND } from "../lib/ai-events.js";
 import { createEventBackedProposal } from "../utils/event-backed-proposal.js";
+import {
+  loadPatchDocument,
+  readPatchDocumentContent,
+  suggestDocumentPatch,
+} from "../services/document-patch/apply-document-patch.js";
+import { loadEditableDocument } from "../utils/document-edit-access.js";
 import {
   buildProposalScopeConditions,
   resolveAutomationStepRunIds,
@@ -115,6 +119,7 @@ import {
   type CompleteMaterializedRecord,
 } from "../services/proposals/stamp-materialized.js";
 import { proposalUnchangedSince } from "../services/proposals/proposal-cas.js";
+import { notUnderTriagePendingSessionWhere } from "../services/focus-sessions/triage.js";
 export {
   planProposalRevert,
   type ProposalRevertPlan,
@@ -611,6 +616,13 @@ export const proposalsRouter = router({
         limit: z.number().min(1).max(100).optional(),
         /** Max proposals scanned before grouping — guards a huge inbox. */
         scanLimit: z.number().min(1).max(2000).optional(),
+        /**
+         * Leave out proposals filed under an undecided agent DRAFT session
+         * (`notUnderTriagePendingSessionWhere`, the one triage rule). The
+         * needs-you count and tray pass it: a draft never counts as needs-you.
+         * In SQL, so drafts cannot eat the scan.
+         */
+        excludeDraftSessions: z.boolean().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -644,6 +656,9 @@ export const proposalsRouter = router({
         );
       }
       // NOTE: no expiry filter — see the matching note in `list` (C2 fix).
+      if (input.excludeDraftSessions) {
+        conditions.push(notUnderTriagePendingSessionWhere(proposals.sessionId));
+      }
 
       // Same editor+ gate as `list` when a concrete workspace is named.
       if (input.workspaceId) {
@@ -932,8 +947,21 @@ export const proposalsRouter = router({
       // proposer for a pod-wide proposal).
       await assertProposalVisibleTo(input.proposalId, userId, { db });
 
+      // `revertable` — same SSOT `.list` uses (`revertableForRow`, the exact
+      // planner `revert` calls at approval time), so the detail page (which
+      // reads THIS door, not `.list`) can render "Can be restored" /
+      // "Can't be undone" instead of a hand-written claim. See DeleteWarning.
+      const revertable = revertableForRow({
+        status: proposal.status,
+        targetType: proposal.targetType,
+        targetId: proposal.targetId,
+        proposalType: proposal.proposalType,
+        data: proposal.data,
+      });
+
       return {
         ...(await enrichProposalsForDisplay([proposal], userId))[0],
+        revertable,
       };
     }),
 
@@ -3094,8 +3122,15 @@ export const proposalsRouter = router({
     }),
 
   /**
-   * Create a document edit proposal (suggest edit): replace text in range [from, to] with replacementText.
-   * Used when user selects text and clicks "Suggest edit" in the editor.
+   * A person SUGGESTS an edit ("Suggest edit" on a selection): filed as a
+   * `document/user_edit` proposal through the document patch door
+   * (`suggestDocumentPatch`) — one `replace_text` op pinned to the revision
+   * read now, so accepting it can never overwrite a later save, and it is
+   * applied by the same approval half as every document patch.
+   *
+   * The selection arrives as a range into the STORED markdown and is turned
+   * into the exact text it covers; `replace_text` then refuses an ambiguous
+   * selection (text that occurs more than once) instead of guessing.
    */
   createDocumentEdit: workspaceProcedure
     .input(
@@ -3107,79 +3142,32 @@ export const proposalsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const workspaceId = ctx.workspaceId;
-      if (!workspaceId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Workspace context required",
-        });
-      }
-
-      const document = await db.query.documents.findFirst({
-        where: eq(documents.id, input.documentId),
-      });
-
-      if (!document) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
-
-      if (document.workspaceId !== workspaceId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Document is not in the current workspace",
-        });
-      }
-
-      let currentContent: string;
-      if (document.storageKey) {
-        const contentBuffer = await storage.downloadBuffer(document.storageKey);
-        currentContent =
-          (document.mimeType?.includes("base64") ?? false)
-            ? contentBuffer.toString("base64")
-            : contentBuffer.toString("utf-8");
-      } else {
+      // The edit floor first: a document the caller may not edit is NOT_FOUND
+      // before its content is read.
+      await loadEditableDocument(ctx.userId, input.documentId);
+      const doc = await loadPatchDocument(input.documentId);
+      const content = await readPatchDocumentContent(doc);
+      const from = Math.min(input.from, input.to, content.length);
+      const to = Math.min(Math.max(input.from, input.to), content.length);
+      if (from === to) {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Document has no stored content (e.g. whiteboard); suggest edit not supported",
+            "Select the text you want to change before suggesting an edit.",
         });
       }
-
-      const from = Math.min(input.from, currentContent.length);
-      const to = Math.min(input.to, currentContent.length);
-      const proposedContent =
-        currentContent.slice(0, from) +
-        input.replacementText +
-        currentContent.slice(to);
-
-      const { proposal } = await createEventBackedProposal({
+      const { proposalId } = await suggestDocumentPatch({
         userId: ctx.userId,
-        workspaceId,
-        targetType: "document",
-        targetId: input.documentId,
-        proposalType: "user_edit",
-        action: "update",
-        summary: "Suggest document edit",
-        data: {
-          source: "user",
-          sourceId: ctx.userId,
-          proposedContent,
-          range: [from, to],
-          originalSnippet: currentContent.slice(from, to),
-          replacementText: input.replacementText,
-        },
+        documentId: input.documentId,
+        baseRevision: doc.contentRevision,
+        ops: [
+          {
+            op: "replace_text",
+            old: content.slice(from, to),
+            new: input.replacementText,
+          },
+        ],
       });
-
-      if (!proposal) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create proposal",
-        });
-      }
-
-      return { proposalId: proposal.id };
+      return { proposalId };
     }),
 });

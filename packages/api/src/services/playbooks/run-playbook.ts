@@ -182,6 +182,11 @@ export interface RunPlaybookInput {
    * is DERIVED from the track, never guessed.
    */
   trackId?: string | null;
+  /**
+   * The stage of that track the run is filed at (0274). Absent ⇒ the track's
+   * current stage; an explicit one must be pinned by the track (refused).
+   */
+  trackStage?: string | null;
   /** The entity this run is about (e.g. a contact, deal, or document).
    * Stored as focus_sessions.subjectEntityId and forwarded in RunContext. */
   subjectId?: string;
@@ -472,6 +477,7 @@ async function resolveInputItems(
 interface RunFiling {
   projectId: string | null;
   trackId: string | null;
+  trackStage: string | null;
 }
 
 /**
@@ -486,9 +492,14 @@ async function resolveRunFiling(input: RunPlaybookInput): Promise<RunFiling> {
     const filed = await resolveTrackFiling({
       trackId: input.trackId,
       projectId: input.projectId ?? null,
+      trackStage: input.trackStage ?? null,
       actor: { userId: input.userId },
     });
-    return { projectId: filed.projectId, trackId: filed.trackId };
+    return {
+      projectId: filed.projectId,
+      trackId: filed.trackId,
+      trackStage: filed.trackStage,
+    };
   }
   if (input.projectId) {
     const { loadVisibleProject } =
@@ -504,9 +515,9 @@ async function resolveRunFiling(input: RunPlaybookInput): Promise<RunFiling> {
         message: `Project ${input.projectId} not found`,
       });
     }
-    return { projectId: project.id, trackId: null };
+    return { projectId: project.id, trackId: null, trackStage: null };
   }
-  return { projectId: null, trackId: null };
+  return { projectId: null, trackId: null, trackStage: null };
 }
 
 /**
@@ -661,6 +672,7 @@ async function executeSingleRun(
     subjectId: input.subjectId ?? null,
     projectId: filing.projectId,
     trackId: filing.trackId,
+    trackStage: filing.trackStage,
     // Two grammars, one resolution. `goalResolver` handles {{mustache}} against
     // the caller's own context; when it declines (a pure `@{arg:}` template) the
     // caller's override template is substituted here with `resolveGoal` — the

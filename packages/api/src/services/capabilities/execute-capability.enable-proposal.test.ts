@@ -35,6 +35,8 @@ let gateDecision: Record<string, unknown> = {
   reason: "This capability is installed but not yet enabled.",
 };
 const inserted: any[] = [];
+/** Open owner-filed enable requests, as `findOpenOwnerRequest` would read them. */
+let openOwnerRequests: Array<{ id: string }> = [];
 const byHash = new Map<string, string>();
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -47,6 +49,8 @@ vi.mock("@synap/database", async (importOriginal) => {
           where: () => ({
             // the executeCapability skill lookup
             orderBy: () => ({ limit: async () => [skillRow] }),
+            // the owner path's "already an open request for this pack?" read
+            limit: async () => openOwnerRequests,
             // the pack's draft-member read (awaited directly)
             then: (resolve: (v: unknown) => unknown) =>
               resolve([
@@ -112,6 +116,7 @@ describe("executeCapability — agent deny on a draft capability proposes enabli
   beforeEach(() => {
     inserted.length = 0;
     byHash.clear();
+    openOwnerRequests = [];
     skillRow = SOURCE_TRIAGE;
     gateDecision = {
       decision: "deny",
@@ -186,6 +191,64 @@ describe("executeCapability — agent deny on a draft capability proposes enabli
     expect(out.kind).toBe("deny");
     if (out.kind !== "deny") return;
     expect(out.enableProposal).toBeUndefined();
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("an unattended OWNER run (connection sync) files the pack request on the owner's behalf", async () => {
+    // Exactly the sync's call shape: no agent, no run proposal, owner filing on.
+    const out = await executeCapability({
+      verbId: "source-triage",
+      parameters: {},
+      workspaceId: WS,
+      userId: "user-1",
+      suppressProposal: true,
+      requestEnableForOwner: true,
+    });
+    expect(out.kind).toBe("deny");
+    if (out.kind !== "deny") return;
+    expect(out.enableProposal).toMatchObject({ status: "proposed" });
+    expect(inserted).toHaveLength(1);
+    expect(inserted[0]).toMatchObject({
+      proposalType: "capability.enable",
+      targetId: PACK.id,
+    });
+    // Attributed to the owner, never to an agent.
+    expect(inserted[0].agentUserId ?? null).toBeNull();
+
+    // The next cron tick finds that request open and reuses it — one request
+    // per pack, not one per tick.
+    openOwnerRequests = [{ id: "prop-1" }];
+    const again = await executeCapability({
+      verbId: "source-triage",
+      parameters: {},
+      workspaceId: WS,
+      userId: "user-1",
+      suppressProposal: true,
+      requestEnableForOwner: true,
+    });
+    expect(inserted).toHaveLength(1);
+    expect(
+      again.kind === "deny" && again.enableProposal?.status === "proposed"
+        ? again.enableProposal.proposalId
+        : null
+    ).toBe("prop-1");
+  });
+
+  it("an owner run denied for a POLICY reason on an ENABLED skill files nothing", async () => {
+    skillRow = { ...SOURCE_TRIAGE, approved: true };
+    gateDecision = {
+      decision: "deny",
+      reason: "Agent capability check failed",
+    };
+    const out = await executeCapability({
+      verbId: "source-triage",
+      parameters: {},
+      workspaceId: WS,
+      userId: "user-1",
+      suppressProposal: true,
+      requestEnableForOwner: true,
+    });
+    expect(out.kind === "deny" && out.enableProposal).toBeFalsy();
     expect(inserted).toHaveLength(0);
   });
 

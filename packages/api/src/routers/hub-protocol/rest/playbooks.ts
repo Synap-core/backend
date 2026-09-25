@@ -108,6 +108,14 @@ const RunPlaybookBodySchema = z.object({
     .describe(
       "File the run inside this track (a method running in a project). Implies its project."
     ),
+  trackStage: z
+    .string()
+    .min(1)
+    .max(120)
+    .optional()
+    .describe(
+      "The stage of that track the run is filed at. Omit for its current stage. Needs trackId."
+    ),
 });
 
 const PlaybookResultSchema = z.record(z.string(), z.unknown());
@@ -339,7 +347,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * PATCH /playbooks/:id
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
-   *         subjectProfile?, schedule?, executor?, status? }
+   *         subjectProfile?, schedule?, executor?, status?, scope? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -389,6 +397,10 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           "is-agent" | "external-agent" | "hybrid" | undefined,
         status: body.status as
           "draft" | "active" | "paused" | "archived" | undefined,
+        // `session` | `project` (a METHOD a project runs as a track). Validated
+        // for real by `playbooks.update`'s zod enum; this only types the body.
+        // It was dropped here, so no Hub caller could make a playbook a method.
+        scope: body.scope as "session" | "project" | undefined,
       });
       return c.json(result);
     } catch (err) {
@@ -476,6 +488,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           reasoning: body.reasoning,
           projectId: body.projectId,
           trackId: body.trackId,
+          trackStage: body.trackStage,
           source: "hub-rest",
         }
       );

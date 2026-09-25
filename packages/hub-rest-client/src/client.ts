@@ -225,6 +225,7 @@ import type {
   CreateDocumentInput,
   UpdateDocumentInput,
   CreateDocumentProposalInput,
+  PatchDocumentInput,
   HubDocumentProposalResult,
   HubCapability,
   HubCapabilityCatalogResult,
@@ -1569,7 +1570,7 @@ export class HubRestClient {
 
   /**
    * Compose widget catalog: curated builtins plus generated/frame DB rows.
-   * GET /widget-definitions already merges composeCatalogAsDefinitionRows —
+   * GET /widget-definitions already merges the built-in catalog (listRenderables) —
    * do not copy the catalog into callers.
    */
   async listWidgetDefinitions(options?: {
@@ -1641,7 +1642,24 @@ export class HubRestClient {
     );
   }
 
-  /** Submit a structured, reviewable document-edit proposal. */
+  /**
+   * Edit a document with ops (section / exact-once text / append / full) —
+   * applied or proposed per governance. The result carries a per-section
+   * `preview` and advisory `diagnostics`.
+   */
+  async patchDocument(
+    documentId: string,
+    input: PatchDocumentInput
+  ): Promise<HubDocumentProposalResult> {
+    const userId = await this.resolveUserId();
+    return this.request<HubDocumentProposalResult>(
+      "POST",
+      `/api/hub/documents/${documentId}/patch`,
+      { userId, ...input }
+    );
+  }
+
+  /** Full replacement — an alias of `patchDocument` with one `replace_all` op. */
   async createDocumentProposal(
     input: CreateDocumentProposalInput
   ): Promise<HubDocumentProposalResult> {

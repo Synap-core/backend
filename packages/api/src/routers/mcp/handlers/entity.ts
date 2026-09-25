@@ -10,6 +10,7 @@
 
 import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../../file-upload.js";
 import {
@@ -196,30 +197,20 @@ export const entityHandlers: McpHandlerMap = {
         );
       }
 
-      // 3. Governed edit through the EXISTING door — `createDocumentProposal`
-      //    (hub-protocol/documents.ts), the same procedure Hub REST
-      //    `PATCH /api/hub/documents/:id` uses. It re-checks `doc.userId`
-      //    (FORBIDDEN on mismatch) and always files a proposal; the approval
-      //    half is the `targetType === "document"` branch (B3) in
-      //    `proposals/apply-approval.ts`, which uploads the new content and
-      //    snapshots a `document_versions` row.
-      const current = await caller.documents.getDocument({
-        documentId,
-        userId,
-      });
-      const originalContent = current.document.content ?? "";
+      // 3. An ALIAS onto the document patch door (`applyDocumentPatch`, via
+      //    hub `createDocumentProposal`): one `replace_all` op, pinned to the
+      //    revision read now. Governed like `synap_update_document` — an
+      //    agent's full replacement is always a proposal, and it may not change
+      //    a person's section or drop an embed. For a section or a sentence,
+      //    `synap_update_document` with `upsert_section` / `replace_text`.
       const proposal = await caller.documents.createDocumentProposal({
         documentId,
         userId,
         ...(agentUserId ? { agentUserId } : {}),
-        proposalType: "ai_edit",
-        changes: [
-          { op: "replace", range: [0, originalContent.length], text: content },
-        ],
-        originalContent,
         proposedContent: content,
+        ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       });
-      body = { documentId, ...(proposal as Record<string, unknown>) };
+      body = { ...proposal };
     }
 
     // A content-only call must NOT also file an all-undefined entity proposal.
@@ -284,56 +275,46 @@ export const entityHandlers: McpHandlerMap = {
     const attachEntityId = args.entityId as string | undefined;
     // OUTPUT LEDGER: recorded inside `documents.createDocument` (the hub door
     // this call goes through), so MCP and the IS REST door share one producer.
-    const doc = result as Record<string, unknown>;
     if (!attachEntityId) return ok(result);
-    // A proposal-gated document has no row yet: `documentId` is only the id it
-    // WILL get. Linking to it now would leave a dangling reference, so say so
-    // instead of pretending the attach happened.
-    if (doc.status === "proposed") {
-      return ok({
-        ...doc,
-        attached: {
-          entityId: attachEntityId,
-          status: "skipped",
-          reason:
-            "The document itself is awaiting review — approve it first, then attach it with synap_update_entity.",
-        },
-      });
-    }
-    const documentId =
-      typeof doc.documentId === "string"
-        ? doc.documentId
-        : typeof doc.id === "string"
-          ? doc.id
-          : undefined;
-    if (!documentId) return ok(result);
-    const attachCtx = await createHubProtocolCallerContext(
-      userId,
-      apiKeyScopes,
-      // Membership-gated lens, never the raw model-supplied id — this ctx
-      // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
-      lensWorkspaceId,
-      undefined,
-      sessionId,
-      agentUserId
-    );
-    const attachCaller = regularEntitiesRouter.createCaller(attachCtx);
-    const attached = await attachCaller.update({
-      id: attachEntityId,
-      documentId,
-      reasoning: `Attach document created via MCP tool: ${toolName}`,
-      ...(agentUserId ? { agentUserId } : {}),
-    });
-    return ok({
-      ...doc,
-      attached: {
+    return ok(
+      await attachCreatedDocument({
+        created: result,
         entityId: attachEntityId,
-        documentId,
-        // Governed like every other entity update: an agent may get a
-        // proposal here even though the document itself was auto-approved.
-        ...(attached as Record<string, unknown>),
-      },
+        userId,
+        scopes: apiKeyScopes,
+        // Membership-gated lens, never the raw model-supplied id — this ctx
+        // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
+        workspaceId: lensWorkspaceId,
+        sessionId,
+        ...(agentUserId ? { agentUserId } : {}),
+        reasoning: `Attach document created via MCP tool: ${toolName}`,
+      })
+    );
+  },
+  /**
+   * Edit a document with ops — THE agent document edit door
+   * (`applyDocumentPatch`, via hub `patchDocument`). The refusals (stale
+   * base, ambiguous `replace_text`, a person's section, embed removal) come
+   * back as errors whose message says what to do next.
+   */
+  synap_update_document: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes, agentUserId, caller } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const result = await caller.documents.patchDocument({
+      documentId: args.documentId as string,
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(typeof args.baseRevision === "number"
+        ? { baseRevision: args.baseRevision }
+        : {}),
+      ops: args.ops as never,
+      ...(args.allow_removing_embeds === true
+        ? { allowRemovingEmbeds: true }
+        : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
+    return ok(result);
   },
   synap_store_file: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {

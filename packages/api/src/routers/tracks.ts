@@ -17,9 +17,13 @@ import {
   advanceTrackStage,
   getTrack,
   listTracks,
+  loadTrackView,
+  loadTrackViews,
+  loadWrittenTrackView,
+  setTrackParams,
   setTrackStatus,
+  startStageSession,
   startTrack,
-  toTrackView,
   type TrackActor,
 } from "../services/tracks/tracks-service.js";
 
@@ -37,6 +41,8 @@ function actorOf(
 
 /** Why — shown to the reviewer when the write lands as a proposal. */
 const reasoning = z.string().max(2000).optional();
+/** Answers to the method's declared params — validated by the service. */
+const params = z.record(z.string(), z.unknown());
 
 export const tracksRouter = router({
   /** The project's tracks (non-archived unless asked), oldest first. */
@@ -59,7 +65,7 @@ export const tracksRouter = router({
           message: "Project not found",
         });
       }
-      return { items: rows.map(toTrackView) };
+      return { items: await loadTrackViews(rows, ctx) };
     }),
 
   get: podProcedure
@@ -69,7 +75,7 @@ export const tracksRouter = router({
       if (!track) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Track not found" });
       }
-      return toTrackView(track);
+      return loadTrackView(track, ctx);
     }),
 
   /** Start a project-scoped method on a project. Idempotent per method. */
@@ -79,6 +85,7 @@ export const tracksRouter = router({
         projectId: z.string().uuid(),
         playbookId: z.string().uuid(),
         name: z.string().trim().min(1).max(200).optional(),
+        params: params.optional(),
         reasoning,
       })
     )
@@ -86,7 +93,10 @@ export const tracksRouter = router({
       const { reasoning: why, ...rest } = input;
       const result = await startTrack({ ...rest, actor: actorOf(ctx, why) });
       if (result.status === "proposed") return result;
-      return { status: result.status, track: toTrackView(result.track) };
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     }),
 
   /** Move to ANY declared stage of the pinned method (re-enterable). */
@@ -105,7 +115,10 @@ export const tracksRouter = router({
         actor: actorOf(ctx, input.reasoning),
       });
       if (result.status === "proposed") return result;
-      return { ...result, track: toTrackView(result.track) };
+      return {
+        ...result,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     }),
 
   setStatus: podProcedure
@@ -123,6 +136,45 @@ export const tracksRouter = router({
         actor: actorOf(ctx, input.reasoning),
       });
       if (result.status === "proposed") return result;
-      return { status: result.status, track: toTrackView(result.track) };
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
     }),
+
+  /**
+   * Answer (some of) the method's params — merged onto the current answers;
+   * `null` clears one. Governed `track/update`.
+   */
+  setParams: podProcedure
+    .input(z.object({ id: z.string().uuid(), params, reasoning }))
+    .mutation(async ({ ctx, input }) => {
+      const result = await setTrackParams({
+        trackId: input.id,
+        params: input.params,
+        actor: actorOf(ctx, input.reasoning),
+      });
+      if (result.status === "proposed") return result;
+      return {
+        status: result.status,
+        track: await loadWrittenTrackView(result.track, ctx),
+      };
+    }),
+
+  /**
+   * Start the session a stage OFFERS (M2) — the ONE door. Idempotent on an
+   * open session already filed at that stage; an agent PROPOSES.
+   */
+  startStageSession: podProcedure
+    .input(
+      z.object({
+        trackId: z.string().uuid(),
+        stageKey: z.string().min(1).max(120).optional(),
+        title: z.string().max(200).optional(),
+        goal: z.string().max(5000).optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      startStageSession({ ...input, actor: actorOf(ctx) })
+    ),
 });

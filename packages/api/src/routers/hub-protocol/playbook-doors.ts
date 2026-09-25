@@ -160,6 +160,8 @@ export async function runPlaybookDoor(
     /** File the run into this project / track (validated by `playbooks.run`). */
     projectId?: string;
     trackId?: string;
+    /** The stage of that track (0274); absent ⇒ its current stage. */
+    trackStage?: string;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -270,6 +272,9 @@ export async function runPlaybookDoor(
     agentIds: input.agentIds,
     ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(input.trackId && input.trackStage
+      ? { trackStage: input.trackStage }
+      : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,

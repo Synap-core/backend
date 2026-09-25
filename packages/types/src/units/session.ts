@@ -29,6 +29,7 @@
 
 import { isTerminalSessionStatus } from "../focus-sessions/statuses.js";
 import type { UnitStateInput } from "./state.js";
+import { sessionNeedsYou, type NeedsYouFacts } from "./needs-you.js";
 
 /** Lifecycle statuses meaning a person or agent is actively in the session. */
 const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set([
@@ -87,8 +88,32 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
 export interface ProjectAggregateSessionFact {
   /** The session's own `status`, exactly as the row carries it. */
   status: string;
-  /** The pod's own next-move owner for this session (`nextMove.actor`). */
-  nextMoveActor: "user" | "ai" | "none";
+  /**
+   * THE needs-you facts — the row's `unitFacts` (`projects.path` rows,
+   * `focusSessions.list` rows under `nextMove: true`). When present, whether
+   * this session needs you is decided ONLY by `sessionNeedsYou`
+   * (`needs-you.ts`), the one rule.
+   */
+  unitFacts?: NeedsYouFacts;
+  /**
+   * @deprecated LEGACY input — the pod's `nextMove.actor`. Read ONLY when
+   * `unitFacts` is absent, so callers that have not yet moved to `unitFacts`
+   * keep compiling and keep their answer.
+   *
+   * It is the SAME rule minus one clause, not a second rule: the pod answers
+   * `actor: "user"` for exactly `owed_slot`, `pending_proposal` and
+   * `ready_to_close` — the rule's three populations — so the two disagree only
+   * on an agent DRAFT (which the actor cannot see) and on a failed read. Pass
+   * `unitFacts` to get the draft exclusion.
+   */
+  nextMoveActor?: "user" | "ai" | "none";
+}
+
+/** Does this session need you? `unitFacts` through the one rule, else the legacy actor. */
+function aggregateNeedsYou(session: ProjectAggregateSessionFact): boolean {
+  return session.unitFacts
+    ? sessionNeedsYou(session.unitFacts)
+    : session.nextMoveActor === "user";
 }
 
 export interface ProjectAggregateStateInput {
@@ -103,7 +128,7 @@ export interface ProjectAggregateStateInput {
  * One leading fact is set at a time, because the derivation checks `terminal`
  * BEFORE `owedFromYou`: setting both would read a project with a live
  * obligation as `done`.
- *   1. any session needs you     → `owedFromYou`
+ *   1. any session needs you (THE rule, `sessionNeedsYou`) → `owedFromYou`
  *   2. every session is terminal → `terminal`
  *   3. otherwise, something open → `running`
  *
@@ -118,9 +143,9 @@ export function projectAggregateInput(
   const total = input.sessions.length;
   if (total === 0) return { everStarted: false };
 
-  const needsYou = input.sessions.filter(
-    (s) => s.nextMoveActor === "user"
-  ).length;
+  // THE rule (`needs-you.ts`): owed + pending decisions + awaiting review,
+  // drafts excluded.
+  const needsYou = input.sessions.filter(aggregateNeedsYou).length;
   const closed = input.sessions.filter((s) =>
     isTerminalSessionStatus(s.status)
   ).length;

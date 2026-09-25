@@ -239,16 +239,6 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
   { door: "bento/arrange", reason: SEVERED },
   { door: "context/link", reason: SEVERED },
   {
-    door: "document/user_edit",
-    reason:
-      "JUSTIFIED KEEP, not a severance — apply-approval.ts branch B3 applies it, " +
-      'but that branch keys on `targetType === "document"` PLUS the payload ' +
-      "predicate `isDocumentContentProposalData`, which a proposalType-keyed scan " +
-      "cannot see. Teaching the parser to treat a bare targetType branch as " +
-      "coverage would score every future `document/*` door as wired, so this is " +
-      "acknowledged instead of widening the detector.",
-  },
-  {
     door: "entity/capture.graph",
     reason:
       "JUSTIFIED KEEP, not a severance — apply-approval.ts branch B0 applies it. " +
@@ -257,7 +247,8 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
       "at line ~495, long before `dispatchProposalApproval` at ~1553, so it " +
       "materializes the whole graph through the real entity/relation callers. " +
       "A proposalType-keyed scan structurally cannot see a payload predicate — " +
-      "the same blind spot already acknowledged for `document/user_edit`. " +
+      "the same payload-predicate blind spot (`document/user_edit` had it until " +
+      "the W4b patch executor gave it a registered approval half). " +
       "Teaching the parser to treat a payload predicate as coverage would score " +
       "every future composite-shaped door as wired, so this is acknowledged " +
       "instead of widening the detector.",
@@ -271,7 +262,8 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
       "at line ~495, long before `dispatchProposalApproval` at ~1553, so it " +
       "materializes the whole graph through the real entity/relation callers. " +
       "A proposalType-keyed scan structurally cannot see a payload predicate — " +
-      "the same blind spot already acknowledged for `document/user_edit`. " +
+      "the same payload-predicate blind spot (`document/user_edit` had it until " +
+      "the W4b patch executor gave it a registered approval half). " +
       "Teaching the parser to treat a payload predicate as coverage would score " +
       "every future composite-shaped door as wired, so this is acknowledged " +
       "instead of widening the detector.",
@@ -287,7 +279,7 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
  * LOWERED. Raising it is how this contract would quietly erode, so any PR that
  * raises it is doing the thing this file exists to prevent.
  */
-const GAP_CEILING = 11;
+const GAP_CEILING = 10;
 
 // ── Load the sources ─────────────────────────────────────────────────────────
 

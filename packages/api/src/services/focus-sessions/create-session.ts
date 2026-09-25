@@ -4,7 +4,10 @@
  * Creates a focus session (goal-bound work session) with governance gating.
  * Idempotent by correlationId. Emits realtime events for browser mirroring.
  */
-import { resolveTrackFiling } from "../tracks/tracks-service.js";
+import {
+  openStageSession,
+  resolveTrackFiling,
+} from "../tracks/tracks-service.js";
 import {
   db,
   focusSessions,
@@ -31,6 +34,7 @@ import { createLogger } from "@synap-core/core";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import {
   collectPlaybookCriteria,
+  describeParamTypeError,
   mergeCriteria,
   readPlaybookParams,
   validatePlaybookParams,
@@ -62,9 +66,9 @@ import {
   findOpenSessionTwin,
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
+import { paramOwedSlots } from "./param-slots.js";
 import {
   normalizeSessionTitle,
-  PARAM_SLOT_KIND,
   SESSION_TITLE_MAX,
   titleSourcePatch,
   canAutoRetitle,
@@ -115,6 +119,12 @@ export interface CreateFocusSessionParams {
    */
   trackId?: string | null;
   /**
+   * The STAGE of that track this session is filed at (0274, M1). Absent ⇒ the
+   * track's CURRENT stage; an explicit stage must be one the track pinned
+   * (refused otherwise). Meaningless without `trackId` — refused alone.
+   */
+  trackStage?: string | null;
+  /**
    * The entity this session is "about" — the subject-spine anchor. Written on
    * the ad-hoc start path so a session can be tied to a person/company/deal.
    */
@@ -145,6 +155,12 @@ export interface CreateFocusSessionParams {
    * block a session the person is already describing in their own words.
    * A MISTYPED value still refuses, on every door — see
    * `InstantiateInput.onMissingRequired`.
+   *
+   * TRACK params (0274): with `trackId` and NO resolved template, `params` are
+   * the answers to the TRACK's method params (as pinned) — `startStageSession`
+   * passes the track's own answers, so a REQUIRED method param still missing
+   * becomes a human-owned slot here, the same way a template's does. Absent
+   * `params` ⇒ no method-param check (a plain tracked session is unchanged).
    */
   params?: Record<string, unknown>;
   /**
@@ -186,6 +202,15 @@ export interface CreateFocusSessionParams {
    * goal and scope exists. Without it that session is returned as `deduped`.
    */
   forceCreate?: boolean;
+  /**
+   * ONE open session per (user, track, stage): inside the insert transaction,
+   * take an advisory lock on `stage-session|user|track|stage`, re-read the
+   * caller's open session filed there and return it as `deduped` instead of
+   * inserting. `startStageSession` passes it, so its check-then-create cannot
+   * race into two open sessions at one stage (goals may differ, so the twin
+   * lock alone does not serialize them). Ignored without `trackId`.
+   */
+  oneOpenPerStage?: boolean;
   /**
    * Binary acceptance criteria — the definition of done (`focus_sessions.
    * criteria`, Lane B's contract). Validated with the shared write schema; at
@@ -304,14 +329,23 @@ export async function createFocusSession(
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
   // caller's own explicit pin (rung 1), so nothing downstream re-derives it.
+  if (!requestedTrackId && params.trackStage) {
+    throw Object.assign(
+      new Error("trackStage needs trackId — a stage belongs to a track."),
+      { code: "BAD_REQUEST" }
+    );
+  }
   const trackFiling = requestedTrackId
     ? await resolveTrackFiling({
         trackId: requestedTrackId,
         projectId: explicitProjectId,
+        trackStage: params.trackStage ?? null,
         actor: { userId },
       })
     : null;
   const trackId = trackFiling?.trackId ?? null;
+  // The stage it is FILED at (M1) — explicit (validated) or the track's current.
+  const trackStage = trackFiling?.trackStage ?? null;
   // The pin rung 1 receives: the track's project when filed into a track
   // (equal to any explicit projectId — a mismatch was refused above).
   const pinnedProjectId = trackFiling?.projectId ?? explicitProjectId;
@@ -394,6 +428,8 @@ export async function createFocusSession(
     projectId,
     parentSessionId,
     templateId,
+    // M3: one goal at two stages of a track is two sessions.
+    ...(trackId ? { track: { trackId, trackStage } } : {}),
   });
   if (twinMatch.exact && !params.forceCreate) {
     return {
@@ -479,6 +515,24 @@ export async function createFocusSession(
         })) ?? null)
       : null;
 
+  // TRACK PARAMS (0274) — resolved BEFORE the membrane so a mistyped answer
+  // refuses its author rather than landing in a human's queue. Only when no
+  // template resolved (a template's own params win) and the caller passed
+  // answers (see `CreateFocusSessionParams.params`).
+  const trackParamResolution =
+    trackFiling && !playbook && params.params !== undefined
+      ? validatePlaybookParams(
+          readPlaybookParams(trackFiling.methodParams),
+          params.params
+        )
+      : null;
+  if (trackParamResolution && trackParamResolution.typeErrors.length > 0) {
+    const [first] = trackParamResolution.typeErrors;
+    throw Object.assign(new Error(describeParamTypeError(first!)), {
+      code: "BAD_REQUEST",
+    });
+  }
+
   const perm = await checkPermissionOrPropose({
     userId,
     agentUserId,
@@ -512,6 +566,11 @@ export async function createFocusSession(
       ...(playbook && workspaceId && params.params
         ? { params: params.params }
         : {}),
+      // The TRACK's param answers (0274) — the approval replay re-validates
+      // them against the track's pinned params and mints the same owed slots.
+      ...(trackParamResolution
+        ? { trackParams: trackParamResolution.declaredValues }
+        : {}),
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
       // Sanitized BEFORE it is proposed, so the payload a human reviews is the
@@ -535,6 +594,8 @@ export async function createFocusSession(
       // The track rides the proposal so the approved row is born inside it
       // too; `proposal.projectId` already carries the track's project.
       ...(trackId ? { trackId } : {}),
+      // …at the stage it was filed at — re-validated at approval.
+      ...(trackId && trackStage ? { trackStage } : {}),
     },
   });
 
@@ -569,33 +630,18 @@ export async function createFocusSession(
   // `CreateFocusSessionParams.params`.
   const paramResolution = playbook
     ? validatePlaybookParams(readPlaybookParams(playbook.params), params.params)
-    : null;
+    : trackParamResolution;
   if (paramResolution && paramResolution.typeErrors.length > 0) {
     const [first] = paramResolution.typeErrors;
-    throw Object.assign(
-      new Error(
-        first!.options
-          ? `"${first!.name}" must be one of ${first!.options.map((o) => `"${o}"`).join(", ")} — got "${first!.received}".`
-          : `"${first!.name}" must be a ${first!.type} — got "${first!.received}".`
-      ),
-      { code: "BAD_REQUEST" }
-    );
+    throw Object.assign(new Error(describeParamTypeError(first!)), {
+      code: "BAD_REQUEST",
+    });
   }
-  const paramOwedAt = new Date().toISOString();
-  const paramSlots: ExpectedOutput[] = (
-    paramResolution?.missingRequired ?? []
-  ).map((p) => ({
-    kind: PARAM_SLOT_KIND,
-    label: `Answer: ${p.label?.trim() || p.name}`,
-    owner: "human" as const,
-    blockedReason: "decision" as const,
-    why: `"${playbook!.name}" needs a value for "${p.label?.trim() || p.name}"${
-      p.options?.length
-        ? ` (one of ${p.options.map((o) => `"${o}"`).join(", ")})`
-        : ` (${p.type})`
-    }. Nobody supplied it when this session was started.`,
-    owedSince: paramOwedAt,
-  }));
+  const paramSlots: ExpectedOutput[] = paramOwedSlots(
+    paramResolution?.missingRequired ?? [],
+    playbook?.name ?? trackFiling?.trackName ?? "This session",
+    new Date().toISOString()
+  );
 
   // Session + its playbook_runs ledger row land in ONE transaction: the
   // correlationId idempotency check returns the existing session on retry, so
@@ -608,12 +654,29 @@ export async function createFocusSession(
   // the matcher never dedups (a template run, or `forceCreate`).
   const lockTwins = !templateId && !params.forceCreate;
   const outcome = await db.transaction(async (tx) => {
+    // Taken BEFORE the twin lock, and only by `startStageSession`, so the lock
+    // order is the same for every caller that takes both.
+    if (params.oneOpenPerStage && trackId && trackStage) {
+      await tx.execute(
+        drizzleSql`select pg_advisory_xact_lock(hashtext(${`stage-session|${userId}|${trackId}|${trackStage}`}))`
+      );
+      const open = await openStageSession(
+        trackId,
+        trackStage,
+        userId,
+        tx as unknown as typeof db
+      );
+      if (open) return { deduped: open, session: undefined };
+    }
     if (lockTwins) {
-      const scopeKey = parentSessionId
-        ? `parent:${parentSessionId}`
-        : projectId
-          ? `project:${projectId}`
-          : `workspace:${workspaceId ?? ""}`;
+      const scopeKey =
+        (parentSessionId
+          ? `parent:${parentSessionId}`
+          : projectId
+            ? `project:${projectId}`
+            : `workspace:${workspaceId ?? ""}`) +
+        // M3: the twin scope includes the track stage, so the lock does too.
+        (trackId ? `|track:${trackId}:${trackStage ?? ""}` : "");
       await tx.execute(
         drizzleSql`select pg_advisory_xact_lock(hashtext(${`session-twin|${userId}|${scopeKey}|${normalizeGoal(goal).toLowerCase()}`}))`
       );
@@ -624,6 +687,7 @@ export async function createFocusSession(
         projectId,
         parentSessionId,
         templateId,
+        ...(trackId ? { track: { trackId, trackStage } } : {}),
         database: tx as unknown as typeof db,
       });
       if (raced.exact) return { deduped: raced.exact, session: undefined };
@@ -633,7 +697,7 @@ export async function createFocusSession(
       workspaceId,
       projectId,
       // Only ever set together with the track's own project (see above).
-      ...(trackId ? { trackId } : {}),
+      ...(trackId ? { trackId, trackStage } : {}),
       subjectEntityId,
       title,
       goal,

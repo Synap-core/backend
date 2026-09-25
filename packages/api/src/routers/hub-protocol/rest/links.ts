@@ -34,9 +34,8 @@ import {
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { linkProjectToWorkspace } from "../../../utils/project-workspace.js";
 import type { LinkEndpointType, LinkType } from "@synap/playbooks";
-import { db, eq, and, isNull, getWorkspaceMembership } from "@synap/database";
-import { workspaces, projects } from "@synap/database/schema";
-import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
+import { db } from "@synap/database";
+import { checkLinkEndpointsVisible } from "./link-endpoint-visibility.js";
 
 // Kept in sync with LinkEndpointType (packages/database/src/schema/links.ts).
 // __tripwires__/links-endpoint-type-ssot.test.ts fails the build if this
@@ -216,34 +215,6 @@ export function registerLinksRoutes(app: HubHono): void {
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     const { userId, workspaceId } = acting;
 
-    // Workspace-as-endpoint edges (feeds/requires between two lenses) name a
-    // SECOND workspace beyond the stamped one — membership-check it too, or
-    // a member of workspace A could wire an edge exposing workspace B's
-    // existence/lens without ever belonging to B.
-    for (const endpointWorkspaceId of new Set(
-      [
-        parsed.data.fromType === "workspace" ? parsed.data.fromId : null,
-        parsed.data.toType === "workspace" ? parsed.data.toId : null,
-      ].filter((id): id is string => id !== null)
-    )) {
-      const [endpointWorkspace, endpointMembership] = await Promise.all([
-        db.query.workspaces.findFirst({
-          where: and(
-            eq(workspaces.id, endpointWorkspaceId),
-            isNull(workspaces.archivedAt)
-          ),
-          columns: { id: true },
-        }),
-        getWorkspaceMembership(db, endpointWorkspaceId, userId),
-      ]);
-      if (!endpointWorkspace || !endpointMembership) {
-        return c.json(
-          { error: `Access denied to workspace ${endpointWorkspaceId}` },
-          403
-        );
-      }
-    }
-
     // `blocked_by` has a dedicated producer (`addSessionBlocker`) whose floor —
     // session endpoints, no self-edge, BOTH sessions owned by the caller — is
     // what makes its owner-blind readers safe. A raw edge from this door would
@@ -276,16 +247,6 @@ export function registerLinksRoutes(app: HubHono): void {
           400
         );
       }
-      const valid = await validateSessionBlocker({
-        sessionId: parsed.data.fromId,
-        blockerSessionId: parsed.data.toId,
-        userId,
-      });
-      if (!valid.ok) {
-        const refusal = BLOCKER_REFUSALS[valid.reason];
-        return c.json({ error: refusal.error }, refusal.status);
-      }
-      blockedByWorkspaceId = valid.workspaceId;
     }
 
     if (
@@ -300,25 +261,33 @@ export function registerLinksRoutes(app: HubHono): void {
         400
       );
     }
-    // The project must be one the caller can see BEFORE governance: otherwise
-    // a foreign or stale project id becomes a proposal that approval would
-    // write as a ghost INDEX edge (`linkProjectToWorkspace` refuses it on the
-    // direct path, but the proposal path never reaches it).
-    if (parsed.data.linkType === "uses") {
-      const visibleProject = await db.query.projects.findFirst({
-        where: and(
-          eq(projects.id, parsed.data.fromId),
-          ownerPrivateVisibleWhere(
-            projects.workspaceId,
-            projects.userId,
-            userId
-          )
-        ),
-        columns: { id: true },
+
+    // EVERY endpoint must be an object the caller can see, BEFORE governance —
+    // otherwise an invisible id becomes a proposal (a name oracle on read-back,
+    // and an edge approval would write). One canonical read floor per type;
+    // an invisible and a nonexistent id get the identical refusal. This also
+    // covers what used to be inline here: a workspace endpoint's membership
+    // (a member of A must not wire an edge naming B) and the `uses` project.
+    const endpointRefusal = await checkLinkEndpointsVisible(
+      parsed.data,
+      userId,
+      workspaceId ?? null
+    );
+    if (endpointRefusal) {
+      return c.json({ error: endpointRefusal.error }, endpointRefusal.status);
+    }
+
+    if (isBlockedBy) {
+      const valid = await validateSessionBlocker({
+        sessionId: parsed.data.fromId,
+        blockerSessionId: parsed.data.toId,
+        userId,
       });
-      if (!visibleProject) {
-        return c.json({ error: "Project not found" }, 404);
+      if (!valid.ok) {
+        const refusal = BLOCKER_REFUSALS[valid.reason];
+        return c.json({ error: refusal.error }, refusal.status);
       }
+      blockedByWorkspaceId = valid.workspaceId;
     }
 
     try {

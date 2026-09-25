@@ -1,0 +1,79 @@
+{
+  "name": "@synap-core/markdown-core",
+  "version": "0.1.0",
+  "description": "The ONE Synap markdown spine: parse, embeds, container scan, sections, plain text, inline markers, diagnostics, blame. Pure \u2014 no React, no Tiptap.",
+  "type": "module",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
+  },
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./markers": {
+      "types": "./dist/markers.d.ts",
+      "import": "./dist/markers.js"
+    },
+    "./embeds": {
+      "types": "./dist/embeds.d.ts",
+      "import": "./dist/embeds.js"
+    },
+    "./scan": {
+      "types": "./dist/scan.d.ts",
+      "import": "./dist/scan.js"
+    },
+    "./processor": {
+      "types": "./dist/processor.d.ts",
+      "import": "./dist/processor.js"
+    },
+    "./sections": {
+      "types": "./dist/sections.d.ts",
+      "import": "./dist/sections.js"
+    },
+    "./plain-text": {
+      "types": "./dist/plain-text.d.ts",
+      "import": "./dist/plain-text.js"
+    },
+    "./diagnostics": {
+      "types": "./dist/diagnostics.d.ts",
+      "import": "./dist/diagnostics.js"
+    },
+    "./blame": {
+      "types": "./dist/blame.d.ts",
+      "import": "./dist/blame.js"
+    },
+    "./diff": {
+      "types": "./dist/diff.d.ts",
+      "import": "./dist/diff.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@types/mdast": "^4.0.4",
+    "mdast-util-directive": "^3.1.0",
+    "remark-directive": "^4.0.0",
+    "remark-gfm": "^4.0.1",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.0",
+    "unist-util-visit": "^5.0.0",
+    "vfile": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10"
+  }
+}

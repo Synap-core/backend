@@ -234,6 +234,42 @@ const NOTABLE_KINDS: ReadonlySet<string> = new Set([
 /** `class` values that are an access / policy decision whatever the kind says. */
 const HIGH_CLASSES: ReadonlySet<string> = new Set(["governance", "access"]);
 
+/**
+ * THE document-edit proposal types: what the pod's document patch door
+ * (`applyDocumentPatch`) files against an EXISTING document (`targetType:
+ * "document"`) — a text/full edit, a section write, a session-narrative write,
+ * a person's suggestion. The pod registers its approval executors from this
+ * list, so a surface keyed on it cannot drift from what the pod mints.
+ */
+export const DOCUMENT_PATCH_PROPOSAL_TYPES = [
+  "update",
+  "section_update",
+  "session_narrative_update",
+  "user_edit",
+] as const;
+export type DocumentPatchProposalType =
+  (typeof DOCUMENT_PATCH_PROPOSAL_TYPES)[number];
+
+/** …plus `ai_edit`, the full-replace type filed before the patch door (still pending on some pods). */
+const DOCUMENT_EDIT_PROPOSAL_TYPES: ReadonlySet<string> = new Set([
+  ...DOCUMENT_PATCH_PROPOSAL_TYPES,
+  "ai_edit",
+]);
+
+/**
+ * Does this proposal edit an existing document's content? The pair matters:
+ * `update` on an entity is a field write, not a document draft.
+ */
+export function isDocumentEditProposal(p: {
+  targetType?: string | null;
+  proposalType?: string | null;
+}): boolean {
+  return (
+    p.targetType === "document" &&
+    DOCUMENT_EDIT_PROPOSAL_TYPES.has(p.proposalType ?? "")
+  );
+}
+
 export type LinkOperation = "create" | "update" | "remove";
 
 /**

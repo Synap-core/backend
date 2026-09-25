@@ -26,6 +26,11 @@
       "import": "./dist/utils/governance-rule-provenance.js",
       "default": "./dist/utils/governance-rule-provenance.js"
     },
+    "./channel-visibility": {
+      "types": "./dist/utils/channel-visibility.d.ts",
+      "import": "./dist/utils/channel-visibility.js",
+      "default": "./dist/utils/channel-visibility.js"
+    },
     "./capture-routing": {
       "types": "./dist/services/capture-routing.d.ts",
       "import": "./dist/services/capture-routing.js",

@@ -112,6 +112,14 @@ export const focusSessions = pgTable(
      */
     trackId: uuid("track_id"),
     /**
+     * The STAGE of its track this session was FILED at (0274) — a key of the
+     * track's pinned `definition_snapshot.stages`. Stamped at birth (default:
+     * the track's current stage) and never re-derived. NOT the session's own
+     * playbook phase (`currentStage` below — a different axis). NULL when the
+     * session has no track, or predates 0274.
+     */
+    trackStage: text("track_stage"),
+    /**
      * How this session came to exist — the TYPED replacement for sniffing
      * `metadata.automationId` / `metadata.source` (migration 0240).
      *
@@ -288,6 +296,10 @@ export const focusSessions = pgTable(
     playbookIdIdx: index("idx_focus_sessions_playbook_id").on(table.playbookId),
     projectIdIdx: index("idx_focus_sessions_project_id").on(table.projectId),
     trackIdIdx: index("idx_focus_sessions_track_id").on(table.trackId),
+    trackStageIdx: index("idx_focus_sessions_track_stage").on(
+      table.trackId,
+      table.trackStage
+    ),
     subjectEntityIdIdx: index("idx_focus_sessions_subject_entity_id").on(
       table.subjectEntityId
     ),

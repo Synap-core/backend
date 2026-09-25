@@ -12,6 +12,7 @@ import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
 import type {
   Document,
+  DocumentVersionAuthor,
   NewDocument,
   NewDocumentVersion,
 } from "../schema/documents.js";
@@ -78,6 +79,24 @@ export interface UpdateDocumentInput {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Who authored a new document's v1 version. The row's provenance columns
+ * (`createdByKind`, `agentUserId`) already say an agent wrote it; stamping the
+ * v1 version `user` + the owner's id made the version rail name the HUMAN as the
+ * author of an agent's document (W5f F7). Same rule every later writer follows
+ * (`apply-approval.ts`: `ai` + the agent's id when an agent drafted it).
+ */
+export function initialVersionAuthor(
+  data: Pick<CreateDocumentInput, "createdByKind" | "agentUserId">,
+  userId: string
+): { author: DocumentVersionAuthor; authorId: string } {
+  if (data.createdByKind === "ai_agent")
+    return { author: "ai", authorId: data.agentUserId ?? userId };
+  if (data.createdByKind === "system")
+    return { author: "system", authorId: userId };
+  return { author: "user", authorId: userId };
+}
+
 export class DocumentRepository extends BaseRepository<
   Document,
   CreateDocumentInput,
@@ -133,8 +152,7 @@ export class DocumentRepository extends BaseRepository<
           documentId: doc.id,
           version: 1,
           ...storedVersionValues(data.preUploadedVersion.snapshot),
-          author: "user",
-          authorId: userId,
+          ...initialVersionAuthor(data, userId),
           message: data.preUploadedVersion.message ?? "Initial version",
         } as NewDocumentVersion);
       } else if (data.content !== undefined) {
@@ -152,8 +170,7 @@ export class DocumentRepository extends BaseRepository<
           documentId: doc.id,
           version: 1,
           ...storedVersionValues(snapshot),
-          author: "user",
-          authorId: userId,
+          ...initialVersionAuthor(data, userId),
           message: "Initial version",
         } as NewDocumentVersion);
       }

@@ -22,7 +22,15 @@
  * a fetched page is the defect this table has shipped twice.
  */
 
-import { eq, ilike, isNull, or, focusSessions } from "@synap/database";
+import {
+  and,
+  eq,
+  ilike,
+  isNotNull,
+  isNull,
+  or,
+  focusSessions,
+} from "@synap/database";
 import type { SQL } from "@synap/database";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import { requireUserId } from "../../utils/user-scoped.js";
@@ -64,6 +72,32 @@ export interface SessionListQuery {
    * honest answer to a contradictory question.
    */
   unfiled?: boolean;
+  /**
+   * Widen the `work` population by the RUN sessions filed in a TRACK — the
+   * project path's population (`workAndTrackedRunsWhere`). Only meaningful with
+   * `kind: "work"`; the tRPC door refuses it with any other kind.
+   */
+  includeTrackedRuns?: boolean;
+}
+
+/**
+ * THE project-path population: a person's WORK, plus the `run`-kind sessions
+ * that carry a `track_id` — a playbook run started INSIDE one of a project's
+ * methods (0272) IS the project's work, it is merely executed by a playbook.
+ * The kind derivation (`session-kind.ts`) is deliberately untouched: such a row
+ * still reads `kind: "run"`; only the POPULATION widens, and only for rows that
+ * carry a track. An untracked run (an automation's scheduled pass, a one-off
+ * playbook run) stays out. Receipts never carry a track.
+ *
+ * ONE predicate, used by `projects.path`, `projects.outputs`, the per-project
+ * needs-you count and `focusSessions.list({ includeTrackedRuns })` (the work
+ * map), so the four cannot disagree about which sessions a project shows.
+ */
+export function workAndTrackedRunsWhere(): SQL {
+  return or(
+    sessionKindWhere("work"),
+    and(isNotNull(focusSessions.trackId), sessionKindWhere("run"))
+  ) as SQL;
 }
 
 export function sessionListConditions({
@@ -76,6 +110,7 @@ export function sessionListConditions({
   statusSince,
   q,
   unfiled,
+  includeTrackedRuns,
 }: SessionListQuery): SQL[] {
   const conditions: SQL[] = [eq(focusSessions.userId, requireUserId(userId))];
 
@@ -103,7 +138,9 @@ export function sessionListConditions({
 
   // KIND LENS. Automation runs are the highest-volume population in this table,
   // so a post-filter would let them eat the page.
-  if (kind !== "all") {
+  if (kind === "work" && includeTrackedRuns) {
+    conditions.push(workAndTrackedRunsWhere());
+  } else if (kind !== "all") {
     conditions.push(sessionKindWhere(kind));
   }
 

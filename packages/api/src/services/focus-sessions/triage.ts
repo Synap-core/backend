@@ -44,6 +44,7 @@ import {
   focusSessions,
 } from "@synap/database";
 import type { FocusSession, SQL } from "@synap/database";
+import { notExists, type AnyColumn } from "drizzle-orm";
 import { emitSideEffects } from "@synap/events";
 import { logEvent } from "../../lib/event-helpers.js";
 import { completeFocusSession } from "./complete-session.js";
@@ -91,6 +92,25 @@ export function notTriagePendingWhere(): SQL {
     not(inArray(focusSessions.origin, [...TRIAGE_ORIGINS])),
     not(inArray(focusSessions.status, [...OPEN_SESSION_STATUSES])),
     drizzleSql`${focusSessions.metadata} #>> '{triage,acceptedAt}' IS NOT NULL`
+  ) as SQL;
+}
+
+/**
+ * SQL: a row that references a session (`proposals.session_id`, …) is NOT
+ * filed under a triage-pending draft — no session, or a session that is not
+ * `triagePendingWhere()`. The same rule, reached through a foreign key, so a
+ * decision filed under an undecided agent draft is left out of needs-you
+ * exactly like the draft itself.
+ */
+export function notUnderTriagePendingSessionWhere(sessionId: AnyColumn): SQL {
+  return or(
+    isNull(sessionId),
+    notExists(
+      db
+        .select({ one: drizzleSql`1` })
+        .from(focusSessions)
+        .where(and(eq(focusSessions.id, sessionId), triagePendingWhere()))
+    )
   ) as SQL;
 }
 

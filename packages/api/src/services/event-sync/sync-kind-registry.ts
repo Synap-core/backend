@@ -164,6 +164,12 @@ export function getSyncProviders(): string[] {
 export interface SyncFailure {
   errorClass: FailureErrorClass;
   next?: CapabilityNextAction;
+  /**
+   * The pack-enable request filed on the owner's behalf for a `permission`
+   * failure — what the owner approves to fix it (one open per pack). Absent
+   * when none could be filed; the `next` link still says where to enable.
+   */
+  enableProposalId?: string;
 }
 
 /** A provider read that did not produce data — carries the verb for the report. */
@@ -191,9 +197,13 @@ export class SyncReadError extends Error {
  */
 export function classifySyncRead(cap: ExecuteCapabilityResult): SyncFailure {
   if (cap.kind === "deny") {
+    const offer = cap.enableProposal;
     return {
       errorClass: "permission",
       ...(cap.enable ? { next: cap.enable } : {}),
+      ...(offer?.status === "proposed"
+        ? { enableProposalId: offer.proposalId }
+        : {}),
     };
   }
   if (cap.kind === "not_found") return { errorClass: "target_missing" };
@@ -235,6 +245,10 @@ export async function readVerbPage(
     // stale same-named skill tied to an older tool (a pre-consolidation code
     // skill) would otherwise win the name lookup and refuse the selector above.
     toolId: ctx.toolId,
+    // A mirror has no one to ask, so a not-enabled pack files ONE enable
+    // request for the owner to approve (deduped per pack) instead of failing
+    // every tick with nothing in the review queue.
+    requestEnableForOwner: true,
     // A scheduled mirror has no review surface: an unapproved verb must come
     // back as a refusal, never as a new proposal row per tick.
     suppressProposal: true,

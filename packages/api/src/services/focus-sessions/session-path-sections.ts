@@ -59,6 +59,7 @@ import {
 } from "./continuation-packet.js";
 import { projectOwedSlots, type OwedSlot } from "./owed-outputs.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { projectTriage } from "./triage.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 
 const logger = createLogger({ module: "session-path-sections" });
@@ -77,6 +78,13 @@ export interface PathSourceRow {
   workspaceId: string | null;
   projectId: string | null;
   expectedOutputs: unknown;
+  /**
+   * REQUIRED (not optional) — `unitFacts.draft` is derived from them through
+   * `projectTriage`, the one triage rule. Optional here would let a narrowed
+   * select silently read every draft as accepted work.
+   */
+  origin: string | null;
+  metadata: unknown;
 }
 
 /** The sections every path/map row carries. */
@@ -90,17 +98,29 @@ export interface SessionPathSections {
   hasOutputs: { status: "ok"; value: boolean } | Unavailable;
   nextMove: ContinuationNextMove;
   /**
-   * The two COUNTS a state mark needs, shaped exactly as `SessionUnitFacts`
-   * (`@synap-core/types/units`) reads them, from the SAME reads as `nextMove`
-   * so the mark and the next move cannot disagree. `pendingDecisions: null`
-   * means the proposals read FAILED — not zero.
+   * The facts a state mark and THE needs-you rule read, shaped exactly as
+   * `SessionUnitFacts` and `NeedsYouFacts` (`@synap-core/types/units`) read
+   * them, from the SAME reads as `nextMove` so the mark, the rule and the next
+   * move cannot disagree. `pendingDecisions: null` means the proposals read
+   * FAILED — not zero.
    */
   unitFacts: SessionUnitCounts;
 }
 
+/**
+ * A row's `unitFacts`. Structurally a `NeedsYouFacts` (`needs-you.ts`): feed it
+ * to `sessionNeedsYou` / `tallyNeedsYou` unchanged.
+ */
 export interface SessionUnitCounts {
   owedFromYou: number;
   pendingDecisions: number | null;
+  /**
+   * Finished and awaiting the person's review / close — this row's
+   * `nextMove.kind === "ready_to_close"`, projected so no reader re-derives it.
+   */
+  awaitingReview: boolean;
+  /** An agent/automation draft still in triage (`projectTriage(row).pending`). */
+  draft: boolean;
 }
 
 /**
@@ -417,6 +437,16 @@ export async function attachPathSections<R extends PathSourceRow>(
           }
         : outputsWith;
 
+    const nextMove = deriveNextMove({
+      status: row.status,
+      owedSlots,
+      pendingProposals,
+      aiCanDo,
+      blockedBy,
+      expectedOutputs: all,
+      outputs,
+      children,
+    });
     return {
       ...row,
       blockedBy,
@@ -427,21 +457,14 @@ export async function attachPathSections<R extends PathSourceRow>(
         outputsWith.status === "ok"
           ? { status: "ok", value: outputsWith.value.has(row.id) }
           : outputsWith,
-      nextMove: deriveNextMove({
-        status: row.status,
-        owedSlots,
-        pendingProposals,
-        aiCanDo,
-        blockedBy,
-        expectedOutputs: all,
-        outputs,
-        children,
-      }),
+      nextMove,
       unitFacts: {
         // Projected from the row itself — there is no read here to fail.
         owedFromYou: owedList.length,
         pendingDecisions:
           pendingProposals.status === "ok" ? pendingProposals.total : null,
+        awaitingReview: nextMove.kind === "ready_to_close",
+        draft: projectTriage(row).pending,
       },
     };
   });

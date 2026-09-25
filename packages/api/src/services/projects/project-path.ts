@@ -37,21 +37,17 @@ import {
   db,
   projects,
   focusSessions,
-  proposals,
   workspaces,
   and,
   eq,
   desc,
   inArray,
   count,
-  ProposalStatus,
   ownerPrivateVisibleWhere,
   userVisibleWhere,
   projectTracks,
   asc,
   ne,
-  or,
-  isNotNull,
 } from "@synap/database";
 import {
   deriveTrackStages,
@@ -67,11 +63,6 @@ import type {
   PacketSection,
 } from "../focus-sessions/continuation-packet.js";
 import {
-  owedSlotPrefilter,
-  owedSlotWhere,
-  projectOwedSlots,
-} from "../focus-sessions/owed-outputs.js";
-import {
   sessionListConditions,
   type SessionLens,
 } from "../focus-sessions/session-list-conditions.js";
@@ -82,13 +73,13 @@ import {
 } from "../focus-sessions/triage.js";
 import {
   attachSessionKind,
-  sessionKindWhere,
   type SessionKind,
 } from "../focus-sessions/session-kind.js";
 import {
   attachPathSections,
   settle,
   type PathCount,
+  type SessionUnitCounts,
   type Settled,
 } from "../focus-sessions/session-path-sections.js";
 import { buildPaginatedResponse } from "../../utils/pagination.js";
@@ -121,7 +112,16 @@ export interface ProjectPathRow {
   kind: SessionKind;
   /** The TRACK (method, 0272) this session was born inside; `null` for most. */
   trackId: string | null;
+  /** The track STAGE it was filed at (0274); `null` when unfiled or legacy. */
+  trackStage: string | null;
   triage: TriageProjection;
+  /**
+   * The facts THE needs-you rule reads (`sessionNeedsYou` / `tallyNeedsYou`,
+   * `@synap-core/types/units`) and a state mark reads (`sessionUnitInput`):
+   * owed-by-you and pending-decision counts, whether the session awaits your
+   * review/close, whether it is an agent draft. Same reads as `nextMove`.
+   */
+  unitFacts: SessionUnitCounts;
   /**
    * `null` for a session filed in no workspace. `name` is `null` when the
    * caller cannot see that workspace.
@@ -155,11 +155,17 @@ export interface ProjectPathResult {
    * never `[]` — "no tracks" and "could not read them" are different facts.
    */
   tracks: { status: "ok"; items: ProjectPathTrack[] } | Unavailable;
-  /** Across the WHOLE path under the same filter, not just this page. */
+  /**
+   * Across the WHOLE path under the same filter, not just this page.
+   *
+   * `userMustDecide` was RETIRED (2026-09-25): it was a second server count of
+   * "needs you" (raw pending proposals joined through sessions + owed slots)
+   * beside `signals.countByProject`, which the rail badge reads, and no screen
+   * rendered it. The project's needs-you number is `signals.countByProject`;
+   * per-row membership is `unitFacts` through `sessionNeedsYou`.
+   */
   summary: {
     openSessions: PathCount;
-    /** Owed human slots + pending proposals — what the user must decide. */
-    userMustDecide: PathCount;
   };
   items: ProjectPathRow[];
   pagination: { hasMore: boolean; limit: number; offset: number };
@@ -180,6 +186,34 @@ export interface ProjectPathTrack {
 
 const iso = (d: Date | string | null | undefined): string | null =>
   d ? new Date(d).toISOString() : null;
+
+/**
+ * THE project path's session set, as WHERE conditions — the caller's own
+ * sessions (the `focus_sessions` owner floor, via `sessionListConditions`)
+ * filed in the project, in the project population (work + runs filed in a
+ * track, `workAndTrackedRunsWhere`). Every project read that lists or counts
+ * the project's sessions starts here, so none can show a different set:
+ * `projects.path`, `projects.outputs` and the per-project needs-you count.
+ */
+export function projectPathConditions(q: {
+  userId: string;
+  projectId: string;
+  /** Narrow to these workspaces. Absent / empty ⇒ every workspace. */
+  workspaceIds?: string[];
+  lens: SessionLens;
+}) {
+  return sessionListConditions({
+    userId: q.userId,
+    scope: {
+      workspaceLens: q.workspaceIds?.length ? q.workspaceIds : undefined,
+      projectLens: q.projectId,
+    },
+    status: "all",
+    lens: q.lens,
+    kind: "work",
+    includeTrackedRuns: true,
+  });
+}
 
 /** Returns `null` when the project does not exist or the caller cannot see it. */
 export async function getProjectPath(
@@ -206,33 +240,17 @@ export async function getProjectPath(
     .limit(1);
   if (!project) return null;
 
-  // ONE WHERE for every session list door. Kind is `work`: a path is the
-  // project's work, never its automation runs or agent write containers —
-  // with ONE widening. A `run`-kind session that carries a `track_id` was
-  // started INSIDE one of this project's methods (a playbook run filed into a
-  // track): it IS the project's work, it is simply executed by a playbook. The
-  // kind derivation (session-kind.ts) is deliberately untouched — the row still
-  // reads `kind: "run"` — only the path's population widens, and only for rows
-  // that carry a track. An untracked run (an automation's scheduled pass, a
-  // one-off playbook run) stays off the path exactly as before. Receipts never
-  // carry a track and are not widened.
+  // ONE WHERE for every session list door, and ONE population for the
+  // project: its work plus the runs filed in a track
+  // (`workAndTrackedRunsWhere`, shared with `projects.outputs`, the
+  // per-project needs-you count and `focusSessions.list({ includeTrackedRuns })`).
   const conditions = and(
-    ...sessionListConditions({
+    ...projectPathConditions({
       userId,
-      scope: {
-        workspaceLens: query.workspaceIds?.length
-          ? query.workspaceIds
-          : undefined,
-        projectLens: projectId,
-      },
-      status: "all",
+      projectId,
+      workspaceIds: query.workspaceIds,
       lens: query.lens,
-      kind: "all",
-    }),
-    or(
-      sessionKindWhere("work"),
-      and(isNotNull(focusSessions.trackId), sessionKindWhere("run"))
-    )
+    })
   );
 
   const pageRows = await database
@@ -249,7 +267,7 @@ export async function getProjectPath(
   const wsIds = [
     ...new Set(page.map((r) => r.workspaceId).filter((w): w is string => !!w)),
   ];
-  const [sectioned, wsNames, open, owed, pending, tracks] = await Promise.all([
+  const [sectioned, wsNames, open, tracks] = await Promise.all([
     attachPathSections(attachSessionKind(attachTriage(page)), {
       userId,
       database,
@@ -285,38 +303,6 @@ export async function getProjectPath(
           )
           .then(([r]) => Number(r?.n ?? 0))
     ),
-    settle(
-      { projectId },
-      "owedSlots",
-      "Decisions waiting could not be counted.",
-      () =>
-        database
-          .select({
-            id: focusSessions.id,
-            goal: focusSessions.goal,
-            status: focusSessions.status,
-            workspaceId: focusSessions.workspaceId,
-            projectId: focusSessions.projectId,
-            expectedOutputs: focusSessions.expectedOutputs,
-          })
-          .from(focusSessions)
-          .where(and(conditions, owedSlotPrefilter(), owedSlotWhere()))
-          .then((rows) =>
-            rows.reduce((n, r) => n + projectOwedSlots(r).length, 0)
-          )
-    ),
-    settle(
-      { projectId },
-      "pendingTotal",
-      "Decisions waiting could not be counted.",
-      () =>
-        database
-          .select({ n: count() })
-          .from(proposals)
-          .innerJoin(focusSessions, eq(proposals.sessionId, focusSessions.id))
-          .where(and(conditions, eq(proposals.status, ProposalStatus.PENDING)))
-          .then(([r]) => Number(r?.n ?? 0))
-    ),
     // The project's tracks. Visibility is the project's own — established by
     // the project read above with the same predicate the `project_tracks`
     // VisibilityRule applies — so this read narrows by project id only.
@@ -336,12 +322,6 @@ export async function getProjectPath(
 
   const toCount = (s: Settled<number>): PathCount =>
     s.status === "ok" ? { status: "ok", total: s.value } : s;
-  const userMustDecide: PathCount =
-    owed.status !== "ok"
-      ? owed
-      : pending.status !== "ok"
-        ? pending
-        : { status: "ok", total: owed.value + pending.value };
 
   const items = sectioned.map((row): ProjectPathRow => ({
     id: row.id,
@@ -352,7 +332,9 @@ export async function getProjectPath(
     statusLabel: resolveStatusLabel(row.status),
     kind: row.kind,
     trackId: row.trackId ?? null,
+    trackStage: row.trackStage ?? null,
     triage: row.triage,
+    unitFacts: row.unitFacts,
     workspace: row.workspaceId
       ? { id: row.workspaceId, name: wsNames.get(row.workspaceId) ?? null }
       : null,
@@ -395,7 +377,7 @@ export async function getProjectPath(
             })),
           }
         : tracks,
-    summary: { openSessions: toCount(open), userMustDecide },
+    summary: { openSessions: toCount(open) },
     items,
     pagination,
   };

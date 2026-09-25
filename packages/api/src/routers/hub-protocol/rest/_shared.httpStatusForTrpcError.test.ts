@@ -40,11 +40,24 @@ describe("httpStatusForTrpcError", () => {
     expect(httpStatusForTrpcError(fakeTrpcError("NOT_FOUND"))).toBe(404);
   });
 
+  it("maps CONFLICT → 409 and PRECONDITION_FAILED → 412 — actionable refusals, not faults", () => {
+    expect(httpStatusForTrpcError(fakeTrpcError("CONFLICT"))).toBe(409);
+    expect(httpStatusForTrpcError(fakeTrpcError("PRECONDITION_FAILED"))).toBe(
+      412
+    );
+    // The wrapped form createCaller produces must resolve too.
+    expect(
+      httpStatusForTrpcError(
+        fakeTrpcError("INTERNAL_SERVER_ERROR", fakeTrpcError("CONFLICT"))
+      )
+    ).toBe(409);
+  });
+
   it("maps every other code (including INTERNAL_SERVER_ERROR) → 500", () => {
     expect(httpStatusForTrpcError(fakeTrpcError("INTERNAL_SERVER_ERROR"))).toBe(
       500
     );
-    expect(httpStatusForTrpcError(fakeTrpcError("CONFLICT"))).toBe(500);
+    expect(httpStatusForTrpcError(fakeTrpcError("TIMEOUT"))).toBe(500);
   });
 
   it("never uses `instanceof TRPCError` — a plain non-Error object with `.code` still resolves", () => {

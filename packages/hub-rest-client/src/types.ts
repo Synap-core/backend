@@ -194,24 +194,44 @@ export interface UpdateDocumentInput {
   sessionId?: string;
 }
 
-export interface HubDocumentChange {
-  op: "insert" | "delete" | "replace";
-  position?: number;
-  range?: [number, number];
-  text?: string;
+/** One document patch op (pod: `services/document-patch/patch-ops.ts`). */
+export type HubDocumentPatchOp =
+  | {
+      op: "upsert_section";
+      id: string;
+      title: string;
+      body: string;
+      status?: string;
+    }
+  /** `old` must occur EXACTLY once in the document. */
+  | { op: "replace_text"; old: string; new: string }
+  | { op: "append"; body: string }
+  /** The whole body; needs `baseRevision`. */
+  | { op: "replace_all"; content: string };
+
+/** POST /api/hub/documents/:id/patch — THE document edit door. */
+export interface PatchDocumentInput {
+  /** The `revision` GET /documents/:id returned. Required for `replace_all`. */
+  baseRevision?: number;
+  ops: HubDocumentPatchOp[];
+  /** Removing an embed is refused unless this is true. */
+  allowRemovingEmbeds?: boolean;
+  agentUserId?: string;
+  sourceMessageId?: string;
+  sessionId?: string;
+  reasoning?: string;
 }
 
-/** Submit a governed edit proposal without replacing a document directly. */
+/** Full replacement — an alias of the patch door (one `replace_all` op). */
 export interface CreateDocumentProposalInput {
   documentId: string;
   agentUserId?: string;
-  threadId?: string;
   sourceMessageId?: string;
   sessionId?: string;
-  proposalType?: "ai_edit" | "user_suggestion" | "review_comment";
-  changes: HubDocumentChange[];
   proposedContent: string;
-  originalContent?: string;
+  baseRevision?: number;
+  allowRemovingEmbeds?: boolean;
+  reasoning?: string;
 }
 
 /** Proposal rows vary slightly by pod version; these stable fields are shared. */
@@ -1658,9 +1678,10 @@ export interface HubView {
 }
 
 /**
- * One row from GET /widget-definitions. Hub listWidgetDefs already merges
- * compose-catalog builtins (source: "compose-catalog") with DB rows — this is
- * the compose allowlist, not raw seeder output. Extra DB columns are allowed.
+ * One row from GET /widget-definitions — the pod's ONE renderables door: the
+ * built-in catalog (`source: "catalog"`, from `@synap-core/types/renderables`)
+ * plus installed / AI-defined `widget_definitions` rows. Extra DB columns are
+ * allowed.
  */
 export interface HubWidgetDefinition {
   id: string;
@@ -1677,7 +1698,16 @@ export interface HubWidgetDefinition {
   defaultConfig?: Record<string, unknown>;
   aliasOf?: string | null;
   source?: string;
-  notes?: string;
+  /** Where it may render; `inline` = embeddable in a document. */
+  placements?: string[];
+  /** Config keys that must be set for it to render. */
+  requiredConfig?: string[];
+  /** May an agent place it (bento arrange / document embed)? */
+  aiPlaceable?: boolean;
+  /** AI-facing guidance: when to pick it and its config gotchas. */
+  aiHint?: string | null;
+  /** Markdown fallback template (`{name}`, `{props.<key>}`). */
+  fallback?: string;
   /** Stale OpenAPI field on some pods. Prefer `typeKey`. */
   kind?: string;
   [key: string]: unknown;

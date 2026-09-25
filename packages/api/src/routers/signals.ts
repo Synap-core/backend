@@ -55,6 +55,7 @@ import {
   type Signal,
 } from "../services/signals/needs-you-union.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
+import { countProjectSessionsAwaitingReview } from "../services/projects/project-needs-you.js";
 
 /** How many unread notifications are pulled before dedupe. A page, not a total —
  *  `truncated` reports when the cap was hit rather than hiding it. */
@@ -146,22 +147,68 @@ function isOwedNarrowable(input: {
 }
 
 /**
+ * Does the REVIEW half of THE needs-you rule participate? Only under a bare
+ * PROJECT scope. "Sessions awaiting your review/close" is read over the
+ * project's session set (`projectPathConditions`); a session/automation scope
+ * has no such set, and a workspace lens cannot be expressed on it faithfully
+ * (a NULL-workspace session belongs to the project but to no workspace), so
+ * under those scopes the half is SUPPRESSED rather than guessed — the same rule
+ * the notification and owed halves follow. The pod-wide badge does not count
+ * it yet (see the report of 2026-09-25): no project, no path population.
+ */
+function isReviewCountable(input: {
+  workspaceId?: string | null;
+  sessionId?: string;
+  projectId?: string;
+  automationId?: string;
+}): input is { projectId: string } {
+  return (
+    !!input.projectId &&
+    input.workspaceId === undefined &&
+    !input.sessionId &&
+    !input.automationId
+  );
+}
+
+/**
  * The body of `signals.count` — one function so `count` and `countByProject`
  * answer over the SAME population by construction (a rail badge must equal the
  * number its project's own page shows).
+ *
+ * THE needs-you rule (`@synap-core/types/units` `needs-you.ts`): owed slots +
+ * pending decisions + sessions awaiting your review, summed by `needsYouTotal`
+ * inside `countNeedsYou`. Items, not sessions — the count differs from a
+ * per-row `tallyNeedsYou` in two stated ways: decisions are distinct CLUSTERS
+ * (a re-filed identical proposal is one decision), and a project scope also
+ * counts proposals filed on the project with no session (a decision owed with
+ * no session to hang it on).
+ *
+ * DRAFTS NEVER COUNT (founder decision): an undecided agent draft is a
+ * suggestion, not work that needs you. All three halves apply the ONE triage
+ * rule the path uses (`triage.ts`): the review half by `needsYouReason`, the
+ * owed half by `excludeDrafts` (`notTriagePendingWhere`), and the decisions
+ * half by `excludeDraftSessions` (a proposal filed under a draft session) —
+ * each in SQL, so drafts cannot eat a scan cap. `list`'s needs-you lens
+ * passes the same two flags, so the tray and the badge agree.
  */
 async function countSignals(
-  ctx: Parameters<typeof proposalsRouter.createCaller>[0],
+  // The object form of the caller context (never the lazy factory) — the
+  // review half reads the caller's `userId` for its owner floor.
+  ctx: Extract<
+    Parameters<typeof proposalsRouter.createCaller>[0],
+    { userId?: unknown }
+  >,
   input: z.infer<z.ZodObject<typeof SignalScope>>
 ) {
   const scoped = isContainerScoped(input);
-  const [groups, notifs, owed] = await Promise.all([
+  const [groups, notifs, owed, review] = await Promise.all([
     proposalsRouter.createCaller(ctx).groups({
       workspaceId: input.workspaceId,
       sessionId: input.sessionId,
       projectId: input.projectId,
       automationId: input.automationId,
       status: "pending",
+      excludeDraftSessions: true,
     }),
     scoped
       ? Promise.resolve({ notifications: [] })
@@ -178,8 +225,15 @@ async function countSignals(
           workspaceId: floorLens(input.workspaceId),
           ...(input.projectId ? { projectId: input.projectId } : {}),
           limit: OWED_SCAN_LIMIT,
+          excludeDrafts: true,
         })
       : Promise.resolve([]),
+    isReviewCountable(input)
+      ? countProjectSessionsAwaitingReview({
+          userId: requireUserId(ctx.userId),
+          projectId: input.projectId,
+        })
+      : Promise.resolve({ review: 0, truncated: false }),
   ]);
 
   return countNeedsYou({
@@ -191,6 +245,8 @@ async function countSignals(
       notifs.notifications.length >= NOTIFICATION_SCAN_LIMIT,
     owedSlots: owed as OwedSlotSignalInput[],
     owedTruncated: owed.length >= OWED_SCAN_LIMIT,
+    reviewSessions: review.review,
+    reviewTruncated: review.truncated,
   });
 }
 
@@ -221,6 +277,7 @@ export const signalsRouter = router({
             automationId: input.automationId,
             status: "pending",
             limit: input.limit,
+            excludeDraftSessions: true,
           }),
           scoped
             ? Promise.resolve({ notifications: [] })
@@ -238,6 +295,7 @@ export const signalsRouter = router({
                 workspaceId: floorLens(input.workspaceId),
                 ...(input.projectId ? { projectId: input.projectId } : {}),
                 limit: input.limit,
+                excludeDrafts: true,
               })
             : Promise.resolve([]),
         ]);
@@ -324,9 +382,15 @@ export const signalsRouter = router({
    * so.
    *
    * The number ships WITH its parts: `decisions` (distinct pending clusters),
-   * `notifications` (deduped unread) and `blocked` (owed slots), with
-   * `needsYou === decisions + notifications + blocked`. A client reads the part
-   * it needs; it never derives one by subtracting the others from `needsYou`.
+   * `notifications` (deduped unread), `blocked` (owed slots) and `review`
+   * (sessions awaiting your review/close — project scope only, see
+   * `isReviewCountable`), with
+   * `needsYou === decisions + notifications + blocked + review`. A client reads
+   * the part it needs; it never derives one by subtracting the others.
+   *
+   * ⚠️ Under a project scope `review` has no ROWS in `list` yet (it would need
+   * a new `Signal` kind every tray renderer learns), so the project list is
+   * shorter than the project count by exactly `review`.
    */
   count: protectedProcedure
     .input(z.object(SignalScope).default({}))

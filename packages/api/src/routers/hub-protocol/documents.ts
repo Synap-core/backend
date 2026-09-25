@@ -30,8 +30,6 @@ import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
-import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   resolveWriteIdempotencyKey,
   idempotencyWindowSeconds,
@@ -42,6 +40,16 @@ import {
   readSessionDocument,
   upsertSessionDocumentSection,
 } from "../../services/session-document/upsert-section.js";
+import {
+  applyDocumentPatch,
+  loadPatchDocument,
+} from "../../services/document-patch/apply-document-patch.js";
+import { DocumentPatchOpsSchema } from "../../services/document-patch/patch-ops.js";
+import {
+  DOCUMENT_READ_FORMATS,
+  currentDiagnostics,
+  projectAgentDocument,
+} from "../../services/document-patch/read-document.js";
 
 const logger = createLogger({ module: "hub-documents" });
 
@@ -371,16 +379,18 @@ export const documentsRouter = router({
     }),
 
   /**
-   * Get document content by ID
-   * Requires: hub-protocol.read scope
-   *
-   * Calls regular API's documents.get endpoint internally
+   * Get a document for an agent: its content (`format: raw` = the stored
+   * markdown, `readable` = embeds replaced by their fallback), the `revision`
+   * a guarded edit passes back as `baseRevision`, its top-level `sections`
+   * (id, owner, heading) and `diagnostics` (what will not render).
+   * Requires: hub-protocol.read scope. Access: `documents.get` (the read floor).
    */
   getDocument: scopedProcedure(["hub-protocol.read"])
     .input(
       z.object({
         documentId: z.string().uuid(),
         userId: z.string(),
+        format: z.enum(DOCUMENT_READ_FORMATS).default("raw"),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -393,27 +403,68 @@ export const documentsRouter = router({
       const result = await caller.get({
         documentId: input.documentId,
       });
+      const doc = result.document;
+      const raw = result.content ?? "";
+      const diagnostics = await currentDiagnostics({
+        documentId: doc.id,
+        workspaceId: doc.workspaceId ?? null,
+        metadata: doc.metadata,
+        revision: doc.contentRevision,
+        content: raw,
+        readerUserId: ctx.userId!,
+      });
 
       return {
-        document: {
-          id: result.document.id,
-          title: result.document.title,
-          type: result.document.type,
-          language: result.document.language,
-          content: result.content,
-          updatedAt: result.document.updatedAt,
-          createdAt: result.document.createdAt,
-        },
+        document: projectAgentDocument(doc, raw, input.format, diagnostics),
       };
     }),
 
   /**
-   * Create document proposal (for AI edits to existing documents)
-   * Requires: hub-protocol.write scope
-   *
-   * Specialized Hub Protocol operation for AI-generated edit proposals on
-   * existing documents. Creates a pending proposal that the user reviews.
-   * This is intentionally direct (creating the proposal IS the governed action).
+   * Edit a document with ops — THE agent document edit door
+   * (`services/document-patch/apply-document-patch.ts`). Applies, or files a
+   * proposal, per governance; refuses stale bases, ambiguous `replace_text`,
+   * agent changes to a person's section, and embed removal without
+   * `allowRemovingEmbeds`. Requires: hub-protocol.write scope.
+   */
+  patchDocument: scopedProcedure(["hub-protocol.write"])
+    .input(
+      z.object({
+        documentId: z.string().uuid(),
+        agentUserId: z.string().uuid().optional(),
+        baseRevision: z.number().int().min(0).optional(),
+        ops: DocumentPatchOpsSchema,
+        allowRemovingEmbeds: z.boolean().optional(),
+        reasoning: z.string().max(2_000).optional(),
+        sourceMessageId: z.string().uuid().optional(),
+      })
+    )
+    .mutation(async ({ input, ctx }) =>
+      applyDocumentPatch({
+        userId: ctx.userId!,
+        // The authenticated agent key's identity when the body names none.
+        agentUserId:
+          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
+        documentId: input.documentId,
+        ...(input.baseRevision !== undefined
+          ? { baseRevision: input.baseRevision }
+          : {}),
+        ops: input.ops,
+        allowRemovingEmbeds: input.allowRemovingEmbeds,
+        reasoning: input.reasoning,
+        sourceMessageId:
+          input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
+        provenanceSessionId: ctx.sessionId ?? null,
+      })
+    ),
+
+  /**
+   * Full-replacement edit — an ALIAS onto `patchDocument` with one
+   * `replace_all` op (the shape REST `PATCH /documents/:id`,
+   * `POST /documents/proposals`, MCP `synap_update_entity.content` and the IS
+   * `update_document` content form send). Governed like every patch: an agent's
+   * full replacement is always a proposal, and it may not change a person's
+   * section or drop an embed. Without `baseRevision` the revision is pinned
+   * HERE, at filing, so approval still refuses over a later human save.
    */
   createDocumentProposal: scopedProcedure(["hub-protocol.write"])
     .input(
@@ -421,137 +472,31 @@ export const documentsRouter = router({
         documentId: z.string().uuid(),
         userId: z.string(),
         agentUserId: z.string().uuid().optional(),
-        threadId: z.string().uuid().optional(),
         sourceMessageId: z.string().uuid().optional(),
-        proposalType: z
-          .enum(["ai_edit", "user_suggestion", "review_comment"])
-          .default("ai_edit"),
-        changes: z.array(
-          z.object({
-            op: z.enum(["insert", "delete", "replace"]),
-            position: z.number().optional(),
-            range: z.tuple([z.number(), z.number()]).optional(),
-            text: z.string().optional(),
-          })
-        ),
         proposedContent: z.string(),
-        originalContent: z.string().optional(),
+        baseRevision: z.number().int().min(0).optional(),
+        allowRemovingEmbeds: z.boolean().optional(),
+        reasoning: z.string().max(2_000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
       const userId = ctx.userId!;
-      const { db, eq } = await import("@synap/database");
-      const { documents, entities } = await import("@synap/database/schema");
-
-      const doc = await db.query.documents.findFirst({
-        where: eq(documents.id, input.documentId),
-      });
-
-      if (!doc) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Document not found",
-        });
-      }
-      if (doc.userId !== userId) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Access denied to document",
-        });
-      }
-
-      const entity = await db.query.entities.findFirst({
-        where: eq(entities.documentId, input.documentId),
-      });
-
-      const workspaceId = entity?.workspaceId ?? doc.workspaceId ?? null;
-
-      const createdBy = input.agentUserId ?? userId;
-      const sourceMessageId =
-        input.sourceMessageId ?? ctx.sourceMessageId ?? undefined;
-      const threadId = input.threadId ?? undefined;
-
-      const sessionId = ctx.sessionId ?? undefined;
-      const { proposal } = await createEventBackedProposal({
+      const baseRevision =
+        input.baseRevision ??
+        (await loadPatchDocument(input.documentId)).contentRevision;
+      return applyDocumentPatch({
         userId,
-        workspaceId,
-        targetType: "document",
-        targetId: input.documentId,
-        proposalType: input.proposalType,
-        action: "update",
-        source: "intelligence",
-        // NAME THE DOCUMENT. This hardcoded literal was the founder's own
-        // example of the defect ("instead of saying AI edit documents, we can
-        // just say … the name of the document"): it described the PRODUCER of
-        // the change and never the thing being changed, so every AI document
-        // edit sitting in the queue was indistinguishable from every other one.
-        //
-        // `doc` is already loaded and access-checked above (owner floor at
-        // `doc.userId !== userId`), so the title costs nothing extra here.
-        //
-        // Composed through the vocabulary SSOT — never a hand-written label
-        // (`.claude/rules/vocabulary.md`). The ACTION is `update`, matching the
-        // `action` this same call passes to `createEventBackedProposal`: the
-        // proposal updates a document. `input.proposalType` (`ai_edit` /
-        // `user_suggestion` / `review_comment`) is the KIND of proposal, which
-        // every card already renders as its own chip and which has no curated
-        // verb — passing it here would render "Ai edit Document …". The mood is
-        // imperative (the default) because a pending proposal's title says what
-        // approving it WILL do.
-        summary: buildObjectActionTitle({
-          action: "update",
-          objectKind: "document",
-          objectName: doc.title,
-        }),
-        agentUserId: input.agentUserId ?? null,
-        createdBy,
-        threadId: threadId ?? null,
-        sourceMessageId: sourceMessageId ?? null,
-        sessionId,
-        // NO `expiresAt`. A defaulted TTL on a proposal row is the C2 defect
-        // `insert-pending-proposal.ts` removed: nothing honours the column, so
-        // it dropped rows out of nobody's queue while `orient` still counted
-        // them. A document draft dies with its SESSION — `expireSessionEphemerals`
-        // retires it on close, writing an EXPIRED status a reader can see.
-        data: {
-          source: "agent",
-          sourceId: createdBy,
-          proposedBy: "ai",
-          changes: input.changes,
-          originalContent: input.originalContent,
-          proposedContent: input.proposedContent,
-          // The version this edit was drafted against, read server-side from
-          // the row just loaded. Approval refuses when the document has moved
-          // past it (`apply-approval.ts`, document-content branch).
-          baseVersion: doc.currentVersion,
-        },
+        agentUserId:
+          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
+        documentId: input.documentId,
+        baseRevision,
+        ops: [{ op: "replace_all", content: input.proposedContent }],
+        allowRemovingEmbeds: input.allowRemovingEmbeds,
+        reasoning: input.reasoning,
+        sourceMessageId:
+          input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
+        provenanceSessionId: ctx.sessionId ?? null,
       });
-
-      const { broadcastSuccess } = await import("@synap/jobs");
-      await broadcastSuccess(userId, "ai:proposal", {
-        proposalId: proposal.id,
-        operation: "create",
-      });
-
-      const { buildProposalResponseFields } =
-        await import("../../utils/permission-check.js");
-      const envelope = buildProposalResponseFields({
-        proposalId: proposal.id,
-        subjectType: "document",
-        action: input.proposalType,
-        data: { id: input.documentId, title: doc.title },
-      });
-
-      return {
-        status: "proposed",
-        proposalId: proposal.id,
-        summary: envelope.summary,
-        reasoning: envelope.reasoning,
-        reviewPath: envelope.reviewPath,
-        reviewUrl: envelope.reviewUrl,
-        message: "Document edit proposed, awaiting approval",
-        requestId: proposal.id,
-      };
     }),
 
   /**
@@ -578,6 +523,7 @@ export const documentsRouter = router({
         title: z.string().min(1).max(200),
         body: z.string().max(100_000),
         baseVersion: z.number().int().min(1).nullable(),
+        baseRevision: z.number().int().min(0).optional(),
         reasoning: z.string().max(2_000).optional(),
         sourceMessageId: z.string().uuid().optional(),
       })
@@ -588,15 +534,16 @@ export const documentsRouter = router({
         // The authenticated agent key's identity when the body names none — a
         // body-only agent id is how agent writes previously ran as the human.
         agentUserId:
-          input.agentUserId ??
-          (ctx.agentUserId as string | undefined) ??
-          null,
+          input.agentUserId ?? (ctx.agentUserId as string | undefined) ?? null,
         sessionId: input.sessionId,
         ambientSessionId: ctx.sessionId ?? null,
         sectionId: input.sectionId,
         title: input.title,
         body: input.body,
         baseVersion: input.baseVersion,
+        ...(input.baseRevision !== undefined
+          ? { baseRevision: input.baseRevision }
+          : {}),
         reasoning: input.reasoning,
         sourceMessageId:
           input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
