@@ -137,6 +137,15 @@ export interface NotificationDef {
  */
 export const SESSION_ATTENTION_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
 
+/**
+ * An agent's room UPDATES (in-app only): at most one bell row per session per
+ * thirty minutes. Shorter than the attention window on purpose — an update is
+ * not a stop, so a later one in the same afternoon is still worth a glance —
+ * and long enough that an agent narrating every step writes one row, not
+ * twenty. The room itself carries every message in realtime regardless.
+ */
+export const SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS = 30 * 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -915,6 +924,80 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         // resolves it — and `pushTarget()` reads THIS handler to give the push
         // its `{kind,id}`, so the tap and the button land on one screen.
         handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * An AGENT handed the person work in a session, or asked them something in
+     * its room — the work waits on them. Producer: `notifySessionNeedsYou`
+     * (`services/focus-sessions/notify-needs-you.ts`), called by every door that
+     * can newly hand a slot to the person (block_output, addOutput, a PATCH or
+     * create declaring an `owner: 'human'` slot, a followed playbook's
+     * unanswered param, a headless run's owed param) and by `post_message` with
+     * `kind: 'question'` in a session room. The door set is pinned by
+     * `__tripwires__/needs-you-every-handoff-door.test.ts`.
+     *
+     * Never for the person's OWN write (no acting agent ⇒ no row).
+     *
+     * `high` + BOTH channels: a hand-off is work that has stopped until they
+     * answer — the same definition of an interrupt the escalation uses. ONE per
+     * session per window (session-keyed `dedupeWindowMs`): three slots and a
+     * question in one working block are one piece of news, one push.
+     */
+    type: "session.needs_you",
+    category: "ai",
+    label: "Session needs you",
+    icon: "hand",
+    priority: "high",
+    titleTemplate: "Needs you: {{sessionTitle}}",
+    bodyTemplate: "{{summary}}",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    groupBy: "sessionId",
+    dedupeWindowMs: SESSION_ATTENTION_DEDUPE_WINDOW_MS,
+    actions: [
+      {
+        id: "view",
+        label: "Open session",
+        variant: "primary",
+        // `sourceId` is the session id (see the producer).
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * An AGENT posted a progress UPDATE in a session's room (`post_message`,
+     * default `kind: 'update'`). Producer: `notifyRoomPost`
+     * (`services/messaging/notify-room-post.ts`).
+     *
+     * IN-APP ONLY, and capped there (`channelCeiling`): ordinary AI chatter
+     * never rings a phone — the same rule the `ai.proactive.*` rows state. A
+     * question (`kind: 'question'`) or an explicit @mention of the person is
+     * what pushes, through `session.needs_you` / `chat.mention`.
+     *
+     * One row per session per {@link SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS}: the
+     * bell says "this session has news", the room holds every line of it.
+     */
+    type: "session.room_update",
+    category: "ai",
+    label: "Session room update",
+    icon: "message-square",
+    priority: "low",
+    titleTemplate: "{{sender}} in {{sessionTitle}}",
+    bodyTemplate: "{{preview}}",
+    defaultChannels: ["in_app"],
+    channelCeiling: ["in_app"],
+    ttl: 0,
+    groupBy: "sessionId",
+    dedupeWindowMs: SESSION_ROOM_UPDATE_DEDUPE_WINDOW_MS,
+    actions: [
+      {
+        id: "open-room",
+        label: "Open room",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "session", view: "room" },
       },
     ],
   },

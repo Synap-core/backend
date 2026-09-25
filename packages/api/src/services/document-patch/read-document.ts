@@ -18,7 +18,8 @@ import {
   sectionOwner,
   type SectionOwner,
 } from "../session-document/sections.js";
-import { locateEmbeds } from "./patch-ops.js";
+import { readableMarkdown as coreReadableMarkdown } from "@synap-core/markdown-core/readable";
+import type { Embed } from "@synap-core/markdown-core/embeds";
 import {
   diagnoseForDocument,
   readStoredDiagnostics,
@@ -54,29 +55,19 @@ export function listDocumentSections(
 }
 
 /**
- * The readable form: each embed's source replaced by the markdown fallback its
- * author wrote; with none, the catalog's fallback template for a cell, or the
- * embed's noun. Never the raw directive.
+ * How the pod names an embed that carries no authored fallback in the readable
+ * form: the catalog's fallback template for a cell, else the embed's noun. The
+ * walk itself is markdown-core's `readableMarkdown` (the one rule).
  */
+export function readableEmbedLabel(embed: Embed): string {
+  const key = embed.ref.cellKey ?? embed.ref["data-cell-key"];
+  const def = key ? WIDGET_BY_KEY[key] : undefined;
+  return def ? fallbackFor(def, embed.props) : resolveObjectNoun(embed.kind);
+}
+
+/** The pod's readable form of a stored document (agent read + user export). */
 export function readableMarkdown(markdown: string): string {
-  const embeds = locateEmbeds(markdown);
-  let out = "";
-  let cursor = 0;
-  for (const { embed, start, end, fallbackRange } of embeds) {
-    out += markdown.slice(cursor, start);
-    if (fallbackRange) {
-      out += markdown.slice(fallbackRange.start, fallbackRange.end);
-    } else {
-      const key = embed.ref.cellKey ?? embed.ref["data-cell-key"];
-      const def = key ? WIDGET_BY_KEY[key] : undefined;
-      const label = def
-        ? fallbackFor(def, embed.props)
-        : resolveObjectNoun(embed.kind);
-      out += `*${label}*`;
-    }
-    cursor = end;
-  }
-  return out + markdown.slice(cursor);
+  return coreReadableMarkdown(markdown, readableEmbedLabel);
 }
 
 /** Diagnostics for the document at `revision`: the stored stamp if current, else checked now. */

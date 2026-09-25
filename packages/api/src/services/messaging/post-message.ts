@@ -54,6 +54,8 @@ import {
   idempotencyWindowSeconds,
 } from "../../utils/write-door-idempotency.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
+import { notifyRoomPost } from "./notify-room-post.js";
+import type { RoomPostKind } from "./room-post-kind.js";
 
 const logger = createLogger({ module: "post-message" });
 
@@ -87,6 +89,13 @@ export interface PostChannelMessageParams {
    * established door `rest/entities.ts:1027`. Absent ⇒ a human wrote it.
    */
   agentUserId?: string;
+  /**
+   * What an AGENT's post is: `'question'` (the person is needed — pushes once
+   * per session window when the room is a session's) or `'update'` (default:
+   * progress/results — in-app only, never a push). Ignored for a human's post,
+   * whose only notifications are the @mentions it names.
+   */
+  kind?: RoomPostKind;
   /**
    * ⚠️ NOT written to `messages.sessionId`. That column FKs to `sessions` (the
    * channel-scoped conversation-memory session), whereas `X-Session-Id` carries
@@ -157,21 +166,22 @@ function duplicateReceipt(
 async function assertCallerMayPostToChannel(
   channelId: string,
   userId: string
-): Promise<void> {
-  const visible =
-    typeof channelId === "string" &&
-    isLikelyUUID(channelId) &&
-    (
-      await db
-        .select({ id: channels.id })
-        .from(channels)
-        .where(and(eq(channels.id, channelId), channelVisibilityWhere(userId)))
-        .limit(1)
-    ).length > 0;
+): Promise<{ workspaceId: string | null }> {
+  const [row] =
+    typeof channelId === "string" && isLikelyUUID(channelId)
+      ? await db
+          .select({ id: channels.id, workspaceId: channels.workspaceId })
+          .from(channels)
+          .where(
+            and(eq(channels.id, channelId), channelVisibilityWhere(userId))
+          )
+          .limit(1)
+      : [];
 
-  if (!visible) {
+  if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Channel not found" });
   }
+  return { workspaceId: row.workspaceId ?? null };
 }
 
 export async function postChannelMessage(
@@ -181,7 +191,7 @@ export async function postChannelMessage(
 
   // Fail CLOSED before ANY write or idempotency work: an unknown or
   // unauthorized channel throws, it never falls through to the insert.
-  await assertCallerMayPostToChannel(channelId, userId);
+  const channel = await assertCallerMayPostToChannel(channelId, userId);
 
   const role = params.role || "assistant";
   const triggerAI = Boolean(params.triggerAI);
@@ -294,6 +304,21 @@ export async function postChannelMessage(
     channelId,
     messageId: msgId,
     data: { role },
+  });
+
+  // Who hears about it — the ONE resolution every posting door shares
+  // (`notify-room-post.ts`): @mentioned humans (an agent's operator included —
+  // an agent post is not a self-mention), and for an agent in a session room
+  // the question push or the in-app update. Only here, after a NEW row landed:
+  // a replayed post notifies nobody twice. Never throws.
+  await notifyRoomPost({
+    channelId,
+    content,
+    messageId: msgId,
+    userId,
+    agentUserId,
+    kind: params.kind,
+    workspaceId: channel.workspaceId,
   });
 
   if (triggerAI) {

@@ -14,6 +14,7 @@ import {
   loadDocumentBodyTexts,
 } from "@synap/database";
 import * as schema from "@synap/database/schema";
+import { markdownToPlainText } from "@synap-core/markdown-core/plain-text";
 import type { IndexingQueueItem } from "../types/index.js";
 import {
   EntityIndexer,
@@ -532,7 +533,11 @@ export class IndexingService {
     db: Awaited<ReturnType<typeof getDb>>,
     documentIds: string[]
   ) {
-    const bodies = await loadDocumentBodyTexts(db, documentIds);
+    const bodies = await loadDocumentBodyTexts(db, documentIds, {
+      // Index what the document READS as, never its directive syntax or the
+      // JSON props of its embeds (markdown-core, the one plain-text rule).
+      markdownText: (markdown) => markdownToPlainText(markdown),
+    });
     for (const [documentId, error] of bodies.failed) {
       console.error(
         `[search] could not read the body of document ${documentId}; its index entry is left as it was:`,

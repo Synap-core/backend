@@ -22,7 +22,7 @@
  *     container whose opener it matches in length (>=), and everything inside
  *     it. So `::::` closes a `::::section` even when a `:::cell` inside it was
  *     never closed — that cell is IMPLICITLY closed (`terminated: false`);
- *   - a code fence (``` / ~~~) hides OPENERS inside it, but NOT closers of an
+ *   - a fence (``` / ~~~ / $$ math) hides OPENERS inside it, but NOT closers of an
  *     enclosing container: micromark checks a container's closing fence before
  *     the content it holds, so a bare `:::` line inside a fence inside a
  *     container closes the container (and ends the fence). A fence at the
@@ -84,20 +84,28 @@ interface Frame {
 
 const CLOSE_RE = /^ {0,3}(:{3,})[ \t]*$/;
 const COLON_LINE_RE = /^[ \t]*(:{3,})[ \t]*$/;
-const CODE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+/**
+ * A fence: ``` / ~~~ (code), or `$$` (math flow, micromark-extension-math:
+ * ≥ 2 dollars, a meta that holds no `$`, closed by at least as many).
+ */
+const CODE_FENCE_RE = /^ {0,3}(`{3,}|~{3,}|\${2,})(.*)$/;
 
-/** A line that closes an open code fence (same char, at least as long, nothing after). */
+/** A line that closes an open fence (same char, at least as long, nothing after). */
 function closesFence(line: string, fence: FenceState): boolean {
-  const m = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+  const m = /^ {0,3}(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(line);
   return !!m && m[1]![0] === fence.char && m[1]!.length >= fence.length;
 }
 
-/** A line that opens a code fence, or null. Backtick info strings cannot contain a backtick. */
+/**
+ * A line that opens a fence, or null. A backtick info string cannot contain a
+ * backtick, and a math meta cannot contain a dollar (`$$E = mc^2$$` on one line
+ * is inline math in a paragraph, not a block).
+ */
 function opensFence(line: string): FenceState | null {
   const m = CODE_FENCE_RE.exec(line);
   if (!m) return null;
   const char = m[1]![0]!;
-  if (char === "`" && m[2]!.includes("`")) return null;
+  if ((char === "`" || char === "$") && m[2]!.includes(char)) return null;
   return { char, length: m[1]!.length };
 }
 

@@ -23,6 +23,7 @@
  */
 
 import { z } from "zod";
+import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 import { TRPCError } from "@trpc/server";
 import type { RendererRef } from "@synap/database";
 import {
@@ -80,12 +81,7 @@ export function buildCellRendererRef(
   return { kind: "cell", cellKey, props: props ?? {} };
 }
 
-const ProfileRendererContentKindSchema = z.enum([
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-]);
+const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
 
 export const hubProfilesRouter = router({
   /**

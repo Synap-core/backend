@@ -2,6 +2,11 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "outDir": "./dist",
+    // DOM supplies a complete `Response`. Without it, `fetch` is typed by
+    // @types/node, whose `Response` collapses to `{}` whenever any other
+    // type in the compile declares a global `onmessage` — which happened in
+    // the Docker install (ok/status "do not exist"). Same choice as packages/api.
+    "lib": ["ES2022", "DOM"],
     "rootDir": "./src",
     "skipLibCheck": true,
     "declaration": true,

@@ -53,6 +53,7 @@ import {
   guidanceForBlockedSlots,
   type BlockGuidance,
 } from "./block-guidelines.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 
 export interface BlockExpectedOutputParams {
   sessionId: string;
@@ -78,6 +79,12 @@ export interface BlockExpectedOutputParams {
    * go together, and a pointer stays true after the agent reclaims the slot.
    */
   ref?: OutputRef | null;
+  /**
+   * The ACTING agent, from the door's verified auth context. Present ⇒ an
+   * agent handed this to the person, who is then told (`session.needs_you`);
+   * absent ⇒ the person blocked it themselves, which is not news.
+   */
+  agentUserId?: string | null;
 }
 
 export interface UnblockExpectedOutputParams {
@@ -186,6 +193,26 @@ export async function blockExpectedOutput(
       )
   );
   if (!stamped) return { status: "not_found" };
+
+  // AFTER the stamp: tell the person (once per session window) that an agent
+  // handed them this. Diffed on the slot as loaded vs as stamped, so re-blocking
+  // a slot that was already theirs is not a second hand-off.
+  await notifySessionNeedsYou({
+    sessionId: params.sessionId,
+    byAgent: !!params.agentUserId,
+    reason: {
+      kind: "slots",
+      before: [slot],
+      after: [
+        {
+          ...slot,
+          owner: "human",
+          blockedReason: params.blockedReason,
+          ...(params.why?.trim() ? { why: params.why.trim() } : {}),
+        },
+      ],
+    },
+  });
 
   // AFTER the stamp: guidance annotates a block that has already landed; it
   // never decides whether the block happens.

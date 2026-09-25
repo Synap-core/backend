@@ -46,7 +46,7 @@ You are connected to the user's Synap pod, the source of truth about their life,
 1. **Recall first.** Before answering about the user's world or creating anything, `ask` (prevents duplicates).
 2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.
 3. **Orient once.** `orient` briefs you: pending review (raise it first), open sessions, kinds, actions.
-4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; ask in its room (`post_message` to `session.channelId`); `evaluate_session` before `complete_session`.
+4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.
 5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: a project grants its members access.
 6. **`proposed` is success**, queued for review. Keep working; never retry.
 7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.
@@ -1317,6 +1317,15 @@ Rules for a snapshot:
 - With a snapshot, the sentence MAY quote a number that is in `data`: they
   cannot drift apart. With a live chart, it may not.
 
+### Diagrams, math and code: fences, not directives
+
+A content LANGUAGE is a fenced block whose source IS the content: ` ```mermaid `
+for a diagram, ` ```math ` for a display equation (LaTeX), any other language
+for code. It has no props and no fallback, and relay and exports show its
+source. `synap_list_widgets` (surface `document`) returns these as `fences`,
+each with its `aiHint`: read them there rather than from memory. There is no
+` ```chart ` fence (a chart is a `synap-cell`), and inline `$…$` math is off.
+
 **Do not write the old attribute form** (`cellProps='{…}'` on the opening line).
 Readers still accept it, but an apostrophe in its JSON turns the whole embed into
 literal text, and the editor rewrites it into the ` ```json ` form on the next save.
@@ -1882,9 +1891,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 - **Stages.** A bound playbook seeds the session's `stages`; set `currentStage` with `synap_update_session` each time the work moves on. A hand-set `progress` says less than a stage does.
 - **Person-only steps** are an `owner: 'human'` output with a `blockedReason` and a `why` (below) — never a line buried in your reply.
-- **Ask in the session room** (below), not only in your own conversation.
+- **Room first.** Post progress, questions and results in the session room (below); your own chat may repeat them.
 - **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then `synap_complete_session`. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.
-- **The doors remind you.** `synap_update_session` and `synap_complete_session` replies carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
+- **The doors remind you.** `synap_update_session` and `synap_complete_session` replies (and Hub `PATCH /focus-sessions/:id` / `POST …/complete`) carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
 
@@ -1915,7 +1924,7 @@ synap session close <id> --workspace <id> [--recap "what was done"]    # close +
 
 Note: all hub-protocol writes are governance-gated server-side — a start may come back `proposed`, which is normal.
 
-**The session room**: every session owns a GROUP room — `session.channelId`, minted at start and returned on the session. Talk to the person THERE, not only in your own chat: `synap_post_message` with `channelId: session.channelId` for a question, a blocker, or a result to check. The room is roster-only (the owner, invited agents, the owner's AI), and an AI answers in it only when @-mentioned. Do not fetch a personal channel for session work — `synap_get_channel` is the user's 1:1 assistant thread, not the session's room. The session's produced entities link back to it via the graph.
+**The session room**: every session owns a GROUP room — `session.channelId`, minted at start and returned on the session. **Room first:** post progress, questions and results THERE with `synap_post_message` (`channelId: session.channelId`); your own chat may repeat them. Why: the person supervises from Relay, their phone, and cannot watch your chat — a cloud or background session is only supervisable through its room. Pass `kind: 'question'` when you need an answer (it notifies the person); the default `kind: 'update'` lands in the app without a push. @-name the person to notify them too. The room is roster-only (the owner, invited agents, the owner's AI), and an AI answers in it only when @-mentioned. Do not fetch a personal channel for session work — `synap_get_channel` is the user's 1:1 assistant thread, not the session's room. The session's produced entities link back to it via the graph.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
 

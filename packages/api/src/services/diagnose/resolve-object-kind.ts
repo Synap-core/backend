@@ -378,7 +378,7 @@ export async function resolveObjectKind(
           .from(documents)
           // Canonical DATA-table floor (registry documents rule) — NO
           // facetLens (documents have no facets; their id doesn't map to
-          // entity_facets). Copied VERBATIM from the `/resolve/:id` probe.
+          // entity_facets), but the registry's `documentFollowsEntity`.
           .where(
             and(
               eq(documents.id, id),
@@ -387,6 +387,9 @@ export async function resolveObjectKind(
                 entityIdColumn: documents.id,
                 ownerColumn: documents.userId,
                 userId,
+                // A document follows its entity (pod-shared bodies), the same
+                // predicate as the registered `documents` VisibilityRule.
+                documentFollowsEntity: true,
               })
             )
           )

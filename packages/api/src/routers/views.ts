@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { VIEW_TYPE_KEYS } from "@synap-core/types/renderables";
 import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure, workspaceProcedure } from "../trpc.js";
 import { storage } from "@synap/storage";
@@ -723,22 +724,9 @@ export const viewsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         /** Compatibility escape hatch. Keep false for clean workspace lenses. */
         includePodWide: z.boolean().optional().default(false),
-        type: z
-          .enum([
-            "whiteboard",
-            "timeline",
-            "kanban",
-            "table",
-            "list",
-            "grid",
-            "gallery",
-            "calendar",
-            "gantt",
-            "mindmap",
-            "graph",
-            "all",
-          ])
-          .optional(),
+        // Every catalog view type (derived — a new view type is filterable
+        // by existing), plus "all".
+        type: z.enum([...VIEW_TYPE_KEYS, "all"]).optional(),
         /** When true, exclude views that were auto-created by bento block picker */
         excludeAutoCreated: z.boolean().optional(),
       })

@@ -3612,7 +3612,7 @@ declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "tools";
 			dataType: "string";
 			columnType: "PgText";
-			data: "active" | "inactive" | "error";
+			data: "error" | "active" | "inactive";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4000,7 +4000,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "draft" | "active" | "paused" | "archived";
+			data: "active" | "archived" | "paused" | "draft";
 			driverParam: string;
 			notNull: true;
 			hasDefault: true;
@@ -4022,7 +4022,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			tableName: "playbooks";
 			dataType: "string";
 			columnType: "PgText";
-			data: "session" | "project";
+			data: "project" | "session";
 			driverParam: string;
 			notNull: false;
 			hasDefault: false;
@@ -4037,7 +4037,7 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 			identity: undefined;
 			generated: undefined;
 		}, {}, {
-			$type: "session" | "project";
+			$type: "project" | "session";
 		}>;
 		flowAutomationId: import("drizzle-orm/pg-core").PgColumn<{
 			name: "flow_automation_id";
@@ -5672,6 +5672,54 @@ export interface ProposalReviewChange {
 	before?: unknown;
 	after?: unknown;
 	valueType?: string;
+	/**
+	 * UPDATE rows of a LIVE proposal only (pending / approval_failed): has the
+	 * target field moved since this proposal captured its before-snapshot?
+	 * Compares the propose-time snapshot (`previousData`) with the live row.
+	 *
+	 *   - `unchanged`     — both sides read, and they agree;
+	 *   - `changed_since` — both sides read, and they differ: the `before` shown
+	 *     is STALE (someone edited the field after this was proposed);
+	 *   - `unknown`       — either side is absent (no snapshot of this field, or
+	 *     the live row was not readable). Never guessed.
+	 *
+	 * Absent on creates, deletes and applied/closed proposals, where the
+	 * question does not apply. Approving still proceeds (warn, never block):
+	 * undo compares-and-restores at apply time, so a stale before cannot make
+	 * the revert clobber the newer value.
+	 */
+	drift?: ProposalFieldDrift;
+}
+/** See {@link ProposalReviewChange.drift}. */
+export type ProposalFieldDrift = "unchanged" | "changed_since" | "unknown";
+/**
+ * What a DELETE proposal removes, measured — so a reviewer sees "12 properties
+ * · 4 links · a document · 2 roles" instead of one name.
+ *
+ * Every count is ABSENT (never 0) when it was not measured: only an entity
+ * target the viewer can read is measured. `recoverable` is the SAME
+ * `revertableForRow` answer `proposals.list` serves as `revertable`, so the
+ * two can never contradict each other.
+ */
+export interface ProposalRemoval {
+	/** The removed object's display name, when resolved. */
+	name?: string;
+	/** Object-kind token: the entity's profile slug, else the target type. */
+	kind: string;
+	/** The entity being removed — the door for the property / link / role counts. */
+	entityId?: string;
+	/** Non-empty property values on the entity. */
+	propertyCount?: number;
+	/** Links (relations) touching the entity that the viewer can see. */
+	relationCount?: number;
+	/** The entity carries a document body. */
+	hasDocument?: boolean;
+	/** The document's id — its own door. Present only when `hasDocument`. */
+	documentId?: string;
+	/** Role nouns the entity wears (vocabulary-resolved), in this proposal's lens. */
+	roles?: string[];
+	/** Can the removal be undone once applied (entity deletes are soft). */
+	recoverable: boolean;
 }
 export interface ProposalReviewEvent {
 	eventId: string;
@@ -5888,6 +5936,8 @@ export interface ProposalReviewModel {
 	 * empty and the graph carries the reviewable content.
 	 */
 	graph?: ProposalReviewGraph;
+	/** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
+	removal?: ProposalRemoval;
 	events: ProposalReviewEvent[];
 }
 export interface CompositeCreateEntityOp {
@@ -18472,7 +18522,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				title?: string | undefined;
 				language?: string | undefined;
 				mimeType?: string | undefined;
-				projectId?: string | undefined;
 				workspaceId?: string | undefined;
 			};
 			output: {
@@ -18485,6 +18534,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		get: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				documentId: string;
+				format?: "raw" | "readable" | undefined;
 			};
 			output: {
 				document: {
@@ -18516,6 +18566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				content: string;
 				canEdit: boolean;
+				format: "raw" | "readable";
 			};
 			meta: object;
 		}>;
@@ -22317,7 +22368,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								srcdoc?: string | undefined;
 								rendererType?: "external" | "native" | "iframe-srcdoc" | undefined;
 								external?: boolean | undefined;
-								placement?: "side" | "embed" | "floating" | "main" | "modal" | "popover" | undefined;
+								placement?: "side" | "floating" | "embed" | "main" | "modal" | "popover" | undefined;
 								displayMode?: "medium" | "full" | "compact" | undefined;
 								props?: Record<string, unknown> | undefined;
 								title?: string | undefined;
@@ -22929,7 +22980,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceIds?: string[] | undefined;
 				workspaceId?: string | null | undefined;
 				includePodWide?: boolean | undefined;
-				type?: "table" | "calendar" | "all" | "whiteboard" | "grid" | "list" | "timeline" | "kanban" | "gallery" | "gantt" | "mindmap" | "graph" | undefined;
+				type?: "table" | "map" | "calendar" | "all" | "bento" | "whiteboard" | "matrix" | "grid" | "flow" | "list" | "sheet" | "gallery" | "kanban" | "masonry" | "gantt" | "timeline" | "graph" | "branch_tree" | "mindmap" | undefined;
 				excludeAutoCreated?: boolean | undefined;
 			};
 			output: PaginatedResponse<{
@@ -28248,7 +28299,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				connectionId?: string | undefined;
 				lastRunAt?: string | undefined;
-				phase?: "failed" | "mapping" | "not_connected" | "fetching" | "review_ready" | "synced" | undefined;
+				phase?: "failed" | "mapping" | "fetching" | "review_ready" | "synced" | "not_connected" | undefined;
 				counts?: ({
 					fetched: number;
 					created: number;

@@ -4,8 +4,12 @@
  * Extracted verbatim from proposals.ts (Wave 5 router-decomposition).
  */
 
-import type { ProposalReviewChange } from "@synap-core/types";
+import type {
+  ProposalFieldDrift,
+  ProposalReviewChange,
+} from "@synap-core/types";
 import { humanizeToken } from "@synap-core/types/vocabulary";
+import { stableStringify } from "../../utils/stable-stringify.js";
 import {
   labelFromPath,
   valueTypeOf,
@@ -56,6 +60,7 @@ export function buildProposalChanges(
     title?: string | null;
     preview?: string | null;
     type?: string | null;
+    documentId?: string | null;
     properties?: unknown;
   },
   /**
@@ -63,7 +68,15 @@ export function buildProposalChanges(
    * Preferred over `current` so the diff survives approval/materialization and
    * concurrent edits. Absent on legacy proposals → `current` is used.
    */
-  previousData?: ProposalPreviousData
+  previousData?: ProposalPreviousData,
+  options: {
+    /**
+     * Stamp `drift` on each update row (snapshot vs live). Only meaningful
+     * BEFORE the proposal applies: once applied, the live row holds the
+     * proposed value and every field would read as "changed since".
+     */
+    measureDrift?: boolean;
+  } = {}
 ): ProposalReviewChange[] {
   const changes: ProposalReviewChange[] = [];
   const operation =
@@ -98,6 +111,52 @@ export function buildProposalChanges(
     return undefined;
   };
 
+  // ── DRIFT: has the field moved since the snapshot was taken? ─────────────
+  // Two sides, each either READ or ABSENT. A side is read when its record is
+  // in hand: the snapshot recorded this field (a stored `null` IS a reading —
+  // "was empty"), or the live row was readable and carries this column. Only
+  // two readings are compared; one missing side is `unknown`, never a guess.
+  const measureDrift = options.measureDrift === true && operation === "update";
+  const LIVE_COLUMN: Record<string, keyof NonNullable<typeof current>> = {
+    title: "title",
+    description: "preview",
+    profileSlug: "type",
+    documentId: "documentId",
+  };
+  const driftOf = (
+    snapshot: { read: boolean; value?: unknown },
+    live: { read: boolean; value?: unknown }
+  ): ProposalFieldDrift => {
+    if (!snapshot.read || !live.read) return "unknown";
+    return sameFieldValue(snapshot.value, live.value)
+      ? "unchanged"
+      : "changed_since";
+  };
+  const topLevelDrift = (key: string): ProposalFieldDrift => {
+    const snapValue = previousData?.[key as keyof ProposalPreviousData];
+    const column = LIVE_COLUMN[key];
+    return driftOf(
+      { read: snapValue !== undefined, value: snapValue },
+      {
+        read: !!current && !!column && column in current,
+        value: current && column ? current[column] : undefined,
+      }
+    );
+  };
+  const liveProps =
+    current?.properties && typeof current.properties === "object"
+      ? (current.properties as Record<string, unknown>)
+      : undefined;
+  const propertyDrift = (key: string): ProposalFieldDrift =>
+    driftOf(
+      {
+        read: !!snapshotProps && key in snapshotProps,
+        value: snapshotProps?.[key],
+      },
+      // The live row was read: a key it lacks is a READING ("empty now").
+      { read: !!liveProps, value: liveProps?.[key] }
+    );
+
   for (const key of ["title", "description", "profileSlug", "documentId"]) {
     if (data[key] !== undefined) {
       changes.push({
@@ -107,6 +166,7 @@ export function buildProposalChanges(
         before: beforeFor(key),
         after: data[key],
         valueType: valueTypeOf(data[key]),
+        ...(measureDrift ? { drift: topLevelDrift(key) } : {}),
       });
     }
   }
@@ -129,6 +189,7 @@ export function buildProposalChanges(
       before: beforePropFor(key),
       after: value,
       valueType: valueTypeOf(value),
+      ...(measureDrift ? { drift: propertyDrift(key) } : {}),
     });
   }
 
@@ -260,6 +321,15 @@ export function buildProposalChanges(
   }
 
   return changes;
+}
+
+/**
+ * Field equality for drift: `undefined` and `null` are both "empty" (the
+ * snapshot stores `null`, a live JSONB bag simply lacks the key); everything
+ * else compares structurally, key order ignored.
+ */
+function sameFieldValue(a: unknown, b: unknown): boolean {
+  return stableStringify(a ?? null) === stableStringify(b ?? null);
 }
 
 /** The fields of a stage the review card shows — everything else stays in `data`. */

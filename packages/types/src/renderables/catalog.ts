@@ -225,31 +225,22 @@ export function configFieldsToJsonSchema(
   };
 }
 
-// ─── Example directive (the document grammar, plan §3 / decision D1) ─────────
+// ─── Example embed props (the document grammar, plan §3 / decision D1) ───────
 
 /**
- * An example embed in the document grammar: a reference-only directive, the
- * props in a first-child ```json block, then a markdown fallback paragraph.
+ * The props of an example embed of this renderable: its required keys as
+ * `<key>` placeholders, a `label` when it takes one, and — for a
+ * snapshot-by-default chart (D2) — example `data` + `capturedAt`.
  *
- * ```
- * :::synap-cell{cellKey="chart-bar"}
- * ```json
- * {"profileSlug":"<profileSlug>","label":"<label>"}
- * ```
- *
- * <one sentence: what this shows>
- * :::
- * ```
+ * Props only, never markup: the directive itself is written by markdown-core's
+ * `serializeEmbed`, the ONE embed writer (this leaf cannot import it).
  */
-export function exampleDirective(
+export function exampleEmbedProps(
   def: Pick<
     WidgetCapabilityDef,
     "requiredConfig" | "configSchema" | "dataBinding"
-  > & {
-    /** A catalog key, or an installed `cell:` / `generated:` key. */
-    key: string;
-  }
-): string {
+  >
+): Record<string, unknown> {
   const props: Record<string, unknown> = {};
   for (const key of requiredConfigFor(def)) props[key] = `<${key}>`;
   if (def.configSchema.some((f) => f.key === "label")) props.label = "<label>";
@@ -260,12 +251,7 @@ export function exampleDirective(
     props.data = CHART_DATA_EXAMPLES[shape];
     props.capturedAt = "<ISO date>";
   }
-  const lines = [`:::synap-cell{cellKey="${def.key}"}`];
-  if (Object.keys(props).length > 0) {
-    lines.push("```json", JSON.stringify(props), "```", "");
-  }
-  lines.push("<one sentence: what this shows>", ":::");
-  return lines.join("\n");
+  return props;
 }
 
 // ─── Key namespaces ──────────────────────────────────────────────────────────

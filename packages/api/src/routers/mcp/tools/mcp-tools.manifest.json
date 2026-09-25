@@ -3104,7 +3104,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Live list of what you may place: in a bento (surface \"bento\", default) or embedded in a document (surface \"document\"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card.",
+      "description": "Live list of what you may place: in a bento (surface \"bento\", default) or embedded in a document (surface \"document\"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card. With surface \"document\" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3160,7 +3160,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one.",
+      "description": "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one. In a session's room (`session.channelId`) this is how you talk to the person: kind 'question' notifies them on their phone; 'update' (default) shows in-app only; an @mention of them notifies too.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -3184,6 +3184,12 @@
             "type": "boolean",
             "description": "Set true to trigger an AI response after posting",
             "default": false
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["question", "update"],
+            "default": "update",
+            "description": "'question' when you need the person's answer — in a session room it pushes a notification to them (once per session per few hours). 'update' for progress and results — in-app only, never a push."
           }
         },
         "required": ["channelId", "content"]
@@ -4109,5 +4115,5 @@
       }
     }
   ],
-  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask` (prevents duplicates).\n2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.\n3. **Orient once.** `orient` briefs you: pending review (raise it first), open sessions, kinds, actions.\n4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; ask in its room (`post_message` to `session.channelId`); `evaluate_session` before `complete_session`.\n5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: a project grants its members access.\n6. **`proposed` is success**, queued for review. Keep working; never retry.\n7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.\n\nDepth via `load_skill`: `system/synap/lenses`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`."
+  "instructions": "You are connected to the user's Synap pod, the source of truth about their life, work and people. Tool names below are stems; your door may prefix them (`synap_ask`, `pod__ask`).\n\n1. **Recall first.** Before answering about the user's world or creating anything, `ask` (prevents duplicates).\n2. **Capture after.** A durable fact, decision, person or task: `capture`; about the user: `remember_fact`. No private scratchpad.\n3. **Orient once.** `orient` briefs you: pending review (raise it first), open sessions, kinds, actions.\n4. **Work in a session.** `start_session` or resume (playbook via `templateId`); 2–5 `criteria`; advance `currentStage`; person-only steps: `owner:'human'` outputs + `blockedReason`; post progress, questions and results in its room (`post_message` to `session.channelId`); your own chat may repeat them; `evaluate_session` before `complete_session`.\n5. **Declare scope; never guess a project.** Pin what the user names: `set_workspace_focus` / `set_project_focus`. Unset is safe: a project grants its members access.\n6. **`proposed` is success**, queued for review. Keep working; never retry.\n7. **Discover before inventing.** `list_profiles` / `list_capabilities` before defining a kind, role or workspace. **Extend first** (facet, overlay, parent); never a twin. New area: skill `from-intent`.\n\nDepth via `load_skill`: `system/synap/lenses`, `focus-sessions`, `from-intent`, `escalation-ladder`, `writes`, `catalog`."
 }

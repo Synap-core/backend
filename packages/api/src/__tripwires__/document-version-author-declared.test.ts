@@ -119,9 +119,39 @@ describe("TRIPWIRE: document_versions.author is stamped from the declared set", 
     expect(sites.length).toBeGreaterThanOrEqual(8);
   });
 
-  it("every insert site names `author`", () => {
+  /**
+   * Helpers an insert may SPREAD its author from. Each returns
+   * `{ author: DocumentVersionAuthor, … }` (typed), and its own literals are
+   * checked below like an insert's: a spread is named, never trusted blind.
+   */
+  const AUTHOR_HELPERS: Record<string, string> = {
+    initialVersionAuthor:
+      "packages/database/src/repositories/document-repository.ts",
+  };
+  const helperBody = (name: string): string => {
+    const src = readFileSync(join(BACKEND, AUTHOR_HELPERS[name]!), "utf8");
+    const start = src.indexOf(`export function ${name}(`);
+    expect(start, `${name} is no longer declared where named`).toBeGreaterThan(
+      -1
+    );
+    // Skip the parameter list and a `{ … }` return type: the body opens at
+    // the first `{` that ends a line.
+    const open = src.indexOf("{\n", src.indexOf(")", start) + 1);
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "{") depth++;
+      else if (src[i] === "}" && --depth === 0) return src.slice(open, i + 1);
+    }
+    return "";
+  };
+
+  it("every insert site names `author` (literally, or by spreading a named helper)", () => {
+    const spreadsHelper = (body: string) =>
+      Object.keys(AUTHOR_HELPERS).some((h) =>
+        new RegExp(`\\.\\.\\.${h}\\(`).test(body)
+      );
     const missing = sites
-      .filter((s) => !/\bauthor:/.test(s.body))
+      .filter((s) => !/\bauthor:/.test(s.body) && !spreadsHelper(s.body))
       .map((s) => s.file);
     expect(
       missing,
@@ -169,6 +199,21 @@ describe("TRIPWIRE: document_versions.author is stamped from the declared set", 
       ),
       "the accepted-AI-edit checkpoint must name the drafting agent"
     ).toBe(true);
+  });
+
+  it("every author a named helper returns is in DOCUMENT_VERSION_AUTHORS", () => {
+    for (const name of Object.keys(AUTHOR_HELPERS)) {
+      const literals = authorLiterals(helperBody(name));
+      expect(
+        literals.length,
+        `${name} returns no author literal`
+      ).toBeGreaterThan(0);
+      for (const l of literals)
+        expect(
+          DOCUMENT_VERSION_AUTHORS as readonly string[],
+          `${name}: ${l}`
+        ).toContain(l);
+    }
   });
 
   it("every `authorKind` literal passed to the content-write door is in DOCUMENT_VERSION_AUTHORS", () => {

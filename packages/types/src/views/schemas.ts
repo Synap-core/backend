@@ -5,6 +5,8 @@
  */
 
 import { z } from "zod";
+import { STRUCTURED_VIEW_TYPES } from "../renderables/views.js";
+import type { ViewTypeKey } from "../renderables/types.js";
 
 // =============================================================================
 // Entity Query Schemas
@@ -187,18 +189,9 @@ const SheetCanvasBlockSchema = z
  */
 export const RenderSettingsSchema = z
   .object({
+    // The structured view types of the ONE catalog (never a hand list).
     layout: z
-      .enum([
-        "table",
-        "kanban",
-        "list",
-        "grid",
-        "gallery",
-        "calendar",
-        "gantt",
-        "timeline",
-        "graph",
-      ])
+      .enum(STRUCTURED_VIEW_TYPES as [ViewTypeKey, ...ViewTypeKey[]])
       .optional(),
 
     // Common fields (flexible to allow frontend-specific structures)

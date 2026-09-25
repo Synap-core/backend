@@ -8,6 +8,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { ROOM_POST_KINDS } from "../../../../services/messaging/room-post-kind.js";
 
 /** Single thread (channel) row as returned by GET /threads. */
 export const ThreadSchema = z
@@ -76,6 +77,12 @@ export const PostMessageRequestSchema = z
       .optional()
       .describe(
         "If true and role=user, schedules an A2AI agent reply via pg-boss."
+      ),
+    kind: z
+      .enum(ROOM_POST_KINDS)
+      .optional()
+      .describe(
+        "An AGENT's post only: 'question' when the person is needed (in a session room it pushes them, once per session window); 'update' (default) for progress/results — in-app only, never a push."
       ),
   })
   .openapi("PostMessageRequest");

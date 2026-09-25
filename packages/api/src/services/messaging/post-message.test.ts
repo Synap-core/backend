@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   channelRows: [{ id: "chan-1" }] as Array<{ id: string }>,
   insertRows: [] as Array<{ id: string }>,
   insertCalls: 0,
+  notifyRoomPost: vi.fn(async () => undefined),
 }));
 
 vi.mock("@synap-core/core", () => ({
@@ -93,6 +94,13 @@ vi.mock("@synap/database", () => {
   };
 });
 
+// Who-hears-about-it is `notify-room-post.ts`'s own suite
+// (`room-first-notifications.pglite.test.ts`); stubbed so this file's
+// hand-built database mock does not have to model the notification tables.
+vi.mock("./notify-room-post.js", () => ({
+  notifyRoomPost: state.notifyRoomPost,
+}));
+
 import { postChannelMessage } from "./post-message.js";
 
 const base = {
@@ -116,6 +124,11 @@ describe("postChannelMessage — ack integrity", () => {
     expect(r.ackState).toBe("applied");
     expect(r.messageId).toMatch(/^[0-9a-f-]{36}$/);
     expect(state.insertCalls).toBe(1);
+    // A NEW row tells the room's people — once, with the landed message id.
+    expect(state.notifyRoomPost).toHaveBeenCalledTimes(1);
+    expect(state.notifyRoomPost).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: r.messageId, kind: undefined })
+    );
   });
 
   it("no-key retry: a prior identical (non-triggering) message returns duplicate-ignored, no insert", async () => {
@@ -127,6 +140,8 @@ describe("postChannelMessage — ack integrity", () => {
     expect(r.priorMessageId).toBe("prior-msg");
     // At-most-once: no second row written.
     expect(state.insertCalls).toBe(0);
+    // …and nobody is notified twice about a replayed post.
+    expect(state.notifyRoomPost).not.toHaveBeenCalled();
   });
 
   it("triggerAI post bypasses content-dedup: an identical prior row still inserts a fresh turn", async () => {
@@ -154,6 +169,8 @@ describe("postChannelMessage — ack integrity", () => {
     expect(r.ackState).toBe("duplicate-ignored");
     // Explicit key skips the content lookup and keys on the derived PK.
     expect(state.insertCalls).toBe(1);
+    // The conflict no-op is a replay: nobody is notified again.
+    expect(state.notifyRoomPost).not.toHaveBeenCalled();
   });
 
   it("explicit key derives a stable message id across retries", async () => {

@@ -48,6 +48,7 @@ import {
   FocusSessionStatus,
 } from "@synap/database/schema";
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
+import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
 import type {
   ChannelSpec,
   RunResult,
@@ -691,6 +692,21 @@ async function executeSingleRun(
         : undefined),
     metadata: sessionMetadata,
   });
+
+  // A run born owing the person something (a playbook step declared
+  // `owner: "human"`, an unanswered required param on the `owe` path) tells
+  // them — once per session window — when nobody is in front of it: an agent
+  // started it, or a HEADLESS door did (`owe` is declared exactly for those,
+  // see `RunPlaybookInput.onMissingRequired`). The run is owned by the agent
+  // user, so the PERSON is named as the recipient.
+  if (session) {
+    await notifySessionNeedsYou({
+      sessionId: session.id,
+      byAgent: !!input.agentUserId || input.onMissingRequired === "owe",
+      recipientUserId: input.userId,
+      reason: { kind: "slots", before: [], after: session.expectedOutputs },
+    });
+  }
 
   // Lineage: the session this run was started FROM. AFTER the row exists and
   // outside any transaction — a bad parent handle must never cost the run. The

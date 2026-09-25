@@ -11,11 +11,18 @@
  *     database; read from source text, SKIPPED when the sibling repo is absent
  *     (a missing checkout is not a drift).
  * The Control Plane's copies are guarded by `cp-pod-content-kind-parity`.
+ *
+ * And no OTHER copy may appear: a derived scan (every non-test source file of
+ * synap-backend, the IS and the CLI, AST-parsed) flags any array literal
+ * holding ≥ 4 content-kind literals outside the catalog and the two pinned
+ * copies. It found `services/surfaces/renderer-usage.ts` (a private copy of the
+ * profile kinds), now imported from the catalog (W7a).
  */
 
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import ts from "typescript";
 import { CONTENT_KINDS as DATABASE_CONTENT_KINDS } from "@synap/database/schema";
 import { CONTENT_KINDS } from "@synap-core/types/renderables";
 
@@ -45,5 +52,81 @@ describe("tripwire: one content-kind taxonomy", () => {
     const cli = literalConstKinds(readFileSync(CLI_CELL, "utf8"));
     expect(cli.length, "extractor found nothing").toBeGreaterThan(0);
     expect(cli).toEqual([...CONTENT_KINDS]);
+  });
+});
+
+// ─── No other copy (derived scan) ────────────────────────────────────────────
+
+const MONOREPO = REPO_ROOT;
+const ALLOWED = new Set([
+  "synap-backend/packages/types/src/renderables/content-kinds.ts",
+  "synap-backend/packages/database/src/schema/widget-definitions.ts",
+  "synap-cli/src/commands/cell.ts",
+]);
+const KINDS = new Set<string>(CONTENT_KINDS);
+
+function walkSources(dir: string, out: string[]): void {
+  for (const name of readdirSync(dir)) {
+    if (
+      name.startsWith(".") ||
+      ["node_modules", "dist", "build", "__tests__", "__fixtures__"].includes(
+        name
+      )
+    )
+      continue;
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) walkSources(full, out);
+    else if (
+      /\.(ts|tsx|mjs)$/.test(name) &&
+      !/\.(test|spec)\.|\.d\.ts$/.test(name)
+    )
+      out.push(full);
+  }
+}
+
+function kindLists(src: string): number {
+  const sf = ts.createSourceFile("x.ts", src, ts.ScriptTarget.Latest, true);
+  let n = 0;
+  const visit = (node: ts.Node) => {
+    if (
+      ts.isArrayLiteralExpression(node) &&
+      node.elements.filter((e) => ts.isStringLiteral(e) && KINDS.has(e.text))
+        .length >= 4
+    )
+      n++;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return n;
+}
+
+describe("tripwire: no other content-kind copy", () => {
+  const files: string[] = [];
+  for (const r of [
+    "synap-backend/packages",
+    "synap-backend/apps",
+    "synap-intelligence-service/apps",
+    "synap-cli/src",
+  ])
+    if (existsSync(join(MONOREPO, r))) walkSources(join(MONOREPO, r), files);
+  const copies = files
+    .filter((f) => {
+      const src = readFileSync(f, "utf8");
+      return src.includes('"entity-card"') && kindLists(src) > 0;
+    })
+    .map((f) => relative(MONOREPO, f));
+
+  it("non-vacuous: sees the catalog and the pinned database copy", () => {
+    expect(files.length).toBeGreaterThan(1000);
+    expect(copies).toContain(
+      "synap-backend/packages/types/src/renderables/content-kinds.ts"
+    );
+    expect(copies).toContain(
+      "synap-backend/packages/database/src/schema/widget-definitions.ts"
+    );
+  });
+
+  it("every copy is the catalog or a pinned one", () => {
+    expect(copies.filter((f) => !ALLOWED.has(f))).toEqual([]);
   });
 });

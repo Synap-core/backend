@@ -54,6 +54,10 @@
     "./diff": {
       "types": "./dist/diff.d.ts",
       "import": "./dist/diff.js"
+    },
+    "./readable": {
+      "types": "./dist/readable.d.ts",
+      "import": "./dist/readable.js"
     }
   },
   "scripts": {
@@ -67,6 +71,7 @@
     "mdast-util-directive": "^3.1.0",
     "remark-directive": "^4.0.0",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "remark-parse": "^11.0.0",
     "unified": "^11.0.0",
     "unist-util-visit": "^5.0.0",

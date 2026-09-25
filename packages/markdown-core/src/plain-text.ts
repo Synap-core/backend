@@ -108,8 +108,9 @@ function blockText(node: RootContent, nounFor?: MarkerNoun): string {
         .filter(Boolean)
         .join(" ");
     case "code":
+    case "math":
       // The code IS content — a preview that drops a fenced block entirely
-      // would render an empty card for a snippet-only note.
+      // would render an empty card for a snippet-only note. Math likewise.
       return node.value;
     case "table":
       return node.children

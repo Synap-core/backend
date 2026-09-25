@@ -326,7 +326,16 @@ export function resolveObjectNounPlural(
   if (entry?.labelPlural) return entry.labelPlural;
   const canonicalNoun = OBJECT_NOUNS[canonical];
   if (canonicalNoun) return `${canonicalNoun}s`;
-  return `${humanizeToken(canonical)}s`;
+  return pluralizeFallback(humanizeToken(canonical));
+}
+
+/**
+ * The uncurated fallback: singular + "s", except a consonant + "y" ending,
+ * which takes "ies" — `property` (an alias target with no registry entry)
+ * rendered "Propertys" through the bare-`s` rule.
+ */
+function pluralizeFallback(noun: string): string {
+  return /[^aeiou]y$/i.test(noun) ? `${noun.slice(0, -1)}ies` : `${noun}s`;
 }
 
 /**

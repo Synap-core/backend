@@ -390,6 +390,13 @@ export const ADMIN_ACTIONS_LIVE: readonly GateEventKey[] = [
   // repository methods have zero gate call sites) — those spellings are in
   // ADMIN_ACTIONS_RESERVED below.
   "projectMember.create",
+  // Exposure edges. Real gate: `routers/relations.ts` — `exposeToAnchor`
+  // passes `subjectType: "relation"` + `action: "expose"` (door
+  // `relation/expose`). An exposure edge (`visible_to` / `belongs_to_project`)
+  // widens who can read the exposed object — the same SCOPE CHANGE as
+  // `projectMember.create`, so no rule or `autoApproveFor` entry (e.g.
+  // `relation.*`) may lift it to auto-execute.
+  "relation.expose",
   // Agent capability grants — `routers/agent-users.ts`.
   "agent.updateCapabilities",
   // API keys. `apiKey.create` was already correct; the DELETE door is spelled

@@ -53,6 +53,10 @@ import { accessScopeWhere } from "../utils/project-scope.js";
 import { paginatedInput, buildPaginatedResponse } from "../utils/pagination.js";
 import { randomUUID } from "crypto";
 import { auditLog } from "../utils/audit-log.js";
+import {
+  DOCUMENT_READ_FORMATS,
+  readableMarkdown,
+} from "../services/document-patch/read-document.js";
 import { emitSideEffects, getBoss } from "@synap/events";
 
 // ============================================================================
@@ -86,7 +90,6 @@ const UploadDocumentSchema = z.object({
   title: z.string().optional(),
   language: z.string().optional(),
   mimeType: z.string().optional(),
-  projectId: z.string().uuid().optional(),
   /** Optional: when omitted, uses X-Workspace-Id header (workspaceLink). */
   workspaceId: z.string().uuid().optional(),
 });
@@ -354,7 +357,18 @@ export const documentsRouter = router({
    * Get document by ID
    */
   get: protectedProcedure
-    .input(z.object({ documentId: z.string() }))
+    .input(
+      z.object({
+        documentId: z.string(),
+        /**
+         * `raw` (default) = the stored body. `readable` = every embed replaced
+         * by its markdown fallback (markdown-core `readableMarkdown`, the same
+         * rule as the agent read) — what an export or another reader gets.
+         * Binary bodies (pdf/docx) have no readable form and are refused.
+         */
+        format: z.enum(DOCUMENT_READ_FORMATS).default("raw"),
+      })
+    )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
 
@@ -388,7 +402,17 @@ export const documentsRouter = router({
       // Only FORBIDDEN reads as false; a failed membership read fails the get.
       const canEdit = await canEditDocument(userId, document);
 
-      return { document, content, canEdit };
+      if (input.format === "readable") {
+        if (document.type === "pdf" || document.type === "docx") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `A ${document.type} document has no readable markdown form.`,
+          });
+        }
+        content = readableMarkdown(content);
+      }
+
+      return { document, content, canEdit, format: input.format };
     }),
 
   /**

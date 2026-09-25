@@ -194,6 +194,7 @@ export type {
   HubSessionCriterion,
   UpdateFocusSessionInput,
   UpdateFocusSessionResult,
+  HubSessionNudges,
   CompleteFocusSessionInput,
   FocusSessionProposalPackItem,
   CompleteFocusSessionResult,

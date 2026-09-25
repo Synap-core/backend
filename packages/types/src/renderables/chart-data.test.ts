@@ -7,7 +7,7 @@ import {
   chartPropsMadeLive,
   configFieldsToJsonSchema,
   dataBindingFor,
-  exampleDirective,
+  exampleEmbedProps,
   freezeChartProps,
   parseChartData,
   parseChartSnapshot,
@@ -75,9 +75,11 @@ describe("chart data binding in the catalog (D2)", () => {
     expect(seen).toBe(13);
   });
 
-  it("the example directive of a snapshot chart carries valid data + the query keys", () => {
-    const ex = exampleDirective(byKey.get("chart-bar")!);
-    const json = JSON.parse(ex.split("\n")[2]!);
+  it("the example props of a snapshot chart carry valid data + the query keys", () => {
+    const json = exampleEmbedProps(byKey.get("chart-bar")!) as Record<
+      string,
+      unknown
+    >;
     expect(json.profileSlug).toBe("<profileSlug>");
     expect(parseChartData("categories", json.data).ok).toBe(true);
     expect(json.capturedAt).toBe("<ISO date>");

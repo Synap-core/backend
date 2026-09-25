@@ -74,6 +74,7 @@ import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
 } from "../../../services/focus-sessions/block-guidelines.js";
+import { notifySessionNeedsYou } from "../../../services/focus-sessions/notify-needs-you.js";
 import { BLOCKED_REASONS, type ExpectedOutput } from "@synap/playbooks";
 import {
   blockExpectedOutput,
@@ -1348,9 +1349,38 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
             })
           : undefined;
 
+      // The IS hands the person a slot through THIS wholesale array too: an
+      // agent's newly person-owned slot tells them, once per session window.
+      if (patch.expectedOutputs !== undefined) {
+        await notifySessionNeedsYou({
+          sessionId: id,
+          byAgent: !!agentUserId,
+          reason: {
+            kind: "slots",
+            before: existing.expectedOutputs,
+            after: set.expectedOutputs,
+          },
+        });
+      }
+
+      // What the session still owes — the SAME loader the MCP
+      // `update_session` door answers with (`session-nudges.ts`), so an IS,
+      // CLI or Raycast agent on this door is reminded exactly like an MCP one.
+      // Read-only (bar the once-only playbook-offer stamp); omitted when
+      // nothing is owed; a failed read is `{status:"unavailable"}`, never thrown.
+      const { loadSessionNudges } =
+        await import("../../../services/focus-sessions/session-nudges.js");
+      const nudges = await loadSessionNudges({
+        session: updated,
+        phase: "update",
+        userId,
+        agentUserId,
+      });
+
       return c.json({
         ...updated,
         ...(blockGuidelines ? { blockGuidelines } : {}),
+        ...(nudges ? { nudges } : {}),
         // What the follow DID — which playbook, which stage, how much
         // structure merged. Without it the caller must infer an attach from a
         // `playbookId` that appeared, and can never see a release's note.
@@ -1549,6 +1579,17 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
 
+      // Never blocks the close (it already happened): what closed still owed.
+      // The SAME loader as MCP `complete_session` — one derivation, two doors.
+      const { loadSessionNudges } =
+        await import("../../../services/focus-sessions/session-nudges.js");
+      const nudges = await loadSessionNudges({
+        session: result.session,
+        phase: "complete",
+        userId,
+        agentUserId,
+      });
+
       return c.json({
         // The status the ROW holds. A literal here would report a cancel or a
         // failure as a successful close.
@@ -1557,6 +1598,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         pendingProposals: result.pendingProposals,
         counts: result.counts,
         warnings: result.warnings,
+        ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
       const code = (err as { code?: unknown })?.code;
@@ -2097,6 +2139,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     run: (args: {
       sessionId: string;
       userId: string;
+      /** The verified acting agent (auth context), never a body field. */
+      agentUserId: string | undefined;
       body: unknown;
     }) => Promise<BlockExpectedOutputResult>,
     schema: typeof BlockOutputBodySchema | typeof UnblockOutputBodySchema
@@ -2132,6 +2176,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         const result = await run({
           sessionId: session.id,
           userId: acting.userId,
+          agentUserId: c.get("agentUserId") as string | undefined,
           body: parsed.data,
         });
         switch (result.status) {
@@ -2177,11 +2222,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
 
   slotOwnershipRoute(
     "block",
-    ({ sessionId, userId, body }) =>
+    ({ sessionId, userId, agentUserId, body }) =>
       blockExpectedOutput({
         sessionId,
         userId,
         ...(body as z.infer<typeof BlockOutputBodySchema>),
+        // AFTER the body spread: the actor is the auth context's, never a
+        // body field that happens to share the name.
+        agentUserId,
       }),
     BlockOutputBodySchema
   );

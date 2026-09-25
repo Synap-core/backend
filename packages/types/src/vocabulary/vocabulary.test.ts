@@ -781,6 +781,14 @@ describe("resolveObjectNounPlural", () => {
     expect(resolveObjectNounPlural("some_new_thing")).toBe("Some new things");
     expect(resolveObjectNounPlural(null)).toBe("");
   });
+
+  it("a consonant + y fallback takes -ies, never a bare s", () => {
+    // `property` is an alias TARGET with no registry entry — it read "Propertys".
+    expect(resolveObjectNounPlural("property")).toBe("Properties");
+    expect(resolveObjectNounPlural("property_def")).toBe("Properties");
+    // A vowel + y keeps the plain s.
+    expect(resolveObjectNounPlural("some_key_way")).toBe("Some key ways");
+  });
 });
 
 describe("withdraw — the mood trap", () => {

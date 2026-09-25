@@ -29,8 +29,8 @@
 
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { parseMarkdown } from "@synap-core/markdown-core/processor";
-import { readEmbed, type Embed } from "@synap-core/markdown-core/embeds";
+import type { Embed } from "@synap-core/markdown-core/embeds";
+import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
   parseSections,
   sectionOwner,
@@ -166,49 +166,6 @@ function sectionBlocks(
 }
 
 // ─── Embeds ──────────────────────────────────────────────────────────────────
-
-/** An embed together with the character range of its source. */
-export interface LocatedEmbed {
-  embed: Embed;
-  start: number;
-  end: number;
-  /** The character range of its markdown fallback, when it has one. */
-  fallbackRange: { start: number; end: number } | null;
-}
-
-/** Every `synap-*` reference embed in the document, in source order. */
-export function locateEmbeds(markdown: string): LocatedEmbed[] {
-  const out: LocatedEmbed[] = [];
-  const walk = (node: {
-    type: string;
-    children?: unknown[];
-    position?: { start: { offset?: number }; end: { offset?: number } };
-  }) => {
-    const embed = readEmbed(node as Parameters<typeof readEmbed>[0]);
-    if (embed) {
-      const start = node.position?.start.offset;
-      const end = node.position?.end.offset;
-      if (typeof start === "number" && typeof end === "number") {
-        const first = embed.fallback[0]?.position?.start.offset;
-        const last =
-          embed.fallback[embed.fallback.length - 1]?.position?.end.offset;
-        out.push({
-          embed,
-          start,
-          end,
-          fallbackRange:
-            typeof first === "number" && typeof last === "number"
-              ? { start: first, end: last }
-              : null,
-        });
-      }
-      return; // an embed's fallback is prose, never another embed to count
-    }
-    for (const child of node.children ?? []) walk(child as typeof node);
-  };
-  walk(parseMarkdown(markdown) as unknown as Parameters<typeof walk>[0]);
-  return out;
-}
 
 /** The identity of an embed for the removal floor: directive + references. */
 function embedIdentity(embed: Embed): string {

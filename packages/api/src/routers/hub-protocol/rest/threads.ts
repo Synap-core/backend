@@ -18,6 +18,7 @@
  * wins over Hono's first-match dynamic param resolution.
  */
 
+import { notifyRoomPost } from "../../../services/messaging/notify-room-post.js";
 import { createRoute, z } from "@hono/zod-openapi";
 import {
   db,
@@ -1211,6 +1212,20 @@ export function registerThreadsRoutes(app: HubHono): void {
         channelId: threadId,
         messageId: msgId,
         data: { role: body.role },
+      });
+
+      // Who hears about it — the ONE resolution the MCP and tRPC post doors
+      // share (`notify-room-post.ts`): @mentioned humans (an agent's operator
+      // included), and for an agent in a session room the question push or
+      // the in-app update. The agent comes ONLY from the auth context. Never
+      // throws.
+      await notifyRoomPost({
+        channelId: threadId,
+        content: body.content,
+        messageId: msgId,
+        userId,
+        agentUserId: ctxAgentUserId,
+        kind: body.kind,
       });
 
       if (body.autoRespond === true && body.role === "user") {

@@ -33,9 +33,20 @@ export interface DocumentBodyTexts {
   failed: Map<string, string>;
 }
 
+export interface DocumentBodyTextOptions {
+  /**
+   * Turns a MARKDOWN body into the prose it reads as (markdown-core
+   * `markdownToPlainText`: embeds read as their fallback, props JSON and
+   * directive syntax never indexed). Injected — this package does not depend
+   * on the markdown spine — and required, so no reader indexes raw directives.
+   */
+  markdownText: (markdown: string) => string;
+}
+
 export async function loadDocumentBodyTexts(
   db: Pick<typeof DbClient, "select">,
-  documentIds: string[]
+  documentIds: string[],
+  options: DocumentBodyTextOptions
 ): Promise<DocumentBodyTexts> {
   const texts = new Map<string, string>();
   const failed = new Map<string, string>();
@@ -62,7 +73,13 @@ export async function loadDocumentBodyTexts(
         return;
       }
       const text = documentVersionContentPreview(body, row.mimeType);
-      if (text && !isYjsStateText(text)) texts.set(row.id, text);
+      if (!text || isYjsStateText(text)) return;
+      texts.set(
+        row.id,
+        (row.mimeType ?? "").includes("markdown")
+          ? options.markdownText(text)
+          : text
+      );
     })
   );
   return { texts, failed };

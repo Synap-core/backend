@@ -37,6 +37,13 @@ vi.mock("../../utils/channel-visibility.js", () => ({
   },
 }));
 
+// Who hears about a post is `notify-room-post.ts`'s own suite
+// (`room-first-notifications.pglite.test.ts`); stubbed so this file's
+// database mock need not model the notification tables.
+vi.mock("./notify-room-post.js", () => ({
+  notifyRoomPost: async () => undefined,
+}));
+
 // PARTIAL mock (see the `database-mock-total-ratchet` tripwire): keep the real
 // tables + operators, fake only `db` and the two effects.
 vi.mock("@synap/database", async (importOriginal) => {

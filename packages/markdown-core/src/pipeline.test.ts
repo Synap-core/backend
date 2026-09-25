@@ -17,8 +17,8 @@ import { join } from "node:path";
 import * as core from "./index.js";
 
 const PROSE =
-  "Meet at 10:30 today; the ratio:high case, a ==highlighted== word.";
-const DOC = `# Notes 10:30\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n::::\n`;
+  "Meet at 10:30 today; the ratio:high case, a ==highlighted== word, it costs $5 and $10.";
+const DOC = `# Notes 10:30, $5 and $10\n\nMeet at 10:30 today; the ratio:high case.\n\n::::synap-section{id="s1"}\n## ratio:high\n\n${PROSE}\n::::\n`;
 
 /** Every string a reader produced, however deep. */
 function strings(value: unknown, out: string[] = []): string[] {
@@ -67,6 +67,9 @@ const READERS: Record<string, Probe> = {
       .segmentSlides(DOC)
       .map((s) => s.title)
       .join("\n"),
+  // Markdown out (source slices around each embed): kept as a reader so a
+  // readable export can never drop prose the stored document has.
+  readableMarkdown: () => core.readableMarkdown(DOC, () => "embed"),
   // The hast mapping runs after the pipeline; it must not reintroduce the loss.
   remarkSynapDirectives: () => {
     const p = core.createMarkdownProcessor().use(core.remarkSynapDirectives);
@@ -104,6 +107,7 @@ const NOT_READERS: Record<string, string> = {
   remarkRepairEmbeds: "plugin (in every reader)",
   remarkGithubAlerts: "plugin (in every reader)",
   remarkHighlight: "plugin (in every reader)",
+  remarkDisplayMath: "plugin (in every reader)",
   synapRemarkPlugins: "plugin list (in every reader)",
   ALERT_KINDS: "data",
   isMarkerHref: "predicate (a URL, no parse)",
@@ -119,6 +123,7 @@ const NOT_READERS: Record<string, string> = {
   DIRECTIVE_ATTRIBUTES: "data",
   LEGACY_PROPS_ATTRIBUTES: "data",
   embedFallback: "reads parsed nodes",
+  locateEmbeds: "embed source ranges (prose read through readableMarkdown)",
   DIAGNOSTIC_CODES: "data",
   collectDiagnostics: "diagnostics, no prose output",
   blame: "line diff over history, no parse",
@@ -154,17 +159,22 @@ describe("every export is classified", () => {
 
 describe("prose survives every reader", () => {
   for (const [name, probe] of Object.entries(READERS)) {
-    it(`${name}: "10:30" and "ratio:high" come back`, () => {
+    it(`${name}: "10:30", "ratio:high" and "$5 and $10" come back`, () => {
       const read = probe();
       expect(read).toContain("10:30");
       expect(read).toContain("ratio:high");
+      expect(read).toContain("$5 and $10");
     });
   }
 
   // listSections / segmentSlides hand back SOURCE slices (a reader renders
   // them later), so a raw `==` there is correct; every other reader must
   // have turned the highlight into its text.
-  const SOURCE_SLICES = new Set(["listSections", "segmentSlides"]);
+  const SOURCE_SLICES = new Set([
+    "listSections",
+    "segmentSlides",
+    "readableMarkdown",
+  ]);
   for (const [name, probe] of Object.entries(READERS)) {
     if (SOURCE_SLICES.has(name)) continue;
     it(`${name}: "==highlighted==" reads as its text, never raw ==`, () => {

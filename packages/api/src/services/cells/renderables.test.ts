@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { WIDGET_DEFINITIONS } from "@synap-core/types/renderables";
+import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
   builtinRenderableRows,
   discoverRenderables,
@@ -155,6 +156,19 @@ describe("discoverRenderables — synap_list_widgets", () => {
           expect(keys.has(def.key), `${surface}: ${def.key}`).toBe(false);
         }
       }
+    }
+  });
+
+  it("every example reads back through the one embed reader (installed keys too)", () => {
+    const doc = discoverRenderables(rows, "document");
+    expect(doc.length).toBeGreaterThan(20);
+    for (const entry of doc) {
+      const [one, ...rest] = locateEmbeds(entry.exampleDirective);
+      expect(rest, entry.key).toEqual([]);
+      expect(one?.embed.ref.cellKey, entry.key).toBe(entry.key);
+      expect(one?.embed.propsError, entry.key).toBeUndefined();
+      expect(one?.embed.legacy, entry.key).toBeFalsy();
+      expect(one?.fallbackRange, entry.key).not.toBeNull();
     }
   });
 

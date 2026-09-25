@@ -432,7 +432,7 @@ export const buildHandlers: McpHandlerMap = {
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    const { discoverRenderables } =
+    const { discoverRenderables, discoverFences } =
       await import("../../../services/cells/renderables.js");
     const workspaceId =
       confinedWorkspaceId ??
@@ -444,11 +444,15 @@ export const buildHandlers: McpHandlerMap = {
     return ok({
       surface,
       widgets: discoverRenderables(rows, surface),
+      // Content languages (```mermaid, ```math, code) are fences, not
+      // directives — the catalog's fence rows, a document-only answer.
+      ...(surface === "document" ? { fences: discoverFences() } : {}),
       notes:
         surface === "document"
           ? [
               "Never guess a key — use this list.",
-              "exampleDirective is the document embed grammar being rolled out: attributes carry ONLY the cellKey, props go in a ```json block, and the paragraph after it is the fallback shown where the live cell cannot render. Until your skill (document-embeds) teaches that form, write embeds the way the skill says.",
+              "exampleDirective is the document embed grammar: attributes carry ONLY the cellKey, props go in a ```json block, and the paragraph after it is the fallback shown where the live cell cannot render.",
+              "fences are content languages written as a fenced block (```mermaid, ```math); their source IS the content. There is no ```chart fence — a chart is a synap-cell.",
               "binding.default says how the data travels: query = live from the pod.",
             ]
           : [
@@ -471,6 +475,9 @@ export const buildHandlers: McpHandlerMap = {
       content: args.content as string,
       role: args.role as string | undefined,
       triggerAI: Boolean(args.triggerAI),
+      // 'question' pushes the person (session rooms); anything else is an
+      // in-app 'update'. Validated by the tool schema's enum.
+      kind: args.kind === "question" ? "question" : "update",
       userId,
       // `userId` is the human OWNER even on an agent key. Pass the agent
       // principal so the row records WHICH agent posted — otherwise every agent

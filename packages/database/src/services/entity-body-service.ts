@@ -223,7 +223,16 @@ export class EntityBodyService {
     if (!shouldMaterializeAsDocument(text)) return { inlineContent: text };
 
     try {
-      const key = storage.buildPath(userId, "entity", entityId, "md");
+      // A FRESH key per created document. The key used to be derived from the
+      // entity alone, so a second materialization of the same entity uploaded
+      // over the FIRST document's live body — a content write outside
+      // `claimDocumentRevision` that the one-door tripwire cannot see.
+      const key = storage.buildPath(
+        userId,
+        "entity",
+        `${entityId}-${randomUUID()}`,
+        "md"
+      );
       const metadata = await storage.upload(key, text, {
         contentType: "text/markdown",
       });

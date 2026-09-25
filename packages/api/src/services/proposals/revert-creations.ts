@@ -151,7 +151,12 @@ export function revertSkipView(skip: RevertSkip): {
         ? target.entityId
         : target.id,
     ...(target.kind === "property" ? { key: target.key } : {}),
-    ...(target.kind === "entity_field" ? { key: target.field } : {}),
+    // The API field name, never the column: the `preview` column is the
+    // `description` field on every entity door, so a kept key reads the way
+    // the client humanizes every other field (vocabulary `humanizeToken`).
+    ...(target.kind === "entity_field"
+      ? { key: target.field === "preview" ? "description" : target.field }
+      : {}),
     reason: skip.reason,
     detail: skip.detail,
   };

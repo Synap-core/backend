@@ -141,6 +141,7 @@ describe("conformance corpus", () => {
       "colons-in-fences.md",
       "colon-nesting.md",
       "unterminated.md",
+      "math-fences.md",
     ]) {
       expect(names).toContain(required);
     }

@@ -34,7 +34,7 @@ import {
 } from "@synap-core/types/renderables";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRenderables, type RenderableRow } from "../cells/renderables.js";
-import { locateEmbeds } from "./patch-ops.js";
+import { locateEmbeds } from "@synap-core/markdown-core/readable";
 
 export const DOCUMENT_DIAGNOSTIC_CODES = [
   "unknown_key",

@@ -56,6 +56,8 @@ import {
 // NOT drizzle's — a raw fragment inside a drizzle `where()` must use this one.
 import { sql as drizzleSql } from "drizzle-orm";
 import { createLogger } from "@synap-core/core";
+// The content kinds a profile assigns (the live renderer writer's slots).
+import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
@@ -122,13 +124,6 @@ export interface RendererUsageInput {
   access: AccessContext;
 }
 
-/** The ContentKind keys the live renderer writer uses. */
-const CONTENT_KINDS = [
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-] as const;
 /** The pre-0112 slot keys, still present in stored overlays. */
 const LEGACY_SLOTS = ["list", "detail", "dashboard"] as const;
 
@@ -309,7 +304,7 @@ async function readWorkspaceBindings(
     )) {
       if (!slots || typeof slots !== "object") continue;
       const slotMap = slots as Record<string, unknown>;
-      for (const slotKey of [...CONTENT_KINDS, ...LEGACY_SLOTS]) {
+      for (const slotKey of [...PROFILE_CONTENT_KINDS, ...LEGACY_SLOTS]) {
         const found = rendererRefKey(slotMap[slotKey]);
         if (!found) continue;
         out.push({

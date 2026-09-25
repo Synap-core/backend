@@ -2219,6 +2219,9 @@ export const focusSessionsRouter = router({
       const result = await blockExpectedOutput({
         sessionId: input.sessionId,
         userId: ctx.userId,
+        // Set only when an agent drives this caller; the person's own block
+        // notifies nobody.
+        agentUserId: ctx.agentUserId ?? null,
         expectedLabel: input.expectedLabel,
         blockedReason: input.blockedReason,
         why: input.why,

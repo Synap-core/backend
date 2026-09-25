@@ -1105,6 +1105,26 @@ describe("decideAgentPolicy — rung 2.8 governance_rules store (safety tripwire
     expect(viaOverride.reasonCode).toBe("ADMIN");
   });
 
+  it("a rule can NEVER auto-approve relation.expose (an exposure edge is a SCOPE CHANGE)", () => {
+    expect(ADMIN_ACTIONS_LIVE as readonly string[]).toContain(
+      "relation.expose"
+    );
+    const viaRule = decideAgentPolicy({
+      subjectType: "relation",
+      action: "expose",
+      governanceRuleVerdict: "auto",
+    });
+    expect(viaRule).toMatchObject({ verdict: "propose", reasonCode: "ADMIN" });
+    const viaOverride = decideAgentPolicy({
+      subjectType: "relation",
+      action: "expose",
+      writesRequireProposal: false,
+      autoApproveFor: ["relation.*", "*"],
+    });
+    expect(viaOverride.verdict).toBe("propose");
+    expect(viaOverride.reasonCode).toBe("ADMIN");
+  });
+
   it("a rule can NEVER override a floor: forcePropose still proposes even with governanceRuleVerdict:'auto'", () => {
     const v = decideAgentPolicy({
       subjectType: "entity",

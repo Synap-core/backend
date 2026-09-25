@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 import {
   router,
   workspaceProcedure,
@@ -138,12 +139,7 @@ function podDefaultRendererRef(slot: RendererSlot) {
  *   entity-profile  ← old `dashboard`
  *   entity-card     — NEW, no legacy slot (the small embeddable block)
  */
-const ProfileContentKindSchema = z.enum([
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-]);
+const ProfileContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
 type ProfileContentKind = z.infer<typeof ProfileContentKindSchema>;
 
 const PROFILE_CONTENT_KIND_TO_SLOT: Record<ProfileContentKind, RendererSlot> = {

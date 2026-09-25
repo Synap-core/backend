@@ -16,9 +16,9 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 - **Stages.** A bound playbook seeds the session's `stages`; set `currentStage` with `synap_update_session` each time the work moves on. A hand-set `progress` says less than a stage does.
 - **Person-only steps** are an `owner: 'human'` output with a `blockedReason` and a `why` (below) — never a line buried in your reply.
-- **Ask in the session room** (below), not only in your own conversation.
+- **Room first.** Post progress, questions and results in the session room (below); your own chat may repeat them.
 - **Grade before you say done.** `synap_evaluate_session { sessionId, evidence: { <criterionKey>: { passed, detail } } }` with the real evidence — the command output, the link, the count. Then `synap_complete_session`. Closing never blocks on criteria, but an ungraded one reads as unmeasured: a claim nobody checked.
-- **The doors remind you.** `synap_update_session` and `synap_complete_session` replies carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
+- **The doors remind you.** `synap_update_session` and `synap_complete_session` replies (and Hub `PATCH /focus-sessions/:id` / `POST …/complete`) carry `nudges` (criteria still ungraded, no criteria, a stage never set, outputs owed by the person, and — once, on a session born without a playbook — the playbooks that fit it). `orient`'s `startHere.sessionsOwingGrade` lists your open sessions with ungraded criteria.
 
 **Hub Protocol REST** (for IS → backend; always include `workspaceId`):
 
@@ -49,6 +49,6 @@ synap session close <id> --workspace <id> [--recap "what was done"]    # close +
 
 Note: all hub-protocol writes are governance-gated server-side — a start may come back `proposed`, which is normal.
 
-**The session room**: every session owns a GROUP room — `session.channelId`, minted at start and returned on the session. Talk to the person THERE, not only in your own chat: `synap_post_message` with `channelId: session.channelId` for a question, a blocker, or a result to check. The room is roster-only (the owner, invited agents, the owner's AI), and an AI answers in it only when @-mentioned. Do not fetch a personal channel for session work — `synap_get_channel` is the user's 1:1 assistant thread, not the session's room. The session's produced entities link back to it via the graph.
+**The session room**: every session owns a GROUP room — `session.channelId`, minted at start and returned on the session. **Room first:** post progress, questions and results THERE with `synap_post_message` (`channelId: session.channelId`); your own chat may repeat them. Why: the person supervises from Relay, their phone, and cannot watch your chat — a cloud or background session is only supervisable through its room. Pass `kind: 'question'` when you need an answer (it notifies the person); the default `kind: 'update'` lands in the app without a push. @-name the person to notify them too. The room is roster-only (the owner, invited agents, the owner's AI), and an AI answers in it only when @-mentioned. Do not fetch a personal channel for session work — `synap_get_channel` is the user's 1:1 assistant thread, not the session's room. The session's produced entities link back to it via the graph.
 
 **Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.

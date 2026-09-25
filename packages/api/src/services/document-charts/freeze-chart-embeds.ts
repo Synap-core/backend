@@ -30,7 +30,7 @@ import {
   isChartCellKey,
   shapeChartEntities,
 } from "@synap-core/types/renderables";
-import { locateEmbeds } from "../document-patch/patch-ops.js";
+import { locateEmbeds } from "@synap-core/markdown-core/readable";
 import {
   GRAMMAR_FIX,
   type DocumentDiagnostic,

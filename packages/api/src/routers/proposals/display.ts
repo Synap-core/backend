@@ -26,6 +26,8 @@ import {
   channels,
   skills,
   tools,
+  relations,
+  drizzleSql,
 } from "@synap/database";
 import {
   ownerPrivateVisibleWhere,
@@ -54,10 +56,13 @@ import {
 import { visibleAgentsWhere } from "../hub-protocol/rest/link-endpoint-visibility.js";
 import type { EventRecord } from "@synap/database";
 import type {
+  ProposalRemoval,
   ProposalReviewEvent,
   ProposalReviewModel,
   StoredProposalData,
 } from "@synap-core/types";
+import { STATUS_ATTENTION } from "@synap-core/types/proposals/attention";
+import { revertableForRow } from "./revert.js";
 import {
   isCompositeProposalData,
   isRequestShapedProposalData,
@@ -453,7 +458,22 @@ export async function enrichProposalsForDisplay(
     ...(linkEndpointIdsByType.get("document") ?? []),
   ]);
   const uniqueFacetIds = uniqueStrings(facetIds);
-  const uniqueRoleEntityIds = uniqueStrings(existingRoleEntityIds);
+  // REMOVAL: the entity targets of delete proposals on this page. Their roles
+  // ride the role-facet batch below (same lens + owner floor); their link
+  // counts get ONE grouped relations read.
+  const removalEntityIds = uniqueStrings(
+    rows.map((row, idx) =>
+      isDeleteProposal(row, requests[idx]!) &&
+      row.targetType === "entity" &&
+      isLikelyUUID(row.targetId)
+        ? row.targetId
+        : undefined
+    )
+  );
+  const uniqueRoleEntityIds = uniqueStrings([
+    ...existingRoleEntityIds,
+    ...removalEntityIds,
+  ]);
   const userIds = uniqueStrings([
     ...rows.flatMap((row, idx) => [
       row.agentUserId ?? undefined,
@@ -529,6 +549,7 @@ export async function enrichProposalsForDisplay(
     workspaceRows,
     channelRows,
     agentRows,
+    removalRelationPairs,
   ] = await Promise.all([
     entityIds.length > 0
       ? db
@@ -539,6 +560,9 @@ export async function enrichProposalsForDisplay(
             type: entities.type,
             properties: entities.properties,
             workspaceId: entities.workspaceId,
+            // Drift (update: live `documentId` vs snapshot) + removal (delete:
+            // "a document" and its door).
+            documentId: entities.documentId,
           })
           .from(entities)
           // The entity `VisibilityRule` (access/registry.ts: owner-gated NULL
@@ -877,7 +901,41 @@ export async function enrichProposalsForDisplay(
             )
         : Promise.resolve([] as Array<{ id: string; name: string }>);
     })(),
+    // REMOVAL link counts — ONE grouped read for every entity a delete on this
+    // page removes, floored by the `relations` VisibilityRule (the same
+    // `scopedDb(access).predicate` the name batches use), so a link the viewer
+    // cannot see is not counted. Grouped by endpoint PAIR (a relation touches
+    // its entity from either end); `countRelationsByEntity` folds pairs → ids.
+    removalEntityIds.length > 0
+      ? db
+          .select({
+            sourceEntityId: relations.sourceEntityId,
+            targetEntityId: relations.targetEntityId,
+            n: drizzleSql<number>`count(*)::int`,
+          })
+          .from(relations)
+          .where(
+            and(
+              or(
+                inArray(relations.sourceEntityId, removalEntityIds),
+                inArray(relations.targetEntityId, removalEntityIds)
+              ),
+              nameAccess.predicate(relations)
+            )
+          )
+          .groupBy(relations.sourceEntityId, relations.targetEntityId)
+      : Promise.resolve(
+          [] as Array<{
+            sourceEntityId: string | null;
+            targetEntityId: string | null;
+            n: number;
+          }>
+        ),
   ]);
+  const relationCountByEntityId = countRelationsByEntity(
+    removalRelationPairs,
+    removalEntityIds
+  );
 
   const entityById = new Map(entityRows.map((row) => [row.id, row]));
   const userById = new Map(userRows.map((row) => [row.id, row]));
@@ -1309,6 +1367,7 @@ export async function enrichProposalsForDisplay(
           title?: string | null;
           preview?: string | null;
           type?: string | null;
+          documentId?: string | null;
           properties?: unknown;
         }
       | undefined = entityMeta;
@@ -1446,6 +1505,28 @@ export async function enrichProposalsForDisplay(
         authorName,
         targetName,
         current: reviewCurrent,
+        removal: isDeleteProposal(row, request)
+          ? buildProposalRemoval({
+              row,
+              name: targetName,
+              profileSlug,
+              entity: row.targetType === "entity" ? entityMeta : undefined,
+              relationCount: relationCountByEntityId.get(row.targetId),
+              roleSlugs:
+                row.targetType === "entity"
+                  ? (roleFacetsByEntityId.get(row.targetId) ?? [])
+                      .filter((f) =>
+                        isFacetVisibleForLens(
+                          f,
+                          row.workspaceId,
+                          userId,
+                          viewerIsPodMember
+                        )
+                      )
+                      .map((f) => f.profileSlug)
+                  : undefined,
+            })
+          : undefined,
         resolveEntityTitle: resolveEntityTitleScoped,
         existingRolesByEntityId,
         events: request.correlationId
@@ -1466,8 +1547,11 @@ function buildProposalReviewModel(params: {
     title?: string | null;
     preview?: string | null;
     type?: string | null;
+    documentId?: string | null;
     properties?: unknown;
   };
+  /** Delete proposals only: what the removal takes with it. */
+  removal?: ProposalRemoval;
   /** B2: resolve a real entity title by id for composite relation endpoints. */
   resolveEntityTitle?: (entityId: string) => string | undefined;
   /** Roles v2: CURRENT roles (lens-filtered) of pre-existing entities the graph
@@ -1484,6 +1568,7 @@ function buildProposalReviewModel(params: {
     authorName,
     targetName,
     current,
+    removal,
     resolveEntityTitle,
     existingRolesByEntityId,
     events,
@@ -1541,9 +1626,13 @@ function buildProposalReviewModel(params: {
       requestData,
       request.changeType,
       current,
-      previousData
+      previousData,
+      // Drift is a question about a proposal NOT YET applied: once applied,
+      // the live row holds the proposed value by construction.
+      { measureDrift: isLiveProposalStatus(row.status) }
     ),
     ...(graph ? { graph } : {}),
+    ...(removal ? { removal } : {}),
     events: reviewEvents,
   };
 }
@@ -2054,6 +2143,129 @@ export function summaryNamesTheObject(
   }
 
   return wordsOf(summary).some((word) => !identityFree.has(word));
+}
+
+/**
+ * A DELETE proposal — the row the removal preview describes. Same reading the
+ * revert planner makes (`planProposalRevert`: the stored `changeType`, else
+ * `proposalType`), and never a composite graph, which only creates.
+ */
+function isDeleteProposal(
+  row: Pick<ProposalRow, "proposalType" | "data">,
+  request: Pick<UpdateRequest, "changeType">
+): boolean {
+  if (isCompositeProposalData(row.data as StoredProposalData | null)) {
+    return false;
+  }
+  return row.proposalType === "delete" || request.changeType === "delete";
+}
+
+/**
+ * A proposal still awaiting its verdict — the population drift is measured
+ * for. The attention table's own "decide" statuses (pending, approval_failed),
+ * so the two readings of "not yet applied" cannot diverge.
+ */
+function isLiveProposalStatus(status: string): boolean {
+  return (
+    (STATUS_ATTENTION as Record<string, string | undefined>)[status] ===
+    "decide"
+  );
+}
+
+/**
+ * Fold the grouped `(source, target) → n` relation rows into a per-entity link
+ * count for `ids`. A relation counts once for each removed entity it touches
+ * (a self-link counts once). An id with no visible relation reads 0 — it WAS
+ * measured, by the one query that asked about it.
+ */
+export function countRelationsByEntity(
+  pairs: ReadonlyArray<{
+    sourceEntityId: string | null;
+    targetEntityId: string | null;
+    n: number;
+  }>,
+  ids: readonly string[]
+): Map<string, number> {
+  const counts = new Map<string, number>(ids.map((id) => [id, 0]));
+  for (const { sourceEntityId, targetEntityId, n } of pairs) {
+    if (sourceEntityId && counts.has(sourceEntityId)) {
+      counts.set(sourceEntityId, counts.get(sourceEntityId)! + Number(n));
+    }
+    if (
+      targetEntityId &&
+      targetEntityId !== sourceEntityId &&
+      counts.has(targetEntityId)
+    ) {
+      counts.set(targetEntityId, counts.get(targetEntityId)! + Number(n));
+    }
+  }
+  return counts;
+}
+
+/** A property value that is actually THERE (a key holding null / "" / [] is not). */
+function isFilledValue(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === "string") return value.trim() !== "";
+  if (Array.isArray(value)) return value.length > 0;
+  return true;
+}
+
+/**
+ * What a delete proposal removes. Counts are measured ONLY for an entity
+ * target the viewer could read (`entity` = the floored batch row); otherwise
+ * every count stays ABSENT — never 0, never guessed.
+ *
+ * `recoverable` is `revertableForRow` — the exact answer `proposals.list`
+ * serves as `revertable` — so the preview's undo claim and the list's can
+ * never disagree.
+ */
+export function buildProposalRemoval(params: {
+  row: Pick<
+    ProposalRow,
+    "status" | "targetType" | "targetId" | "proposalType" | "data"
+  >;
+  name?: string;
+  profileSlug?: string;
+  entity?: {
+    properties?: unknown;
+    documentId?: string | null;
+  };
+  relationCount?: number;
+  roleSlugs?: string[];
+}): ProposalRemoval {
+  const { row, name, profileSlug, entity, relationCount, roleSlugs } = params;
+  const recoverable = revertableForRow({
+    status: row.status,
+    targetType: row.targetType,
+    targetId: row.targetId,
+    proposalType: row.proposalType,
+    data: row.data,
+  });
+  const base: ProposalRemoval = {
+    ...(name ? { name } : {}),
+    kind:
+      row.targetType === "entity"
+        ? (profileSlug ?? row.targetType)
+        : row.targetType,
+    recoverable,
+  };
+  if (row.targetType !== "entity" || !entity) return base;
+
+  const props =
+    entity.properties && typeof entity.properties === "object"
+      ? (entity.properties as Record<string, unknown>)
+      : {};
+  return {
+    ...base,
+    entityId: row.targetId,
+    propertyCount: Object.values(props).filter(isFilledValue).length,
+    ...(relationCount !== undefined ? { relationCount } : {}),
+    hasDocument: !!entity.documentId,
+    ...(entity.documentId ? { documentId: entity.documentId } : {}),
+    roles: uniqueStrings(roleSlugs ?? []).map((slug) =>
+      resolveObjectNoun(slug)
+    ),
+  };
 }
 
 export function uniqueStrings(

@@ -3,6 +3,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
+import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import {
@@ -34,12 +35,7 @@ import {
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
 
-const ProfileRendererContentKindSchema = z.enum([
-  "entity-detail",
-  "entity-card",
-  "entity-profile",
-  "collection",
-]);
+const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
 // Frozen at the three kinds that HAD slots. `entity-card` postdates the slot
 // era and is reachable only through `contentKind` — never widen this.
 const LegacyRendererSlotSchema = z.enum(["list", "detail", "dashboard"]);

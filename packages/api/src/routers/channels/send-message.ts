@@ -31,10 +31,9 @@ import {
   resolveAgentHandle,
   extractMentionAgentType,
   extractMentionHandles,
-  extractHumanMentionHandles,
   resolveMentionedMember,
 } from "../../utils/agent-handles.js";
-import { NotificationService } from "../../notifications/NotificationService.js";
+import { notifyHumanMentions } from "../../services/messaging/notify-room-post.js";
 import { TRPCError } from "@trpc/server";
 import {
   db,
@@ -116,7 +115,6 @@ import {
   redactTurnContext,
   projectTurnAccessWhere,
   usesInternalSessionBoundary,
-  handleCandidatesFor,
   resolveAgentId,
   getMcpServersForWorkspace,
   ensureAgentUser,
@@ -527,60 +525,20 @@ export const sendMessageProcedure = protectedProcedure
     });
 
     // Human @mention notifications — DISTINCT from agent @handles (which route
-    // to an AI, above). Resolve the plain @handles that are NOT agent handles
-    // against this channel's HUMAN members and notify each (excluding the
-    // sender / self-mentions). Skipped for ephemeral messages: they vanish on
-    // reload, so a durable notification would point at nothing.
+    // to an AI, above). ONE resolution shared with the MCP and Hub post doors
+    // (`services/messaging/notify-room-post.ts`): plain @handles that are not
+    // agent handles, matched against this channel's HUMAN members, each
+    // notified once — never the sender (this door is the person). Skipped for
+    // ephemeral messages: they vanish on reload, so a durable notification
+    // would point at nothing. Never throws.
     if (!input.ephemeral) {
-      const humanHandles = extractHumanMentionHandles(content);
-      if (humanHandles.length > 0) {
-        try {
-          const humanMembers = await db
-            .select({ memberId: channelMembers.memberId, name: users.name })
-            .from(channelMembers)
-            .innerJoin(users, eq(users.id, channelMembers.memberId))
-            .where(
-              and(
-                eq(channelMembers.channelId, channelId),
-                eq(channelMembers.memberKind, ChannelMemberKind.HUMAN)
-              )
-            );
-
-          // Resolve sender display name (for the notification title) once.
-          const senderRow = humanMembers.find((m) => m.memberId === userId);
-          const senderName = senderRow?.name ?? "Someone";
-          const preview =
-            content.length > 140 ? `${content.slice(0, 140)}…` : content;
-
-          const notified = new Set<string>();
-          for (const member of humanMembers) {
-            if (member.memberId === userId) continue; // no self-mention
-            if (notified.has(member.memberId)) continue;
-            // A member matches a handle when a normalized form of their display
-            // name equals one of the mentioned handles.
-            const candidates = handleCandidatesFor(member.name);
-            if (!humanHandles.some((h) => candidates.has(h))) continue;
-            notified.add(member.memberId);
-
-            await NotificationService.create({
-              type: "chat.mention",
-              userId: member.memberId,
-              workspaceId: workspaceId ?? channel.workspaceId ?? null,
-              sourceType: "system",
-              sourceId: channelId,
-              data: {
-                sender: senderName,
-                preview,
-                channelId,
-                messageId: userMessageId,
-              },
-            });
-          }
-        } catch (err) {
-          // Non-fatal — a failed mention notification must never fail the send.
-          logger.warn({ err, channelId }, "human @mention notification failed");
-        }
-      }
+      await notifyHumanMentions({
+        channelId,
+        content,
+        senderUserId: userId,
+        workspaceId: workspaceId ?? channel.workspaceId ?? null,
+        messageId: userMessageId,
+      });
     }
 
     // Link attachment entities to channel context

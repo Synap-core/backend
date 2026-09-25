@@ -106,13 +106,32 @@ describe("EntityBodyService", () => {
         text: long,
       });
       expect(res).toEqual({ documentId: "doc-1" });
-      // Uploaded the md body to the entity storage path.
+      // Uploaded the md body under the entity's storage path, with a fresh
+      // suffix: a second materialization never lands on the first body's key.
       expect(storage.buildPath).toHaveBeenCalledWith(
         "user-1",
         "entity",
-        "e-1",
+        expect.stringMatching(/^e-1-[0-9a-f-]{36}$/),
         "md"
       );
+      await svc.setBody({
+        entityId: "e-1",
+        userId: "user-1",
+        provenance: HUMAN,
+        text: long,
+      });
+      const keys = (storage.upload as any).mock.calls.map(
+        (c: unknown[]) => c[0]
+      );
+      expect(keys).toHaveLength(2);
+      expect(new Set(keys).size).toBe(2);
+      createSpy.mockClear();
+      await svc.setBody({
+        entityId: "e-1",
+        userId: "user-1",
+        provenance: HUMAN,
+        text: long,
+      });
       expect(createSpy).toHaveBeenCalledTimes(1);
       const arg = createSpy.mock.calls[0]![0] as any;
       expect(arg.type).toBe("markdown");

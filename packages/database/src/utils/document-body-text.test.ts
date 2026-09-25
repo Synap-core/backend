@@ -5,7 +5,9 @@
  *   - the STORED body is read (not the last checkpoint row);
  *   - a body that is legacy `yjs:` editor state yields no text;
  *   - a FAILED read lands in `failed`, never as empty text;
- *   - an external reference (no storage key) is neither text nor failure.
+ *   - an external reference (no storage key) is neither text nor failure;
+ *   - a MARKDOWN body goes through the injected `markdownText` (search passes
+ *     markdown-core's plain-text rule), any other text body is kept as is.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -26,6 +28,9 @@ import { loadDocumentBodyTexts } from "./document-body-text.js";
 
 type Row = { id: string; storageKey: string | null; mimeType: string | null };
 
+/** A visible stand-in for markdown-core's `markdownToPlainText`. */
+const OPTS = { markdownText: (md: string) => `plain(${md})` };
+
 function fakeDb(rows: Row[]) {
   return {
     select: () => ({
@@ -45,17 +50,35 @@ describe("loadDocumentBodyTexts", () => {
         { id: "gone", storageKey: "k/missing", mimeType: "text/markdown" },
         { id: "ref", storageKey: null, mimeType: "text/html" },
       ]),
-      ["md", "yjs", "gone", "ref"]
+      ["md", "yjs", "gone", "ref"],
+      OPTS
     );
     expect(Object.fromEntries(texts)).toEqual({
-      md: "# Title\n\nHuman save.",
+      md: "plain(# Title\n\nHuman save.)",
     });
     expect([...failed.keys()]).toEqual(["gone"]);
     expect(failed.get("gone")).toContain("no blob");
   });
 
   it("no ids → no query, nothing read", async () => {
-    const { texts, failed } = await loadDocumentBodyTexts(fakeDb([]), []);
+    const { texts, failed } = await loadDocumentBodyTexts(fakeDb([]), [], OPTS);
     expect(texts.size + failed.size).toBe(0);
+  });
+
+  it("only a markdown body is flattened; html and plain text are kept as stored", async () => {
+    blobs.set("k/html", Buffer.from("<p>Hi</p>", "utf-8"));
+    blobs.set("k/txt", Buffer.from("plain words", "utf-8"));
+    const { texts } = await loadDocumentBodyTexts(
+      fakeDb([
+        { id: "html", storageKey: "k/html", mimeType: "text/html" },
+        { id: "txt", storageKey: "k/txt", mimeType: "text/plain" },
+      ]),
+      ["html", "txt"],
+      OPTS
+    );
+    expect(Object.fromEntries(texts)).toEqual({
+      html: "<p>Hi</p>",
+      txt: "plain words",
+    });
   });
 });

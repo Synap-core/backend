@@ -26,15 +26,20 @@
  *      swallowing the rest of a report.
  *   4. `remarkGithubAlerts` — `> [!NOTE]` becomes a marked blockquote.
  *   5. `remarkHighlight` — `==x==` becomes a `mark` node (the editor's highlight).
+ *   6. `remark-math` (`singleDollarTextMath: false`, D-math: inline `$…$` is
+ *      OFF, so "$5 and $10" is prose) + `remarkDisplayMath` — a `$$…$$` alone
+ *      in its paragraph is a display `math` block, like a `$$` fence.
  */
 
 import { unified, type Processor } from "unified";
 import remarkParse from "remark-parse";
 import remarkGfm from "remark-gfm";
 import remarkDirective from "remark-directive";
+import remarkMath from "remark-math";
 import type {
   Blockquote,
   Data,
+  Literal,
   Paragraph,
   Parent,
   PhrasingContent,
@@ -123,6 +128,90 @@ export function remarkRestoreProse() {
       String(file.value ?? "")
     );
   };
+}
+
+// ─── 2b. Display math ───────────────────────────────────────────────────────
+
+/**
+ * D-math: math is a BLOCK — a `$$` fence, a ```math fence, or `$$…$$` written
+ * on one line (what the probe doc and most authors write). micromark reads the
+ * one-line form as double-dollar TEXT math inside a paragraph; a paragraph
+ * holding only that becomes the same `math` block a fence produces. Single
+ * `$` never opens math (`singleDollarTextMath: false`), so prices stay prose.
+ * A `$$x$$` inside a sentence is PROSE too, put back as its exact source: one
+ * rule — math is a block — and no reader ever meets an `inlineMath` node.
+ */
+function displayMathData(value: string): Record<string, unknown> {
+  // The hast shape mdast-util-math gives a `math` block, so hosts draw it alike.
+  return {
+    hName: "pre",
+    hChildren: [
+      {
+        type: "element",
+        tagName: "code",
+        properties: { className: ["language-math", "math-display"] },
+        children: [{ type: "text", value }],
+      },
+    ],
+  };
+}
+
+/** Put every remaining `inlineMath` back as its source text, re-merging runs. */
+function inlineMathToProse(node: AnyNode, source: string): void {
+  if (!node.children) return;
+  const next: AnyNode[] = [];
+  for (const child of node.children) {
+    let current = child;
+    const start = child.position?.start.offset;
+    const end = child.position?.end.offset;
+    if (child.type === "inlineMath" && start != null && end != null) {
+      current = { type: "text", value: source.slice(start, end) };
+    } else {
+      inlineMathToProse(child, source);
+    }
+    const previous = next[next.length - 1];
+    if (current.type === "text" && previous?.type === "text") {
+      previous.value = (previous.value ?? "") + (current.value ?? "");
+    } else {
+      next.push(current);
+    }
+  }
+  node.children = next;
+}
+
+function promoteDisplayMath(node: AnyNode): void {
+  if (!node.children) return;
+  node.children = node.children.map((child) => {
+    const only =
+      child.type === "paragraph" && child.children?.length === 1
+        ? child.children[0]
+        : null;
+    if (only?.type === "inlineMath") {
+      return {
+        type: "math",
+        value: only.value ?? "",
+        data: displayMathData(only.value ?? ""),
+        position: child.position,
+      };
+    }
+    promoteDisplayMath(child);
+    return child;
+  });
+}
+
+export function remarkDisplayMath() {
+  return (tree: Root, file: VFile) => {
+    promoteDisplayMath(tree as unknown as AnyNode);
+    // Everything left (sentences, headings, table cells) is prose.
+    inlineMathToProse(tree as unknown as AnyNode, String(file.value ?? ""));
+  };
+}
+
+/** remark-math with D-math: `$$` only; a single `$` is always prose. */
+function remarkMathBlocks(this: unknown) {
+  return (remarkMath as (this: unknown, o: object) => void).call(this, {
+    singleDollarTextMath: false,
+  });
 }
 
 // ─── 3. Unterminated-embed repair ───────────────────────────────────────────
@@ -298,12 +387,26 @@ export interface Mark extends Parent {
   data?: MarkData;
 }
 
+/**
+ * A display-math block (D-math: math is a block; there is no inline math
+ * node after this pipeline). Declared here so consumers typecheck without
+ * resolving mdast-util-math from this package's dist types.
+ */
+export interface MathBlock extends Literal {
+  type: "math";
+  meta?: string | null;
+}
+
 declare module "mdast" {
   interface PhrasingContentMap {
     mark: Mark;
   }
+  interface BlockContentMap {
+    math: MathBlock;
+  }
   interface RootContentMap {
     mark: Mark;
+    math: MathBlock;
   }
 }
 
@@ -406,7 +509,9 @@ export function remarkHighlight() {
 export const synapRemarkPlugins = [
   remarkGfm,
   remarkDirective,
+  remarkMathBlocks,
   remarkRestoreProse,
+  remarkDisplayMath,
   remarkRepairEmbeds,
   remarkGithubAlerts,
   remarkHighlight,

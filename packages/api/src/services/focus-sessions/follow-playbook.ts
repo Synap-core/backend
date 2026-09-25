@@ -89,6 +89,7 @@ import {
   newlyBlockedSlots,
   type BlockGuidance,
 } from "./block-guidelines.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import {
   mergeExpectedOutputs,
   sanitizeDeclaredOutputs,
@@ -411,6 +412,9 @@ export async function followPlaybook(
   // Diffed against the LOCKED base inside the transaction, so only slots THIS
   // attach blocked count — a slot already owed stays the block that filed it.
   let blockedByThisAttach: ReturnType<typeof newlyBlockedSlots> = [];
+  // The same locked base + merge, for the needs-you notification below.
+  let outputsBefore: ExpectedOutput[] = [];
+  let outputsAfter: ExpectedOutput[] = [];
   const { updated, addedCriteria, addedOutputs, runId } = await db.transaction(
     async (tx) => {
       const [locked] = await tx
@@ -470,6 +474,8 @@ export async function followPlaybook(
         ...added,
       ]);
       blockedByThisAttach = newlyBlockedSlots(currentOutputs, nextOutputs);
+      outputsBefore = currentOutputs;
+      outputsAfter = nextOutputs;
 
       const [row] = await tx
         .update(focusSessions)
@@ -538,6 +544,15 @@ export async function followPlaybook(
     userId,
     workspaceId: session.workspaceId ?? null,
     slots: blockedByThisAttach,
+  });
+
+  // An AGENT's follow that landed person-owned slots (a playbook step declared
+  // `owner: "human"`, an unanswered required param) tells the person — once
+  // per session window. The person following a playbook themselves is not news.
+  await notifySessionNeedsYou({
+    sessionId,
+    byAgent: !!agentUserId,
+    reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 
   // Provenance edge — the same `instantiated_from` an instantiate writes, so

@@ -18,11 +18,15 @@ import {
 import { toSafeToolError, validateUuidArgs } from "../tool-errors.js";
 import { USER_OBSERVATION_CATEGORIES } from "../../../services/knowledge/remember-fact.js";
 import { SESSION_KINDS } from "../../../services/focus-sessions/session-kind.js";
+import { ROOM_POST_KINDS } from "../../../services/messaging/room-post-kind.js";
 import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 // View types an agent may CREATE — the renderables catalog's creation door
 // (the same list the browser's "New view" chooser offers), never a local enum.
-import { CREATABLE_VIEW_DEFINITIONS } from "@synap-core/types/renderables";
+import {
+  CONTENT_KINDS,
+  CREATABLE_VIEW_DEFINITIONS,
+} from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = CREATABLE_VIEW_DEFINITIONS.map((d) => d.key);
 import { ABSTRACT_VERBS, PROJECT_TRACK_STATUSES } from "@synap/database/schema";
 // The catalog names `synap_find` accepts — SPREAD from the service that owns
@@ -2119,13 +2123,7 @@ export const tools = {
             },
             contentKind: {
               type: "string",
-              enum: [
-                "entity-detail",
-                "entity-card",
-                "entity-profile",
-                "collection",
-                "widget",
-              ],
+              enum: [...CONTENT_KINDS],
               description:
                 "Optional renderer SLOT — WHAT this cell renders. 'entity-detail' = one entity's full page, 'entity-card' = one entity's small block, 'entity-profile' = a whole profile's dashboard, 'collection' = a view of many entities, 'widget' (the default) = generic and placeable only. A cell left at 'widget' is never offered when assigning a renderer to a profile, so declare the slot you actually want.",
             },
@@ -3377,7 +3375,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Live list of what you may place: in a bento (surface "bento", default) or embedded in a document (surface "document"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card.',
+          'Live list of what you may place: in a bento (surface "bento", default) or embedded in a document (surface "document"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card. With surface "document" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint.',
         inputSchema: {
           type: "object",
           properties: {
@@ -3437,7 +3435,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one.",
+          "Post a message to a Synap channel or thread with optional AI triggering. Handles thread creation from a channelId and can trigger an AI response. triggerAI only starts an agent turn when role is 'user' — pass role:'user' with triggerAI:true to start one. In a session's room (`session.channelId`) this is how you talk to the person: kind 'question' notifies them on their phone; 'update' (default) shows in-app only; an @mention of them notifies too.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3460,6 +3458,13 @@ export const tools = {
               type: "boolean",
               description: "Set true to trigger an AI response after posting",
               default: false,
+            },
+            kind: {
+              type: "string",
+              enum: [...ROOM_POST_KINDS],
+              default: "update",
+              description:
+                "'question' when you need the person's answer — in a session room it pushes a notification to them (once per session per few hours). 'update' for progress and results — in-app only, never a push.",
             },
           },
           required: ["channelId", "content"],

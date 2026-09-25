@@ -1162,10 +1162,39 @@ export interface UpdateFocusSessionInput {
 }
 
 /**
+ * What a session still OWES, returned by the update and complete doors (the
+ * pod's `session-nudges.ts`, the same loader MCP `update_session` /
+ * `complete_session` answer with). Omitted when nothing is owed. Read-only:
+ * a nudge never blocks the write it rides on.
+ */
+export type HubSessionNudges =
+  | {
+      /** Declared criteria with no pass/fail verdict yet (keys). */
+      ungradedCriteria?: string[];
+      /** The session declares no criteria. */
+      noCriteria?: true;
+      /** Stages exist and `currentStage` is unset, or (at complete) not final. */
+      stage?: {
+        state: "unset" | "not_final";
+        current: string | null;
+        stages: string[];
+      };
+      /** Outputs handed to the person (`owner: 'human'`) still pending. */
+      owedByPerson?: number;
+      /** Ranked playbooks for a session born without one — offered once. */
+      playbookCandidates?: unknown[];
+      /** One imperative line per nudge above, in the same order. */
+      hints: string[];
+    }
+  /** The nudge read failed — never "nothing owed". */
+  | { status: "unavailable" };
+
+/**
  * Governance-gated update: either a pending proposal receipt or the applied
  * row, same shape as `CreateFocusSessionResult` — `proposed` is normal, never
  * an error. `blockGuidelines` rides only when `expectedOutputs` newly declared
- * a blocked slot; `follow` only when `followPlaybookId`/`followStageKey` acted.
+ * a blocked slot; `follow` only when `followPlaybookId`/`followStageKey` acted;
+ * `nudges` only when the session still owes something.
  */
 export type UpdateFocusSessionResult =
   | {
@@ -1181,6 +1210,7 @@ export type UpdateFocusSessionResult =
   | (HubFocusSession & {
       blockGuidelines?: unknown;
       follow?: unknown;
+      nudges?: HubSessionNudges;
     });
 
 /** Input for POST /api/hub/focus-sessions/:id/complete. */
@@ -1230,6 +1260,8 @@ export type CompleteFocusSessionResult =
         retiredSlots: number;
       };
       warnings: string[];
+      /** What closed still owed — never a refusal of the close. */
+      nudges?: HubSessionNudges;
     };
 
 /** Input for POST /api/hub/focus-sessions/:id/rerun. */

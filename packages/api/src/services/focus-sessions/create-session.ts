@@ -67,6 +67,7 @@ import {
   type SessionTwinCandidate,
 } from "./find-open-session-twin.js";
 import { paramOwedSlots } from "./param-slots.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import {
   normalizeSessionTitle,
   SESSION_TITLE_MAX,
@@ -973,6 +974,14 @@ export async function createFocusSession(
       [],
       sessionOut.expectedOutputs as ExpectedOutput[] | null
     ),
+  });
+
+  // A slot born owed by the person, filed by an AGENT, tells them — once per
+  // session window. The person starting their own session is not news.
+  await notifySessionNeedsYou({
+    sessionId: sessionOut.id,
+    byAgent: !!agentUserId,
+    reason: { kind: "slots", before: [], after: sessionOut.expectedOutputs },
   });
 
   return {

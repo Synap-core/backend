@@ -46,6 +46,7 @@ import {
   type BlockGuidance,
   type BlockedSlotRef,
 } from "./block-guidelines.js";
+import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import type { FollowOutcome } from "./follow-playbook.js";
 import {
   normalizeSessionTitle,
@@ -1096,6 +1097,9 @@ export async function updateFocusSession(
   let completeOutputOutcome: CompleteOutputOutcome | undefined;
   // Diffed against the LOCKED base, so only blocks this patch declared count.
   let blockedByThisPatch: BlockedSlotRef[] = [];
+  // The same locked base + result, for the needs-you notification below.
+  let outputsBefore: OutputItem[] = [];
+  let outputsAfter: OutputItem[] = [];
 
   const [updated] = await db.transaction(async (tx) => {
     if (mutatesOutputs) {
@@ -1115,6 +1119,8 @@ export async function updateFocusSession(
       set.expectedOutputs = applied.outputs;
       completeOutputOutcome = applied.completeOutput;
       blockedByThisPatch = newlyBlockedSlots(current, applied.outputs);
+      outputsBefore = current;
+      outputsAfter = applied.outputs;
     }
     return tx
       .update(focusSessions)
@@ -1198,6 +1204,14 @@ export async function updateFocusSession(
     userId,
     workspaceId: existing.workspaceId ?? null,
     slots: blockedByThisPatch,
+  });
+
+  // An AGENT that handed the person a slot tells them — once per session
+  // window. A no-op for the person's own write and for an unchanged array.
+  await notifySessionNeedsYou({
+    sessionId,
+    byAgent: !!agentUserId,
+    reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 
   // The row the FOLLOW wrote wins when there was one — it is strictly later

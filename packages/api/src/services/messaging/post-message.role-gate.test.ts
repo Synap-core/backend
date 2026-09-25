@@ -28,6 +28,13 @@ vi.mock("../../utils/channel-visibility.js", () => ({
   channelVisibilityWhere: () => undefined,
 }));
 
+// Who hears about a post is `notify-room-post.ts`'s own suite
+// (`room-first-notifications.pglite.test.ts`); stubbed so this file's
+// database mock need not model the notification tables.
+vi.mock("./notify-room-post.js", () => ({
+  notifyRoomPost: async () => undefined,
+}));
+
 vi.mock("@synap/database", () => ({
   db: {
     // Two selects reach here: the channel floor (`from().where().limit()`,

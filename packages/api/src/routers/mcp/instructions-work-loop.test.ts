@@ -72,6 +72,16 @@ describe("MCP instructions teach the session work loop", () => {
     expect(groundingBudgetBytes()).toBeGreaterThanOrEqual(588);
   });
 
+  it("is ROOM-FIRST: progress, questions and results go to the room; the chat may repeat", () => {
+    // Founder decision 2026-09-25: the person supervises from Relay, so the
+    // room is where an agent TALKS — not only where it asks. "ask in its room"
+    // (the previous wording) sent progress and results to the agent's own chat.
+    expect(text).toContain(
+      "post progress, questions and results in its room (`post_message` to `session.channelId`)"
+    );
+    expect(text).toContain("your own chat may repeat them");
+  });
+
   it("grades BEFORE completing — the order is the rule", () => {
     expect(text.indexOf("`evaluate_session`")).toBeLessThan(
       text.indexOf("`complete_session`")

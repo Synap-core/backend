@@ -579,6 +579,9 @@ async function diagnoseObject(
               entityIdColumn: documents.id,
               ownerColumn: documents.userId,
               userId,
+              // A document follows its entity (pod-shared bodies), the same
+              // predicate as the registered `documents` VisibilityRule.
+              documentFollowsEntity: true,
             })
           )
         )

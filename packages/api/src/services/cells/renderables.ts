@@ -20,14 +20,16 @@
 
 import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
+import { serializeEmbed } from "@synap-core/markdown-core/embeds";
 import {
   DEFAULT_FALLBACK_TEMPLATE,
   DEFAULT_INSTALLED_PLACEMENTS,
+  FENCE_RENDERABLES,
   WIDGET_BY_KEY,
   WIDGET_DEFINITIONS,
   configFieldsToJsonSchema,
   dataBindingFor,
-  exampleDirective,
+  exampleEmbedProps,
   isAiPlaceable,
   isBuiltinRenderableKey,
   isInstalledRenderableKey,
@@ -231,6 +233,9 @@ export function placeableInstalledKeys(
 
 export type RenderableSurface = "document" | "bento";
 
+/** The fallback slot of an example embed: what the author writes there. */
+const EXAMPLE_FALLBACK = "<one sentence: what this shows>";
+
 export interface RenderableDiscoveryEntry {
   key: string;
   name: string;
@@ -267,21 +272,52 @@ export function discoverRenderables(
       propsSchema: r.configSchema,
       requiredConfig: r.requiredConfig,
       binding: r.dataBinding,
-      exampleDirective: exampleDirective({
-        key: r.typeKey,
-        requiredConfig: r.requiredConfig,
-        configSchema:
-          r.source === "catalog"
-            ? (WIDGET_BY_KEY[r.typeKey]?.configSchema ?? [])
-            : [],
-        // A document embed shows its snapshot form (D2); a dashboard stays live.
-        ...(surface === "document" && r.dataBinding
-          ? { dataBinding: r.dataBinding }
-          : {}),
+      exampleDirective: serializeEmbed({
+        directive: "synap-cell",
+        ref: { cellKey: r.typeKey },
+        props: exampleEmbedProps({
+          requiredConfig: r.requiredConfig,
+          configSchema:
+            r.source === "catalog"
+              ? (WIDGET_BY_KEY[r.typeKey]?.configSchema ?? [])
+              : [],
+          // A document embed shows its snapshot form (D2); a dashboard stays live.
+          ...(surface === "document" && r.dataBinding
+            ? { dataBinding: r.dataBinding }
+            : {}),
+        }),
+        fallback: EXAMPLE_FALLBACK,
       }),
       fallback: r.fallback,
       aiHint: r.aiHint,
       ...(surface === "bento" ? { defaultSize: r.defaultSize } : {}),
       installed: r.source !== "catalog",
     }));
+}
+
+/** A content language a document writes as a fenced block (catalog `form: "fence"`). */
+export interface FenceDiscoveryEntry {
+  key: string;
+  name: string;
+  description: string;
+  /** Info-string languages that select it; `[]` = any other language (code). */
+  languages: readonly string[];
+  aiHint: string;
+}
+
+/**
+ * The fence rows of the ONE catalog (`FENCE_RENDERABLES`) that a document may
+ * hold — derived, never a hand list, so a new fence row is discoverable by
+ * existing.
+ */
+export function discoverFences(): FenceDiscoveryEntry[] {
+  return FENCE_RENDERABLES.filter((f) => f.placements.includes("inline")).map(
+    (f) => ({
+      key: f.key,
+      name: f.name,
+      description: f.description,
+      languages: f.languages,
+      aiHint: f.aiHint,
+    })
+  );
 }

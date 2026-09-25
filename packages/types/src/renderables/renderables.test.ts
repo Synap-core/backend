@@ -10,7 +10,7 @@ import {
   WIDGET_DEFINITIONS,
   WIDGET_TYPE_KEYS,
   configFieldsToJsonSchema,
-  exampleDirective,
+  exampleEmbedProps,
   fallbackFor,
   isAiPlaceable,
   isBuiltinRenderableKey,
@@ -148,25 +148,18 @@ describe("fallback templates", () => {
   });
 });
 
-describe("example directive (document grammar, plan §3)", () => {
-  it("is a reference-only directive + ```json props block + fallback prose", () => {
-    expect(exampleDirective(WIDGET_BY_KEY["chart-live-line"]!)).toBe(
-      [
-        ':::synap-cell{cellKey="chart-live-line"}',
-        "```json",
-        '{"profileSlug":"<profileSlug>","label":"<label>"}',
-        "```",
-        "",
-        "<one sentence: what this shows>",
-        ":::",
-      ].join("\n")
-    );
+describe("example embed props (document grammar, plan §3)", () => {
+  it("are the required keys as placeholders, plus a label when the cell takes one", () => {
+    expect(exampleEmbedProps(WIDGET_BY_KEY["chart-live-line"]!)).toEqual({
+      profileSlug: "<profileSlug>",
+      label: "<label>",
+    });
   });
 
-  it("never puts JSON in a directive attribute", () => {
+  it("are plain data for every catalog widget (the directive is serializeEmbed's)", () => {
     for (const def of WIDGET_DEFINITIONS) {
-      const first = exampleDirective(def).split("\n")[0]!;
-      expect(first).toBe(`:::synap-cell{cellKey="${def.key}"}`);
+      const props = exampleEmbedProps(def);
+      expect(JSON.parse(JSON.stringify(props)), def.key).toEqual(props);
     }
   });
 });

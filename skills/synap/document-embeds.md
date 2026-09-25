@@ -95,6 +95,15 @@ Rules for a snapshot:
 - With a snapshot, the sentence MAY quote a number that is in `data`: they
   cannot drift apart. With a live chart, it may not.
 
+### Diagrams, math and code: fences, not directives
+
+A content LANGUAGE is a fenced block whose source IS the content: ` ```mermaid `
+for a diagram, ` ```math ` for a display equation (LaTeX), any other language
+for code. It has no props and no fallback, and relay and exports show its
+source. `synap_list_widgets` (surface `document`) returns these as `fences`,
+each with its `aiHint`: read them there rather than from memory. There is no
+` ```chart ` fence (a chart is a `synap-cell`), and inline `$…$` math is off.
+
 **Do not write the old attribute form** (`cellProps='{…}'` on the opening line).
 Readers still accept it, but an apostrophe in its JSON turns the whole embed into
 literal text, and the editor rewrites it into the ` ```json ` form on the next save.

@@ -264,6 +264,56 @@ export interface ProposalReviewChange {
   before?: unknown;
   after?: unknown;
   valueType?: string;
+  /**
+   * UPDATE rows of a LIVE proposal only (pending / approval_failed): has the
+   * target field moved since this proposal captured its before-snapshot?
+   * Compares the propose-time snapshot (`previousData`) with the live row.
+   *
+   *   - `unchanged`     — both sides read, and they agree;
+   *   - `changed_since` — both sides read, and they differ: the `before` shown
+   *     is STALE (someone edited the field after this was proposed);
+   *   - `unknown`       — either side is absent (no snapshot of this field, or
+   *     the live row was not readable). Never guessed.
+   *
+   * Absent on creates, deletes and applied/closed proposals, where the
+   * question does not apply. Approving still proceeds (warn, never block):
+   * undo compares-and-restores at apply time, so a stale before cannot make
+   * the revert clobber the newer value.
+   */
+  drift?: ProposalFieldDrift;
+}
+
+/** See {@link ProposalReviewChange.drift}. */
+export type ProposalFieldDrift = "unchanged" | "changed_since" | "unknown";
+
+/**
+ * What a DELETE proposal removes, measured — so a reviewer sees "12 properties
+ * · 4 links · a document · 2 roles" instead of one name.
+ *
+ * Every count is ABSENT (never 0) when it was not measured: only an entity
+ * target the viewer can read is measured. `recoverable` is the SAME
+ * `revertableForRow` answer `proposals.list` serves as `revertable`, so the
+ * two can never contradict each other.
+ */
+export interface ProposalRemoval {
+  /** The removed object's display name, when resolved. */
+  name?: string;
+  /** Object-kind token: the entity's profile slug, else the target type. */
+  kind: string;
+  /** The entity being removed — the door for the property / link / role counts. */
+  entityId?: string;
+  /** Non-empty property values on the entity. */
+  propertyCount?: number;
+  /** Links (relations) touching the entity that the viewer can see. */
+  relationCount?: number;
+  /** The entity carries a document body. */
+  hasDocument?: boolean;
+  /** The document's id — its own door. Present only when `hasDocument`. */
+  documentId?: string;
+  /** Role nouns the entity wears (vocabulary-resolved), in this proposal's lens. */
+  roles?: string[];
+  /** Can the removal be undone once applied (entity deletes are soft). */
+  recoverable: boolean;
 }
 
 export interface ProposalReviewEvent {
@@ -479,6 +529,8 @@ export interface ProposalReviewModel {
    * empty and the graph carries the reviewable content.
    */
   graph?: ProposalReviewGraph;
+  /** Present ONLY for delete proposals — see {@link ProposalRemoval}. */
+  removal?: ProposalRemoval;
   events: ProposalReviewEvent[];
 }
 
